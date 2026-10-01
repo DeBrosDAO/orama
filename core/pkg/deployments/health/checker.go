@@ -24,12 +24,16 @@ type Database interface {
 const (
 	consecutiveFailuresThreshold = 3
 	defaultDesiredReplicas       = deployments.DefaultReplicaCount
+	// unitStatusActive is what a running unit reports.
+	unitStatusActive = "active"
 )
 
 // ProcessManager is the subset of process.Manager needed by the health checker.
 type ProcessManager interface {
 	Restart(ctx context.Context, deployment *deployments.Deployment) error
 	Stop(ctx context.Context, deployment *deployments.Deployment) error
+	// Status is the state of the deployment's own unit ("active" when it runs).
+	Status(ctx context.Context, deployment *deployments.Deployment) (string, error)
 }
 
 // ReplicaReconciler provides replica management for the reconciliation loop.
@@ -143,6 +147,7 @@ func (hc *HealthChecker) checkAllDeployments(ctx context.Context) error {
 		WHERE d.status IN ('active', 'degraded')
 		  AND dr.node_id = ?
 		  AND dr.status IN ('active', 'failed')
+		  AND dr.port > 0
 		  AND d.type IN ('nextjs', 'nodejs-backend', 'go-backend')
 	`
 
@@ -182,8 +187,15 @@ func (hc *HealthChecker) checkAllDeployments(ctx context.Context) error {
 // checkDeployment checks a single deployment's health via HTTP.
 func (hc *HealthChecker) checkDeployment(ctx context.Context, dep deploymentRow) bool {
 	if dep.Port == 0 {
-		// Static deployments are always healthy
-		return true
+		// Only dynamic deployments are checked, and they run on a port. A
+		// replica row without one never had a unit set up (a failed setup
+		// leaves port 0); reading that as healthy "recovered" replicas that
+		// did not exist.
+		hc.logger.Warn("Replica has no port, so no process to probe",
+			zap.String("deployment", dep.Name),
+			zap.String("namespace", dep.Namespace),
+		)
+		return false
 	}
 
 	// Check local port
@@ -289,6 +301,12 @@ func (hc *HealthChecker) handleHealthy(ctx context.Context, dep deploymentRow) {
 			return
 		}
 
+		// The probe answering is not enough: the port may be another
+		// process's. The replica is back only if its own unit is running.
+		if !hc.unitActive(ctx, dep) {
+			return
+		}
+
 		// Under-replicated — genuine recovery. Bring this replica back.
 		hc.logger.Info("Failed replica recovered, marking active",
 			zap.String("deployment", dep.Name),
@@ -308,6 +326,34 @@ func (hc *HealthChecker) handleHealthy(ctx context.Context, dep deploymentRow) {
 		msg := fmt.Sprintf("Replica on node %s recovered and marked active", hc.nodeID)
 		hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now())
 	}
+}
+
+// unitActive reports whether the deployment's own unit on this node runs. A
+// status that cannot be read counts as not running: a replica is not marked
+// active on a guess.
+func (hc *HealthChecker) unitActive(ctx context.Context, dep deploymentRow) bool {
+	if hc.processManager == nil {
+		hc.logger.Error("Cannot verify the replica's unit: no process manager", zap.String("deployment", dep.Name))
+		return false
+	}
+	d := &deployments.Deployment{
+		ID:        dep.ID,
+		Namespace: dep.Namespace,
+		Name:      dep.Name,
+		Type:      deployments.DeploymentType(dep.Type),
+		Port:      dep.Port,
+	}
+	status, err := hc.processManager.Status(ctx, d)
+	if err != nil || status != unitStatusActive {
+		hc.logger.Warn("Replica answers its probe but its unit is not active; it stays failed",
+			zap.String("deployment", dep.Name),
+			zap.String("node_id", hc.nodeID),
+			zap.String("unit_status", status),
+			zap.Error(err),
+		)
+		return false
+	}
+	return true
 }
 
 // handleUnhealthy processes an unhealthy check result.

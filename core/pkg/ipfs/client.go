@@ -784,6 +784,18 @@ var errContentNotFound = errors.New("content not found")
 
 func isContentNotFound(err error) bool { return errors.Is(err, errContentNotFound) }
 
+// ErrStreamFailed marks a fetch Kubo started and could not finish: the blocks
+// were not reachable from any peer it asked ("failed to fetch all nodes").
+var ErrStreamFailed = errors.New("kubo stream failed")
+
+// IsContentUnavailable reports whether err means the content is not (yet)
+// retrievable from this node or its peers, as opposed to a failure of the
+// node itself. A caller that knows the content was just pinned may wait for it;
+// any other error waiting cannot fix.
+func IsContentUnavailable(err error) bool {
+	return errors.Is(err, errContentNotFound) || errors.Is(err, ErrStreamFailed)
+}
+
 // kuboLocalMiss is how Kubo words an offline `cat` of a block it does not
 // hold. It answers such a request with HTTP 500 and this message, never 404:
 // verified against Kubo 0.43.1 (bugboard #414). Recognising only a 404 meant a
@@ -866,7 +878,7 @@ func (b *streamErrorBody) Read(p []byte) (int, error) {
 	case b.offline && strings.Contains(msg, kuboLocalMiss):
 		return n, fmt.Errorf("%w partway through the DAG: %s", errContentNotFound, msg)
 	default:
-		return n, fmt.Errorf("kubo stream failed: %s", msg)
+		return n, fmt.Errorf("%w: %s", ErrStreamFailed, msg)
 	}
 }
 

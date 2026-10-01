@@ -103,6 +103,19 @@ type mockProcessManager struct {
 	restartErr   error
 	stopCalls    []string // deployment IDs
 	stopErr      error
+	// status/statusErr answer Status; an empty status reads as "active".
+	status    string
+	statusErr error
+}
+
+func (m *mockProcessManager) Status(_ context.Context, _ *deployments.Deployment) (string, error) {
+	if m.statusErr != nil {
+		return "unknown", m.statusErr
+	}
+	if m.status == "" {
+		return "active", nil
+	}
+	return m.status, nil
 }
 
 func (m *mockProcessManager) Restart(_ context.Context, dep *deployments.Deployment) error {
@@ -196,18 +209,16 @@ func TestNewHealthChecker_NonNil(t *testing.T) {
 
 // ---- b) checkDeployment ---------------------------------------------------
 
-func TestCheckDeployment_StaticDeployment(t *testing.T) {
+// A replica row with no port never had a unit set up (a failed setup leaves
+// port 0). Reading it as healthy "recovered" replicas that did not exist.
+func TestCheckDeployment_NoPortIsNotHealthy(t *testing.T) {
 	db := &mockDB{}
 	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
 
-	dep := deploymentRow{
-		ID:   "dep-1",
-		Name: "static-site",
-		Port: 0, // static deployment
-	}
+	dep := deploymentRow{ID: "dep-1", Name: "app", Port: 0}
 
-	if !hc.checkDeployment(context.Background(), dep) {
-		t.Error("static deployment (port 0) should always be healthy")
+	if hc.checkDeployment(context.Background(), dep) {
+		t.Error("a replica with no port has no process and must not probe healthy")
 	}
 }
 
@@ -299,6 +310,9 @@ func TestCheckAllDeployments_QueriesLocalReplicas(t *testing.T) {
 	}
 	if !strings.Contains(q, "'degraded'") {
 		t.Errorf("expected query to include 'degraded' status, got: %s", q)
+	}
+	if !strings.Contains(q, "dr.port > 0") {
+		t.Errorf("expected query to skip replicas with no port (no unit was set up), got: %s", q)
 	}
 
 	// Verify nodeID was passed as the bind parameter
@@ -525,7 +539,7 @@ func TestHandleHealthy_RecoversFailedReplica(t *testing.T) {
 			return nil
 		},
 	}
-	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+	hc := NewHealthChecker(db, zap.NewNop(), "node-1", &mockProcessManager{})
 
 	dep := deploymentRow{
 		ID:            "dep-recover",
@@ -554,6 +568,45 @@ func TestHandleHealthy_RecoversFailedReplica(t *testing.T) {
 	}
 	if !foundEvent {
 		t.Error("expected replica_recovered event")
+	}
+}
+
+// The probe answering is not proof the replica runs: the port can be another
+// process's. Without an active unit the replica stays failed.
+func TestHandleHealthy_DoesNotRecoverWithoutActiveUnit(t *testing.T) {
+	cases := map[string]*mockProcessManager{
+		"inactive unit":      {status: "inactive"},
+		"status unreadable":  {statusErr: fmt.Errorf("systemctl failed")},
+		"no process manager": nil,
+	}
+	for name, pm := range cases {
+		t.Run(name, func(t *testing.T) {
+			db := &mockDB{
+				queryFunc: func(dest interface{}, query string, args ...interface{}) error {
+					if strings.Contains(query, "COUNT(*)") {
+						appendRows(dest, []map[string]interface{}{{"Count": 0}})
+					}
+					return nil
+				},
+			}
+			var hc *HealthChecker
+			if pm == nil {
+				hc = NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+			} else {
+				hc = NewHealthChecker(db, zap.NewNop(), "node-1", pm)
+			}
+
+			hc.handleHealthy(context.Background(), deploymentRow{
+				ID: "dep-ghost", Namespace: "test", Name: "ghost", Type: "go-backend",
+				Port: 10001, ReplicaStatus: "failed",
+			})
+
+			for _, call := range db.getExecCalls() {
+				if strings.Contains(call.query, "UPDATE deployment_replicas") || strings.Contains(call.query, "replica_recovered") {
+					t.Errorf("replica without an active unit was changed: %s", call.query)
+				}
+			}
+		})
 	}
 }
 

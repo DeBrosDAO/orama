@@ -100,14 +100,21 @@ func (s *DeploymentService) CheckNewDeploymentName(ctx context.Context, namespac
 // writeDeploymentNameError answers a CheckNewDeploymentName failure with the
 // status it means.
 func writeDeploymentNameError(w http.ResponseWriter, logger *zap.Logger, err error) {
+	status, msg := deploymentNameStatus(logger, err)
+	http.Error(w, msg, status)
+}
+
+// deploymentNameStatus is the status and message a CheckNewDeploymentName
+// failure is answered with.
+func deploymentNameStatus(logger *zap.Logger, err error) (int, string) {
 	var taken *instanceTakenError
 	switch {
 	case errors.Is(err, errInvalidDeploymentName):
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		return http.StatusBadRequest, err.Error()
 	case errors.As(err, &taken), errors.Is(err, errInstanceNotNew):
-		http.Error(w, err.Error(), http.StatusConflict)
+		return http.StatusConflict, err.Error()
 	default:
 		logger.Error("Failed to check a deployment name", zap.Error(err))
-		http.Error(w, "Failed to check the deployment name", http.StatusInternalServerError)
+		return http.StatusInternalServerError, "Failed to check the deployment name"
 	}
 }

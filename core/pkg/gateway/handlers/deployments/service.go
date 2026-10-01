@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -437,13 +438,12 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 }
 
 // SetupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
+// A setup that fails is recorded as a failed replica with its reason
+// (recordReplicaSetupFailure); the leader's reconciliation retries it.
 func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
 	nodeIP, err := s.replicaManager.GetNodeOverlayIP(ctx, nodeID)
 	if err != nil {
-		s.logger.Error("Failed to get node IP for replica setup",
-			zap.String("node_id", nodeID),
-			zap.Error(err),
-		)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("failed to get the node's overlay IP: %w", err))
 		return
 	}
 
@@ -462,11 +462,7 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 	// secret, so there is no reason to put it back in the clear on the wire.
 	storedEnv, envErr := s.EncodeEnvironment(deployment.Environment)
 	if envErr != nil {
-		s.logger.Error("Failed to encode the environment for the replica",
-			zap.String("deployment_id", deployment.ID),
-			zap.Error(envErr),
-		)
-		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("failed to encode the environment: %w", envErr))
 		return
 	}
 
@@ -487,28 +483,24 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 
 	resp, err := s.callInternalAPI(nodeID, nodeIP, "/v1/internal/deployments/replica/setup", payload)
 	if err != nil {
-		s.logger.Error("Failed to set up dynamic replica on remote node",
-			zap.String("deployment_id", deployment.ID),
-			zap.String("node_id", nodeID),
-			zap.String("node_ip", nodeIP),
-			zap.Error(err),
-		)
-		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, err)
 		return
 	}
 
 	// Update replica with allocated port
 	port, ok := resp["port"].(float64)
 	if !ok || port <= 0 {
-		s.logger.Error("Replica setup returned invalid port",
-			zap.String("deployment_id", deployment.ID),
-			zap.String("node_id", nodeID),
-			zap.Any("port_value", resp["port"]),
-		)
-		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("replica setup returned an invalid port: %v", resp["port"]))
 		return
 	}
-	s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false, deployments.ReplicaStatusActive)
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false, deployments.ReplicaStatusActive); err != nil {
+		s.logger.Error("Failed to record the set-up replica as active",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+		return
+	}
 
 	s.logger.Info("Dynamic replica set up on remote node",
 		zap.String("deployment_id", deployment.ID),
@@ -518,6 +510,41 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 
 	// Create DNS record for the replica node (after successful setup)
 	s.publishReplicaRecord(ctx, deployment, nodeID)
+}
+
+// recordReplicaSetupFailure keeps a replica whose setup failed: its row is
+// written as failed (so the deployment reports it and the leader's
+// reconciliation retries it, rather than the node silently missing) and the
+// reason, including the peer's own error text, goes into the deployment's
+// events. It runs after the request that started the setup may have ended, so
+// it does not take that request's cancellation.
+func (s *DeploymentService) recordReplicaSetupFailure(ctx context.Context, deployment *deployments.Deployment, nodeID string, cause error) {
+	ctx = context.WithoutCancel(ctx)
+	s.logger.Error("Failed to set up dynamic replica on remote node",
+		zap.String("deployment_id", deployment.ID),
+		zap.String("node_id", nodeID),
+		zap.Error(cause),
+	)
+
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false, deployments.ReplicaStatusFailed); err != nil {
+		s.logger.Error("Failed to record the replica as failed",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
+
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, ?, ?, ?)`,
+		deployment.ID, replicaSetupFailedEvent,
+		fmt.Sprintf("Replica setup on node %s failed: %v", nodeID, cause), time.Now())
+	if err != nil {
+		s.logger.Error("Failed to record the replica setup failure event",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
 }
 
 // publishReplicaRecord adds the replica node's A record for the deployment.
@@ -564,23 +591,19 @@ func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: replicaCallTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request to node %s failed: %w", nodeID, err)
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReplicaResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the response of node %s: %w", nodeID, err)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return result, fmt.Errorf("remote node returned status %d", resp.StatusCode)
-	}
-
-	return result, nil
+	return parseReplicaResponse(nodeID, resp.StatusCode, body)
 }
 
 // GetDeployment retrieves a deployment by namespace and name

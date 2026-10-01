@@ -269,6 +269,34 @@ deployment it is named after if the gateway handling the request has that
 deployment, and refused otherwise — the files may be another gateway's, and
 until an operator removes them the name cannot be used.
 
+### Replicas
+
+A dynamic deployment (Next.js SSR, Node.js, Go) runs on its home node and on a
+second node, its replica. After the home node pins the build artifact it calls
+the replica node's internal `POST /v1/internal/deployments/replica/setup`. The
+artifact is not always on that node yet when the call arrives, so the replica
+polls for it (every 2 s, up to 60 s) instead of failing on the first miss, and
+only then extracts it, starts the unit and answers its port. Only "not
+retrievable yet" is waited for; any other fetch failure is answered at once.
+
+The internal replica routes (`setup`, `update`, `rollback`, `teardown`) answer
+every error as JSON, `{"error": "<reason>"}`, with the status that fits. The home
+node carries that reason into its own error and log, so a failed setup reads
+`node <id> returned status 500: Failed to extract content: ...` rather than a
+parse error.
+
+A setup that fails is not dropped. The replica's row in `deployment_replicas` is
+written with status `failed` and a `replica_setup_failed` event carrying the
+reason is added to the deployment's events (`GET /v1/deployments/events`). The
+cluster leader's reconciliation, every 5 minutes, sees the deployment
+under-replicated and sets a replica up again.
+
+The node's health checker probes each local replica's own port every 30 s. A
+replica row with no port (a failed setup) is not probed, and a `failed` replica
+is marked `active` again only when the probe answers **and** its own systemd
+unit reports `active`; an answer from some other process on the port does not
+bring it back.
+
 ---
 
 ## Deploying Next.js Applications

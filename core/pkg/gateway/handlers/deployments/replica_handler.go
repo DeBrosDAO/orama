@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -66,23 +67,23 @@ type replicaSetupRequest struct {
 // POST /v1/internal/deployments/replica/setup
 func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeReplicaError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	if !h.isInternalRequest(r) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeReplicaError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req replicaSetupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -98,7 +99,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	port, err := h.service.portAllocator.AllocatePort(ctx, h.service.nodePeerID, req.DeploymentID)
 	if err != nil {
 		h.logger.Error("Failed to allocate port for replica", zap.Error(err))
-		http.Error(w, "Failed to allocate port", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to allocate port")
 		return
 	}
 
@@ -116,7 +117,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	// a deployment whose instance this one maps to (instance_claim.go).
 	claim, err := h.service.claimInstance(ctx, h.baseDeployPath, req.Namespace, req.Name)
 	if err != nil {
-		writeDeploymentNameError(w, h.logger, err)
+		writeReplicaNameError(w, h.logger, err)
 		return
 	}
 	defer func() {
@@ -134,7 +135,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.extractFromIPFS(ctx, cid, deployPath); err != nil {
 		h.logger.Error("Failed to extract IPFS content for replica", zap.Error(err))
-		http.Error(w, "Failed to extract content", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to extract content: %v", err))
 		return
 	}
 
@@ -145,7 +146,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	env, envErr := h.service.decodeEnvironment(req.Namespace, req.Name, req.Environment)
 	if envErr != nil {
 		h.logger.Error("Failed to read the replica's environment", zap.Error(envErr))
-		http.Error(w, "Failed to read the deployment environment", http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, "Failed to read the deployment environment")
 		return
 	}
 
@@ -172,7 +173,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	if process.UsesBuildOutput(deployment.Type) {
 		if err := h.processManager.ClearDependencies(deployment.Namespace, deployment.Name); err != nil {
 			h.logger.Error("Failed to clear the replica's build output", zap.Error(err))
-			http.Error(w, "Failed to prepare the replica", http.StatusInternalServerError)
+			writeReplicaError(w, http.StatusInternalServerError, "Failed to prepare the replica")
 			return
 		}
 	}
@@ -180,7 +181,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	// Start the process
 	if err := h.processManager.Start(ctx, deployment, deployPath); err != nil {
 		h.logger.Error("Failed to start replica process", zap.Error(err))
-		http.Error(w, fmt.Sprintf("Failed to start process: %v", err), http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to start process: %v", err))
 		return
 	}
 
@@ -221,12 +222,12 @@ type replicaUpdateRequest struct {
 // POST /v1/internal/deployments/replica/update
 func (h *ReplicaHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeReplicaError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	if !h.isInternalRequest(r) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeReplicaError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
 	h.applyUpdate(w, r)
@@ -239,11 +240,11 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req replicaUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -280,39 +281,39 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	// The directory on this host must be this deployment's before anything
 	// replaces it (instance_claim.go).
 	if err := h.service.checkInstanceOwner(ctx, deployPath, req.Namespace, req.Name); err != nil {
-		writeDeploymentNameError(w, h.logger, err)
+		writeReplicaNameError(w, h.logger, err)
 		return
 	}
 
 	// Extract to staging
 	if err := os.MkdirAll(stagingPath, 0755); err != nil {
-		http.Error(w, "Failed to create staging directory", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to create staging directory")
 		return
 	}
 
 	if err := h.extractFromIPFS(ctx, cid, stagingPath); err != nil {
 		os.RemoveAll(stagingPath)
-		http.Error(w, "Failed to extract content", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to extract content: %v", err))
 		return
 	}
 	// The staged directory replaces the claimed one, so it carries the marker.
 	if err := writeOwnerMarker(stagingPath, req.Namespace, req.Name, false); err != nil {
 		h.logger.Error("Failed to mark the staged replica directory", zap.Error(err))
 		os.RemoveAll(stagingPath)
-		http.Error(w, "Failed to stage the update", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to stage the update")
 		return
 	}
 
 	// Atomic swap
 	if err := os.Rename(deployPath, oldPath); err != nil {
 		os.RemoveAll(stagingPath)
-		http.Error(w, "Failed to backup current deployment", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to backup current deployment")
 		return
 	}
 
 	if err := os.Rename(stagingPath, deployPath); err != nil {
 		os.Rename(oldPath, deployPath)
-		http.Error(w, "Failed to activate new deployment", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to activate new deployment")
 		return
 	}
 
@@ -340,7 +341,7 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 		os.Rename(deployPath, stagingPath)
 		os.Rename(oldPath, deployPath)
 		h.processManager.Restart(ctx, deployment)
-		http.Error(w, fmt.Sprintf("Failed to restart: %v", err), http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to restart: %v", err))
 		return
 	}
 
@@ -350,7 +351,7 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 		os.Rename(deployPath, stagingPath)
 		os.Rename(oldPath, deployPath)
 		h.processManager.Restart(ctx, deployment)
-		http.Error(w, "Health check failed after update", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Health check failed after update")
 		return
 	}
 
@@ -365,12 +366,12 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 // POST /v1/internal/deployments/replica/rollback
 func (h *ReplicaHandler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeReplicaError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	if !h.isInternalRequest(r) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeReplicaError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
 
@@ -390,23 +391,23 @@ type replicaTeardownRequest struct {
 // POST /v1/internal/deployments/replica/teardown
 func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeReplicaError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
 	if !h.isInternalRequest(r) {
-		http.Error(w, "Forbidden", http.StatusForbidden)
+		writeReplicaError(w, http.StatusForbidden, "Forbidden")
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req replicaTeardownRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 	if err := process.ValidateInstance(req.Namespace, req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeReplicaError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -425,7 +426,7 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 	owned, err := h.service.ownsInstanceDir(ctx, deployPath, req.Namespace, req.Name)
 	if err != nil {
 		h.logger.Error("Failed to check who owns the replica's directory", zap.Error(err))
-		http.Error(w, "Failed to check the replica's directory", http.StatusInternalServerError)
+		writeReplicaError(w, http.StatusInternalServerError, "Failed to check the replica's directory")
 		return
 	}
 
@@ -453,13 +454,13 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 		// caller retries, and the port it holds is not released under it.
 		if err := h.processManager.Stop(ctx, deployment); err != nil {
 			h.logger.Error("Failed to stop the replica's unit; the teardown is refused", zap.Error(err))
-			http.Error(w, "Failed to stop the replica's unit; retry the teardown", http.StatusInternalServerError)
+			writeReplicaError(w, http.StatusInternalServerError, "Failed to stop the replica's unit; retry the teardown")
 			return
 		}
 		// Removing the directory releases the instance on this host.
 		if err := os.RemoveAll(deployPath); err != nil {
 			h.logger.Error("Failed to remove replica files", zap.String("path", deployPath), zap.Error(err))
-			http.Error(w, "Failed to remove the replica's files", http.StatusInternalServerError)
+			writeReplicaError(w, http.StatusInternalServerError, "Failed to remove the replica's files")
 			return
 		}
 	} else {
@@ -484,9 +485,11 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 
 // extractFromIPFS downloads and extracts a tarball from IPFS.
 func (h *ReplicaHandler) extractFromIPFS(ctx context.Context, cid, destPath string) error {
-	reader, err := h.ipfsClient.Get(ctx, "/ipfs/"+cid, "")
+	reader, err := awaitContent(ctx, func(ctx context.Context) (io.ReadCloser, error) {
+		return h.ipfsClient.Get(ctx, "/ipfs/"+cid, "")
+	}, replicaContentWait, replicaContentPollInterval)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to fetch %s: %w", cid, err)
 	}
 	defer reader.Close()
 

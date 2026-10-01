@@ -120,3 +120,32 @@ func TestCatOnce_headerTimeoutStopsAWedgedDaemon(t *testing.T) {
 		t.Errorf("the header timeout took %s to fire", took)
 	}
 }
+
+// A pinned-but-not-yet-placed artifact fails the networked fetch through the
+// X-Stream-Error trailer; that is "not retrievable yet", which a caller that
+// just pinned the content may wait out. A node failure is not.
+func TestIsContentUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("offline") == "true" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, kuboOfflineMissBody)
+			return
+		}
+		w.Header().Set("Trailer", "X-Stream-Error")
+		_, _ = io.WriteString(w, "partial")
+		w.Header().Set("X-Stream-Error", "failed to fetch all nodes")
+	}))
+	defer srv.Close()
+	c, err := NewClient(Config{ClusterAPIURL: srv.URL}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = c.Get(context.Background(), "QmfYzxZHqYpmy29rVWqs6f4igzYngACaxSxPWdf7FspuDV", srv.URL)
+	if !IsContentUnavailable(err) {
+		t.Fatalf("a kubo stream failure must read as content unavailable: %v", err)
+	}
+	if IsContentUnavailable(errors.New("repo is locked")) || IsContentUnavailable(nil) {
+		t.Error("an unrelated error or nil must not read as content unavailable")
+	}
+}
