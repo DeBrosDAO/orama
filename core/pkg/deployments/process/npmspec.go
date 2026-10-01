@@ -202,19 +202,26 @@ func checkOverrides(raw json.RawMessage, path string) error {
 	return nil
 }
 
-// lockEntry is what a lockfile records about one installed package, in the
-// v2/v3 "packages" map and the v1 "dependencies" tree alike.
+// lockEntry is what a lockfile records about one installed package. In the
+// v2/v3 "packages" map that is all an entry is checked for: its own
+// "dependencies" there name version ranges (strings), not entries.
 type lockEntry struct {
-	Version      string               `json:"version"`
-	Resolved     string               `json:"resolved"`
-	Link         bool                 `json:"link"`
-	Dependencies map[string]lockEntry `json:"dependencies"`
+	Version  string `json:"version"`
+	Resolved string `json:"resolved"`
+	Link     bool   `json:"link"`
+}
+
+// lockTreeEntry is one package of the nested "dependencies" tree a v1
+// lockfile has, and a v2 lockfile keeps beside "packages" for older npm.
+type lockTreeEntry struct {
+	lockEntry
+	Dependencies map[string]lockTreeEntry `json:"dependencies"`
 }
 
 func checkLockfile(data []byte) error {
 	var lock struct {
-		Packages     map[string]lockEntry `json:"packages"`
-		Dependencies map[string]lockEntry `json:"dependencies"`
+		Packages     map[string]lockEntry     `json:"packages"`
+		Dependencies map[string]lockTreeEntry `json:"dependencies"`
 	}
 	if err := json.Unmarshal(data, &lock); err != nil {
 		return fmt.Errorf("not a valid lockfile: %w", err)
@@ -231,9 +238,9 @@ func checkLockfile(data []byte) error {
 }
 
 // checkLockTree walks a v1 lockfile's nested dependencies.
-func checkLockTree(deps map[string]lockEntry) error {
+func checkLockTree(deps map[string]lockTreeEntry) error {
 	for _, name := range sortedKeys(deps) {
-		if err := checkLockEntry(name, deps[name], true); err != nil {
+		if err := checkLockEntry(name, deps[name].lockEntry, true); err != nil {
 			return err
 		}
 		if err := checkLockTree(deps[name].Dependencies); err != nil {

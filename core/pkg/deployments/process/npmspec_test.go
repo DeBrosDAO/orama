@@ -125,3 +125,44 @@ func TestCheckRegistryOnlyDependencies_readsOnlyRegularFiles(t *testing.T) {
 		t.Errorf("a missing package.json: %v", err)
 	}
 }
+
+// A real npm 7+ lockfile: a "packages" entry lists its own dependencies as
+// version ranges (strings). Every such lockfile was refused as "not a valid
+// lockfile", which also hid the refusal of a git or plain-http entry.
+func TestCheckRegistryOnlyDependencies_packagesEntriesListRangesNotEntries(t *testing.T) {
+	const realLock = `{
+		"lockfileVersion": 3,
+		"packages": {
+			"": {"name": "app", "dependencies": {"debug": "^4.3.4"}},
+			"node_modules/debug": {"version": "4.3.4", "resolved": "https://registry.npmjs.org/debug/-/debug-4.3.4.tgz",
+				"dependencies": {"ms": "2.1.2"}, "peerDependenciesMeta": {"supports-color": {"optional": true}}},
+			"node_modules/ms": {"version": "2.1.2", "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.2.tgz"}
+		}
+	}`
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", `{"dependencies":{"debug":"^4.3.4"}}`)
+	writeFile(t, dir, "package-lock.json", realLock)
+	if err := CheckRegistryOnlyDependencies(dir); err != nil {
+		t.Fatalf("a real v3 lockfile was refused: %v", err)
+	}
+
+	gitLock := strings.Replace(realLock, "https://registry.npmjs.org/ms/-/ms-2.1.2.tgz", "git+ssh://git@github.com/u/ms.git#abc", 1)
+	writeFile(t, dir, "package-lock.json", gitLock)
+	err := CheckRegistryOnlyDependencies(dir)
+	if err == nil || !strings.Contains(err.Error(), "not a registry tarball") {
+		t.Fatalf("a git entry in a real v3 lockfile: %v, want a refusal naming the registry", err)
+	}
+}
+
+func TestCheckRegistryOnlyDependencies_v2KeepsTheLegacyTreeChecked(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "package.json", `{"dependencies":{"x":"^1.0.0"}}`)
+	writeFile(t, dir, "package-lock.json", `{
+		"lockfileVersion": 2,
+		"packages": {"": {"dependencies": {"x": "^1.0.0"}}, "node_modules/x": {"version": "1.0.0", "dependencies": {"y": "^1"}}},
+		"dependencies": {"x": {"version": "1.0.0", "requires": {"y": "^1"}, "dependencies": {"y": {"version": "file:../y"}}}}
+	}`)
+	if err := CheckRegistryOnlyDependencies(dir); err == nil {
+		t.Fatal("a file: entry nested in a v2 lockfile's legacy tree was accepted")
+	}
+}
