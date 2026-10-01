@@ -415,6 +415,28 @@ func (s *Service) regrant(ctx context.Context, db client.DatabaseClient, princip
 			`UPDATE grants SET expires_at = ? WHERE id = ?`, expires, id); err != nil {
 			return fmt.Errorf("failed to set the expiry of the grant in namespace %q: %w", req.Namespace, err)
 		}
+	}
+	others, err := db.Query(client.WithInternalAuth(ctx),
+		`SELECT id FROM grants
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner' AND id != ?
+		  LIMIT 1`,
+		principalID, nsID, id)
+	if err != nil {
+		return fmt.Errorf("failed to read the principal's other grants: %w", err)
+	}
+	_, replacing, err := firstID(others)
+	if err != nil {
+		return err
+	}
+	if replacing {
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			`UPDATE grants SET revoked_at = datetime('now')
+			  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner' AND id != ?`,
+			principalID, nsID, id); err != nil {
+			return fmt.Errorf("failed to retire the principal's previous grant: %w", err)
+		}
+	}
+	if !sameExpiry || replacing {
 		s.audit.Record(ctx, AuditEvent{
 			Namespace: req.Namespace,
 			Actor:     req.CreatedBy,
@@ -423,12 +445,6 @@ func (s *Service) regrant(ctx context.Context, db client.DatabaseClient, princip
 			Result:    AuditSuccess,
 			Metadata:  map[string]string{"role": string(req.Role), "selector": resource, "expires_at": getStringVal(expires)},
 		})
-	}
-	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`UPDATE grants SET revoked_at = datetime('now')
-		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner' AND id != ?`,
-		principalID, nsID, id); err != nil {
-		return fmt.Errorf("failed to retire the principal's previous grant: %w", err)
 	}
 	return nil
 }

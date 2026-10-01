@@ -287,6 +287,16 @@ func (d *grantsDB) Query(_ context.Context, query string, args ...interface{}) (
 		}
 		return &client.QueryResult{Count: 1}, nil
 
+	case strings.Contains(query, "SELECT id FROM grants") && strings.Contains(query, "AND id != ?"):
+		principalID, nsID, keep := toInt64(args[0]), getStringVal(args[1]), toInt64(args[2])
+		for _, row := range d.rows {
+			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID &&
+				row.role != string(RoleOwner) && row.id != keep {
+				return rows(row.id), nil
+			}
+		}
+		return &client.QueryResult{}, nil
+
 	case strings.Contains(query, "AND id != ?"):
 		principalID, nsID, keep := toInt64(args[0]), getStringVal(args[1]), toInt64(args[2])
 		for _, row := range d.rows {
