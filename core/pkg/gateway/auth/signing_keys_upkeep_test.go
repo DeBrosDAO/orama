@@ -160,3 +160,24 @@ func TestRotate_refusesWithoutAKeyStore(t *testing.T) {
 		t.Fatal("the key changed")
 	}
 }
+
+// TestStamp_bringsBackARetiredKeyStillInUse: a gateway whose key a peer retired
+// (stamping failed for a day, or the peer ran before this release stamped)
+// kept signing tokens every other node refused until it restarted.
+func TestStamp_bringsBackARetiredKeyStillInUse(t *testing.T) {
+	keys, _ := signingKeyStore(t)
+	old := ago(72 * time.Hour)
+	seedKey(t, keys, "ed_mine", nil, old, old, nil)
+	if _, err := keys.RetireUnusedKeys(context.Background(), "ed_other", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if retiredAtOf(t, keys, "ed_mine") == nil {
+		t.Fatal("setup: key not retired")
+	}
+	if err := keys.Stamp(context.Background(), "ed_mine"); err != nil {
+		t.Fatal(err)
+	}
+	if at := retiredAtOf(t, keys, "ed_mine"); at != nil {
+		t.Errorf("the heartbeat of a gateway still signing with its key left it retired: %v", at)
+	}
+}

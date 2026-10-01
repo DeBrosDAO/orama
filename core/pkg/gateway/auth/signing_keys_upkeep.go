@@ -66,14 +66,15 @@ func (s *SigningKeys) RetireUnusedKeys(ctx context.Context, keepKID string, now 
 	return len(res.Rows), nil
 }
 
-// Stamp records that the key is in use.
+// Stamp records that the key is in use, and brings it back if a peer retired
+// it: a gateway that still signs with a key must have it verifiable.
 func (s *SigningKeys) Stamp(ctx context.Context, kid string) error {
 	db := s.database()
 	if db == nil {
 		return nil
 	}
 	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`UPDATE signing_keys SET last_seen_at = CURRENT_TIMESTAMP WHERE kid = ?`, kid); err != nil {
+		`UPDATE signing_keys SET last_seen_at = CURRENT_TIMESTAMP, retired_at = NULL WHERE kid = ?`, kid); err != nil {
 		return fmt.Errorf("stamp the signing key %s: %w", kid, err)
 	}
 	return nil

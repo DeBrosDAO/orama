@@ -22,8 +22,10 @@ func collectVault() *VaultReport {
 	r := &VaultReport{}
 	statusCtx, cancelStatus := context.WithTimeout(context.Background(), vaultStatusTimeout)
 	probeVaultStatus(statusCtx, constants.LocalGatewayURL()+"/v1/vault/status", r)
-	probeVaultHealth(statusCtx, constants.LocalGatewayURL()+"/v1/vault/health", r)
 	cancelStatus()
+	healthCtx, cancelHealth := context.WithTimeout(context.Background(), vaultStatusTimeout)
+	probeVaultHealth(healthCtx, constants.LocalGatewayURL()+"/v1/vault/health", r)
+	cancelHealth()
 
 	ctx, cancel := context.WithTimeout(context.Background(), vaultDetailsTimeout)
 	defer cancel()
