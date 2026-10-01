@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -123,7 +124,7 @@ func mintThrough(client *http.Client, gatewayURL, host, nodeIP, bearer string, e
 	if err != nil {
 		return Minted{}, err
 	}
-	m, err := mintAt(client, gatewayURL, bearer, int(expiry.Minutes()))
+	m, err := mintAt(client, gatewayURL, bearer, expiry)
 	if err != nil {
 		return Minted{}, fmt.Errorf("mint an invite through %s (%s): %w", nodeIP, host, err)
 	}
@@ -196,9 +197,19 @@ type minted struct {
 // mintAt asks the node client reaches for an invite token, and fingerprints
 // the certificate it answered with — so the pin is of the node that minted
 // the token, on the very connection that did.
-func mintAt(client *http.Client, gatewayURL, bearer string, expiryMinutes int) (minted, error) {
+// inviteExpiryBody asks for expiry in seconds, which a gateway of this release
+// honours, and in whole minutes rounded up for an older one that reads only
+// minutes: 30s sent as int(Minutes()) was 0, and 0 meant the default hour.
+func inviteExpiryBody(expiry time.Duration) map[string]int {
+	return map[string]int{
+		"expiry_seconds": int(math.Ceil(expiry.Seconds())),
+		"expiry_minutes": int(math.Ceil(expiry.Minutes())),
+	}
+}
+
+func mintAt(client *http.Client, gatewayURL, bearer string, expiry time.Duration) (minted, error) {
 	raw, state, err := shared.RequestWith(client, gatewayURL, bearer, http.MethodPost, "/v1/operator/invite",
-		map[string]int{"expiry_minutes": expiryMinutes})
+		inviteExpiryBody(expiry))
 	if err != nil {
 		return minted{}, err
 	}

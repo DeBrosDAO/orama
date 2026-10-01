@@ -120,7 +120,7 @@ func TestMintAt_mintsThroughTheNodeAndPinsItsCertificate(t *testing.T) {
 	gatewayURL := "https://example.com:" + u.Port()
 	client := nodeClient(srv.Client().Transport.(*http.Transport), "127.0.0.1")
 
-	m, err := mintAt(client, gatewayURL, "bearer-x", 30)
+	m, err := mintAt(client, gatewayURL, "bearer-x", 30*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestMintAt_failures(t *testing.T) {
 			defer srv.Close()
 			u, _ := url.Parse(srv.URL)
 			client := nodeClient(srv.Client().Transport.(*http.Transport), "127.0.0.1")
-			if _, err := mintAt(client, "https://example.com:"+u.Port(), "b", 30); err == nil {
+			if _, err := mintAt(client, "https://example.com:"+u.Port(), "b", 30*time.Minute); err == nil {
 				t.Error("a failed mint produced an invite")
 			}
 		})
@@ -163,7 +163,7 @@ func TestMintAt_certificateMustVerifyForTheDomain(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	client := nodeClient(srv.Client().Transport.(*http.Transport), "127.0.0.1")
-	if _, err := mintAt(client, "https://stagenet.not-in-the-cert.test:"+u.Port(), "b", 30); err == nil {
+	if _, err := mintAt(client, "https://stagenet.not-in-the-cert.test:"+u.Port(), "b", 30*time.Minute); err == nil {
 		t.Fatal("a certificate not valid for the domain was pinned")
 	}
 }
@@ -184,7 +184,7 @@ func TestMintAt_doesNotFollowRedirects(t *testing.T) {
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	client := nodeClient(srv.Client().Transport.(*http.Transport), "127.0.0.1")
-	_, err := mintAt(client, "https://example.com:"+u.Port(), "b", 30)
+	_, err := mintAt(client, "https://example.com:"+u.Port(), "b", 30*time.Minute)
 	if err == nil || !strings.Contains(err.Error(), "307") {
 		t.Fatalf("a redirected mint was followed or misreported: %v", err)
 	}
@@ -251,5 +251,24 @@ func TestMintThrough_aFailedMintProducesNoInvite(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "203.0.113.9") {
 		t.Errorf("the error does not name the node: %v", err)
+	}
+}
+
+// TestInviteExpiryBody_subMinuteIsNotZero: --expiry 30s was sent as
+// expiry_minutes 0, which the gateway read as "use the default hour".
+func TestInviteExpiryBody_subMinuteIsNotZero(t *testing.T) {
+	for _, c := range []struct {
+		in            time.Duration
+		seconds, mins int
+	}{
+		{30 * time.Second, 30, 1},
+		{90 * time.Second, 90, 2},
+		{time.Hour, 3600, 60},
+		{1500 * time.Millisecond, 2, 1},
+	} {
+		got := inviteExpiryBody(c.in)
+		if got["expiry_seconds"] != c.seconds || got["expiry_minutes"] != c.mins {
+			t.Errorf("%s: %v, want %d s and %d min", c.in, got, c.seconds, c.mins)
+		}
 	}
 }

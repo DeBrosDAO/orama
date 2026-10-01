@@ -18,7 +18,30 @@ const maxInviteBody = 4096
 
 // InviteRequest is the optional body for POST /v1/operator/invite.
 type InviteRequest struct {
-	ExpiryMinutes int `json:"expiry_minutes,omitempty"` // Default: 60
+	// ExpirySeconds wins over ExpiryMinutes; minutes alone could not say 30s,
+	// so a sub-minute expiry became 0 and took the default hour.
+	ExpirySeconds int `json:"expiry_seconds,omitempty"`
+	ExpiryMinutes int `json:"expiry_minutes,omitempty"`
+}
+
+// Invite lifetimes. An invite token is a credential for every secret the
+// cluster holds, so it is short-lived by design.
+const (
+	defaultInviteExpiry = time.Hour
+	maxInviteExpiry     = time.Hour
+)
+
+// expiry is how long the requested invite lives: seconds if given, else
+// minutes, else the default, and never past the cap.
+func (req InviteRequest) expiry() time.Duration {
+	d := defaultInviteExpiry
+	switch {
+	case req.ExpirySeconds > 0:
+		d = time.Duration(req.ExpirySeconds) * time.Second
+	case req.ExpiryMinutes > 0:
+		d = time.Duration(req.ExpiryMinutes) * time.Minute
+	}
+	return min(d, maxInviteExpiry)
 }
 
 // InviteResponse is returned on success.
@@ -42,31 +65,20 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional expiry from the body (default and cap: 60 min). An empty body,
+	// Optional expiry from the body (default and cap: an hour). An empty body,
 	// chunked or not, takes the default; a body that is not the request is
 	// refused rather than silently ignored.
-	expiryMinutes := 60
+	var req InviteRequest
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxInviteBody))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read the request body")
 		return
 	}
 	if len(body) > 0 {
-		var req InviteRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"expiry_minutes\": N} or no body at all")
+			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"expiry_seconds\": N} or no body at all")
 			return
 		}
-		if req.ExpiryMinutes > 0 {
-			expiryMinutes = req.ExpiryMinutes
-		}
-	}
-	// An invite token is a credential for every secret the cluster holds, so it
-	// is short-lived by design. A week was long enough to outlive the reason it
-	// was minted.
-	const maxExpiryMinutes = 60
-	if expiryMinutes > maxExpiryMinutes {
-		expiryMinutes = maxExpiryMinutes
 	}
 
 	// Generate random 32-byte token. What is returned below is the only copy
@@ -79,7 +91,7 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	expiresAt := time.Now().UTC().Add(time.Duration(expiryMinutes) * time.Minute)
+	expiresAt := time.Now().UTC().Add(req.expiry())
 	expiresAtStr := expiresAt.Format("2006-01-02 15:04:05")
 
 	ctx := r.Context()
