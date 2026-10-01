@@ -124,3 +124,17 @@ func TestGenerateCorefile_AlwaysCarriesCredentials(t *testing.T) {
 		t.Errorf("Corefile rqlite block lacks credentials:\n%s", corefile)
 	}
 }
+
+// resolved answers LLMNR on 0.0.0.0:5355 and mDNS on 5353 unless told not to;
+// the drop-in install writes is what keeps both off the public address, next to
+// the stub listener CoreDNS needs gone.
+func TestResolvedDropIn_turnsOffStubLLMNRAndMDNS(t *testing.T) {
+	for _, want := range []string{"[Resolve]\n", "DNSStubListener=no\n", "LLMNR=no\n", "MulticastDNS=no\n"} {
+		if !strings.Contains(resolvedDropIn, want) {
+			t.Errorf("resolved drop-in lacks %q:\n%s", want, resolvedDropIn)
+		}
+	}
+	if !strings.HasSuffix(resolvedDropIn, "\n") {
+		t.Error("resolved drop-in must end with a newline")
+	}
+}

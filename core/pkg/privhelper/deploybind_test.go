@@ -311,7 +311,8 @@ func TestDeployBuildUserName_isDistinctPerInstanceAndFitsAUserName(t *testing.T)
 		}
 		seen[name] = instance
 	}
-	if DeployBuildUserName("acme-web") != DeployBuildUserName("acme-web") {
+	first, second := DeployBuildUserName("acme-web"), DeployBuildUserName("acme-web")
+	if first != second {
 		t.Error("the user of one instance changes between calls")
 	}
 }

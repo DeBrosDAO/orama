@@ -8,6 +8,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/config"
 )
 
 // TestInstall_firewallDefaultDeny: ufw is active, denies incoming by default
@@ -30,7 +31,9 @@ func TestInstall_firewallDefaultDeny(t *testing.T) {
 // `orama` (Reconcile owns only tagged rules, docs/SECURITY.md "Firewall: only
 // Orama's rules"), the desired set is all there, and nothing outside it is
 // open: SSH, WireGuard, HTTP(S), DNS on nameservers only, TURN only while the
-// host relays, and the mesh only on wg0.
+// host relays, and the mesh only on wg0. On the stagenet target a rule the
+// operator added without a tag must be declared in config.StagenetHostUFWRules
+// (and is logged); a declaration whose rule is gone fails.
 func TestInstall_firewallRulesAreExactlyOramas(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -44,15 +47,30 @@ func TestInstall_firewallRulesAreExactlyOramas(t *testing.T) {
 				t.Errorf("%s: no allow rule for %s tagged %q", n.Name, to, infra.TagOrama)
 			}
 		}
+		used := map[string]bool{}
 		for _, r := range rules {
 			if r.V6 || !strings.HasPrefix(r.Action, "ALLOW") {
 				continue
+			}
+			if r.Comment == "" && f.State.IsStagenet() {
+				if h, ok := config.StagenetHostUFWRule(n.Name, r.To); ok {
+					used[h.To] = true
+					t.Logf("%s: untagged rule %s is a declared host extra: %s", n.Name, r.To, h.Why)
+					continue
+				}
 			}
 			if r.Comment != infra.TagOrama && r.Comment != infra.TagGlobal {
 				t.Errorf("%s: untagged rule %s %s from %s (comment %q)", n.Name, r.To, r.Action, r.From, r.Comment)
 			}
 			if r.Comment == infra.TagOrama && !permitted[r.To] {
 				t.Errorf("%s: an orama rule opens %s, which the desired set does not have", n.Name, r.To)
+			}
+		}
+		if f.State.IsStagenet() {
+			for _, h := range config.StagenetHostUFWRulesOn(n.Name) {
+				if !used[h.To] {
+					t.Errorf("%s: the declared host rule %q is not there any more: remove it from config.StagenetHostUFWRules", n.Name, h.To)
+				}
 			}
 		}
 		for _, r := range rules {

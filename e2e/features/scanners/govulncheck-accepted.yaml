@@ -1,0 +1,54 @@
+# Vulnerabilities govulncheck reports as reachable and that the project accepts
+# for now. TestGovulncheck_modulesUnaffected fails on a finding not listed here,
+# on an entry that no longer appears (remove it), and on an entry past its
+# review_by. review_by is at most 90 days away. See e2e/README.md, "Scanners".
+accepted:
+  - module: chain
+    id: GO-2026-6443
+    reason: >-
+      grpc 1.84.0; the fix exists only in the pre-release v1.85.0-dev (no tagged
+      release carries it): upgrade at the v1.85.0 release. Not exposed by the
+      chain: the panic needs a gRPC server routed by xDS (the flaw is the xDS
+      server interceptor indexing an empty :authority). The chain's only gRPC
+      server is cosmos-sdk's server/grpc, a plain grpc.NewServer, and nothing in
+      the chain, cosmos-sdk or its own dependencies calls xds.NewGRPCServer; the
+      xDS packages are linked only through the client-side
+      xds/googledirectpath that cloud.google.com/go/storage imports. The trace
+      govulncheck reports (scripts/stagenet/node agent http.Server.Serve to
+      transport.HandleStreams) is the generic HTTP/2 transport, which cannot hit
+      the xDS route.
+    review_by: 2026-12-29
+  - module: chain
+    id: GO-2026-5932
+    reason: >-
+      golang.org/x/crypto/openpgp is unmaintained and has no fixed version. The
+      chain never calls it: the reported traces are package init (cosmos-sdk
+      crypto/armor imports openpgp/armor for key export and import) and
+      interface dispatch (io.ReadAll and io.ReadFull in provider.Cat and
+      storagekey.Apply treat armor.Read as a possible io.Reader; no code in the
+      chain builds an armor reader). Real armor use is the operator key
+      import/export commands of the cosmos keyring, reading a file the operator
+      names on their own machine; no network peer or transaction supplies input
+      to it.
+    review_by: 2026-12-29
+  - module: chain
+    id: GO-2026-4740
+    reason: >-
+      shamaton/msgpack v2.2.3 (GHSA-h9q6-hc68-35rp, out-of-range read on a
+      truncated fixext) has no fixed version. govulncheck reports only package
+      init (x/wasmpolicy imports wasmvm/v3/types, which imports msgpack); the
+      decoder is never called. wasmvm uses it in one place, to decode the
+      pinned-module metrics libwasmvm returns in-process, and the chain does not
+      call that. No transaction, contract or peer message reaches a msgpack
+      decoder.
+    review_by: 2026-12-29
+  - module: chain
+    id: GO-2024-2584
+    reason: >-
+      cosmos-sdk slashing evasion through re-delegation (GHSA-86h5-xcpx-cfqc,
+      ASA-2024-005). The advisory covers versions <= 0.50.4 and <= 0.47.9 and
+      the chain is on v0.54.4, which is later than both; the vulndb entry has no
+      fixed version, so govulncheck reports it for every release. The reported
+      trace is app/slash_base_fix.go calling x/staking Keeper.Slash, our own
+      wrapper that fixes the slash base amount.
+    review_by: 2026-12-29

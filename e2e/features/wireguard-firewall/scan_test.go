@@ -75,20 +75,21 @@ func openFromOutside(ctx context.Context, ip string, ports []int) []int {
 
 // TestScan_onlyEdgePortsOpen: from the runner, over the internet, each
 // node's public address accepts TCP on SSH, HTTP and HTTPS, on 53 only when
-// it is a nameserver, on the TURN ports only while it relays, and on nothing
-// else scanned (docs/SECURITY.md "Network Isolation"). The run's cloud
+// it is a nameserver, on the TURN ports only while it relays, on the global
+// layer's ports only when the node is a global node, and on nothing else
+// scanned (docs/SECURITY.md "Network Isolation"). The run's cloud
 // firewall also filters, so only ports it lets through can reveal a leak.
 func TestScan_onlyEdgePortsOpen(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	ports := scanPorts()
 	for _, n := range f.State.Nodes {
-		turn := infra.HostRunsTURN(t, f, n)
+		e := nodeEdge(t, f, n)
 		open := openFromOutside(t.Context(), n.PublicIP, ports)
 		got := map[int]bool{}
 		for _, p := range open {
 			got[p] = true
-			if !allowedPublic(fleet.Listener{Proto: "tcp", Port: p}, n, turn) {
+			if !allowedPublic(fleet.Listener{Proto: "tcp", Port: p}, n, e) {
 				t.Errorf("%s: tcp %d is open from the internet", n.Name, p)
 			}
 		}

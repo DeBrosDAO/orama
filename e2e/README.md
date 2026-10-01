@@ -660,6 +660,35 @@ asserts. The skips:
   broken-node test also skips: `provision.BreakUpgrade` never runs on stagenet.
   `cli-env-auth-misc`'s rollout tests pass a dummy archive and run.
 
+**Tenant deployments in the listener audit (every target).** A deployment binds
+whatever address its code picks, on the one port its unit allows. The audit
+excuses such a socket only when the process is in an
+`orama-deploy-<runtime>@<instance>.service` cgroup, the port is in 10200-19999
+(`fleet.DeployPortMin/Max`, pinned to `privhelper.DeployPortMin/Max` by a test)
+and no ufw allow rule opens it; it logs each one. docs/SECURITY.md, "Tenant
+deployments", says why.
+
+**What the stagenet nodes have that Orama did not install.** The public-edge
+audits (`wireguard-firewall`'s listener audit and port scan, `install`'s
+firewall rules) assert that only Orama's ports are open. Two things on the
+stagenet are legitimately more, and the audits know them differently:
+
+- The **global layer** (`orama global install --colocated`): the chain P2P
+  (31000 tcp+udp), the public Kubo swarm (31010 tcp+udp) and the storage
+  provider (31013 tcp) are public on purpose, DNAT-ed into the `orama-global`
+  namespace and allowed by ufw rules tagged `orama-global`. The audits read
+  those rules (`fleet.GlobalPublicPorts`) and excuse exactly those ports, on a
+  node that has them; a tagged rule on any other port is not excused.
+- **Operator and image extras**, declared in `harness/config/hostextras.go`
+  (`StagenetHostListeners`, `StagenetHostUFWRules`): tailscale (its sockets and
+  its untagged `ufw allow in on tailscale0`) and the image's rpcbind on node-2.
+  Each declaration names the node, the process, the protocol and the port
+  (0 = any), and why it is there. The audit logs every use of one, and **fails**
+  when a declaration no longer matches anything on the node, so the list cannot
+  outlive the thing it excuses. A fleet run has no declarations: nothing is
+  excused there. To admit a new extra, add a declaration with its reason; an
+  Orama process is never declared.
+
 Stages 10 and 11 disturb the live cluster (upgrades, partitions, kills): run
 them only on purpose.
 
@@ -751,6 +780,40 @@ test, a coverage gap), **FAIL** (a test, package or
 run step failed; a package whose `go test` exited non-zero fails with the tail
 of its stderr even when every parsed test passed; a failed teardown is a run
 error; a flaky failure is still a failure). Exit codes 0, 3, 1 (2 for usage).
+
+## Scanners
+
+`features/scanners` runs govulncheck, staticcheck and gosec on the `core`,
+`chain` and `e2e` modules, plus the secret, audit, fuzz and race scans. A
+scanner that is not installed is not covered, never a pass. govulncheck
+(`golang.org/x/vuln/cmd/govulncheck`) and staticcheck are not taken from the
+runner: both are pinned in `golang_test.go` and run with `go run`, so the
+Go toolchain that builds the modules builds the scanner. An installed binary
+is as old as its last install and refuses a module whose `go` directive is
+newer ("package requires newer Go version").
+
+**Accepted vulnerabilities.** govulncheck runs with `-format json`, and the
+vulnerabilities whose function the code reaches (a finding with a function in
+its trace; an imported package or a required module alone does not count) are
+compared with `features/scanners/govulncheck-accepted.yaml`, embedded in the
+test. Each entry names a `module` (`core`, `chain` or `e2e`), an `id`
+(`GO-YYYY-NNNN`), a `reason` (why it is unfixable or not exploitable here: the
+call path and the mitigation, specifically) and a `review_by` date no more than
+90 days away. The test fails on:
+
+- a reachable vulnerability that is not listed: upgrade the dependency, or
+  list it with a reason;
+- a listed entry govulncheck no longer reports (stale): remove it;
+- a listed entry whose `review_by` has passed: fix it, or review the reason and
+  move the date;
+- a file that does not parse (unknown field, missing reason, bad ID or date,
+  a duplicate, a date over 90 days out).
+
+A govulncheck run that fails or prints no `config` message is a failure, never
+a clean scan. The parsing and matching (`Parse`, `Called` and `Judge` in package
+`harness/vulnaccept`) have unit tests that need no fleet:
+`cd e2e && go test ./harness/vulnaccept/`. The reasons are the same analysis as
+"Chain dependency advisories" in `docs/SECURITY.md`; change both together.
 
 ## Coverage gate
 

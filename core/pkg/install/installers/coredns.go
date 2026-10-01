@@ -29,7 +29,13 @@ func NewCoreDNSInstaller(arch string, logWriter io.Writer, oramaHome string) *Co
 	}
 }
 
-// Install builds and installs CoreDNS with the custom RQLite plugin
+// resolvedDropIn is the systemd-resolved drop-in install writes. The stub
+// listener is off so CoreDNS owns :53. LLMNR and mDNS are off because resolved
+// answers them on 0.0.0.0:5355 and 0.0.0.0:5353 by default (Ubuntu and Debian
+// ship LLMNR on), a public-address listener no Orama service needs: names
+// resolve through CoreDNS and the overlay, never through multicast.
+const resolvedDropIn = "[Resolve]\nDNSStubListener=no\nLLMNR=no\nMulticastDNS=no\n"
+
 // DisableResolvedStubListener disables systemd-resolved's DNS stub listener
 // so CoreDNS can bind to port 53. This is required on Ubuntu/Debian systems
 // where systemd-resolved listens on 127.0.0.53:53 by default.
@@ -46,8 +52,7 @@ func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
 	if err := os.MkdirAll("/etc/systemd/resolved.conf.d", 0755); err != nil {
 		return fmt.Errorf("failed to create resolved.conf.d: %w", err)
 	}
-	conf := "[Resolve]\nDNSStubListener=no\n"
-	if err := os.WriteFile(resolvedConf, []byte(conf), 0644); err != nil {
+	if err := os.WriteFile(resolvedConf, []byte(resolvedDropIn), 0644); err != nil {
 		return fmt.Errorf("failed to write resolved config: %w", err)
 	}
 

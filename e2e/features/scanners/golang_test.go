@@ -3,16 +3,22 @@
 package scanners
 
 import (
+	_ "embed"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
+	"github.com/DeBrosOfficial/network/e2e/harness/vulnaccept"
 )
+
+// acceptedYAML is the checked-in list of vulnerabilities the project accepts
+// (package vulnaccept judges a scan against it).
+//
+//go:embed govulncheck-accepted.yaml
+var acceptedYAML []byte
 
 // Exit codes the Go scanners document.
 const (
-	// govulncheckAffected: "Your code is affected by N vulnerabilities"
-	// (golang.org/x/vuln/cmd/govulncheck, text mode).
-	govulncheckAffected = 3
 	// staticcheckFindings and gosecFindings: problems were reported.
 	staticcheckFindings = 1
 	gosecFindings       = 1
@@ -25,6 +31,13 @@ const (
 // v0.8.1 is staticcheck 2026.2.1, the first release after Go 1.27.
 const staticcheckPackage = "honnef.co/go/tools/cmd/staticcheck@v0.8.1"
 
+// govulncheckPackage is the govulncheck the modules are scanned with, run
+// through `go run` for the same reason as staticcheck: an installed binary is
+// built with the Go of its last install, and a govulncheck built with an older
+// Go than a module's go directive refuses it ("package requires newer Go
+// version"). v1.8.0 is the latest release.
+const govulncheckPackage = "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
+
 // tagArgs is the -tags flag for m, or nothing.
 func tagArgs(m module) []string {
 	if m.tags == "" {
@@ -34,24 +47,36 @@ func tagArgs(m module) []string {
 }
 
 // TestGovulncheck_modulesUnaffected: no module calls a function with a known
-// vulnerability (govulncheck reports only reachable ones). Network: govulncheck
-// downloads the Go vulnerability database (vuln.go.dev) and, like go build,
-// may fetch modules through GOPROXY, from the runner; it sends module paths
-// and versions, never source.
+// vulnerability (govulncheck reports only reachable ones) beyond those listed,
+// with a reason and a review date, in govulncheck-accepted.yaml. A reachable
+// vulnerability not listed, a listed one no longer reported, and a listed one
+// past its review_by all fail. Network: govulncheck downloads the Go
+// vulnerability database (vuln.go.dev) and, like go build, may fetch modules
+// through GOPROXY, from the runner; it sends module paths and versions, never
+// source.
 func TestGovulncheck_modulesUnaffected(t *testing.T) {
 	t.Parallel()
-	realistic.Tool(t, "govulncheck", "install golang.org/x/vuln/cmd/govulncheck to scan for known vulnerabilities")
+	realistic.Tool(t, "go", "the pinned govulncheck is built and run with `go run`")
+	now := time.Now()
+	accepted, err := vulnaccept.Parse(acceptedYAML, now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := newScan(t)
 	for _, m := range goModules {
 		t.Run(m.dir, func(t *testing.T) {
 			t.Parallel()
-			res := s.run(t, m.dir, vulnBudget, "govulncheck", append(tagArgs(m), "./...")...)
-			switch res.Exit {
-			case 0:
-			case govulncheckAffected:
-				t.Errorf("%s calls vulnerable code:\n%s", m.dir, realistic.Tail(res.Stdout))
-			default:
+			args := append(append([]string{"run", govulncheckPackage, "-format", "json"}, tagArgs(m)...), "./...")
+			res := s.run(t, m.dir, vulnBudget, "go", args...)
+			if res.Exit != 0 {
 				t.Fatalf("govulncheck could not scan %s (exit %d):\n%s", m.dir, res.Exit, realistic.Tail(res.Output()))
+			}
+			found, err := vulnaccept.Called([]byte(res.Stdout))
+			if err != nil {
+				t.Fatalf("%s: %v\n%s", m.dir, err, realistic.Tail(res.Output()))
+			}
+			for _, problem := range vulnaccept.Judge(m.dir, found, accepted, now) {
+				t.Error(problem)
 			}
 		})
 	}
