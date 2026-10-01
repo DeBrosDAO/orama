@@ -922,6 +922,14 @@ Every subcommand takes `--json`, which prints the gateway's reply verbatim.
 or the wait runs out. Only "the record is not visible yet" is retried; a domain
 that was never added fails immediately.
 
+Adding a domain proves nothing, so it does not reserve the name. Only a
+**verified** domain, or a pending one of your own namespace, refuses an add
+(`409 Domain already in use`, the same answer whichever namespace holds it).
+A pending row of another namespace is replaced by your add, and a pending row
+expires 72 hours after it was added. If two namespaces add the same name, the
+last add holds the single row, and only its token verifies: re-run
+`orama domain add` and use the token it prints.
+
 After verification, point your domain's A record to your deployment's node IP.
 
 > **No certificate for custom domains yet.** The gateway's TLS check allows only subdomains of the network's base domain (`core/pkg/gateway/status_handlers.go`), so HTTPS works on your deployment's own address, not on the custom domain.

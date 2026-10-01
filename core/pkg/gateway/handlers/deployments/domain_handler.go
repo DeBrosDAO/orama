@@ -22,6 +22,10 @@ import (
 // gateway's host routing requires before it serves the domain.
 const domainStatusSQL = `CASE WHEN dd.verified_at IS NULL THEN 'pending' ELSE 'verified' END`
 
+// pendingDomainTTL is how long an unverified custom-domain row holds its name
+// against other namespaces' adds. After that an add replaces it.
+const pendingDomainTTL = 72 * time.Hour
+
 // DomainHandler handles custom domain management
 type DomainHandler struct {
 	service *DeploymentService
@@ -105,37 +109,30 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 	// Generate verification token
 	token := generateVerificationToken()
 
-	// Check if domain already exists
-	var existingCount int
-	checkQuery := `SELECT COUNT(*) AS count FROM deployment_domains WHERE domain = ?`
-	var counts []struct {
-		Count int `db:"count"`
-	}
-	if err := h.service.db.Query(ctx, &counts, checkQuery, domain); err != nil {
-		h.logger.Error("Failed to check for an existing domain", zap.Error(err))
-		http.Error(w, "Failed to add domain", http.StatusInternalServerError)
-		return
-	}
-	if len(counts) > 0 {
-		existingCount = counts[0].Count
-	}
-
-	if existingCount > 0 {
-		http.Error(w, "Domain already in use", http.StatusConflict)
-		return
-	}
-
-	// Insert only if no row holds the domain: the duplicate check above and
-	// this insert are two statements, and a concurrent add of the same domain
-	// would otherwise meet the UNIQUE constraint and answer 500, not 409.
+	// One statement claims the domain, so two adds racing for it cannot both
+	// win and none meets the UNIQUE constraint as a 500. A verified row, or a
+	// pending row of this namespace that has not expired, blocks the add. A
+	// pending row of another namespace, or an expired one, proves nothing and
+	// is superseded in place: the last add holds the row and only its token
+	// verifies.
 	query := `
 		INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
-		SELECT ?, ?, ?, ?, TRUE, ?, ?, ?
-		WHERE NOT EXISTS (SELECT 1 FROM deployment_domains WHERE domain = ?)
+		VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)
+		ON CONFLICT(domain) DO UPDATE SET
+			id = excluded.id,
+			deployment_id = excluded.deployment_id,
+			namespace = excluded.namespace,
+			is_custom = TRUE,
+			verification_token = excluded.verification_token,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at
+		WHERE deployment_domains.verified_at IS NULL
+		  AND (deployment_domains.namespace != excluded.namespace
+		       OR datetime(deployment_domains.created_at) < datetime(?))
 	`
 
 	now := time.Now()
-	res, err := h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now, domain)
+	res, err := h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now, now.Add(-pendingDomainTTL))
 	if err != nil {
 		h.logger.Error("Failed to insert domain", zap.Error(err))
 		http.Error(w, "Failed to add domain", http.StatusInternalServerError)

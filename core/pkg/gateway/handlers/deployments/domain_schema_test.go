@@ -118,9 +118,8 @@ func TestHandleListDomains_unknown_deployment(t *testing.T) {
 	}
 }
 
-// racingDomainClient inserts another namespace's row for the domain just
-// before the add's insert runs: the add's duplicate check has already passed,
-// as it would when two adds of one domain run at once.
+// racingDomainClient inserts a row for the domain just before the add's
+// insert runs, as when two adds of one domain run at once.
 type racingDomainClient struct {
 	rqlite.Client
 	race func()
@@ -136,8 +135,8 @@ func (c racingDomainClient) Exec(ctx context.Context, query string, args ...any)
 func TestHandleAddDomain_aConcurrentAddIs409Not500(t *testing.T) {
 	h, exec := newDomainHandlerOnSchema(t)
 	h.service.db = racingDomainClient{Client: h.service.db, race: func() {
-		exec(`INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
-			VALUES ('r1', 'd2', 'ns-b', 'race.example.org', TRUE, 't', datetime('now'), datetime('now'))`)
+		exec(`INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, verified_at)
+			VALUES ('r1', 'd2', 'ns-b', 'race.example.org', TRUE, 't', datetime('now'))`)
 	}}
 	w := httptest.NewRecorder()
 	h.HandleAddDomain(w, domainRequest(http.MethodPost, "/v1/deployments/domains/add",
