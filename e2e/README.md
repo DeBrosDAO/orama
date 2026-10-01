@@ -556,6 +556,11 @@ go run ./cmd/e2e-fleet target stagenet --out /tmp/stagenet-state.json   # read-o
 E2E_FLEET_STATE=/tmp/stagenet-state.json go run ./cmd/e2e-fleet test --stage 1
 ```
 
+`test --features a,b` runs only those packages (of every stage, or of `--stage N`)
+and keeps the other packages' results in the artifact dir's timeline and report: a
+fix to one package is rechecked in minutes instead of a whole stage. An unknown
+package name is a usage error.
+
 `target stagenet` writes the state (`"target": "stagenet"`): `node-1` athena
 `37.59.116.212` (user `debian`, WG `10.0.0.1`), `node-2` superman
 `141.227.165.168` and `node-3` poseidon `57.128.226.141` (user `ubuntu`, WG

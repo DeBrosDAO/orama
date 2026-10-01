@@ -71,6 +71,9 @@ type Options struct {
 	Only int
 	// Resume skips stages the state file records as completed.
 	Resume bool
+	// Features, when set, runs just these packages of the selected stages and
+	// keeps the other packages' results already in the timeline.
+	Features []string
 }
 
 // Run executes steps in order and returns the timeline. Test failures do not
@@ -81,7 +84,7 @@ type Options struct {
 func (r *Runner) Run(ctx context.Context, steps []Step, opt Options) (*Timeline, error) {
 	statePath := filepath.Join(r.ArtifactDir, StateFileName)
 	tl := &Timeline{}
-	if opt.Resume || opt.Only != 0 {
+	if opt.Resume || opt.Only != 0 || len(opt.Features) > 0 {
 		loaded, err := LoadTimeline(statePath)
 		if err != nil {
 			return nil, err
@@ -95,11 +98,21 @@ func (r *Runner) Run(ctx context.Context, steps []Step, opt Options) (*Timeline,
 		if (opt.Only != 0 && step.Stage.ID != opt.Only) || (opt.Resume && tl.Completed(step.Stage.ID)) {
 			continue
 		}
+		if len(opt.Features) > 0 {
+			step = step.only(opt.Features)
+			if step.empty() {
+				continue
+			}
+		}
 		if err := ctx.Err(); err != nil {
 			return tl, fmt.Errorf("stopped before stage %d (%s): %w", step.Stage.ID, step.Stage.Name, err)
 		}
 		run := r.runStep(ctx, step)
-		tl.put(run)
+		if len(opt.Features) > 0 {
+			tl.merge(run)
+		} else {
+			tl.put(run)
+		}
 		if err := tl.Save(statePath); err != nil {
 			return tl, err
 		}

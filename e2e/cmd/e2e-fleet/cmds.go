@@ -75,9 +75,10 @@ func (rs *runState) provision(ctx, parent context.Context) (int, error) {
 
 func cmdTest(parent context.Context, args []string) (int, error) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	only := fs.Int("stage", 0, "run only this stage id")
+	stageID := fs.Int("stage", 0, "run only this stage id")
 	resume := fs.Bool("resume", false, "skip stages already completed in this artifact dir")
 	parallel := fs.Int("parallel", -1, "go test -parallel for each package (default: the target's; 0 is go's default)")
+	features := fs.String("features", "", "comma-separated packages to run (of the selected stages); the others keep their results in the report")
 	if err := parseFlags(fs, args); err != nil {
 		return exitUsage, err
 	}
@@ -102,15 +103,30 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 	if err != nil {
 		return exitFail, err
 	}
+	only := splitFeatures(*features)
+	if err := stages.CheckFeatures(steps, only); err != nil {
+		return exitUsage, errors.Join(errUsage, err)
+	}
 	err = withBroker(ctx, lay, st, statePath, func(r *stages.Runner) error {
 		r.TestParallel = testParallel(st, *parallel)
-		_, err := r.Run(ctx, steps, stages.Options{Only: *only, Resume: *resume})
+		_, err := r.Run(ctx, steps, stages.Options{Only: *stageID, Resume: *resume, Features: only})
 		return err
 	})
 	if err != nil {
 		return exitFail, err
 	}
 	return writeReport(lay, reportRun{artifactDir: st.ArtifactDir, statePath: statePath, runID: st.RunID}, false)
+}
+
+// splitFeatures is the --features list, blanks dropped.
+func splitFeatures(list string) []string {
+	var out []string
+	for _, f := range strings.Split(list, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // stagenetTestParallel bounds how many tests of a package run at once on the stagenet target: its
