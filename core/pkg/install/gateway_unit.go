@@ -38,8 +38,9 @@ ReadOnlyPaths=/opt/orama/.orama/secrets
 # is the only one that receives them. LoadCredential= has no optional form (a
 # "-" prefix is rejected and the line ignored), so the unit does not start
 # unless both files exist: the installer creates them first (ensureIndexGatewayKeys).
-LoadCredential=jwt-signing-key:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem
-LoadCredential=jwt-eddsa-key:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem
+# The credential ID is the file name the gateway opens in $CREDENTIALS_DIRECTORY.
+LoadCredential=jwt-signing-key.pem:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem
+LoadCredential=jwt-eddsa-key.pem:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem
 `
 
 // installIndexGatewayDropIn writes IndexGatewayDropIn. The caller reloads

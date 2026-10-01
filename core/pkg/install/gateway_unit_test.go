@@ -104,8 +104,8 @@ func TestIndexGatewayDropIn(t *testing.T) {
 		t.Errorf("ReadOnlyPaths = %v", got)
 	}
 	for _, cred := range []string{
-		"jwt-signing-key:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem",
-		"jwt-eddsa-key:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem",
+		"jwt-signing-key.pem:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem",
+		"jwt-eddsa-key.pem:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem",
 	} {
 		if !strings.Contains(IndexGatewayDropIn, "LoadCredential="+cred) {
 			t.Errorf("the index gateway does not receive %s", cred)
@@ -152,5 +152,30 @@ func TestLoadCredentialLines_haveNoOptionalPrefix(t *testing.T) {
 	}
 	if credentials == 0 {
 		t.Fatal("found no LoadCredential= line to check")
+	}
+}
+
+// TestIndexGatewayDropIn_credentialIDsAreTheFilesTheGatewayOpens: systemd
+// names each credential file after its ID, and the gateway opens
+// $CREDENTIALS_DIRECTORY/<file name>; the drop-in said jwt-signing-key, the
+// gateway opened jwt-signing-key.pem, and the upgraded index gateway would not
+// start.
+func TestIndexGatewayDropIn_credentialIDsAreTheFilesTheGatewayOpens(t *testing.T) {
+	ids := map[string]bool{}
+	for _, line := range strings.Split(IndexGatewayDropIn, "\n") {
+		rest, ok := strings.CutPrefix(line, "LoadCredential=")
+		if !ok {
+			continue
+		}
+		id, _, found := strings.Cut(rest, ":")
+		if !found {
+			t.Fatalf("LoadCredential line %q names no source", line)
+		}
+		ids[id] = true
+	}
+	for _, name := range []string{constants.GatewayRSAKeyFileName, constants.GatewayEdDSAKeyFileName} {
+		if !ids[name] {
+			t.Errorf("no credential named %s, the file the gateway opens; the drop-in loads %v", name, ids)
+		}
 	}
 }
