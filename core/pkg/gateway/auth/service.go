@@ -33,6 +33,7 @@ type Service struct {
 	edSigningKey     ed25519.PrivateKey
 	edKeyID          string
 	edKeyNamespace   string
+	keyStore         *KeyStore // where a rotation writes the replacement; nil until SetKeyStore
 	signingKeys      *SigningKeys
 	preferEdDSA      bool
 	defaultNS        string
@@ -284,6 +285,9 @@ func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey, namespace string) {
 	s.preferEdDSA = true
 	s.signingKeys.Add(SigningKey{KID: s.edKeyID, Namespace: namespace, Public: pub})
 }
+
+// SetKeyStore sets where Rotate stores the replacement key.
+func (s *Service) SetKeyStore(store KeyStore) { s.keyStore = &store }
 
 // SigningKeys is every key this gateway will accept a token from.
 func (s *Service) SigningKeys() *SigningKeys { return s.signingKeys }

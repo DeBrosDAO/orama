@@ -923,6 +923,12 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		return fmt.Errorf("this gateway has no signing key and cannot mint a token: %w", err)
 	}
 	authService.SetEdDSAKey(edKey, signingKeyNamespace(cfg.ClientNamespace))
+	// Where a rotation writes the replacement: what the next boot reads.
+	if servesNamedNamespace(cfg.ClientNamespace) {
+		authService.SetKeyStore(auth.FileKeyStore(cfg.StateDir))
+	} else {
+		authService.SetKeyStore(indexKeyStore(privhelper.PutGatewayKey))
+	}
 
 	// Tokens minted before this change carry the old cluster-derived kid, and
 	// have to keep verifying across the upgrade. Only when this boot actually

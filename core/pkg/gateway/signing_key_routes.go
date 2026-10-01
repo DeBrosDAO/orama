@@ -37,14 +37,8 @@ func (g *Gateway) handleRotateSigningKey(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if g.cfg == nil || g.cfg.StateDir == "" {
-		writeError(w, http.StatusServiceUnavailable,
-			"this gateway has no state directory, so a replacement key has nowhere to be written")
-		return
-	}
-
 	previous := g.authService.SigningKID()
-	next, err := g.authService.Rotate(r.Context(), g.cfg.StateDir)
+	next, err := g.authService.Rotate(r.Context())
 	if err != nil {
 		// The cause names files on this node; it goes to the node's log, and
 		// the caller is told where to look.

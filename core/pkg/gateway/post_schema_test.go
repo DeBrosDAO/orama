@@ -107,9 +107,12 @@ func TestPostSchemaSteps_gatingAndAfterReadyGroups(t *testing.T) {
 	if want := []string{"publish this gateway's signing key", "hash plaintext API keys"}; strings.Join(gating, "|") != strings.Join(want, "|") {
 		t.Fatalf("gating steps = %q, want %q", gating, want)
 	}
-	after := g.afterReadySteps(context.Background(), &Config{}, deps)
+	life, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	after := g.afterReadySteps(life, &Config{}, deps)
 	want := []string{
 		"revoke API keys of deleted namespaces",
+		"retire unused index signing keys",
 		"backfill push token fingerprints",
 		"start the pubsub trigger dispatcher",
 		"start the cron scheduler",
@@ -119,6 +122,13 @@ func TestPostSchemaSteps_gatingAndAfterReadyGroups(t *testing.T) {
 	}
 	if err := runPostSchemaSteps(context.Background(), after); err != nil {
 		t.Fatalf("run: %v", err)
+	}
+
+	// A namespace gateway's key is bound and is not its to retire.
+	for _, name := range stepNames(g.afterReadySteps(life, &Config{ClientNamespace: "anchat"}, deps)) {
+		if name == "retire unused index signing keys" {
+			t.Fatalf("a namespace gateway retires index signing keys")
+		}
 	}
 }
 

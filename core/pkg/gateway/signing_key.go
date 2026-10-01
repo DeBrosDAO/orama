@@ -237,6 +237,27 @@ func loadIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink func(st
 	return priv, true, nil
 }
 
+// indexKeyStore is where a rotation puts the index gateway's replacement key:
+// the root-only tree the unit's credential is loaded from, through sink
+// (privhelper.PutGatewayKey), replacing the file. The state directory is never
+// written: a tenant gateway reads it, and the next boot would load the old
+// credential and undo the rotation.
+func indexKeyStore(sink func(string, []byte) error) auth.KeyStore {
+	return auth.KeyStore{
+		Store: func(priv ed25519.PrivateKey) error {
+			encoded, err := marshalEdPrivateKey(priv)
+			if err != nil {
+				return err
+			}
+			if err := sink(eddsaKeyFileName, encoded); err != nil {
+				return fmt.Errorf("store the index gateway's replacement signing key: %w", err)
+			}
+			return nil
+		},
+		Where: filepath.Join(gatewaykeys.Dir, constants.IndexNamespace, eddsaKeyFileName),
+	}
+}
+
 // sealedKey returns the key PEM systemd passed in as the credential name and
 // removes the copy an earlier release left in stateDir, which a tenant gateway
 // (the same uid) can read. A credential that is not there is an error that

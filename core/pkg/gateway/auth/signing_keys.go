@@ -165,9 +165,9 @@ func (s *SigningKeys) Publish(ctx context.Context, key SigningKey) error {
 		namespace = key.Namespace
 	}
 	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`INSERT INTO signing_keys(kid, namespace, algorithm, public_key)
-		 VALUES (?, ?, 'EdDSA', ?)
-		 ON CONFLICT(kid) DO UPDATE SET retired_at = NULL`,
+		`INSERT INTO signing_keys(kid, namespace, algorithm, public_key, last_seen_at)
+		 VALUES (?, ?, 'EdDSA', ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(kid) DO UPDATE SET retired_at = NULL, last_seen_at = CURRENT_TIMESTAMP`,
 		key.KID, namespace, encodePublicKey(key.Public)); err != nil {
 		return fmt.Errorf("publish the signing key %s: %w", key.KID, err)
 	}
@@ -338,9 +338,12 @@ func retirementFrom(cell any) time.Time {
 // private half of — and the next boot would read the old key back, having
 // silently undone the rotation. A failed publish restores the key that is still
 // signing, so what is on disk is always what this gateway signs with.
-func (s *Service) Rotate(ctx context.Context, stateDir string) (SigningKey, error) {
+func (s *Service) Rotate(ctx context.Context) (SigningKey, error) {
 	if s.edSigningKey == nil {
 		return SigningKey{}, fmt.Errorf("this gateway does not sign tokens, so it has no key to rotate")
+	}
+	if s.keyStore == nil {
+		return SigningKey{}, fmt.Errorf("this gateway has nowhere to store a replacement signing key")
 	}
 	previous := s.edKeyID
 	current := s.edSigningKey
@@ -350,16 +353,16 @@ func (s *Service) Rotate(ctx context.Context, stateDir string) (SigningKey, erro
 		return SigningKey{}, fmt.Errorf("generate the replacement signing key: %w", err)
 	}
 
-	if err := PersistSigningKey(stateDir, priv); err != nil {
+	if err := s.keyStore.Store(priv); err != nil {
 		return SigningKey{}, err
 	}
 	next := SigningKey{KID: KeyIDFor(pub), Namespace: s.edKeyNamespace, Public: pub}
 	// Published before it signs anything: a token signed with a key the rest
 	// of the cluster has not seen is refused everywhere until the next reload.
 	if err := s.signingKeys.Publish(ctx, next); err != nil {
-		if rerr := PersistSigningKey(stateDir, current); rerr != nil {
+		if rerr := s.keyStore.Store(current); rerr != nil {
 			return SigningKey{}, fmt.Errorf("%w; restoring the key still in use at %s also failed, so the next boot switches keys without retiring this one: %v",
-				err, SigningKeyPath(stateDir), rerr)
+				err, s.keyStore.Where, rerr)
 		}
 		return SigningKey{}, err
 	}
@@ -372,6 +375,28 @@ func (s *Service) Rotate(ctx context.Context, stateDir string) (SigningKey, erro
 		return next, fmt.Errorf("the new key is live but the previous one was not retired: %w", err)
 	}
 	return next, nil
+}
+
+// KeyStore is where a gateway keeps the Ed25519 key the next boot loads.
+//
+// A rotation has to write exactly what the next boot reads. A tenant gateway
+// reads its own state directory (FileKeyStore). The index gateway reads a
+// systemd credential from a root-only tree and must never write its key into
+// its state directory, which a tenant gateway (the same uid) can read; its
+// store is built by the gateway package around the privileged helper.
+type KeyStore struct {
+	// Store replaces the stored key with priv.
+	Store func(priv ed25519.PrivateKey) error
+	// Where names the location, for an operator reading an error.
+	Where string
+}
+
+// FileKeyStore keeps the key in the gateway's state directory.
+func FileKeyStore(stateDir string) KeyStore {
+	return KeyStore{
+		Store: func(priv ed25519.PrivateKey) error { return PersistSigningKey(stateDir, priv) },
+		Where: SigningKeyPath(stateDir),
+	}
 }
 
 // EdDSAKeyFileName is a gateway's own signing key, inside its state directory.

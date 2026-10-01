@@ -328,7 +328,8 @@ func TestRotate_leavesTheOutgoingKeyVerifiable(t *testing.T) {
 	}
 	previousKID := svc.SigningKID()
 
-	next, err := svc.Rotate(context.Background(), t.TempDir())
+	svc.SetKeyStore(FileKeyStore(t.TempDir()))
+	next, err := svc.Rotate(context.Background())
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -366,7 +367,8 @@ func TestRotate_writesTheReplacementWhereTheNextBootReadsIt(t *testing.T) {
 	svc.signingKeys.registry = keys.registry
 
 	dir := t.TempDir()
-	next, err := svc.Rotate(context.Background(), dir)
+	svc.SetKeyStore(FileKeyStore(dir))
+	next, err := svc.Rotate(context.Background())
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -396,7 +398,8 @@ func TestRotate_publishesNothingWhenTheKeyCannotBeWritten(t *testing.T) {
 	previousKID := svc.SigningKID()
 
 	missing := filepath.Join(t.TempDir(), "no-such-state-dir")
-	if _, err := svc.Rotate(context.Background(), missing); err == nil {
+	svc.SetKeyStore(FileKeyStore(missing))
+	if _, err := svc.Rotate(context.Background()); err == nil {
 		t.Fatal("rotation reported success with nowhere to write the key")
 	}
 
@@ -424,7 +427,8 @@ func TestRotate_restoresTheKeyInUseWhenPublishFails(t *testing.T) {
 	if _, err := db.Exec(`DROP TABLE signing_keys`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Rotate(context.Background(), dir); err == nil {
+	svc.SetKeyStore(FileKeyStore(dir))
+	if _, err := svc.Rotate(context.Background()); err == nil {
 		t.Fatal("rotation reported success although the key was never published")
 	}
 

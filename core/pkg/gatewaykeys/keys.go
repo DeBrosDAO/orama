@@ -51,6 +51,13 @@ func ValidName(name string) bool {
 
 // Write stores pem at dir/namespace/name, replacing the file, as root:root 0400.
 // namespace is the index gateway only; the caller has already checked that.
+//
+// Replacing is what a rotation needs and Ensure never does: Ensure leaves a key
+// that exists alone, so only an explicit Write (the privileged helper's
+// `gateway-key put`) changes a key in place. The file is synced before the
+// rename and the directory after it, so a crash right after a rotation leaves
+// the new key or the old one, never an empty or missing file the unit then
+// refuses to start with.
 func Write(dir, namespace, name string, keyPEM []byte) error {
 	if namespace != constants.IndexNamespace {
 		return fmt.Errorf("gateway key namespace %q is not %s", namespace, constants.IndexNamespace)
@@ -87,6 +94,10 @@ func Write(dir, namespace, name string, keyPEM []byte) error {
 		tmp.Close()
 		return fmt.Errorf("write %s: %w", name, err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync %s: %w", name, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", name, err)
 	}
@@ -95,8 +106,18 @@ func Write(dir, namespace, name string, keyPEM []byte) error {
 		return fmt.Errorf("replace %s: %w", dest, err)
 	}
 	cleanup = false
-	if err := os.Chmod(dest, fileMode); err != nil {
-		return fmt.Errorf("restrict %s: %w", dest, err)
+	return syncDir(destDir)
+}
+
+// syncDir makes a rename in dir durable.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open %s to sync it: %w", dir, err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("sync %s: %w", dir, err)
 	}
 	return nil
 }

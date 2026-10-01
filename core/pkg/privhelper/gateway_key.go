@@ -21,7 +21,8 @@ func validateGatewayKey(args []string) error {
 	return fmt.Errorf("gateway-key %q is not allowed", args)
 }
 
-// PutGatewayKey stores pem as the index gateway's key named name.
+// PutGatewayKey stores pem as the index gateway's key named name, replacing the
+// file: it is what a key rotation uses (pkg/gatewaykeys Ensure never replaces).
 func PutGatewayKey(name string, pem []byte) error {
 	if !gatewaykeys.ValidName(name) {
 		return fmt.Errorf("store the index gateway's %s: not a signing key", name)

@@ -127,6 +127,23 @@ func (g *Gateway) afterReadySteps(life context.Context, cfg *Config, deps *Depen
 			return g.logCount(ctx, "Revoked orphaned API keys", deps.AuthService.RevokeOrphanedAPIKeys)
 		},
 	}}
+	// The index gateways' unbound keys: stamp this one while it runs, and
+	// retire the ones no gateway has stamped for longer than any token they
+	// signed could still be valid. A namespace gateway's key is bound and is
+	// not this gateway's to retire.
+	if !servesNamedNamespace(cfg.ClientNamespace) {
+		steps = append(steps, postSchemaStep{
+			name: "retire unused index signing keys",
+			run: onceSucceeded(func(ctx context.Context) error {
+				if err := g.logCount(ctx, "Retired index signing keys no gateway has used for a day",
+					deps.AuthService.RetireUnusedIndexKeys); err != nil {
+					return err
+				}
+				deps.AuthService.StartSigningKeyHeartbeat(life)
+				return nil
+			}),
+		})
+	}
 	if b, ok := deps.PushDeviceStore.(tokenFPBackfiller); ok {
 		steps = append(steps, postSchemaStep{
 			name: "backfill push token fingerprints",

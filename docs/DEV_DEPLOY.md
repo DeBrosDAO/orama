@@ -1080,6 +1080,10 @@ Both are **expand-only** in this release; the next one contracts them.
   the cutoff that still has no expiry — it never backfills one — and then
   rebuilds the table with `expires_at` and `scopes` NOT NULL.
 
+#### Rotate the index gateway's signing key after upgrading (this release)
+
+The index gateway's signing keys are systemd credentials now (`/var/lib/orama-gateway-keys/index`, root `0400`). The key the upgrade carries over from `data/namespaces/index/gateway` was readable by every tenant gateway until then, and the index key signs for any namespace, so run `orama operator rotate-signing-key` once on each node's index gateway after the whole fleet is upgraded, one node at a time. Rotation writes the new key to the credential tree (never the state directory) and survives a restart; nobody is signed out. The same release stamps each gateway's key every 10 minutes (migration 071) and retires, at index gateway start, unbound keys nobody has stamped for 24 hours, which clears the keys earlier releases published on every restart. Complete the rolling upgrade within 24 hours of the migration: a peer still on the old build does not stamp its key, and its key is retired (published live again when it restarts).
+
 #### Access tokens across the upgrade
 
 0.122.x gateways signed access tokens with the EdDSA key every node derived from
