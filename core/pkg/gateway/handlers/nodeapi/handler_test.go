@@ -508,19 +508,25 @@ func TestHeartbeat_anUnstampedRequestWritesNothing(t *testing.T) {
 	}
 }
 
-// These endpoints write, so they answer only to POST.
+// These endpoints write, so they answer only to POST — to a caller on this
+// node; the internet gets 404 for every method.
 func TestNodeAPI_onlyPostIsServed(t *testing.T) {
 	db := &recordingDB{affected: 1}
 	h := newHandler(db)
+	local := func(method, path string) *http.Request {
+		r := httptest.NewRequest(method, path, nil)
+		r.RemoteAddr = loopbackCaller
+		return r
+	}
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		w := httptest.NewRecorder()
-		h.HandleRegister(w, httptest.NewRequest(method, "/v1/internal/node/register", nil))
+		h.HandleRegister(w, local(method, "/v1/internal/node/register"))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s register: status = %d, want 405", method, w.Code)
 		}
 		w = httptest.NewRecorder()
-		h.HandleHeartbeat(w, httptest.NewRequest(method, "/v1/internal/node/heartbeat", nil))
+		h.HandleHeartbeat(w, local(method, "/v1/internal/node/heartbeat"))
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s heartbeat: status = %d, want 405", method, w.Code)
 		}
@@ -971,5 +977,20 @@ func TestEnrolKey_theProofDoesNotCoverADifferentKey(t *testing.T) {
 	}
 	if len(db.calls) != 0 {
 		t.Errorf("a replayed proof wrote %d rows", len(db.calls))
+	}
+}
+
+// From the internet every method is a 404: a 405 for anything but POST
+// confirmed the route exists, which the off-host 404 is there to deny.
+func TestNodeAPI_aMethodFromTheInternetIsNotFoundNotNotAllowed(t *testing.T) {
+	h := newHandler(&recordingDB{affected: 1})
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		r := httptest.NewRequest(method, "/v1/internal/node/register", nil)
+		r.Header.Set("X-Forwarded-For", "198.51.100.9")
+		w := httptest.NewRecorder()
+		h.HandleRegister(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s from the internet: status %d, want 404", method, w.Code)
+		}
 	}
 }

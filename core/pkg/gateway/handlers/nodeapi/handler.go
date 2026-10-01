@@ -274,11 +274,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (string, 
 
 // authenticateAgainst is the common path, given how to check the stamp.
 func (h *Handler) authenticateAgainst(w http.ResponseWriter, r *http.Request, verifierFor auth.NodeVerifierFor) (string, []byte, bool) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return "", nil, false
-	}
-
 	// Caddy reverse-proxies every path on this node's domains to the gateway,
 	// so without this these endpoints are reachable from the internet and the
 	// stamp is the only thing between a stolen node key and a stranger
@@ -291,8 +286,15 @@ func (h *Handler) authenticateAgainst(w http.ResponseWriter, r *http.Request, ve
 	// should not confirm that it exists. This filters where the request came
 	// from; it authenticates nothing — every process on this host passes it —
 	// and the stamp below is the credential.
+	//
+	// It comes before the method check: a 405 to the internet for anything
+	// but POST confirmed the route as surely as a 403 would.
 	if !auth.ReachedWithoutPublicProxy(r) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return "", nil, false
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", nil, false
 	}
 
