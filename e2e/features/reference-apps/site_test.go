@@ -82,13 +82,18 @@ func render(t testing.TB, c *gw.Client) string {
 // the app: an SSR upload ships node_modules, so the gateway clears whatever
 // an earlier holder of the instance installed
 // (core/pkg/gateway/handlers/deployments/nextjs_handler.go ClearDependencies).
+// It is a oneshot, and systemd zeroes a finished oneshot's start timestamps,
+// so whether it ran is read from its journal: a run that finished, and a last
+// result of success.
 func requireCleanRan(t testing.TB, tn *realistic.Tenant, name string) {
 	t.Helper()
 	unit := "orama-deploy-clean@" + tn.N.Name + "-" + name + ".service"
 	for _, n := range appUnitNodes(t, tn, "node", name) {
-		out := tn.F.MustExec(t, n, "systemctl show -p Result -p ExecMainStartTimestampMonotonic "+unit)
-		if strings.Contains(out.Stdout, "ExecMainStartTimestampMonotonic=0") || !strings.Contains(out.Stdout, "Result=success") {
-			t.Errorf("%s: %s did not run successfully for the SSR app:\n%s", n.Name, unit, out.Stdout)
+		ran := tn.F.MustExec(t, n, "journalctl -u "+unit+" --no-pager -q -o cat | grep -c '^Finished ' || true").Stdout
+		result := tn.F.MustExec(t, n, "systemctl show -p Result "+unit).Stdout
+		if strings.TrimSpace(ran) == "0" || !strings.Contains(result, "Result=success") {
+			t.Errorf("%s: %s did not run successfully for the SSR app (finished runs: %s; %s)",
+				n.Name, unit, strings.TrimSpace(ran), strings.TrimSpace(result))
 		}
 	}
 }
