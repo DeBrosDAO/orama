@@ -70,7 +70,10 @@ func redeployAs(t *testing.T, tn *realistic.Tenant, u, role, version string) {
 	t.Helper()
 	tn.Grant(t, todoApp, role)
 	tn.Deploy(t, "nodejs", realistic.ServerApp(t, tn.F, realistic.AppNodeAPI, version), todoApp,
-		"--env", "STORE_FN="+todoStoreFn, "--env", "APP_VERSION="+version, "--update")
+		"--update")
+	// An update replaces the build and never reads variables: the version the
+	// app reports is a variable, changed on the running app (which restarts it).
+	tn.N.CLI.MustOK(t, "app", "env", "set", todoApp, "--env", "APP_VERSION="+version)
 	tn.EveryNodeServes(t, u, "/version", version)
 	eventually.Require(t, pollEvery, realistic.StartBudget, "both replicas on "+version, func() (bool, error) {
 		n := len(appUnitNodes(t, tn, "node", todoApp))

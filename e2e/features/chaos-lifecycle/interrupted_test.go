@@ -77,7 +77,9 @@ func redeploy(t *testing.T, tn *realistic.Tenant, dir string) {
 	if res.Exit == 0 {
 		return
 	}
-	upd := tn.N.CLI.MustOK(t, "deploy", "go", dir, "--name", "chaosapp", "--env", "APP_VERSION=chaos-v1", "--update")
+	upd := tn.N.CLI.MustOK(t, "deploy", "go", dir, "--name", "chaosapp", "--update")
+	// An update never reads variables; the failed attempt may not have stored them.
+	tn.N.CLI.MustOK(t, "app", "env", "set", "chaosapp", "--env", "APP_VERSION=chaos-v1")
 	t.Logf("the name was held by the failed attempt; --update completed it:\n%s", upd.Stdout)
 }
 
