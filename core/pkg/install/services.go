@@ -219,6 +219,11 @@ func (ps *ProductionSetup) InstallNamespaceTemplates() (err error) {
 
 	// Before the templates: installing them reloads systemd, which is what
 	// picks the drop-ins up.
+	if created, err := ensureIndexGatewayKeys(ps.oramaDir); err != nil {
+		return err
+	} else if len(created) > 0 {
+		ps.logf("  ✓ Created the index gateway's signing keys: %v", created)
+	}
 	if err := installIndexGatewayDropIn(); err != nil {
 		return err
 	}

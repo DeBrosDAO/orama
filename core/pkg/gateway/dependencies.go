@@ -884,7 +884,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	if servesNamedNamespace(cfg.ClientNamespace) {
 		keyPEM, err = loadOrCreateSigningKey(cfg.StateDir, logger)
 	} else {
-		keyPEM, err = loadOrCreateIndexSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir, privhelper.PutGatewayKey, logger)
+		keyPEM, err = loadIndexSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to load or create JWT signing key: %w", err)
@@ -917,7 +917,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	if servesNamedNamespace(cfg.ClientNamespace) {
 		edKey, migrated, err = loadOrCreateEdSigningKey(cfg.StateDir, cfg.ClusterSecret, logger)
 	} else {
-		edKey, migrated, err = loadOrCreateIndexEdSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir, cfg.ClusterSecret, privhelper.PutGatewayKey, logger)
+		edKey, migrated, err = loadIndexEdSigningKey(os.Getenv("CREDENTIALS_DIRECTORY"), cfg.StateDir, cfg.ClusterSecret, privhelper.PutGatewayKey, logger)
 	}
 	if err != nil {
 		return fmt.Errorf("this gateway has no signing key and cannot mint a token: %w", err)

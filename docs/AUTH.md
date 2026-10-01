@@ -903,15 +903,17 @@ the reason. The lobby and the platform's reserved names cannot be removed.
 
 ## Which key signed a token
 
-Every gateway generates its own Ed25519 signing key at first boot, keeps it
-`0600` in its own state directory (`data/namespaces/<ns>/gateway`, `0700`; the
-index gateway's is `data/namespaces/index/gateway`), and publishes the public
+Every gateway has its own Ed25519 signing key, generated at first boot and kept
+`0600` in its own state directory (`data/namespaces/<ns>/gateway`, `0700`). The
+index gateway's is not there: `orama node install`/`upgrade` creates it, root
+`0400`, in `/var/lib/orama-gateway-keys/index` and systemd hands it to that unit
+as a credential (see docs/SECURITY.md), so a gateway restart keeps it. Each gateway publishes the public
 half **to the cluster registry** — not to the tenant database it may also be
 holding — so the rest of the cluster can verify what it mints. It publishes
 once its schema is up, and stays not ready (refusing everything, so minting
 nothing) until the key is published. A token's `kid`
 names the key. A key file that holds the old cluster-derived key (what a
-0.122.x node wrote, carried into the index gateway's state directory by the
+0.122.x node wrote, carried into the index gateway's key by the
 upgrade) is replaced with a key of the gateway's own on load, never signed with.
 
 **A namespace gateway's key is bound to its namespace.** A token signed with it

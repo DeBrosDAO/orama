@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/hkdf"
@@ -191,51 +192,37 @@ func LegacyClusterSigningKey(clusterSecret string) (ed25519.PublicKey, error) {
 	return ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), nil
 }
 
-// deriveEd25519Seed derives a deterministic 32-byte seed for Ed25519 from the
-// cluster secret using HKDF-SHA256 with a stable purpose label. Same secret +
-// same label = same seed = same keypair on every gateway in the cluster.
-// loadOrCreateIndexSigningKey loads the index gateway's RSA key from the
-// credential systemd handed this unit, or generates one and stores it through
-// sink. It does not leave the key in stateDir: every tenant gateway runs as
-// the same user and could read it there.
-func loadOrCreateIndexSigningKey(credDir, stateDir string, sink func(string, []byte) error, logger *logging.ColoredLogger) ([]byte, error) {
-	if pem, err := sealedKey(credDir, stateDir, jwtKeyFileName, sink); err != nil || pem != nil {
-		return pem, err
-	}
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, fmt.Errorf("generate RSA key: %w", err)
-	}
-	pem := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	if err := sink(jwtKeyFileName, pem); err != nil {
-		return nil, err
-	}
-	logger.ComponentInfo(logging.ComponentGeneral, "Generated an RSA signing key for the index gateway")
-	return pem, nil
+// loadIndexSigningKey returns the index gateway's RSA key from the credential
+// systemd handed this unit. The installer creates the file before the unit
+// starts (pkg/gatewaykeys Ensure) and the unit's LoadCredential= refuses to
+// start without it, so a missing credential is a broken install, not a first
+// boot: generating a key here would rotate it on every restart.
+func loadIndexSigningKey(credDir, stateDir string) ([]byte, error) {
+	return sealedKey(credDir, stateDir, jwtKeyFileName)
 }
 
-// loadOrCreateIndexEdSigningKey is the Ed25519 half of loadOrCreateIndexSigningKey.
-// A key that is the cluster-derived one is replaced, as for a tenant gateway.
-func loadOrCreateIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink func(string, []byte) error, logger *logging.ColoredLogger) (ed25519.PrivateKey, bool, error) {
-	pem, err := sealedKey(credDir, stateDir, eddsaKeyFileName, sink)
+// loadIndexEdSigningKey is the Ed25519 half of loadIndexSigningKey. A key that
+// is the cluster-derived one is replaced, as for a tenant gateway; the
+// replacement is stored through sink and signs from this boot on, and the unit
+// loads it as its credential from the next.
+func loadIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink func(string, []byte) error, logger *logging.ColoredLogger) (ed25519.PrivateKey, bool, error) {
+	pem, err := sealedKey(credDir, stateDir, eddsaKeyFileName)
 	if err != nil {
 		return nil, false, err
 	}
-	if pem != nil {
-		edKey, perr := parseEdSigningKey(pem)
-		if perr != nil {
-			return nil, false, fmt.Errorf("the index EdDSA signing key cannot be read (%v); move it aside to have a new one generated, "+
-				"which invalidates every token this gateway has issued", perr)
-		}
-		shared, derr := isClusterDerivedKey(edKey, clusterSecret)
-		if derr != nil {
-			return nil, false, derr
-		}
-		if !shared {
-			return edKey, false, nil
-		}
-		logger.ComponentWarn(logging.ComponentGeneral, "The index EdDSA signing key is the cluster-derived key every node can compute; replacing it")
+	edKey, perr := parseEdSigningKey(pem)
+	if perr != nil {
+		return nil, false, fmt.Errorf("the index EdDSA signing key cannot be read (%v); move %s/%s aside and re-run `orama node upgrade` to have a new one generated, "+
+			"which invalidates every token this gateway has issued", perr, gatewaykeys.Dir, constants.IndexNamespace+"/"+eddsaKeyFileName)
 	}
+	shared, derr := isClusterDerivedKey(edKey, clusterSecret)
+	if derr != nil {
+		return nil, false, derr
+	}
+	if !shared {
+		return edKey, false, nil
+	}
+	logger.ComponentWarn(logging.ComponentGeneral, "The index EdDSA signing key is the cluster-derived key every node can compute; replacing it")
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, false, fmt.Errorf("generate Ed25519 key: %w", err)
@@ -247,31 +234,26 @@ func loadOrCreateIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink
 	if err := sink(eddsaKeyFileName, encoded); err != nil {
 		return nil, false, err
 	}
-	return priv, pem != nil, nil
+	return priv, true, nil
 }
 
-// sealedKey returns the key PEM systemd passed in, or the one previously
-// stored in stateDir after moving it through sink. A missing key is (nil, nil).
-// A copy in stateDir is removed once the sealed copy exists.
-func sealedKey(credDir, stateDir, name string, sink func(string, []byte) error) ([]byte, error) {
-	if credDir != "" {
-		pem, err := readKeyIfPresent(filepath.Join(credDir, name))
-		if err != nil {
-			return nil, err
-		}
-		if pem != nil {
-			if err := removeStateKey(stateDir, name); err != nil {
-				return nil, err
-			}
-			return pem, nil
-		}
+// sealedKey returns the key PEM systemd passed in as the credential name and
+// removes the copy an earlier release left in stateDir, which a tenant gateway
+// (the same uid) can read. A credential that is not there is an error that
+// says how to repair it.
+func sealedKey(credDir, stateDir, name string) ([]byte, error) {
+	if credDir == "" {
+		return nil, fmt.Errorf("CREDENTIALS_DIRECTORY is not set, so systemd gave this unit no signing keys; " +
+			"the index gateway must run as orama-namespace-gateway@index with the LoadCredential= lines of its drop-in " +
+			"(orama-namespace-gateway@index.service.d/10-cluster-gateway.conf); run `orama node upgrade` to install them")
 	}
-	pem, err := readKeyIfPresent(filepath.Join(stateDir, name))
-	if err != nil || pem == nil {
+	pem, err := readKeyIfPresent(filepath.Join(credDir, name))
+	if err != nil {
 		return nil, err
 	}
-	if err := sink(name, pem); err != nil {
-		return nil, err
+	if pem == nil {
+		return nil, fmt.Errorf("the credential %s is missing from %s; the index gateway's signing key lives in %s/%s/%s "+
+			"and `orama node upgrade` creates it", name, credDir, gatewaykeys.Dir, constants.IndexNamespace, name)
 	}
 	if err := removeStateKey(stateDir, name); err != nil {
 		return nil, err
@@ -309,6 +291,9 @@ func marshalEdPrivateKey(priv ed25519.PrivateKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
+// deriveEd25519Seed derives a deterministic 32-byte seed for Ed25519 from the
+// cluster secret using HKDF-SHA256 with a stable purpose label. Same secret +
+// same label = same seed = same keypair on every gateway in the cluster.
 func deriveEd25519Seed(clusterSecret string) ([]byte, error) {
 	if clusterSecret == "" {
 		return nil, fmt.Errorf("cluster secret is empty")

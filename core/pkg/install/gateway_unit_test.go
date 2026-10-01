@@ -104,8 +104,8 @@ func TestIndexGatewayDropIn(t *testing.T) {
 		t.Errorf("ReadOnlyPaths = %v", got)
 	}
 	for _, cred := range []string{
-		"jwt-signing-key:-/var/lib/orama-gateway-keys/index/jwt-signing-key.pem",
-		"jwt-eddsa-key:-/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem",
+		"jwt-signing-key:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem",
+		"jwt-eddsa-key:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem",
 	} {
 		if !strings.Contains(IndexGatewayDropIn, "LoadCredential="+cred) {
 			t.Errorf("the index gateway does not receive %s", cred)
@@ -116,5 +116,41 @@ func TestIndexGatewayDropIn(t *testing.T) {
 	}
 	if !strings.HasSuffix(indexGatewayDropInDir, "/orama-namespace-gateway@index.service.d") {
 		t.Errorf("the drop-in is not the index instance's: %s", indexGatewayDropInDir)
+	}
+}
+
+// systemd rejects a "-" before the source of a LoadCredential= (it logs
+// "Credential source ... not valid, ignoring" and the unit gets no credentials
+// directory), so no unit this repo writes may carry one.
+func TestLoadCredentialLines_haveNoOptionalPrefix(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	units, err := filepath.Glob(filepath.Join(filepath.Dir(file), "..", "..", "systemd", "*.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := map[string]string{"IndexGatewayDropIn": IndexGatewayDropIn}
+	for _, u := range units {
+		data, err := os.ReadFile(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		texts[filepath.Base(u)] = string(data)
+	}
+	credentials := 0
+	for name, text := range texts {
+		for _, line := range strings.Split(text, "\n") {
+			rest, ok := strings.CutPrefix(line, "LoadCredential=")
+			if !ok {
+				continue
+			}
+			credentials++
+			id, source, ok := strings.Cut(rest, ":")
+			if !ok || id == "" || !strings.HasPrefix(source, "/") {
+				t.Errorf("%s: %q is not LoadCredential=ID:/absolute/path", name, line)
+			}
+		}
+	}
+	if credentials == 0 {
+		t.Fatal("found no LoadCredential= line to check")
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 )
 
@@ -151,8 +150,6 @@ func RenderNamespaceUnit(dir, service string, isolate bool) (string, error) {
 		return "", fmt.Errorf("%s: %w", service, err)
 	}
 	switch service {
-	case string(ServiceTypeGateway):
-		unit, err = grantGatewayKeys(unit)
 	case string(ServiceTypeIPFS):
 		unit, err = isolateIPFSSecrets(unit)
 	}
@@ -208,30 +205,6 @@ func rewriteUser(unit, user string) (string, error) {
 		return "", fmt.Errorf("unit has %d User= and %d Group= directives", userN, groupN)
 	}
 	return strings.Join(lines, "\n"), nil
-}
-
-// grantGatewayKeys adds the index gateway's signing-key credentials. The
-// shipped template does not name them; the index drop-in does, and only that
-// one unit may receive them. The rendered isolated unit carries the same
-// lines so the gateway user is the one granted gatewaykeys.Dir.
-func grantGatewayKeys(unit string) (string, error) {
-	block := gatewayKeyLines()
-	if strings.Contains(unit, block) {
-		return unit, nil
-	}
-	const marker = "[Install]\n"
-	if !strings.Contains(unit, marker) {
-		return "", fmt.Errorf("gateway unit has no [Install] section")
-	}
-	return strings.Replace(unit, marker, block+marker, 1), nil
-}
-
-func gatewayKeyLines() string {
-	base := filepath.Join(gatewaykeys.Dir, constants.IndexNamespace)
-	rsa := filepath.Join(base, constants.GatewayRSAKeyFileName)
-	ed := filepath.Join(base, constants.GatewayEdDSAKeyFileName)
-	return "LoadCredential=jwt-signing-key:-" + rsa + "\n" +
-		"LoadCredential=jwt-eddsa-key:-" + ed + "\n"
 }
 
 // isolateIPFSSecrets replaces the ipfs unit's read of the whole secrets

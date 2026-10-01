@@ -1,9 +1,14 @@
 package install
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 )
 
 // The gateway template (core/systemd/orama-namespace-gateway@.service) lets a
@@ -30,10 +35,11 @@ TemporaryFileSystem=
 BindReadOnlyPaths=
 ReadOnlyPaths=/opt/orama/.orama/secrets
 # The index gateway's signing keys. The files are root:root 0400; this unit
-# is the only one that receives them. A missing file is a first boot: the
-# gateway generates the key and stores it through orama-privhelper.
-LoadCredential=jwt-signing-key:-/var/lib/orama-gateway-keys/index/jwt-signing-key.pem
-LoadCredential=jwt-eddsa-key:-/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem
+# is the only one that receives them. LoadCredential= has no optional form (a
+# "-" prefix is rejected and the line ignored), so the unit does not start
+# unless both files exist: the installer creates them first (ensureIndexGatewayKeys).
+LoadCredential=jwt-signing-key:/var/lib/orama-gateway-keys/index/jwt-signing-key.pem
+LoadCredential=jwt-eddsa-key:/var/lib/orama-gateway-keys/index/jwt-eddsa-key.pem
 `
 
 // installIndexGatewayDropIn writes IndexGatewayDropIn. The caller reloads
@@ -47,4 +53,25 @@ func installIndexGatewayDropIn() error {
 		return fmt.Errorf("write the cluster gateway's drop-in %s: %w", path, err)
 	}
 	return nil
+}
+
+// ensureIndexGatewayKeys creates the index gateway's signing keys when they are
+// missing, before the unit that loads them is (re)started. A key already
+// stored is left alone; a missing one is taken from the state directory an
+// earlier release kept it in, and generated only when there is none there.
+func ensureIndexGatewayKeys(oramaDir string) ([]string, error) {
+	stateDir := constants.GatewayStateDir(constants.NamespacesDir(oramaDir), constants.IndexNamespace)
+	root := OramaRoot(oramaDir)
+	readLegacy := func(name string) ([]byte, error) {
+		keyPEM, err := root.ReadFile(filepath.Join(stateDir, name), gatewaykeys.MaxPEM)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return keyPEM, err
+	}
+	created, err := gatewaykeys.Ensure(gatewaykeys.Dir, readLegacy)
+	if err != nil {
+		return nil, fmt.Errorf("make sure the index gateway's signing keys exist in %s: %w", gatewaykeys.Dir, err)
+	}
+	return created, nil
 }

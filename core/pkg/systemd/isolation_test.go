@@ -76,7 +76,7 @@ func TestRenderNamespaceUnit_gatewayAndIPFSDoNotShareAUser(t *testing.T) {
 	}
 }
 
-func TestRenderNamespaceUnit_ipfsUserIsNotGrantedTheGatewayKey(t *testing.T) {
+func TestRenderNamespaceUnit_noTemplateIsGrantedTheGatewayKeys(t *testing.T) {
 	dir := unitDir(t)
 	gw, err := RenderNamespaceUnit(dir, string(ServiceTypeGateway), true)
 	if err != nil {
@@ -90,13 +90,14 @@ func TestRenderNamespaceUnit_ipfsUserIsNotGrantedTheGatewayKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The process in the ipfs account is the ipfs unit. The gateway key
-	// directory is granted to the gateway unit and to nobody else here.
+	// No template unit is granted the gateway key directory: the keys belong to
+	// the index instance alone, through its drop-in (pkg/install/gateway_unit.go),
+	// and a template-wide grant would hand them to every tenant gateway.
 	if UnitGrants(ipfs, gatewaykeys.Dir) {
 		t.Fatalf("a process running as %s is granted %s\n%s", ipfsUser, gatewaykeys.Dir, ipfs)
 	}
-	if !UnitGrants(gw, gatewaykeys.Dir) {
-		t.Fatalf("gateway unit is not granted %s\n%s", gatewaykeys.Dir, gw)
+	if UnitGrants(gw, gatewaykeys.Dir) {
+		t.Fatalf("the gateway template is granted %s, so every tenant gateway would receive the index signing keys\n%s", gatewaykeys.Dir, gw)
 	}
 	const clusterSecret = "/opt/orama/.orama/secrets/cluster-secret"
 	const swarmKey = "/opt/orama/.orama/secrets/swarm.key"
