@@ -400,15 +400,29 @@ that build the cluster state, the join lists and the surviving ports skip a bloc
 whose node owes a teardown for that cluster (`notOwedTeardownSQL`): the node's own
 assignment reads (`clusterAssignedQuery`, `restoreClusterOnNode`, `desiredLocalConfig`)
 apply it too, while the allocators' capacity reads still count the block. The
-membership row is removed before the teardown is recorded, so the owed row never
-coexists with the membership it evicts. Giving the node the same cluster again
+teardown is recorded as owed, claimed by the evicting caller, before the membership
+row is removed (`removeAndEvictMember`), so a crash between the two leaves the
+owed row to free the block from; the claim keeps a replay from reading the node as
+still a member and dropping the row, and is released when the teardown stays owed
+(the row is deleted when the eviction freed everything). Giving the node the same cluster again
 withdraws the teardown it owes for it (`AllocatePortBlock`, which also reports that
 the block it hands back was owed): a rollback of that add (`rollbackPortBlock`) records
 the teardown again instead of freeing the block, since the units may still run. A
 replay re-confirms, just before sending and again before freeing, that its row is
 still there and still claimed by it, and drops a teardown owed for a node that is a
 member of that very cluster again (not another incarnation) without sending it or
-freeing the block.
+freeing the block. A replay that fails only updates the row it holds the claim on
+(`recordReplayFailure`), never inserts: a row the re-add withdrew in the meantime
+stays gone.
+
+Residual window: a teardown already on the wire when a re-add withdraws its row
+can still reach the node while the re-add is spawning, and stop the units being
+spawned. The receiver cannot close it: the registry has the block allocated for
+the cluster both for a re-add and for a teardown sent without a row (a namespace
+delete sends before recording), so the node cannot tell them apart without every
+sender recording first. The node's `cluster_id` guard covers another incarnation
+only. A cluster left short by it is repaired by the next reconcile sweep, and the
+failed replay records nothing.
 
 A stop or teardown that fails is recorded in `namespace_pending_cleanup` and retried
 every sweep, rather than logged. The unit keeps running and keeps holding a port

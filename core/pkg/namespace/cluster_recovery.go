@@ -670,8 +670,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	}
 
 	// 13. Clean up dead node's port allocations and cluster assignments
-	cm.removeClusterNodeAssignment(ctx, cluster.ID, deadNodeID)
-	cm.evictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
+	cm.removeAndEvictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
 
 	// 14. Update cluster-state.json on all nodes
 	cm.updateClusterStateAfterRecovery(ctx, cluster)
@@ -855,14 +854,50 @@ func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *Names
 // does not confirm keeps its reservations, owed to it in namespace_pending_cleanup
 // (evictMemberAllocations), and is left out of every read of the cluster's
 // members (notOwedTeardownSQL).
-func (cm *ClusterManager) evictMember(ctx context.Context, clusterID, namespace, nodeID string) {
-	if err := cm.evictMemberAllocations(ctx, clusterID, namespace, nodeID); err != nil {
+func (cm *ClusterManager) evictMember(ctx context.Context, clusterID, namespace, nodeID string) error {
+	err := cm.evictMemberAllocations(ctx, clusterID, namespace, nodeID)
+	if err != nil {
 		cm.logger.Warn("Evicted cluster member keeps its port reservations",
 			zap.String("cluster_id", clusterID),
 			zap.String("namespace", namespace),
 			zap.String("node_id", nodeID),
 			zap.Error(err))
 	}
+	return err
+}
+
+// removeAndEvictMember takes a node out of a cluster in the order that never
+// leaves its block ownerless: the teardown it is owed is recorded first, claimed
+// by this caller, then the membership row goes, then the teardown is attempted.
+// A crash after the membership row went still has the owed row to free the block
+// from; recording after it would leave a block no membership names and no row
+// owes (staleClusterNodeSQL joins membership).
+//
+// The row is claimed so that a replay does not read the node as a member while
+// the membership row is still there and drop the row it was just given
+// (replayRow's isClusterMember check): a claimed row is skipped. The claim is
+// released when the teardown stays owed, and the row deleted when the eviction
+// freed everything (a node gone from the registry sends no teardown, so nothing
+// else clears its row). It reports false when the owed row could not be
+// recorded: the membership is then kept, for the next sweep to prune.
+func (cm *ClusterManager) removeAndEvictMember(ctx context.Context, clusterID, namespace, nodeID string) bool {
+	token, err := cm.recordClaimedTeardown(ctx, clusterID, namespace, nodeID)
+	if err != nil {
+		cm.logger.Warn("Not removing a cluster member: its teardown could not be recorded as owed first",
+			zap.String("cluster_id", clusterID), zap.String("node_id", nodeID), zap.Error(err))
+		return false
+	}
+	cm.removeClusterNodeAssignment(ctx, clusterID, nodeID)
+	evictErr := cm.evictMember(ctx, clusterID, namespace, nodeID)
+	query := `DELETE FROM namespace_pending_cleanup WHERE claimed_by = ?`
+	if evictErr != nil {
+		query = `UPDATE namespace_pending_cleanup SET claimed_until = NULL, claimed_by = NULL WHERE claimed_by = ?`
+	}
+	if _, err := cm.db.Exec(client.WithInternalAuth(context.WithoutCancel(ctx)), query, token); err != nil {
+		cm.logger.Warn("Could not settle the claim on an evicted member's owed teardown; it lapses by itself",
+			zap.String("cluster_id", clusterID), zap.String("node_id", nodeID), zap.Error(err))
+	}
+	return true
 }
 
 // clusterNodePurgeStaleAfter mirrors purgeStaleAfter in
@@ -963,8 +998,9 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 		// with Olric discovery aimed at two removed nodes: its cache was down on
 		// every gateway, and each gateway restart stalled for MINUTES timing out
 		// against them before it would bind.
-		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
-		cm.evictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID)
+		if !cm.removeAndEvictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID) {
+			continue
+		}
 		removed = append(removed, r.NodeID)
 		cm.logger.Warn("Removed permanently-gone cluster node assignment; its port allocation is freed or owed its teardown (bugboard #173, #280)",
 			zap.String("cluster_id", clusterID),

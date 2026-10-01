@@ -112,6 +112,36 @@ func (cm *ClusterManager) recordPendingCleanup(ctx context.Context, namespace, n
 	return nil
 }
 
+// recordClaimedTeardown records the teardown an evicted member owes, claimed
+// with a token that is returned, in one statement: no replay can read the row
+// between its insert and a claim. A row a replay already holds keeps that claim.
+func (cm *ClusterManager) recordClaimedTeardown(ctx context.Context, clusterID, namespace, nodeID string) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("make a claim token for the teardown of %s on node %s: %w", namespace, nodeID, err)
+	}
+	token := cm.localNodeID + ":" + hex.EncodeToString(nonce[:])
+	nodeIP := ""
+	if ips, err := cm.getNodeIPs(ctx, nodeID); err == nil {
+		nodeIP = ips.InternalIP
+	}
+	_, err := cm.db.Exec(client.WithInternalAuth(ctx), `
+		INSERT INTO namespace_pending_cleanup (namespace, node_id, node_ip, action, cluster_id, purge_data, attempts, last_error, last_attempt_at, claimed_until, claimed_by)
+		VALUES (?, ?, ?, ?, ?, 0, 0, 'member evicted; teardown not yet attempted', CURRENT_TIMESTAMP, datetime('now', ?), ?)
+		ON CONFLICT(namespace, node_id, action) DO UPDATE SET
+		  node_ip = CASE WHEN excluded.node_ip = '' THEN namespace_pending_cleanup.node_ip ELSE excluded.node_ip END,
+		  cluster_id = CASE WHEN excluded.cluster_id = '' THEN namespace_pending_cleanup.cluster_id ELSE excluded.cluster_id END,
+		  claimed_until = CASE WHEN namespace_pending_cleanup.claimed_until IS NULL OR namespace_pending_cleanup.claimed_until <= datetime('now')
+		                       THEN excluded.claimed_until ELSE namespace_pending_cleanup.claimed_until END,
+		  claimed_by = CASE WHEN namespace_pending_cleanup.claimed_until IS NULL OR namespace_pending_cleanup.claimed_until <= datetime('now')
+		                    THEN excluded.claimed_by ELSE namespace_pending_cleanup.claimed_by END`,
+		namespace, nodeID, nodeIP, teardownAction, clusterID, pendingCleanupClaimLease, token)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errCleanupNotRecorded, err)
+	}
+	return token, nil
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -412,7 +442,7 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 	}
 	// replayCleanup records a failure itself and leaves the row of a success in
 	// place, for settleCleanup to clear once the allocations are freed.
-	if err := cm.replayCleanup(ctx, r); err != nil {
+	if err := cm.replayCleanup(ctx, r, token); err != nil {
 		cm.logExhaustedCleanup(r, err)
 		return nil
 	}
@@ -433,28 +463,57 @@ func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) er
 	return cm.settleCleanup(ctx, r)
 }
 
-// replayCleanup carries out one owed cleanup on its node and records the
-// outcome. A teardown owed by this node is run here; any other goes through the
-// node's spawn endpoint, at the overlay address recorded with it or, when none
-// was known then, the one the node has registered since.
-func (cm *ClusterManager) replayCleanup(ctx context.Context, r pendingCleanupRow) error {
+// replayCleanup carries out one owed cleanup on its node and records a failure
+// on the row the replay holds (recordReplayFailure). A teardown owed by this
+// node is run here; any other goes through the node's spawn endpoint, at the
+// overlay address recorded with it or, when none was known then, the one the
+// node has registered since.
+func (cm *ClusterManager) replayCleanup(ctx context.Context, r pendingCleanupRow, token string) error {
 	scope := cleanupScope{ClusterID: r.ClusterID, PurgeData: r.PurgeData != 0}
-	if r.NodeID == cm.localNodeID && r.Action == teardownAction {
-		return cm.teardownLocalKeepingRow(ctx, r.NodeID, r.NodeIP, r.Namespace, scope)
-	}
+	var err error
 	ip := r.NodeIP
-	if ip == "" {
-		resolved, err := cm.nodeInternalIP(r.NodeID)
-		if err != nil {
-			cause := fmt.Errorf("cannot replay %s of %s: %w", r.Action, r.Namespace, err)
-			if rerr := cm.recordPendingCleanup(ctx, r.Namespace, r.NodeID, "", r.Action, scope, cause); rerr != nil {
-				return fmt.Errorf("%w; %w", cause, rerr)
-			}
-			return cause
+	switch {
+	case r.NodeID == cm.localNodeID && r.Action == teardownAction:
+		err = cm.teardownLocal(ctx, r.Namespace, scope.ClusterID, scope.PurgeData)
+	case ip == "":
+		resolved, rerr := cm.nodeInternalIP(r.NodeID)
+		if rerr != nil {
+			err = fmt.Errorf("cannot replay %s of %s: %w", r.Action, r.Namespace, rerr)
+			break
 		}
 		ip = resolved
+		fallthrough
+	default:
+		err = cm.sendStop(ctx, ip, r.Action, r.Namespace, r.NodeID, scope)
 	}
-	return cm.sendStopKeepingRow(ctx, ip, r.Action, r.Namespace, r.NodeID, scope)
+	if err == nil {
+		return nil
+	}
+	cm.logger.Warn("Failed to replay a pending cleanup; keeping it for retry",
+		zap.String("namespace", r.Namespace), zap.String("node_id", r.NodeID), zap.String("action", r.Action), zap.Error(err))
+	if rerr := cm.recordReplayFailure(ctx, r, token, ip, err); rerr != nil {
+		return fmt.Errorf("%w; %w", err, rerr)
+	}
+	return err
+}
+
+// recordReplayFailure counts a failed replay on the row it holds the claim on.
+// It only updates: a row the re-add withdrew in the meantime stays gone, since
+// inserting it again would hide the re-added node's block from the cluster's
+// reads and send a teardown to the node being spawned.
+func (cm *ClusterManager) recordReplayFailure(ctx context.Context, r pendingCleanupRow, token, nodeIP string, cause error) error {
+	_, err := cm.db.Exec(client.WithInternalAuth(ctx), `
+		UPDATE namespace_pending_cleanup
+		   SET attempts = attempts + 1, last_error = ?, last_attempt_at = CURRENT_TIMESTAMP,
+		       node_ip = CASE WHEN ? = '' THEN node_ip ELSE ? END
+		 WHERE id = ? AND claimed_by = ?`,
+		cause.Error(), nodeIP, nodeIP, r.ID, token)
+	if err != nil {
+		cm.logger.Error("Could not record a failed replay; the cleanup keeps its previous attempt count",
+			zap.String("namespace", r.Namespace), zap.String("node_id", r.NodeID), zap.String("action", r.Action), zap.Error(err))
+		return fmt.Errorf("%w: %w", errCleanupNotRecorded, err)
+	}
+	return nil
 }
 
 // logExhaustedCleanup says, at Error, that a cleanup has failed as many times as

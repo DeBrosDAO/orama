@@ -1052,18 +1052,7 @@ func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, n
 // state belongs to. A node on the previous release does not read the field and
 // tears down as before.
 func (cm *ClusterManager) sendStopKeepingRow(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
-	req := map[string]interface{}{
-		"action":    action,
-		"namespace": namespace,
-		"node_id":   nodeID,
-	}
-	if scope.PurgeData && action == teardownAction {
-		req["purge_data"] = true
-	}
-	if scope.ClusterID != "" && isDestructiveCleanup(action) {
-		req["cluster_id"] = scope.ClusterID
-	}
-	_, err := cm.sendSpawnRequest(ctx, nodeIP, req)
+	err := cm.sendStop(ctx, nodeIP, action, namespace, nodeID, scope)
 	if err != nil {
 		// A stop that did not happen is work still owed, not a warning. The
 		// unit keeps running and keeps holding a port the allocator has
@@ -1078,6 +1067,25 @@ func (cm *ClusterManager) sendStopKeepingRow(ctx context.Context, nodeIP, action
 			return fmt.Errorf("%w; %w", err, rerr)
 		}
 	}
+	return err
+}
+
+// sendStop sends the stop or teardown request and records nothing: a replay
+// owns its row already and updates it (recordReplayFailure), and recording from
+// here would insert the row again after a re-add withdrew it.
+func (cm *ClusterManager) sendStop(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	req := map[string]interface{}{
+		"action":    action,
+		"namespace": namespace,
+		"node_id":   nodeID,
+	}
+	if scope.PurgeData && action == teardownAction {
+		req["purge_data"] = true
+	}
+	if scope.ClusterID != "" && isDestructiveCleanup(action) {
+		req["cluster_id"] = scope.ClusterID
+	}
+	_, err := cm.sendSpawnRequest(ctx, nodeIP, req)
 	return err
 }
 

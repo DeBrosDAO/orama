@@ -201,10 +201,13 @@ func TestPruneStaleClusterNodes_removesReturnedRowsAndReportsThem(t *testing.T) 
 		case strings.Contains(ec.Query, "DELETE FROM namespace_port_allocations"),
 			strings.Contains(ec.Query, "DELETE FROM webrtc_port_allocations"):
 			// expected companion delete
+		case strings.Contains(ec.Query, "namespace_pending_cleanup"):
+			// the owed teardown recorded before the membership went, and its
+			// claim settled after (removeAndEvictMember)
 		default:
 			t.Errorf("unexpected exec query = %q", ec.Query)
 		}
-		if len(ec.Args) >= 2 {
+		if len(ec.Args) >= 2 && strings.Contains(ec.Query, "DELETE FROM namespace_") {
 			gotNodeIDs[ec.Args[1].(string)] = true
 		}
 	}
