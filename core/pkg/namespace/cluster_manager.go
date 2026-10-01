@@ -76,13 +76,19 @@ type ClusterManager struct {
 	// crash-looping unit cannot be restarted every tick (bugboard #161).
 	webrtcSpawnMu       sync.Mutex
 	webrtcSpawnCooldown map[string]time.Time
-	nodeSelector        *ClusterNodeSelector
-	systemdSpawner      *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
-	dnsManager          *DNSRecordManager
-	logger              *zap.Logger
-	baseDomain          string
-	baseDataDir         string
-	globalRQLiteDSN     string // Global RQLite DSN for namespace gateway auth
+
+	// rqliteDownSweeps counts, per cluster, the consecutive tenant sweeps this
+	// node found its namespace rqlite unit not active (rqlite_liveness.go).
+	rqliteDownMu     sync.Mutex
+	rqliteDownSweeps map[string]int
+
+	nodeSelector    *ClusterNodeSelector
+	systemdSpawner  *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
+	dnsManager      *DNSRecordManager
+	logger          *zap.Logger
+	baseDomain      string
+	baseDataDir     string
+	globalRQLiteDSN string // Global RQLite DSN for namespace gateway auth
 
 	// IPFS configuration for namespace gateways
 	ipfsClusterAPIURL     string
@@ -111,6 +117,11 @@ type ClusterManager struct {
 	// Nil in production; set in tests so remote stop/spawn paths run without a
 	// network.
 	spawnRequestFn func(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error)
+
+	// raftRemoveFn replaces the admin call that removes a member from a
+	// namespace's raft configuration through one surviving member. Nil in
+	// production; set in tests so the removal paths run without an rqlited.
+	raftRemoveFn func(ctx context.Context, via survivingNodePorts, raftID string) error
 
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
@@ -364,6 +375,15 @@ func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer
 	data, err := json.Marshal(peers)
 	if err != nil {
 		return fmt.Errorf("failed to marshal peers: %w", err)
+	}
+
+	removed, err := rqlite.RemoveRecoveryLeftovers(dataDir)
+	if err != nil {
+		return err
+	}
+	if len(removed) > 0 {
+		cm.logger.Warn("Removed leftovers of an earlier rqlite recovery before writing peers.json",
+			zap.String("data_dir", dataDir), zap.Strings("removed", removed))
 	}
 
 	return os.WriteFile(peersFile, data, 0644)
@@ -1773,7 +1793,7 @@ func (cm *ClusterManager) RestoreLocalClusters(ctx context.Context) error {
 		SELECT DISTINCT cn.namespace_cluster_id, c.namespace_name, cn.node_id, cn.role
 		FROM namespace_cluster_nodes cn
 		JOIN namespace_clusters c ON cn.namespace_cluster_id = c.id
-		WHERE cn.node_id = ? AND c.status = 'ready'
+		WHERE cn.node_id = ? AND c.status IN ('ready', 'degraded')
 	`
 	if err := cm.db.Query(ctx, &assignments, query, cm.localNodeID); err != nil {
 		return fmt.Errorf("failed to query local cluster assignments: %w", err)
@@ -1832,8 +1852,8 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	if err != nil {
 		return fmt.Errorf("re-read cluster %s before restoring it: %w", clusterID, err)
 	}
-	if cluster == nil || cluster.Status != ClusterStatusReady {
-		cm.logger.Info("Not restoring a namespace cluster that is no longer ready",
+	if cluster == nil || (cluster.Status != ClusterStatusReady && cluster.Status != ClusterStatusDegraded) {
+		cm.logger.Info("Not restoring a namespace cluster that is no longer ready or degraded",
 			zap.String("namespace", namespaceName), zap.String("cluster_id", clusterID))
 		return nil
 	}

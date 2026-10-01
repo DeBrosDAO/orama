@@ -157,7 +157,7 @@ func (g *Gateway) probeLocalNamespaces(ctx context.Context) {
 		SELECT nc.namespace_name, npa.rqlite_http_port, npa.olric_http_port, npa.gateway_http_port
 		FROM namespace_port_allocations npa
 		JOIN namespace_clusters nc ON npa.namespace_cluster_id = nc.id
-		WHERE npa.node_id = ? AND nc.status = 'ready'
+		WHERE npa.node_id = ? AND nc.status IN ('ready', 'degraded')
 	`
 	rows, err := g.sqlDB.QueryContext(ctx, query, g.nodePeerID)
 	if err != nil {
@@ -453,14 +453,14 @@ func (g *Gateway) reconcileNamespaces(ctx context.Context) {
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "Running namespace reconciliation check")
 
-	// Query all ready namespaces with their expected and actual node counts
+	// Query all ready and degraded namespaces with their expected and actual node counts
 	query := `
 		SELECT nc.namespace_name,
 			nc.rqlite_node_count + nc.olric_node_count + nc.gateway_node_count AS expected_services,
 			(SELECT COUNT(*) FROM namespace_cluster_nodes ncn
 			 WHERE ncn.namespace_cluster_id = nc.id AND ncn.status = 'running') AS actual_services
 		FROM namespace_clusters nc
-		WHERE nc.status = 'ready' AND nc.namespace_name != 'default'
+		WHERE nc.status IN ('ready', 'degraded') AND nc.namespace_name != 'default'
 	`
 	rows, err := g.sqlDB.QueryContext(ctx, query)
 	if err != nil {

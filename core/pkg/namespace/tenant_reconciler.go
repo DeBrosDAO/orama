@@ -82,6 +82,10 @@ func (cm *ClusterManager) reconcileTenantsOnce(ctx context.Context) {
 		cm.logger.Warn("Tenant reconcile: could not reconcile local service configs this sweep", zap.Error(err))
 	}
 
+	if err := cm.reconcileRQLiteLiveness(ctx, cm.localRQLiteRunning); err != nil {
+		cm.logger.Warn("Tenant reconcile: could not report this node's rqlite state this sweep", zap.Error(err))
+	}
+
 	if err := cm.reapOrphanedTenants(ctx); err != nil {
 		cm.logger.Warn("Tenant reconcile: could not tear down orphaned namespaces this sweep", zap.Error(err))
 	}
@@ -327,98 +331,14 @@ func (cm *ClusterManager) desiredLocalConfig(ctx context.Context, clusterID stri
 	}, nil
 }
 
-// pruneAndDeraft forgets members that are permanently gone, and takes them out
-// of the namespace's raft.
-//
-// Order matters. The raft address has to be read BEFORE the prune, because
-// pruning deletes the port allocation the address is built from — after that
-// there is nothing left to name in the removal, and the departed node stays a
-// configured voter for ever. That was the gap: pruning released the ports and
-// the membership row and stopped there.
+// pruneAndDeraft forgets members that are permanently gone. Each is taken out of
+// the namespace's raft first (pruneStaleClusterNodes), so every path that prunes
+// — this sweep, RepairCluster, the WebRTC reconciler — leaves raft consistent.
 func (cm *ClusterManager) pruneAndDeraft(ctx context.Context, a tenantAssignment) error {
-	gone, err := cm.staleMemberRaftAddrs(ctx, a.ClusterID)
-	if err != nil {
-		return err
-	}
-	if len(gone) == 0 {
-		return nil
-	}
-
-	removed, err := cm.pruneStaleClusterNodes(ctx, a.ClusterID)
-	if err != nil {
+	if _, err := cm.pruneStaleClusterNodes(ctx, a.ClusterID); err != nil {
 		return fmt.Errorf("prune stale members: %w", err)
 	}
-	if len(removed) == 0 {
-		return nil
-	}
-
-	survivors, err := cm.survivingNodes(ctx, a.ClusterID)
-	if err != nil {
-		return fmt.Errorf("read surviving members: %w", err)
-	}
-	if len(survivors) == 0 {
-		// Nothing left to issue the removal through. Say so rather than
-		// silently leaving the raft configuration wrong.
-		cm.logger.Error("Pruned a departed member but no surviving member can be reached to remove it from raft; "+
-			"the namespace still counts it toward quorum",
-			zap.String("namespace", a.NamespaceName),
-			zap.Strings("pruned", removed))
-		return fmt.Errorf("no surviving member to remove %v from raft", removed)
-	}
-
-	for _, nodeID := range removed {
-		raftAddr, ok := gone[nodeID]
-		if !ok || raftAddr == "" {
-			cm.logger.Warn("Pruned a member with no recorded raft address; nothing to remove from raft",
-				zap.String("namespace", a.NamespaceName),
-				zap.String("node_id", nodeID))
-			continue
-		}
-		cm.removeDeadNodeFromRaft(ctx, raftAddr, survivors)
-		cm.logger.Info("Removed a departed member from the namespace raft configuration",
-			zap.String("namespace", a.NamespaceName),
-			zap.String("node_id", nodeID),
-			zap.String("raft_addr", raftAddr))
-	}
 	return nil
-}
-
-// staleMemberRaftAddrs returns the raft address of each member that the prune
-// is about to remove, keyed by node id.
-//
-// Read before the prune because pruning deletes the allocation these come from.
-func (cm *ClusterManager) staleMemberRaftAddrs(ctx context.Context, clusterID string) (map[string]string, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-	cutoff := time.Now().UTC().Add(-clusterNodePurgeStaleAfter).Format("2006-01-02 15:04:05")
-
-	var rows []struct {
-		NodeID     string `db:"node_id"`
-		InternalIP string `db:"internal_ip"`
-		RaftPort   int    `db:"rqlite_raft_port"`
-	}
-	if err := cm.db.Query(internalCtx, &rows, `
-		SELECT cn.node_id,
-		       COALESCE(dn.internal_ip, dn.ip_address) AS internal_ip,
-		       COALESCE(pa.rqlite_raft_port, 0) AS rqlite_raft_port
-		  FROM namespace_cluster_nodes cn
-		  JOIN dns_nodes dn ON cn.node_id = dn.id
-		  LEFT JOIN namespace_port_allocations pa
-		    ON pa.namespace_cluster_id = cn.namespace_cluster_id AND pa.node_id = cn.node_id
-		 WHERE cn.namespace_cluster_id = ?
-		   AND dn.status != 'active'
-		   AND COALESCE(dn.last_seen, '') < ?`, clusterID, cutoff); err != nil {
-		return nil, fmt.Errorf("read stale member addresses: %w", err)
-	}
-
-	out := make(map[string]string, len(rows))
-	for _, r := range rows {
-		if r.InternalIP == "" || r.RaftPort == 0 {
-			out[r.NodeID] = ""
-			continue
-		}
-		out[r.NodeID] = fmt.Sprintf("%s:%d", r.InternalIP, r.RaftPort)
-	}
-	return out, nil
 }
 
 // survivingNodes returns the members that are still active, with the ports a

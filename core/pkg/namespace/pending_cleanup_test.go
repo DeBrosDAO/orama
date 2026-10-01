@@ -29,6 +29,11 @@ type registryRig struct {
 	requests []map[string]interface{}
 	sendErr  error
 	nextID   int
+
+	// raftRemovals records the raft ids removed from the namespace's raft, and
+	// raftErr makes every removal fail.
+	raftRemovals []string
+	raftErr      error
 }
 
 func newRegistryRig(t *testing.T) *registryRig {
@@ -52,6 +57,15 @@ func newRegistryRig(t *testing.T) *registryRig {
 				return nil, r.sendErr
 			}
 			return &spawnResponse{Success: true}, nil
+		},
+		raftRemoveFn: func(_ context.Context, _ survivingNodePorts, raftID string) error {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.raftErr != nil {
+				return r.raftErr
+			}
+			r.raftRemovals = append(r.raftRemovals, raftID)
+			return nil
 		},
 	}
 	return r

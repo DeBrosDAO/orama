@@ -346,10 +346,30 @@ cluster-wide state and runs on exactly one member per namespace, elected as the
 lowest-sorted live node id: prune members that are permanently gone, release
 their ports, and remove them from that namespace's raft.
 
-The raft address is read BEFORE the prune, because pruning deletes the port
-allocation the address is built from — after that there is nothing left to name
-in the removal, and the departed node stays a configured voter for ever. That
-was the gap: pruning released the ports and the membership row and stopped.
+Every path that prunes a member (this sweep, `RepairCluster`, the WebRTC
+reconciler) removes it from the namespace's raft first, inside
+`pruneStaleClusterNodes`. The raft address is read BEFORE the prune, because
+pruning deletes the port allocation the address is built from — after that
+there is nothing left to name in the removal, and the departed node stays a
+configured voter for ever. If no surviving member accepts the removal, the
+member is NOT pruned: it stays registered and the next sweep retries. Only the
+departed member's own address (host and raft port) leaves raft, so a replacement
+on the same host under another port block is untouched. `ReplaceClusterNode`
+likewise aborts, rolling back the replacement's port block, when the dead node
+cannot be removed from raft.
+
+The removal is guarded before anything is sent. The address must be built from
+the member's `internal_ip` (a node without one is an error, never addressed by
+its public IP) and lie inside the WireGuard overlay; it is refused when it
+equals a surviving member's raft address (raft ids are addresses, so that would
+remove a live member); and it is refused when the survivors would be fewer than
+a quorum of the configuration, since without a leader the removal cannot commit.
+That quorum-loss refusal, and "no surviving member" (reported the same way by the
+prune and by `ReplaceClusterNode`), name the recovery procedure: "Emergency:
+namespace RQLite lost quorum" in `docs/NODE_REPLACEMENT.md` (`orama node
+recover-raft` recovers the platform cluster, not a namespace). Removing an id
+that is not in the configuration succeeds in rqlite, so concurrent prunes of one
+member on several nodes do not fail each other.
 
 **Provisioning waits out a registry election and never strands a cluster.**
 Provisioning (both the async and the synchronous entry point) runs under one

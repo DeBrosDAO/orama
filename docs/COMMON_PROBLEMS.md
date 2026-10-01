@@ -177,6 +177,18 @@ rqlite is restored on this evidence instead:
 The state file is still used for everything else about the restore (ports, local
 IP, WebRTC roles) — just not for asserting who the voters are.
 
+**A namespace whose rqlite is not running is not `ready`.** Each node's tenant
+sweep (every 60 s) looks at its own `orama-namespace-rqlite@<ns>` unit. After
+three consecutive sweeps with the unit not active the cluster is marked
+`degraded` with the message `rqlite is not running on node <id>[, <id>...]`;
+each node adds or removes only its own id, so two down nodes are both named. The
+cluster is settled from its members only when the last node named is running
+again (a node that left the cluster is not waited for), and nothing is written
+while the report is unchanged. The member's row keeps `running` (a `failed` row
+would make the repair path replace a node that is alive), and a `degraded` cluster is still served: the boot
+restore, the tenant sweep and the gateway's under-provisioning check all cover
+`ready` and `degraded` clusters.
+
 ---
 
 ## 4. Namespace gateway processes not restarting after upgrade
@@ -503,6 +515,18 @@ Since 0.122.113 the file is replaced by a synced rename (`pkg/durablefile`), so 
 directory it names aside, and run the upgrade on that node again. A new repo and IPFS identity are
 created, the other nodes re-learn it through the peering sync, and IPFS Cluster re-pins this node's
 replicas from the other two.
+
+## 20. Namespace rqlite crash-loops: "cannot replay WAL files: existing WAL file present"
+
+**Symptom:** `orama-namespace-rqlite@<ns>` restarts every few seconds (hundreds of times) and each start ends with
+`failed to open store: failed to recover node: failed to restore snapshot <id> to temporary database: checkpointing WALs: cannot replay WAL files: existing WAL file present`.
+`raft/peers.json` is present in the rqlite data directory, and the data directory holds `recovery.db-wal` and `recovery.db-shm` (and usually `restore-wal-N.tmp`) from an earlier recovery.
+
+**Cause:** rqlited v10.4.0 reads `raft/peers.json` as a Raft recovery. It restores the latest snapshot into a scratch `recovery.db`, then deletes `recovery.db` only. The `recovery.db-wal` and `-shm` SQLite opened beside it stay behind. The next recovery, once the latest snapshot carries WAL files, refuses to replay them next to that stale `-wal`, exits before opening its store, and the unit restarts into the same failure for ever. The data is intact. Orama removes those leftovers whenever it writes a recovery `peers.json` (`rqlite.RemoveRecoveryLeftovers`), so a node on this release cannot reach the state; a node that already has it must be repaired by hand.
+
+**Fix (one node, rolling, never two voters at once):** stop the unit with the `orama` CLI, then as `orama` delete `recovery.db*` and `restore-wal-*.tmp` from `/opt/orama/.orama/data/namespaces/<ns>/rqlite/<node-id>/`, keep `raft/peers.json` (the recovery it carries is still wanted), and start the unit again. rqlited renames `peers.json` to `peers.info` once the recovery succeeds. If the file lists members that no longer exist, correct it first — it replaces the node's raft configuration.
+
+---
 
 ## General Debugging Tips
 

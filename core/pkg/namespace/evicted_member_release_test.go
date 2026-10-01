@@ -12,12 +12,13 @@ import (
 // services then crash-loop on "address already in use" (bugboard #275).
 
 // newEvictRig is cluster c1 of "acme" on node1 (remote, with a core block and an
-// SFU allocation) and node2 (a core block), both active.
+// SFU allocation), node2 and node9 (a core block each), all active: three
+// voters, so a removal leaves the quorum of two that raft needs to commit it.
 func newEvictRig(t *testing.T) *registryRig {
 	t.Helper()
 	r := newRegistryRig(t)
 	r.cluster("c1", "acme")
-	for _, n := range []string{"node1", "node2"} {
+	for _, n := range []string{"node1", "node2", "node9"} {
 		r.exec(`INSERT INTO dns_nodes (id, ip_address, internal_ip, status) VALUES (?, '192.0.2.1', ?, 'active')`, n, "10.0.0."+n[len(n)-1:])
 		r.membership("c1", n)
 		r.blockAt("c1", n, 10000)

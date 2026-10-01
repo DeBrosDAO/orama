@@ -3,9 +3,14 @@ package namespace
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -481,9 +486,11 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? ` + notOwedTeardownSQL + `
+		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? AND pa.node_id != ? ` + notOwedTeardownSQL + `
 	`
-	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID); err != nil {
+	// The replacement already holds its port block but is not in raft yet: it
+	// is neither a survivor to ask nor a voter to count towards quorum.
+	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID, replacement.NodeID); err != nil {
 		// Rollback port allocation
 		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return fmt.Errorf("failed to query surviving node ports: %w", err)
@@ -504,9 +511,16 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 8. Remove dead node from RQLite Raft cluster (before joining replacement)
 	if deadNodeRoles[NodeRoleRQLiteLeader] || deadNodeRoles[NodeRoleRQLiteFollower] {
 		deadIPs, err := cm.getNodeIPs(ctx, deadNodeID)
-		if err == nil && deadNodeRaftPort > 0 {
-			deadRaftAddr := fmt.Sprintf("%s:%d", deadIPs.InternalIP, deadNodeRaftPort)
-			cm.removeDeadNodeFromRaft(ctx, deadRaftAddr, surviving)
+		if err != nil {
+			cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
+			return fmt.Errorf("failed to address dead node %s in raft: %w", deadNodeID, err)
+		}
+		if deadNodeRaftPort > 0 {
+			deadRaftAddr := net.JoinHostPort(deadIPs.InternalIP, strconv.Itoa(deadNodeRaftPort))
+			if err := cm.removeDeadNodeFromRaft(ctx, deadRaftAddr, surviving); err != nil {
+				cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
+				return fmt.Errorf("failed to remove dead node %s from raft: %w", deadNodeID, err)
+			}
 		}
 	}
 
@@ -998,6 +1012,14 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 		// with Olric discovery aimed at two removed nodes: its cache was down on
 		// every gateway, and each gateway restart stalled for MINUTES timing out
 		// against them before it would bind.
+		// The raft removal comes first, while the allocation still names the
+		// member's address. When it fails the member stays registered, and the
+		// next sweep tries again.
+		if err := cm.removeMemberFromRaft(ctx, clusterID, cluster.NamespaceName, r.NodeID); err != nil {
+			cm.logger.Error("Not pruning a departed member: it could not be removed from the namespace raft configuration; the next sweep retries",
+				zap.String("cluster_id", clusterID), zap.String("node_id", r.NodeID), zap.Error(err))
+			continue
+		}
 		if !cm.removeAndEvictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID) {
 			continue
 		}
@@ -1065,35 +1087,155 @@ func (cm *ClusterManager) repairDegradedClusters(ctx context.Context, nodeID str
 	}
 }
 
-// removeDeadNodeFromRaft sends a DELETE request to a surviving RQLite node
-// to remove the dead node from the Raft voter set.
-func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAddr string, survivingNodes []survivingNodePorts) {
+// removeDeadNodeFromRaft removes a departed member from the namespace's raft
+// configuration, asking each surviving member in turn until one accepts. The
+// raft id of a namespace rqlite is its raft address.
+//
+// The address comes from a registry row, so it is checked before anything is
+// sent: it must be an address inside the WireGuard overlay (a public-IP fallback
+// from a node without an internal_ip would name a machine that is not the
+// member), it must not be any surviving member's own raft address (raft ids are
+// addresses, so removing a live member's address removes the live member), and
+// removing the member must leave the cluster a quorum.
+//
+// Removing an id that is not in the configuration succeeds in rqlite (the raft
+// library leaves the configuration unchanged), so concurrent prunes of the same
+// member on several nodes do not fail each other. Without a leader the removal
+// cannot commit: that is quorum loss, reported with the recovery procedure.
+//
+// It returns an error when no survivor accepted: the caller must not forget the
+// member then, because once the registry has dropped it nothing names the
+// address any more and the departed voter stays configured for ever.
+func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAddr string, survivingNodes []survivingNodePorts) error {
 	if deadRaftAddr == "" {
-		return
+		return nil
+	}
+	if err := guardRaftRemoval(deadRaftAddr, survivingNodes); err != nil {
+		return err
 	}
 
+	var errs []string
 	for _, s := range survivingNodes {
 		if s.RQLiteHTTPPort == 0 {
 			continue
 		}
-		ep, err := cm.tenantRQLiteEndpoint(s.InternalIP, s.RQLiteHTTPPort)
-		if err != nil {
-			cm.logger.Warn("Cannot address surviving node's RQLite to remove the dead node",
-				zap.String("target", s.NodeID), zap.Error(err))
-			continue
-		}
-		if err := ep.Admin().Remove(ctx, deadRaftAddr); err != nil {
+		if err := cm.removeRaftMember(ctx, s, deadRaftAddr); err != nil {
 			cm.logger.Warn("Failed to remove dead node from Raft via this node",
 				zap.String("target", s.NodeID), zap.Error(err))
+			errs = append(errs, fmt.Sprintf("%s: %v", s.NodeID, err))
 			continue
 		}
 		cm.logger.Info("Removed dead node from Raft cluster",
 			zap.String("dead_raft_addr", deadRaftAddr),
 			zap.String("via_node", s.NodeID))
-		return
+		return nil
 	}
-	cm.logger.Warn("Could not remove dead node from Raft cluster (best-effort)",
-		zap.String("dead_raft_addr", deadRaftAddr))
+	if len(errs) == 0 {
+		return fmt.Errorf("remove %s from raft: no surviving member exposes an rqlite to remove it through", deadRaftAddr)
+	}
+	return fmt.Errorf("remove %s from raft: no surviving member accepted the removal (a namespace whose members cannot elect a leader has lost quorum: %s): %s",
+		deadRaftAddr, quorumRecoveryHint, strings.Join(errs, "; "))
+}
+
+// quorumRecoveryHint names how a namespace raft that lost quorum is recovered.
+// `orama node recover-raft` recovers the platform cluster, not a namespace's.
+const quorumRecoveryHint = "recover it with the procedure \"Emergency: namespace RQLite lost quorum\" in docs/NODE_REPLACEMENT.md"
+
+// guardRaftRemoval refuses a removal that would remove the wrong member or
+// leave the namespace's raft without a quorum.
+func guardRaftRemoval(raftAddr string, survivors []survivingNodePorts) error {
+	host, _, err := net.SplitHostPort(raftAddr)
+	if err != nil {
+		return fmt.Errorf("refusing to remove raft member %q: it is not a host:port address: %w", raftAddr, err)
+	}
+	if ip, perr := netip.ParseAddr(host); perr != nil || !constants.WireGuardOverlay().Contains(ip) {
+		return fmt.Errorf("refusing to remove raft member %q: its host is not an address inside the WireGuard overlay %s (a node without an internal_ip must not be addressed by its public IP)",
+			raftAddr, constants.WireGuardOverlay())
+	}
+	voters := 0
+	for _, s := range survivors {
+		if s.RQLiteRaftPort == 0 {
+			continue
+		}
+		voters++
+		if net.JoinHostPort(s.InternalIP, strconv.Itoa(s.RQLiteRaftPort)) == raftAddr {
+			return fmt.Errorf("refusing to remove raft member %s: it is the address of surviving member %s", raftAddr, s.NodeID)
+		}
+	}
+	// The configuration holds the survivors and the member being removed.
+	if quorum := (voters+1)/2 + 1; voters < quorum {
+		return fmt.Errorf("refusing to remove raft member %s: %d of %d voters would remain and a quorum is %d, so the removal could not commit; the namespace has lost quorum: %s",
+			raftAddr, voters, voters+1, quorum, quorumRecoveryHint)
+	}
+	return nil
+}
+
+// removeRaftMember issues the raft removal through one surviving member.
+func (cm *ClusterManager) removeRaftMember(ctx context.Context, via survivingNodePorts, raftID string) error {
+	if cm.raftRemoveFn != nil {
+		return cm.raftRemoveFn(ctx, via, raftID)
+	}
+	ep, err := cm.tenantRQLiteEndpoint(via.InternalIP, via.RQLiteHTTPPort)
+	if err != nil {
+		return fmt.Errorf("address the rqlite on %s: %w", via.NodeID, err)
+	}
+	return ep.Admin().Remove(ctx, raftID)
+}
+
+// removeMemberFromRaft takes a member that is about to leave the registry out
+// of its namespace's raft configuration.
+//
+// It has to run BEFORE the registry forgets the member: the address comes from
+// the member's port allocation, which the eviction frees. Forgetting first and
+// removing after (or never) is how a replaced node stayed a configured voter —
+// and made every restart of the namespace rewrite a recovery peers.json, because
+// the registry's members never matched the raft configuration again.
+//
+// A member that never had a raft port is not in raft. With no surviving member
+// there is nothing a removal could reach and no quorum: that is an error, as in
+// ReplaceClusterNode, so the member stays registered until the namespace is
+// recovered rather than being forgotten while raft still holds it.
+func (cm *ClusterManager) removeMemberFromRaft(ctx context.Context, clusterID, namespace, nodeID string) error {
+	raftAddr, err := cm.memberRaftAddr(ctx, clusterID, nodeID)
+	if err != nil {
+		return err
+	}
+	if raftAddr == "" {
+		return nil
+	}
+	survivors, err := cm.survivingNodes(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if err := cm.removeDeadNodeFromRaft(ctx, raftAddr, survivors); err != nil {
+		return fmt.Errorf("namespace %s: %w", namespace, err)
+	}
+	return nil
+}
+
+// memberRaftAddr returns the raft address a member's namespace rqlite
+// advertises, built from its WireGuard address and its allocated raft port ("" when
+// it has no allocation). A member with a raft port but no internal_ip is an
+// error: its public address is not where its raft listens.
+func (cm *ClusterManager) memberRaftAddr(ctx context.Context, clusterID, nodeID string) (string, error) {
+	var rows []struct {
+		InternalIP string `db:"internal_ip"`
+		RaftPort   int    `db:"rqlite_raft_port"`
+	}
+	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, `
+		SELECT COALESCE(dn.internal_ip, '') AS internal_ip, pa.rqlite_raft_port
+		  FROM dns_nodes dn
+		  JOIN namespace_port_allocations pa ON pa.node_id = dn.id
+		 WHERE pa.namespace_cluster_id = ? AND pa.node_id = ?`, clusterID, nodeID); err != nil {
+		return "", fmt.Errorf("read the raft address of member %s: %w", nodeID, err)
+	}
+	if len(rows) == 0 || rows[0].RaftPort == 0 {
+		return "", nil
+	}
+	if rows[0].InternalIP == "" {
+		return "", fmt.Errorf("member %s has raft port %d but no internal_ip in dns_nodes: its raft address cannot be built from the WireGuard overlay", nodeID, rows[0].RaftPort)
+	}
+	return net.JoinHostPort(rows[0].InternalIP, strconv.Itoa(rows[0].RaftPort)), nil
 }
 
 // updateClusterStateAfterRecovery rebuilds and distributes cluster-state.json

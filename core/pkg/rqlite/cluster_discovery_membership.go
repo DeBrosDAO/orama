@@ -462,6 +462,15 @@ func (c *ClusterDiscoveryService) writeRecoveryPeersJSON(peers []map[string]inte
 		return fmt.Errorf("failed to marshal recovery peers.json: %w", err)
 	}
 
+	removed, err := RemoveRecoveryLeftovers(filepath.Join(dataDir, "rqlite"))
+	if err != nil {
+		return err
+	}
+	if len(removed) > 0 {
+		c.logger.Warn("Removed leftovers of an earlier rqlite recovery before writing peers.json",
+			zap.Strings("removed", removed))
+	}
+
 	tempFile := peersFile + ".tmp"
 	if err := os.WriteFile(tempFile, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp recovery peers.json %s: %w", tempFile, err)

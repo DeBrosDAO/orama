@@ -46,6 +46,34 @@ func TestRestoreClusterOnNode_aClusterNoLongerReadyIsNotRestored(t *testing.T) {
 	}
 }
 
+// 'degraded' is what the rqlite liveness leg and the repair paths leave behind
+// most often, and a degraded cluster is still served: a node that rebooted
+// must restore it like a ready one.
+func TestRestoreClusterOnNode_aDegradedClusterIsRestored(t *testing.T) {
+	err := restoreWith(ClusterStatusDegraded).restoreClusterOnNode(context.Background(), "c1", "acme", "10.0.0.1")
+	if err == nil || !strings.Contains(err.Error(), "no port allocation") {
+		t.Fatalf("restoring a degraded cluster: %v; want it to proceed to the port allocation, not be skipped", err)
+	}
+}
+
+func TestRestoreLocalClusters_listsDegradedClustersToo(t *testing.T) {
+	var restoreQuery string
+	db := &recoveryMockDB{}
+	db.queryFunc = func(_ any, query string, _ ...any) error {
+		if strings.Contains(query, "FROM namespace_cluster_nodes cn") {
+			restoreQuery = query
+		}
+		return nil
+	}
+	cm := &ClusterManager{db: db, logger: zap.NewNop(), localNodeID: "node-a"}
+	if err := cm.RestoreLocalClusters(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(restoreQuery, "'degraded'") {
+		t.Fatalf("restore query = %q, want degraded clusters included", restoreQuery)
+	}
+}
+
 // While a teardown holds the namespace's lock the restore waits, and it reads
 // the cluster's status only once the teardown is done.
 func TestRestoreClusterOnNode_waitsForATeardownOfTheNamespace(t *testing.T) {

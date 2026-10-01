@@ -300,6 +300,13 @@ func (is *InstanceSpawner) WritePeersJSON(dataDir string, peers []RaftPeer) erro
 		return fmt.Errorf("failed to marshal peers.json: %w", err)
 	}
 
+	if removed, err := RemoveRecoveryLeftovers(dataDir); err != nil {
+		return err
+	} else if len(removed) > 0 {
+		is.logger.Warn("Removed leftovers of an earlier rqlite recovery before writing peers.json",
+			zap.String("data_dir", dataDir), zap.Strings("removed", removed))
+	}
+
 	peersPath := filepath.Join(raftDir, "peers.json")
 	if err := os.WriteFile(peersPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write peers.json: %w", err)
