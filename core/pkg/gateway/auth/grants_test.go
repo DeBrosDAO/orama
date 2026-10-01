@@ -262,34 +262,36 @@ func (d *grantsDB) Query(_ context.Context, query string, args ...interface{}) (
 		})
 		return &client.QueryResult{Count: 1}, nil
 
-	case strings.Contains(query, "SELECT id, COALESCE(expires_at"):
-		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
-		role, resource := getStringVal(args[2]), getStringVal(args[3])
+	case strings.Contains(query, "SELECT id,") && strings.Contains(query, "CASE WHEN"):
+		expires := getStringVal(args[0])
+		principalID, nsID := toInt64(args[2]), getStringVal(args[3])
+		role, resource := getStringVal(args[4]), getStringVal(args[5])
 		for _, row := range d.rows {
 			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID &&
 				row.role == role && row.resource == resource {
-				return &client.QueryResult{Count: 1, Rows: [][]interface{}{{row.id, row.expiresAt}}}, nil
+				same := int64(0)
+				if row.expiresAt == expires {
+					same = 1
+				}
+				return &client.QueryResult{Count: 1, Rows: [][]interface{}{{row.id, same}}}, nil
 			}
 		}
 		return &client.QueryResult{}, nil
 
-	case strings.Contains(query, "SELECT MAX(id) FROM grants"):
-		principalID, nsID := toInt64(args[0]), getStringVal(args[1])
-		var newest int64
-		for _, row := range d.rows {
-			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID && row.role != string(RoleOwner) && row.id > newest {
-				newest = row.id
-			}
-		}
-		if newest == 0 {
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{nil}}}, nil
-		}
-		return rows(newest), nil
-
-	case strings.Contains(query, "UPDATE grants SET revoked_at = datetime('now') WHERE id = ?"):
-		id := toInt64(args[0])
+	case strings.Contains(query, "UPDATE grants SET expires_at"):
+		expires, id := getStringVal(args[0]), toInt64(args[1])
 		for _, row := range d.rows {
 			if row.id == id {
+				row.expiresAt = expires
+			}
+		}
+		return &client.QueryResult{Count: 1}, nil
+
+	case strings.Contains(query, "AND id != ?"):
+		principalID, nsID, keep := toInt64(args[0]), getStringVal(args[1]), toInt64(args[2])
+		for _, row := range d.rows {
+			if !row.revoked && row.principalID == principalID && row.namespaceID == nsID &&
+				row.role != string(RoleOwner) && row.id != keep {
 				row.revoked = true
 			}
 		}

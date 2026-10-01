@@ -377,10 +377,7 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 		// stops the same grant existing twice, so a second write of the same
 		// thing lands here rather than leaving two rows one revoke cannot
 		// clear.
-		if err := s.regrant(ctx, db, principalID, nsID, req, resource, expires, err); err != nil {
-			return err
-		}
-		return keepNewestGrant(ctx, db, principalID, nsID)
+		return s.regrant(ctx, db, principalID, nsID, req, identifier, resource, expires, err)
 	}
 	if err := keepNewestGrant(ctx, db, principalID, nsID); err != nil {
 		return err
@@ -398,78 +395,67 @@ func (s *Service) writeGrant(ctx context.Context, req GrantRequest) error {
 }
 
 // regrant handles a grant write the unique index refused: the principal
-// already holds a live row of this role and selector. When it is their newest
-// and carries the requested expiry it stands. Otherwise it is written again:
-// a newer row beside it (written before a new role replaced the old one) would
-// win over it, and a row whose expiry differs — or has passed, which the index
-// does not see — is not the grant asked for.
-func (s *Service) regrant(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, req GrantRequest, resource string, expires interface{}, insertErr error) error {
-	id, storedExpiry, found, err := liveGrantID(ctx, db, principalID, nsID, req.Role, resource)
+// already holds an unrevoked row of this role and selector. That row is made
+// the grant, in place: its expiry is set to the one asked for (the index does
+// not look at the expiry, so the row may have expired or carry another date),
+// and every other row the principal holds beside it is retired — rows written
+// before a new role replaced the old one would otherwise win over it. Nothing
+// is revoked before the row it keeps is right, so the principal is never left
+// without a grant.
+func (s *Service) regrant(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, req GrantRequest, identifier, resource string, expires interface{}, insertErr error) error {
+	id, sameExpiry, found, err := liveGrantID(ctx, db, principalID, nsID, req.Role, resource, expires)
 	if err != nil {
 		return fmt.Errorf("failed to record the grant in namespace %q: %w (and could not tell whether it was already there: %v)", req.Namespace, insertErr, err)
 	}
 	if !found {
 		return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, insertErr)
 	}
-	newest, _, err := newestLiveGrantID(ctx, db, principalID, nsID)
-	if err != nil {
-		return err
-	}
-	if id == newest && storedExpiry == getStringVal(expires) {
-		return nil
+	if !sameExpiry {
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			`UPDATE grants SET expires_at = ? WHERE id = ?`, expires, id); err != nil {
+			return fmt.Errorf("failed to set the expiry of the grant in namespace %q: %w", req.Namespace, err)
+		}
+		s.audit.Record(ctx, AuditEvent{
+			Namespace: req.Namespace,
+			Actor:     req.CreatedBy,
+			Action:    AuditGrantAdded,
+			Resource:  string(req.PrincipalType) + " " + identifier,
+			Result:    AuditSuccess,
+			Metadata:  map[string]string{"role": string(req.Role), "selector": resource, "expires_at": getStringVal(expires)},
+		})
 	}
 	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`UPDATE grants SET revoked_at = datetime('now') WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("failed to replace the grant in namespace %q: %w", req.Namespace, err)
-	}
-	var resourceValue interface{}
-	if resource != "" {
-		resourceValue = resource
-	}
-	if _, err := db.Query(client.WithInternalAuth(ctx),
-		`INSERT INTO grants(principal_id, namespace_id, role, resource, expires_at, created_by)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		principalID, nsID, string(req.Role), resourceValue, expires, req.CreatedBy); err != nil {
-		return fmt.Errorf("failed to record the grant in namespace %q: %w", req.Namespace, err)
+		`UPDATE grants SET revoked_at = datetime('now')
+		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner' AND id != ?`,
+		principalID, nsID, id); err != nil {
+		return fmt.Errorf("failed to retire the principal's previous grant: %w", err)
 	}
 	return nil
 }
 
-// liveGrantID is the id and expiry of the principal's unrevoked grant of this
-// role and selector, expired or not: the unique index is what refused the
-// write, and it does not look at the expiry.
-func liveGrantID(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string) (int64, string, bool, error) {
+// liveGrantID is the id of the principal's unrevoked grant of this role and
+// selector, expired or not — the unique index that refused the write does not
+// look at the expiry — and whether its expiry is the one given. The expiry is
+// compared by SQLite, as a time, rather than as text the driver formats.
+func liveGrantID(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}, role Role, resource string, expires interface{}) (int64, bool, bool, error) {
 	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT id, COALESCE(expires_at, '') FROM grants
+		`SELECT id,
+		        CASE WHEN (expires_at IS NULL AND ? IS NULL)
+		               OR datetime(expires_at) = datetime(?) THEN 1 ELSE 0 END
+		   FROM grants
 		  WHERE principal_id = ? AND namespace_id = ? AND role = ? AND COALESCE(resource, '') = ?
 		    AND revoked_at IS NULL
 		  LIMIT 1`,
-		principalID, nsID, string(role), resource)
+		expires, expires, principalID, nsID, string(role), resource)
 	if err != nil {
-		return 0, "", false, fmt.Errorf("failed to read the principal's grant: %w", err)
+		return 0, false, false, fmt.Errorf("failed to read the principal's grant: %w", err)
 	}
 	id, found, err := firstID(res)
 	if err != nil || !found {
-		return 0, "", found, err
+		return 0, false, found, err
 	}
-	expiry := ""
-	if len(res.Rows[0]) > 1 {
-		expiry = getStringVal(res.Rows[0][1])
-	}
-	return id, expiry, true, nil
-}
-
-// newestLiveGrantID is the id of the principal's newest live grant other than
-// ownership.
-func newestLiveGrantID(ctx context.Context, db client.DatabaseClient, principalID, nsID interface{}) (int64, bool, error) {
-	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT MAX(id) FROM grants
-		  WHERE principal_id = ? AND namespace_id = ? AND revoked_at IS NULL AND role != 'owner'`,
-		principalID, nsID)
-	if err != nil {
-		return 0, false, fmt.Errorf("failed to read the principal's newest grant: %w", err)
-	}
-	return firstID(res)
+	same := len(res.Rows[0]) > 1 && getStringVal(res.Rows[0][1]) == "1"
+	return id, same, true, nil
 }
 
 func firstID(res *client.QueryResult) (int64, bool, error) {
