@@ -43,6 +43,10 @@ func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []
 		}
 	}
 
+	if err := h.recordPublishDepth(ctx, topic, data); err != nil {
+		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: err}
+	}
+
 	// The pubsub adapter handles namespacing internally
 	if err := h.pubsub.Publish(ctx, topic, data); err != nil {
 		return &serverless.HostFunctionError{Function: "pubsub_publish", Cause: err}
@@ -50,6 +54,25 @@ func (h *HostFunctions) PubSubPublish(ctx context.Context, topic string, data []
 
 	h.dispatchLocalWildcards(ctx, topic, data)
 	return nil
+}
+
+// recordPublishDepth tells the trigger dispatcher the depth this invocation
+// runs at, before the message leaves for libp2p, so the dispatch of that message
+// continues the chain instead of restarting it at depth 0. A no-op outside a
+// triggered invocation (depth 0) and when no dispatcher is wired. An error means
+// the depth could not be kept and the publish must not go out.
+func (h *HostFunctions) recordPublishDepth(ctx context.Context, topic string, data []byte) error {
+	h.triggerDispatcherLock.RLock()
+	d := h.triggerDispatcher
+	h.triggerDispatcherLock.RUnlock()
+	if d == nil {
+		return nil
+	}
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil || cur.Namespace == "" || cur.TriggerDepth < 1 {
+		return nil
+	}
+	return d.RecordPublishDepth(ctx, cur.Namespace, topic, data, cur.TriggerDepth)
 }
 
 // dispatchLocalWildcards calls the trigger dispatcher's wildcard-only
@@ -138,6 +161,12 @@ func (h *HostFunctions) PubSubPublishBatch(ctx context.Context, msgsJSON []byte)
 		return &serverless.HostFunctionError{
 			Function: "pubsub_publish_batch",
 			Cause:    fmt.Errorf("publish budget exceeded (max %d per invocation)", maxPublishesPerInvocation),
+		}
+	}
+
+	for _, m := range msgs {
+		if err := h.recordPublishDepth(ctx, m.Topic, m.Data); err != nil {
+			return &serverless.HostFunctionError{Function: "pubsub_publish_batch", Cause: err}
 		}
 	}
 

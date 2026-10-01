@@ -663,6 +663,17 @@ When triggered via PubSub, the function receives this JSON via stdin:
 
 To prevent infinite loops (function A publishes to topic → triggers function A again), trigger depth is tracked. Maximum depth is **5**. If a function's output triggers another function, `trigger_depth` increments. At depth 5, no further triggers fire.
 
+The limit also holds when the function republishes over the network: a publish
+made by a function that was itself triggered carries the function's depth beside
+the message (a record keyed by namespace, topic and payload hash, kept for 30
+seconds on the gateway and, when the namespace has Olric, shared across its
+gateways), and the dispatcher that receives the message continues the chain from
+that depth. The payload is never changed, so subscribers see exactly what was
+published. A record only raises a message's depth: a message nothing recorded,
+such as one a client publishes, starts at depth 0, and a tenant cannot lower the
+depth of a function's publish. A publish whose depth cannot be recorded fails
+rather than going out with the chain restarted.
+
 ## Function Lifecycle
 
 ### Versioning

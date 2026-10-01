@@ -90,14 +90,12 @@ type topicLister interface {
 //     swarm key (PSK) separating each tenant's pubsub mesh. Documented
 //     in the security audit on bugboard #282; track as a separate ticket.
 //
-//  2. Trigger-depth loops via libp2p round-trip: maxTriggerDepth=5 is
-//     embedded in the PubSubEvent payload, but a triggered function that
-//     publishes back through `oh.PubSubPublish` re-enters this dispatcher
-//     via libp2p Subscribe with depth=0 (the depth field lives in the
-//     OUR envelope, not in the libp2p wire format). Loops are bounded
-//     only by the per-invocation timeout. WASM functions MUST self-limit
-//     by reading `event.trigger_depth` from their input. A future fix
-//     would encode depth in a libp2p header the dispatcher reads back.
+//  2. Trigger depth across the libp2p hop: the wire format carries only the
+//     payload, so a publish made from inside a triggered function re-enters
+//     this dispatcher through Subscribe with no depth. The host records the
+//     publishing invocation's depth beside the message (RecordPublishDepth,
+//     publish_depth.go) and the Subscribe handler reads it back, so a chain of
+//     republishes stops at maxTriggerDepth.
 //
 //  3. Wildcard patterns are not subscribed via libp2p (libp2p has no
 //     wildcard subscribe). Wildcard triggers only fire from HTTP-publish
@@ -140,6 +138,13 @@ type PubSubDispatcher struct {
 	// Bugboard #555. Always non-nil after NewPubSubDispatcher.
 	localDedup *localDedupCache
 
+	// depthLedger / depthStore carry the trigger depth of a message published
+	// by a function across the libp2p hop (publish_depth.go). depthLedger is
+	// always non-nil after NewPubSubDispatcher; depthStore is nil when the
+	// namespace has no Olric, leaving only same-gateway depth.
+	depthLedger *depthLedger
+	depthStore  depthStore
+
 	// degradedDedupWarn rate-limits the "Olric dedup degraded" WARN so a
 	// misconfigured cluster doesn't flood the log on every publish.
 	// Bugboard #555.
@@ -164,7 +169,13 @@ func NewPubSubDispatcher(
 	ps dispatcherPubSub,
 	logger *zap.Logger,
 ) *PubSubDispatcher {
+	var shared depthStore
+	if olricClient != nil {
+		shared = olricDepthStore{client: olricClient}
+	}
 	return &PubSubDispatcher{
+		depthLedger:    newDepthLedger(),
+		depthStore:     shared,
 		store:          store,
 		topicLister:    store, // defaults to the real store; tests override
 		invoker:        invoker,
@@ -285,8 +296,10 @@ func (d *PubSubDispatcher) Refresh(ctx context.Context) error {
 		ns, topic := s.Namespace, s.TopicPattern
 		handler := func(msgTopic string, data []byte) error {
 			// PEER_DISCOVERY_PING is filtered upstream in the Manager.
-			// data already excludes those.
-			d.Dispatch(context.Background(), ns, topic, data, 0)
+			// data already excludes those. A message arriving here may have
+			// been published by a triggered function; dispatch recovers the
+			// depth it recorded.
+			d.dispatch(context.Background(), ns, topic, data, 0, true)
 			return nil
 		}
 		if err := d.pubsub.Subscribe(ctx, topic, handler); err != nil {
@@ -345,6 +358,14 @@ func (d *PubSubDispatcher) Aggregator() *aggregator.Aggregator {
 // invokes matching functions asynchronously. Each invocation runs in its own
 // goroutine and does not block the caller.
 func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string, data []byte, depth int) {
+	d.dispatch(ctx, namespace, topic, data, depth, false)
+}
+
+// dispatch is Dispatch. fromWire is true for a message that arrived over
+// libp2p: its depth is then raised to the one the publishing function recorded
+// (publishedDepth), never lowered, so a republishing chain cannot restart at 0.
+// A publish through the HTTP hook is a client's and keeps the depth it was given.
+func (d *PubSubDispatcher) dispatch(ctx context.Context, namespace, topic string, data []byte, depth int, fromWire bool) {
 	if depth >= maxTriggerDepth {
 		d.logger.Warn("PubSub trigger depth limit reached, skipping dispatch",
 			zap.String("namespace", namespace),
@@ -378,6 +399,20 @@ func (d *PubSubDispatcher) Dispatch(ctx context.Context, namespace, topic string
 			zap.String("namespace", namespace),
 			zap.String("topic", topic))
 		return
+	}
+
+	if fromWire {
+		if recorded := d.publishedDepth(ctx, namespace, topic, data); recorded > depth {
+			depth = recorded
+		}
+		if depth >= maxTriggerDepth {
+			d.logger.Warn("PubSub trigger depth limit reached, skipping dispatch",
+				zap.String("namespace", namespace),
+				zap.String("topic", topic),
+				zap.Int("depth", depth),
+			)
+			return
+		}
 	}
 
 	matches, err := d.getMatches(ctx, namespace, topic)
