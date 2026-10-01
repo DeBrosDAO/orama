@@ -26,6 +26,8 @@ describe.skipIf(!onFleet || !hasChain)("chain read proxy", () => {
   });
 
   it("every other path, method and query is refused", async () => {
+    // Each is given its handler as it is made: they run at once, and one
+    // refused before the loop below reached it was an unhandled rejection.
     const bad = [
       client().get("/v1/chain/abci_query"),
       client().get("/v1/chain/broadcast_tx_commit?tx=0x00"),
@@ -37,9 +39,9 @@ describe.skipIf(!onFleet || !hasChain)("chain read proxy", () => {
       client().get("/v1/chain/block?height=abc"),
       client().get("/v1/chain/status?unexpected=1"),
       client().post("/v1/chain/status", {}),
-    ];
+    ].map((p) => p.catch((e) => e));
     for (const p of bad) {
-      const err = await p.catch((e) => e);
+      const err = await p;
       expect(err).toBeInstanceOf(SDKError);
       expect([400, 404, 405]).toContain((err as SDKError).httpStatus);
     }
