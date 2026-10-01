@@ -21,6 +21,7 @@ requires:
   chain: false
 covers:
   routes:
+    - /v1/internal/push/ntfy/
     - /v1/namespace/push-credentials
     - /v1/namespace/push-credentials/
     - /v1/push/config

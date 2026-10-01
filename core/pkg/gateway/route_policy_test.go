@@ -103,6 +103,7 @@ var publicRoutes = []string{
 	"/v1/internal/node/heartbeat",
 	"/v1/internal/node/register",
 	"/v1/internal/ping",
+	"/v1/internal/push/ntfy/",
 	"/v1/internal/storage/evict",
 	"/v1/internal/telemetry",
 	"/v1/internal/tls/check",

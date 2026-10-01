@@ -91,6 +91,8 @@ func (g *Gateway) Routes() http.Handler {
 	// Namespace cluster repair (internal, handler does its own auth)
 	mux.HandleFunc("/v1/internal/namespace/repair", g.namespaceClusterRepairHandler)
 	mux.HandleFunc("/v1/internal/secrets/reencrypt", g.handleInternalReencrypt)
+	// Push fan-out relay to this node's loopback ntfy (internal, coordination MAC v2)
+	mux.HandleFunc("/v1/internal/push/ntfy/", g.handleInternalNtfyPublish) // pushntfy.FanoutPathPrefix
 
 	// Namespace WebRTC enable/disable/status (public, JWT/API key auth via middleware)
 	mux.HandleFunc("/v1/namespace/webrtc/enable", g.namespaceWebRTCEnablePublicHandler)

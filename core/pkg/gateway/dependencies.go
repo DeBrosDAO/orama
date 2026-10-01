@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1280,20 +1279,15 @@ func buildPushDispatcher(
 	// ntfy cluster fan-out (bugboard #858): the default push infra runs an
 	// independent ntfy per node with no shared store, so a publish must reach
 	// EVERY active node for the subscriber's instance (picked by round-robin
-	// DNS) to receive it. Build a resolver over the global dns_nodes table; the
-	// factory attaches it only to providers using the shared default base URL
-	// (a namespace pointing ntfy at its own server is never fanned across our
-	// cluster). nil globalDB or an unparseable base URL → no fan-out (provider
-	// falls back to the single base URL).
+	// DNS) to receive it. The fan-out travels the WireGuard overlay to each
+	// node's internal gateway, signed with a coordination MAC (never the public
+	// push host). The factory attaches it only to providers using the shared
+	// default base URL (a namespace pointing ntfy at its own server is never
+	// fanned across our cluster). nil globalDB or no default base URL → no
+	// fan-out (provider publishes to the single base URL).
 	var ntfyFanout *ntfyFanoutResolver
-	var ntfyFanoutHost string
-	if globalDB != nil {
-		if base := strings.TrimSpace(cfg.NtfyBaseURL); base != "" {
-			if u, perr := url.Parse(base); perr == nil && u.Hostname() != "" {
-				ntfyFanoutHost = u.Hostname()
-				ntfyFanout = newNtfyFanoutResolver(globalDB, u.Scheme, u.Port(), defaultNtfyFanoutTTL)
-			}
-		}
+	if globalDB != nil && strings.TrimSpace(cfg.NtfyBaseURL) != "" {
+		ntfyFanout = newNtfyFanoutResolver(globalDB, defaultNtfyFanoutTTL)
 	}
 
 	// ProviderFactory turns a resolved Config into the right set of
@@ -1344,8 +1338,8 @@ func buildPushDispatcher(
 			// A namespace that overrode BaseURL with its own ntfy server keeps
 			// single-host delivery (its server, not our cluster).
 			if ntfyFanout != nil && !ntfyCfg.GuardTarget && ntfyCfg.BaseURL == cfg.NtfyBaseURL {
-				ntfyCfg.FanoutResolver = ntfyFanout.Hosts
-				ntfyCfg.FanoutHostHeader = ntfyFanoutHost
+				ntfyCfg.FanoutResolver = ntfyFanout.Targets
+				ntfyCfg.FanoutSigner = newNtfyFanoutSigner(cfg.ClusterSecret, time.Now)
 			}
 			ps = append(ps, pushntfy.New(ntfyCfg, logger.Logger))
 		}

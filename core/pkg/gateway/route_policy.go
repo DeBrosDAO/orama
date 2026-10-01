@@ -355,6 +355,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(nodeSelfRegistration, "/v1/internal/node/register", "/v1/internal/node/heartbeat",
 		"/v1/internal/node/enrol-key")
 
+	// A peer's push fan-out, relayed to this node's own ntfy. A v2 coordination
+	// MAC (covers the body, names this node) plus a WireGuard-peer source check,
+	// in the handler. MainGateway: the node's ntfy and the stamp's audience are
+	// the index gateway's, not a tenant namespace gateway's.
+	pushNtfyRelay := policyHandlerAuth
+	pushNtfyRelay.MainGateway = true
+	t.Add(pushNtfyRelay, "/v1/internal/push/ntfy/")
+
 	// --- Data plane ----------------------------------------------------
 	//
 	// storage, webrtc and proxy additionally require a genuine logged-in user.

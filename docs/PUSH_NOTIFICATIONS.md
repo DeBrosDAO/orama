@@ -568,6 +568,28 @@ and nothing is persisted to `preferences.yaml`. Each node:
   localhost:10109, with Let's Encrypt cert via the orama ACME DNS-01
   flow.
 
+**Fan-out travels the WireGuard overlay, never the public push host.** Every
+node's ntfy is independent (no shared store) and subscribers land on one of
+them by round-robin DNS, so a publish through the platform ntfy is sent to every
+active node. The namespace gateway reads `id` and `internal_ip` of the active
+rows in `dns_nodes` (cached 30 s; a node with no `internal_ip` is skipped, never
+reached by its public address) and POSTs to each node's index gateway,
+`http://<internal_ip>:10104/v1/internal/push/ntfy/<topic>`, with a v2
+coordination MAC (covers the body; audience is the target node's peer id; see
+`docs/SECURITY.md`). That route requires a WireGuard source and the stamp, then
+relays the body and the `Title`, `Priority` and `Tags` headers to the node's own
+ntfy on `127.0.0.1:10109`. The topic must be one segment of `[-_A-Za-z0-9]`, at
+most 64 characters (ntfy's own rule). Because the hop is loopback and the local
+ntfy has no auth, the namespace's ntfy `auth_token` is not sent on it.
+
+A send succeeds when at least one node accepted the publish; a node that fails
+is logged (with the topic's fingerprint, never the topic) and a subscriber
+pinned to it misses that message. A send fails, and the push dispatcher records
+it, when the node list cannot be read, there is no active node, or every node
+refused. There is no fallback to publishing at `push.<dnsZone>`. A namespace
+that sets its own ntfy `base_url` is not fanned out: its publish goes to that one
+server.
+
 ntfy only binds to localhost, so nodes that don't host a public
 `push.*` DNS entry simply run an idle ntfy with no inbound traffic —
 uniform install means no per-node toggling and no surprises when the

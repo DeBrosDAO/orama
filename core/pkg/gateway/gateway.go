@@ -102,8 +102,13 @@ type Gateway struct {
 	// encHolder is the process-wide encryption root. Stored-ciphertext
 	// keys are derived from it so a rotate takes effect without a restart.
 	encHolder *secrets.Holder
-	registry  rqlite.Client
-	envCodec  *deployments.EnvCodec
+
+	// ntfyLocalURL overrides the node-local ntfy base URL the push fan-out relay
+	// publishes to. Empty means loopback on constants.NtfyListenPort; set only
+	// by tests.
+	ntfyLocalURL string
+	registry     rqlite.Client
+	envCodec     *deployments.EnvCodec
 
 	// Global RQLite client for API key validation (namespace gateways only)
 	authClient client.NetworkClient
