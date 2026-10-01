@@ -58,17 +58,22 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		if v := r.FormValue("is_internal"); v != "" {
 			def.IsInternal, _ = strconv.ParseBool(v)
 		}
-		if v := r.FormValue("memory_limit_mb"); v != "" {
-			def.MemoryLimitMB, _ = strconv.Atoi(v)
+		var limitErr error
+		if v := r.FormValue(fieldMemoryLimitMB); v != "" {
+			def.MemoryLimitMB, limitErr = parseDeployInt(fieldMemoryLimitMB, v, h.maxMemoryLimitMB)
 		}
-		if v := r.FormValue("timeout_seconds"); v != "" {
-			def.TimeoutSeconds, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldTimeoutSeconds); v != "" && limitErr == nil {
+			def.TimeoutSeconds, limitErr = parseDeployInt(fieldTimeoutSeconds, v, h.maxTimeoutSeconds)
 		}
-		if v := r.FormValue("retry_count"); v != "" {
-			def.RetryCount, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldRetryCount); v != "" && limitErr == nil {
+			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, noMaximum)
 		}
-		if v := r.FormValue("retry_delay_seconds"); v != "" {
-			def.RetryDelaySeconds, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldRetryDelaySeconds); v != "" && limitErr == nil {
+			def.RetryDelaySeconds, limitErr = parseDeployInt(fieldRetryDelaySeconds, v, noMaximum)
+		}
+		if limitErr != nil {
+			writeError(w, http.StatusBadRequest, limitErr.Error())
+			return
 		}
 
 		// Get WASM file
@@ -112,6 +117,13 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	def.Namespace = namespace
+
+	// Limits from the metadata JSON are checked here too: the form fields above
+	// are only one of the two places a limit can arrive.
+	if err := h.validateDefinitionLimits(&def); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if def.Name == "" {
 		writeError(w, http.StatusBadRequest, "Function name required")

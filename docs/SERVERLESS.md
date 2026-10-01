@@ -56,7 +56,10 @@ memory: 64              # Memory limit in MB (1-256, default: 64). Enforced per
                         # module whose minimum memory is already above it is
                         # refused (command-mode functions; reactor/persistent
                         # instances only get the runtime-wide 256 MB cap).
-timeout: 30             # Execution timeout in seconds (1-300, default: 30)
+                        # A deploy whose memory or timeout is not a whole number,
+                        # is below 1, or is above the gateway's maximum (256 MB,
+                        # 60 s) is refused 400 VALIDATION_FAILED naming the field.
+timeout: 30             # Execution timeout in seconds (1-60, default: 30)
                         # Bump to 60-300 for batch DB ops, schema migrations,
                         # or anything that does many sequential host calls.
                         # Exceeding this timeout on a direct invoke returns

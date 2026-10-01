@@ -29,17 +29,22 @@ type ServerlessHandlers struct {
 	// servedNamespace is the namespace a namespace gateway serves; "" on the
 	// cluster gateway (SetServedNamespace).
 	servedNamespace string
-	invoker         *serverless.Invoker
-	engine          *serverless.Engine // for persistent WS instantiation
-	registry        serverless.FunctionRegistry
-	wsManager       *serverless.WSManager
-	triggerStore    *triggers.PubSubTriggerStore
-	cronStore       *triggers.CronTriggerStore // optional; nil = cron triggers unavailable
-	dispatcher      *triggers.PubSubDispatcher
-	persistentMgr   *persistent.Manager // optional; when nil persistent WS rejects 503
-	wsBridge        *wsbridge.Bridge    // optional; nil = no client→ns registration
-	secretsManager  serverless.SecretsManager
-	jwtVerifier     JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
+	// maxMemoryLimitMB and maxTimeoutSeconds are the ceilings a deploy is
+	// checked against (SetFunctionLimits); they start at the serverless
+	// defaults so a handler nobody configured still refuses an absurd limit.
+	maxMemoryLimitMB  int
+	maxTimeoutSeconds int
+	invoker           *serverless.Invoker
+	engine            *serverless.Engine // for persistent WS instantiation
+	registry          serverless.FunctionRegistry
+	wsManager         *serverless.WSManager
+	triggerStore      *triggers.PubSubTriggerStore
+	cronStore         *triggers.CronTriggerStore // optional; nil = cron triggers unavailable
+	dispatcher        *triggers.PubSubDispatcher
+	persistentMgr     *persistent.Manager // optional; when nil persistent WS rejects 503
+	wsBridge          *wsbridge.Bridge    // optional; nil = no client→ns registration
+	secretsManager    serverless.SecretsManager
+	jwtVerifier       JWTVerifier // optional; when nil, mid-session auth.refresh is disabled
 	// sessions holds every token-authorized function WebSocket to its token's
 	// expiry and revocation. It is the gateway's one registry, the one its
 	// sweeper runs over.
@@ -82,20 +87,23 @@ func NewServerlessHandlers(
 	audit *auth.AuditLog,
 	logger *zap.Logger,
 ) *ServerlessHandlers {
+	defaults := serverless.DefaultConfig()
 	return &ServerlessHandlers{
-		invoker:        invoker,
-		engine:         engine,
-		registry:       registry,
-		wsManager:      wsManager,
-		triggerStore:   triggerStore,
-		cronStore:      cronStore,
-		dispatcher:     dispatcher,
-		persistentMgr:  persistentMgr,
-		wsBridge:       wsBridge,
-		secretsManager: secretsManager,
-		sessions:       sessions,
-		audit:          audit,
-		logger:         logger,
+		maxMemoryLimitMB:  defaults.MaxMemoryLimitMB,
+		maxTimeoutSeconds: defaults.MaxTimeoutSeconds,
+		invoker:           invoker,
+		engine:            engine,
+		registry:          registry,
+		wsManager:         wsManager,
+		triggerStore:      triggerStore,
+		cronStore:         cronStore,
+		dispatcher:        dispatcher,
+		persistentMgr:     persistentMgr,
+		wsBridge:          wsBridge,
+		secretsManager:    secretsManager,
+		sessions:          sessions,
+		audit:             audit,
+		logger:            logger,
 	}
 }
 
