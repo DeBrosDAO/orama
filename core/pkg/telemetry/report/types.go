@@ -61,9 +61,13 @@ type SystemReport struct {
 	DiskAvailGB   string  `json:"disk_avail_gb"`
 	DiskUsePct    int     `json:"disk_use_pct"`
 	InodePct      int     `json:"inode_use_pct"`
-	OOMKills      int     `json:"oom_kills"`
-	KernelVersion string  `json:"kernel_version"`
-	TimeUnix      int64   `json:"time_unix"`
+	// OOMKills counts kernel OOM kills in the last hour (OOMKillWindowArg),
+	// not since boot. Meaningless when OOMKillsError is set.
+	OOMKills int `json:"oom_kills"`
+	// OOMKillsError is why the count is unknown; empty when OOMKills is real.
+	OOMKillsError string `json:"oom_kills_error,omitempty"`
+	KernelVersion string `json:"kernel_version"`
+	TimeUnix      int64  `json:"time_unix"`
 
 	// CPUStealPct is the share of CPU time the hypervisor gave to other
 	// guests over a short sample: a VPS on an oversubscribed host. Load

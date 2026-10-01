@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
 func init() {
@@ -163,13 +164,17 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 		}
 	}
 
-	// 6.18 OOM kills
-	if sys.OOMKills == 0 {
-		r = append(r, inspector.Pass("system.oom", "No OOM kills", systemSub, node,
-			"no OOM kills in dmesg", inspector.Critical))
-	} else {
-		r = append(r, inspector.Fail("system.oom", "No OOM kills", systemSub, node,
-			fmt.Sprintf("%d OOM kills in dmesg", sys.OOMKills), inspector.Critical))
+	// 6.18 OOM kills (within the report window, not since boot)
+	switch {
+	case sys.OOMKillsError != "":
+		r = append(r, inspector.Warn("system.oom", "No recent OOM kills", systemSub, node,
+			"OOM kill count unknown: "+sys.OOMKillsError, inspector.Critical))
+	case sys.OOMKills == 0:
+		r = append(r, inspector.Pass("system.oom", "No recent OOM kills", systemSub, node,
+			"no OOM kills in "+report.OOMKillWindowLabel, inspector.Critical))
+	default:
+		r = append(r, inspector.Fail("system.oom", "No recent OOM kills", systemSub, node,
+			fmt.Sprintf("%d OOM kills in %s", sys.OOMKills, report.OOMKillWindowLabel), inspector.Critical))
 	}
 
 	// 6.19 Swap usage

@@ -221,7 +221,8 @@ type SystemData struct {
 	UptimeRaw      string
 	LoadAvg        string
 	CPUCount       int
-	OOMKills       int
+	OOMKills       int    // kills within report.OOMKillWindowArg
+	OOMKillsError  string // non-empty when the count is unknown
 	SwapUsedMB     int
 	SwapTotalMB    int
 	InodePct       int   // inode usage percentage
@@ -947,7 +948,9 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	cmd += ` && echo "$SEP"`
 	cmd += ` && systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{print $1}'`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && dmesg 2>/dev/null | grep -ci 'out of memory' || echo 0`
+	// A journal the SSH user cannot read still exits 0 with a "not seeing
+	// messages" hint; any such text means the count is unknown, never 0.
+	cmd += ` && { out=$(sudo -n journalctl -k --no-pager -o cat --since "-` + report.OOMKillWindowArg + `" 2>&1) && ! printf '%s\n' "$out" | grep -qiE 'not seeing messages|permission|no journal files|a password is required|hint:' && { printf '%s\n' "$out" | grep -c 'Killed process' || true; } || echo unknown; }`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && df -i / 2>/dev/null | awk 'NR==2{print $5}' | tr -d '%'`
 	cmd += ` && echo "$SEP"`
@@ -1035,7 +1038,7 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 
 	// Part 7: OOM kills
 	if len(parts) > 7 {
-		data.OOMKills = parseIntDefault(strings.TrimSpace(parts[7]), 0)
+		data.OOMKills, data.OOMKillsError = parseOOMKillsField(parts[7])
 	}
 
 	// Part 8: inode usage
@@ -1262,6 +1265,18 @@ echo "$SEP"
 }
 
 // Parse helper functions
+
+// parseOOMKillsField reads the OOM section of the system probe: a count of
+// kills in the window, or "unknown" when the kernel log could not be read.
+// Anything else is an error too, never a silent zero.
+func parseOOMKillsField(field string) (int, string) {
+	v := strings.TrimSpace(field)
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Sprintf("kernel log unreadable for OOM kills (journalctl -k): %q", v)
+	}
+	return n, ""
+}
 
 func parseIntDefault(s string, def int) int {
 	n, err := strconv.Atoi(s)

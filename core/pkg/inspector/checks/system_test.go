@@ -263,6 +263,13 @@ func TestCheckSystem_OOMKills(t *testing.T) {
 	expectStatus(t, results, "system.oom", inspector.StatusFail)
 }
 
+func TestCheckSystem_OOMKills_unknown(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.System = &inspector.SystemData{Services: map[string]string{}, OOMKillsError: "journalctl failed"}
+	data := makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd})
+	expectStatus(t, CheckSystem(data), "system.oom", inspector.StatusWarn)
+}
+
 func TestCheckSystem_Inodes(t *testing.T) {
 	tests := []struct {
 		name   string

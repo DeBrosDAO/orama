@@ -131,9 +131,12 @@ func checkNodeSystem(r *report.NodeReport, host string) []Alert {
 		alerts = append(alerts, Alert{AlertWarning, "system", host,
 			fmt.Sprintf("Disk at %d%%", r.System.DiskUsePct)})
 	}
-	if r.System.OOMKills > 0 {
+	if r.System.OOMKillsError != "" {
+		alerts = append(alerts, Alert{AlertWarning, "system", host,
+			"OOM kill count unknown: " + r.System.OOMKillsError})
+	} else if r.System.OOMKills > 0 {
 		alerts = append(alerts, Alert{AlertCritical, "system", host,
-			fmt.Sprintf("%d OOM kills detected", r.System.OOMKills)})
+			fmt.Sprintf("%d OOM kills in %s", r.System.OOMKills, report.OOMKillWindowLabel)})
 	}
 	if r.System.SwapUsedMB > 0 && r.System.SwapTotalMB > 0 {
 		pct := r.System.SwapUsedMB * 100 / r.System.SwapTotalMB

@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -172,16 +173,19 @@ func collectSystem() *SystemReport {
 		}
 	}
 
-	// 9. OOM kills: run `dmesg 2>/dev/null | grep -ci 'out of memory'` via bash -c
+	// 9. OOM kills inside OOMKillWindow, from the kernel ring in the journal.
+	// The kernel's own since-boot count never decays, so one kill would keep
+	// the node critical until it rebooted.
 	{
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		if out, err := runCmd(ctx, "bash", "-c", "dmesg 2>/dev/null | grep -ci 'out of memory'"); err == nil {
-			if n, err := strconv.Atoi(strings.TrimSpace(out)); err == nil {
-				r.OOMKills = n
-			}
+		out, err := runCmd(ctx, "journalctl", "-k", "--no-pager", "-o", "cat",
+			"--since", "-"+OOMKillWindowArg)
+		if err != nil {
+			r.OOMKillsError = fmt.Sprintf("cannot read kernel log for OOM kills (journalctl -k): %v", err)
+		} else {
+			r.OOMKills = CountOOMKills(out)
 		}
-		// On error, OOMKills stays 0 (zero value)
 	}
 
 	// 10. Kernel version: run `uname -r`
@@ -202,4 +206,25 @@ func collectSystem() *SystemReport {
 	r.TimeUnix = time.Now().Unix()
 
 	return r
+}
+
+// OOMKillWindowArg is the journalctl --since offset (without the leading "-")
+// that bounds the OOM kill count; OOMKillWindowLabel is how alerts name it.
+const (
+	OOMKillWindowArg   = "1h"
+	OOMKillWindowLabel = "the last hour"
+	oomKillMarker      = "Killed process"
+)
+
+// CountOOMKills counts the OOM kills in kernel journal output. The kernel
+// logs one "Out of memory: Killed process N (name)" line per victim, for
+// global and memory-cgroup OOMs alike.
+func CountOOMKills(journal string) int {
+	n := 0
+	for _, line := range strings.Split(journal, "\n") {
+		if strings.Contains(line, oomKillMarker) {
+			n++
+		}
+	}
+	return n
 }

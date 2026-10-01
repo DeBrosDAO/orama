@@ -52,7 +52,9 @@ func TestHTTPFetcherFetch_errors(t *testing.T) {
 		handler http.HandlerFunc
 		want    string
 	}{
-		"non-200": {func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "no report yet", http.StatusServiceUnavailable) }, "HTTP 503: no report yet"},
+		"non-200": {func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "no report yet", http.StatusServiceUnavailable)
+		}, "HTTP 503: no report yet"},
 		"refused": {func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "not found", 404) }, "cluster secret"},
 		"no age":  {func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(`{}`)) }, ReportAgeHeader},
 		"huge age": {func(w http.ResponseWriter, _ *http.Request) {

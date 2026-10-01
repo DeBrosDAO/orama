@@ -74,6 +74,11 @@ func Collect(version string) *NodeReport {
 	}
 	wg.Wait()
 
+	// An unreadable kernel log leaves the OOM count unknown; surface it.
+	for _, msg := range systemErrors(rpt.System) {
+		addError(msg)
+	}
+
 	// Populate top-level WireGuard IP from the WireGuard collector result.
 	if rpt.WireGuard != nil && rpt.WireGuard.WgIP != "" {
 		rpt.WGIP = rpt.WireGuard.WgIP
@@ -81,6 +86,14 @@ func Collect(version string) *NodeReport {
 
 	rpt.CollectMS = time.Since(start).Milliseconds()
 	return rpt
+}
+
+// systemErrors lists what the system collector could not read.
+func systemErrors(s *SystemReport) []string {
+	if s == nil || s.OOMKillsError == "" {
+		return nil
+	}
+	return []string{s.OOMKillsError}
 }
 
 // collector is one section of the report.

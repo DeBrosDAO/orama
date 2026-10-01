@@ -109,13 +109,19 @@ func MemoryHog(t testing.TB, f *fleet.Fleet, n fleet.Node, mb int) string {
 // in percent: a caller sizes the hog so this much still fits.
 const HogFootprintPct = hogMaxPct
 
-// OOMKills is the node's kernel-log OOM count, read the way its telemetry
-// reads it (core/pkg/telemetry/report/system.go): a pressure test records it
-// before and asserts it unchanged after, since any increase is a permanent
-// critical alert on that node.
+// oomKillWindow mirrors report.OOMKillWindowArg in core/pkg/telemetry/report
+// (this module does not link core's telemetry packages).
+const oomKillWindow = "1h"
+
+// OOMKills is the node's count of kernel OOM kills in the telemetry window
+// (oomKillWindow), read from the same
+// journal query: a pressure test records it before and asserts it unchanged
+// after, since a kill inside the window is a critical alert on that node.
 func OOMKills(t testing.TB, f *fleet.Fleet, n fleet.Node) int {
 	t.Helper()
-	out := strings.TrimSpace(f.MustExec(t, n, "dmesg 2>/dev/null | grep -ci 'out of memory' || true").Stdout)
+	cmd := fmt.Sprintf("sudo -n journalctl -k --no-pager -o cat --since %s | grep -c 'Killed process' || true",
+		fleet.ShellQuote("-"+oomKillWindow))
+	out := strings.TrimSpace(f.MustExec(t, n, cmd).Stdout)
 	v, err := strconv.Atoi(out)
 	if err != nil {
 		t.Fatalf("%s: the kernel log OOM count is %q: %v", n.Name, out, err)
