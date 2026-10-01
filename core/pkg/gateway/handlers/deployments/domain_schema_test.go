@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/rqlite/rqlitetest"
 	"go.uber.org/zap"
 )
@@ -113,5 +115,34 @@ func TestHandleListDomains_unknown_deployment(t *testing.T) {
 	h.HandleListDomains(w, domainRequest(http.MethodGet, "/v1/deployments/domains/list?deployment_name=nope", ""))
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+// racingDomainClient inserts another namespace's row for the domain just
+// before the add's insert runs: the add's duplicate check has already passed,
+// as it would when two adds of one domain run at once.
+type racingDomainClient struct {
+	rqlite.Client
+	race func()
+}
+
+func (c racingDomainClient) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if strings.Contains(query, "INSERT INTO deployment_domains") {
+		c.race()
+	}
+	return c.Client.Exec(ctx, query, args...)
+}
+
+func TestHandleAddDomain_aConcurrentAddIs409Not500(t *testing.T) {
+	h, exec := newDomainHandlerOnSchema(t)
+	h.service.db = racingDomainClient{Client: h.service.db, race: func() {
+		exec(`INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
+			VALUES ('r1', 'd2', 'ns-b', 'race.example.org', TRUE, 't', datetime('now'), datetime('now'))`)
+	}}
+	w := httptest.NewRecorder()
+	h.HandleAddDomain(w, domainRequest(http.MethodPost, "/v1/deployments/domains/add",
+		`{"deployment_name":"web","domain":"race.example.org"}`))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("add racing another add: status %d %q, want 409", w.Code, w.Body.String())
 	}
 }

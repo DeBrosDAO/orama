@@ -125,17 +125,29 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Insert domain record
+	// Insert only if no row holds the domain: the duplicate check above and
+	// this insert are two statements, and a concurrent add of the same domain
+	// would otherwise meet the UNIQUE constraint and answer 500, not 409.
 	query := `
 		INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
-		VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)
+		SELECT ?, ?, ?, ?, TRUE, ?, ?, ?
+		WHERE NOT EXISTS (SELECT 1 FROM deployment_domains WHERE domain = ?)
 	`
 
 	now := time.Now()
-	_, err = h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now)
+	res, err := h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now, domain)
 	if err != nil {
 		h.logger.Error("Failed to insert domain", zap.Error(err))
 		http.Error(w, "Failed to add domain", http.StatusInternalServerError)
+		return
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			h.logger.Error("Failed to read the domain insert's result", zap.Error(err))
+			http.Error(w, "Failed to add domain", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "Domain already in use", http.StatusConflict)
 		return
 	}
 
@@ -230,7 +242,7 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 	// Verify TXT record
 	txtRecord := fmt.Sprintf("_orama-verify.%s", domain)
-	verified := h.verifyTXTRecord(txtRecord, domainRecord.VerificationToken)
+	verified := h.verifyTXTRecord(ctx, txtRecord, domainRecord.VerificationToken)
 
 	if !verified {
 		http.Error(w, "Verification failed: TXT record not found or doesn't match", http.StatusBadRequest)
@@ -244,7 +256,8 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 		WHERE domain = ? AND deployment_id = ?
 	`
 
-	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), time.Now(), domain, domainRecord.DeploymentID)
+	now := time.Now()
+	_, err = h.service.db.Exec(ctx, updateQuery, now, now, domain, domainRecord.DeploymentID)
 	if err != nil {
 		h.logger.Error("Failed to update verification status", zap.Error(err))
 		http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
@@ -489,8 +502,14 @@ func allDigits(s string) bool {
 	return true
 }
 
-func (h *DomainHandler) verifyTXTRecord(record, expectedValue string) bool {
-	txtRecords, err := net.LookupTXT(record)
+// txtLookupTimeout bounds the DNS lookup a verify makes on a domain the
+// tenant chose; a slow authoritative server must not hold the request.
+const txtLookupTimeout = 5 * time.Second
+
+func (h *DomainHandler) verifyTXTRecord(ctx context.Context, record, expectedValue string) bool {
+	ctx, cancel := context.WithTimeout(ctx, txtLookupTimeout)
+	defer cancel()
+	txtRecords, err := net.DefaultResolver.LookupTXT(ctx, record)
 	if err != nil {
 		h.logger.Warn("Failed to lookup TXT record",
 			zap.String("record", record),

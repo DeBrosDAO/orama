@@ -32,16 +32,26 @@ const (
 )
 
 // expiry is how long the requested invite lives: seconds if given, else
-// minutes, else the default, and never past the cap.
+// minutes, else the default, and never past the cap. The count is clamped
+// before it becomes a Duration, so a huge one cannot overflow into a negative
+// lifetime.
 func (req InviteRequest) expiry() time.Duration {
-	d := defaultInviteExpiry
 	switch {
 	case req.ExpirySeconds > 0:
-		d = time.Duration(req.ExpirySeconds) * time.Second
+		return time.Duration(min(req.ExpirySeconds, int(maxInviteExpiry/time.Second))) * time.Second
 	case req.ExpiryMinutes > 0:
-		d = time.Duration(req.ExpiryMinutes) * time.Minute
+		return time.Duration(min(req.ExpiryMinutes, int(maxInviteExpiry/time.Minute))) * time.Minute
 	}
-	return min(d, maxInviteExpiry)
+	return defaultInviteExpiry
+}
+
+// valid refuses a negative expiry: it can only be a mistake, and taking the
+// default would mint an invite the caller did not ask for.
+func (req InviteRequest) valid() error {
+	if req.ExpirySeconds < 0 || req.ExpiryMinutes < 0 {
+		return fmt.Errorf("expiry must not be negative")
+	}
+	return nil
 }
 
 // InviteResponse is returned on success.
@@ -77,6 +87,10 @@ func (h *Handler) HandleInvite(w http.ResponseWriter, r *http.Request) {
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid json body: expected {\"expiry_seconds\": N} or no body at all")
+			return
+		}
+		if err := req.valid(); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}

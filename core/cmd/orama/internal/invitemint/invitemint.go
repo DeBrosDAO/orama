@@ -194,9 +194,6 @@ type minted struct {
 	fingerprint string
 }
 
-// mintAt asks the node client reaches for an invite token, and fingerprints
-// the certificate it answered with — so the pin is of the node that minted
-// the token, on the very connection that did.
 // inviteExpiryBody asks for expiry in seconds, which a gateway of this release
 // honours, and in whole minutes rounded up for an older one that reads only
 // minutes: 30s sent as int(Minutes()) was 0, and 0 meant the default hour.
@@ -207,6 +204,9 @@ func inviteExpiryBody(expiry time.Duration) map[string]int {
 	}
 }
 
+// mintAt asks the node client reaches for an invite token, and fingerprints
+// the certificate it answered with — so the pin is of the node that minted
+// the token, on the very connection that did.
 func mintAt(client *http.Client, gatewayURL, bearer string, expiry time.Duration) (minted, error) {
 	raw, state, err := shared.RequestWith(client, gatewayURL, bearer, http.MethodPost, "/v1/operator/invite",
 		inviteExpiryBody(expiry))
