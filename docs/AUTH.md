@@ -466,6 +466,13 @@ A member holds one grant. Adding a member who already holds one replaces it
 with the new role, selector and expiry, so `members add` is also how a role is
 changed or a selector removed.
 
+A grant takes effect on every node as soon as the write returns. The gateway
+reads grants, nonces and API keys at rqlite `level=weak` (from the leader), not
+from the node's own replica, so a member's first sign-in on a node that has not
+yet applied the log is not refused. The price is one hop to the leader, about
+1-2 ms over the WireGuard mesh, on a read the node does not serve as leader;
+per-request API key lookups are cached.
+
 Ownership is transferred rather than granted, and it is one step: the outgoing
 owner keeps an admin grant, and there is no moment where the namespace has no
 owner. The incoming owner's previous grant ends: ownership replaces it.

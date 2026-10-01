@@ -155,33 +155,9 @@ func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies,
 
 	// Create and connect network client
 	logger.ComponentInfo(logging.ComponentGeneral, "Building client config...")
-	cliCfg := client.DefaultClientConfig(cfg.ClientNamespace)
-	if len(cfg.BootstrapPeers) > 0 {
-		cliCfg.BootstrapPeers = cfg.BootstrapPeers
-	}
-	// Explicit rqlite_dsn always wins (bugboard #162). A gateway dials RQLite
-	// itself, so it always has endpoints: the client would otherwise reach the
-	// database through a gateway, this one.
-	endpoints, err := resolveDatabaseEndpoints(cfg, client.DefaultDatabaseEndpoints())
+	cliCfg, err := gatewayClientConfig(cfg)
 	if err != nil {
 		return nil, err
-	}
-	cliCfg.DatabaseEndpoints = endpoints
-	// A namespace gateway's peers dial it (peer discovery); it listens on
-	// this node's WireGuard IP only. Every other gateway has no listener.
-	listenAddrs, err := libp2pListenAddrs(cfg)
-	if err != nil {
-		return nil, err
-	}
-	cliCfg.ListenAddrs = listenAddrs
-	// The network status reads this node's IPFS Cluster REST API, which
-	// requires the password derived from the cluster secret.
-	if cfg.ClusterSecret != "" {
-		password, err := ipfs.ClusterRESTPassword(cfg.ClusterSecret)
-		if err != nil {
-			return nil, err
-		}
-		cliCfg.IPFSClusterAPIPassword = password
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Creating network client...")
@@ -1160,6 +1136,45 @@ func discoverIPFSFromNodeConfigs(logger *zap.Logger) ipfsDiscoveryResult {
 	}
 
 	return ipfsDiscoveryResult{}
+}
+
+// gatewayClientConfig is the configuration of the gateway's main network
+// client, which is also the handle an index gateway's auth service reads its
+// grants, nonces and API keys through.
+func gatewayClientConfig(cfg *Config) (*client.ClientConfig, error) {
+	cliCfg := client.DefaultClientConfig(cfg.ClientNamespace)
+	if len(cfg.BootstrapPeers) > 0 {
+		cliCfg.BootstrapPeers = cfg.BootstrapPeers
+	}
+	// Explicit rqlite_dsn always wins (bugboard #162). A gateway dials RQLite
+	// itself, so it always has endpoints: the client would otherwise reach the
+	// database through a gateway, this one.
+	endpoints, err := resolveDatabaseEndpoints(cfg, client.DefaultDatabaseEndpoints())
+	if err != nil {
+		return nil, err
+	}
+	cliCfg.DatabaseEndpoints = endpoints
+	// Reads go to the leader, as the tenant handle's do: an auth decision (a
+	// grant `orama members add` just wrote, a nonce just spent) must see every
+	// write the leader acknowledged, and a follower's local read does not.
+	cliCfg.DatabaseReadLevel = client.ReadLevelWeak
+	// A namespace gateway's peers dial it (peer discovery); it listens on
+	// this node's WireGuard IP only. Every other gateway has no listener.
+	listenAddrs, err := libp2pListenAddrs(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cliCfg.ListenAddrs = listenAddrs
+	// The network status reads this node's IPFS Cluster REST API, which
+	// requires the password derived from the cluster secret.
+	if cfg.ClusterSecret != "" {
+		password, err := ipfs.ClusterRESTPassword(cfg.ClusterSecret)
+		if err != nil {
+			return nil, err
+		}
+		cliCfg.IPFSClusterAPIPassword = password
+	}
+	return cliCfg, nil
 }
 
 // resolveDatabaseEndpoints picks the gorqlite endpoint list (bugboard #162).

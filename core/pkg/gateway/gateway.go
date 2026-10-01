@@ -1652,14 +1652,9 @@ func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.N
 		zap.String("global_dsn", rqlite.RedactDSN(cfg.GlobalRQLiteDSN)),
 	)
 
-	authCfg := client.DefaultClientConfig("default") // the registry is not a tenant namespace
-	registryDSN, err := credentialedRQLiteDSN(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	authCfg, err := registryClientConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("global_rqlite_dsn: %w", err)
-	}
-	authCfg.DatabaseEndpoints = []string{registryDSN}
-	if len(cfg.BootstrapPeers) > 0 {
-		authCfg.BootstrapPeers = cfg.BootstrapPeers
+		return nil, err
 	}
 
 	registryClient, err := client.NewClient(authCfg)
@@ -1685,6 +1680,29 @@ func connectAPIKeyRegistry(cfg *Config, logger *logging.ColoredLogger) (client.N
 	}
 
 	return registryClient, nil
+}
+
+// registryClientConfig is the configuration of the client that reads the
+// cluster registry: API keys, and the grants that decide who may sign in.
+//
+// It reads at level=weak, the leader. A grant `orama members add` has had the
+// leader acknowledge is not on a follower until the follower applies the log,
+// and a local read of it answered 403 NAMESPACE_NOT_OWNED to the member's first
+// sign-in on any other node. Cost: one hop to the leader (~1-2 ms over the
+// WireGuard mesh) per registry read that this node does not serve as leader;
+// the hot per-request key lookups are cached by the auth service.
+func registryClientConfig(cfg *Config) (*client.ClientConfig, error) {
+	authCfg := client.DefaultClientConfig("default") // the registry is not a tenant namespace
+	registryDSN, err := credentialedRQLiteDSN(cfg.GlobalRQLiteDSN, cfg.RQLiteUsername, cfg.RQLitePassword)
+	if err != nil {
+		return nil, fmt.Errorf("global_rqlite_dsn: %w", err)
+	}
+	authCfg.DatabaseEndpoints = []string{registryDSN}
+	authCfg.DatabaseReadLevel = client.ReadLevelWeak
+	if len(cfg.BootstrapPeers) > 0 {
+		authCfg.BootstrapPeers = cfg.BootstrapPeers
+	}
+	return authCfg, nil
 }
 
 // registryUnreachable is the fatal boot error for a namespace gateway that

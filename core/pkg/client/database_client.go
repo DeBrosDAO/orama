@@ -241,6 +241,25 @@ func (d *DatabaseClientImpl) getRQLiteNodes() []string {
 	return DefaultDatabaseEndpoints()
 }
 
+// openURL is the DSN a connection to rqliteURL is opened with.
+//
+// Cluster discovery is off to avoid /nodes timeouts from unreachable peers.
+// Reads are served at the configured level: ReadLevelNone (the default) reads
+// this node's local SQLite with no leader forwarding, so a write the leader
+// has acknowledged may not be visible yet; ReadLevelWeak routes the read to
+// the leader. Writes are unaffected: they always go through Raft consensus.
+func (d *DatabaseClientImpl) openURL(rqliteURL string) string {
+	level := ReadLevelNone
+	if d.client != nil && d.client.config != nil && d.client.config.DatabaseReadLevel != "" {
+		level = d.client.config.DatabaseReadLevel
+	}
+	sep := "?"
+	if strings.Contains(rqliteURL, "?") {
+		sep = "&"
+	}
+	return rqliteURL + sep + "disableClusterDiscovery=true&level=" + level
+}
+
 // connectToAvailableNode tries to connect to any available RQLite node
 func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, error) {
 	// Get RQLite nodes from environment or use defaults
@@ -253,15 +272,7 @@ func (d *DatabaseClientImpl) connectToAvailableNode() (*gorqlite.Connection, err
 		var conn *gorqlite.Connection
 		var err error
 
-		// Disable gorqlite cluster discovery to avoid /nodes timeouts from unreachable peers.
-		// Use level=none to read from local SQLite directly (no leader forwarding).
-		// Writes are unaffected — they always go through Raft consensus.
-		openURL := rqliteURL
-		if strings.Contains(openURL, "?") {
-			openURL += "&disableClusterDiscovery=true&level=none"
-		} else {
-			openURL += "?disableClusterDiscovery=true&level=none"
-		}
+		openURL := d.openURL(rqliteURL)
 		conn, err = gorqlite.Open(openURL)
 		if err != nil {
 			lastErr = err

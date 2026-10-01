@@ -7,6 +7,16 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
+// rqlite read consistency levels a client can be configured with.
+const (
+	// ReadLevelNone reads this node's local replica: fastest, but it can miss
+	// a write the leader has acknowledged and this node has not yet applied.
+	ReadLevelNone = "none"
+	// ReadLevelWeak routes the read to the leader, which has every
+	// acknowledged write. It costs one hop when this node is not the leader.
+	ReadLevelWeak = "weak"
+)
+
 // ClientConfig represents configuration for network clients
 type ClientConfig struct {
 	AppName        string   `json:"app_name"`
@@ -17,7 +27,10 @@ type ClientConfig struct {
 	// its own database. Left empty, the database client goes through the
 	// gateway at GatewayURL with the client's credential. DefaultDatabaseEndpoints
 	// is the in-mesh default.
-	DatabaseEndpoints []string      `json:"database_endpoints"`
+	DatabaseEndpoints []string `json:"database_endpoints"`
+	// DatabaseReadLevel is the rqlite consistency level reads are served at:
+	// ReadLevelNone (the default when empty) or ReadLevelWeak.
+	DatabaseReadLevel string        `json:"database_read_level"`
 	GatewayURL        string        `json:"gateway_url"` // Gateway URL for HTTP API access
 	ConnectTimeout    time.Duration `json:"connect_timeout"`
 	RetryAttempts     int           `json:"retry_attempts"`
