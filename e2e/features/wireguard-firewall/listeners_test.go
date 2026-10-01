@@ -40,16 +40,20 @@ const relayLow, relayHigh = 49152, 65535
 // provider) when the node is also a global node, which is what the firewall's
 // orama-global rules say.
 type edge struct {
-	turn   bool
-	global map[string]bool
-	ufw    string
+	turn bool
+	// global is the global ports a HOST process may listen on; forwarded adds
+	// the ports ufw forwards to the orama-global namespace, which are open from
+	// the internet but are served inside the namespace, never by the host.
+	global    map[string]bool
+	forwarded map[string]bool
+	ufw       string
 }
 
 // nodeEdge reads n's optional public ports.
 func nodeEdge(t testing.TB, f *fleet.Fleet, n fleet.Node) edge {
 	t.Helper()
-	ufw := f.MustExec(t, n, "ufw status").Stdout
-	return edge{turn: infra.HostRunsTURN(t, f, n), global: fleet.GlobalPublicPorts(ufw), ufw: ufw}
+	ufw := f.MustExec(t, n, "ufw status verbose").Stdout
+	return edge{turn: infra.HostRunsTURN(t, f, n), global: fleet.GlobalHostPorts(ufw), forwarded: fleet.GlobalPublicPorts(ufw), ufw: ufw}
 }
 
 // allowedPublic says whether l may listen at a public address on n.
@@ -122,13 +126,14 @@ func TestListeners_onlyEdgePortsPublic(t *testing.T) {
 
 // tenantDeployment says whether l is a tenant deployment's own socket: the
 // process runs in an orama-deploy-<runtime>@<instance>.service cgroup, the port
-// is in the deployment range, and no ufw allow rule opens it. A deployment
+// is in the deployment range, ufw is active with a default deny of incoming
+// traffic, and no ufw allow rule opens the port. A deployment
 // binds the address its code picks (the unit confines it to its one port, not
 // to loopback: it must still dial out), so the firewall is what keeps the port
 // off the internet; a deployment port ufw allows is not excused.
 func tenantDeployment(t testing.TB, f *fleet.Fleet, n fleet.Node, l fleet.Listener, e edge) (string, bool) {
 	t.Helper()
-	if !strings.HasPrefix(l.Proto, "tcp") || !fleet.InDeploymentRange(l.Port) || fleet.UFWAllowsPort(e.ufw, l.Proto, l.Port) {
+	if !strings.HasPrefix(l.Proto, "tcp") || !fleet.InDeploymentRange(l.Port) || !fleet.UFWDefaultDenyActive(e.ufw) || fleet.UFWAllowsPort(e.ufw, l.Proto, l.Port) {
 		return "", false
 	}
 	cmd := fmt.Sprintf(`pid=$(ss -H -ltnp 'sport = :%d' | grep -o 'pid=[0-9]*' | head -n1 | cut -d= -f2); [ -n "$pid" ] && cat /proc/$pid/cgroup`, l.Port)
@@ -145,7 +150,7 @@ func declaredHostListener(f *fleet.Fleet, n fleet.Node, l fleet.Listener) (confi
 	if !f.State.IsStagenet() {
 		return config.HostListener{}, false
 	}
-	return config.StagenetHostListener(n.Name, l.Proto, l.Port, l.Process)
+	return config.StagenetHostListener(n.Name, l.Proto, l.Addr, l.Port, l.Process)
 }
 
 // declaredHostListeners are the declarations for n's host extras.

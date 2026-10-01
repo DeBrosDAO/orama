@@ -89,7 +89,7 @@ func TestScan_onlyEdgePortsOpen(t *testing.T) {
 		got := map[int]bool{}
 		for _, p := range open {
 			got[p] = true
-			if !allowedPublic(fleet.Listener{Proto: "tcp", Port: p}, n, e) {
+			if !allowedPublic(fleet.Listener{Proto: "tcp", Port: p}, n, e) && !e.forwarded["tcp/"+strconv.Itoa(p)] {
 				t.Errorf("%s: tcp %d is open from the internet", n.Name, p)
 			}
 		}

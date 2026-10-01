@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
 )
 
 // PreBuiltManifest describes the contents of a pre-built binary archive. It is
@@ -109,7 +110,7 @@ func (ps *ProductionSetup) installFromPreBuilt(detected *PreBuiltManifest) (err 
 		return fmt.Errorf("install node.js: %w", err)
 	}
 
-	if err := freeResolverPort(ps.isNameserver, ps.disableResolvedStub); err != nil {
+	if err := freeResolverPort(ps.isNameserver, ps.disableResolvedStub, installers.DisableResolvedMulticast); err != nil {
 		return err
 	}
 
@@ -205,15 +206,19 @@ func (ps *ProductionSetup) setCapabilities() error {
 	return nil
 }
 
-// freeResolverPort disables the systemd-resolved stub listener on a nameserver
-// (needed even in pre-built mode so CoreDNS can bind port 53). Fatal: a
-// nameserver whose :53 stays with the stub installs "successfully" and then
-// cannot answer for its zone.
-func freeResolverPort(isNameserver bool, disable func() error) error {
+// freeResolverPort prepares systemd-resolved. On every node it turns off LLMNR
+// and mDNS (a public-address listener nothing uses); on a nameserver it also
+// disables the stub listener (needed even in pre-built mode so CoreDNS can bind
+// port 53). Fatal: a nameserver whose :53 stays with the stub installs
+// "successfully" and then cannot answer for its zone.
+func freeResolverPort(isNameserver bool, disableStub, disableMulticast func() error) error {
+	if err := disableMulticast(); err != nil {
+		return fmt.Errorf("turn off systemd-resolved LLMNR and mDNS: %w", err)
+	}
 	if !isNameserver {
 		return nil
 	}
-	if err := disable(); err != nil {
+	if err := disableStub(); err != nil {
 		return fmt.Errorf("disable the systemd-resolved stub listener so CoreDNS can bind :53: %w", err)
 	}
 	return nil

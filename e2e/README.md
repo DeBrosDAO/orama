@@ -665,7 +665,9 @@ whatever address its code picks, on the one port its unit allows. The audit
 excuses such a socket only when the process is in an
 `orama-deploy-<runtime>@<instance>.service` cgroup, the port is in 10200-19999
 (`fleet.DeployPortMin/Max`, pinned to `privhelper.DeployPortMin/Max` by a test)
-and no ufw allow rule opens it; it logs each one. docs/SECURITY.md, "Tenant
+ufw is active with a default deny of incoming traffic (`ufw status verbose`),
+and no ufw allow or limit rule opens it (a bare `Anywhere` rule opens every
+port; an `ALLOW FWD` rule opens nothing on the host); it logs each one. docs/SECURITY.md, "Tenant
 deployments", says why.
 
 **What the stagenet nodes have that Orama did not install.** The public-edge
@@ -676,14 +678,20 @@ stagenet are legitimately more, and the audits know them differently:
 - The **global layer** (`orama global install --colocated`): the chain P2P
   (31000 tcp+udp), the public Kubo swarm (31010 tcp+udp) and the storage
   provider (31013 tcp) are public on purpose, DNAT-ed into the `orama-global`
-  namespace and allowed by ufw rules tagged `orama-global`. The audits read
-  those rules (`fleet.GlobalPublicPorts`) and excuse exactly those ports, on a
-  node that has them; a tagged rule on any other port is not excused.
+  namespace and allowed by ufw rules tagged `orama-global`, plus the Tor
+  relay's ORPort and a dirauth's DirPort; the ports come from
+  `core/pkg/constants`. The port scan (open from the internet) excuses a port a
+  tagged rule allows or forwards (`fleet.GlobalPublicPorts`). The listener
+  audit, which looks at sockets on the host, excuses only a direct allow
+  (`fleet.GlobalHostPorts`, a global-only machine): a forwarded port is served
+  inside the namespace, so a host listener on it fails. A tagged rule on any
+  other port is not excused.
 - **Operator and image extras**, declared in `harness/config/hostextras.go`
   (`StagenetHostListeners`, `StagenetHostUFWRules`): tailscale (its sockets and
   its untagged `ufw allow in on tailscale0`) and the image's rpcbind on node-2.
-  Each declaration names the node, the process, the protocol and the port
-  (0 = any), and why it is there. The audit logs every use of one, and **fails**
+  Each declaration names the node, the process, the protocol, the port
+  (0 = any), optionally the network the bound address must lie in (tailscale's
+  TCP sockets: `100.64.0.0/10`), and why it is there. The audit logs every use of one, and **fails**
   when a declaration no longer matches anything on the node, so the list cannot
   outlive the thing it excuses. A fleet run has no declarations: nothing is
   excused there. To admit a new extra, add a declaration with its reason; an
@@ -807,7 +815,7 @@ call path and the mitigation, specifically) and a `review_by` date no more than
 - a listed entry whose `review_by` has passed: fix it, or review the reason and
   move the date;
 - a file that does not parse (unknown field, missing reason, bad ID or date,
-  a duplicate, a date over 90 days out).
+  a duplicate, a date over 90 days out, a module the scan does not cover).
 
 A govulncheck run that fails or prints no `config` message is a failure, never
 a clean scan. The parsing and matching (`Parse`, `Called` and `Judge` in package

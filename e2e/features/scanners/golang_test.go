@@ -58,7 +58,7 @@ func TestGovulncheck_modulesUnaffected(t *testing.T) {
 	t.Parallel()
 	realistic.Tool(t, "go", "the pinned govulncheck is built and run with `go run`")
 	now := time.Now()
-	accepted, err := vulnaccept.Parse(acceptedYAML, now)
+	accepted, err := vulnaccept.Parse(acceptedYAML, now, moduleDirs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,4 +127,13 @@ func TestGosec_noHighSeverityFindings(t *testing.T) {
 			}
 		})
 	}
+}
+
+// moduleDirs are the directories of the modules the scanners cover.
+func moduleDirs() []string {
+	dirs := make([]string, 0, len(goModules))
+	for _, m := range goModules {
+		dirs = append(dirs, m.dir)
+	}
+	return dirs
 }

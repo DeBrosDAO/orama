@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -43,8 +44,10 @@ func (a Vuln) reviewDate() time.Time {
 
 // Parse reads the accepted list and refuses an entry that is
 // incomplete, has a malformed ID or date, is listed twice, or whose review_by
-// is more than 90 days after now.
-func Parse(data []byte, now time.Time) ([]Vuln, error) {
+// is more than 90 days after now, or that names a module outside modules (the
+// modules the scan covers: an entry for any other never matches a finding and
+// would be accepted silently).
+func Parse(data []byte, now time.Time, modules []string) ([]Vuln, error) {
 	var file struct {
 		Accepted []Vuln `yaml:"accepted"`
 	}
@@ -58,6 +61,9 @@ func Parse(data []byte, now time.Time) ([]Vuln, error) {
 		where := fmt.Sprintf("govulncheck-accepted.yaml entry %d (%s %s)", i+1, a.Module, a.ID)
 		if a.Module == "" || strings.TrimSpace(a.Reason) == "" {
 			return nil, fmt.Errorf("%s: module and reason are required", where)
+		}
+		if !slices.Contains(modules, a.Module) {
+			return nil, fmt.Errorf("%s: module %q is not one of the scanned modules %v", where, a.Module, modules)
 		}
 		if !vulnID.MatchString(a.ID) {
 			return nil, fmt.Errorf("%s: id is not a GO-YYYY-NNNN identifier", where)

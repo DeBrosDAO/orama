@@ -7,22 +7,26 @@ func TestStagenetHostListener_declaredAndUndeclared(t *testing.T) {
 		name    string
 		node    string
 		proto   string
+		addr    string
 		port    int
 		process string
 		want    bool
 	}{
-		{"tailscale udp on any port", "node-1", "udp", 41641, "tailscaled", true},
-		{"tailscale ephemeral tcp", "node-3", "tcp", 61927, "tailscaled", true},
-		{"tcp6 is tcp", "node-3", "tcp6", 44445, "tailscaled", true},
-		{"rpcbind on its port", "node-2", "tcp", 111, "rpcbind", true},
-		{"rpcbind on another port", "node-2", "tcp", 112, "rpcbind", false},
-		{"rpcbind on another node", "node-1", "tcp", 111, "rpcbind", false},
-		{"tailscale on a node without it", "node-2", "udp", 41641, "tailscaled", false},
-		{"an Orama process is never excused", "node-1", "tcp", 10200, "app", false},
-		{"empty process", "node-1", "tcp", 41641, "", false},
+		{"tailscale udp on any port", "node-1", "udp", "0.0.0.0", 41641, "tailscaled", true},
+		{"tailscale ephemeral tcp on the tailnet address", "node-3", "tcp", "100.101.102.103", 61927, "tailscaled", true},
+		{"tailscale tcp on a wildcard is not excused", "node-3", "tcp", "0.0.0.0", 61927, "tailscaled", false},
+		{"tailscale tcp on the public address is not excused", "node-3", "tcp", "203.0.113.9", 61927, "tailscaled", false},
+		{"tailscale tcp just outside the CGNAT range", "node-3", "tcp", "100.128.0.1", 61927, "tailscaled", false},
+		{"tailscale tcp on an unparseable address", "node-3", "tcp", "", 61927, "tailscaled", false},
+		{"rpcbind on its port", "node-2", "tcp", "0.0.0.0", 111, "rpcbind", true},
+		{"rpcbind on another port", "node-2", "tcp", "0.0.0.0", 112, "rpcbind", false},
+		{"rpcbind on another node", "node-1", "tcp", "0.0.0.0", 111, "rpcbind", false},
+		{"tailscale on a node without it", "node-2", "udp", "0.0.0.0", 41641, "tailscaled", false},
+		{"an Orama process is never excused", "node-1", "tcp", "0.0.0.0", 10200, "app", false},
+		{"empty process", "node-1", "tcp", "0.0.0.0", 41641, "", false},
 	}
 	for _, c := range cases {
-		if _, got := StagenetHostListener(c.node, c.proto, c.port, c.process); got != c.want {
+		if _, got := StagenetHostListener(c.node, c.proto, c.addr, c.port, c.process); got != c.want {
 			t.Errorf("%s: covered = %v, want %v", c.name, got, c.want)
 		}
 	}

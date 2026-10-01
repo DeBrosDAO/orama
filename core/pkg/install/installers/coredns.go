@@ -29,12 +29,9 @@ func NewCoreDNSInstaller(arch string, logWriter io.Writer, oramaHome string) *Co
 	}
 }
 
-// resolvedDropIn is the systemd-resolved drop-in install writes. The stub
-// listener is off so CoreDNS owns :53. LLMNR and mDNS are off because resolved
-// answers them on 0.0.0.0:5355 and 0.0.0.0:5353 by default (Ubuntu and Debian
-// ship LLMNR on), a public-address listener no Orama service needs: names
-// resolve through CoreDNS and the overlay, never through multicast.
-const resolvedDropIn = "[Resolve]\nDNSStubListener=no\nLLMNR=no\nMulticastDNS=no\n"
+// resolvedStubDropIn is the systemd-resolved drop-in a nameserver gets: the
+// stub listener is off so CoreDNS owns :53.
+const resolvedStubDropIn = "[Resolve]\nDNSStubListener=no\n"
 
 // DisableResolvedStubListener disables systemd-resolved's DNS stub listener
 // so CoreDNS can bind to port 53. This is required on Ubuntu/Debian systems
@@ -47,13 +44,9 @@ func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
 
 	fmt.Fprintf(ci.logWriter, "  Disabling systemd-resolved DNS stub listener (for CoreDNS)...\n")
 
-	// Disable the stub listener
-	resolvedConf := "/etc/systemd/resolved.conf.d/no-stub.conf"
-	if err := os.MkdirAll("/etc/systemd/resolved.conf.d", 0755); err != nil {
-		return fmt.Errorf("failed to create resolved.conf.d: %w", err)
-	}
-	if err := os.WriteFile(resolvedConf, []byte(resolvedDropIn), 0644); err != nil {
-		return fmt.Errorf("failed to write resolved config: %w", err)
+	changed, err := writeResolvedDropIn(resolvedDropInDir, resolvedStubDropInFile, resolvedStubDropIn)
+	if err != nil {
+		return err
 	}
 
 	// Point resolv.conf to localhost (CoreDNS) and a fallback
@@ -65,10 +58,13 @@ func (ci *CoreDNSInstaller) DisableResolvedStubListener() error {
 		return fmt.Errorf("failed to write resolv.conf: %w", err)
 	}
 
-	// Restart systemd-resolved. Leaving the stub listener up means CoreDNS
-	// cannot bind :53, and the install used to report success anyway.
-	if output, err := exec.Command("systemctl", "restart", "systemd-resolved").CombinedOutput(); err != nil {
-		return fmt.Errorf("restart systemd-resolved after disabling its stub listener: %w\n%s", err, output)
+	// Restart systemd-resolved only when the drop-in changed. Leaving the stub
+	// listener up means CoreDNS cannot bind :53, and the install used to report
+	// success anyway.
+	if changed {
+		if output, err := exec.Command("systemctl", "restart", "systemd-resolved").CombinedOutput(); err != nil {
+			return fmt.Errorf("restart systemd-resolved after disabling its stub listener: %w\n%s", err, output)
+		}
 	}
 
 	fmt.Fprintf(ci.logWriter, "  ✓ systemd-resolved stub listener disabled\n")

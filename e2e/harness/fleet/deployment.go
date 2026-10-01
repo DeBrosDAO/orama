@@ -33,19 +33,26 @@ func DeployUnitFromCgroup(cgroup string) (string, bool) {
 
 var ufwPortSpec = regexp.MustCompile(`^(\d+)(?::(\d+))?(?:/(tcp|udp))?$`)
 
-// UFWAllowsPort reports whether `ufw status` has an ALLOW rule that opens
-// proto/port to every interface: a rule whose destination is a port, a
-// port/proto or a start:end range. A rule scoped to an interface ("Anywhere
-// on wg0") names no port and is not one that exposes it to the internet.
+// UFWAllowsPort reports whether `ufw status` has an ALLOW or LIMIT rule that
+// opens proto/port to every interface: a rule whose destination is a port, a
+// port/proto or a start:end range, or plain "Anywhere" (no interface, no port:
+// it opens every port). A rule scoped to an interface ("Anywhere on wg0") is
+// not one that exposes the port to the internet.
 func UFWAllowsPort(ufwStatus, proto string, port int) bool {
 	for _, line := range strings.Split(ufwStatus, "\n") {
 		body, _, _ := strings.Cut(line, "#")
-		if !strings.Contains(body, "ALLOW") {
+		if (!strings.Contains(body, "ALLOW") && !strings.Contains(body, "LIMIT")) || strings.Contains(body, "FWD") {
 			continue
 		}
 		cols := ufwColumns.Split(strings.TrimSpace(body), -1)
 		to := strings.TrimSpace(strings.ReplaceAll(cols[0], "(v6)", ""))
 		fields := strings.Fields(to)
+		if len(fields) == 0 {
+			continue
+		}
+		if len(fields) == 1 && fields[0] == "Anywhere" {
+			return true
+		}
 		m := ufwPortSpec.FindStringSubmatch(fields[len(fields)-1])
 		if m == nil {
 			continue
@@ -60,4 +67,21 @@ func UFWAllowsPort(ufwStatus, proto string, port int) bool {
 		}
 	}
 	return false
+}
+
+// UFWDefaultDenyActive reports whether `ufw status verbose` says the firewall
+// is active and denies incoming traffic by default: the property a tenant
+// deployment's public-address socket relies on to stay off the internet.
+func UFWDefaultDenyActive(ufwVerbose string) bool {
+	active, deny := false, false
+	for _, line := range strings.Split(ufwVerbose, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "Status: active":
+			active = true
+		case strings.HasPrefix(line, "Default:"):
+			deny = strings.Contains(line, "deny (incoming)") || strings.Contains(line, "reject (incoming)")
+		}
+	}
+	return active && deny
 }

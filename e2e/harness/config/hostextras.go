@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"net/netip"
+	"strings"
+)
 
 // HostListener is a listening socket on a stagenet node that Orama did not
 // install: the operator's own access tool or something the machine image
@@ -19,6 +22,10 @@ type HostListener struct {
 	// Port is the listening port; 0 covers any port, for a process whose ports
 	// are ephemeral.
 	Port int
+	// Net is the CIDR the socket's bound address must lie in; empty covers any
+	// address. A declaration that names a network cannot excuse a wildcard or
+	// public-address bind.
+	Net string
 	// Why is who put it there.
 	Why string
 }
@@ -34,18 +41,22 @@ type HostUFWRule struct {
 
 const (
 	whyTailscale = "tailscale is the operator's own access path to the stagenet nodes"
-	whyRPCBind   = "rpcbind is socket-activated by the machine image (an NFS client package); Orama neither installs nor starts it, and ufw's default deny keeps 111 off the internet"
+	// tailnetNet is Tailscale's CGNAT range, where tailscaled's TCP sockets bind
+	// the node's tailnet address.
+	tailnetNet = "100.64.0.0/10"
+	whyRPCBind = "rpcbind is socket-activated by the machine image (an NFS client package); Orama neither installs nor starts it, and ufw's default deny keeps 111 off the internet"
 )
 
 // StagenetHostListeners are the listeners on the stagenet nodes that are not
 // Orama's. Tailscale is on node-1 and node-3 only; its sockets are the
-// WireGuard UDP port on every address and ephemeral TCP ports on the tailnet
-// address.
+// WireGuard UDP port on every address and ephemeral TCP ports bound only to
+// the tailnet address (100.64.0.0/10): a tailscaled TCP socket on any other
+// address is not excused.
 var StagenetHostListeners = []HostListener{
 	{Node: "node-1", Process: "tailscaled", Proto: "udp", Why: whyTailscale},
-	{Node: "node-1", Process: "tailscaled", Proto: "tcp", Why: whyTailscale},
+	{Node: "node-1", Process: "tailscaled", Proto: "tcp", Net: tailnetNet, Why: whyTailscale},
 	{Node: "node-3", Process: "tailscaled", Proto: "udp", Why: whyTailscale},
-	{Node: "node-3", Process: "tailscaled", Proto: "tcp", Why: whyTailscale},
+	{Node: "node-3", Process: "tailscaled", Proto: "tcp", Net: tailnetNet, Why: whyTailscale},
 	{Node: "node-2", Process: "rpcbind", Proto: "tcp", Port: 111, Why: whyRPCBind},
 	{Node: "node-2", Process: "rpcbind", Proto: "udp", Port: 111, Why: whyRPCBind},
 }
@@ -56,13 +67,26 @@ var StagenetHostUFWRules = []HostUFWRule{
 }
 
 // StagenetHostListener returns the declaration that covers a listener on node.
-func StagenetHostListener(node, proto string, port int, process string) (HostListener, bool) {
+func StagenetHostListener(node, proto, addr string, port int, process string) (HostListener, bool) {
 	for _, h := range StagenetHostListeners {
-		if (h.Node == "" || h.Node == node) && h.Process == process && strings.HasPrefix(proto, h.Proto) && (h.Port == 0 || h.Port == port) {
+		if (h.Node == "" || h.Node == node) && h.Process == process && strings.HasPrefix(proto, h.Proto) && (h.Port == 0 || h.Port == port) && h.covers(addr) {
 			return h, true
 		}
 	}
 	return HostListener{}, false
+}
+
+// covers reports whether addr lies in the declaration's network; a declaration
+// without one covers any address.
+func (h HostListener) covers(addr string) bool {
+	if h.Net == "" {
+		return true
+	}
+	ip, err := netip.ParseAddr(addr)
+	if err != nil {
+		return false
+	}
+	return netip.MustParsePrefix(h.Net).Contains(ip.Unmap())
 }
 
 // StagenetHostListenersOn returns every listener declaration for node.

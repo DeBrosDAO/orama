@@ -100,7 +100,7 @@ func TestGoClientStorage_emptyAndUnicodeNames(t *testing.T) {
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
 	c := newClient(t, n, owner(n))
 	for name, data := range map[string][]byte{
-		"empty.txt":               {},
+		"empty.txt":                    {},
 		"\u202eשלום-é-\U0001f600.txt": []byte("unicode name"),
 	} {
 		up, err := c.Storage().Upload(t.Context(), bytes.NewReader(data), name)

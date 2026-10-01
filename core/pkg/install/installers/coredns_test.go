@@ -2,6 +2,7 @@ package installers
 
 import (
 	"io"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -126,15 +127,37 @@ func TestGenerateCorefile_AlwaysCarriesCredentials(t *testing.T) {
 }
 
 // resolved answers LLMNR on 0.0.0.0:5355 and mDNS on 5353 unless told not to;
-// the drop-in install writes is what keeps both off the public address, next to
-// the stub listener CoreDNS needs gone.
-func TestResolvedDropIn_turnsOffStubLLMNRAndMDNS(t *testing.T) {
-	for _, want := range []string{"[Resolve]\n", "DNSStubListener=no\n", "LLMNR=no\n", "MulticastDNS=no\n"} {
-		if !strings.Contains(resolvedDropIn, want) {
-			t.Errorf("resolved drop-in lacks %q:\n%s", want, resolvedDropIn)
+// the multicast drop-in turns both off on every node, and the nameserver's stub
+// drop-in carries only the stub listener.
+func TestResolvedDropIns_multicastOffEverywhereStubOnlyOnNameserver(t *testing.T) {
+	for _, want := range []string{"[Resolve]\n", "LLMNR=no\n", "MulticastDNS=no\n"} {
+		if !strings.Contains(resolvedMulticastContent, want) {
+			t.Errorf("multicast drop-in lacks %q:\n%s", want, resolvedMulticastContent)
 		}
 	}
-	if !strings.HasSuffix(resolvedDropIn, "\n") {
-		t.Error("resolved drop-in must end with a newline")
+	if strings.Contains(resolvedMulticastContent, "DNSStubListener") {
+		t.Error("the multicast drop-in must not touch the stub listener: every node gets it")
+	}
+	if !strings.Contains(resolvedStubDropIn, "DNSStubListener=no\n") || strings.Contains(resolvedStubDropIn, "LLMNR") {
+		t.Errorf("stub drop-in must carry only the stub listener:\n%s", resolvedStubDropIn)
+	}
+}
+
+func TestWriteResolvedDropIn_reportsChange(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "resolved.conf.d")
+	changed, err := writeResolvedDropIn(dir, "x.conf", resolvedMulticastContent)
+	if err != nil || !changed {
+		t.Fatalf("first write: changed=%v err=%v", changed, err)
+	}
+	changed, err = writeResolvedDropIn(dir, "x.conf", resolvedMulticastContent)
+	if err != nil || changed {
+		t.Fatalf("identical rewrite must report no change: changed=%v err=%v", changed, err)
+	}
+	changed, err = writeResolvedDropIn(dir, "x.conf", "[Resolve]\nLLMNR=yes\n")
+	if err != nil || !changed {
+		t.Fatalf("different content must report a change: changed=%v err=%v", changed, err)
+	}
+	if _, err := writeResolvedDropIn("/proc/nonexistent/x", "x.conf", "a"); err == nil {
+		t.Error("unwritable directory must fail")
 	}
 }

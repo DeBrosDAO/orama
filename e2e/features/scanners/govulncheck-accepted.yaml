@@ -6,17 +6,27 @@ accepted:
   - module: chain
     id: GO-2026-6443
     reason: >-
-      grpc 1.84.0; the fix exists only in the pre-release v1.85.0-dev (no tagged
-      release carries it): upgrade at the v1.85.0 release. Not exposed by the
-      chain: the panic needs a gRPC server routed by xDS (the flaw is the xDS
-      server interceptor indexing an empty :authority). The chain's only gRPC
-      server is cosmos-sdk's server/grpc, a plain grpc.NewServer, and nothing in
-      the chain, cosmos-sdk or its own dependencies calls xds.NewGRPCServer; the
-      xDS packages are linked only through the client-side
-      xds/googledirectpath that cloud.google.com/go/storage imports. The trace
-      govulncheck reports (scripts/stagenet/node agent http.Server.Serve to
-      transport.HandleStreams) is the generic HTTP/2 transport, which cannot hit
-      the xDS route.
+      grpc 1.84.0; the Go vulnerability database lists the fix only as the
+      pre-release v1.85.0-dev.0.20260825072537-93e31b48545e, so its version
+      range ("introduced 1.84.0-dev, fixed 1.85.0-dev...") also covers the
+      v1.84.0 tag, which post-dates that fix. Two independent reasons the
+      chain is not exposed. (1) The advisory's own precondition: servers
+      configured with xDS routing can panic, because the xDS routing
+      interceptor (internal/xds/server RouteAndProcess) indexed an empty
+      :authority. The reported symbols http2Server.HandleStreams and
+      http2Server.operateHeaders are where the transport accepted a request with
+      neither :authority nor Host; without the xDS interceptor nothing indexes
+      the empty value, so the generic transport path alone does not panic. The
+      chain's only gRPC server is cosmos-sdk's server/grpc, a plain
+      grpc.NewServer, and nothing in the chain, cosmos-sdk or their
+      dependencies calls xds.NewGRPCServer; the xDS packages are linked only
+      through the client-side xds/googledirectpath that
+      cloud.google.com/go/storage imports. (2) The v1.84.0 source already
+      carries the fix: http2Server.operateHeaders answers a request with no host
+      or :authority header with an early abort (HTTP 400), and RouteAndProcess
+      returns an Internal status for a missing :authority instead of indexing
+      it. Take the tagged release that the database lists as fixed when it does,
+      and drop this entry.
     review_by: 2026-12-29
   - module: chain
     id: GO-2026-5932

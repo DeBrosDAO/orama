@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+var scanned = []string{"chain", "core"}
+
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
 const okEntry = `accepted:
@@ -21,13 +23,13 @@ func TestParse_checkedInFileIsValid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Parse(data, now); err != nil {
+	if _, err := Parse(data, now, scanned); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestParse_valid(t *testing.T) {
-	got, err := Parse([]byte(okEntry), now)
+	got, err := Parse([]byte(okEntry), now, scanned)
 	if err != nil || len(got) != 1 || got[0].ID != "GO-2026-0001" {
 		t.Fatalf("got %v, %v", got, err)
 	}
@@ -35,7 +37,7 @@ func TestParse_valid(t *testing.T) {
 
 func TestParse_emptyListIsFine(t *testing.T) {
 	for _, in := range []string{"", "accepted: []\n"} {
-		if got, err := Parse([]byte(in), now); err != nil || len(got) != 0 {
+		if got, err := Parse([]byte(in), now, scanned); err != nil || len(got) != 0 {
 			t.Errorf("%q: got %v, %v", in, got, err)
 		}
 	}
@@ -46,18 +48,19 @@ func TestParse_rejects(t *testing.T) {
 		return "accepted:\n  - module: " + mod + "\n    id: " + id + "\n    reason: \"" + reason + "\"\n    review_by: " + by + "\n"
 	}
 	cases := map[string]struct{ in, want string }{
-		"no reason":     {entry("chain", "GO-2026-0001", " ", "2026-12-01"), "required"},
-		"no module":     {entry("", "GO-2026-0001", "r", "2026-12-01"), "required"},
-		"bad id":        {entry("chain", "CVE-2026-1", "r", "2026-12-01"), "GO-YYYY-NNNN"},
-		"bad date":      {entry("chain", "GO-2026-0001", "r", "soon"), "YYYY-MM-DD"},
-		"no date":       {entry("chain", "GO-2026-0001", "r", "\"\""), "YYYY-MM-DD"},
-		"over 90 days":  {entry("chain", "GO-2026-0001", "r", "2027-01-01"), "90 days"},
-		"unknown field": {okEntry + "    note: x\n", "note"},
-		"duplicate":     {okEntry + okEntry[len("accepted:\n"):], "twice"},
-		"not yaml":      {"accepted: [", "govulncheck-accepted.yaml"},
+		"no reason":        {entry("chain", "GO-2026-0001", " ", "2026-12-01"), "required"},
+		"no module":        {entry("", "GO-2026-0001", "r", "2026-12-01"), "required"},
+		"bad id":           {entry("chain", "CVE-2026-1", "r", "2026-12-01"), "GO-YYYY-NNNN"},
+		"bad date":         {entry("chain", "GO-2026-0001", "r", "soon"), "YYYY-MM-DD"},
+		"no date":          {entry("chain", "GO-2026-0001", "r", "\"\""), "YYYY-MM-DD"},
+		"over 90 days":     {entry("chain", "GO-2026-0001", "r", "2027-01-01"), "90 days"},
+		"unknown field":    {okEntry + "    note: x\n", "note"},
+		"duplicate":        {okEntry + okEntry[len("accepted:\n"):], "twice"},
+		"unscanned module": {entry("chian", "GO-2026-0001", "r", "2026-12-01"), "scanned modules"},
+		"not yaml":         {"accepted: [", "govulncheck-accepted.yaml"},
 	}
 	for name, c := range cases {
-		_, err := Parse([]byte(c.in), now)
+		_, err := Parse([]byte(c.in), now, scanned)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err %v, want it to mention %q", name, err, c.want)
 		}
@@ -66,7 +69,7 @@ func TestParse_rejects(t *testing.T) {
 
 func TestParse_exactly90DaysIsAllowed(t *testing.T) {
 	in := strings.Replace(okEntry, "2026-12-01", now.Add(maxReviewHorizon).Format(dateLayout), 1)
-	if _, err := Parse([]byte(in), now); err != nil {
+	if _, err := Parse([]byte(in), now, scanned); err != nil {
 		t.Fatal(err)
 	}
 }

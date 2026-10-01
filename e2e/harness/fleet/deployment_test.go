@@ -84,3 +84,42 @@ func TestUFWAllowsPort(t *testing.T) {
 		t.Error("an empty status allows nothing")
 	}
 }
+
+func TestUFWAllowsPort_anywhereAndLimit(t *testing.T) {
+	cases := []struct {
+		name, ufw, proto string
+		port             int
+		want             bool
+	}{
+		{"bare Anywhere opens every port", "Anywhere                   ALLOW IN    203.0.113.7\n", "tcp", 10200, true},
+		{"bare Anywhere v6", "Anywhere (v6)              ALLOW IN    Anywhere (v6)\n", "tcp", 10200, true},
+		{"interface-scoped Anywhere does not", "Anywhere on wg0            ALLOW IN    10.0.0.0/24\n", "tcp", 10200, false},
+		{"LIMIT opens the port like ALLOW", "10200/tcp                  LIMIT IN    Anywhere\n", "tcp", 10200, true},
+		{"LIMIT on another port", "22/tcp                     LIMIT IN    Anywhere\n", "tcp", 10200, false},
+		{"a forward rule opens nothing on the host", "Anywhere                   ALLOW FWD   198.18.0.2 on ogl-host     # orama-global\n", "tcp", 10200, false},
+		{"DENY of Anywhere is not an allow", "Anywhere                   DENY IN     203.0.113.7\n", "tcp", 10200, false},
+	}
+	for _, c := range cases {
+		if got := UFWAllowsPort("Status: active\n\n"+c.ufw, c.proto, c.port); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestUFWDefaultDenyActive(t *testing.T) {
+	cases := []struct {
+		name, out string
+		want      bool
+	}{
+		{"active and deny", "Status: active\nLogging: on (low)\nDefault: deny (incoming), allow (outgoing), disabled (routed)\n", true},
+		{"inactive", "Status: inactive\n", false},
+		{"active but default allow", "Status: active\nDefault: allow (incoming), allow (outgoing), disabled (routed)\n", false},
+		{"non-verbose output has no default line", "Status: active\n\nTo Action From\n", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		if got := UFWDefaultDenyActive(c.out); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
