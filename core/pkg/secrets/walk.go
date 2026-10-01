@@ -27,7 +27,6 @@ func NamespaceColumns() []Column {
 		{Table: "namespace_push_config", Column: "expo_access_token_encrypted", IDCols: []string{"namespace"}, Purpose: "namespace-push-config"},
 		{Table: "namespace_push_credentials", Column: "credentials_json", IDCols: []string{"namespace", "provider"}, Purpose: "namespace-push-credentials"},
 		{Table: "namespace_webrtc_config", Column: "turn_shared_secret", IDCols: []string{"id"}, Purpose: "turn-encryption"},
-		{Table: "deployments", Column: "environment", IDCols: []string{"id"}, Purpose: "orama-deployment-environment-v1"},
 	}
 }
 
@@ -35,6 +34,10 @@ func NamespaceColumns() []Column {
 func IndexColumns() []Column {
 	return []Column{
 		{Table: "wireguard_peers", Column: "agent_token", IDCols: []string{"node_id"}, Purpose: "node-agent-token"},
+		// Deployments live in the registry. Listed with the tenant columns, a
+		// rotation re-sealed an empty tenant copy of the table and left every
+		// deployment's environment under the root being retired.
+		{Table: "deployments", Column: "environment", IDCols: []string{"id"}, Purpose: "orama-deployment-environment-v1"},
 	}
 }
 

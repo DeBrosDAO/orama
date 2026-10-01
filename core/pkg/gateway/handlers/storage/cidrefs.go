@@ -634,7 +634,9 @@ func (h *Handlers) backfillCIDRefs(ctx context.Context, namespace string) error 
 	if err != nil {
 		return err
 	}
-	deployed, err := h.backfillSource(ctx,
+	// Deployments are the registry's: on a namespace gateway db's copy of the
+	// table is empty, and a backfill run there took no deployment references.
+	deployed, err := h.backfillSourceIn(ctx, h.globalDB,
 		`SELECT content_cid AS cid FROM deployments WHERE namespace = ? AND content_cid IS NOT NULL AND content_cid != ''
 		 UNION
 		 SELECT build_cid AS cid FROM deployments WHERE namespace = ? AND build_cid IS NOT NULL AND build_cid != ''
@@ -658,8 +660,13 @@ func (h *Handlers) backfillCIDRefs(ctx context.Context, namespace string) error 
 // backfillSource reads at most maxBackfillRefs+1 CIDs and fails when the
 // namespace has more than the bound.
 func (h *Handlers) backfillSource(ctx context.Context, query string, args ...any) ([]string, error) {
+	return h.backfillSourceIn(ctx, h.db, query, args...)
+}
+
+// backfillSourceIn is backfillSource against db.
+func (h *Handlers) backfillSourceIn(ctx context.Context, db rqlite.Client, query string, args ...any) ([]string, error) {
 	var rows []map[string]interface{}
-	if err := h.db.Query(ctx, &rows, query, append(args, maxBackfillRefs+1)...); err != nil {
+	if err := db.Query(ctx, &rows, query, append(args, maxBackfillRefs+1)...); err != nil {
 		return nil, fmt.Errorf("failed to read the namespace's existing references: %w", err)
 	}
 	if len(rows) > maxBackfillRefs {

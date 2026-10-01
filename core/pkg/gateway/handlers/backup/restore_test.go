@@ -33,7 +33,7 @@ func TestRestoreHandler_round_trip_onto_another_cluster(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if resp.Pins != 2 || resp.Secrets != 3 || resp.SecretsWithoutRow != 0 || resp.RQLiteBytes != len(testDB) {
+	if resp.Pins != 2 || resp.Secrets != 2 || resp.SecretsWithoutRow != 0 || resp.RQLiteBytes != len(testDB) {
 		t.Fatalf("response %+v", resp)
 	}
 	if len(dst.snap.loaded) != 1 || !bytes.Equal(dst.snap.loaded[0], testDB) {
@@ -44,7 +44,6 @@ func TestRestoreHandler_round_trip_onto_another_cluster(t *testing.T) {
 	}
 	got := decryptOps(t, dst.db.batches[1], destRoot)
 	want := map[string]string{
-		"UPDATE deployments SET environment = ? WHERE id = ? [dep1]":                  `{"API_KEY":"x"}`,
 		"UPDATE function_secrets SET encrypted_value = ? WHERE id = ? [1000000]":      "sk_live_1",
 		"UPDATE namespace_webrtc_config SET turn_shared_secret = ? WHERE id = ? [w1]": "legacy-plain",
 	}
@@ -169,7 +168,7 @@ func TestRestoreHandler_counts_secrets_without_a_row(t *testing.T) {
 	seedSource(t, src)
 	pub, priv := ownerKey(t)
 	dst := newRig(t, destRoot, testNamespace, true)
-	dst.db.noRowFrom = 2
+	dst.db.noRowFrom = 1
 	rec := do(dst.h.RestoreHandler, http.MethodPost, restoreBody(t, backupFrom(t, src, pub), priv, destRoot))
 	var resp RestoreResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.SecretsWithoutRow != 1 {
@@ -266,7 +265,7 @@ func TestRestoreKeyHandler_returns_the_key_restores_are_sealed_to(t *testing.T) 
 }
 
 func TestNew_requires_every_dependency(t *testing.T) {
-	ok := Config{Namespace: testNamespace, DB: &fakeDB{}, Snapshots: &fakeSnap{}, Pins: &fakePins{},
+	ok := Config{Namespace: testNamespace, DB: &fakeDB{}, Registry: &fakeDB{}, Snapshots: &fakeSnap{}, Pins: &fakePins{},
 		Root: func() secrets.Root { return destRoot }, ReplicationFactor: 3,
 		Caller: func(*http.Request) (string, bool) { return "", false }, Audit: &fakeAudit{}, Logger: zap.NewNop()}
 	if _, err := New(ok); err != nil {
@@ -275,6 +274,7 @@ func TestNew_requires_every_dependency(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
 		"namespace": func(c *Config) { c.Namespace = "" },
 		"db":        func(c *Config) { c.DB = nil },
+		"registry":  func(c *Config) { c.Registry = nil },
 		"rf zero":   func(c *Config) { c.ReplicationFactor = 0 },
 		"root":      func(c *Config) { c.Root = nil },
 	} {

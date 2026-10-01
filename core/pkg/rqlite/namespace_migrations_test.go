@@ -268,6 +268,8 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		// with "there is already another table with this name" on any
 		// namespace database that still had the old table.
 		`ALTER TABLE api_keys_new RENAME TO api_keys`,
+		// Deployments are cluster state (schema_placement.go).
+		`CREATE TABLE IF NOT EXISTS deployments (id INTEGER)`,
 	}
 	for _, s := range strip {
 		if !stmtTargetsStrippedTable(s) {
@@ -278,7 +280,6 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS functions (id INTEGER)`,
 		`CREATE TABLE IF NOT EXISTS user_subscriptions (id INTEGER)`, // not our table
 		`INSERT OR IGNORE INTO orama_schema_migrations(version) VALUES (2)`,
-		`CREATE TABLE IF NOT EXISTS deployments (id INTEGER)`,
 		`CREATE INDEX idx ON push_devices(user_id)`,
 	}
 	for _, s := range keep {

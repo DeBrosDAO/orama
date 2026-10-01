@@ -49,8 +49,14 @@ type Caller func(r *http.Request) (namespace string, owner bool)
 // Config is everything a Handler needs. Every field is required.
 type Config struct {
 	// Namespace is the namespace this gateway serves.
-	Namespace         string
-	DB                DB
+	Namespace string
+	// DB is this namespace gateway's own RQLite: the snapshot, the restore,
+	// and the namespace's stored objects and quota.
+	DB DB
+	// Registry is the cluster registry, where the namespace's deployments
+	// live. Read from DB they were an empty table, and every backup left out
+	// the content and builds of the namespace's deployments.
+	Registry          DB
 	Snapshots         Snapshotter
 	Pins              Pinner
 	Root              func() secrets.Root
@@ -97,7 +103,7 @@ func New(cfg Config) (*Handler, error) {
 	if !httputil.ValidateNamespace(cfg.Namespace) {
 		return nil, fmt.Errorf("namespace backup: %q is not a namespace this gateway can serve", cfg.Namespace)
 	}
-	if cfg.DB == nil || cfg.Snapshots == nil || cfg.Pins == nil || cfg.Root == nil ||
+	if cfg.DB == nil || cfg.Registry == nil || cfg.Snapshots == nil || cfg.Pins == nil || cfg.Root == nil ||
 		cfg.Caller == nil || cfg.Audit == nil || cfg.Logger == nil {
 		return nil, fmt.Errorf("namespace backup: database, RQLite snapshots, IPFS, encryption root, caller, audit and logger are all required")
 	}

@@ -148,7 +148,7 @@ func TestTablesOfTrust_partitionThePlacement(t *testing.T) {
 // rest on them. Naming the ones that must stay out of TrustPlatform keeps a
 // mass reclassification from silently widening the guard.
 func TestTrust_tenantDataAndTelemetryAreNotPlatform(t *testing.T) {
-	for _, table := range []string{"apps", "push_devices", "request_logs", "function_logs", "function_invocations", "deployment_events"} {
+	for _, table := range []string{"apps", "push_devices", "request_logs", "function_logs", "function_invocations"} {
 		note, ok := PlacementOf(table)
 		if !ok || note.Trust == TrustPlatform {
 			t.Errorf("%q must not be platform-trust (placed: %v)", table, ok)

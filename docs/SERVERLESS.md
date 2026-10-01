@@ -254,7 +254,7 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `ipfs_cid_refs`, `deployments`, `deployment_domains`, `deployment_replicas`,
 `home_node_assignments`, `port_allocations`, `functions`,
 `function_cron_triggers`, `function_pubsub_triggers`, `function_db_triggers`,
-`deployment_history`, `namespace_push_config`, `namespace_webrtc_config`,
+`deployment_history`, `deployment_events`, `deployment_health_checks`, `namespace_push_config`, `namespace_webrtc_config`,
 `namespace_sqlite_databases`, `namespace_sqlite_backups`, `webrtc_rooms`,
 `webrtc_port_allocations`, `namespace_cluster_events`,
 `namespace_pending_cleanup`, `node_health_events`, `rqlite_backups`, `_pubsub_mesh_peers` and `_namespace_libp2p_peers` (the list in

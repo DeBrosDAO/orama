@@ -1,6 +1,10 @@
 package gateway
 
-import "time"
+import (
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+)
 
 // Config holds configuration for the gateway server
 type Config struct {
@@ -117,6 +121,23 @@ type Config struct {
 // DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
 // GlobalRQLiteDSN is the cluster registry. The index gateway is its own
 // registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
+// deploymentRegistry is the database every gateway's deployment family reads
+// and writes: the cluster registry. A deployment's rows, ports and home node
+// are cluster state, written by `orama deploy` through the main gateway and read
+// by host routing; a namespace gateway that served them from its own RQLite
+// read an empty table, and every deployment call on a namespace host answered
+// "Deployment not found".
+func deploymentRegistry(deps *Dependencies) rqlite.Client {
+	return deps.GlobalORMClient
+}
+
+// runsDeploymentHealthChecker reports whether this gateway checks and restarts
+// the node's deployment replicas. The checker covers every namespace's replicas
+// on the node, so exactly one gateway per node runs it: the main one.
+func runsDeploymentHealthChecker(cfg *Config) bool {
+	return !isNamespaceGateway(cfg)
+}
+
 func isNamespaceGateway(cfg *Config) bool {
 	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
 }

@@ -36,7 +36,8 @@ func registrySchema(t *testing.T) *sqliteDB {
 		CREATE TABLE namespace_clusters (namespace_id INTEGER NOT NULL UNIQUE, status TEXT NOT NULL, ready_at TIMESTAMP)`); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"064_ipfs_cid_refs.sql", "065_ipfs_cid_refs_holders.sql"} {
+	// Deployments are cluster state: their rows are the registry's.
+	for _, f := range []string{"007_deployments.sql", "064_ipfs_cid_refs.sql", "065_ipfs_cid_refs_holders.sql"} {
 		ddl, err := os.ReadFile("../../../../migrations/" + f)
 		if err != nil {
 			t.Fatal(err)
@@ -48,19 +49,12 @@ func registrySchema(t *testing.T) *sqliteDB {
 	return &sqliteDB{db: db}
 }
 
-// namespaceSchema is one namespace's own RQLite: its ownership rows and its
-// deployments, and nothing of any other namespace's.
+// namespaceSchema is one namespace's own RQLite: its ownership rows, and
+// nothing of any other namespace's.
 func namespaceSchema(t *testing.T) *sqliteDB {
 	t.Helper()
 	db := ownershipSchema(t)
 	db.db.SetMaxOpenConns(1)
-	ddl, err := os.ReadFile("../../../../migrations/007_deployments.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.db.Exec(string(ddl)); err != nil {
-		t.Fatalf("apply 007: %v", err)
-	}
 	return db
 }
 
@@ -295,7 +289,7 @@ func TestBackfill_loadsExistingContentOnce(t *testing.T) {
 		VALUES ('1', 'QmLegacyPinned', 'ns-a', 1, datetime('now'), 'ns-a'), ('2', 'QmNotPinned', 'ns-a', 0, datetime('now'), 'ns-a')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := nsDB.db.Exec(`INSERT INTO deployments (id, namespace, name, type, content_cid, build_cid, deployed_by) VALUES ('d1', 'ns-a', 'app', 'nodejs', 'QmContent', 'QmBuild', 'x')`); err != nil {
+	if _, err := registry.db.Exec(`INSERT INTO deployments (id, namespace, name, type, content_cid, build_cid, deployed_by) VALUES ('d1', 'ns-a', 'app', 'nodejs', 'QmContent', 'QmBuild', 'x')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.backfillCIDRefs(ctx, "ns-a"); err != nil {

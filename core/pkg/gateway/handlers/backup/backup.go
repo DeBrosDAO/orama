@@ -149,7 +149,7 @@ func (h *Handler) pinnedCIDs(ctx context.Context) ([]string, error) {
 		"SELECT cid FROM ipfs_content_ownership WHERE namespace = ? AND is_pinned = 1", h.cfg.Namespace); err != nil {
 		return nil, fmt.Errorf("list the namespace's pinned objects: %w", err)
 	}
-	if err := h.cfg.DB.Query(ctx, &deployed,
+	if err := h.cfg.Registry.Query(ctx, &deployed,
 		"SELECT content_cid, build_cid FROM deployments WHERE namespace = ?", h.cfg.Namespace); err != nil {
 		return nil, fmt.Errorf("list the namespace's deployment CIDs: %w", err)
 	}

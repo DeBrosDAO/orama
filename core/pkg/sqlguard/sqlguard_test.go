@@ -64,17 +64,12 @@ func TestCheck_refusesTheDeploymentTables(t *testing.T) {
 		"INSERT INTO port_allocations(port) VALUES (1)",
 		"INSERT INTO deployment_history(content_cid) VALUES ('QmForged')",
 		"SELECT d.name FROM messages m JOIN [deployments] d ON 1=1",
-	} {
-		if err := Check(query); err == nil {
-			t.Errorf("allowed: %s", query)
-		}
-	}
-	for _, query := range []string{
+		// The deployment family's record moved to the registry with it.
 		"SELECT * FROM deployment_events",
 		"SELECT * FROM deployment_health_checks",
 	} {
-		if err := Check(query); err != nil {
-			t.Errorf("refused %q: %v", query, err)
+		if err := Check(query); err == nil {
+			t.Errorf("allowed: %s", query)
 		}
 	}
 }
@@ -125,7 +120,6 @@ func TestCheck_allowsATenantsOwnSQL(t *testing.T) {
 		"SELECT * FROM messages ORDER BY created_at DESC LIMIT 50;",
 		"WITH recent AS (SELECT * FROM messages LIMIT 10) SELECT * FROM recent",
 		"SELECT * FROM apps",              // core owns the name, but a tenant may already be using it
-		"SELECT * FROM deployment_events", // what happened to a deployment, not what runs
 		"SELECT * FROM schema_migrations", // the tenant's own migration tracker
 	} {
 		t.Run(query, func(t *testing.T) {
@@ -354,12 +348,11 @@ func TestCheck_emptyAndTrivial(t *testing.T) {
 //
 // `audit_events` used to be on this list for the second reason. It moved to the
 // registry, where it holds every namespace's trail, so the reason stopped being
-// true.
+// true; so did `deployment_events` and `deployment_health_checks`, with the
+// deployments they record.
 var reachableTables = map[string]bool{
-	"apps":                     true,
-	"deployment_events":        true,
-	"deployment_health_checks": true,
-	"function_invocations":     true, "function_logs": true,
+	"apps":                 true,
+	"function_invocations": true, "function_logs": true,
 	"function_jobs": true, "function_timers": true, "function_rate_limits": true,
 	"function_db_change_tracking": true,
 	"namespace_publish_seq":       true,

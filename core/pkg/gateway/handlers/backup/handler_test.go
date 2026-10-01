@@ -167,19 +167,21 @@ func (f *fakeAudit) RecordFromRequest(_ context.Context, _ *http.Request, e auth
 }
 
 type rig struct {
-	h     *Handler
-	db    *fakeDB
-	snap  *fakeSnap
-	pins  *fakePins
-	audit *fakeAudit
+	h        *Handler
+	db       *fakeDB
+	registry *fakeDB
+	snap     *fakeSnap
+	pins     *fakePins
+	audit    *fakeAudit
 }
 
 func newRig(t *testing.T, root secrets.Root, callerNS string, owner bool) *rig {
 	t.Helper()
-	r := &rig{db: &fakeDB{rows: map[string][]map[string]any{}, noRowFrom: -1}, snap: &fakeSnap{db: testDB},
+	r := &rig{db: &fakeDB{rows: map[string][]map[string]any{}, noRowFrom: -1},
+		registry: &fakeDB{rows: map[string][]map[string]any{}, noRowFrom: -1}, snap: &fakeSnap{db: testDB},
 		pins: &fakePins{}, audit: &fakeAudit{}}
 	h, err := New(Config{
-		Namespace: testNamespace, DB: r.db, Snapshots: r.snap, Pins: r.pins,
+		Namespace: testNamespace, DB: r.db, Registry: r.registry, Snapshots: r.snap, Pins: r.pins,
 		Root: func() secrets.Root { return root }, ReplicationFactor: 3,
 		Caller: func(*http.Request) (string, bool) { return callerNS, owner },
 		Audit:  r.audit, Logger: zap.NewNop(),
@@ -207,10 +209,8 @@ func sealUnder(t *testing.T, root secrets.Root, purpose, value string) string {
 
 func seedSource(t *testing.T, r *rig) {
 	r.db.rows["ipfs_content_ownership"] = []map[string]any{{"cid": testCIDa}}
-	r.db.rows["deployments"] = []map[string]any{
-		{"content_cid": testCIDb, "build_cid": nil, "id": "dep1",
-			"environment": sealUnder(t, sourceRoot, "orama-deployment-environment-v1", `{"API_KEY":"x"}`)},
-	}
+	// Deployments are the registry's; the namespace's own database has none.
+	r.registry.rows["deployments"] = []map[string]any{{"content_cid": testCIDb, "build_cid": nil}}
 	r.db.rows["function_secrets"] = []map[string]any{
 		{"id": float64(1000000), "encrypted_value": sealUnder(t, sourceRoot, "orama-secrets-encryption-v1", "sk_live_1")},
 	}

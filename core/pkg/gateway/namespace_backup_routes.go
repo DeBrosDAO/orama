@@ -15,12 +15,13 @@ import (
 // serves them: a backup there would hand out every tenant's secrets and a
 // restore would replace the registry.
 func (g *Gateway) initNamespaceBackup(deps *Dependencies) {
-	if g.servesCoreRegistry() || deps.ORMClient == nil || deps.IPFSClient == nil {
+	if g.servesCoreRegistry() || deps.ORMClient == nil || deps.GlobalORMClient == nil || deps.IPFSClient == nil {
 		return
 	}
 	h, err := backuphandlers.New(backuphandlers.Config{
 		Namespace:         ownNamespace(g.cfg),
 		DB:                deps.ORMClient,
+		Registry:          deps.GlobalORMClient,
 		Snapshots:         newRQLiteSnapshots(g.rqliteBaseURL()),
 		Pins:              deps.IPFSClient,
 		Root:              g.encHolder.Get,

@@ -678,17 +678,25 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		envCodec.SetHolder(gw.encHolder)
 		gw.envCodec = envCodec
 	}
-	if deps.ORMClient != nil && deps.IPFSClient != nil && envCodec != nil {
+	if deploymentRegistry(deps) != nil && deps.IPFSClient != nil && envCodec != nil {
+		// Deployments are cluster state: their rows, ports and home nodes live
+		// in the cluster registry, which is where `orama deploy` through the
+		// main gateway writes them and where host routing reads them. A
+		// namespace gateway used to serve them from its own RQLite, whose copy
+		// of these tables is empty, so every deployment call made on a
+		// namespace host answered "Deployment not found". On the main gateway
+		// GlobalORMClient is ORMClient.
+		deploymentDB := deploymentRegistry(deps)
 		// Convert rqlite.Client to health.Database for the deployment checker
-		dbAdapter := &deploymentDatabaseAdapter{client: deps.ORMClient}
+		dbAdapter := &deploymentDatabaseAdapter{client: deploymentDB}
 
 		// Create deployment service
 		baseDomain := gw.cfg.BaseDomain
 
 		// Create deployment service components
-		gw.portAllocator = deployments.NewPortAllocator(deps.ORMClient, logger.Logger)
-		gw.homeNodeManager = deployments.NewHomeNodeManager(deps.ORMClient, gw.portAllocator, logger.Logger)
-		gw.replicaManager = deployments.NewReplicaManager(deps.ORMClient, gw.homeNodeManager, gw.portAllocator, logger.Logger)
+		gw.portAllocator = deployments.NewPortAllocator(deploymentDB, logger.Logger)
+		gw.homeNodeManager = deployments.NewHomeNodeManager(deploymentDB, gw.portAllocator, logger.Logger)
+		gw.replicaManager = deployments.NewReplicaManager(deploymentDB, gw.homeNodeManager, gw.portAllocator, logger.Logger)
 		gw.processManager = process.NewManager(logger.Logger, process.Config{
 			Stager:     process.HelperStager{},
 			BaseDomain: baseDomain,
@@ -705,7 +713,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		})
 
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
-			deps.ORMClient,
+			deploymentDB,
 			gw.homeNodeManager,
 			gw.portAllocator,
 			gw.replicaManager,
@@ -840,16 +848,22 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			logger.Logger,
 		)
 
-		// Start health checker
-		gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
-		gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
-		// Waits for readiness: it queries the deployment tables, which do not
-		// exist until the migrations this gateway is still applying have run.
-		go func() {
-			if gw.AwaitReady(context.Background()) {
-				gw.healthChecker.Start(context.Background())
-			}
-		}()
+		// Start health checker. It checks and restarts every deployment
+		// replica on this node, all namespaces' alike, so it runs once per
+		// node, in the main gateway: the deployment tables are the registry's
+		// on every gateway, and a checker in each namespace gateway as well
+		// would check and restart the same replicas once per namespace.
+		if runsDeploymentHealthChecker(cfg) {
+			gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
+			gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
+			// Waits for readiness: it queries the deployment tables, which do not
+			// exist until the migrations this gateway is still applying have run.
+			go func() {
+				if gw.AwaitReady(context.Background()) {
+					gw.healthChecker.Start(context.Background())
+				}
+			}()
+		}
 
 		logger.ComponentInfo(logging.ComponentGeneral, "Deployment system initialized")
 	}

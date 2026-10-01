@@ -118,11 +118,13 @@ var protectedTables = map[string]string{
 	// /v1/deployments, which validates all of that; a row written here skips it,
 	// so it would run content the deploy path refused, on a port and a node the
 	// tenant chose. No documented tenant workflow runs SQL against them.
-	"deployments":           "what runs, from which content, on which port",
-	"deployment_domains":    "which host names route to which deployment",
-	"deployment_replicas":   "which nodes run a deployment",
-	"home_node_assignments": "which node hosts a deployment",
-	"port_allocations":      "which ports a deployment holds",
+	"deployments":              "what runs, from which content, on which port",
+	"deployment_domains":       "which host names route to which deployment",
+	"deployment_replicas":      "which nodes run a deployment",
+	"deployment_events":        "what happened to a deployment",
+	"deployment_health_checks": "a deployment's health record",
+	"home_node_assignments":    "which node hosts a deployment",
+	"port_allocations":         "which ports a deployment holds",
 	// The cluster-wide reference count that decides whether an unpin removes a
 	// shared pin. It lives in the cluster registry only, but a caller should
 	// be told what it is rather than "no such table".
