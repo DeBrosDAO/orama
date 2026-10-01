@@ -151,11 +151,6 @@ describe.skipIf(!hasGateway())("Cache", () => {
   it("should handle empty dmap name", async () => {
     const client = await createTestClient();
 
-    try {
-      await client.cache.get("", "test-key");
-      expect.fail("Expected get to fail with empty dmap");
-    } catch (err: any) {
-      expect(err.message).toBeDefined();
-    }
+    await expect(client.cache.get("", "test-key")).rejects.toThrow();
   });
 });

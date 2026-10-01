@@ -93,8 +93,11 @@ func runVitest(t *testing.T, f *fleet.Fleet, pnpm, sdkDir, cfg, report string, e
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), vitestBudget)
 	defer cancel()
+	// The default reporter writes to the recorded output what the JSON report
+	// leaves out: an unhandled error or rejection, which fails the run with no
+	// failed assertion to point at.
 	cmd := exec.CommandContext(ctx, pnpm, "--dir", sdkDir, "exec", "vitest", "run",
-		"--config", cfg, "--reporter=json", "--outputFile="+report)
+		"--config", cfg, "--reporter=default", "--reporter=json", "--outputFile.json="+report)
 	cmd.Env, cmd.Dir = env, filepath.Dir(report)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
