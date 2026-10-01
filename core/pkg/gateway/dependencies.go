@@ -1157,6 +1157,11 @@ func gatewayClientConfig(cfg *Config) (*client.ClientConfig, error) {
 	// Reads go to the leader, as the tenant handle's do: an auth decision (a
 	// grant `orama members add` just wrote, a nonce just spent) must see every
 	// write the leader acknowledged, and a follower's local read does not.
+	// `weak` is rqlite's own default; this client used to force `none`. The
+	// cost is that while the cluster has no leader (an election, a few seconds
+	// with the platform's Raft timing) every read on this client fails rather
+	// than answering from the local follower: a control plane that answers
+	// late is preferred to one that answers with what it has not caught up on.
 	cliCfg.DatabaseReadLevel = client.ReadLevelWeak
 	// A namespace gateway's peers dial it (peer discovery); it listens on
 	// this node's WireGuard IP only. Every other gateway has no listener.
