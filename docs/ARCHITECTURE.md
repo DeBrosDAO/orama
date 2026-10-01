@@ -272,7 +272,7 @@ The process no longer exits because the cluster is unreachable, so a restart now
 means a real crash and systemd should keep restarting rather than park the unit
 in `failed`; the stop timeout leaves room for the shutdown sequence (announce
 maintenance → wait up to 10s for the supervisor → tear down → hand raft
-leadership over). `orama upgrade` rewrites the unit in Phase 5, so an existing
+leadership over). `orama node upgrade` rewrites the unit in Phase 5, so an existing
 fleet picks both settings up on the next upgrade, after `daemon-reload` and a
 node restart.
 
@@ -384,6 +384,19 @@ A remote stop or teardown that fails is recorded in `namespace_pending_cleanup` 
 every sweep, rather than logged. The unit keeps running and keeps holding a port
 the allocator has already released, and the next namespace given that port finds
 it occupied and joins a foreign raft group.
+
+Deleting a namespace (`DELETE /v1/namespace/delete`) deprovisions the cluster and then removes
+the namespace row, its grants and its other per-namespace rows. The cluster row, ports,
+DNS and membership are removed even when a node does not confirm its teardown; the
+unconfirmed teardown is then in `namespace_pending_cleanup` and the delete carries on and
+answers 200 with `"cleanup_pending": true` (the audit row has `teardown=pending`), because
+stopping there left the namespace row and its owner grant behind with no cluster, counted
+against the owner's cap. Any other deprovision failure answers 500 with `retryable: true`
+and leaves the namespace and its cluster row for the retry. A namespace with no cluster
+is deleted by the same call, which is also how a namespace left behind that way by an
+older release is cleared. A create whose provisioning does not start (503
+`NAMESPACE_PROVISION_FAILED`) removes the namespace row and owner grant it wrote, unless
+a cluster record exists for it.
 
 A teardown is destructive, so its replay is checked before it is sent. The row
 carries the cluster id the teardown was owed for and whether it was the
@@ -1609,13 +1622,13 @@ Namespaces can opt in to WebRTC support for real-time voice, video, and data cha
 ### Components
 
 - **SFU (Selective Forwarding Unit)** — Pion WebRTC server that handles signaling (WebSocket), SDP negotiation, and RTP forwarding. Runs on all 3 cluster nodes, binds only to WireGuard IPs.
-- **TURN Server** — Pion TURN relay that provides NAT traversal. One shared server per host (`orama-turn.service`) serves every namespace allocated TURN there, each authenticated against its own secret; typically 2 of 3 nodes for redundancy. Public-facing (UDP 3478, 443, relay range 49152-65535).
+- **TURN Server** — Pion TURN relay that provides NAT traversal. One shared server per host (`orama-turn.service`) serves every namespace allocated TURN there, each authenticated against its own secret; typically 2 of 3 nodes for redundancy. Public-facing (3478/udp and 3478/tcp, TURNS on 5349/tcp and, with stealth TURN, on 443/tcp through the SNI router ([STEALTH_TURN.md](STEALTH_TURN.md)), relay range 49152-65535/udp).
 
 ### Security Model
 
 - **TURN-shielded**: SFU binds only to WireGuard (10.0.0.x), never 0.0.0.0. All client media flows through TURN relay.
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side — no direct peer connections.
-- **HMAC credentials**: Per-namespace TURN shared secret with 10-minute TTL.
+- **HMAC credentials**: Per-namespace TURN shared secret. Credentials from the REST endpoint and the host function last 24h; those the SFU signals to a client use the per-namespace TTL, 600s by default ([WEBRTC.md](WEBRTC.md)).
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
 
 ### Port Allocation
@@ -1626,8 +1639,8 @@ WebRTC uses a separate port allocation system from core namespace services:
 |---------|-----------|
 | SFU signaling | 30000-30099 |
 | SFU media (RTP) | 20000-29999 |
-| TURN listen | 3478/udp (standard) |
-| TURN TLS | 443/udp |
+| TURN listen | 3478/udp and 3478/tcp |
+| TURN TLS | 5349/tcp (443/tcp with stealth TURN) |
 | TURN relay | 49152-65535/udp |
 
 See [docs/WEBRTC.md](WEBRTC.md) for full details including client integration, API reference, and debugging.

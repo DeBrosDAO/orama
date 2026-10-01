@@ -493,6 +493,7 @@ When WebRTC is enabled, the following ports are opened via UFW on TURN nodes:
 | 3478 | UDP | TURN standard |
 | 3478 | TCP | TURN TCP fallback (for clients behind UDP-blocking firewalls) |
 | 5349 | TCP | TURNS — TURN over TLS (encrypted, works through strict firewalls/DPI) |
+| 443 | TCP | Stealth TURNS: the SNI router hands TURN-over-TLS clients to the namespace's TURNS listener ([STEALTH_TURN.md](STEALTH_TURN.md)); open already for HTTPS |
 | 49152-65535 | UDP | TURN relay range (allocated per namespace) |
 
 SFU ports are NOT opened in the firewall — they are WireGuard-internal only.

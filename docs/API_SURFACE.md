@@ -5,7 +5,7 @@ are is [CLIENT_SURFACE.md](CLIENT_SURFACE.md): humans use the CLI, programs use
 the SDK and this HTTP API, and there is no Orama dashboard.
 
 The TypeScript SDK's coverage is a decision rather than an accident: it reaches
-38 of 152 routes, and the other 114 are here with a reason.
+39 of 169 routes, and the other 130 are here with a reason.
 
 `core/pkg/gateway/api_surface_test.go` keeps this document honest in both
 directions. A route registered in the gateway and missing here fails the Go
@@ -14,10 +14,10 @@ route therefore means deciding who calls it.
 
 | Owner | Meaning | Count |
 |-------|---------|-------|
-| `SDK` | `@debros/orama` calls it | 38 |
-| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 71 |
-| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 22 |
-| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 21 |
+| `SDK` | `@debros/orama` calls it | 39 |
+| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 80 |
+| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 27 |
+| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 23 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures
 in [`contracts/`](../contracts), which both a Go handler test and a TypeScript
@@ -153,9 +153,9 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 
 | Route | Owner | Notes |
 |-------|-------|-------|
-| `/v1/namespace/push-credentials` | CLI | Push credential management. |
-| `/v1/namespace/push-credentials/` | CLI | One push credential. |
-| `/v1/push/config` | CLI | Per-namespace push credentials. `orama namespace push-credentials`. |
+| `/v1/namespace/push-credentials` | direct | Push credential management, an owner's setting made over HTTP; the CLI has no command for it. |
+| `/v1/namespace/push-credentials/` | direct | One push credential (`PUT`/`DELETE .../{provider}`). The CLI has no command for it. |
+| `/v1/push/config` | direct | Legacy per-namespace push credentials, superseded by `/v1/namespace/push-credentials/`. The CLI has no command for it. |
 | `/v1/push/devices` | direct | Register a device for push. A mobile client concern; a native SDK owns it, not this one. |
 | `/v1/push/devices/` | direct | One registered device. |
 | `/v1/push/send` | CLI | Server-side send, on the namespace's `push:write` grant (which the `runtime` role holds); a function or a backend calls it directly. |
@@ -167,7 +167,7 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 | Route | Owner | Notes |
 |-------|-------|-------|
 | `/v1/namespace/backup` | CLI | Owner only. The namespace's RQLite snapshot, pinned CIDs and decrypted secrets, sealed to the X25519 public key in the body. The gateway never sees the private key. Namespace gateways only; one backup or restore at a time per gateway (429 otherwise); a database over 256 MiB or more than 50,000 pins is refused (413). `orama namespace backup`. |
-| `/v1/namespace/delete` | CLI | Destroy a namespace. |
+| `/v1/namespace/delete` | CLI | Destroy a namespace. Idempotent: a namespace whose cluster is already gone is removed too. 200 with `cleanup_pending: true` when a node's teardown is still owed (recorded for replay); 500 `retryable` when the cluster could not be deprovisioned. |
 | `/v1/namespace/keys` | CLI | Mint and list scoped API keys. `orama namespace keys`. |
 | `/v1/namespace/keys/` | CLI | Revoke a key. |
 | `/v1/namespace/list` | CLI | Namespaces owned by the calling wallet. |
@@ -181,9 +181,9 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 | `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
 | `/v1/namespace/session-policy` | direct | Whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval (`optional`, `required`, `approval`). An owner's setting, made once per namespace over HTTP; the CLI has no command for it. See AUTH.md. |
 | `/v1/namespace/status` | CLI | Provisioning progress, polled by `orama namespace create`. |
-| `/v1/namespace/webrtc/disable` | CLI | `orama namespace webrtc disable`. |
-| `/v1/namespace/webrtc/enable` | CLI | `orama namespace webrtc enable`. |
-| `/v1/namespace/webrtc/status` | CLI | `orama namespace webrtc status`. |
+| `/v1/namespace/webrtc/disable` | CLI | `orama namespace disable webrtc`. |
+| `/v1/namespace/webrtc/enable` | CLI | `orama namespace enable webrtc`. |
+| `/v1/namespace/webrtc/status` | CLI | `orama namespace webrtc-status`. |
 | `/v1/namespace/webrtc/stealth/disable` | CLI | Stealth TURN. |
 | `/v1/namespace/webrtc/stealth/enable` | CLI | Stealth TURN. See docs/STEALTH_TURN.md. |
 
@@ -191,29 +191,29 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 
 | Route | Owner | Notes |
 |-------|-------|-------|
-| `/v1/deployments/delete` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/domains/add` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/domains/list` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/domains/remove` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/domains/verify` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/env` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/delete` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/domains/add` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/domains/list` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/domains/remove` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/domains/verify` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/env` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
 | `/v1/deployments/grants` | CLI | What a deployment may do as itself. `orama app grants list\|set`. Admin grant; a deployment cannot be granted the control plane. |
-| `/v1/deployments/env/set` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/events` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/get` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/go/update` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/go/upload` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/list` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/logs` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/nextjs/update` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/nextjs/upload` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/nodejs/update` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/nodejs/upload` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/rollback` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/static/update` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/static/upload` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/stats` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
-| `/v1/deployments/versions` | CLI | Application deployment. `orama app deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/env/set` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/events` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/get` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/go/update` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/go/upload` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/list` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/logs` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/nextjs/update` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/nextjs/upload` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/nodejs/update` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/nodejs/upload` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/rollback` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/static/update` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/static/upload` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/stats` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
+| `/v1/deployments/versions` | CLI | Application deployment. `orama deploy` and friends; an application does not deploy itself. |
 
 ### Application databases
 

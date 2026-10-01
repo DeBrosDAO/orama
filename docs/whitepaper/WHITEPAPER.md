@@ -73,7 +73,7 @@ In most platforms a tenant is a column in a shared table. In Orama a tenant is a
 
 The namespace's tables live in its own database file, on its own replication log, behind its own gateway. There is no cross-tenant query because there is no shared table to query across.
 
-A wallet can own up to 10 namespaces. A network with a single eligible machine provisions one-node namespaces for evaluation. This mode is explicitly not highly available, and losing the disk loses the namespace. A network with two eligible machines refuses to provision, because a two-member Raft group cannot survive the loss of either member. Networks of three or more always provision tenants on three nodes.
+A wallet can own up to 10 namespaces by default; the operator of a cluster sets that cap anywhere from 1 to 10,000. A network with a single eligible machine provisions one-node namespaces for evaluation. This mode is explicitly not highly available, and losing the disk loses the namespace. A network with two eligible machines refuses to provision, because a two-member Raft group cannot survive the loss of either member. Networks of three or more always provision tenants on three nodes.
 
 ### 3.4 The gateway
 
@@ -91,7 +91,7 @@ Caddy terminates public TLS and obtains certificates automatically through DNS-0
 
 `oramad` is a Cosmos SDK application on CometBFT. It lives in `chain/`, its own Go module. The node process does not import it. Accounts use the `orama` prefix. The unit of account is `norama`. One ORAMA is one billion norama.
 
-A normal genesis mints nothing. New coins are created once per epoch, and an epoch closes only after 24 hours of block time and 14,400 blocks. The per-epoch maximum starts at 14,848 ORAMA and halves every 730 epochs across five brackets, then continues forever at 274 ORAMA per epoch. There is no terminal cap. Only 60% of each epoch's maximum is minted, and it is paid to validators and delegators according to voting power, not raw stake. The storage, relay, and development shares are recorded and are not minted. No module pays them.
+A normal genesis mints nothing. New coins are created once per epoch, and an epoch closes only after 24 hours of block time and 14,400 blocks. The per-epoch maximum starts at 14,848 ORAMA and halves every 730 epochs across five brackets, then continues forever at 274 ORAMA per epoch. There is no terminal cap. Only 60% of each epoch's maximum is minted, and it is paid to validators and delegators according to voting power, not raw stake. The storage, relay, and development shares are ceilings, not payments. Coins are minted from them only when a storage or relay payment, or a development spend that governance approved, calls for them, and never beyond the share; until then nothing is minted for them.
 
 Voting power is capped, ramped over 30 epochs, and bounded so redistribution cannot more than double a validator's raw stake share. Fees use a base fee that is entirely burned. Tips go to the block proposer. There is no on-chain governance, no IBC, and no shielded transfer.
 

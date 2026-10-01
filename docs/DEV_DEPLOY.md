@@ -848,7 +848,7 @@ Each node is upgraded only after the previous one reports Leader or Follower,
 an applied index caught up to the leader, and a gateway serving /health.
 ```
 
-`orama node pre-upgrade` (and the upgrade itself, before its stop) hands index
+The pre-upgrade step (which `orama node upgrade` runs before its stop) hands index
 RQLite leadership to another voter, **aborts** if it cannot, and then confirms
 another node has actually taken leadership before allowing the stop — a node
 that stepped down into a cluster where nobody was elected must not be removed
@@ -1406,7 +1406,7 @@ when the node is a non-voter the guard could not classify.
 
 #### Leadership handover
 
-`orama node pre-upgrade` — which the upgrade runs before it stops anything —
+The pre-upgrade step — which `orama node upgrade` runs before it stops anything —
 hands index RQLite leadership to another voter before the node stops, and
 **aborts** if this node is still the leader afterwards.
 Restarting a leader that never stepped down forces an election and fails

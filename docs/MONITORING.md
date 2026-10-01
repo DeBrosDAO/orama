@@ -503,7 +503,7 @@ its gate between nodes. A node passes when **all** of these hold:
 
 Anything short of all four stops the rollout, leaving the remaining voters
 untouched. The same package backs `orama node install`'s post-install
-verification, `orama node start`, and `orama node post-upgrade`, so "ready"
+verification, `orama node start`, and the post-upgrade step of `orama node upgrade`, so "ready"
 means one thing across the CLI.
 
 ### Per-Node Checks

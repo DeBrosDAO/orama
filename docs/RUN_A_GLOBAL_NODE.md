@@ -161,7 +161,7 @@ The operator's wallet never touches the node. On the operator's machine:
 4. `orama global capacity` declares storage bytes for a provider.
 
 Every command that signs a transaction (`orama global register`, `bond`, `capacity`, the validator
-commands, `orama cluster register` and `retire`, and `orama storage create`, `grant` and `prove`)
+commands, `orama cluster register-onchain` and `retire-onchain`, and `orama storage create`, `grant` and `prove`)
 returns only once the transaction is in a block, and prints its hash and height. Admission to the
 mempool is not success: a transaction the block refuses (out of gas, insufficient funds, a failed
 check) is reported as a failure with the chain's log, and one that is not in a block within two
@@ -524,7 +524,7 @@ was written in.
   the node.
 - TUF verification of the staged binaries by the installer, and an installed
   update path for a chain patch that changes no consensus behaviour.
-- An `orama global update-node` (`MsgUpdateNode`): an ASN is set at
+- An `orama global` command for `MsgUpdateNode`: an ASN is set at
   registration only.
 - An `orama` command for `MsgRegisterOperator`. `register` needs the operator to be registered first, and
   no CLI command builds that message (the stagenet deploy sends it with its own helper, `stagenet-node`).

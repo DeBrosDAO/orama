@@ -554,7 +554,8 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
 2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`,
    with `cumulative_burned` kept current by `ReconcileBurns` (above). `cumulative_development_minted`
    is zero until `MintDevelopmentSpend` runs; `cumulative_service_minted` is zero until a storage
-   or relay payment is minted.
+   or relay payment is minted. In one line: `supply == emitted - burned`, where emitted is the genesis
+   supply plus every epoch, development and service mint.
 
 Both are exposed as `oramad query emission invariants` and as a keeper-level Go function
 (`Keeper.CheckSupplyInvariant`) any test can call directly. They are checked on every `InitGenesis`
@@ -2255,7 +2256,7 @@ response are protobuf, encoded and decoded from the query descriptors embedded i
 fails when the file is stale.
 
 **Onion submission.** `--onion <addr.onion[:port]>` on every transaction command (`orama global register`,
-`bond`, `unbond`, `capacity`, `retire`, `unjail` and the other validator commands, `orama storage deal`,
+`bond`, `unbond`, `capacity`, `retire`, `unjail` and the other validator commands, `orama storage create`,
 `grant`, `revoke` and `prove`, `orama cluster register-onchain` and `retire-onchain`), or
 `ORAMA_CHAIN_ONION`, sends the account read and the broadcast to a validator's onion service through the
 Tor SOCKS5 proxy at `--onion-socks` (default `127.0.0.1:9050`, or `ORAMA_ONION_SOCKS`). `--node` and

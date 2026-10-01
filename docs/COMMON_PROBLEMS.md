@@ -245,7 +245,7 @@ Errors from `AdminClient` name a 401 explicitly ("rqlite rejected the credential
 
 ### Pre-upgrade: "served by this node … has no rqlite.env"
 
-**Symptom:** `orama node pre-upgrade` (or the upgrade's restart step, or post-upgrade) stops with `namespace(s) <ns> are served by this node … but … has no rqlite.env for them`.
+**Symptom:** `orama node upgrade` (in its pre-upgrade hand-over, its restart step or its post-upgrade step) stops with `namespace(s) <ns> are served by this node … but … has no rqlite.env for them`.
 
 **Cause:** the node has `data/namespaces/<ns>/cluster-state.json` and `data/namespaces/<ns>/rqlite/`, so it restores that namespace's rqlite at boot, but the env file that says where the instance listens is missing from the tree the step reads — `/var/lib/orama-unit-env/<ns>/rqlite.env`, or `data/namespaces/<ns>/rqlite.env` on a node that has not yet started on the new layout. Without it the step cannot hand the namespace's leadership over, and restarting the node would take its leader down blind.
 
