@@ -30,6 +30,9 @@ const pendingDomainTTL = 72 * time.Hour
 type DomainHandler struct {
 	service *DeploymentService
 	logger  *zap.Logger
+	// lookupTXT resolves a TXT record; nil is the system resolver. A test
+	// sets it to stand in for DNS.
+	lookupTXT func(ctx context.Context, name string) ([]string, error)
 }
 
 // NewDomainHandler creates a new domain handler
@@ -124,6 +127,9 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 			namespace = excluded.namespace,
 			is_custom = TRUE,
 			verification_token = excluded.verification_token,
+			routing_type = 'balanced',
+			node_id = NULL,
+			tls_cert_cid = NULL,
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at
 		WHERE deployment_domains.verified_at IS NULL
@@ -250,14 +256,25 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 	updateQuery := `
 		UPDATE deployment_domains
 		SET verified_at = ?, updated_at = ?
-		WHERE domain = ? AND deployment_id = ?
+		WHERE domain = ? AND deployment_id = ? AND verified_at IS NULL AND verification_token = ?
 	`
 
+	// The claim can be superseded while the TXT lookup runs; only the claim
+	// whose token was checked is marked verified.
 	now := time.Now()
-	_, err = h.service.db.Exec(ctx, updateQuery, now, now, domain, domainRecord.DeploymentID)
+	res, err := h.service.db.Exec(ctx, updateQuery, now, now, domain, domainRecord.DeploymentID, domainRecord.VerificationToken)
 	if err != nil {
 		h.logger.Error("Failed to update verification status", zap.Error(err))
 		http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
+		return
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		if err != nil {
+			h.logger.Error("Failed to read the verification update's result", zap.Error(err))
+			http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
+			return
+		}
+		http.Error(w, "The domain's claim changed while it was being verified; add it again", http.StatusConflict)
 		return
 	}
 
@@ -506,7 +523,11 @@ const txtLookupTimeout = 5 * time.Second
 func (h *DomainHandler) verifyTXTRecord(ctx context.Context, record, expectedValue string) bool {
 	ctx, cancel := context.WithTimeout(ctx, txtLookupTimeout)
 	defer cancel()
-	txtRecords, err := net.DefaultResolver.LookupTXT(ctx, record)
+	lookup := h.lookupTXT
+	if lookup == nil {
+		lookup = net.DefaultResolver.LookupTXT
+	}
+	txtRecords, err := lookup(ctx, record)
 	if err != nil {
 		h.logger.Warn("Failed to lookup TXT record",
 			zap.String("record", record),

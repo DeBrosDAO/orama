@@ -1,6 +1,10 @@
 package gatewaykeys
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -187,4 +191,20 @@ func mustGenerate(t *testing.T, name string) []byte {
 		t.Fatal(err)
 	}
 	return pem
+}
+
+func TestWrite_refusesAWeakRSAKeyOrTrailingData(t *testing.T) {
+	dir := t.TempDir()
+	weak, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(weak)})
+	if err := Write(dir, constants.IndexNamespace, constants.GatewayRSAKeyFileName, weakPEM); err == nil {
+		t.Error("a 1024-bit RSA key was written")
+	}
+	good := mustGenerate(t, constants.GatewayRSAKeyFileName)
+	if err := Write(dir, constants.IndexNamespace, constants.GatewayRSAKeyFileName, append(good, []byte("junk")...)); err == nil {
+		t.Error("a key with data after its PEM block was written")
+	}
 }

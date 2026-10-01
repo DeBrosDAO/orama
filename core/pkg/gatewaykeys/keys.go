@@ -9,6 +9,7 @@
 package gatewaykeys
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -192,18 +193,28 @@ func Generate(name string) ([]byte, error) {
 	return nil, fmt.Errorf("gateway key %q is not a signing key", name)
 }
 
+// minRSABits is the smallest RSA signing key accepted.
+const minRSABits = 2048
+
 // validKeyPEM refuses a key that is not the kind its name holds: a write the
 // gateway could not load would stop it at its next start, and Ensure never
 // replaces a non-empty file.
 func validKeyPEM(name string, keyPEM []byte) error {
-	block, _ := pem.Decode(keyPEM)
+	block, rest := pem.Decode(keyPEM)
 	if block == nil {
 		return fmt.Errorf("gateway key %s is not PEM", name)
 	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return fmt.Errorf("gateway key %s has data after its PEM block", name)
+	}
 	switch name {
 	case constants.GatewayRSAKeyFileName:
-		if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
 			return fmt.Errorf("gateway key %s is not a PKCS#1 RSA private key: %w", name, err)
+		}
+		if key.N.BitLen() < minRSABits {
+			return fmt.Errorf("gateway key %s is a %d-bit RSA key; at least %d bits are required", name, key.N.BitLen(), minRSABits)
 		}
 	case constants.GatewayEdDSAKeyFileName:
 		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
