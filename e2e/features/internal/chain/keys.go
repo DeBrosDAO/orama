@@ -78,7 +78,7 @@ func (c *Chain) Valoper(t testing.TB, k Key) string {
 func (c *Chain) showAddress(t testing.TB, k Key, bech string) string {
 	t.Helper()
 	args := append([]string{"keys", "show", k.Name, "-a", "--bech", bech}, k.keyringFlags()...)
-	out := c.Run(t, k.Node, QueryBudget, OramadCmd(args...))
+	out := c.Run(t, k.Node, QueryBudget, c.OramadCmd(args...))
 	addr := strings.TrimSpace(out.Stdout)
 	want := addrPattern
 	if bech == "val" {
@@ -95,7 +95,7 @@ func (c *Chain) showAddress(t testing.TB, k Key, bech string) string {
 func (c *Chain) PubKeyHex(t testing.TB, k Key) string {
 	t.Helper()
 	args := append([]string{"keys", "show", k.Name, "--output", "json"}, k.keyringFlags()...)
-	out := c.Run(t, k.Node, QueryBudget, OramadCmd(args...))
+	out := c.Run(t, k.Node, QueryBudget, c.OramadCmd(args...))
 	var shown struct {
 		PubKey string `json:"pubkey"`
 	}
@@ -132,7 +132,7 @@ func (c *Chain) NewKey(t testing.TB, n fleet.Node, name string) Key {
 	}
 	k := Key{Node: n, Name: name, KeyringDir: dir}
 	args := append([]string{"keys", "add", name, "--no-backup"}, k.keyringFlags()...)
-	add := c.Run(t, n, QueryBudget, OramadCmd(args...)+" >/dev/null")
+	add := c.Run(t, n, QueryBudget, c.OramadCmd(args...)+" >/dev/null")
 	if add.Exit != 0 {
 		t.Fatalf("%s: failed to add key %s: %s", n.Name, name, c.F.Redact(add.Stderr))
 	}

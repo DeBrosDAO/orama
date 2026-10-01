@@ -70,7 +70,7 @@ func (c *Chain) SubmitUnsigned(t testing.TB, k Key, opts TxOptions, unsigned []b
 // into the proto-JSON oramad works with, using the node's own decoder.
 func (c *Chain) DecodeTxRaw(t testing.TB, n fleet.Node, raw []byte) []byte {
 	t.Helper()
-	out := c.Run(t, n, QueryBudget, OramadCmd("tx", "decode", base64.StdEncoding.EncodeToString(raw)))
+	out := c.Run(t, n, QueryBudget, c.OramadCmd("tx", "decode", base64.StdEncoding.EncodeToString(raw)))
 	if out.Exit != 0 {
 		t.Fatalf("%s: oramad tx decode refused the transaction: %s", n.Name, out.Stderr)
 	}

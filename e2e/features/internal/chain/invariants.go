@@ -33,7 +33,7 @@ func (c *Chain) NodeInvariants(t testing.TB, n fleet.Node) map[string][]string {
 	var script strings.Builder
 	for _, m := range InvariantModules {
 		fmt.Fprintf(&script, "echo '%s%s'; %s || echo '{\"query_failed\": false}'\n", invariantMark, m,
-			OramadCmd("query", m, "invariants", "--node", c.RPC(), "--output", "json"))
+			c.OramadCmd("query", m, "invariants", "--node", c.RPC(), "--output", "json"))
 	}
 	out := c.Run(t, n, QueryBudget, script.String())
 	got := map[string][]string{}

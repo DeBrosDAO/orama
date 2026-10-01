@@ -138,6 +138,23 @@ func TestGlobalInstall_refusalsChangeNothing(t *testing.T) {
 	}
 }
 
+// optionalGlobalServices are the global services a node may run without:
+// a fleet validator runs none of them, stagenet's nodes run all but repair.
+var optionalGlobalServices = []string{"archiver", "repair", "indexer", "provider"}
+
+// uninstalledGlobalService is an optional global service whose unit file the
+// node does not have, which is what the lifecycle reads as "not installed".
+func uninstalledGlobalService(t *testing.T, f *fleet.Fleet, n fleet.Node) string {
+	t.Helper()
+	for _, s := range optionalGlobalServices {
+		if strings.TrimSpace(f.MustExec(t, n, "test -e /etc/systemd/system/orama-global-"+s+".service && echo installed || echo absent").Stdout) == "absent" {
+			return s
+		}
+	}
+	t.Fatalf("%s has every optional global service installed (%v): no service is left to show the not-installed refusal", n.Name, optionalGlobalServices)
+	return ""
+}
+
 // TestGlobalLifecycle_usageErrors: start, stop and restart refuse a service
 // name that is not one of chain, ipfs, provider, archiver, indexer or repair
 // with the usage code, a service that is not installed on this node with a
@@ -148,9 +165,10 @@ func TestGlobalLifecycle_usageErrors(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	n := c.Node(t, 1)
+	absent := uninstalledGlobalService(t, c.F, n)
 	for _, verb := range []string{"start", "stop", "restart"} {
 		infra.ExpectNodeExit(t, verb+" of an unknown service", asRoot(t, c.F, n, "global", verb, "e2e-bogus"), infra.ExitUsage, "unknown global service")
-		infra.ExpectNodeExit(t, verb+" of a service that is not installed", asRoot(t, c.F, n, "global", verb, "archiver"), infra.ExitFailure, "archiver is not installed")
+		infra.ExpectNodeExit(t, verb+" of a service that is not installed", asRoot(t, c.F, n, "global", verb, absent), infra.ExitFailure, absent+" is not installed")
 		infra.ExpectNodeExit(t, verb+" as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, n, "global", verb), infra.ExitUsage, infra.MustBeRoot)
 	}
 	infra.ExpectNodeExit(t, "status takes no argument", asRoot(t, c.F, n, "global", "status", "chain"), infra.ExitUsage)

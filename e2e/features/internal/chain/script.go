@@ -79,7 +79,7 @@ flock -w %d 9 || { echo lock timeout >&2; exit 91; }
 // the next block charges unless that block is over half full (docs/CHAIN.md
 // "The base fee (EIP-1559-style)").
 func (c *Chain) feeScript(opts TxOptions) string {
-	base := OramadCmd("query", "fees", "base-fee", "--node", c.RPC(), "--output", "json")
+	base := c.OramadCmd("query", "fees", "base-fee", "--node", c.RPC(), "--output", "json")
 	abs := opts.FeeAmount
 	if abs == "" {
 		abs = "0"
@@ -109,7 +109,7 @@ func signScript(c *Chain, k Key, opts TxOptions) string {
 			"--sequence", fmt.Sprint(opts.Sequence))
 	}
 	// $D must expand: quote everything, then let the shell see $D.
-	cmd := strings.ReplaceAll(OramadCmd(args...), "'$D/", `"$D"'/`)
+	cmd := strings.ReplaceAll(c.OramadCmd(args...), "'$D/", `"$D"'/`)
 	return cmd + ` 2> "$D/sign.err" || { echo ` + markSignErr + `; cat "$D/sign.err"; exit 0; }
 echo ` + markSigned + `; cat "$D/s.json"; echo
 `
@@ -117,8 +117,8 @@ echo ` + markSigned + `; cat "$D/s.json"; echo
 
 // broadcastScript broadcasts $D/s.json and waits for its block.
 func (c *Chain) broadcastScript() string {
-	bcast := strings.ReplaceAll(OramadCmd("tx", "broadcast", "$D/s.json", "--node", c.RPC(), "--output", "json"), "'$D/", `"$D"'/`)
-	wait := OramadCmd("query", "wait-tx", "HASH", "--timeout", InclusionTimeout, "--node", c.RPC(), "--output", "json")
+	bcast := strings.ReplaceAll(c.OramadCmd("tx", "broadcast", "$D/s.json", "--node", c.RPC(), "--output", "json"), "'$D/", `"$D"'/`)
+	wait := c.OramadCmd("query", "wait-tx", "HASH", "--timeout", InclusionTimeout, "--node", c.RPC(), "--output", "json")
 	wait = strings.Replace(wait, "'HASH'", `"$H"`, 1)
 	return bcast + ` > "$D/b.json" 2> "$D/b.err" || { echo ` + markRPCErr + `; cat "$D/b.err"; exit 0; }
 echo ` + markBcast + `; cat "$D/b.json"; echo

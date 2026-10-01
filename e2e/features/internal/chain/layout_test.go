@@ -58,3 +58,23 @@ func TestCheckChainID_perTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestOramadCmd_perTarget: stagenet's host ruleset drops the chain user's
+// connections to the chain's RPC through the veth, so a stagenet command runs
+// inside the netns; a fleet validator listens on loopback and needs no netns.
+func TestOramadCmd_perTarget(t *testing.T) {
+	fleetCmd := chainFor(config.TargetFleet).OramadCmd("query", "fees", "base-fee")
+	if want := "sudo -u orama-chain /usr/lib/orama-global/bin/oramad 'query' 'fees' 'base-fee' --home /var/lib/orama-global/chain"; fleetCmd != want {
+		t.Errorf("fleet command\n got %s\nwant %s", fleetCmd, want)
+	}
+	stagenetCmd := chainFor(config.TargetStagenet).OramadCmd("query", "fees", "base-fee")
+	if want := "sudo ip netns exec orama-global runuser -u orama-chain -- /usr/lib/orama-global/bin/oramad 'query' 'fees' 'base-fee' --home /var/lib/orama-global/chain"; stagenetCmd != want {
+		t.Errorf("stagenet command\n got %s\nwant %s", stagenetCmd, want)
+	}
+}
+
+func TestOramadCmd_noArgumentsStillNamesTheHome(t *testing.T) {
+	if got := chainFor(config.TargetStagenet).OramadCmd(); !strings.HasSuffix(got, "oramad --home /var/lib/orama-global/chain") {
+		t.Errorf("got %s", got)
+	}
+}

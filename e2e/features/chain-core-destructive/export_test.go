@@ -57,12 +57,12 @@ func TestChainExport_stoppedNodeExportsValidGenesis(t *testing.T) {
 	if prep.Exit != 0 {
 		t.Fatalf("failed to create %s: %s", dir, prep.Stderr)
 	}
-	export := chain.OramadCmd("export", "--output-document", dir+"/export.json")
+	export := c.OramadCmd("export", "--output-document", dir+"/export.json")
 	out := c.Run(t, victim, chain.TxBudget, export)
 	if out.Exit != 0 {
 		t.Fatalf("oramad export exited %d: %s", out.Exit, c.F.Redact(out.Stderr))
 	}
-	validate := c.Run(t, victim, chain.QueryBudget, chain.OramadCmd("genesis", "validate", dir+"/export.json"))
+	validate := c.Run(t, victim, chain.QueryBudget, c.OramadCmd("genesis", "validate", dir+"/export.json"))
 	if validate.Exit != 0 {
 		t.Errorf("oramad genesis validate refused the export: %s %s", validate.Stdout, validate.Stderr)
 	}

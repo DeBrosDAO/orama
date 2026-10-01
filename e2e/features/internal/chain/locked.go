@@ -45,7 +45,7 @@ type LockedEdit struct {
 
 // accountScript reads k's live account number and sequence into $AN and $SEQ.
 func (c *Chain) accountScript(k Key) string {
-	q := OramadCmd("query", "auth", "account", k.Address, "--node", c.RPC(), "--output", "json")
+	q := c.OramadCmd("query", "auth", "account", k.Address, "--node", c.RPC(), "--output", "json")
 	return fmt.Sprintf("A=$(%s | python3 -c %s) || exit 95\nset -- $A; AN=$1; SEQ=$2\n", q, fleet.ShellQuote(accountPy))
 }
 

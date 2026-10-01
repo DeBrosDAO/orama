@@ -3,9 +3,11 @@
 // Package chainwaivers pins the CURRENT, documented absence of the chain
 // surfaces that are built as libraries but not wired into oramad:
 // x/inclusion, x/vpnlaunch, x/confidential and x/wasmbindings. Each test is a
-// tripwire: when one of them ships a message, a query, genesis state or vote
-// extensions on the live chain, the matching test turns red and forces real
-// tests (and the removal of its waiver).
+// tripwire: when one of them ships a message, a query or genesis state on the
+// live chain, the matching test turns red and forces real tests (and the
+// removal of its waiver). x/inclusion is wired into BaseApp's proposal and
+// vote-extension handlers only, so it still has none of the three; its switch
+// is pinned by TestInclusion_voteExtensionsAreTheDeploysSwitch.
 package chainwaivers
 
 import (
@@ -20,8 +22,8 @@ import (
 )
 
 // unwired are the module names (proto package segment and genesis key) that
-// have no live surface today (docs/CHAIN.md: "chain/x/inclusion ... oramad
-// does not put them in a block"; "chain/
+// register no message, query or genesis state today (docs/CHAIN.md:
+// x/inclusion works through BaseApp handlers only; "chain/
 // x/confidential refuses every attestation report"; x/wasmbindings answers
 // NOT_LINKED; x/vpnlaunch is a pure gate).
 var unwired = []string{"inclusion", "vpnlaunch", "confidential", "wasmbindings"}
@@ -164,11 +166,22 @@ func TestUnwired_noQueryServiceAndNoGenesisState(t *testing.T) {
 	}
 }
 
-// TestUnwired_noVoteExtensions: x/inclusion's ordering bytes would ride on
-// vote extensions, which this CometBFT commit does not carry (docs/CHAIN.md
-// "Modules wired"): the consensus parameters leave them disabled (enable
-// height 0).
-func TestUnwired_noVoteExtensions(t *testing.T) {
+// voteExtensionsEnableHeight is the abci.vote_extensions_enable_height each
+// deploy writes into genesis (docs/CHAIN.md "Inclusion lists (C13)"):
+// e2e/scripts/chain-deploy.sh leaves it 0 (off) on a run chain,
+// chain/scripts/stagenet/deploy.sh sets 2.
+func voteExtensionsEnableHeight(c *chain.Chain) string {
+	if c.F.State.IsStagenet() {
+		return "2"
+	}
+	return "0"
+}
+
+// TestInclusion_voteExtensionsAreTheDeploysSwitch: x/inclusion is wired, and
+// its bytes ride on vote extensions only from the height the deploy's genesis
+// names; the chain cannot change it later (every consensus-param authority is
+// unreachable), so the live value is the deploy's.
+func TestInclusion_voteExtensionsAreTheDeploysSwitch(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	var r map[string]any
@@ -177,10 +190,10 @@ func TestUnwired_noVoteExtensions(t *testing.T) {
 	}
 	h, ok := findString(r, "vote_extensions_enable_height")
 	if !ok {
-		t.Fatalf("consensus_params carries no vote_extensions_enable_height: the tripwire cannot read it: %v", r)
+		t.Fatalf("consensus_params carries no vote_extensions_enable_height: %v", r)
 	}
-	if h != "0" {
-		t.Errorf("vote extensions are enabled from height %s: x/inclusion may now carry bytes; write its tests", h)
+	if want := voteExtensionsEnableHeight(c); h != want {
+		t.Errorf("vote extensions are enabled from height %s, the deploy sets %s", h, want)
 	}
 }
 

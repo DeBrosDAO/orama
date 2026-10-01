@@ -609,7 +609,10 @@ now: the RPC and REST address. A fleet validator listens on `127.0.0.1:31001/310
 stagenet's chain is inside the `orama-global` netns and answers on
 `198.18.0.2:31001` (RPC), `:31003` (REST), `:31015` (indexer) from the host.
 `Chain.Host()`, `RPC()` and `RPCHTTP()` return the right address for the state's
-target, and `Chain.Tunnel` forwards to it; the chain id check accepts a devnet id
+target, and `Chain.Tunnel` forwards to it; `Chain.OramadCmd` runs `oramad` inside
+the `orama-global` netns on stagenet (`ip netns exec … runuser -u orama-chain`),
+because the host ruleset lets only root and the cluster's account reach those
+ports through the veth; the chain id check accepts a devnet id
 on a fleet run and a stagenet id on this target. Not target-aware, so the chain
 packages that depend on it fail or are meaningless on stagenet: the validator
 operator keys in each node's `test` keyring under the chain home (`chain-deploy.sh`

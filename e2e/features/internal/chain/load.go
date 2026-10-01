@@ -75,7 +75,7 @@ func (c *Chain) PrepareLoad(t testing.TB, k Key, perKey int) string {
 		opts := TxOptions{Offline: true, AccountNumber: acc.Number, Sequence: acc.Sequence + uint64(i)}
 		sign := strings.Replace(signScript(c, k, opts), `"$D"'/s.json'`, fmt.Sprintf(`"$D"'/s%02d.json'`, i), 1)
 		sign = sign[:strings.Index(sign, " 2> ")]
-		enc := strings.ReplaceAll(OramadCmd("tx", "encode", fmt.Sprintf("$D/s%02d.json", i)), "'$D/", `"$D"'/`)
+		enc := strings.ReplaceAll(c.OramadCmd("tx", "encode", fmt.Sprintf("$D/s%02d.json", i)), "'$D/", `"$D"'/`)
 		fmt.Fprintf(&script, "%s\n%s > \"$D\"/tx%02d.b64\n", sign, enc, i)
 	}
 	out := c.Run(t, k.Node, TxBudget, script.String())

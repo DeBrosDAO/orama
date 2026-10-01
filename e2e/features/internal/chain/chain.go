@@ -36,9 +36,11 @@ import (
 // Layout of a co-hosted validator (e2e/scripts/chain-deploy.sh, docs/CHAIN.md
 // "The stagenet deploy script").
 const (
-	Oramad       = "/usr/lib/orama-global/bin/oramad"
-	Home         = "/var/lib/orama-global/chain"
-	ServiceUser  = "orama-chain"
+	Oramad      = "/usr/lib/orama-global/bin/oramad"
+	Home        = "/var/lib/orama-global/chain"
+	ServiceUser = "orama-chain"
+	// NetnsName is the network namespace stagenet runs the global units in.
+	NetnsName    = "orama-global"
 	Unit         = "orama-global-chain.service"
 	ValidatorKey = "validator"
 	P2PPort      = 31000
@@ -103,10 +105,18 @@ func (c *Chain) Node(t testing.TB, i int) fleet.Node {
 }
 
 // OramadCmd is the shell form of `oramad <args>` run as the chain user with
-// the chain home, every argument quoted.
-func OramadCmd(args ...string) string {
-	q := make([]string, 0, len(args)+6)
-	q = append(q, "sudo", "-u", ServiceUser, Oramad)
+// the chain home, every argument quoted. On stagenet it runs inside the
+// orama-global netns, as the chain's own units do: the host ruleset lets only
+// root and the cluster's account reach the chain's host-only ports through the
+// veth, so the chain user cannot query its RPC from the root namespace
+// (docs/RUN_A_GLOBAL_NODE.md).
+func (c *Chain) OramadCmd(args ...string) string {
+	q := make([]string, 0, len(args)+10)
+	if c.F.State.IsStagenet() {
+		q = append(q, "sudo", "ip", "netns", "exec", NetnsName, "runuser", "-u", ServiceUser, "--", Oramad)
+	} else {
+		q = append(q, "sudo", "-u", ServiceUser, Oramad)
+	}
 	for _, a := range args {
 		q = append(q, fleet.ShellQuote(a))
 	}
@@ -156,7 +166,7 @@ func (c *Chain) CleanupExec(t testing.TB, n fleet.Node, cmd string) {
 func (c *Chain) QueryOut(t testing.TB, n fleet.Node, args ...string) fleet.Output {
 	t.Helper()
 	full := append(append([]string{"query"}, args...), "--node", c.RPC(), "--output", "json")
-	return c.Run(t, n, QueryBudget, OramadCmd(full...))
+	return c.Run(t, n, QueryBudget, c.OramadCmd(full...))
 }
 
 // Query decodes `oramad query <args>` into v and fails the test on any error.
