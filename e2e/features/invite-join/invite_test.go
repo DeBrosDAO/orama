@@ -11,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
@@ -140,9 +141,10 @@ func TestInvite_refusals(t *testing.T) {
 }
 
 // TestInviteRoute_operatorsOnly: the invite route refuses no credential
-// (401) and a signed-in wallet that is not an operator (403
+// (401), a signed-in wallet with no grant (403: the route needs the admin
+// grant), and the admin of a namespace who is not on the operator list (403
 // NOT_AN_OPERATOR), and mints nothing for them (docs/AUTH.md "Operating the
-// cluster").
+// cluster": the admin grant and the operator list).
 func TestInviteRoute_operatorsOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -153,9 +155,13 @@ func TestInviteRoute_operatorsOnly(t *testing.T) {
 		t.Errorf("no credential: HTTP %d, want 401: %.200s", r.Status, r.Body)
 	}
 	u := gw.NewUser(t, f, gw.LobbyNamespace)
-	r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathInvite, Header: h, Body: body, Bearer: u.Token()})
+	if r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathInvite, Header: h, Body: body, Bearer: u.Token()}); r.Status != http.StatusForbidden {
+		t.Errorf("a wallet with no grant: HTTP %d %s, want 403", r.Status, r.ErrorCode())
+	}
+	admin := ns.New(t, f, ns.Options{}).Owner
+	r := c.MustSend(t, gw.Req{Method: http.MethodPost, Path: pathInvite, Header: h, Body: body, Bearer: admin.Token()})
 	if r.Status != http.StatusForbidden || r.ErrorCode() != "NOT_AN_OPERATOR" {
-		t.Errorf("a non-operator: HTTP %d %s, want 403 NOT_AN_OPERATOR", r.Status, r.ErrorCode())
+		t.Errorf("a namespace admin who is not an operator: HTTP %d %s, want 403 NOT_AN_OPERATOR", r.Status, r.ErrorCode())
 	}
 	if r := c.MustSend(t, gw.Req{Method: http.MethodGet, Path: pathInvite, Bearer: u.Token()}); r.Status < 400 {
 		t.Errorf("GET %s answered %d", pathInvite, r.Status)
