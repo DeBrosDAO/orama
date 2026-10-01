@@ -55,7 +55,7 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		name = nameWithNS[idx+1:]
 	} else {
 		name = nameWithNS
-		namespace = invokeNamespace(r)
+		namespace = h.invokeNamespace(r)
 	}
 
 	if namespace == "" {

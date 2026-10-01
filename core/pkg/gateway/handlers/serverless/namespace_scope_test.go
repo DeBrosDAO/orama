@@ -300,9 +300,31 @@ func TestInvokeNamespace_order(t *testing.T) {
 			return r
 		}(), ""},
 	}
+	cluster := &ServerlessHandlers{}
 	for _, tc := range cases {
-		if got := invokeNamespace(tc.req); got != tc.want {
+		if got := cluster.invokeNamespace(tc.req); got != tc.want {
 			t.Errorf("%s: invokeNamespace = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// An anonymous invocation names no namespace and carries no credential. On a
+// namespace gateway it is the gateway's own namespace; on ns-<name> it used to
+// be refused "name the namespace", so no public function could be called
+// anonymously. A credential or ?namespace= still decides when present.
+func TestInvokeNamespace_anonymousOnANamespaceGatewayIsItsNamespace(t *testing.T) {
+	h := &ServerlessHandlers{}
+	h.SetServedNamespace("tenant")
+	if got := h.invokeNamespace(httptest.NewRequest(http.MethodPost, "/x", nil)); got != "tenant" {
+		t.Errorf("anonymous: %q, want the served namespace", got)
+	}
+	if got := h.invokeNamespace(asCredentialOf(httptest.NewRequest(http.MethodPost, "/x", nil), "other")); got != "other" {
+		t.Errorf("with a credential: %q, want the credential's", got)
+	}
+	if got := h.invokeNamespace(httptest.NewRequest(http.MethodPost, "/x?namespace=named", nil)); got != "named" {
+		t.Errorf("named in the query: %q", got)
+	}
+	if got := (&ServerlessHandlers{}).invokeNamespace(httptest.NewRequest(http.MethodPost, "/x", nil)); got != "" {
+		t.Errorf("anonymous on the cluster gateway: %q, want none", got)
 	}
 }

@@ -83,7 +83,7 @@ func (h *ServerlessHandlers) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	// namespace is the one the URL names (?namespace=), which the capability's
 	// key is derived from.
 	if token := capabilityToken(r); token != "" {
-		h.serveCapabilityWebSocket(w, r, invokeNamespace(r), name, version, token)
+		h.serveCapabilityWebSocket(w, r, h.invokeNamespace(r), name, version, token)
 		return
 	}
 

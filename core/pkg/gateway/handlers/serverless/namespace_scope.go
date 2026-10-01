@@ -62,9 +62,23 @@ func managedNamespace(w http.ResponseWriter, r *http.Request, named ...string) (
 // the one named with ?namespace=, else the credential's, else "" — an
 // anonymous caller may run a public function, but has to say whose.
 // POST /v1/invoke/<namespace>/<function> names it in the path instead.
-func invokeNamespace(r *http.Request) string {
+func (h *ServerlessHandlers) invokeNamespace(r *http.Request) string {
 	if ns := strings.TrimSpace(r.URL.Query().Get("namespace")); ns != "" {
 		return ns
 	}
-	return credentialNamespace(r)
+	if ns := credentialNamespace(r); ns != "" {
+		return ns
+	}
+	// An anonymous call of a public function names no namespace and carries
+	// no credential. On a namespace gateway it can only mean the namespace the
+	// gateway serves: invoked on ns-<name> it was refused "name the
+	// namespace", and no public function could be called anonymously. The
+	// cluster gateway serves none, so there it is still refused.
+	return h.servedNamespace
+}
+
+// SetServedNamespace records the namespace this gateway serves, on a namespace
+// gateway only. An anonymous invocation that names no namespace runs there.
+func (h *ServerlessHandlers) SetServedNamespace(namespace string) {
+	h.servedNamespace = strings.TrimSpace(namespace)
 }

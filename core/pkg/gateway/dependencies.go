@@ -987,6 +987,9 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		authService.Audit(),
 		logger.Logger,
 	)
+	if isNamespaceGateway(cfg) {
+		deps.ServerlessHandlers.SetServedNamespace(cfg.ClientNamespace)
+	}
 	if err := wireCapabilities(cfg.ClusterSecret, authService, deps.ServerlessHandlers, hostFuncs, logger.Logger); err != nil {
 		return err
 	}
