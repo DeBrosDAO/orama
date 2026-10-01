@@ -687,6 +687,11 @@ lines skipped, one layer of surrounding quotes removed. It does **not** expand
 machine running the deploy happens to have set. A `--env` on the command line
 overrides the same name from the file.
 
+`--env` and `--env-file` belong to a first deploy. With `--update` the CLI
+refuses them: an update replaces the build and never reads variables, so they
+would be dropped without a word. Change variables on a running app with
+`orama app env set`, below.
+
 ### After deploying
 
 ```bash

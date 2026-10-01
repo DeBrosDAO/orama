@@ -165,3 +165,30 @@ func TestSortedEnvKeys_is_stable(t *testing.T) {
 		}
 	}
 }
+
+func withDeployFlags(t *testing.T, update bool, env []string) {
+	t.Helper()
+	oldUpdate, oldEnv, oldFile, oldName := deployUpdate, deployEnv, deployEnvFile, deployName
+	deployUpdate, deployEnv, deployEnvFile, deployName = update, env, "", "api"
+	t.Cleanup(func() { deployUpdate, deployEnv, deployEnvFile, deployName = oldUpdate, oldEnv, oldFile, oldName })
+}
+
+func TestDeployForm_refuses_env_with_update(t *testing.T) {
+	withDeployFlags(t, true, []string{"LOG_LEVEL=debug"})
+	_, err := deployForm(true)
+	if err == nil || !strings.Contains(err.Error(), "orama app env set api") {
+		t.Fatalf("--env with --update = %v, want a refusal pointing at `orama app env set`", err)
+	}
+}
+
+func TestDeployForm_update_without_env_and_deploy_with_env(t *testing.T) {
+	withDeployFlags(t, true, nil)
+	if _, err := deployForm(true); err != nil {
+		t.Fatalf("an update with no variables: %v", err)
+	}
+	withDeployFlags(t, false, []string{"LOG_LEVEL=debug"})
+	form, err := deployForm(true)
+	if err != nil || form["env_LOG_LEVEL"] != "debug" {
+		t.Fatalf("a first deploy with --env = %v %v, want env_LOG_LEVEL=debug", form, err)
+	}
+}

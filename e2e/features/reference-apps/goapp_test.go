@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
 const (
@@ -66,10 +68,15 @@ func TestReferenceGo_notesThroughTheGatewayAsItself(t *testing.T) {
 	for _, node := range tn.F.State.Nodes {
 		readNotes(t, app.PinTo(node.PublicIP), notes)
 	}
-	tn.Deploy(t, "go", realistic.ServerApp(t, tn.F, realistic.AppGo, "go-v2"), notesApp, "--env", "APP_VERSION=go-v2", "--update")
+	tn.Deploy(t, "go", realistic.ServerApp(t, tn.F, realistic.AppGo, "go-v2"), notesApp, "--update")
 	tn.EveryNodeServes(t, u, "/version", `"version":"go-v2"`)
 	requireReplicas(t, tn, "go", notesApp)
-	tn.N.CLI.MustOK(t, "app", "rollback", notesApp, "--version", "1")
+	// The rollback asks "(y/N)" on stdin; without an answer it prints
+	// "Cancelled" and exits 0, so the run answers y and checks it did not cancel.
+	rolled, err := tn.N.CLI.For(t).RunWith(t.Context(), oramacli.RunOpts{Stdin: []byte("y\n")}, "app", "rollback", notesApp, "--version", "1")
+	if err != nil || rolled.Exit != 0 || strings.Contains(rolled.Stdout, "Cancelled") {
+		t.Fatalf("orama app rollback %s --version 1: exit %d %v %s", notesApp, rolled.Exit, err, rolled.Stdout)
+	}
 	tn.EveryNodeServes(t, u, "/version", `"version":"go-v1"`)
 	requireReplicas(t, tn, "go", notesApp)
 	deleteAndCheckTeardown(t, tn, notesApp)

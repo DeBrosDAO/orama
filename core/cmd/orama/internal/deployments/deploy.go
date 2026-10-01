@@ -90,6 +90,11 @@ func deployForm(withHealthCheck bool) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The update endpoints replace the build and never read env_ fields, so
+	// an --env sent with --update would be dropped without a word.
+	if deployUpdate && len(env) > 0 {
+		return nil, fmt.Errorf("--env and --env-file do not apply to --update: an update replaces the build only; change variables with `orama app env set %s --env KEY=VALUE`", deployName)
+	}
 
 	form := map[string]string{
 		"name":      deployName,
