@@ -1,14 +1,8 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createClient, MemoryStorage } from "../../src/index";
 import { createTestClient, getGatewayUrl, hasGateway } from "./setup";
 
 describe.skipIf(!hasGateway())("Auth", () => {
-  beforeAll(() => {
-    if (hasGateway()) {
-      console.log("Skipping auth tests");
-    }
-  });
-
   it("should get whoami", async () => {
     const client = await createTestClient();
     const whoami = await client.auth.whoami();

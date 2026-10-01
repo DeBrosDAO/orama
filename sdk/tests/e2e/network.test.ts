@@ -1,13 +1,7 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createTestClient, hasGateway } from "./setup";
 
 describe.skipIf(!hasGateway())("Network", () => {
-  beforeAll(() => {
-    if (hasGateway()) {
-      console.log("Skipping network tests");
-    }
-  });
-
   it("should check health", async () => {
     const client = await createTestClient();
     const healthy = await client.network.health();

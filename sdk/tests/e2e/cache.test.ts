@@ -2,11 +2,6 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { createTestClient, hasGateway } from "./setup";
 
 describe.skipIf(!hasGateway())("Cache", () => {
-  if (hasGateway()) {
-    console.log("Skipping cache tests - gateway not available");
-    return;
-  }
-
   const testDMap = "test-cache";
 
   beforeEach(async () => {
