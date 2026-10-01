@@ -5,7 +5,9 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -235,5 +237,29 @@ func TestTeardownNamespaceOnNodes_purgeTravelsWithTheRequest(t *testing.T) {
 	}
 	if purge, _ := got[1]["purge_data"].(bool); !purge {
 		t.Errorf("a delete's request did not ask for a purge: %v", got[1])
+	}
+}
+
+// Every node's teardown is in flight at once: each remote stop here waits for
+// the other to start, so a teardown that went node by node would never see
+// both and every stop would fail.
+func TestTeardownNamespaceOnNodes_tearsTheNodesDownConcurrently(t *testing.T) {
+	sw := newStaleSweep(nil, nil, false)
+	var started sync.WaitGroup
+	started.Add(len(twoRemoteNodes))
+	allStarted := make(chan struct{})
+	go func() { started.Wait(); close(allStarted) }()
+	sw.stopErr = func(string) error {
+		started.Done()
+		select {
+		case <-allStarted:
+			return nil
+		case <-time.After(5 * time.Second):
+			return errors.New("the other node's teardown never started")
+		}
+	}
+
+	if err := sw.cm.teardownNamespaceOnNodes(context.Background(), twoRemoteNodes, "acme", cleanupScope{}); err != nil {
+		t.Fatalf("teardown: %v", err)
 	}
 }

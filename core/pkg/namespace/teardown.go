@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"go.uber.org/zap"
@@ -105,15 +106,24 @@ func (cm *ClusterManager) teardownNamespaceOnNode(ctx context.Context, node stal
 	return cm.sendStopRequest(ctx, node.InternalIP, teardownAction, namespace, node.NodeID, scope)
 }
 
-// teardownNamespaceOnNodes tears a namespace down on every node, attempting all
-// of them and joining the failures.
+// teardownNamespaceOnNodes tears a namespace down on every node at once,
+// attempting all of them and joining the failures in node order. The nodes'
+// teardowns share nothing, and run one after another they made deleting a
+// namespace take the sum of every node's (a minute on three nodes, inside the
+// delete request) and grow with the cluster.
 func (cm *ClusterManager) teardownNamespaceOnNodes(ctx context.Context, nodes []staleClusterNode, namespace string, scope cleanupScope) error {
-	var errs []error
-	for _, node := range nodes {
-		if err := cm.teardownNamespaceOnNode(ctx, node, namespace, scope); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", node.NodeID, err))
-		}
+	errs := make([]error, len(nodes))
+	var wg sync.WaitGroup
+	for i, node := range nodes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := cm.teardownNamespaceOnNode(ctx, node, namespace, scope); err != nil {
+				errs[i] = fmt.Errorf("%s: %w", node.NodeID, err)
+			}
+		}()
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 
