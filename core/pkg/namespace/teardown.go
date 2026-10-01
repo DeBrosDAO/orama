@@ -192,7 +192,7 @@ func (cm *ClusterManager) teardownLocalRecorded(ctx context.Context, nodeID, nod
 // success in place: the replay frees the allocations the row stands for before
 // it clears it (settleCleanup).
 func (cm *ClusterManager) teardownLocalKeepingRow(ctx context.Context, nodeID, nodeIP, namespace string, scope cleanupScope) error {
-	err := cm.teardownLocal(ctx, namespace, scope.PurgeData)
+	err := cm.teardownLocal(ctx, namespace, scope.ClusterID, scope.PurgeData)
 	if err == nil {
 		return nil
 	}

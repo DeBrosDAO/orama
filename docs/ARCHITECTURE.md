@@ -443,7 +443,10 @@ replayer first **claims** a row: `claimed_until` (migration 069) is set by an
 `UPDATE` that matches one claimer only, on the row's id, the attempt count it was
 read with and a free or lapsed lease (`pendingCleanupClaimLease`, 5 minutes, so a
 gateway that died holding one blocks the row for that long and no longer). The
-claim is given back when the replay ends. A gateway that read the row before
+claim also stores its holder in `claimed_by` (migration 070: the node id and a random
+token per claim), and the release at the end of the replay is `WHERE id = ? AND
+claimed_by = ?`: a lease that lapsed mid-replay and was taken by another gateway is
+not erased by the first one's release. A gateway that read the row before
 another replayed and failed it finds the attempt count changed and leaves the row
 to the next sweep, so `attempts` counts one replay per sweep, not one per gateway,
 and the destructive request is sent by one gateway at a time.
@@ -456,7 +459,12 @@ the new namespace down. A request with no `cluster_id` (a sender on the previous
 release) and a node with no state file are carried out as before; a state file that
 cannot be parsed is refused, since the node cannot say whose namespace it holds.
 The state is written once the new cluster's services are up, so before that the
-claim and the registry check are what cover the node.
+claim and the registry check are what cover the node. A row owed by the node that
+replays it takes the same check: the local replay calls
+`TeardownNamespaceOfCluster` with the row's cluster id, and a refusal is recorded
+as a failed attempt like any other, so the row stays owed. Withdrawing the rows owed
+for a namespace deletes only the rows it read (by id and cluster id), after
+freeing their ports: a row recorded again for another cluster in between stays.
 
 A row leaves the table only after the allocations it kept are freed: a replay that
 succeeded, a teardown dropped because the namespace was created again on the node,

@@ -112,15 +112,15 @@ func (cm *ClusterManager) localTenantNamespaces() ([]string, error) {
 }
 
 // teardownLocal tears a namespace down on this node; purgeData also removes its
-// tenant data (TeardownNamespaceAndData).
-func (cm *ClusterManager) teardownLocal(ctx context.Context, namespace string, purgeData bool) error {
+// tenant data. clusterID is the incarnation the teardown was owed for: it is
+// refused (ErrClusterMismatch) when this node holds the namespace for another
+// cluster, as the receiving side of a remote teardown does. "" is a teardown of
+// whatever is here (the orphan sweep).
+func (cm *ClusterManager) teardownLocal(ctx context.Context, namespace, clusterID string, purgeData bool) error {
 	if cm.teardownLocalFn != nil {
 		return cm.teardownLocalFn(ctx, namespace, purgeData)
 	}
-	if purgeData {
-		return cm.systemdSpawner.TeardownNamespaceAndData(ctx, namespace)
-	}
-	return cm.systemdSpawner.TeardownNamespace(ctx, namespace)
+	return cm.systemdSpawner.TeardownNamespaceOfCluster(ctx, namespace, clusterID, purgeData)
 }
 
 // registryDisownsEveryTenant reports whether none of the node's tenants is
@@ -158,7 +158,7 @@ func (cm *ClusterManager) teardownUnassigned(ctx context.Context, namespace stri
 	if err != nil {
 		return fmt.Errorf("check whether the registry still knows namespace %s: %w", namespace, err)
 	}
-	return cm.teardownLocal(ctx, namespace, clusters == 0)
+	return cm.teardownLocal(ctx, namespace, "", clusters == 0)
 }
 
 // reapOrphanedTenants tears down tenant namespaces that have state on this node

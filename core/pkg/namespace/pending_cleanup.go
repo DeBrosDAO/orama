@@ -2,6 +2,8 @@ package namespace
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -46,6 +48,26 @@ const pendingCleanupClaimLease = "+5 minutes"
 type cleanupScope struct {
 	ClusterID string
 	PurgeData bool
+}
+
+// ReplayableCleanupActions are the spawn actions a pending cleanup can be
+// replayed with: the ones the spawn handler implements that stop or tear down a
+// unit. A row with any other action (an older release recorded "stop-all", which
+// the handler never had a case for) can never succeed, and is dropped unsent. The
+// handler's switch must have a case for each (TestReplayableCleanupActions_...
+// checks it).
+var ReplayableCleanupActions = []string{
+	"stop-rqlite", "stop-olric", "stop-gateway", "stop-sfu", "stop-turn",
+	teardownAction, teardownSFUAction, teardownTURNAction,
+}
+
+func isReplayableCleanup(action string) bool {
+	for _, a := range ReplayableCleanupActions {
+		if a == action {
+			return true
+		}
+	}
+	return false
 }
 
 // isDestructiveCleanup reports whether the action deletes state, so that a
@@ -218,33 +240,46 @@ func (cm *ClusterManager) replayPendingCleanups(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// claimPendingCleanup takes the lease on a row, and reports whether this
-// gateway got it. The tenant reconciler runs on every node's gateway, so every
-// gateway reads the same rows: the claim is an UPDATE that matches for one of
-// them only. It matches the attempt count the row was read with, so a gateway
-// that read the row before another one replayed and failed it finds the row
-// changed and leaves it to the next sweep.
-func (cm *ClusterManager) claimPendingCleanup(ctx context.Context, r pendingCleanupRow) (bool, error) {
+// claimPendingCleanup takes the lease on a row. It returns the claim's token
+// when this gateway got the lease, and "" when it did not. The tenant
+// reconciler runs on every node's gateway, so every gateway reads the same
+// rows: the claim is an UPDATE that matches for one of them only. It matches the
+// attempt count the row was read with, so a gateway that read the row before
+// another one replayed and failed it finds the row changed and leaves it to the
+// next sweep. The token (this node's id and a random value per claim) is stored
+// as claimed_by, so a release can tell its own claim from a later one.
+func (cm *ClusterManager) claimPendingCleanup(ctx context.Context, r pendingCleanupRow) (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("make a claim token for the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+	}
+	token := cm.localNodeID + ":" + hex.EncodeToString(nonce[:])
 	res, err := cm.db.Exec(client.WithInternalAuth(ctx), `
-		UPDATE namespace_pending_cleanup SET claimed_until = datetime('now', ?)
+		UPDATE namespace_pending_cleanup SET claimed_until = datetime('now', ?), claimed_by = ?
 		 WHERE id = ? AND attempts = ? AND cluster_id = ?
 		   AND (claimed_until IS NULL OR claimed_until <= datetime('now'))`,
-		pendingCleanupClaimLease, r.ID, r.Attempts, r.ClusterID)
+		pendingCleanupClaimLease, token, r.ID, r.Attempts, r.ClusterID)
 	if err != nil {
-		return false, fmt.Errorf("claim the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+		return "", fmt.Errorf("claim the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, fmt.Errorf("read the claim of the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
+		return "", fmt.Errorf("read the claim of the pending %s of %s on node %s: %w", r.Action, r.Namespace, r.NodeID, err)
 	}
-	return n == 1, nil
+	if n != 1 {
+		return "", nil
+	}
+	return token, nil
 }
 
-// releasePendingClaim gives the lease back so the next sweep can retry at once.
-// A failure is only logged: the lease lapses by itself.
-func (cm *ClusterManager) releasePendingClaim(ctx context.Context, r pendingCleanupRow) {
+// releasePendingClaim gives the lease back so the next sweep can retry at once,
+// if the row is still claimed with token: a lease that lapsed mid-replay and was
+// taken by another gateway is not this one's to clear. A failure is only
+// logged: the lease lapses by itself.
+func (cm *ClusterManager) releasePendingClaim(ctx context.Context, r pendingCleanupRow, token string) {
 	if _, err := cm.db.Exec(client.WithInternalAuth(context.WithoutCancel(ctx)),
-		`UPDATE namespace_pending_cleanup SET claimed_until = NULL WHERE id = ?`, r.ID); err != nil {
+		`UPDATE namespace_pending_cleanup SET claimed_until = NULL, claimed_by = NULL WHERE id = ? AND claimed_by = ?`,
+		r.ID, token); err != nil {
 		cm.logger.Warn("Could not release the claim on a pending cleanup; it lapses by itself",
 			zap.String("namespace", r.Namespace), zap.String("node_id", r.NodeID), zap.Error(err))
 	}
@@ -281,11 +316,20 @@ func (cm *ClusterManager) settleCleanup(ctx context.Context, r pendingCleanupRow
 // a cleanup the node did not confirm is recorded again and logged, not
 // returned.
 func (cm *ClusterManager) replayRow(ctx context.Context, r pendingCleanupRow) error {
-	claimed, err := cm.claimPendingCleanup(ctx, r)
-	if err != nil || !claimed {
+	token, err := cm.claimPendingCleanup(ctx, r)
+	if err != nil || token == "" {
 		return err
 	}
-	defer cm.releasePendingClaim(ctx, r)
+	defer cm.releasePendingClaim(ctx, r, token)
+
+	if !isReplayableCleanup(r.Action) {
+		cm.logger.Warn("Dropping a pending cleanup: its action is not one the spawn handler implements, so it can never succeed",
+			zap.String("namespace", r.Namespace),
+			zap.String("node_id", r.NodeID),
+			zap.String("action", r.Action),
+			zap.Int("attempts", r.Attempts))
+		return cm.clearPendingCleanupRow(ctx, r)
+	}
 
 	removed, err := cm.nodeRemoved(ctx, r.NodeID)
 	if err != nil {
@@ -394,10 +438,11 @@ func withdrawPendingTeardowns(ctx context.Context, db rqlite.Client, clusterID, 
 	ctx = client.WithInternalAuth(ctx)
 	for _, action := range actions {
 		var owed []struct {
+			ID        int64  `db:"id"`
 			ClusterID string `db:"cluster_id"`
 		}
 		if err := db.Query(ctx, &owed, `
-			SELECT cluster_id FROM namespace_pending_cleanup
+			SELECT id, cluster_id FROM namespace_pending_cleanup
 			 WHERE node_id = ? AND action = ?
 			   AND namespace = (SELECT namespace_name FROM namespace_clusters WHERE id = ?)`,
 			nodeID, action, clusterID); err != nil {
@@ -411,12 +456,14 @@ func withdrawPendingTeardowns(ctx context.Context, db rqlite.Client, clusterID, 
 				return fmt.Errorf("release the ports of cluster %s on node %s before withdrawing its pending %s: %w", o.ClusterID, nodeID, action, err)
 			}
 		}
-		if _, err := db.Exec(ctx, `
-			DELETE FROM namespace_pending_cleanup
-			 WHERE node_id = ? AND action = ?
-			   AND namespace = (SELECT namespace_name FROM namespace_clusters WHERE id = ?)`,
-			nodeID, action, clusterID); err != nil {
-			return fmt.Errorf("withdraw the pending %s of node %s: %w", action, nodeID, err)
+		for _, o := range owed {
+			// Only the rows that were read, and whose ports were just freed: a
+			// row recorded again for another cluster in between has not had
+			// its ports released, and stays owed.
+			if _, err := db.Exec(ctx, `DELETE FROM namespace_pending_cleanup WHERE id = ? AND cluster_id = ?`,
+				o.ID, o.ClusterID); err != nil {
+				return fmt.Errorf("withdraw the pending %s of node %s: %w", action, nodeID, err)
+			}
 		}
 	}
 	return nil

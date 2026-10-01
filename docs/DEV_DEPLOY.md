@@ -919,6 +919,23 @@ The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts
 
 This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
 
+**Crossing migration 069 (pending-cleanup claim).** Migration 069 gives
+`namespace_pending_cleanup` a claim lease, and 070 records who holds it. A
+gateway of an earlier release replays those rows without claiming them, and
+clears a row before it releases the ports the row kept. Next to a claiming
+gateway that can double-send a teardown and free a block twice, so before the
+first node of a rolling upgrade that crosses 069 the table must be empty. Check
+it, read-only, against the registry (index RQLite):
+
+```sql
+SELECT namespace, node_id, action, cluster_id, attempts, claimed_until
+  FROM namespace_pending_cleanup;
+```
+
+Zero rows: upgrade. Any row is a teardown still owed to a node; let the running
+release finish it (it leaves the table when the node confirms) or find out why
+it cannot, and upgrade after.
+
 #### Registry backups and restore
 
 The index RQLite is backed up hourly by the leader. Each snapshot is written to
