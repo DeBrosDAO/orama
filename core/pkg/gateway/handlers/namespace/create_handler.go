@@ -185,15 +185,17 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// binary does not understand was already refused above, not treated as
 	// unlimited.
 	if owned >= policy.WalletCap {
-		writeCreateJSON(w, http.StatusForbidden, map[string]any{
-			"error": fmt.Sprintf("this wallet already owns %d namespaces, which is the limit; "+
-				"delete one to create another", owned),
-			"code": ErrCodeNamespaceQuota,
-		})
+		writeNamespaceQuota(w, policy.WalletCap)
 		return
 	}
 
-	namespaceID, err := h.create(ctx, name, wallet)
+	namespaceID, err := h.create(ctx, name, wallet, policy.WalletCap)
+	if errors.Is(err, errNamespaceQuota) {
+		// Other creates by this wallet committed between the count above and
+		// this one's owner grant.
+		writeNamespaceQuota(w, policy.WalletCap)
+		return
+	}
 	if errors.Is(err, errNamespaceTaken) {
 		// Another create of the same name committed between the check above
 		// and this insert: the same answer the check gives.
@@ -302,7 +304,7 @@ func (h *CreateHandler) countOwned(ctx context.Context, wallet string) (int, err
 // one name, so the insert itself decides: the name is UNIQUE, the insert
 // ignores a conflict, and a create that inserted nothing lost the race and
 // returns errNamespaceTaken without writing an owner.
-func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64, error) {
+func (h *CreateHandler) create(ctx context.Context, name, wallet string, walletCap int) (int64, error) {
 	res, err := h.ormClient.Exec(ctx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", name)
 	if err != nil {
 		return 0, fmt.Errorf("insert namespace: %w", err)
@@ -330,14 +332,49 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string) (int64,
 		return 0, fmt.Errorf("the namespace was created but its owner could not be recorded, "+
 			"so it would be unowned and claimable: %w", err)
 	}
-	if _, err := h.ormClient.Exec(ctx,
+	// The per-wallet cap is decided by this statement, not by the count the
+	// handler made first: concurrent creates by one wallet all passed that
+	// count, and a wallet capped at ten was seen owning twelve. Raft applies
+	// one statement at a time, so the count in its WHERE sees every grant
+	// committed before it.
+	res, err = h.ormClient.Exec(ctx,
 		`INSERT INTO grants(principal_id, namespace_id, role, created_by)
-		 SELECT id, ?, 'owner', ? FROM principals WHERE type = 'wallet' AND identifier = ?`,
-		rows[0].ID, owner, owner); err != nil {
+		 SELECT id, ?, 'owner', ? FROM principals WHERE type = 'wallet' AND identifier = ?
+		   AND (SELECT COUNT(*) FROM grants g JOIN principals p ON p.id = g.principal_id
+		         WHERE p.type = 'wallet' AND p.identifier = ? AND g.role = 'owner' AND g.revoked_at IS NULL) < ?`,
+		rows[0].ID, owner, owner, owner, walletCap)
+	if err != nil {
 		return 0, fmt.Errorf("the namespace was created but its owner grant could not be recorded, "+
 			"so it would be unowned and claimable: %w", err)
 	}
+	granted, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("the namespace was created but whether its owner grant was written could not be read, "+
+			"so it may be unowned and claimable: %w", err)
+	}
+	if granted == 0 {
+		if _, err := h.ormClient.Exec(ctx, "DELETE FROM namespaces WHERE id = ?", rows[0].ID); err != nil {
+			return 0, fmt.Errorf("the wallet is at its namespace limit, and the namespace row created for it "+
+				"could not be removed, so it is unowned: %w", err)
+		}
+		return 0, errNamespaceQuota
+	}
 	return rows[0].ID, nil
+}
+
+// errNamespaceQuota is create's answer when the wallet reached its cap
+// between the handler's count and the owner grant.
+var errNamespaceQuota = errors.New("the wallet owns as many namespaces as it may")
+
+// writeNamespaceQuota answers a wallet at its namespace cap. It names the
+// cap: it used to name the wallet's count as "the limit", and a count past
+// the cap read as a second limit.
+func writeNamespaceQuota(w http.ResponseWriter, walletCap int) {
+	writeCreateJSON(w, http.StatusForbidden, map[string]any{
+		"error": fmt.Sprintf("this wallet already owns the most namespaces it may (%d); "+
+			"delete one to create another", walletCap),
+		"code": ErrCodeNamespaceQuota,
+	})
 }
 
 // errNamespaceTaken is create's answer when another create of the same name

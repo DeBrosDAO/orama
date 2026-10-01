@@ -38,6 +38,10 @@ type registry struct {
 	// lostRace makes the namespace insert write nothing, as when another
 	// create of the same name committed after the existence check.
 	lostRace bool
+	// fillOnInsert sets a wallet's owned count when a namespace row is
+	// inserted, as other creates by that wallet committing between the
+	// handler's count and its owner grant.
+	fillOnInsert map[string]int
 
 	// mode is the stored namespace_creation value. Empty means no row, which
 	// the handler reads as operators. newRegistry sets open: these tests
@@ -135,9 +139,23 @@ func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Resul
 		name, _ := args[0].(string)
 		r.existing[name] = r.nextID
 		r.nextID++
+		for wallet, n := range r.fillOnInsert {
+			r.owned[wallet] = n
+		}
+	}
+	if strings.Contains(query, "DELETE FROM namespaces") {
+		for name, id := range r.existing {
+			if any(id) == args[0] {
+				delete(r.existing, name)
+			}
+		}
 	}
 	if strings.Contains(query, "INSERT INTO grants") {
 		wallet, _ := args[1].(string)
+		// The statement writes only while the wallet is under its cap.
+		if walletCap, ok := args[len(args)-1].(int); ok && r.owned[wallet] >= walletCap {
+			return createExecResult{affected: 0}, nil
+		}
 		r.owned[wallet]++
 	}
 	return createExecResult{affected: 1}, nil
@@ -651,5 +669,45 @@ func TestCreate_concurrentSameNameOneWinner(t *testing.T) {
 	}
 	if n := countRows(t, db, `SELECT COUNT(*) FROM grants WHERE role = 'owner'`); n != 1 {
 		t.Errorf("owner grants = %d, want 1", n)
+	}
+}
+
+// Concurrent creates by one wallet all passed the handler's count: a wallet
+// capped at ten was seen owning twelve. The owner grant decides now, and a
+// create that loses removes the namespace row it wrote.
+func TestCreate_theCapHoldsWhenOtherCreatesCommitFirst(t *testing.T) {
+	db := newRegistry()
+	db.owned["0xowner"] = operator.DefaultMaxNamespacesPerWallet - 1
+	db.fillOnInsert = map[string]int{"0xowner": operator.DefaultMaxNamespacesPerWallet}
+	prov := &recordingProvisioner{}
+	h := NewCreateHandler(db, prov, nil, zap.NewNop())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", "onetoomany"))
+
+	if w.Code != http.StatusForbidden || decodeCreate(t, w)["code"] != ErrCodeNamespaceQuota {
+		t.Fatalf("status %d, want 403 %s: %s", w.Code, ErrCodeNamespaceQuota, w.Body.String())
+	}
+	if db.owned["0xowner"] != operator.DefaultMaxNamespacesPerWallet {
+		t.Errorf("the wallet owns %d, past its cap of %d", db.owned["0xowner"], operator.DefaultMaxNamespacesPerWallet)
+	}
+	if _, left := db.existing["onetoomany"]; left {
+		t.Error("the refused create left its namespace row behind, unowned")
+	}
+	if prov.called {
+		t.Error("the refused create started provisioning")
+	}
+}
+
+// The refusal names the cap, not the wallet's count.
+func TestCreate_theQuotaRefusalNamesTheCap(t *testing.T) {
+	db := newRegistry()
+	db.owned["0xowner"] = operator.DefaultMaxNamespacesPerWallet + 2
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", "onemore"))
+	msg, _ := decodeCreate(t, w)["error"].(string)
+	if !strings.Contains(msg, fmt.Sprintf("(%d)", operator.DefaultMaxNamespacesPerWallet)) {
+		t.Errorf("the refusal %q does not name the cap of %d", msg, operator.DefaultMaxNamespacesPerWallet)
 	}
 }
