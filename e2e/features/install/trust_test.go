@@ -18,6 +18,7 @@ import (
 func TestArchiveTrust_pushUsageRefusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
+	harness.RequireArchive(t, f.State.ArchivePath)
 	cli := harness.CLI(t)
 	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env), "--archive is required")
 	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env, "--archive", "/nonexistent/orama.tar.gz"),

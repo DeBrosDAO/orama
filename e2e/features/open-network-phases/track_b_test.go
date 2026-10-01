@@ -97,6 +97,9 @@ func TestPhaseB3_chainUnitAccountAndPorts(t *testing.T) {
 			}
 		}
 	}
+	if f.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "the stagenet chain runs in the orama-global netns: its RPC and p2p ports are not host listeners, so their bind addresses cannot be asserted from the host")
+	}
 }
 
 // TestPhaseB4_identityKeyBindingFromTheLiveKey: `orama global bind` signs a
@@ -116,6 +119,9 @@ func TestPhaseB4_identityKeyBindingFromTheLiveKey(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(res.Stdout), &b); err != nil || b.Signature == "" {
 		t.Fatalf("bind printed no binding: %v %s", err, res.Stdout)
+	}
+	if f.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "the stagenet chain RPC answers inside the orama-global netns, not on the node's 127.0.0.1:31001, so the key it reports cannot be read from the host loopback")
 	}
 	status := f.MustExec(t, n, fmt.Sprintf("curl -fsS http://127.0.0.1:%d/status", infra.ChainRPCPort)).Stdout
 	var st struct {

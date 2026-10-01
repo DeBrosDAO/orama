@@ -111,6 +111,9 @@ func TestCoHost_stateOwnedByTheChainUser(t *testing.T) {
 func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
+	if c.F.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "the stagenet chain runs in the orama-global netns and answers on "+c.Host()+", not on the host's loopback: its ports are not host listeners")
+	}
 	for _, n := range c.Nodes() {
 		seen := map[int]bool{}
 		for _, l := range c.F.Listeners(t, n) {

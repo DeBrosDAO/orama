@@ -78,3 +78,31 @@ func TestOramadCmd_noArgumentsStillNamesTheHome(t *testing.T) {
 		t.Errorf("got %s", got)
 	}
 }
+
+// skips runs fn in a subtest and reports whether it was skipped and failed.
+func skips(t *testing.T, fn func(t testing.TB)) (skipped, failed bool) {
+	t.Helper()
+	t.Run("inner", func(t *testing.T) {
+		defer func() { skipped, failed = t.Skipped(), t.Failed() }()
+		fn(t)
+	})
+	return skipped, failed
+}
+
+func TestRequireFresh_skipsOnStagenetOnly(t *testing.T) {
+	skipped, failed := skips(t, func(t testing.TB) { requireFresh(t, &fleet.State{Target: config.TargetStagenet}) })
+	if !skipped || failed {
+		t.Errorf("stagenet: skipped=%v failed=%v, want a skip", skipped, failed)
+	}
+	skipped, failed = skips(t, func(t testing.TB) { requireFresh(t, &fleet.State{Target: config.TargetFleet}) })
+	if skipped || failed {
+		t.Errorf("fleet: skipped=%v failed=%v, want to run on", skipped, failed)
+	}
+}
+
+func TestValidator_skipsOnStagenetBeforeAnyKeyringRead(t *testing.T) {
+	skipped, failed := skips(t, func(t testing.TB) { chainFor(config.TargetStagenet).Validator(t, fleet.Node{Name: "node-1"}) })
+	if !skipped || failed {
+		t.Errorf("skipped=%v failed=%v, want a skip", skipped, failed)
+	}
+}

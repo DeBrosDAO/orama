@@ -63,6 +63,7 @@ func newNode(t *testing.T, name string) node {
 // archiveBytes is the run's signed HEAD archive.
 func archiveBytes(t *testing.T, f *fleet.Fleet) []byte {
 	t.Helper()
+	harness.RequireArchive(t, f.State.ArchivePath)
 	raw, err := os.ReadFile(f.State.ArchivePath)
 	if err != nil {
 		t.Fatalf("read the run's archive: %v", err)

@@ -89,6 +89,9 @@ func equal(a, b map[string]string) bool {
 // rolling upgrades).
 func TestRollout_haltsOnABrokenNodeThenResumes(t *testing.T) {
 	f := harness.Fleet(t)
+	if f.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "the stagenet target cannot break a node's staged signature (provision.BreakUpgrade): the existing cluster is only tested, never changed")
+	}
 	r := infra.RequireHealthy(t)
 	leader := infra.Leader(t, r)
 	plan := infra.Run(t, harness.CLI(t), "node", "upgrade", "--env", f.State.Env)

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
+	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/evidence"
 )
 
@@ -31,6 +32,9 @@ var (
 // the run's key and pinned known_hosts. Only the read-only verbs are used.
 func runDeployScript(t *testing.T, c *chain.Chain, verb string) (string, int) {
 	t.Helper()
+	if c.F.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "chain-deploy.sh lays out a run chain (loopback ports, its own nodes spec); the stagenet chain is deployed by chain/scripts/stagenet/deploy.sh in the orama-global netns")
+	}
 	if verb != "status" && verb != "invariants" {
 		t.Fatalf("refusing to run chain-deploy.sh %s: only status and invariants are read-only", verb)
 	}

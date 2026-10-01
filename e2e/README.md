@@ -589,21 +589,36 @@ live in `harness/config/stagenet.go`. `run`, `provision`, `teardown`, `sweep`
 and `hook destroy|break|provision` refuse a stagenet state when
 `E2E_FLEET_STATE` names it; `test` starts no broker (`E2E_BROKER_SOCK` is unset),
 so `harness.ExtraNode`, `ExtraCluster`, `DNSTXT`, `CustomDomain` and
-`harness.Broker` fail the test with "not available on the stagenet target", as do
-`provision.AddExtra/RemoveExtra/AddEvalCluster/DestroyNode/BreakUpgrade/RestoreUpgrade/UpgradeToHead`
-and the probe vantage of `external-vantage`. After a destructive package the
+`harness.Broker` skip the test with `harness.SkipNotApplicable` (the stagenet
+target has no extra server, probe VM or DNS broker), as does the probe vantage of
+`external-vantage`; the `provision` functions themselves
+(`AddExtra/RemoveExtra/AddEvalCluster/DestroyNode/BreakUpgrade/RestoreUpgrade/UpgradeToHead`)
+still return the "not available on the stagenet target" error to any other
+caller. After a destructive package the
 runner still removes the iptables rules tagged `e2e-<run>-` on the three nodes and
 turns NTP back on where a test left it off (`Fleet.RestoreNodes`).
 
-**What runs.** Stages 1-7 and 9 are tests of the running cluster. Some packages
-cannot pass there and fail on purpose: the ones that need an extra server
-(`boot-lifecycle`, `chaos-lifecycle`, `install-extra`, `invite-join-destructive`,
-`namespace-backup-chaos`, `release-tuf`), the probe VM (`external-vantage`), the
-brokered DNS (`dns-tls` CLI test), and the release archives, which the stagenet
-state does not carry (`install`, `install-extra`, `release-checks`,
-`release-tuf`, `rollout-upgrade`, `scanners` secrets scan, `cli-env-auth-misc`
-rollout test). Stages 10 and 11 disturb the live cluster (upgrades, partitions,
-kills): run them only on purpose.
+**What runs.** Stages 1-7 and 9 are tests of the running cluster. A test whose
+premise stagenet lacks by design **skips** with `harness.SkipNotApplicable` (the
+report lists it as not covered, with the reason) instead of failing, so a run's
+failures are only real ones; on a fleet run every one of them still runs and
+asserts. The skips:
+
+- an extra server, the probe VM or the DNS broker (`boot-lifecycle`,
+  `chaos-lifecycle`, `install-extra`, `invite-join-destructive`,
+  `namespace-backup-chaos`, `release-tuf`, `external-vantage`, the `dns-tls` CLI
+  test): skipped in `ExtraNode`, `ExtraCluster`, `DNSTXT`, `CustomDomain`,
+  `Broker` and `external-vantage`'s `probes`;
+- the release archives, which the stagenet state does not carry
+  (`install`, `install-extra`, `release-checks`, `release-tuf`, `rollout-upgrade`,
+  `scanners` secrets scan): skipped by `harness.RequireArchive`, called in
+  `infra.ReadArchiveFile`, `ArchiveManifest`, `RewriteArchive`, `RunningArchive` and
+  the tests that read `State.ArchivePath` directly. `rollout-upgrade`'s
+  broken-node test also skips: `provision.BreakUpgrade` never runs on stagenet.
+  `cli-env-auth-misc`'s rollout tests pass a dummy archive and run.
+
+Stages 10 and 11 disturb the live cluster (upgrades, partitions, kills): run
+them only on purpose.
 
 **Chain stage (8).** The chain helpers (`features/internal/chain`) run the real
 `oramad` on the node as the chain user, exactly as `e2e/scripts/chain-deploy.sh`
@@ -618,14 +633,23 @@ target, and `Chain.Tunnel` forwards to it; `Chain.OramadCmd` runs `oramad` insid
 the `orama-global` netns on stagenet (`ip netns exec … runuser -u orama-chain`),
 because the host ruleset lets only root and the cluster's account reach those
 ports through the veth; the chain id check accepts a devnet id
-on a fleet run and a stagenet id on this target. Not target-aware, so the chain
-packages that depend on it fail or are meaningless on stagenet: the validator
-operator keys in each node's `test` keyring under the chain home (`chain-deploy.sh`
-creates and funds them; a stagenet node's keyring is not assumed to hold them, so
-every test that signs fails there), the genesis and epoch settings the deploy script
-gives a run chain (zero supply, the E2E epoch length), and the assertions that the
-chain listens on loopback (`chain-global/cohost_test.go`, `open-network-phases`,
-`wireguard-firewall`), which describe the fleet layout, not the netns.
+on a fleet run and a stagenet id on this target. What a stagenet node does not have, and the chain tests skip
+with `SkipNotApplicable` for:
+
+- the validator operator keys in each node's `test` keyring under the chain home
+  (`chain-deploy.sh` creates and funds them; a stagenet node's keyring is not
+  assumed to hold them): `Chain.Validator`, and so `FundedValidator` and every
+  test that signs with a validator key, skips on stagenet;
+- a fresh run chain's genesis (zero supply, an empty shielded pool, a validator
+  operator with no fee balance, the E2E epoch length): `chain.RequireFreshChain`
+  skips `TestEmission_devnetShortEpochParams`, `TestShieldedQueries_poolStartsEmptyAndInvariantsHold`,
+  `TestChainQuery_runsAnyModuleQuery` and `TestFeeBalance_queryAnswers`;
+- a chain on the host's loopback (the fleet layout, not the netns):
+  `chain-global`'s `TestCoHost_p2pOnWireGuardRPCOnLoopback`, the REST probe
+  (`requireREST`, 127.0.0.1:31003) and `chain-deploy.sh status|invariants`
+  (`runDeployScript`), `open-network-phases` B3 (after its unit-account check) and
+  B4 (after the bind), and the chain ports in `wireguard-firewall`'s
+  `TestListeners_internalsOnTheirAddress`, which are not asserted on stagenet.
 
 ## Evidence and the report
 

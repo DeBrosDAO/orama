@@ -50,6 +50,7 @@ func TestShieldedQueries_paramsAreGenesisSetAndPositive(t *testing.T) {
 // pool, the nullifier database folds to the accumulator).
 func TestShieldedQueries_poolStartsEmptyAndInvariantsHold(t *testing.T) {
 	t.Parallel()
+	chain.RequireFreshChain(t)
 	c := chain.New(t)
 	got := queryPool(t, c)
 	if got.pools != 0 || got.queued != 0 || got.treeSize != 0 || got.nullifiers != 0 {

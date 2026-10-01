@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
@@ -45,6 +46,7 @@ type Edit struct {
 // add one, or re-sign with a key the node does not trust.
 func RewriteArchive(t testing.TB, src, dir, name string, e Edit) string {
 	t.Helper()
+	harness.RequireArchive(t, src)
 	dst := filepath.Join(dir, name)
 	if err := rewrite(src, dst, e); err != nil {
 		t.Fatalf("failed to build the test archive %s: %v", name, err)
@@ -132,6 +134,7 @@ func writeEntry(tw *tar.Writer, hdr *tar.Header, data []byte) error {
 // ReadArchiveFile returns one small file of a build archive.
 func ReadArchiveFile(t testing.TB, src, rel string) []byte {
 	t.Helper()
+	harness.RequireArchive(t, src)
 	in, err := os.Open(src)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +188,7 @@ func FirstTemplate(t testing.TB, m archivetrust.Manifest) string {
 // node joined mid-run installs the build its cluster runs.
 func RunningArchive(t testing.TB, f *fleet.Fleet) string {
 	t.Helper()
+	harness.RequireArchive(t, f.State.ArchivePath)
 	staged := string(f.ReadFile(t, f.State.Nodes[0], StagedManifest))
 	for _, a := range []string{f.State.ArchivePath, f.State.PreviousArchivePath} {
 		if a != "" && string(ReadArchiveFile(t, a, ManifestName)) == staged {

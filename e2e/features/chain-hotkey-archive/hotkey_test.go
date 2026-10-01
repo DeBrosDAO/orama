@@ -84,6 +84,7 @@ func TestFundHotKey_refusals(t *testing.T) {
 // refuses one that is not bech32; every validator answers alike.
 func TestFeeBalance_queryAnswers(t *testing.T) {
 	t.Parallel()
+	chain.RequireFreshChain(t)
 	c := chain.New(t)
 	for _, addr := range []string{c.Validator(t, c.Node(t, 0)).Address, chain.ModuleAddress("fee_collector")} {
 		for _, n := range c.Nodes() {

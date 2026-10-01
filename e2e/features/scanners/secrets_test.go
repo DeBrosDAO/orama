@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
+	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
 const (
@@ -100,6 +101,7 @@ func TestSecretScan_releaseArchive(t *testing.T) {
 	t.Parallel()
 	scanner := pickSecretScanner(t)
 	s := newScan(t)
+	harness.RequireArchive(t, s.f.State.ArchivePath)
 	if s.f.State.ArchivePath == "" {
 		t.Fatal("the run state names no release archive (state.archive_path); the build step must record it")
 	}

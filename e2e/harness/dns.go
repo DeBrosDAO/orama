@@ -100,12 +100,12 @@ func ExtraCluster(t testing.TB, name string) provision.EvalCluster {
 	return cl
 }
 
-// requireNotStagenet fails a test that needs a server, DNS record or broker
+// requireNotStagenet skips a test that needs a server, DNS record or broker
 // operation of its own: the stagenet target only tests the existing cluster,
-// so such a test fails loudly instead of running against nothing.
+// so there is nothing to provision, and the test cannot apply.
 func requireNotStagenet(t testing.TB, what string) {
 	t.Helper()
 	if Fleet(t).State.IsStagenet() {
-		t.Fatalf("%s is not available on the stagenet target: the existing stagenet cluster is only tested, never provisioned, changed or destroyed", what)
+		SkipNotApplicable(t, what+": the stagenet target has no extra server, probe VM or DNS broker: the existing cluster is only tested, never provisioned, changed or destroyed")
 	}
 }

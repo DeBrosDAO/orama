@@ -27,6 +27,7 @@ var shippedBinaries = []string{"orama", "orama-node", "gateway", "olric-server",
 func TestRelease_headArchiveVerifies(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
+	harness.RequireArchive(t, f.State.ArchivePath)
 	dir := filepath.Join(t.TempDir(), "archive")
 	if err := archivetrust.Extract(f.State.ArchivePath, dir); err != nil {
 		t.Fatalf("extract %s: %v", f.State.ArchivePath, err)

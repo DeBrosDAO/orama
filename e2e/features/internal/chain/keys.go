@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
@@ -54,6 +55,9 @@ func (k Key) keyringFlags() []string {
 // the only kind of account a run chain can fund (see funds.go).
 func (c *Chain) Validator(t testing.TB, n fleet.Node) Key {
 	t.Helper()
+	if c.F.State.IsStagenet() {
+		harness.SkipNotApplicable(t, "a stagenet node's test keyring does not hold the validator operator key (chain-deploy.sh creates and funds it on a run chain only), so a test that signs with it cannot apply")
+	}
 	if v, ok := validatorCache.Load(c.ID + "/" + n.Name); ok {
 		return v.(Key)
 	}

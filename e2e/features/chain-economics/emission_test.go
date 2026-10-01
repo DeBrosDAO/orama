@@ -160,6 +160,7 @@ type emissionParams struct {
 // genesis supply is exactly zero (no premine).
 func TestEmission_devnetShortEpochParams(t *testing.T) {
 	t.Parallel()
+	chain.RequireFreshChain(t)
 	c := chain.New(t)
 	n := c.Node(t, 0)
 	var p emissionParams

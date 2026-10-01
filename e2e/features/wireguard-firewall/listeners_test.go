@@ -95,7 +95,9 @@ func TestListeners_internalsOnTheirAddress(t *testing.T) {
 		wg := wgAddress(t, f, n)
 		ls := f.Listeners(t, n)
 		want := map[int][]string{infra.IndexRQLiteHTTP: {wg}, infra.IndexRQLiteRaft: {wg}, 10102: {wg}, 10104: {wg, "127.0.0.1"}}
-		if f.State.ChainID != "" {
+		// The stagenet chain runs in the orama-global netns: its ports are not
+		// host listeners, so only a fleet run's chain is asserted here.
+		if f.State.ChainID != "" && !f.State.IsStagenet() {
 			want[infra.ChainP2PPort] = []string{wg}
 			want[infra.ChainRPCPort] = []string{"127.0.0.1"}
 		}

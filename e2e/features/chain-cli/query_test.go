@@ -65,6 +65,7 @@ func TestChainQuery_listsEveryQueryTheChainDeclares(t *testing.T) {
 // the proto field names.
 func TestChainQuery_runsAnyModuleQuery(t *testing.T) {
 	t.Parallel()
+	chain.RequireFreshChain(t)
 	c := chain.New(t)
 	rpc := rpcURL(t, c)
 	var fee any
