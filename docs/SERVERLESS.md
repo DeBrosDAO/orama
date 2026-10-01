@@ -461,7 +461,8 @@ API (`POST /v1/storage/upload`, `GET /v1/storage/get/:cid`).
 > secret either. The pattern that works: the **client** uploads with its user JWT and
 > passes the resulting CID to a function (which records/uses it). If your function
 > truly needs to originate IPFS content, it needs a user-JWT credential, not a
-> namespace API key.
+> namespace API key. (A deployed app, as opposed to a function, holds its own
+> workload token, which these endpoints accept within its grant: docs/AUTH.md.)
 
 ### PubSub
 

@@ -83,7 +83,8 @@ of everyone who loads the page. The split the gateway enforces:
   developer's machine, never in anything a browser downloads.
 - **Safe in a client bundle** — an `app-runtime` key. Data-plane grants only,
   and the gateway additionally requires a logged-in user's wallet JWT for
-  storage, WebRTC and proxy operations, so an extracted runtime key on its own
+  storage, WebRTC and proxy operations (on storage and WebRTC a deployed app's
+  own workload token also qualifies), so an extracted runtime key on its own
   cannot act as anybody.
 
 ```bash

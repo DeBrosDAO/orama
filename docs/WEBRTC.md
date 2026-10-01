@@ -86,8 +86,9 @@ Authorization: Bearer <access token>
 ```
 
 An API key on its own is refused. WebRTC is a layer-1 route — it needs a genuine
-logged-in user — which is what makes a runtime key extracted from an app bundle
-worthless against it. The SDK gets that token by exchanging your key, or from
+logged-in user, or a deployed app holding its own workload token (docs/AUTH.md
+"A workload's identity") — which is what makes a runtime key extracted from an app
+bundle worthless against it. The SDK gets that token by exchanging your key, or from
 `auth.verify()` after a wallet signs in; `X-API-Key` and `Authorization: ApiKey`
 are the deprecated spellings and are going away.
 
@@ -478,7 +479,7 @@ systemctl status orama-turn
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side. Clients cannot bypass TURN.
 - **HMAC credentials**: Per-namespace TURN shared secret. REST/host-fn credentials expire after 24h (long enough to outlast any call, since they are not refreshed mid-call); SFU-signaled credentials use the shorter per-namespace TTL and are refreshed over the signaling channel.
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
-- **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?jwt=`, because a browser cannot set a header on an upgrade (`?token=` is read as an API key, which these endpoints refuse).
+- **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token, or a deployed app's own workload token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?jwt=`, because a browser cannot set a header on an upgrade (`?token=` is read as an API key, which these endpoints refuse).
 - **Room management**: Creating/closing rooms requires namespace ownership.
 - **SFU on WireGuard only**: SFU binds to 10.0.0.x, never 0.0.0.0. Only reachable via TURN relay.
 - **Permissions-Policy**: `camera=(self), microphone=(self)` — only same-origin can access media devices.

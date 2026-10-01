@@ -103,15 +103,20 @@ func TestRoutePermission(t *testing.T) {
 // not that was intended; it is declared per route now, and this is the set that
 // must still ask for a logged-in user.
 func TestRouteToken(t *testing.T) {
-	wallet := []string{
+	principal := []string{
 		"/v1/storage/upload", "/v1/storage/pin", "/v1/storage/get/Qm1", "/v1/storage/status/Qm1",
 		"/v1/webrtc/signal", "/v1/webrtc/rooms", "/v1/webrtc/turn/credentials",
-		"/v1/proxy/anon", "/v1/proxy/tunnel",
 	}
+	for _, path := range principal {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.PrincipalToken {
+			t.Errorf("%q asks for token %v, want a user or an app's own token — an extracted runtime "+
+				"key would otherwise reach it on its own", path, got)
+		}
+	}
+	wallet := []string{"/v1/proxy/anon", "/v1/proxy/tunnel", "/v1/namespaces"}
 	for _, path := range wallet {
 		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.WalletToken {
-			t.Errorf("%q asks for token %v, want a logged-in user — an extracted runtime "+
-				"key would otherwise reach it on its own", path, got)
+			t.Errorf("%q asks for token %v, want a logged-in user and nothing else", path, got)
 		}
 	}
 
@@ -298,6 +303,39 @@ func reqDelJWT(path string, claims *auth.JWTClaims) *http.Request {
 	return r
 }
 
+// TestHasRequiredToken_principalTokenAdmitsAUserOrAnApp: a deployed app holds
+// a workload token its owner's grant gives storage; it must reach storage as
+// itself, and an exchanged key must not, nor may an app create a namespace.
+func TestHasRequiredToken_principalTokenAdmitsAUserOrAnApp(t *testing.T) {
+	g := &Gateway{}
+	principal := routepolicy.Policy{Token: routepolicy.PrincipalToken}
+	walletOnly := routepolicy.Policy{Token: routepolicy.WalletToken}
+	cases := []struct {
+		name          string
+		sub           string
+		principal, wo bool
+	}{
+		{"a wallet", "0x1111111111111111111111111111111111111111", true, true},
+		{"a deployed app", "app:acme/notes", true, false},
+		{"an exchanged key", "orama_rk_2fJ8xQ_9Zc", false, false},
+		{"a legacy key", "ak_abc:acme", false, false},
+		{"an unknown subject", "did:ethr:not-an-address", false, false},
+		{"no subject", "", false, false},
+	}
+	for _, c := range cases {
+		r := reqWithJWT(&auth.JWTClaims{Sub: c.sub})
+		if got := g.hasRequiredToken(r, principal, auth.PermissionSet{}); got != c.principal {
+			t.Errorf("%s on a principal route: %v, want %v", c.name, got, c.principal)
+		}
+		if got := g.hasRequiredToken(r, walletOnly, auth.PermissionSet{}); got != c.wo {
+			t.Errorf("%s on a user-only route: %v, want %v", c.name, got, c.wo)
+		}
+	}
+	if g.hasRequiredToken(httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil), principal, auth.PermissionSet{}) {
+		t.Error("a request with no token passed a principal route")
+	}
+}
+
 func TestHasAnyJWT(t *testing.T) {
 	if !hasAnyJWT(reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})) {
 		t.Error("wallet JWT should count as a JWT")
@@ -324,12 +362,12 @@ func TestStorageUnpinToken(t *testing.T) {
 	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123").Token; got != routepolicy.AnyToken {
 		t.Errorf("DELETE unpin asks for token %v, want any exchanged token (#151)", got)
 	}
-	if got := policyOf(http.MethodPost, "/v1/storage/unpin/Qm123").Token; got != routepolicy.WalletToken {
+	if got := policyOf(http.MethodPost, "/v1/storage/unpin/Qm123").Token; got != routepolicy.PrincipalToken {
 		t.Errorf("POST to the unpin route asks for token %v; only DELETE is the reclaim", got)
 	}
 	for _, path := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
-		if got := policyOf(http.MethodDelete, path).Token; got != routepolicy.WalletToken {
-			t.Errorf("%q asks for token %v, want a logged-in user", path, got)
+		if got := policyOf(http.MethodDelete, path).Token; got != routepolicy.PrincipalToken {
+			t.Errorf("%q asks for token %v, want a user or an app's own token", path, got)
 		}
 	}
 	// And the permission is unchanged: the relaxation is about the token, not

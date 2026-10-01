@@ -198,10 +198,25 @@ func (g *Gateway) hasRequiredToken(r *http.Request, policy routepolicy.Policy, p
 	if policy.Token == routepolicy.AnyCredential || perms.IsAdmin() {
 		return true
 	}
-	if policy.Token == routepolicy.AnyToken {
+	switch policy.Token {
+	case routepolicy.AnyToken:
 		return hasAnyJWT(r)
+	case routepolicy.PrincipalToken:
+		return hasWalletJWT(r) || hasWorkloadJWT(r)
+	default:
+		return hasWalletJWT(r)
 	}
-	return hasWalletJWT(r)
+}
+
+// hasWorkloadJWT reports whether the request carries a deployed app's own
+// workload token (subject app:<namespace>/<name>). It is minted by the gateway
+// for the app at start and renewed only by its holder; a key's exchange never
+// carries that subject.
+func hasWorkloadJWT(r *http.Request) bool {
+	if claims, ok := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims); ok && claims != nil {
+		return auth.IsWorkloadSubject(claims.Sub)
+	}
+	return false
 }
 
 // markGrant returns a shallow copy of the request whose context carries the

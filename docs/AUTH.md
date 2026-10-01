@@ -796,7 +796,7 @@ about it — plus the fields that make it actionable.
 | `AUTH_REVOKED` | the credential was revoked — sign in again |
 | `AUTH_UNAVAILABLE` | the gateway could not tell whether the credential was revoked (503, `Retry-After`) — retry with the same credential |
 | `AUTH_EXPIRED` | the token expired — refresh |
-| `USER_JWT_REQUIRED` | this operation needs a logged-in user; a key alone is not enough |
+| `USER_JWT_REQUIRED` | this operation needs a logged-in user (on storage and WebRTC, a deployed app's own token also qualifies); a key alone is not enough |
 | `INSUFFICIENT_SCOPE` | the credential lacks a grant; `required_scope` names it |
 | `NAMESPACE_MISMATCH` | the credential belongs to another namespace |
 | `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
@@ -959,6 +959,12 @@ as it narrows a wallet, within the grant cache's ten seconds. An app nobody has 
 anything to holds a token that reaches nothing, which is the only safe default —
 the alternative is every app starting with the namespace's whole data plane,
 which is the permanent key this replaces wearing a different hat.
+
+Storage and WebRTC refuse a key on its own, however it was exchanged, so that a
+runtime key pulled out of a client reaches neither. They accept an app's own
+workload token as they accept a logged-in user's, and the app's grant then decides
+what it reaches. Two things stay a person's: the anonymity proxy and tunnel, which
+are an end user's anonymity, and creating or listing namespaces.
 
 A deployment cannot be granted the control plane. Only a workload token may be
 renewed; a user session is renewed by its refresh token, which rotates and can be

@@ -74,9 +74,15 @@ const (
 	// leaked key on its own does not.
 	AnyToken
 
-	// WalletToken: a genuine logged-in user. This is what makes an extracted
-	// runtime key worthless on the data plane.
+	// WalletToken: a genuine logged-in user. An app or a key never qualifies:
+	// creating and listing namespaces is a person's act.
 	WalletToken
+
+	// PrincipalToken: a logged-in user or a deployed app's own workload token,
+	// never a key or a key's exchange. This is what makes an extracted runtime
+	// key worthless on the data plane, while an app its owner granted the
+	// domain reaches it as itself (docs/AUTH.md "A workload's identity").
+	PrincipalToken
 )
 
 // Policy is what a route requires of its caller.

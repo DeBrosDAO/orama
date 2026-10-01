@@ -365,14 +365,16 @@ func buildRoutePolicies() *routepolicy.Table {
 
 	// --- Data plane ----------------------------------------------------
 	//
-	// storage, webrtc and proxy additionally require a genuine logged-in user.
-	// That is what makes an extracted runtime key worthless: the key alone
+	// storage and webrtc additionally require a principal's token: a logged-in
+	// user, or a deployed app holding its own workload token. proxy requires a
+	// logged-in user: the tunnel is an end user's anonymity, keyed to who they
+	// are. That is what makes an extracted runtime key worthless: the key alone
 	// reaches none of them.
-	t.Add(dataPlane(auth.DomainStorage, auth.ActionRead, false, routepolicy.WalletToken),
+	t.Add(dataPlane(auth.DomainStorage, auth.ActionRead, false, routepolicy.PrincipalToken),
 		"/v1/storage/get/", "/v1/storage/status/")
-	t.Add(dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.WalletToken),
+	t.Add(dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.PrincipalToken),
 		"/v1/storage/upload", "/v1/storage/pin")
-	t.Add(dataPlane(auth.DomainWebRTC, auth.ActionRead, true, routepolicy.WalletToken),
+	t.Add(dataPlane(auth.DomainWebRTC, auth.ActionRead, true, routepolicy.PrincipalToken),
 		"/v1/webrtc/turn/credentials", "/v1/webrtc/signal", "/v1/webrtc/rooms")
 	t.Add(dataPlane(auth.DomainProxy, auth.ActionWrite, true, routepolicy.WalletToken),
 		"/v1/proxy/anon", "/v1/proxy/tunnel")
@@ -399,7 +401,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		if r.Method == http.MethodDelete {
 			return dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.AnyToken)
 		}
-		return dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.WalletToken)
+		return dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.PrincipalToken)
 	})
 
 	// The rqlite ORM composes its own patterns from a base path and reports
