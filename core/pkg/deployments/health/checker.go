@@ -86,9 +86,10 @@ type HealthChecker struct {
 
 	// Orphan unit sweep (optional, set via SetOrphanReaper). orphanSeen holds
 	// each unit the previous sweep found, with when it was first found; only the sweep goroutine touches it.
-	orphanUnits RuntimeUnitManager
-	orphanSeen  map[string]time.Time
-	now         func() time.Time // nil means time.Now; tests set it
+	orphanUnits      RuntimeUnitManager
+	orphanDeployPath string
+	orphanSeen       map[string]time.Time
+	now              func() time.Time // nil means time.Now; tests set it
 }
 
 // NewHealthChecker creates a new health checker.
@@ -125,11 +126,8 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 	reconcileTicker := time.NewTicker(5 * time.Minute)
 	defer probeTicker.Stop()
 	defer reconcileTicker.Stop()
-	var orphanC <-chan time.Time
 	if hc.orphanUnits != nil {
-		orphanTicker := time.NewTicker(orphanSweepInterval)
-		defer orphanTicker.Stop()
-		orphanC = orphanTicker.C
+		go hc.runOrphanSweeps(ctx)
 	}
 
 	for {
@@ -143,10 +141,6 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 			}
 		case <-reconcileTicker.C:
 			hc.reconcileDeployments(ctx)
-		case <-orphanC:
-			if err := hc.reapOrphanUnits(ctx); err != nil {
-				hc.logger.Error("Orphan unit sweep failed", zap.Error(err))
-			}
 		}
 	}
 }

@@ -37,6 +37,15 @@ func TestStop_aRunDeploymentStillReportsAFailedStop(t *testing.T) {
 	}
 }
 
+// An unknown type is a programming error, not a served deployment: a new
+// runtime missing from RuntimeFor must not turn its Stop into a no-op.
+func TestStop_anUnknownTypeIsAnError(t *testing.T) {
+	m := NewManager(zap.NewNop(), Config{Systemctl: func(args ...string) error { return nil }})
+	if err := m.Stop(context.Background(), &deployments.Deployment{Namespace: "acme", Name: "x", Type: "rust-backend"}); err == nil {
+		t.Fatal("Stop of an unknown type returned nil")
+	}
+}
+
 func TestRuntimeFor_servedTypesAreErrServedNotRun(t *testing.T) {
 	if _, _, err := RuntimeFor(&deployments.Deployment{Type: deployments.DeploymentTypeStatic}); !errors.Is(err, ErrServedNotRun) {
 		t.Errorf("static: %v, want ErrServedNotRun", err)

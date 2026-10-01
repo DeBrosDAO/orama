@@ -164,7 +164,9 @@ func RuntimeFor(deployment *deployments.Deployment) (Runtime, string, error) {
 		}
 	case deployments.DeploymentTypeGoBackend:
 		return RuntimeGo, "", nil
-	default:
+	case deployments.DeploymentTypeStatic, deployments.DeploymentTypeNextJSStatic, deployments.DeploymentTypeGoWASM:
 		return "", "", fmt.Errorf("deployment type %q has no runtime: %w", deployment.Type, ErrServedNotRun)
+	default:
+		return "", "", fmt.Errorf("deployment type %q is not one this node knows how to run or serve", deployment.Type)
 	}
 }

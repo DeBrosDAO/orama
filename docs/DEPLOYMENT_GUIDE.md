@@ -303,16 +303,18 @@ while the node was down) and still holds the port the registry has freed. Every
 2 minutes it lists the node's runtime units (any state; the `build@` and
 `clean@` oneshots are ignored) and compares their instances with every row of
 the registry's `deployments` table, in any status. A unit with no row is stopped,
-disabled, and its staged secrets and installed dependencies are removed, and a
-Warn line names it. Every doubt stops nothing: the registry read must succeed
-and hold at least one row; the unit must be unmatched on two consecutive sweeps;
-its age must be at least
-10 minutes, the longer of its systemd age (last activation, or last state
-change if failed) and how long this node has been finding it unmatched, so a
-crash-looping unit whose activation keeps resetting is still reaped; and at
-most 2 units are stopped per sweep. A unit that gains a row, disappears, or is
-seen while the registry read fails or is empty starts over. A stop that fails is
-logged as an error and retried on a later sweep.
+disabled, and its staged secrets, installed dependencies and extracted files
+are removed (a unit whose stop fails keeps its files, which it still runs from),
+and a Warn line names it. Every doubt stops nothing: the registry read must
+succeed and hold at least one row; the unit must be unmatched on two consecutive
+sweeps; its age must be at least 10 minutes, the longer of its systemd age (last
+activation, or last state change if failed) and how long this node has been
+finding it unmatched, so a crash-looping unit whose activation keeps resetting
+is still reaped; and at most 2 units are stopped per sweep. A sweep runs on its
+own timer, bounded to 90 seconds, so it never delays the replica probes. A unit
+that gains a row, disappears, or is seen while the registry read fails or is
+empty starts over. A stop that fails is logged as an error and retried on a
+later sweep.
 
 ---
 

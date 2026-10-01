@@ -861,7 +861,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		if runsDeploymentHealthChecker(cfg) {
 			gw.healthChecker = health.NewHealthChecker(dbAdapter, logger.Logger, cfg.NodePeerID, gw.processManager)
 			gw.healthChecker.SetReconciler(cfg.RQLiteDSN, gw.replicaManager, gw.deploymentService)
-			gw.healthChecker.SetOrphanReaper(gw.processManager)
+			gw.healthChecker.SetOrphanReaper(gw.processManager, baseDeployPath)
 			// Waits for readiness: it queries the deployment tables, which do not
 			// exist until the migrations this gateway is still applying have run.
 			go func() {

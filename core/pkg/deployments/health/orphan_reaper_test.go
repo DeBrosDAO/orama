@@ -3,6 +3,8 @@ package health
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +45,7 @@ func registryWith(rows ...deploymentKey) *mockDB {
 
 func newReaper(db *mockDB, units *fakeUnits) *HealthChecker {
 	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
-	hc.SetOrphanReaper(units)
+	hc.SetOrphanReaper(units, "")
 	return hc
 }
 
@@ -199,5 +201,58 @@ func TestReapOrphanUnits_unitThatGainsARowIsNeverStopped(t *testing.T) {
 	_ = hc.reapOrphanUnits(context.Background())
 	if len(units.stopped) != 0 {
 		t.Fatalf("stopped %v, a unit that had a row", units.stopped)
+	}
+}
+
+// TestReapOrphanUnits_removesTheStoppedOrphansFiles: a later deployment given
+// the same instance must not start on the orphan's stale code; a unit that
+// could not be stopped keeps its files, which it is still running from.
+func TestReapOrphanUnits_removesTheStoppedOrphansFiles(t *testing.T) {
+	base := t.TempDir()
+	for _, inst := range []string{"gone-app", "acme-web"} {
+		if err := os.MkdirAll(filepath.Join(base, inst, "app"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	units := &fakeUnits{units: []process.RuntimeUnit{oldUnit(process.RuntimeNode, "gone-app"), oldUnit(process.RuntimeNode, "acme-web")}}
+	hc := NewHealthChecker(registryWith(liveRow), zap.NewNop(), "node-1", nil)
+	hc.SetOrphanReaper(units, base)
+	for i := 0; i < 2; i++ {
+		if err := hc.reapOrphanUnits(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(base, "gone-app")); !os.IsNotExist(err) {
+		t.Errorf("the orphan's directory is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "acme-web", "app")); err != nil {
+		t.Errorf("a live deployment's files were touched: %v", err)
+	}
+}
+
+func TestReapOrphanUnits_aFailedStopKeepsTheFiles(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "gone-app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	units := &fakeUnits{units: []process.RuntimeUnit{oldUnit(process.RuntimeNode, "gone-app")}, stopErr: errors.New("refused")}
+	hc := NewHealthChecker(registryWith(liveRow), zap.NewNop(), "node-1", nil)
+	hc.SetOrphanReaper(units, base)
+	_ = hc.reapOrphanUnits(context.Background())
+	if err := hc.reapOrphanUnits(context.Background()); err == nil {
+		t.Fatal("a refused stop was not reported")
+	}
+	if _, err := os.Stat(filepath.Join(base, "gone-app")); err != nil {
+		t.Errorf("the files of a unit still running were removed: %v", err)
+	}
+}
+
+func TestRemoveOrphanFiles_refusesAnInstanceThatLeavesTheBase(t *testing.T) {
+	hc := NewHealthChecker(registryWith(liveRow), zap.NewNop(), "node-1", nil)
+	hc.SetOrphanReaper(&fakeUnits{}, t.TempDir())
+	for _, inst := range []string{"../x", "a/b", ""} {
+		if err := hc.removeOrphanFiles(inst); err == nil {
+			t.Errorf("instance %q was accepted", inst)
+		}
 	}
 }

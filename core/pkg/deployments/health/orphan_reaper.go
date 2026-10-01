@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
@@ -31,6 +33,8 @@ const (
 	orphanMinAge = 10 * time.Minute
 	// maxOrphansPerSweep bounds what one sweep may stop.
 	maxOrphansPerSweep = 2
+	// orphanSweepTimeout bounds one sweep; it is shorter than the interval.
+	orphanSweepTimeout = 90 * time.Second
 )
 
 // RuntimeUnitManager is what the reaper needs from the process manager.
@@ -45,10 +49,51 @@ type deploymentKey struct {
 	Name      string `db:"name"`
 }
 
-// SetOrphanReaper enables the orphan unit sweep (optional). Must be called
-// before Start().
-func (hc *HealthChecker) SetOrphanReaper(units RuntimeUnitManager) {
+// SetOrphanReaper enables the orphan unit sweep (optional). baseDeployPath is
+// where deployments are extracted ("" leaves an orphan's files alone). Must be
+// called before Start().
+func (hc *HealthChecker) SetOrphanReaper(units RuntimeUnitManager, baseDeployPath string) {
 	hc.orphanUnits = units
+	hc.orphanDeployPath = baseDeployPath
+}
+
+// runOrphanSweeps sweeps on its own ticker, so listing and stopping units
+// never delays the replica probes; each sweep is bounded by
+// orphanSweepTimeout, which is shorter than the interval, so sweeps never
+// overlap.
+func (hc *HealthChecker) runOrphanSweeps(ctx context.Context) {
+	ticker := time.NewTicker(orphanSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweepCtx, cancel := context.WithTimeout(ctx, orphanSweepTimeout)
+			if err := hc.reapOrphanUnits(sweepCtx); err != nil {
+				hc.logger.Error("Orphan unit sweep failed", zap.Error(err))
+			}
+			cancel()
+		}
+	}
+}
+
+// removeOrphanFiles removes a stopped orphan's extracted code, so a later
+// deployment given the same instance does not start on stale files. No row
+// owns the instance (that is what made it an orphan), so no deployment's
+// claim on the directory is taken.
+func (hc *HealthChecker) removeOrphanFiles(instance string) error {
+	if hc.orphanDeployPath == "" {
+		return nil
+	}
+	dir := filepath.Join(hc.orphanDeployPath, instance)
+	if filepath.Dir(dir) != filepath.Clean(hc.orphanDeployPath) {
+		return fmt.Errorf("instance %q does not name a directory directly under %s", instance, hc.orphanDeployPath)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove the orphan's directory %s: %w", dir, err)
+	}
+	return nil
 }
 
 func (hc *HealthChecker) clock() time.Time {
@@ -98,6 +143,10 @@ func (hc *HealthChecker) reapOrphanUnits(ctx context.Context) error {
 		)
 		if err := hc.orphanUnits.StopOrphan(u.Runtime, u.Instance); err != nil {
 			errs = append(errs, fmt.Errorf("stop the orphan unit %s: %w", u.Unit, err))
+			continue
+		}
+		if err := hc.removeOrphanFiles(u.Instance); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	hc.orphanSeen = seen
