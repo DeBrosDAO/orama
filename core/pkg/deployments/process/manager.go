@@ -2,6 +2,8 @@ package process
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -48,6 +50,22 @@ type Manager struct {
 	// auth service, and so a test can watch what a deployment is handed.
 	mintWorkloadToken WorkloadTokenMinter
 
+	// stagedUntil is when the token last staged for each unit instance expires,
+	// as this gateway minted it. The staged file is root-only and cannot be
+	// read back, so this is what says whether a restart can run on it.
+	stagedMu    sync.Mutex
+	stagedUntil map[string]time.Time
+
+	// stopped holds the instances a Stop has taken down and no Start has
+	// brought back. A delete stops the unit before it removes the deployment's
+	// row, so for that window a refresh or a restart would find a row and mint
+	// a principal and a token for a deployment that is on its way out.
+	stopped map[string]struct{}
+
+	// refreshToken mints a credential for a deployment that already runs. It
+	// writes nothing to the registry. Nil means mintWorkloadToken.
+	refreshToken WorkloadTokenMinter
+
 	// systemctl runs one systemctl command on a deployment unit. Nil means
 	// runSystemctl, through orama-privhelper; a test sets it to watch the calls.
 	systemctl func(args ...string) error
@@ -61,8 +79,29 @@ type Manager struct {
 	processesMu sync.RWMutex
 }
 
-// WorkloadTokenMinter issues the token a deployment runs with.
+// WorkloadTokenMinter issues the token a deployment runs with. It answers
+// ErrDeploymentGone for a deployment that no longer exists.
 type WorkloadTokenMinter func(ctx context.Context, namespace, name string) (string, error)
+
+// SetWorkloadTokenRefresher wires the cheaper mint a refresh of a running
+// deployment uses: the principal exists after Start, so it need not be
+// recorded again, and the caller has just read the deployment's row.
+func (m *Manager) SetWorkloadTokenRefresher(mint WorkloadTokenMinter) {
+	m.refreshToken = mint
+}
+
+// ErrStopped is a mint refused because the deployment has been stopped for a
+// delete and not started since.
+var ErrStopped = errors.New("the deployment has been stopped")
+
+// ErrDeploymentGone is a mint refused because the deployment's row is gone: a
+// restart or a refresh that raced its delete must not give a deleted
+// deployment an identity again.
+var ErrDeploymentGone = errors.New("the deployment no longer exists")
+
+// WorkloadTokenRestartMargin is how much life a staged token must have left for
+// a restart to run on it when a fresh one cannot be minted.
+const WorkloadTokenRestartMargin = 5 * time.Minute
 
 // SetWorkloadTokenMinter wires the credential a deployment is started with.
 //
@@ -179,21 +218,134 @@ func unitInstance(serviceName string) string {
 // and a deployment started with no identity is the permanent-key situation this
 // replaces: it would work, and nothing it did would be attributable.
 func (m *Manager) writeWorkloadToken(ctx context.Context, deployment *deployments.Deployment, serviceName string) error {
+	return m.stageWorkloadToken(ctx, deployment, serviceName, m.mintWorkloadToken)
+}
+
+// stageWorkloadToken is writeWorkloadToken with the minter to use.
+func (m *Manager) stageWorkloadToken(ctx context.Context, deployment *deployments.Deployment, serviceName string, mint WorkloadTokenMinter) error {
+	if m.isStopped(unitInstance(serviceName)) {
+		return fmt.Errorf("no credential for %s: %w", serviceName, ErrStopped)
+	}
 	if m.stager == nil {
 		return fmt.Errorf("no deployment stager is configured, so the credential of %s has nowhere to go", serviceName)
 	}
-	if m.mintWorkloadToken == nil {
+	if mint == nil {
 		return fmt.Errorf("this gateway cannot mint a workload token, so %s would run with no identity", serviceName)
 	}
 
-	token, err := m.mintWorkloadToken(ctx, deployment.Namespace, deployment.Name)
+	token, err := mint(ctx, deployment.Namespace, deployment.Name)
 	if err != nil {
 		return fmt.Errorf("mint the credential for %s: %w", serviceName, err)
 	}
 	if err := m.stager.SetToken(unitInstance(serviceName), token); err != nil {
 		return fmt.Errorf("store the credential for %s: %w", serviceName, err)
 	}
+	m.recordStaged(unitInstance(serviceName), token)
 	return nil
+}
+
+// recordStaged remembers when the token just staged for instance expires. A
+// token whose expiry cannot be read is recorded as expired, so nothing runs on
+// a credential nobody can vouch for.
+func (m *Manager) recordStaged(instance, token string) {
+	until, _ := tokenExpiry(token)
+	m.stagedMu.Lock()
+	defer m.stagedMu.Unlock()
+	if m.stagedUntil == nil {
+		m.stagedUntil = map[string]time.Time{}
+	}
+	m.stagedUntil[instance] = until
+}
+
+// stagedTokenUsable reports whether the token staged for instance still has
+// WorkloadTokenRestartMargin of life left.
+func (m *Manager) stagedTokenUsable(instance string) bool {
+	m.stagedMu.Lock()
+	defer m.stagedMu.Unlock()
+	until, ok := m.stagedUntil[instance]
+	return ok && time.Until(until) > WorkloadTokenRestartMargin
+}
+
+// tokenExpiry reads the exp claim of a JWT without verifying it: the manager
+// minted the token itself and only needs to know how long it lasts.
+func tokenExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
+}
+
+// RefreshToken stages a fresh credential for a running deployment without
+// restarting it. The unit reads its credential at every start, and systemd
+// restarts a crashed unit (Restart=always) or starts it at boot without the
+// gateway, so the staged token must always have life left or the app would
+// start with one that has expired and could not renew it.
+//
+// A unit that is not running is left alone (the health checker's restart mints
+// its own), and so is one a delete has stopped.
+func (m *Manager) RefreshToken(ctx context.Context, deployment *deployments.Deployment) error {
+	if !m.useSystemd {
+		return nil
+	}
+	unit, err := m.unitName(deployment)
+	if errors.Is(err, ErrServedNotRun) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	serviceName := m.getServiceName(deployment)
+	if m.isStopped(unitInstance(serviceName)) {
+		return fmt.Errorf("no credential for %s: %w", serviceName, ErrStopped)
+	}
+	out, err := m.querySystemctl(ctx, "show", unit, "--property="+propActiveState)
+	if err != nil {
+		return fmt.Errorf("read the state of %s before refreshing its credential: %w", unit, err)
+	}
+	switch parseSystemctlShow(string(out))[propActiveState] {
+	case "active", "activating", "reloading":
+	default:
+		return nil
+	}
+	mint := m.refreshToken
+	if mint == nil {
+		mint = m.mintWorkloadToken
+	}
+	return m.stageWorkloadToken(ctx, deployment, serviceName, mint)
+}
+
+// markStopped and clearStopped record whether Stop has taken instance down.
+func (m *Manager) markStopped(instance string) {
+	m.stagedMu.Lock()
+	defer m.stagedMu.Unlock()
+	if m.stopped == nil {
+		m.stopped = map[string]struct{}{}
+	}
+	m.stopped[instance] = struct{}{}
+}
+
+func (m *Manager) clearStopped(instance string) {
+	m.stagedMu.Lock()
+	defer m.stagedMu.Unlock()
+	delete(m.stopped, instance)
+}
+
+func (m *Manager) isStopped(instance string) bool {
+	m.stagedMu.Lock()
+	defer m.stagedMu.Unlock()
+	_, ok := m.stopped[instance]
+	return ok
 }
 
 // writeEnvFile stores the deployment's environment where only root can read it.
@@ -252,6 +404,9 @@ func (m *Manager) removeSecrets(serviceName string) error {
 	if err := m.stager.Clear(unitInstance(serviceName)); err != nil {
 		return fmt.Errorf("remove the environment and credential of %s: %w", serviceName, err)
 	}
+	m.stagedMu.Lock()
+	delete(m.stagedUntil, unitInstance(serviceName))
+	m.stagedMu.Unlock()
 	return nil
 }
 
@@ -282,6 +437,8 @@ func (m *Manager) Start(ctx context.Context, deployment *deployments.Deployment,
 	if err != nil {
 		return err
 	}
+	// A start is a new deployment of the instance, whatever stopped it before.
+	m.clearStopped(unitInstance(serviceName))
 
 	// The environment file is the only thing the gateway writes. The unit is a
 	// template installed at install time, because a gateway that is not root
@@ -417,8 +574,13 @@ func (m *Manager) Stop(ctx context.Context, deployment *deployments.Deployment) 
 	// helper refused freed the deployment's port while its unit kept running
 	// on it, and the next deployment given the port crash-looped behind it.
 	var errs []error
+	// Marked before the stop and kept after it: from here until a Start, no
+	// credential is minted for this instance. A stop that failed leaves the
+	// unit running, so it is not marked.
+	m.markStopped(unitInstance(serviceName))
 	stopErr := m.systemdStop(unit)
 	if stopErr != nil {
+		m.clearStopped(unitInstance(serviceName))
 		errs = append(errs, fmt.Errorf("stop %s: %w", unit, stopErr))
 	}
 	if err := m.systemdDisable(unit); err != nil {
@@ -529,6 +691,22 @@ func (m *Manager) Restart(ctx context.Context, deployment *deployments.Deploymen
 	unit, err := m.unitName(deployment)
 	if err != nil {
 		return err
+	}
+	// The unit reads its credential at every start, so a restart that left the
+	// staged file alone would start the app on the token minted at its last
+	// Start: one that may have expired (the app renews with the token it holds,
+	// so an expired one is an identity it cannot get back), and one holding the
+	// grant of that day, which a redeploy is documented to replace at once.
+	if err := m.writeWorkloadToken(ctx, deployment, serviceName); err != nil {
+		// A deployment that is gone or stopped is never restarted. For any other failure
+		// (the registry is down) a restart may still run on the staged token
+		// while it has life left: refusing would leave a crashed app down for
+		// as long as the registry is, over a credential that works.
+		if errors.Is(err, ErrDeploymentGone) || errors.Is(err, ErrStopped) || !m.stagedTokenUsable(unitInstance(serviceName)) {
+			return err
+		}
+		m.logger.Warn("Could not mint a fresh credential; restarting on the one already staged",
+			zap.String("service", serviceName), zap.Error(err))
 	}
 	return m.systemdRestart(unit)
 }

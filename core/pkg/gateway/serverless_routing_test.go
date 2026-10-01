@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
@@ -390,5 +391,30 @@ func TestClusterServerlessRouting_aProxiedRequestWithoutABodyHasNoLength(t *test
 
 	if len(f.hits) != 1 || f.hits[0].contentLength != 0 {
 		t.Fatalf("hits %+v; want one request with ContentLength 0", f.hits)
+	}
+}
+
+// An app's workload token is a credential of its own namespace like any other:
+// naming another namespace's function, on the cluster gateway's direct-invoke
+// route or with ?namespace=, is refused before anything is proxied or run.
+func TestClusterServerlessRouting_aWorkloadOfAnotherNamespaceIsRefused(t *testing.T) {
+	f := newClusterGatewayFixture(t, "default")
+	token, _, err := f.g.authService.GenerateJWT("tenant-b", auth.WorkloadSubject("tenant-b", "web"), time.Minute, nil)
+	if err != nil {
+		t.Fatalf("GenerateJWT: %v", err)
+	}
+
+	for _, target := range []string{
+		"/v1/invoke/" + tenantNamespace + "/private",
+		"/v1/functions/private/invoke?namespace=" + tenantNamespace,
+	} {
+		r := httptest.NewRequest(http.MethodPost, target, nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		if rec := f.serve(r); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", target, rec.Code)
+		}
+	}
+	if len(f.hits) != 0 || f.local != 0 {
+		t.Errorf("a refused request was proxied %d / served %d times", len(f.hits), f.local)
 	}
 }

@@ -131,6 +131,16 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		// retryable bit from defaultRetryableFor(code), so a cold-WASM
 		// FUNCTION_UNAVAILABLE comes back retryable automatically.
 		statusCode, errCode, _ := classifyInvokeError(err)
+		// A caller the gateway knows and the invoker refused has been
+		// authenticated: signing in again would change nothing, so it is told
+		// it may not (403), and 401 stays for a caller with no identity.
+		// getWalletFromRequest answers a verified wallet, else the namespace
+		// the credential belongs to (an API key, a workload), and "" only when
+		// the request carries no credential at all.
+		identified := callerWallet != ""
+		if errCode == httputil.ErrCodeUnauthorized && identified {
+			statusCode, errCode = http.StatusForbidden, httputil.ErrCodeForbidden
+		}
 
 		// Pick the most informative message: function-side resp.Error
 		// (if set) is more actionable than the wrapping err.Error().

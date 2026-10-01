@@ -83,3 +83,43 @@ func redeployAs(t *testing.T, tn *realistic.Tenant, u, role, version string) {
 		return false, fmt.Errorf("%d nodes run it", n)
 	})
 }
+
+// TestReferenceNodeAPI_grantFollowsARunningAppWithoutARedeploy: the app's
+// invoke authorization is its grant now, not the scopes its token was minted
+// with. An app deployed before it is granted anything is refused (403, it is
+// known), the runtime grant reaches it on every node within the grant cache's
+// seconds with no redeploy and no renewal, and taking it down to reader refuses
+// it again the same way (docs/AUTH.md "A workload's identity").
+func TestReferenceNodeAPI_grantFollowsARunningAppWithoutARedeploy(t *testing.T) {
+	t.Parallel()
+	realistic.RequireTinyGo(t)
+	requireNPM(t)
+	tn := realistic.NewTenant(t)
+	requireNodeRuntime(t, tn.F)
+	tn.DeployFunction(t, todoStoreFn, "store", false)
+	u := tn.Deploy(t, "nodejs", realistic.ServerApp(t, tn.F, realistic.AppNodeAPI, "api-v1"), todoApp,
+		"--env", "STORE_FN="+todoStoreFn, "--env", "APP_VERSION=api-v1")
+	tn.EveryNodeServes(t, u, "/health", "ok")
+	requireReplicas(t, tn, "node", todoApp)
+	app := tn.App(u)
+	usr := realistic.NewUsers(t, tn, roleRuntime, 1)[0]
+
+	everyNodeAnswers := func(want int, why string) {
+		t.Helper()
+		for _, node := range tn.F.State.Nodes {
+			pinned := app.PinTo(node.PublicIP)
+			eventually.Require(t, pollEvery, realistic.StartBudget, node.Name+": "+why, func() (bool, error) {
+				status, _ := postJSON(t.Context(), pinned, "/api/todos", usr.Token(), map[string]string{"text": why}, nil)
+				if status != want {
+					return false, fmt.Errorf("HTTP %d, want %d", status, want)
+				}
+				return true, nil
+			})
+		}
+	}
+	everyNodeAnswers(http.StatusForbidden, "an app with no grant is refused")
+	tn.Grant(t, todoApp, roleRuntime)
+	everyNodeAnswers(http.StatusCreated, "a granted app stores")
+	tn.Grant(t, todoApp, roleReader)
+	everyNodeAnswers(http.StatusForbidden, "a reader app is refused again")
+}

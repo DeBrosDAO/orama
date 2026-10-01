@@ -103,6 +103,9 @@ type mockProcessManager struct {
 	restartErr   error
 	stopCalls    []string // deployment IDs
 	stopErr      error
+	// refreshCalls records namespace/name; refreshErrs fails the named ones.
+	refreshCalls []string
+	refreshErrs  map[string]error
 	// status/statusErr answer Status; an empty status reads as "active".
 	status    string
 	statusErr error
@@ -123,6 +126,16 @@ func (m *mockProcessManager) Restart(_ context.Context, dep *deployments.Deploym
 	m.restartCalls = append(m.restartCalls, dep.ID)
 	m.mu.Unlock()
 	return m.restartErr
+}
+
+func (m *mockProcessManager) RefreshToken(_ context.Context, dep *deployments.Deployment) error {
+	m.mu.Lock()
+	m.refreshCalls = append(m.refreshCalls, dep.Namespace+"/"+dep.Name)
+	m.mu.Unlock()
+	if err, ok := m.refreshErrs[dep.Name]; ok {
+		return err
+	}
+	return nil
 }
 
 func (m *mockProcessManager) Stop(_ context.Context, dep *deployments.Deployment) error {

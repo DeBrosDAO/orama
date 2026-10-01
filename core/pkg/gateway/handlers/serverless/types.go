@@ -212,6 +212,15 @@ func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
+			// A deployed app holds what its grant says now. Its token carries
+			// the scopes of the grant at the moment its unit started, and an
+			// app is started before its owner can grant it anything, so the
+			// claim is the one answer that is wrong for as long as the app
+			// has not renewed (docs/AUTH.md, "A workload's identity").
+			if auth.IsWorkloadSubject(sub) {
+				grant, _ := ctx.Value(ctxkeys.Grant).(*auth.Grant)
+				return grant != nil && grant.Scopes().Has(auth.ScopeInvoke)
+			}
 			if auth.IsAPIKeySubject(sub) {
 				if claims.Custom != nil {
 					if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).Has(auth.ScopeInvoke) {

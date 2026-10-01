@@ -23,6 +23,10 @@ func TestIsLongRunningProxyPath(t *testing.T) {
 		{"/v1/functions/abc/invoke", true},
 		{"/v1/functions", true}, // deploy: WASM upload + IPFS pin
 		{"/v1/functions/abc/ws", true},
+		{"/v1/namespace/backup", true},  // a database of up to 256 MiB, sealed
+		{"/v1/namespace/restore", true}, // the same, uploaded
+		{"/v1/rqlite/export", true},
+		{"/v1/rqlite/import", true},
 
 		// Fast paths — must default to the 30s budget.
 		{"/v1/health", false},
@@ -30,6 +34,8 @@ func TestIsLongRunningProxyPath(t *testing.T) {
 		{"/v1/pubsub/publish", false}, // single-publish, fast
 		{"/v1/functions/abc/logs", false},
 		{"/v1/db/query", false},
+		{"/v1/namespace/restore-key", false},
+		{"/v1/namespace/status", false},
 		{"", false},
 	}
 	for _, c := range cases {

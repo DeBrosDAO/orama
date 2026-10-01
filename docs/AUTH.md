@@ -960,11 +960,39 @@ It lasts an hour and the app renews it at `POST /v1/auth/renew` with the token i
 is holding — so nothing long-lived is on the node, and nothing privileged has to
 rewrite anything while the app runs.
 
-Grants are resolved when the token is minted, not baked in at deploy: taking one
-away reaches a running app on its next renewal. The gateway also reads the app's
-grant on the routes that resolve one, under the app principal, so a selector on
-it (`"resource": "fn:name=checkout"` in `POST /v1/deployments/grants`) narrows the app
-as it narrows a wallet, within the grant cache's ten seconds. An app nobody has granted
+A new token is minted every time the gateway starts or restarts the unit — a
+deploy, an environment change, a redeploy, a health-check restart — and, because
+systemd also starts the unit on its own (a crash restart, a reboot) from whatever
+token is staged, the node's gateway stages a fresh one for every running
+deployment on the node at start and every 20 minutes, without restarting
+anything. A staged token therefore has at least 40 minutes of its hour left. Two
+limits follow: a gateway that is down for longer than that leaves a unit that
+systemd starts meanwhile with an expired token (it cannot renew it; a redeploy or
+`orama app env set` mints a new one), and a gateway-driven restart while the
+registry is unreachable runs on the staged token only if it has more than five
+minutes left, and is refused otherwise — including, after a gateway restart and
+until its first sweep has succeeded (the sweep retries until the deployments can
+be listed), for want of a known staged token (systemd's own `Restart=always`
+still restarts a crash). A mint, a restart and a refresh are all
+refused for a deployment whose row is gone, and for one the gateway has stopped
+for a delete (until a deploy of the same name starts it again), so a restart or
+a refresh that races a delete neither recreates its principal nor issues it a
+token. The refresh is paced (50 ms between deployments), skips a unit that is not
+running, and reads the registry without writing to it.
+
+The token's scopes are the grant at the moment it was minted. What
+the app may do is not read from them. The gateway reads the app's grant on every
+route, under the app principal, so a grant given or taken away after the token was
+minted applies within the grant cache's ten seconds on every node — including
+invoking a function, which an app deployed before its owner granted it anything
+needs from its first request — and a selector on it (`"resource":
+"fn:name=checkout"` in `POST /v1/deployments/grants`) narrows the app as it narrows a
+wallet. An app the grant does not cover is refused `403 FORBIDDEN` when it invokes a
+function; `401` is for a caller with no identity. An app can only be granted
+`runtime` or `reader`, so it is never an admin on invoke (the admin-only
+`internal` functions stay closed to it). Its token is also good in its own namespace
+only: naming another namespace's function on the cluster gateway is refused `403`
+before anything is run. An app nobody has granted
 anything to holds a token that reaches nothing, which is the only safe default —
 the alternative is every app starting with the namespace's whole data plane,
 which is the permanent key this replaces wearing a different hat.

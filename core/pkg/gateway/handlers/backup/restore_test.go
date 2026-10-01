@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -285,3 +288,40 @@ func TestNew_requires_every_dependency(t *testing.T) {
 		}
 	}
 }
+
+// unreadable fails the test if the handler reads any of it.
+type unreadable struct{ t *testing.T }
+
+func (u unreadable) Read([]byte) (int, error) {
+	u.t.Helper()
+	u.t.Error("the handler read the body of a request announced as over the limit")
+	return 0, errors.New("unread")
+}
+
+func TestRestoreHandler_announced_oversize_is_refused_unread(t *testing.T) {
+	dst := newRig(t, destRoot, testNamespace, true)
+	r := httptest.NewRequest(http.MethodPost, "/", unreadable{t})
+	r.ContentLength = int64(MaxRestoreBytes) + 1
+	rec := httptest.NewRecorder()
+	dst.h.RestoreHandler(rec, r)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	assertNothingWritten(t, dst)
+}
+
+func TestRestoreHandler_unannounced_oversize_is_refused_while_reading(t *testing.T) {
+	dst := newRig(t, destRoot, testNamespace, true)
+	r := httptest.NewRequest(http.MethodPost, "/", io.LimitReader(zeroReader{}, int64(MaxRestoreBytes)+1))
+	r.ContentLength = -1
+	rec := httptest.NewRecorder()
+	dst.h.RestoreHandler(rec, r)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	assertNothingWritten(t, dst)
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }

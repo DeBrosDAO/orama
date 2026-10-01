@@ -544,11 +544,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		if deps.globalSQLDB != nil {
 			gw.webrtcHandlers.SetSFUDirectory(newRegistrySFUDirectory(deps.globalSQLDB, sfuDirectoryTTL))
 		}
-		// TURNS (:5349) must advertise the single-label host so the *.<base>
-		// wildcard cert validates it in browsers; UDP/TCP keep the legacy host.
-		if tlsHost := turn.TLSHostFromLegacyTURNHost(cfg.TURNDomain); tlsHost != "" {
-			gw.webrtcHandlers.SetTURNSTLSDomain(tlsHost)
-		}
+		applyTURNHosts(gw.webrtcHandlers, cfg)
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
 			zap.Int("sfu_port", cfg.SFUPort),
 			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),
@@ -709,13 +705,8 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// What a deployment runs as. It used to run as whatever key somebody
 		// had pasted into its image; it is a principal of its own now, and the
 		// credential it gets is short-lived and renews itself.
-		gw.processManager.SetWorkloadTokenMinter(func(ctx context.Context, namespace, name string) (string, error) {
-			if err := deps.AuthService.EnsureWorkloadPrincipal(ctx, namespace, name); err != nil {
-				return "", err
-			}
-			token, _, err := deps.AuthService.MintWorkloadToken(ctx, namespace, name)
-			return token, err
-		})
+		gw.processManager.SetWorkloadTokenMinter(workloadTokenMinter(deps.AuthService, deploymentDB))
+		gw.processManager.SetWorkloadTokenRefresher(workloadTokenRefresher(deps.AuthService))
 
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deploymentDB,
@@ -1085,6 +1076,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 // — or the test passes while live behavior diverges.
 func shouldRegisterWebRTCRoutes(cfg *Config) bool {
 	return cfg.SFUPort > 0
+}
+
+// applyTURNHosts sets the hosts the TURN credentials advertise beyond the
+// plain turn: ones. TURNS (:5349) must use the single-label host so the
+// *.<base> wildcard cert validates it in browsers; UDP/TCP keep the legacy
+// host. The stealth host (turns:<host>:443) is advertised only when the
+// namespace has stealth enabled, which its gateway config carries.
+func applyTURNHosts(h *webrtchandlers.WebRTCHandlers, cfg *Config) {
+	if tlsHost := turn.TLSHostFromLegacyTURNHost(cfg.TURNDomain); tlsHost != "" {
+		h.SetTURNSTLSDomain(tlsHost)
+	}
+	h.SetStealthCDNDomain(cfg.StealthCDNDomain)
 }
 
 // shouldServeTURNCredentials gates ONLY the /v1/webrtc/turn/credentials

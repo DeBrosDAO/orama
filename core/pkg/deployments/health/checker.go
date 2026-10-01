@@ -32,6 +32,8 @@ const (
 type ProcessManager interface {
 	Restart(ctx context.Context, deployment *deployments.Deployment) error
 	Stop(ctx context.Context, deployment *deployments.Deployment) error
+	// RefreshToken stages a fresh workload credential without restarting.
+	RefreshToken(ctx context.Context, deployment *deployments.Deployment) error
 	// Status is the state of the deployment's own unit ("active" when it runs).
 	Status(ctx context.Context, deployment *deployments.Deployment) (string, error)
 }
@@ -91,6 +93,7 @@ type HealthChecker struct {
 	orphanSeen       map[string]time.Time
 	orphanStateSeen  map[string]time.Time // leftover state directories, likewise
 	now              func() time.Time     // nil means time.Now; tests set it
+	refreshSpacing   time.Duration        // pause between two token refreshes of a sweep
 }
 
 // NewHealthChecker creates a new health checker.
@@ -102,6 +105,7 @@ func NewHealthChecker(db Database, logger *zap.Logger, nodeID string, pm Process
 		nodeID:         nodeID,
 		processManager: pm,
 		states:         make(map[string]*replicaState),
+		refreshSpacing: tokenRefreshSpacing,
 	}
 }
 
@@ -117,6 +121,7 @@ func (hc *HealthChecker) SetReconciler(rqliteDSN string, rc ReplicaReconciler, r
 //  1. Every 30s: probe local replicas
 //  2. Every 5m: (leader-only) reconcile under-replicated deployments
 //  3. Every 2m, if enabled: stop runtime units no deployment owns
+//  4. Every 20m: stage a fresh workload token for every local deployment
 func (hc *HealthChecker) Start(ctx context.Context) error {
 	hc.logger.Info("Starting health checker",
 		zap.Int("workers", hc.workers),
@@ -130,6 +135,7 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 	if hc.orphanUnits != nil {
 		go hc.runOrphanSweeps(ctx)
 	}
+	go hc.runTokenRefresh(ctx)
 
 	for {
 		select {

@@ -101,6 +101,11 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 
 // readRestore reads and validates the body, writing the refusal if it fails.
 func (h *Handler) readRestore(w http.ResponseWriter, r *http.Request) (nsbackup.RestoreRequest, bool) {
+	// An announced size over the limit is refused without reading any of it.
+	if r.ContentLength > int64(MaxRestoreBytes) {
+		httputil.WriteError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("restore request is over %d bytes", MaxRestoreBytes))
+		return nsbackup.RestoreRequest{}, false
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, int64(MaxRestoreBytes)))
 	if err != nil {
 		var tooBig *http.MaxBytesError

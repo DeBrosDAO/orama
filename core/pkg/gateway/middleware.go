@@ -33,6 +33,8 @@ import (
 //   - /v1/functions/.../invoke and /v1/invoke/...        — up to 300s per fn
 //   - /v1/functions/.../ws                                — long-lived WS
 //   - /v1/storage/upload, /v1/storage/pin                 — IPFS add can be slow
+//   - /v1/namespace/backup, /v1/namespace/restore         — a database of up to 256 MiB, sealed or applied
+//   - /v1/rqlite/export, /v1/rqlite/import                — the whole database, streamed
 //
 // Adding a path here is preferable to bumping the global timeout: each
 // path's bound is documented in one grep-able place.
@@ -40,6 +42,10 @@ func isLongRunningProxyPath(p string) bool {
 	switch {
 	case strings.HasPrefix(p, "/v1/storage/upload"),
 		strings.HasPrefix(p, "/v1/storage/pin"),
+		p == "/v1/namespace/backup",
+		p == "/v1/namespace/restore",
+		p == "/v1/rqlite/export",
+		p == "/v1/rqlite/import",
 		// Deploys reach a namespace gateway through this proxy since bugboard
 		// #427, and the handler itself allows the upload a minute.
 		p == "/v1/functions",
@@ -1806,6 +1812,10 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		if cb != nil {
 			cb.RecordFailure()
 		}
+		return
+	}
+
+	if refuseOversizedProxyBody(w, r) {
 		return
 	}
 

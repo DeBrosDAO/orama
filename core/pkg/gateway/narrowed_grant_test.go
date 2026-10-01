@@ -372,3 +372,41 @@ func TestForwardedWorkload_withNoGrantReachesNothing(t *testing.T) {
 		t.Errorf("an ungranted workload wrote the cache: status %d, want 403", status)
 	}
 }
+
+// An app is started before its owner can grant it anything, so its token
+// carries no invoke scope for as long as it has not renewed. The invoker asks
+// the grant, which has to reach it even when it names no function: an app
+// granted runtime was refused every invoke until its first renewal.
+func TestForwardedWorkload_theInvokeCarriesItsGrantEvenWithoutASelector(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.principalType = auth.PrincipalApp
+	r := hop(t, g, http.MethodPost, "/v1/functions/store/invoke", hopNamespace, auth.WorkloadSubject(hopNamespace, "web"))
+
+	var carried *auth.Grant
+	rec := httptest.NewRecorder()
+	g.internalAuthMiddleware(g.routePolicyMiddleware(g.authMiddleware(g.authorizationMiddleware(
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			carried, _ = r.Context().Value(ctxKeyGrant).(*auth.Grant)
+		}))))).ServeHTTP(rec, r)
+
+	if carried == nil || !carried.Scopes().Has(auth.ScopeInvoke) {
+		t.Fatalf("the invoke did not carry the workload's runtime grant: %+v (status %d)", carried, rec.Code)
+	}
+}
+
+// The same wallet with no selector is left as it was: its invoke is the
+// invoker's decision and nothing was resolved for it.
+func TestForwardedInvoke_aWalletWithoutASelectorCarriesNoGrant(t *testing.T) {
+	g, _ := namespaceGatewayForHops(t, "runtime")
+	r := hop(t, g, http.MethodPost, "/v1/functions/store/invoke", hopNamespace, hopWallet)
+
+	var carried *auth.Grant
+	g.internalAuthMiddleware(g.routePolicyMiddleware(g.authMiddleware(g.authorizationMiddleware(
+		http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			carried, _ = r.Context().Value(ctxKeyGrant).(*auth.Grant)
+		}))))).ServeHTTP(httptest.NewRecorder(), r)
+
+	if carried != nil {
+		t.Errorf("a wallet with no selector carried a grant: %+v", carried)
+	}
+}

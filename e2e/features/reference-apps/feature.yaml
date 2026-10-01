@@ -65,6 +65,7 @@ covers:
   claims:
     - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app renews its workload token from inside its sandbox and the renewed token is accepted"
     - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app reaches nothing it was not granted; a grant change reaches a running app on redeploy"
+    - "docs/AUTH.md#a-workloads-identity: an app's grant applies to a running app on every node without a redeploy, and an app the grant does not cover is refused 403 when it invokes a private function"
     - "docs/DEPLOYMENT_GUIDE.md#updating-a-deployment: an update replaces the app on its home node and its replica"
     - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: every node serves every app by name"
     - "docs/SERVERLESS.md#pubsub-triggers: a publish invokes the triggered function, which can push to a user's devices"

@@ -69,10 +69,11 @@ func TestInvoke_accessMatrix(t *testing.T) {
 	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "invoke-only")); r.Status != http.StatusOK {
 		t.Errorf("invoke-only key: %d %.200s", r.Status, r.Body)
 	}
-	// A storage-only key lacks the invoke grant: the invoker's ErrUnauthorized
-	// (serverless/invoke.go canInvokeFn, handler classifyInvokeError).
-	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "storage")); r.Status != http.StatusUnauthorized {
-		t.Errorf("a storage-only key invoking a private function: want 401, got %d %.200s", r.Status, r.Body)
+	// A storage-only key lacks the invoke grant: an identified caller that is
+	// refused gets 403 (serverless/invoke.go canInvokeFn, handler
+	// classifyInvokeError); 401 is for a caller with no identity.
+	if r := invokeKey(t, fx, "e2e-private", mintKey(t, fx, "storage")); r.Status != http.StatusForbidden {
+		t.Errorf("a storage-only key invoking a private function: want 403, got %d %.200s", r.Status, r.Body)
 	}
 	for name, bearer := range map[string]string{"garbage": "x.y.z", "expired-looking": strings.Repeat("a", 40)} {
 		if r := invoke(t, fx.c, "e2e-private", bearer, map[string]any{"op": "echo"}); r.Status != http.StatusUnauthorized {

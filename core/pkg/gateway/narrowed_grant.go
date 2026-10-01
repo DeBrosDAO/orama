@@ -178,9 +178,18 @@ func (g *Gateway) narrowOpenRoute(w http.ResponseWriter, r *http.Request) (*http
 		g.refuseUnreadableGrant(w, err)
 		return nil, false
 	}
-	if grant == nil || strings.TrimSpace(grant.Resource) == "" {
+	// A workload's grant is carried whatever it says: the invoker reads the
+	// invoke grant off it, because the scopes the token was minted with are the
+	// grant of the moment the unit started (see getCallerHasInvokeFromRequest).
+	if grant == nil || (strings.TrimSpace(grant.Resource) == "" && !auth.IsWorkloadSubject(claims.Sub)) {
 		return r, true
 	}
 	r = markGrant(r, grant)
+	// Without a selector the grant narrows nothing. Permissions are set from a
+	// grant only when it narrows, or a reader app would be refused a public
+	// function by the resource check that follows.
+	if strings.TrimSpace(grant.Resource) == "" {
+		return r, true
+	}
 	return r.WithContext(context.WithValue(r.Context(), ctxkeys.Permissions, g.callerPermissions(r))), true
 }
