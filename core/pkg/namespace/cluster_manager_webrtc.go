@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -311,35 +312,37 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 		return fmt.Errorf("failed to mark WebRTC disabled for namespace %s before stopping its units; nothing was stopped: %w", namespaceName, err)
 	}
 
-	// 6. Tear down SFU on all nodes: stopped AND disabled with its env/config
-	// removed. Stopping alone left the unit enabled with its env file, and the
-	// next `orama node upgrade` restarts every unit it finds — a namespace that
-	// turned WebRTC off got its SFU back. A node that cannot be reached is
+	// 6. Tear down the SFU on every node (stopped AND disabled with its env/config
+	// removed — stopping alone left the unit enabled, and the next
+	// `orama node upgrade` restarts every unit it finds: a namespace that turned
+	// WebRTC off got its SFU back) and, since TURN is the shared host server
+	// (bugboard #283) that this namespace shares with every other one on the
+	// host, only the pre-#283 per-namespace TURN unit an upgraded node may still
+	// carry: the namespace leaves the shared server's tenant list in step 9b,
+	// once its allocation and WebRTC config are gone. All units are torn down
+	// concurrently so the request lasts as long as the slowest drain, not the
+	// sum of them (teardownWebRTCConcurrently). A node that cannot be reached is
 	// recorded for retry (sendStopRequest) and reported below.
+	tasks := make([]webrtcTeardownTask, 0, len(clusterNodes)+len(turnBlocks))
+	for _, node := range clusterNodes {
+		tasks = append(tasks, webrtcTeardownTask{NodeID: node.NodeID, NodeIP: node.InternalIP, ServiceType: "sfu", Action: teardownSFUAction})
+	}
+	for _, block := range turnBlocks {
+		tasks = append(tasks, webrtcTeardownTask{NodeID: block.NodeID, NodeIP: cm.getNodeIP(clusterNodes, block.NodeID), ServiceType: "turn", Action: teardownTURNAction})
+	}
 	var cleanupErrs []error
 	var retained []webrtcUnit
-	for _, node := range clusterNodes {
-		if err := cm.teardownWebRTCOnNode(ctx, node.NodeID, node.InternalIP, namespaceName, cluster.ID, teardownSFUAction); err != nil {
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("SFU on node %s: %w", node.NodeID, err))
-			retained = append(retained, webrtcUnit{NodeID: node.NodeID, ServiceType: "sfu"})
+	for _, res := range cm.teardownWebRTCConcurrently(ctx, namespaceName, cluster.ID, tasks) {
+		if res.Err != nil {
+			cleanupErrs = append(cleanupErrs, res.Err)
+			retained = append(retained, webrtcUnit{NodeID: res.Task.NodeID, ServiceType: res.Task.ServiceType})
 			continue
 		}
-		cm.logEvent(ctx, cluster.ID, EventSFUStopped, node.NodeID, "SFU torn down", nil)
-	}
-
-	// 7. TURN. The relay is the shared host server (bugboard #283), which this
-	// namespace shares with every other one on the host, so it is NOT stopped
-	// here: the namespace leaves its tenant list in step 9b, once the allocation
-	// and WebRTC config are gone. Only the pre-#283 per-namespace unit, which
-	// an upgraded node may still carry, is torn down.
-	for _, block := range turnBlocks {
-		nodeIP := cm.getNodeIP(clusterNodes, block.NodeID)
-		if err := cm.teardownWebRTCOnNode(ctx, block.NodeID, nodeIP, namespaceName, cluster.ID, teardownTURNAction); err != nil {
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("TURN on node %s: %w", block.NodeID, err))
-			retained = append(retained, webrtcUnit{NodeID: block.NodeID, ServiceType: "turn"})
-			continue
+		if res.Task.ServiceType == "turn" {
+			cm.logEvent(ctx, cluster.ID, EventTURNStopped, res.Task.NodeID, "TURN unit torn down", nil)
+		} else {
+			cm.logEvent(ctx, cluster.ID, EventSFUStopped, res.Task.NodeID, "SFU torn down", nil)
 		}
-		cm.logEvent(ctx, cluster.ID, EventTURNStopped, block.NodeID, "TURN unit torn down", nil)
 	}
 
 	// 8. Release the WebRTC ports of every unit that is gone. A unit that could
@@ -780,6 +783,9 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 		}
 	}
 
+	// The nodes' gateways are independent, and restarting them one after another
+	// added a restart per node to the disable/enable request.
+	var wg sync.WaitGroup
 	for _, node := range nodes {
 		pb, ok := portBlocks[node.NodeID]
 		if !ok {
@@ -821,21 +827,26 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			SecretsEncryptionKey: cm.secretsEncryptionKey,
 		}
 
-		if node.NodeID == cm.localNodeID {
-			if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
-				cm.logger.Error("Failed to restart local gateway with WebRTC config",
-					zap.String("namespace", cluster.NamespaceName),
-					zap.String("node_id", node.NodeID),
-					zap.Error(err))
-			} else {
-				cm.logger.Info("Restarted local gateway with WebRTC config",
-					zap.String("namespace", cluster.NamespaceName),
-					zap.Bool("webrtc_enabled", webrtcEnabled))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if node.NodeID == cm.localNodeID {
+				if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
+					cm.logger.Error("Failed to restart local gateway with WebRTC config",
+						zap.String("namespace", cluster.NamespaceName),
+						zap.String("node_id", node.NodeID),
+						zap.Error(err))
+				} else {
+					cm.logger.Info("Restarted local gateway with WebRTC config",
+						zap.String("namespace", cluster.NamespaceName),
+						zap.Bool("webrtc_enabled", webrtcEnabled))
+				}
+				return
 			}
-		} else {
 			cm.restartGatewayRemote(ctx, node.InternalIP, cfg)
-		}
+		}()
 	}
+	wg.Wait()
 }
 
 // restartGatewayRemote sends a restart-gateway request to a remote node.
