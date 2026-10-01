@@ -48,3 +48,18 @@ func TestRunSSHStreaming_withStdinFeedsTheCommand(t *testing.T) {
 		t.Errorf("the secret is in ssh's argv:\n%s", args)
 	}
 }
+
+// TestBaseSSHOptions_aDeadSessionFails: a push hung for an hour on a session
+// that had died without either end noticing; every scp and ssh call now sends
+// keepalives and gives up when a minute of them goes unanswered.
+func TestBaseSSHOptions_aDeadSessionFails(t *testing.T) {
+	opts := strings.Join(baseSSHOptions(), " ")
+	for _, want := range []string{"ConnectTimeout=", "ServerAliveInterval=", "ServerAliveCountMax=", "IdentitiesOnly=yes"} {
+		if !strings.Contains(opts, want) {
+			t.Errorf("options %q lack %s", opts, want)
+		}
+	}
+	if sshServerAliveInterval*sshServerAliveCountMax > 120 {
+		t.Errorf("a dead session is detected after %ds; keep it within two minutes", sshServerAliveInterval*sshServerAliveCountMax)
+	}
+}

@@ -45,7 +45,7 @@ func UploadFile(node inspector.Node, localPath, remotePath string, opts ...SSHOp
 
 	dest := fmt.Sprintf("%s@%s:%s", node.User, node.Host, remotePath)
 
-	args := []string{"-o", "ConnectTimeout=10", "-o", "IdentitiesOnly=yes", "-i", node.SSHKey}
+	args := append(baseSSHOptions(), "-i", node.SSHKey)
 	if cfg.noHostKeyCheck {
 		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
 	} else {
@@ -76,7 +76,7 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 		o(&cfg)
 	}
 
-	args := []string{"-o", "ConnectTimeout=10", "-o", "IdentitiesOnly=yes", "-i", node.SSHKey}
+	args := append(baseSSHOptions(), "-i", node.SSHKey)
 	if cfg.noHostKeyCheck {
 		args = append([]string{"-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"}, args...)
 	} else {
@@ -116,4 +116,24 @@ func RunSSHOutput(node inspector.Node, command string, opts ...SSHOption) (strin
 		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, res.Stderr)
 	}
 	return res.Stdout, nil
+}
+
+// Liveness of an SSH session to a node. Without them a connection that died
+// silently (the node overloaded, a NAT dropping the flow) kept scp and ssh
+// waiting forever, and a push or rollout hung on that node with no error.
+const (
+	sshConnectTimeoutSec   = 10
+	sshServerAliveInterval = 15
+	sshServerAliveCountMax = 4
+)
+
+// baseSSHOptions is every scp and ssh call's connect timeout, identity rule
+// and keepalives: a session that answers no keepalive for a minute fails.
+func baseSSHOptions() []string {
+	return []string{
+		"-o", fmt.Sprintf("ConnectTimeout=%d", sshConnectTimeoutSec),
+		"-o", fmt.Sprintf("ServerAliveInterval=%d", sshServerAliveInterval),
+		"-o", fmt.Sprintf("ServerAliveCountMax=%d", sshServerAliveCountMax),
+		"-o", "IdentitiesOnly=yes",
+	}
 }
