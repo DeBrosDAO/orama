@@ -50,12 +50,12 @@ echo "$SEP"
 `, TorUnit, constants.TorSOCKSPort, TorBootstrapUnknown)
 }
 
-func collectTor(ctx context.Context, node Node) *TorData {
+func collectTor(ctx context.Context, node Node) (*TorData, error) {
 	res := RunSSH(ctx, node, torCollectScript())
-	if !res.OK() && res.Stdout == "" {
-		return nil
+	if err := sshOutputError(res); err != nil {
+		return nil, err
 	}
-	return parseTorOutput(res.Stdout)
+	return parseTorOutput(res.Stdout), nil
 }
 
 func parseTorOutput(stdout string) *TorData {

@@ -15,12 +15,13 @@ import (
 // unit state over one SSH session. The node report on the machine does the
 // same checks and also verifies the CometBFT node key; this path does not
 // have that key, so a process that bound the loopback port can answer as the chain.
-func collectGlobalNode(ctx context.Context, node Node) (*report.ChainReport, *report.GlobalReport) {
+func collectGlobalNode(ctx context.Context, node Node) (*report.ChainReport, *report.GlobalReport, error) {
 	res := RunSSH(ctx, node, globalCollectScript())
-	if !res.OK() && res.Stdout == "" {
-		return nil, nil
+	if err := sshOutputError(res); err != nil {
+		return nil, nil, err
 	}
-	return parseGlobalCollect(res.Stdout, time.Now())
+	chain, global := parseGlobalCollect(res.Stdout, time.Now())
+	return chain, global, nil
 }
 
 // chainCurlFailed is what the collection script prints in a chain section when the request failed.

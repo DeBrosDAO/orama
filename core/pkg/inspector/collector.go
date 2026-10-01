@@ -36,7 +36,13 @@ type NodeData struct {
 	Chain      *report.ChainReport
 	Global     *report.GlobalReport
 	Namespaces []NamespaceData // namespace instances on this node
-	Errors     []string        // collection errors for this node
+	Errors     []string        // collection errors for this node, one line each
+	// Unreachable is why no session to the node worked ("" when one did). When set
+	// nothing else was collected and every check on the node is replaced by one result.
+	Unreachable string
+	// Failed maps a subsystem to why its data could not be collected. A subsystem
+	// in here has nil data, never zero values that read as a dead service.
+	Failed map[string]string
 }
 
 // NamespaceData holds data for a single namespace on a node.
@@ -278,35 +284,62 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 		return false
 	}
 
+	// One cheap session first: a node that cannot be reached is one failure,
+	// not a dozen collectors each retrying and each reading nothing as zeros.
+	if err := probeNode(ctx, node); err != nil {
+		nd.markUnreachable(err)
+		return nd
+	}
+
 	if shouldCollect("rqlite") {
-		nd.RQLite = collectRQLite(ctx, node, verbose)
+		var err error
+		nd.RQLite, err = collectRQLite(ctx, node, verbose)
+		nd.recordFailure(SubsystemRQLite, err)
 	}
 	if shouldCollect("olric") {
-		nd.Olric = collectOlric(ctx, node)
+		var err error
+		nd.Olric, err = collectOlric(ctx, node)
+		nd.recordFailure(SubsystemOlric, err)
 	}
 	if shouldCollect("ipfs") {
-		nd.IPFS = collectIPFS(ctx, node)
+		var err error
+		nd.IPFS, err = collectIPFS(ctx, node)
+		nd.recordFailure(SubsystemIPFS, err)
 	}
 	if shouldCollect("dns") && node.IsNameserver() {
-		nd.DNS = collectDNS(ctx, node)
+		var err error
+		nd.DNS, err = collectDNS(ctx, node)
+		nd.recordFailure(SubsystemDNS, err)
 	}
 	if shouldCollect("wireguard") || shouldCollect("wg") {
-		nd.WireGuard = collectWireGuard(ctx, node)
+		var err error
+		nd.WireGuard, err = collectWireGuard(ctx, node)
+		nd.recordFailure(SubsystemWireGuard, err)
 	}
 	if shouldCollect("system") {
-		nd.System = collectSystem(ctx, node)
+		var err error
+		nd.System, err = collectSystem(ctx, node)
+		nd.recordFailure(SubsystemSystem, err)
 	}
 	if shouldCollect("network") {
-		nd.Network = collectNetwork(ctx, node, nd.WireGuard)
+		var err error
+		nd.Network, err = collectNetwork(ctx, node, nd.WireGuard)
+		nd.recordFailure(SubsystemNetwork, err)
 	}
 	if shouldCollect("tor") {
-		nd.Tor = collectTor(ctx, node)
+		var err error
+		nd.Tor, err = collectTor(ctx, node)
+		nd.recordFailure(SubsystemTor, err)
 	}
 	if shouldCollect("global") {
-		nd.Chain, nd.Global = collectGlobalNode(ctx, node)
+		var err error
+		nd.Chain, nd.Global, err = collectGlobalNode(ctx, node)
+		nd.recordFailure(SubsystemGlobal, err)
 	}
 	// Namespace collection — always collect if any subsystem is collected
-	nd.Namespaces = collectNamespaces(ctx, node)
+	var err error
+	nd.Namespaces, err = collectNamespaces(ctx, node)
+	nd.recordFailure(SubsystemNamespace, err)
 
 	return nd
 }
@@ -316,7 +349,7 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 const inspectorSudo = "sudo "
 
 // collectRQLite gathers RQLite data from a node via SSH.
-func collectRQLite(ctx context.Context, node Node, verbose bool) *RQLiteData {
+func collectRQLite(ctx context.Context, node Node, verbose bool) (*RQLiteData, error) {
 	data := &RQLiteData{}
 
 	// Collect all endpoints in a single SSH session for efficiency.
@@ -339,13 +372,9 @@ echo "$SEP"
 `
 
 	result := RunSSH(ctx, node, cmd)
-	if !result.OK() && result.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(result.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 5 {
-		return data
+	parts, err := splitSections(result, 5)
+	if err != nil {
+		return nil, err
 	}
 
 	data.StatusRaw = strings.TrimSpace(parts[1])
@@ -377,7 +406,7 @@ echo "$SEP"
 		data.StrongRead = strings.Contains(parts[5], "STRONG_OK")
 	}
 
-	return data
+	return data, nil
 }
 
 func parseRQLiteStatus(raw string) *RQLiteStatus {
@@ -563,7 +592,7 @@ func parseRQLiteDebugVars(raw string) *RQLiteDebugVars {
 
 // Placeholder collectors for Phase 2
 
-func collectOlric(ctx context.Context, node Node) *OlricData {
+func collectOlric(ctx context.Context, node Node) (*OlricData, error) {
 	data := &OlricData{}
 
 	cmd := `
@@ -584,13 +613,9 @@ echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 8 {
-		return data
+	parts, err := splitSections(res, 8)
+	if err != nil {
+		return nil, err
 	}
 
 	data.ServiceActive = strings.TrimSpace(parts[1]) == "active"
@@ -604,10 +629,10 @@ ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 	rssKB := parseIntDefault(strings.TrimSpace(parts[7]), 0)
 	data.ProcessMemMB = rssKB / 1024
 
-	return data
+	return data, nil
 }
 
-func collectIPFS(ctx context.Context, node Node) *IPFSData {
+func collectIPFS(ctx context.Context, node Node) (*IPFSData, error) {
 	data := &IPFSData{}
 
 	cmd := `
@@ -632,13 +657,9 @@ echo "$SEP"
 ` + ipfsKuboCurl("/api/v0/bootstrap/list") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 10 {
-		return data
+	parts, err := splitSections(res, 10)
+	if err != nil {
+		return nil, err
 	}
 
 	data.DaemonActive = strings.TrimSpace(parts[1]) == "active"
@@ -670,7 +691,7 @@ echo "$SEP"
 	bootstrapCount := parseIntDefault(strings.TrimSpace(parts[9]), -1)
 	data.BootstrapEmpty = bootstrapCount == 0
 
-	return data
+	return data, nil
 }
 
 // The units collectDNS asks about. The host units caddy.service and
@@ -722,7 +743,7 @@ echo "$SEP"
 command -v dig >/dev/null && echo yes || echo no
 `
 
-func collectDNS(ctx context.Context, node Node) *DNSData {
+func collectDNS(ctx context.Context, node Node) (*DNSData, error) {
 	data := &DNSData{
 		BaseTLSDaysLeft: -1,
 		WildTLSDaysLeft: -1,
@@ -731,13 +752,9 @@ func collectDNS(ctx context.Context, node Node) *DNSData {
 	// Get the domain from the node's role (e.g. "nameserver-ns1" -> we need the domain)
 	// We'll discover the domain from Corefile
 	res := RunSSH(ctx, node, dnsCollectScript)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 9 {
-		return data
+	parts, err := splitSections(res, 9)
+	if err != nil {
+		return nil, err
 	}
 
 	data.CoreDNSActive = strings.TrimSpace(parts[1]) == "active"
@@ -808,7 +825,7 @@ func collectDNS(ctx context.Context, node Node) *DNSData {
 		data.DigMissing = strings.TrimSpace(parts[16]) == "no"
 	}
 
-	return data
+	return data, nil
 }
 
 // parseTLSExpiry parses an openssl date string and returns days until expiry (-1 on error).
@@ -830,7 +847,7 @@ func parseTLSExpiry(dateStr string) int {
 	return -1
 }
 
-func collectWireGuard(ctx context.Context, node Node) *WireGuardData {
+func collectWireGuard(ctx context.Context, node Node) (*WireGuardData, error) {
 	data := &WireGuardData{}
 
 	cmd := `
@@ -849,13 +866,9 @@ echo "$SEP"
 sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 7 {
-		return data
+	parts, err := splitSections(res, 7)
+	if err != nil {
+		return nil, err
 	}
 
 	wgIP := strings.TrimSpace(parts[1])
@@ -898,10 +911,10 @@ sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 	}
 	data.PeerCount = len(data.Peers)
 
-	return data
+	return data, nil
 }
 
-func collectSystem(ctx context.Context, node Node) *SystemData {
+func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	data := &SystemData{
 		Services: make(map[string]string),
 	}
@@ -947,11 +960,10 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	cmd += ` && journalctl -u orama-node --no-pager -n 500 --since "1 hour ago" 2>/dev/null | grep -ciE '(panic|fatal)' || echo 0`
 
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
+	parts, err := splitSections(res, systemMinSections)
+	if err != nil {
+		return nil, err
 	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
 
 	// Part 0: service statuses (before first SEP)
 	if len(parts) > 0 {
@@ -1056,10 +1068,10 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 		data.PanicCount = parseIntDefault(strings.TrimSpace(parts[12]), 0)
 	}
 
-	return data
+	return data, nil
 }
 
-func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) *NetworkData {
+func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) (*NetworkData, error) {
 	data := &NetworkData{
 		PingResults: make(map[string]bool),
 	}
@@ -1094,11 +1106,10 @@ echo "$SEP"
 `, pingCmds)
 
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
+	parts, err := splitSections(res, networkMinSections)
+	if err != nil {
+		return nil, err
 	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
 
 	if len(parts) > 1 {
 		data.InternetReachable = strings.TrimSpace(parts[1]) == "yes"
@@ -1165,10 +1176,10 @@ echo "$SEP"
 		}
 	}
 
-	return data
+	return data, nil
 }
 
-func collectNamespaces(ctx context.Context, node Node) []NamespaceData {
+func collectNamespaces(ctx context.Context, node Node) ([]NamespaceData, error) {
 	// Detect namespace services: orama-namespace-gateway@<name>.service
 	cmd := `
 SEP="===INSPECTOR_SEP==="
@@ -1177,13 +1188,9 @@ systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespac
 echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return nil
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 2 {
-		return nil
+	parts, err := splitSections(res, 2)
+	if err != nil {
+		return nil, err
 	}
 
 	var names []string
@@ -1195,7 +1202,7 @@ echo "$SEP"
 	}
 
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var nsCmd string
@@ -1212,16 +1219,11 @@ echo "$SEP"
 	}
 
 	if nsCmd == "" {
-		return unprobed
+		return unprobed, nil
 	}
 	nsRes := RunSSH(ctx, node, nsCmd)
-	if !nsRes.OK() && nsRes.Stdout == "" {
-		// Return namespace names at minimum
-		var result []NamespaceData
-		for _, name := range names {
-			result = append(result, NamespaceData{Name: name})
-		}
-		return result
+	if err := sshOutputError(nsRes); err != nil {
+		return nil, fmt.Errorf("probing namespaces: %w", err)
 	}
 
 	// Parse namespace results
@@ -1256,7 +1258,7 @@ echo "$SEP"
 		}
 	}
 
-	return append(result, unprobed...)
+	return append(result, unprobed...), nil
 }
 
 // Parse helper functions

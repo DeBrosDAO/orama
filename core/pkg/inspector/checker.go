@@ -135,6 +135,8 @@ func RunChecks(data *ClusterData, subsystems []string) *Results {
 		}
 	}
 
+	results.Checks = append(results.Checks, collectionResults(data, shouldCheck)...)
+
 	results.Duration = time.Since(start)
 	return results
 }

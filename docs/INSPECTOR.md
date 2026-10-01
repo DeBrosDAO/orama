@@ -70,6 +70,14 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | **webrtc** | Per-namespace SFU/TURN services active, cross-node SFU coverage (3 nodes) and TURN redundancy (2 nodes). Only applies to namespaces with WebRTC provisioned |
 | **global** | (every chain and global-node check, ids `chain.*` and `global.*`, is in this subsystem) Chain unit and RPC on a node that has `orama-global-chain.service`: height lag against the median responsive height (more than 20 blocks, and not while catching up), no peers while the validator set has more than one member, a block older than 60 seconds, jailed, tombstoned, and missed-block ratio against the chain's own `min_signed_per_window` (warning at half the downtime miss fraction, failure at the fraction). Slashing and staking are one page of 200 from `127.0.0.1:31003`. Public Kubo, provider, and relay units when they are installed: unit down, Kubo repo over StorageMax, provider hot-key balance 0, provider proof misses, provider disk over the declared maximum, relay reporting it is not in the relay set. The hot-key, proof, disk, and relay-set fields come from `monitor.json` in the unit home; nothing in this release writes that file, so those checks stay quiet until a process does. This SSH path does not verify the CometBFT node key; `orama node report` does. |
 
+## Collection Failures
+
+The inspector never reads a failed collection as zero values. Before collecting, it opens one SSH session (`true`) to each node. If that session fails (a connection reset from an overloaded node, a timeout, a refused key), the node is **unreachable**: nothing is collected from it and it produces one critical result, `node.reachable` (subsystem `node`), `could not collect from <node>: <error>; every check on this node was skipped`. No `wireguard`, `network`, `system` or `dns` check runs against it, so there is no "wg0 down", "no default route" or "2/3 nameservers active" from a node the inspector simply could not read.
+
+Each subsystem is collected over its own SSH session. When one of them returns no output, or output cut short of the fields the collector reads, only that subsystem is affected: its data is left unset, its checks on that node are skipped, and one critical `<subsystem>.collected` result (for example `dns.collected`) reports why. A namespace collection failure is reported as both `namespace.collected` and `webrtc.collected`. The other subsystems on the node are checked normally, and cross-node checks count only the nodes whose data was collected. A command that ran and reported a service `inactive` is still a normal failure of that service's check.
+
+Every collection failure is also listed under "Collection Errors" in the results summary and handed to the AI analysis.
+
 ## Severity Levels
 
 | Level | When Used |
