@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 	"github.com/DeBrosOfficial/network/pkg/sqlguard"
-	_ "github.com/mattn/go-sqlite3" // opens the image; linked into the gateway already (handlers/sqlite)
 )
 
 // A database image is checked before it is loaded, not after.
@@ -30,6 +30,11 @@ import (
 // gateway validates keys against the cluster registry and reads none from its
 // own database) and ownership rows of other namespaces (every read of the table
 // filters on this gateway's own namespace).
+
+// The "sqlite3" driver that opens an image is registered by the gateway
+// (pkg/gateway imports github.com/mattn/go-sqlite3). It is not imported here:
+// this package's types are also linked into the orama CLI, which is built
+// without cgo.
 
 // ErrImageRefused means the image itself is not acceptable: damaged, or
 // carrying something a namespace's database may not. It is the caller's
@@ -162,13 +167,52 @@ func imageHasNoPlatformSQL(ctx context.Context, db *sql.DB) error {
 	return rows.Err()
 }
 
-func imageTableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	var n int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&n)
-	if err != nil {
-		return false, refuse("its schema cannot be read: %v", err)
+// imageTable returns the name a table has in the image's schema. SQLite
+// resolves table names case-insensitively, so a table the platform reads as
+// ipfs_content_ownership may be stored as IPFS_Content_Ownership; matching the
+// name in the schema byte for byte would let such an image skip every check
+// and be live after the load.
+func imageTable(ctx context.Context, db *sql.DB, table string) (name string, found bool, err error) {
+	err = db.QueryRowContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE", table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
 	}
-	return n > 0, nil
+	if err != nil {
+		return "", false, refuse("its schema cannot be read: %v", err)
+	}
+	return name, true, nil
+}
+
+// imageHasColumns refuses a table that lacks a column the platform reads it by.
+// The shipped schema has had both since migration 008; a table without them is
+// not one this gateway can read, and a load would leave storage failing on
+// "no such column" for the namespace.
+func imageHasColumns(ctx context.Context, db *sql.DB, table string, want ...string) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+quoteIdent(table)+")")
+	if err != nil {
+		return refuse("the columns of %s cannot be read: %v", table, err)
+	}
+	defer rows.Close()
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return refuse("the columns of %s cannot be read: %v", table, err)
+		}
+		have[strings.ToLower(name)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return refuse("the columns of %s cannot be read: %v", table, err)
+	}
+	for _, w := range want {
+		if !have[w] {
+			return refuse("its %s table has no %q column, so this gateway could not read it", table, w)
+		}
+	}
+	return nil
 }
 
 // imageGrantsNoForeignContent refuses an image whose ownership rows for this
@@ -177,10 +221,14 @@ func imageTableExists(ctx context.Context, db *sql.DB, table string) (bool, erro
 // (authorize.go, download_handler.go), on every gateway of the namespace, so a
 // row like that grants access from the moment the load lands.
 func (h *Handler) imageGrantsNoForeignContent(ctx context.Context, db *sql.DB) error {
-	if ok, err := imageTableExists(ctx, db, "ipfs_content_ownership"); err != nil || !ok {
+	table, ok, err := imageTable(ctx, db, "ipfs_content_ownership")
+	if err != nil || !ok {
 		return err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT cid FROM ipfs_content_ownership WHERE namespace = ?", h.cfg.Namespace)
+	if err := imageHasColumns(ctx, db, table, "cid", "namespace"); err != nil {
+		return err
+	}
+	rows, err := db.QueryContext(ctx, "SELECT cid FROM "+quoteIdent(table)+" WHERE namespace = ?", h.cfg.Namespace)
 	if err != nil {
 		return refuse("its ipfs_content_ownership table cannot be read: %v", err)
 	}

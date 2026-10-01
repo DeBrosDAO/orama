@@ -23,6 +23,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
+	_ "github.com/mattn/go-sqlite3" // the driver the gateway registers
 	"go.uber.org/zap"
 	"golang.org/x/crypto/nacl/box"
 )

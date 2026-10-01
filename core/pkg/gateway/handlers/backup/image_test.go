@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/nsbackup"
 )
@@ -183,5 +184,74 @@ func TestRestoreHandler_scrubsEvenWhenTheClientWentAwayOrTheLoadFailed(t *testin
 				t.Fatalf("no scrub ran: %v", written(dst))
 			}
 		})
+	}
+}
+
+// SQLite resolves table names case-insensitively, so an image that stores the
+// table as IPFS_Content_Ownership is read by the platform as its own.
+func TestCheckImage_aMixedCaseTableIsCheckedLikeAnyOther(t *testing.T) {
+	r := newRig(t, destRoot, testNamespace, true)
+	r.registry.rows["ipfs_cid_refs"] = []map[string]any{{"cid": "QmTheirs", "own": float64(0)}}
+	img := mustImage(`CREATE TABLE "IPFS_Content_Ownership" (cid TEXT, namespace TEXT)`,
+		"INSERT INTO ipfs_content_ownership VALUES ('QmTheirs', '"+testNamespace+"')")
+	if err := checkBytes(t, r, img); !errors.Is(err, ErrImageRefused) || !strings.Contains(err.Error(), "QmTheirs") {
+		t.Fatalf("got %v, want a refusal naming the foreign CID", err)
+	}
+}
+
+func TestCheckImage_aViewOverAMixedCasePlatformTableIsRefused(t *testing.T) {
+	r := newRig(t, destRoot, testNamespace, true)
+	img := mustImage("CREATE TABLE Grants (role TEXT)", "CREATE VIEW v AS SELECT * FROM GRANTS")
+	if err := checkBytes(t, r, img); !errors.Is(err, ErrImageRefused) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// An ownership table without the columns the gateway reads it by is not one it
+// could serve: storage would fail on "no such column" after the load.
+func TestCheckImage_anOwnershipTableWithoutItsColumnsIsRefusedClearly(t *testing.T) {
+	for name, ddl := range map[string]string{
+		"no namespace": "CREATE TABLE ipfs_content_ownership (cid TEXT)",
+		"no cid":       "CREATE TABLE ipfs_content_ownership (namespace TEXT)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, destRoot, testNamespace, true)
+			err := checkBytes(t, r, mustImage(ddl))
+			if !errors.Is(err, ErrImageRefused) || !strings.Contains(err.Error(), "no \"") {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func TestCheckImage_aMixedCaseColumnNameStillCounts(t *testing.T) {
+	r := newRig(t, destRoot, testNamespace, true)
+	if err := checkBytes(t, r, mustImage("CREATE TABLE ipfs_content_ownership (CID TEXT, Namespace TEXT)")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The budget a restore started with may be spent by the time it has an answer.
+func TestRestoreHandler_theResponseGetsItsOwnDeadline(t *testing.T) {
+	old := transferBudget
+	transferBudget = 200 * time.Millisecond
+	t.Cleanup(func() { transferBudget = old })
+
+	src := newRig(t, sourceRoot, testNamespace, true)
+	pub, priv := ownerKey(t)
+	body := restoreBody(t, backupFrom(t, src, pub), priv, destRoot)
+	dst := newRig(t, destRoot, testNamespace, true)
+	dst.snap.onLoad = func() { time.Sleep(500 * time.Millisecond) } // longer than the budget
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(dst.h.RestoreHandler))
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+	resp, err := http.Post(srv.URL, "application/octet-stream", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("the client never saw the answer of a restore that succeeded: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d", resp.StatusCode)
 	}
 }

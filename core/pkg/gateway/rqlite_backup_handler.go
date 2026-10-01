@@ -260,7 +260,9 @@ func (g *Gateway) rqliteImportHandler(w http.ResponseWriter, r *http.Request) {
 	status, message := g.postLoad(ctx, rqliteURL+rqliteLoadPath, body, length)
 	// The image was handed to RQLite: whatever it answered, or failed to, it
 	// may have applied it.
-	if err := finish(ctx); err != nil {
+	scrubErr := finish(ctx)
+	g.renewTransferDeadlines(w)
+	if err := scrubErr; err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "rqlite import: the loaded database could not be scrubbed", zap.Error(err))
 		writeError(w, http.StatusBadGateway,
 			"the database may have been imported but could not be checked; running the same import again is safe")

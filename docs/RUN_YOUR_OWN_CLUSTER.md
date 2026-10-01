@@ -176,7 +176,9 @@ and opens it read-only in SQLite. It refuses the image with 400, writing
 nothing, unless it is an intact SQLite database with no trigger (tenant SQL
 cannot create one), no view over a platform table, and no stored-object record
 naming content that the registry records only against other namespaces (such a
-record would let you read another tenant's content). Older backups may still
+record would let you read another tenant's content). Table names are matched as SQLite does, ignoring case, and an
+ownership table missing its `cid` or `namespace` column is refused (the
+platform's schema has had both since the first release of the table). Older backups may still
 carry plaintext `api_keys` rows and stored-object records of other namespaces;
 nothing reads them, so they are accepted. After the load the gateway removes
 them, checks again for anything above as a backstop, and only then puts the

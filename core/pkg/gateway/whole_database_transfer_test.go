@@ -423,3 +423,36 @@ func TestRQLiteImport_theClusterGatewaysRegistryImportIsNotCapped(t *testing.T) 
 		t.Fatalf("%d, loads %d: %s", rec.Code, loads.Load(), rec.Body)
 	}
 }
+
+// The budget an import started with may be spent by its check, load and scrub;
+// the response gets its own, so a success is not reported as a dropped
+// connection.
+func TestRQLiteImport_theResponseGetsItsOwnDeadline(t *testing.T) {
+	old := transferBudget
+	transferBudget = 200 * time.Millisecond
+	t.Cleanup(func() { transferBudget = old })
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		time.Sleep(500 * time.Millisecond) // longer than the budget
+	}))
+	defer slow.Close()
+	g := nsGateway(t, slow.URL, &fakeLoadGuard{})
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = markGrant(r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, "anchat")), &auth.Grant{Role: auth.RoleOwner})
+		g.rqliteImportHandler(w, r)
+	}))
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(sqliteHead+"x"))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("the client never saw the answer of an import that succeeded: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%d", resp.StatusCode)
+	}
+}

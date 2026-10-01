@@ -7,6 +7,8 @@ import (
 
 	backuphandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/backup"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
 )
 
 // longProxyTimeout is the proxy's whole-request budget for the routes
@@ -36,6 +38,21 @@ func isWholeDatabasePath(p string) bool {
 	return false
 }
 
+// transferBudget is the time a whole-database request is given on this
+// gateway's server. A variable so a test can shorten it.
+var transferBudget = httputil.TransferBudget
+
+// renewTransferDeadlines gives the response of a whole-database request its own
+// budget once the work is done: a long check, load and scrub may have spent
+// the one the request started with, and a client must not be told a success
+// failed because the write that reports it was cut off.
+func (g *Gateway) renewTransferDeadlines(w http.ResponseWriter) {
+	if err := httputil.ExtendIO(w, transferBudget); err != nil {
+		g.logger.ComponentWarn(logging.ComponentGeneral,
+			"could not renew the response deadline; the client may not see the answer", zap.Error(err))
+	}
+}
+
 // extendTransferDeadlines gives a whole-database request its time budget on
 // this gateway's server, whose own read and write timeouts (60s and 120s,
 // cmd/gateway/main.go) would cut a large database off however long the proxy
@@ -45,7 +62,7 @@ func extendTransferDeadlines(w http.ResponseWriter, r *http.Request) bool {
 	if !isWholeDatabasePath(r.URL.Path) {
 		return true
 	}
-	if err := httputil.ExtendIO(w, httputil.TransferBudget); err != nil {
+	if err := httputil.ExtendIO(w, transferBudget); err != nil {
 		writeError(w, http.StatusInternalServerError, "the transfer could not be given its time budget: "+err.Error())
 		return false
 	}

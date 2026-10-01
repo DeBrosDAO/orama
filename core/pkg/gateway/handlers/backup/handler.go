@@ -104,6 +104,21 @@ func (h *Handler) begin(w http.ResponseWriter) (release func(), ok bool) {
 	return h.slot.Begin(w)
 }
 
+// transferBudget is the time a transfer is given on this gateway's server. A
+// variable so a test can shorten it.
+var transferBudget = httputil.TransferBudget
+
+// renewDeadlines gives the response its own budget once the work is done. The
+// budget a transfer started with may be spent by a long check, load and scrub,
+// and a client must not be told a success failed because the write that
+// reports it was cut off.
+func (h *Handler) renewDeadlines(w http.ResponseWriter) {
+	if err := httputil.ExtendIO(w, transferBudget); err != nil {
+		h.cfg.Logger.Warn("could not renew the response deadline; the client may not see the answer",
+			zap.String("namespace", h.cfg.Namespace), zap.Error(err))
+	}
+}
+
 // retryAfterSeconds is what a refused backup or restore is told to wait.
 const retryAfterSeconds = "30"
 

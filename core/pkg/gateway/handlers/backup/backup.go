@@ -60,7 +60,7 @@ func (h *Handler) BackupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if err := httputil.ExtendIO(w, httputil.TransferBudget); err != nil {
+	if err := httputil.ExtendIO(w, transferBudget); err != nil {
 		h.internalError(w, http.StatusInternalServerError, "namespace transfer could not be given its time budget", err)
 		return
 	}

@@ -69,7 +69,7 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if err := httputil.ExtendIO(w, httputil.TransferBudget); err != nil {
+	if err := httputil.ExtendIO(w, transferBudget); err != nil {
 		h.internalError(w, http.StatusInternalServerError, "namespace transfer could not be given its time budget", err)
 		return
 	}
@@ -86,6 +86,7 @@ func (h *Handler) RestoreHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := loadContext(r)
 	defer cancel()
 	resp, err := h.apply(ctx, req, plan)
+	h.renewDeadlines(w)
 	if errors.Is(err, ErrOverQuota) {
 		httputil.WriteError(w, http.StatusRequestEntityTooLarge,
 			err.Error()+"; the database was replaced and no CID was pinned")
