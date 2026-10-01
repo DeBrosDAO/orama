@@ -29,6 +29,10 @@ type SpawnRequest struct {
 	// namespace is being deleted, not moved or rolled back.
 	PurgeData bool `json:"purge_data,omitempty"`
 
+	// Release, with action = "reconcile-host-turn", asks the host to drop the
+	// namespace from its shared TURN server instead of confirming it is served.
+	Release bool `json:"release,omitempty"`
+
 	// ClusterID, with a teardown-* action, is the cluster the teardown was asked
 	// for. The node refuses it when its own state says the namespace here belongs
 	// to another cluster: the name was created again, and the teardown would
@@ -126,10 +130,18 @@ type SpawnHandler struct {
 	hostTURN HostTURNConfirmer
 }
 
+// hostTURNRequestTimeout bounds a reconcile-host-turn request. It runs under its
+// own context, not the request's: the reconcile may wait for the TURN server to
+// reload, and an unbounded background context would let a stuck host hold the
+// handler forever.
+const hostTURNRequestTimeout = 30 * time.Second
+
 // HostTURNConfirmer reconciles the host's shared TURN server and reports an
-// error unless it serves the namespace.
+// error unless it serves the namespace (Confirm), or unless it has dropped it
+// (Release).
 type HostTURNConfirmer interface {
 	ConfirmHostTURN(ctx context.Context, namespace string) error
+	ReleaseHostTURN(ctx context.Context, namespace string) error
 }
 
 // SetHostTURN wires the confirmer for the "reconcile-host-turn" action.
@@ -461,8 +473,14 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: "this node has no shared TURN reconciler"})
 			return
 		}
-		if err := h.hostTURN.ConfirmHostTURN(ctx, req.Namespace); err != nil {
-			h.logger.Error("Failed to confirm the shared TURN server serves the namespace", zap.Error(err))
+		turnCtx, cancel := context.WithTimeout(context.Background(), hostTURNRequestTimeout)
+		defer cancel()
+		reconcile, what := h.hostTURN.ConfirmHostTURN, "confirm the shared TURN server serves the namespace"
+		if req.Release {
+			reconcile, what = h.hostTURN.ReleaseHostTURN, "drop the namespace from the shared TURN server"
+		}
+		if err := reconcile(turnCtx, req.Namespace); err != nil {
+			h.logger.Error("Failed to "+what, zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return
 		}

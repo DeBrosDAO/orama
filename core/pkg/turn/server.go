@@ -41,6 +41,9 @@ type Server struct {
 	// restarting drops every OTHER tenant's active relays.
 	tenantMu sync.RWMutex
 	tenants  *tenantSet
+	// servedPath is where the live tenant set is published; empty publishes
+	// nothing. Set by WatchTenantConfig before the watcher starts.
+	servedPath string
 }
 
 // NewServer creates and starts a TURN server.

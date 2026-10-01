@@ -35,7 +35,7 @@ func main() {
 
 	// Pick up namespaces added to or removed from this shared server without a
 	// restart (bugboard #283) — restarting would drop every other tenant's relays.
-	server.WatchTenantConfig(configPath)
+	server.WatchTenantConfig(configPath, turn.DefaultServedTenantsPath)
 
 	// Wait for termination signal
 	quit := make(chan os.Signal, 1)

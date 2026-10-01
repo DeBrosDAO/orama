@@ -993,6 +993,34 @@ statement refreshes `created_at`, keeping the row inside the 30-minute join
 grace, and a row is only ever dropped when it is *also* unmatched in `dns_nodes`.
 Once every node is on the new binary this resolves on the next 60s sync tick.
 
+#### Mixed-version window: shared TURN confirmation (`served-tenants.json`)
+
+`reconcile-host-turn` now answers only once the RUNNING `orama-turn` process has
+loaded the namespace, which it proves by writing `/run/orama-turn/served-tenants.json`
+(the unit's `RuntimeDirectory`, removed whenever the unit stops). Only the new
+`turn` binary and unit write it, and a host-side confirmation also requires
+`orama-turn` to be active. The rolling upgrade installs the new unit and restarts
+`orama-turn` on each node in turn, so between the new `orama-node` coming up and
+that restart a node is in one of these states:
+
+- **New node code, old `turn` still running.** No status file exists, so a
+  `reconcile-host-turn` confirmation waits its 6s and is refused. The only
+  consequence is that enabling WebRTC in that window does not advertise that
+  host from the enable call; its own 60s WebRTC sweep advertises it once it
+  serves, and nothing already enabled is affected. Avoid enabling WebRTC during
+  the roll.
+- **`orama-turn` restarting.** The restart drops active relays on that host
+  (the unit is `PartOf=orama-node.service`, so this happens on every node
+  restart anyway). The status file is removed with the unit and a new process
+  deletes any leftover before its first load; the host stays unconfirmed until
+  the new process has published.
+- **Old node code receiving `release`.** A coordinator rolling back a failed
+  enablement sends `reconcile-host-turn` with `release: true`. An old host does
+  not know the field, treats it as a confirmation and answers 500 "does not
+  serve" once the namespace is gone. That 500 is the expected outcome of a
+  successful drop there: the coordinator logs it as a failed release, and the
+  host has already dropped the namespace's secret by reconciling.
+
 #### Mixed-version window: unscoped API keys (migration 043)
 
 Migration 043 writes `scopes = 'admin'` onto every live key whose scopes column

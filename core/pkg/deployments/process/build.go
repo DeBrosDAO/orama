@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 )
@@ -117,19 +118,37 @@ func (m *Manager) giveBuildUser(instance string) error {
 	return nil
 }
 
+// unitStateQueryTimeout bounds the read of a unit's state after a failed reset.
+const unitStateQueryTimeout = 10 * time.Second
+
 // runOneshot runs a oneshot unit to completion: `systemctl start` of one
 // returns when its command has exited, with its status. A unit that failed has
 // reported its failure through that error, so it is reset: left in the failed
 // state it would stay in `systemctl list-units` for good.
+//
+// A reset that errors is a failure only if the unit is still failed. systemd
+// has a unit in memory to reset only while it is failed (or running), so
+// `reset-failed` of one that never failed (a start refused before it ran)
+// exits 1 with "not loaded"; that leaves nothing behind to clean up.
 func (m *Manager) runOneshot(unit string) error {
 	err := m.runSystemctl("start", unit)
 	if err == nil {
 		return nil
 	}
-	if resetErr := m.runSystemctl("reset-failed", unit); resetErr != nil {
-		return errors.Join(err, fmt.Errorf("reset the failed state of %s: %w", unit, resetErr))
+	resetErr := m.runSystemctl("reset-failed", unit)
+	if resetErr == nil {
+		return err
 	}
-	return err
+	ctx, cancel := context.WithTimeout(context.Background(), unitStateQueryTimeout)
+	defer cancel()
+	out, showErr := m.querySystemctl(ctx, "show", unit, "--property="+propActiveState)
+	if showErr != nil {
+		return errors.Join(err, fmt.Errorf("reset the failed state of %s: %w (and its state could not be read: %v)", unit, resetErr, showErr))
+	}
+	if parseSystemctlShow(string(out))[propActiveState] != activeStateFailed {
+		return err
+	}
+	return errors.Join(err, fmt.Errorf("reset the failed state of %s: %w", unit, resetErr))
 }
 
 // installDirect runs npm in workDir, for a gateway without systemd.

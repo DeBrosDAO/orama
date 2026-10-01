@@ -574,3 +574,74 @@ func TestClearDependencies_resetsAFailedCleanUnitAndReportsBothFailures(t *testi
 		t.Fatalf("both failures must be reported: %v", err)
 	}
 }
+
+func oneshotRig(startErr, resetErr error, activeState string) *Manager {
+	return &Manager{
+		logger:     zap.NewNop(),
+		useSystemd: true,
+		systemctl: func(args ...string) error {
+			switch args[0] {
+			case "start":
+				return startErr
+			case "reset-failed":
+				return resetErr
+			}
+			return nil
+		},
+		query: func(context.Context, ...string) ([]byte, error) {
+			return []byte("ActiveState=" + activeState + "\n"), nil
+		},
+	}
+}
+
+// systemd has a unit in memory to reset only while it is failed, so the reset
+// of one whose start was refused exits 1 "not loaded". That is not a second
+// failure: only the start's error is the cause.
+func TestRunOneshot_aResetOfAUnitThatNeverFailedIsNotAnError(t *testing.T) {
+	startErr := errors.New("start refused")
+	err := oneshotRig(startErr, errors.New("Unit not loaded"), "inactive").runOneshot("u.service")
+	if !errors.Is(err, startErr) {
+		t.Fatalf("err = %v, want the start failure", err)
+	}
+	if strings.Contains(err.Error(), "reset the failed state") {
+		t.Errorf("a reset of a unit that is not failed was reported as a failure: %v", err)
+	}
+}
+
+func TestRunOneshot_aResetThatLeavesTheUnitFailedIsAnError(t *testing.T) {
+	err := oneshotRig(errors.New("start refused"), errors.New("reset denied"), "failed").runOneshot("u.service")
+	if err == nil || !strings.Contains(err.Error(), "reset the failed state of u.service") {
+		t.Fatalf("err = %v, want the failed reset reported", err)
+	}
+}
+
+func TestRunOneshot_aStateThatCannotBeReadIsReported(t *testing.T) {
+	m := oneshotRig(errors.New("start refused"), errors.New("reset denied"), "failed")
+	m.query = func(context.Context, ...string) ([]byte, error) { return nil, errors.New("dbus down") }
+	err := m.runOneshot("u.service")
+	if err == nil || !strings.Contains(err.Error(), "dbus down") {
+		t.Fatalf("err = %v, want the unreadable state reported", err)
+	}
+}
+
+func TestRunOneshot_success(t *testing.T) {
+	if err := oneshotRig(nil, errors.New("unused"), "inactive").runOneshot("u.service"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// F6: the state read after a failed reset is bounded, so a wedged systemctl
+// cannot hang the deploy.
+func TestRunOneshot_boundsTheStateQuery(t *testing.T) {
+	m := oneshotRig(errors.New("start refused"), errors.New("reset denied"), "failed")
+	var bounded bool
+	m.query = func(ctx context.Context, _ ...string) ([]byte, error) {
+		d, ok := ctx.Deadline()
+		bounded = ok && time.Until(d) <= unitStateQueryTimeout
+		return []byte("ActiveState=failed\n"), nil
+	}
+	_ = m.runOneshot("u.service")
+	if !bounded {
+		t.Fatal("the unit state query has no deadline")
+	}
+}

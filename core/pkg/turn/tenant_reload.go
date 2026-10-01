@@ -10,12 +10,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// tenantReloadInterval is how often the shared server re-reads its config file
+// TenantReloadInterval is how often the shared server re-reads its config file
 // to pick up tenants that were added or removed. Enabling WebRTC advertises the
 // relay once its host has written the tenant set, so this is the window in which
 // a client's credentials can still be refused; it is kept short, and a tick
 // costs the parse of one small file.
-const tenantReloadInterval = 2 * time.Second
+const TenantReloadInterval = 2 * time.Second
 
 // tenantSet is an immutable snapshot of who this server serves. It is swapped
 // wholesale under lock rather than mutated, so an in-flight authHandler always
@@ -250,6 +250,11 @@ func (s *Server) reloadTenants(path string) error {
 	if err != nil {
 		return fmt.Errorf("read TURN config %s: %w", path, err)
 	}
+	return s.applyTenantConfig(data)
+}
+
+// applyTenantConfig swaps in the tenant set that config bytes describe.
+func (s *Server) applyTenantConfig(data []byte) error {
 	cfg, err := ParseConfig(data)
 	if err != nil {
 		return err
@@ -277,7 +282,64 @@ func (s *Server) reloadTenants(path string) error {
 
 	startPendingWatchers(pending)
 	stopDroppedStealthWatchers(prev, next)
+
+	// Publish what is now live, so a host can confirm the running server — not
+	// just the file it wrote — serves a namespace.
+	if s.servedPath == "" {
+		return nil
+	}
+	if err := writeServedTenants(s.servedPath, ServedTenants{Namespaces: next.namespaces(), ConfigSHA256: ConfigDigest(data)}); err != nil {
+		return fmt.Errorf("tenant set loaded but not published: %w", err)
+	}
 	return nil
+}
+
+// reloadState is what the watcher remembers between ticks.
+type reloadState struct {
+	digest  string
+	lastErr string
+}
+
+// tick runs one watcher iteration. The file is read and hashed every tick (it is
+// small) and the tenant set is rebuilt only when the content changed: mtime and
+// size cannot be trusted, since a same-size rewrite within the filesystem's
+// timestamp granularity looks untouched, and a rotated secret would go unseen.
+// A failure is logged once per distinct error: the watcher ticks every few
+// seconds forever, so a config that stays broken would otherwise fill the
+// journal. After a failure every tick retries.
+func (s *Server) tick(path string, st *reloadState) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		st.digest = ""
+		s.logReloadFailure(path, st, fmt.Errorf("read TURN config %s: %w", path, err))
+		return
+	}
+	digest := ConfigDigest(data)
+	if digest == st.digest && st.lastErr == "" {
+		return
+	}
+
+	before := s.currentTenants().namespaces()
+	if err := s.applyTenantConfig(data); err != nil {
+		st.digest = ""
+		s.logReloadFailure(path, st, err)
+		return
+	}
+	st.digest, st.lastErr = digest, ""
+	after := s.currentTenants().namespaces()
+	if !sameStringSet(before, after) {
+		s.logger.Info("TURN tenant set reloaded",
+			zap.Strings("before", before),
+			zap.Strings("after", after))
+	}
+}
+
+func (s *Server) logReloadFailure(path string, st *reloadState, err error) {
+	if msg := err.Error(); msg != st.lastErr {
+		st.lastErr = msg
+		s.logger.Warn("TURN tenant reload failed",
+			zap.String("config_path", path), zap.Error(err))
+	}
 }
 
 // watchTenants polls the config file so tenant changes take effect without a
@@ -287,23 +349,16 @@ func (s *Server) watchTenants(path string, interval time.Duration, stop <-chan s
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var st reloadState
+	// Load once now so the live set is published as soon as the watcher starts,
+	// not a tick later.
+	s.tick(path, &st)
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
-			before := s.currentTenants().namespaces()
-			if err := s.reloadTenants(path); err != nil {
-				s.logger.Warn("TURN tenant reload failed, keeping the current tenant set",
-					zap.String("config_path", path), zap.Error(err))
-				continue
-			}
-			after := s.currentTenants().namespaces()
-			if !sameStringSet(before, after) {
-				s.logger.Info("TURN tenant set reloaded",
-					zap.Strings("before", before),
-					zap.Strings("after", after))
-			}
+			s.tick(path, &st)
 		}
 	}
 }
@@ -329,15 +384,25 @@ func sameStringSet(a, b []string) bool {
 // WatchTenantConfig starts polling path for tenant changes, so namespaces can be
 // added to or removed from this shared server without restarting it.
 //
-// Callers pass the same path the config was loaded from. Safe to call once, after
+// Callers pass the same path the config was loaded from, and the path the
+// served tenant set is published to (empty to publish nothing). Safe to call once, after
 // NewServer; the watcher stops when the server is closed.
-func (s *Server) WatchTenantConfig(path string) {
+func (s *Server) WatchTenantConfig(path, servedPath string) {
 	if path == "" {
 		return
 	}
+	// A file left by an earlier process must not be read as this one's: remove
+	// it before the first load.
+	if servedPath != "" {
+		if err := os.Remove(servedPath); err != nil && !os.IsNotExist(err) {
+			s.logger.Error("Could not remove the served-tenants file of an earlier process; hosts may read it as this server's",
+				zap.String("path", servedPath), zap.Error(err))
+		}
+	}
+	s.servedPath = servedPath
 	if s.certStop == nil {
 		// TURNS disabled, so no stop channel was created by the TLS block.
 		s.certStop = make(chan struct{})
 	}
-	go s.watchTenants(path, tenantReloadInterval, s.certStop)
+	go s.watchTenants(path, TenantReloadInterval, s.certStop)
 }

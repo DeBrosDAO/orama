@@ -170,12 +170,16 @@ func TestDeleteHandler_replicaTeardownIsStampedForItsNode(t *testing.T) {
 }
 
 type fakeHostTURN struct {
-	err error
-	ns  string
+	err         error
+	ns          string
+	released    string
+	deadline    time.Time
+	hasDeadline bool
 }
 
-func (f *fakeHostTURN) ConfirmHostTURN(_ context.Context, namespace string) error {
+func (f *fakeHostTURN) ConfirmHostTURN(ctx context.Context, namespace string) error {
 	f.ns = namespace
+	f.deadline, f.hasDeadline = ctx.Deadline()
 	return f.err
 }
 
@@ -203,5 +207,52 @@ func TestSpawnHandler_reconcileHostTURN(t *testing.T) {
 				t.Errorf("confirmed namespace %q, want acme", tc.confirmer.ns)
 			}
 		})
+	}
+}
+
+func (f *fakeHostTURN) ReleaseHostTURN(ctx context.Context, namespace string) error {
+	f.released = namespace
+	f.deadline, f.hasDeadline = ctx.Deadline()
+	return f.err
+}
+
+// A background context has no deadline, so a host that never answers would hold
+// the handler for good.
+func TestSpawnHandler_reconcileHostTURNRunsUnderATimeout(t *testing.T) {
+	f := &fakeHostTURN{}
+	h, key := coordHandler(t)
+	h.SetHostTURN(f)
+	body := `{"action":"reconcile-host-turn","namespace":"acme","node_id":"n1","release":true}`
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, spawnRequestWith(t, key, body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if f.released != "acme" || f.ns != "" {
+		t.Fatalf("release=%q confirm=%q, want a release only", f.released, f.ns)
+	}
+	if !f.hasDeadline || time.Until(f.deadline) > hostTURNRequestTimeout {
+		t.Fatalf("no bounded deadline on the reconcile (has=%v)", f.hasDeadline)
+	}
+}
+
+// release:true must reach ReleaseHostTURN, and its failure must be reported; a
+// request without it must never release.
+func TestSpawnHandler_releaseDispatchesToReleaseHostTURN(t *testing.T) {
+	f := &fakeHostTURN{err: errors.New("still serves acme")}
+	h, key := coordHandler(t)
+	h.SetHostTURN(f)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, spawnRequestWith(t, key, `{"action":"reconcile-host-turn","namespace":"acme","node_id":"n1","release":true}`))
+	if w.Code != http.StatusInternalServerError || f.released != "acme" {
+		t.Fatalf("status %d released=%q: %s", w.Code, f.released, w.Body.String())
+	}
+
+	g := &fakeHostTURN{}
+	h.SetHostTURN(g)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, spawnRequestWith(t, key, `{"action":"reconcile-host-turn","namespace":"acme","node_id":"n1"}`))
+	if g.released != "" || g.ns != "acme" {
+		t.Fatalf("a request without release dispatched to release (released=%q confirmed=%q)", g.released, g.ns)
 	}
 }

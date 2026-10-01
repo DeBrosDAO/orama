@@ -59,7 +59,7 @@ orama namespace disable webrtc --namespace myapp
 3. Allocates WebRTC port blocks on each node (SFU signaling + media range, TURN relay range)
 4. Spawns TURN on 2 nodes (selected by capacity)
 5. Spawns SFU on all 3 nodes
-6. Asks every other TURN host to apply its tenant set now (`reconcile-host-turn`) and creates DNS A records pointing to the public IPs of the TURN nodes that confirmed they serve the namespace (a node that did not confirm is advertised by its own sweep once it serves; enabling fails if none confirmed): `turn.ns-{name}.{baseDomain}` (plain UDP/TCP TURN) and `turn-{name}.{baseDomain}` (single-label TLS host for TURNS, covered by the `*.{baseDomain}` wildcard cert)
+6. Asks every other TURN host to apply its tenant set now (`reconcile-host-turn`) and creates DNS A records pointing to the public IPs of the TURN nodes whose RUNNING server confirmed it serves the namespace, this node included: a host answers only once `orama-turn` is active and the server's published tenant set (`served-tenants.json`, below) matches the config it wrote and lists the namespace, waiting up to 6s for the server's ~2s reload (a node that did not confirm is advertised by its own sweep once it serves; enabling fails if none confirmed). If enabling fails after that, every TURN host that was asked is told to drop the namespace at once (`reconcile-host-turn` with `release`, under a fresh 30s context so a cancelled enable cannot skip it), so none keeps the namespace in its shared TURN config until the next sweep; hosts that cannot be reached are logged and drop it on their next sweep: `turn.ns-{name}.{baseDomain}` (plain UDP/TCP TURN) and `turn-{name}.{baseDomain}` (single-label TLS host for TURNS, covered by the `*.{baseDomain}` wildcard cert)
 7. Updates cluster state on all nodes (for cold-boot restoration)
 
 ### What happens on disable:
@@ -313,7 +313,15 @@ serve is rejected rather than falling back to any default.
 The tenant list lives in `/opt/orama/.orama/data/turn/turn.yaml` (mode 0600 — it holds
 every tenant's HMAC secret) and is re-read by the running process (~2s). Namespaces
 are added and removed without a restart, because restarting drops every tenant's
-active relays on that host.
+active relays on that host. The process reads and hashes the file each tick and rebuilds only when the content
+changed, and logs a failed reload once per distinct error.
+
+After every successful load the process writes `/run/orama-turn/served-tenants.json`
+(its `RuntimeDirectory`, mode 0750, removed when the unit stops; namespaces, the
+SHA-256 of the config it loaded; no secrets). A starting
+process deletes any leftover before its first load. That file, not the
+config, is what `reconcile-host-turn` waits on: a written config only means the server
+will serve a namespace on its next tick.
 
 Relay allocations come from the host-wide range 49152-65535, which is also what the
 firewall opens. Each namespace still gets its own 800-port block recorded in
@@ -322,7 +330,7 @@ which node, not a per-tenant relay range — one process has one range.
 
 `orama-turn.service` runs as the unprivileged `orama` user with
 `CAP_NET_BIND_SERVICE` for ports 3478/5349, and `ProtectSystem=strict`. It reads its
-config and Caddy's wildcard certificate and writes nothing.
+config and Caddy's wildcard certificate, and writes only `served-tenants.json`, into its `RuntimeDirectory` (`/run/orama-turn`).
 
 ## TURN Credential Protocol
 

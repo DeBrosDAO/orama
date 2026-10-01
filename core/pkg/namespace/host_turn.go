@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -26,6 +27,11 @@ import (
 // A var, not a const, only so tests can redirect it into a temp dir; nothing in
 // production reassigns it.
 var hostTURNConfigPath = constants.HostTURNConfigPath(install.OramaDir)
+
+// hostTURNServedPath is where the running shared TURN server publishes the
+// tenants it has loaded. A var, like hostTURNConfigPath, only so tests can
+// redirect it.
+var hostTURNServedPath = turn.DefaultServedTenantsPath
 
 // hostTURNConfigDirMode: the directory holds only the 0600 config, read by
 // orama-turn.service running as the same orama user that writes it.
@@ -102,10 +108,24 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) ([]string, erro
 // its shared TURN tenant set now and confirm it serves one namespace.
 const spawnActionReconcileHostTURN = "reconcile-host-turn"
 
+// hostTURNServePollInterval is how often ConfirmHostTURN re-reads what the
+// running server says it serves.
+const hostTURNServePollInterval = 200 * time.Millisecond
+
+// hostTURNServeTimeout bounds the wait for the running server to load a config
+// this host just wrote: it re-reads on a TenantReloadInterval tick, and a newly
+// started process needs one more to come up and publish.
+var hostTURNServeTimeout = 3 * turn.TenantReloadInterval
+
 // ConfirmHostTURN reconciles this host's shared TURN server and returns nil only
-// when the namespace is one of the tenants it is configured to relay for. It is
-// what a coordinator's reconcile-host-turn request runs, so the host applies its
-// own tenant set (config is never pushed between hosts) and answers for it.
+// when the RUNNING server serves the namespace: the config names it and the
+// server has loaded exactly that config. It is what a coordinator's
+// reconcile-host-turn request runs, so the host applies its own tenant set
+// (config is never pushed between hosts) and answers for it.
+//
+// A written config is not enough: the server picks tenants up on its next
+// reload tick, and a client pointed at it before then is refused ("TURN
+// credential for a namespace this server does not serve").
 func (cm *ClusterManager) ConfirmHostTURN(ctx context.Context, namespace string) error {
 	served, err := cm.ReconcileHostTURN(ctx)
 	if err != nil {
@@ -113,6 +133,95 @@ func (cm *ClusterManager) ConfirmHostTURN(ctx context.Context, namespace string)
 	}
 	if !slices.Contains(served, namespace) {
 		return fmt.Errorf("this host's shared TURN server does not serve namespace %s (serving %v)", namespace, served)
+	}
+	return cm.awaitHostTURNServing(ctx, namespace)
+}
+
+// awaitHostTURNServing waits until the running shared TURN server serves the
+// namespace.
+func (cm *ClusterManager) awaitHostTURNServing(ctx context.Context, namespace string) error {
+	if cm.waitHostTURNServingFn != nil {
+		return cm.waitHostTURNServingFn(ctx, namespace)
+	}
+	return cm.waitHostTURNServing(ctx, namespace)
+}
+
+// ReleaseHostTURN reconciles this host's shared TURN server after the namespace
+// lost its allocation or WebRTC config, and returns nil only when the host no
+// longer lists it. It drops the namespace's secret now rather than on the next
+// sweep.
+func (cm *ClusterManager) ReleaseHostTURN(ctx context.Context, namespace string) error {
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(served, namespace) {
+		return fmt.Errorf("this host's shared TURN server still serves namespace %s after its allocation was released (serving %v)", namespace, served)
+	}
+	return nil
+}
+
+// hostTURNActive reports whether orama-turn.service is active.
+func (cm *ClusterManager) hostTURNActive() (bool, error) {
+	if cm.hostTURNActiveFn != nil {
+		return cm.hostTURNActiveFn()
+	}
+	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil {
+		return false, fmt.Errorf("no systemd manager on this node")
+	}
+	return cm.systemdSpawner.systemdMgr.IsHostTURNActive()
+}
+
+// waitHostTURNServing polls the running server's published tenant set until it
+// reflects the config file on disk and includes the namespace.
+func (cm *ClusterManager) waitHostTURNServing(ctx context.Context, namespace string) error {
+	deadline := time.NewTimer(hostTURNServeTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(hostTURNServePollInterval)
+	defer ticker.Stop()
+
+	var last error
+	for {
+		last = cm.checkHostTURNServing(namespace)
+		if last == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the shared TURN server to serve namespace %s: %w (last check: %v)", namespace, ctx.Err(), last)
+		case <-deadline.C:
+			return fmt.Errorf("the shared TURN server did not load namespace %s within %s; is orama-turn running and able to write %s? last check: %w",
+				namespace, hostTURNServeTimeout, hostTURNServedPath, last)
+		case <-ticker.C:
+		}
+	}
+}
+
+// checkHostTURNServing reports whether the running server has loaded the config
+// now on disk and serves the namespace. The unit must be active: the status file
+// survives only as long as the process that wrote it, but a crash-looping unit
+// is between files, and a confirmation must never rest on a dead server.
+func (cm *ClusterManager) checkHostTURNServing(namespace string) error {
+	active, err := cm.hostTURNActive()
+	if err != nil {
+		return fmt.Errorf("determine the shared TURN service state: %w", err)
+	}
+	if !active {
+		return fmt.Errorf("the shared TURN service (orama-turn) is not active")
+	}
+	cfg, err := os.ReadFile(hostTURNConfigPath)
+	if err != nil {
+		return fmt.Errorf("read the shared TURN config: %w", err)
+	}
+	st, err := turn.ReadServedTenants(hostTURNServedPath)
+	if err != nil {
+		return err
+	}
+	if st.ConfigSHA256 != turn.ConfigDigest(cfg) {
+		return fmt.Errorf("the running server has not loaded the current config yet")
+	}
+	if !slices.Contains(st.Namespaces, namespace) {
+		return fmt.Errorf("the running server loaded the current config but does not serve %s (serving %v)", namespace, st.Namespaces)
 	}
 	return nil
 }

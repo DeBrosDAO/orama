@@ -45,7 +45,15 @@ ExecStart=/bin/sh -c 'exec /opt/orama/bin/turn --config ${TURN_CONFIG}'
 # orama-sni-router.service, the other host-level public listener.
 #
 # `orama` owns both the config (written by the index gateway) and Caddy's cert storage,
-# so no additional ReadWritePaths are needed — TURN only ever reads.
+# so no additional ReadWritePaths are needed — TURN only ever reads its config.
+#
+# The one thing it publishes is served-tenants.json, in a RuntimeDirectory rather
+# than next to the config: systemd removes /run/orama-turn when the unit stops, so
+# a dead server leaves no claim of what it serves behind. Mode 0750 so the gateway
+# (a different process, same orama user and group) can read it and no other
+# local user can.
+RuntimeDirectory=orama-turn
+RuntimeDirectoryMode=0750
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 User=orama

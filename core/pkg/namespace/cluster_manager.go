@@ -164,6 +164,11 @@ type ClusterManager struct {
 	// reconcileHostTURNFn replaces ReconcileHostTURN, which drives the real
 	// shared TURN unit. Nil in production; set in tests, which have no systemd.
 	reconcileHostTURNFn func(ctx context.Context) ([]string, error)
+	// waitHostTURNServingFn replaces the wait for the running shared TURN server
+	// to load the namespace, which reads files only a real server writes.
+	waitHostTURNServingFn func(ctx context.Context, namespace string) error
+	// hostTURNActiveFn replaces the systemd query for orama-turn being active.
+	hostTURNActiveFn func() (bool, error)
 
 	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
 	// timestamp of the last leadership transfer, to bound churn. Lazy-init.

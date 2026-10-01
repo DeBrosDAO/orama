@@ -99,7 +99,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range clusterNodes {
 		block, err := cm.webrtcPortAllocator.AllocateSFUPorts(ctx, node.NodeID, cluster.ID)
 		if err != nil {
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 			return fmt.Errorf("failed to allocate SFU ports on node %s: %w", node.NodeID, err)
 		}
 		sfuBlocks[node.NodeID] = block
@@ -127,7 +127,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range turnNodes {
 		block, err := cm.webrtcPortAllocator.AllocateTURNPorts(ctx, node.NodeID, cluster.ID)
 		if err != nil {
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 			return fmt.Errorf("failed to allocate TURN ports on node %s: %w", node.NodeID, err)
 		}
 		turnBlocks[node.NodeID] = block
@@ -143,7 +143,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// 10. Get port blocks for RQLite DSN
 	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
 	if err != nil {
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 		return fmt.Errorf("failed to get port blocks: %w", err)
 	}
 
@@ -172,20 +172,21 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// rather than reported done.
 	served, err := cm.ReconcileHostTURN(ctx)
 	if err != nil {
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 		return fmt.Errorf("failed to reconcile this host's shared TURN server for namespace %s: %w", namespaceName, err)
 	}
-	// Every other TURN host is asked to apply its tenant set now, so the relays
-	// are serving when this returns, and only hosts that confirmed are
-	// advertised. Without the ask a host picks the namespace up on its next
-	// sweep, up to a minute later, while the DNS record and the credentials
-	// already point clients at it: its relay rejected them ("TURN credential for
+	// Every other TURN host is asked to apply its tenant set now and to answer
+	// only once its RUNNING server has loaded it (the server reloads on a
+	// ~2s tick, so a written config alone does not mean it serves), and only
+	// hosts that confirmed are advertised. Without the ask a host picks the
+	// namespace up on its next sweep, up to a minute later, while the DNS record
+	// and the credentials already point clients at it: its relay rejected them ("TURN credential for
 	// a namespace this server does not serve") and every relay-only call
 	// failed ICE. A host that did not confirm advertises itself once its own
 	// sweep has it serving.
 	confirmedTURNIPs := cm.confirmTURNHosts(ctx, namespaceName, turnNodes, served)
 	if len(confirmedTURNIPs) == 0 {
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 		return fmt.Errorf("no TURN host confirmed it serves namespace %s; WebRTC is not enabled", namespaceName)
 	}
 	if len(turnNodes) > 0 {
@@ -224,7 +225,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 				zap.String("namespace", namespaceName),
 				zap.String("node_id", node.NodeID),
 				zap.Error(err))
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 			return fmt.Errorf("failed to spawn SFU on node %s: %w", node.NodeID, err)
 		}
 
@@ -237,7 +238,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 		cm.logger.Error("Failed to create TURN DNS records, aborting WebRTC enablement",
 			zap.String("namespace", namespaceName),
 			zap.Error(err))
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 		return fmt.Errorf("failed to create TURN DNS records: %w", err)
 	}
 
@@ -260,18 +261,24 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	return nil
 }
 
-// confirmTURNHosts returns the public IPs of the TURN nodes that are serving the
-// namespace: this node when its own reconcile served it, each other node when
-// it confirmed after applying its tenant set. A node that cannot be reached, or
+// confirmTURNHosts returns the public IPs of the TURN nodes whose running server
+// serves the namespace: this node when its own reconcile listed it and its
+// server loaded it, each other node when it confirmed the same. A node that cannot be reached, or
 // runs a release that does not know the request, is left out and logged; its
 // own sweep advertises it once it serves.
 func (cm *ClusterManager) confirmTURNHosts(ctx context.Context, namespaceName string, turnNodes []clusterNodeInfo, served []string) []string {
 	var ips []string
 	for _, node := range turnNodes {
 		if node.NodeID == cm.localNodeID {
-			if slices.Contains(served, namespaceName) {
-				ips = append(ips, node.PublicIP)
+			if !slices.Contains(served, namespaceName) {
+				continue
 			}
+			if err := cm.awaitHostTURNServing(ctx, namespaceName); err != nil {
+				cm.logger.Warn("This host's shared TURN server did not load the namespace; it is advertised once its own sweep has it serving",
+					zap.String("namespace", namespaceName), zap.String("node_id", node.NodeID), zap.Error(err))
+				continue
+			}
+			ips = append(ips, node.PublicIP)
 			continue
 		}
 		_, err := cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
@@ -639,7 +646,10 @@ func (cm *ClusterManager) getNodeIP(nodes []clusterNodeInfo, nodeID string) stri
 }
 
 // cleanupWebRTCOnError cleans up partial WebRTC allocations when EnableWebRTC fails mid-way.
-func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, namespaceName string, nodes []clusterNodeInfo) {
+// turnHosts are the TURN hosts that were asked to serve the namespace: each is
+// told to drop it once its allocation and config are gone, so no host keeps the
+// namespace's secret in its shared TURN config until the next sweep.
+func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, namespaceName string, nodes, turnHosts []clusterNodeInfo) {
 	cm.logger.Warn("Cleaning up partial WebRTC enablement",
 		zap.String("namespace", namespaceName),
 		zap.String("cluster_id", clusterID))
@@ -683,6 +693,42 @@ func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, n
 		cm.logger.Error("Failed to delete the WebRTC config while rolling back WebRTC enablement",
 			zap.String("namespace", namespaceName), zap.Error(err))
 	}
+
+	// Last, so each host derives its tenant set from the rows as they now are.
+	// A fresh bounded context: this runs because the enable failed, often because
+	// ctx was cancelled or timed out, and the drop must still be sent.
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTURNHostsTimeout)
+	defer cancel()
+	if err := cm.releaseTURNHosts(releaseCtx, namespaceName, turnHosts); err != nil {
+		cm.logger.Error("A TURN host could not be told to drop the namespace while rolling back WebRTC enablement; it drops it on its next WebRTC reconcile sweep",
+			zap.String("namespace", namespaceName), zap.Error(err))
+	}
+}
+
+// releaseTURNHostsTimeout bounds the whole rollback release across hosts.
+const releaseTURNHostsTimeout = 30 * time.Second
+
+// releaseTURNHosts asks every host to drop the namespace from its shared TURN
+// server now. Every host is asked; the failures come back joined.
+func (cm *ClusterManager) releaseTURNHosts(ctx context.Context, namespaceName string, hosts []clusterNodeInfo) error {
+	var errs []error
+	for _, node := range hosts {
+		if node.NodeID == cm.localNodeID {
+			if err := cm.ReleaseHostTURN(ctx, namespaceName); err != nil {
+				errs = append(errs, fmt.Errorf("local host %s: %w", node.NodeID, err))
+			}
+			continue
+		}
+		if _, err := cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
+			"action":    spawnActionReconcileHostTURN,
+			"namespace": namespaceName,
+			"node_id":   node.NodeID,
+			"release":   true,
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("host %s: %w", node.NodeID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // updateClusterStateWithWebRTC updates the cluster-state.json on all nodes

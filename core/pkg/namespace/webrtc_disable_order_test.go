@@ -203,7 +203,7 @@ func TestCleanupWebRTCOnError_marksDisabledFirstAndKeepsAnAllocationItCouldNotRe
 	r.cm.cleanupWebRTCOnError(context.Background(), "cluster-acme", "acme", []clusterNodeInfo{
 		{NodeID: "node-1", InternalIP: "10.0.0.1"},
 		{NodeID: "node-2", InternalIP: "10.0.0.2"},
-	})
+	}, nil)
 
 	if marked, first := r.index("db:config-disabled"), r.index("local-teardown:"); marked < 0 || first < marked {
 		t.Errorf("the config was not marked disabled before the first stop (%d, %d): %v", marked, first, r.events)
