@@ -150,6 +150,13 @@ func (r *registry) Exec(_ context.Context, query string, args ...any) (sql.Resul
 			}
 		}
 	}
+	if strings.Contains(query, "DELETE FROM grants") {
+		for wallet := range r.owned {
+			if r.owned[wallet] > 0 {
+				r.owned[wallet]--
+			}
+		}
+	}
 	if strings.Contains(query, "INSERT INTO grants") {
 		wallet, _ := args[1].(string)
 		// The statement writes only while the wallet is under its cap.
@@ -421,21 +428,32 @@ func TestCreate_deniesWhenTheRegistryCannotBeRead(t *testing.T) {
 	}
 }
 
-// A namespace whose cluster did not start is reported as created but not
-// provisioned, rather than as a cluster that will never appear.
-func TestCreate_saysSoWhenProvisioningDoesNotStart(t *testing.T) {
-	h := NewCreateHandler(newRegistry(), &recordingProvisioner{err: errString("no capacity")}, nil, zap.NewNop())
+// A namespace whose cluster could not be started is not left behind: the row
+// and the owner grant are removed and the answer says nothing was created.
+// Left behind they could not be used, counted against the wallet's cap, and
+// kept the name taken.
+func TestCreate_provisioningThatDoesNotStartUndoesTheCreate(t *testing.T) {
+	db := newRegistry()
+	h := NewCreateHandler(db, &recordingProvisioner{err: errString("no capacity")}, nil, zap.NewNop())
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, createRequest("0xowner", "myapp"))
 
-	body := decodeCreate(t, w)
-	if body["status"] != "created" {
-		t.Errorf("status %v, want created", body["status"])
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503: %s", w.Code, w.Body.String())
 	}
-	reason, _ := body["cluster"].(string)
-	if !strings.Contains(reason, "no capacity") {
+	body := decodeCreate(t, w)
+	if body["code"] != ErrCodeNamespaceProvision {
+		t.Errorf("code %v, want %s", body["code"], ErrCodeNamespaceProvision)
+	}
+	if reason, _ := body["error"].(string); !strings.Contains(reason, "no capacity") {
 		t.Errorf("the reason provisioning did not start is not reported: %q", reason)
+	}
+	if _, ok := db.existing["myapp"]; ok {
+		t.Error("the namespace row was left behind")
+	}
+	if db.owned["0xowner"] != 0 {
+		t.Errorf("the wallet still owns %d namespaces", db.owned["0xowner"])
 	}
 }
 

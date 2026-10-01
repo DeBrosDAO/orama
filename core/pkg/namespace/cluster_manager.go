@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -1133,6 +1134,16 @@ const deprovisionActiveNodesQuery = `
 // this node take the same lock (SystemdSpawner.LockNamespace).
 func (cm *ClusterManager) Spawner() *SystemdSpawner { return cm.systemdSpawner }
 
+// ErrTeardownIncomplete is what DeprovisionCluster wraps when a node did not
+// confirm the teardown. The registry side is complete by then (cluster row,
+// ports, DNS and membership are gone) and what a node did not confirm is still
+// owed: a remote node has a namespace_pending_cleanup record that is replayed
+// until it succeeds, and a namespace the registry no longer assigns to a node is
+// reaped by that node's own tenant reconciler. The caller may therefore finish
+// deleting the namespace instead of asking for the delete to be retried, which
+// would find no cluster and do exactly that.
+var ErrTeardownIncomplete = errors.New("namespace not torn down on every node")
+
 // DeprovisionCluster tears down a namespace cluster on all nodes.
 // Stops and disables the namespace's units (Gateway, Olric, RQLite, WebRTC) on every
 // cluster node, deletes its data directory and unit env files, deallocates ports,
@@ -1193,7 +1204,7 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	if err := cm.teardownNamespaceOnNodes(ctx, clusterNodes, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID, PurgeData: true}); err != nil {
 		cm.logger.Error("Namespace was NOT torn down on every node — re-creating this namespace would inherit its state (bugboard #281)",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		deprovisionDataErr = fmt.Errorf("namespace not torn down on every node: %w", err)
+		deprovisionDataErr = fmt.Errorf("%w: %w", ErrTeardownIncomplete, err)
 		teardownIncomplete = true
 	}
 
@@ -1224,8 +1235,11 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 
-	// 7. Delete cluster record
-	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
+	// 7. Delete cluster record. A failure returns with the row in place, so the
+	// caller's retry finds the cluster and finishes the teardown.
+	if _, err := cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID); err != nil {
+		return fmt.Errorf("failed to delete the cluster record of namespace %s: %w", cluster.NamespaceName, err)
+	}
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
 

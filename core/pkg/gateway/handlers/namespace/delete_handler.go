@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
+	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -156,9 +158,21 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	}
 
 	// 1. Deprovision the cluster (stops infra on ALL nodes, deletes cluster-state, deallocates ports, deletes DNS)
+	//
+	// A node that did not confirm its teardown is not a reason to stop here: by
+	// then the cluster row is gone and the unconfirmed teardown is recorded for
+	// replay, so stopping would leave the namespace row and its owner grant
+	// behind with no cluster, counted against the owner's cap, and a retry of
+	// the delete would find nothing to deprovision and do what is done below.
+	cleanupPending := false
 	if err := h.deprovisioner.DeprovisionCluster(r.Context(), namespaceID); err != nil {
-		failed("deprovision", "the namespace's cluster could not be deprovisioned; retry the delete", err)
-		return
+		if !errors.Is(err, namespacepkg.ErrTeardownIncomplete) {
+			failed("deprovision", "the namespace's cluster could not be deprovisioned; retry the delete", err)
+			return
+		}
+		cleanupPending = true
+		h.logger.Warn("Namespace cluster removed, but a node did not confirm its teardown; the teardown stays recorded for replay",
+			zap.String("namespace", ns), zap.Error(err))
 	}
 
 	// 2. Clean up deployments (teardown replicas on all nodes, unpin IPFS, delete DB records)
@@ -190,7 +204,7 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 		h.logger.Error("Namespace deleted, but its reference index marker could not be removed; it is inert", zap.String("namespace", ns), zap.Error(err))
 	}
 
-	h.logger.Info("Namespace deleted successfully", zap.String("namespace", ns))
+	h.logger.Info("Namespace deleted successfully", zap.String("namespace", ns), zap.Bool("cleanup_pending", cleanupPending))
 
 	// Deleting a namespace takes every deployment, key and grant in it with
 	// it. It is the most destructive thing an owner can do, so it belongs in
@@ -199,6 +213,11 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 	// Recorded at cluster level rather than against the namespace: names are
 	// reusable, and whoever creates this one next would otherwise open their
 	// audit trail on the previous tenant's wallet.
+	resp := map[string]interface{}{"status": "deleted", "namespace": ns}
+	if cleanupPending {
+		resp["cleanup_pending"] = true
+		metadata = withTeardownPending(metadata)
+	}
 	h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
 		Actor:    auth.ActorFromRequest(r),
 		Action:   action,
@@ -207,10 +226,18 @@ func (h *DeleteHandler) remove(w http.ResponseWriter, r *http.Request, ns, actio
 		Metadata: metadata,
 	})
 
-	writeDeleteResponse(w, http.StatusOK, map[string]interface{}{
-		"status":    "deleted",
-		"namespace": ns,
-	})
+	writeDeleteResponse(w, http.StatusOK, resp)
+}
+
+// withTeardownPending is metadata plus the note that a node's teardown is still
+// owed. The caller's map is not modified.
+func withTeardownPending(metadata map[string]string) map[string]string {
+	out := make(map[string]string, len(metadata)+1)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	out["teardown"] = "pending"
+	return out
 }
 
 // cleanupDeployments tears down all deployment replicas on all nodes, unpins IPFS content,

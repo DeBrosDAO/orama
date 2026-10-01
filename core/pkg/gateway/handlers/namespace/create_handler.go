@@ -44,6 +44,9 @@ const (
 	ErrCodeNamespaceCreation = "NAMESPACE_CREATION_DENIED"
 	// ErrCodeNamespaceName is returned when the name is not a legal one.
 	ErrCodeNamespaceName = "NAMESPACE_NAME_INVALID"
+	// ErrCodeNamespaceProvision is returned when the namespace's cluster could
+	// not be started and the create was undone.
+	ErrCodeNamespaceProvision = "NAMESPACE_PROVISION_FAILED"
 )
 
 // namespaceName is what a namespace may be called.
@@ -213,12 +216,14 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
-		Namespace: name,
-		Actor:     wallet,
-		Action:    auth.AuditNamespaceCreated,
-		Result:    auth.AuditSuccess,
-	})
+	recordCreated := func() {
+		h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
+			Namespace: name,
+			Actor:     wallet,
+			Action:    auth.AuditNamespaceCreated,
+			Result:    auth.AuditSuccess,
+		})
+	}
 
 	response := map[string]any{"name": name, "owner": wallet, "status": "created"}
 
@@ -228,13 +233,10 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.provisioner != nil {
 		clusterID, pollURL, err := h.provisioner.ProvisionNamespaceCluster(ctx, int(namespaceID), name, wallet)
 		if err != nil {
-			h.logger.Error("namespace created but provisioning did not start",
-				zap.String("namespace", name), zap.Error(err))
-			response["status"] = "created"
-			response["cluster"] = "not started: " + err.Error()
-			writeCreateJSON(w, http.StatusAccepted, response)
+			h.refuseUnprovisioned(w, r, namespaceID, name, err)
 			return
 		}
+		recordCreated()
 		response["status"] = "provisioning"
 		response["cluster_id"] = clusterID
 		response["poll_url"] = pollURL
@@ -243,7 +245,62 @@ func (h *CreateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	recordCreated()
 	writeCreateJSON(w, http.StatusCreated, response)
+}
+
+// refuseUnprovisioned undoes a create whose cluster could not be started, and
+// answers 503. A namespace row and owner grant with no cluster behind them
+// cannot be used, are counted against the wallet's cap, and keep the name
+// taken, and nothing but a delete would ever remove them.
+//
+// If the undo itself fails, the namespace stays and the answer says so: it is
+// then a namespace without a cluster, which its owner's delete removes.
+func (h *CreateHandler) refuseUnprovisioned(w http.ResponseWriter, r *http.Request, namespaceID int64, name string, cause error) {
+	h.logger.Error("namespace created but provisioning did not start",
+		zap.String("namespace", name), zap.Error(cause))
+	if err := h.removeUnprovisioned(r.Context(), namespaceID); err != nil {
+		h.logger.Error("could not undo the create of a namespace whose provisioning did not start",
+			zap.String("namespace", name), zap.Error(err))
+		h.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+			Namespace: name,
+			Actor:     walletFromContext(r),
+			Action:    auth.AuditNamespaceCreated,
+			Result:    auth.AuditSuccess,
+		})
+		writeCreateJSON(w, http.StatusInternalServerError, map[string]any{
+			"error": "the namespace's cluster could not be started (" + cause.Error() + ") and the namespace " +
+				"could not be removed again; delete namespace " + name + " to clear it",
+		})
+		return
+	}
+	writeCreateJSON(w, http.StatusServiceUnavailable, map[string]any{
+		"error": "the namespace's cluster could not be started, so nothing was created: " + cause.Error(),
+		"code":  ErrCodeNamespaceProvision,
+	})
+}
+
+// removeUnprovisioned deletes a namespace's owner grants and its row, unless a
+// cluster row exists for it: provisioning that failed after recording its
+// cluster is a cluster the owner's delete deprovisions, not something to drop
+// from under it. The guard is in each statement, as the cap is in the grant's.
+func (h *CreateHandler) removeUnprovisioned(ctx context.Context, namespaceID int64) error {
+	const noCluster = " AND NOT EXISTS (SELECT 1 FROM namespace_clusters WHERE namespace_id = ?)"
+	if _, err := h.ormClient.Exec(ctx, "DELETE FROM grants WHERE namespace_id = ?"+noCluster, namespaceID, namespaceID); err != nil {
+		return fmt.Errorf("delete the grants of namespace %d: %w", namespaceID, err)
+	}
+	res, err := h.ormClient.Exec(ctx, "DELETE FROM namespaces WHERE id = ?"+noCluster, namespaceID, namespaceID)
+	if err != nil {
+		return fmt.Errorf("delete namespace %d: %w", namespaceID, err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete namespace %d: could not read whether the row was removed: %w", namespaceID, err)
+	}
+	if removed == 0 {
+		return fmt.Errorf("namespace %d has a cluster record, so it was kept", namespaceID)
+	}
+	return nil
 }
 
 // walletFromContext returns the signed-in wallet, or "" when the caller
