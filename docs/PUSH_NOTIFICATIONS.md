@@ -572,7 +572,7 @@ and nothing is persisted to `preferences.yaml`. Each node:
 node's ntfy is independent (no shared store) and subscribers land on one of
 them by round-robin DNS, so a publish through the platform ntfy is sent to every
 active node. The namespace gateway reads `id` and `internal_ip` of the active
-rows in the cluster registry's `dns_nodes` (its own RQLite has an empty one; cached 30 s; a node with no `internal_ip` is skipped, never
+rows in the cluster registry's `dns_nodes` (its own RQLite has an empty one; cached 30 s; a node whose `internal_ip` is empty or outside the WireGuard overlay `10.0.0.0/24` is skipped, never
 reached by its public address) and POSTs to each node's index gateway,
 `http://<internal_ip>:10104/v1/internal/push/ntfy/<topic>`, with a v2
 coordination MAC (covers the body; audience is the target node's peer id; see

@@ -26,7 +26,9 @@ func TestNtfyFanoutResolver_readsTheRegistrysActiveOverlayNodes(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO dns_nodes (id, ip_address, internal_ip, status) VALUES
 		('n1', '192.0.2.1', '10.0.0.1', 'active'),
 		('n2', '192.0.2.2', '10.0.0.2', 'inactive'),
-		('n3', '192.0.2.3', '', 'active')`); err != nil {
+		('n3', '192.0.2.3', '', 'active'),
+		('n4', '192.0.2.4', '203.0.113.9', 'active'),
+		('n5', '192.0.2.5', 'not-an-ip', 'active')`); err != nil {
 		t.Fatalf("seed dns_nodes: %v", err)
 	}
 	targets, err := newNtfyFanoutResolver(c, time.Minute).Targets(ctx)
@@ -34,7 +36,7 @@ func TestNtfyFanoutResolver_readsTheRegistrysActiveOverlayNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(targets) != 1 || targets[0].NodeID != "n1" || targets[0].BaseURL != fmt.Sprintf("http://10.0.0.1:%d", constants.GatewayAPIPort) {
-		t.Fatalf("targets %+v, want n1 on its overlay address alone", targets)
+		t.Fatalf("targets %+v, want n1 on its overlay address alone (a public or malformed internal_ip is never a target)", targets)
 	}
 }
 

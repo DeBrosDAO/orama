@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -70,11 +71,22 @@ func newNtfyFanoutResolver(registry rqlite.Client, ttl time.Duration) *ntfyFanou
 			}
 			nodes := make([]ntfyFanoutNode, 0, len(rows))
 			for _, r := range rows {
+				if !onOverlay(r.InternalIP) {
+					// The publish carries the tenant's message and a MAC over
+					// plaintext HTTP: it goes to an overlay address or nowhere.
+					continue
+				}
 				nodes = append(nodes, ntfyFanoutNode{ID: r.ID, InternalIP: r.InternalIP})
 			}
 			return nodes, nil
 		},
 	}
+}
+
+// onOverlay reports whether ip is an address inside the WireGuard mesh.
+func onOverlay(ip string) bool {
+	addr, err := netip.ParseAddr(ip)
+	return err == nil && constants.WireGuardOverlay().Contains(addr)
 }
 
 // Targets returns the cached fan-out targets, refreshing from the query when the
