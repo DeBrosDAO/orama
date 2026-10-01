@@ -137,6 +137,9 @@ func mintKey(t testing.TB, n *ns.Namespace, scope string) key {
 
 func newKey(t testing.TB, n *ns.Namespace, scope string) key {
 	t.Helper()
+	if n.Owner == nil {
+		t.Fatalf("namespace %s has no HTTP owner session (created ViaOperator), so a key cannot be minted over HTTP; use the CLI", n.Name)
+	}
 	var k key
 	resp := Post(t, n.Client, PathKeys, Owner(n), map[string]any{"scope": scope, "label": "e2e-" + scope})
 	if err := resp.Expect(t, http.StatusCreated).Decode(&k); err != nil || k.APIKey == "" {

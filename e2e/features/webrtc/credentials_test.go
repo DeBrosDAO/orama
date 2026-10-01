@@ -138,7 +138,7 @@ func TestSignal_accessAndRooms(t *testing.T) {
 	if _, resp, err := fx.c.DialWS(t.Context(), services.SignalPath+"?room=r", "", nil); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("an anonymous signalling socket: %v", err)
 	}
-	key := tenancy.APIKey(t, fx.n, "app-runtime")
+	key := runtimeKey(t, fx.n)
 	if _, resp, err := fx.c.DialWS(t.Context(), services.SignalPath+"?room=r", "", http.Header{"X-API-Key": {key}}); err == nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("a signalling socket with a key alone: %v", err)
 	}

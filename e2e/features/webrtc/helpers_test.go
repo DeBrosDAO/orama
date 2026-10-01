@@ -5,6 +5,7 @@ package webrtc
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,32 @@ const (
 	pollEvery       = 3 * time.Second
 	dialBudget      = 15 * time.Second
 )
+
+// cliKeyShape is the key `orama namespace keys create` prints once, on a line
+// of its own; the id is on an "id:" line.
+var (
+	cliKeyShape = regexp.MustCompile(`(?m)^\s*(orama_(?:sk|rk)_[0-9A-Za-z]+_[0-9A-Za-z]+)\s*$`)
+	cliKeyID    = regexp.MustCompile(`(?m)^\s+id:\s+(\d+)\s*$`)
+)
+
+// runtimeKey mints an app-runtime key with the operator's CLI (the namespace
+// has no HTTP owner session: ViaOperator) and revokes it at cleanup.
+func runtimeKey(t *testing.T, n *ns.Namespace) string {
+	t.Helper()
+	out := n.CLI.MustOK(t, "namespace", "keys", "create", "--scope", "app-runtime", "--label", "e2e-webrtc").Stdout
+	key, id := cliKeyShape.FindStringSubmatch(out), cliKeyID.FindStringSubmatch(out)
+	if key == nil || id == nil {
+		t.Fatalf("keys create printed no key or id: %q", out)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
+		defer cancel()
+		if res, err := n.CLI.Run(ctx, "namespace", "keys", "revoke", "--id", id[1]); err != nil || res.Exit != 0 {
+			t.Errorf("cleanup: revoking key %s in %s: %v %s", id[1], n.Name, err, res.Stderr)
+		}
+	})
+	return key[1]
+}
 
 func sfuUnit(name string) string { return "orama-namespace-sfu@" + name + ".service" }
 
