@@ -40,10 +40,13 @@ func ParseSS(out string) ([]Listener, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ss line %d: port in %q: %w", i+1, local, err)
 		}
-		addr := strings.Trim(local[:sep], "[]")
+		// ss writes a scoped address as [fe80::1]%ens3: the zone follows the
+		// bracket, so it is cut before the brackets are trimmed.
+		addr := local[:sep]
 		if pct := strings.Index(addr, "%"); pct >= 0 {
 			addr = addr[:pct]
 		}
+		addr = strings.Trim(addr, "[]")
 		l := Listener{Proto: fields[0], Addr: addr, Port: port}
 		if m := ssProcess.FindStringSubmatch(line); m != nil {
 			l.Process = m[1]

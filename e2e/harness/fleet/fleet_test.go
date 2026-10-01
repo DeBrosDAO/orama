@@ -210,6 +210,18 @@ udp   UNCONN 0      0          0.0.0.0:51820      0.0.0.0:*
 	}
 }
 
+// ss writes a scoped IPv6 address with the zone after the bracket; the address
+// comes out bare, as an unscoped one does.
+func TestParseSS_scopedLinkLocalAddress(t *testing.T) {
+	ls, err := ParseSS(`udp   UNCONN 0      0      [fe80::f816:3eff:fe59:ce1e]%ens3:546          [::]:*    users:(("systemd-network",pid=7,fd=21))` + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ls) != 1 || ls[0].Addr != "fe80::f816:3eff:fe59:ce1e" || ls[0].Port != 546 || ls[0].Public() {
+		t.Fatalf("ls %+v", ls)
+	}
+}
+
 func TestParseUFW_statusAndAllows(t *testing.T) {
 	out := `Status: active
 

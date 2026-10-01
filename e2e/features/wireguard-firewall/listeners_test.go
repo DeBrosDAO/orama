@@ -75,7 +75,9 @@ func private(addr string) bool {
 		return false
 	}
 	_, mesh, _ := net.ParseCIDR(infra.WireGuardSubnet)
-	return ip.IsLoopback() || mesh.Contains(ip)
+	// A link-local address (DHCPv6's client on fe80::/10) is not routed
+	// beyond the link, so it is no more reachable than loopback.
+	return ip.IsLoopback() || ip.IsLinkLocalUnicast() || mesh.Contains(ip)
 }
 
 // TestListeners_onlyEdgePortsPublic: on every node, a socket bound to a
