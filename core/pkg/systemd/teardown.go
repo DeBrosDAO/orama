@@ -39,9 +39,12 @@ func (m *Manager) TeardownService(namespace string, serviceType ServiceType) err
 }
 
 // resetFailedUnit clears the failed state of a unit that has been stopped and
-// disabled. `systemctl reset-failed` on a unit that is not failed is a no-op; on
-// one systemd does not know it fails, which is success only when systemd
-// confirms nothing is loaded under that name.
+// disabled. systemd only has a unit in memory to reset while it is failed (or
+// running), so `systemctl reset-failed` on a stopped unit that did not fail
+// exits 1 with "not loaded". That is not a failure: LoadState cannot tell the
+// two apart, because systemd reports every instance of an installed template
+// as loaded, so the reset has failed only if the unit is still in the failed
+// state afterwards.
 func (m *Manager) resetFailedUnit(unit string) error {
 	output, err := m.runUnit("reset-failed", unit)
 	if err == nil {
@@ -51,7 +54,7 @@ func (m *Manager) resetFailedUnit(unit string) error {
 	if stateErr != nil {
 		return fmt.Errorf("failed to reset the failed state of %s: %w; output: %s (and its state could not be read: %v)", unit, err, string(output), stateErr)
 	}
-	if !state.loaded() {
+	if state.Active != activeStateFailed {
 		return nil
 	}
 	return fmt.Errorf("failed to reset the failed state of %s: %w; output: %s", unit, err, string(output))

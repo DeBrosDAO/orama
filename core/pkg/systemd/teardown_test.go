@@ -411,3 +411,24 @@ func TestTeardownService_aUnitSystemdDoesNotKnowNeedsNoReset(t *testing.T) {
 		t.Fatalf("err = %v, want nil: nothing is loaded under that name", err)
 	}
 }
+
+// systemd reports every instance of an installed template as loaded, and
+// reset-failed on one that is stopped and did not fail exits 1 "not loaded".
+// Stagenet e2e run 21: every WebRTC teardown reported its SFU and TURN units as
+// incomplete because the unit read as loaded.
+func TestTeardownService_aStoppedUnitThatNeverFailedNeedsNoReset(t *testing.T) {
+	m, _ := newFakeManager(t)
+	m.runUnitCmd = func(args ...string) ([]byte, error) {
+		if args[0] == "reset-failed" {
+			return []byte("Failed to reset failed state of unit: Unit not loaded."), errors.New("exit status 1")
+		}
+		return nil, nil
+	}
+	m.unitState = func(string) (unitState, error) {
+		return unitState{Load: "loaded", Active: "inactive", UnitFile: "disabled"}, nil
+	}
+
+	if err := m.TeardownService("acme", ServiceTypeSFU); err != nil {
+		t.Fatalf("err = %v, want nil: the unit is stopped and not failed", err)
+	}
+}
