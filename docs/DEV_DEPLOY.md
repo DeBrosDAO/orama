@@ -609,7 +609,7 @@ cd chain/scripts/stagenet
 ./deploy.sh register   # after 2 epochs: operator, node, bonds, hot key, capacity, then provider and archiver
 ./deploy.sh invariants
 ./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
-SHIELDED_SCENARIO=build/stagenet-shielded-scenario.json ./deploy.sh smoke
+SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke   # gen-shielded prints this path
 ```
 
 `up` builds `oramad` (`make build-linux-amd64-full`), `orama-global` and the `stagenet-node` helper
