@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
@@ -156,6 +157,7 @@ type IPFSData struct {
 type DNSData struct {
 	CoreDNSActive   bool
 	CaddyActive     bool
+	DigMissing      bool // dig is not installed: the resolution checks cannot run
 	Port53Bound     bool
 	Port80Bound     bool
 	Port443Bound    bool
@@ -671,20 +673,23 @@ echo "$SEP"
 	return data
 }
 
-func collectDNS(ctx context.Context, node Node) *DNSData {
-	data := &DNSData{
-		BaseTLSDaysLeft: -1,
-		WildTLSDaysLeft: -1,
-	}
+// The units collectDNS asks about. The host units caddy.service and
+// coredns.service were replaced by the namespace-templated ones, so asking
+// systemd about the old names reports a live nameserver as down.
+var (
+	dnsCoreDNSUnit = systemd.NamespaceUnit(systemd.ServiceTypeCoreDNS, systemd.NameserverNamespace)
+	dnsCaddyUnit   = systemd.NamespaceUnit(systemd.ServiceTypeCaddy, systemd.IndexNamespace)
+)
 
-	// Get the domain from the node's role (e.g. "nameserver-ns1" -> we need the domain)
-	// We'll discover the domain from Corefile
-	cmd := `
-SEP="===INSPECTOR_SEP==="
+// dnsCollectScript prints the DNS facts collectDNS parses, one section per
+// separator. /etc/coredns/Corefile is root:orama-coredns 0640, so the zone
+// is read through sudo: read as the SSH user it comes back empty and dig
+// then asks for the root zone, which answers.
+var dnsCollectScript = `SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-(systemctl is-active --quiet orama-namespace-coredns@nameserver && echo active) || (systemctl is-active --quiet coredns && echo active) || echo inactive
+(systemctl is-active --quiet ` + dnsCoreDNSUnit + ` && echo active) || (systemctl is-active --quiet coredns && echo active) || echo inactive
 echo "$SEP"
-systemctl is-active caddy 2>/dev/null
+systemctl is-active ` + dnsCaddyUnit + ` 2>/dev/null
 echo "$SEP"
 ss -ulnp 2>/dev/null | grep ':53 ' | head -1
 echo "$SEP"
@@ -694,27 +699,38 @@ ss -tlnp 2>/dev/null | grep ':443 ' | head -1
 echo "$SEP"
 ps -C coredns -o rss= 2>/dev/null | head -1 || echo 0
 echo "$SEP"
-systemctl show orama-namespace-coredns@nameserver --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show ` + dnsCoreDNSUnit + ` --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
-journalctl -u orama-namespace-coredns@nameserver -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
+journalctl -u ` + dnsCoreDNSUnit + ` -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
 echo "$SEP"
 test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
-DOMAIN=$(grep -oP '^\S+(?=\s*\{)' /etc/coredns/Corefile 2>/dev/null | grep -v '^\.' | head -1)
+DOMAIN=$(sudo -n grep -oP '^\S+(?=\s*\{)' /etc/coredns/Corefile 2>/dev/null | grep -v '^\.' | head -1)
 echo "DOMAIN:${DOMAIN}"
-dig @127.0.0.1 SOA ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 SOA ${DOMAIN} +short 2>/dev/null | head -1
 echo "$SEP"
-dig @127.0.0.1 NS ${DOMAIN} +short 2>/dev/null
+[ -n "$DOMAIN" ] && dig @127.0.0.1 NS ${DOMAIN} +short 2>/dev/null
 echo "$SEP"
-dig @127.0.0.1 A test-wildcard.${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A test-wildcard.${DOMAIN} +short 2>/dev/null | head -1
 echo "$SEP"
-dig @127.0.0.1 A ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A ${DOMAIN} +short 2>/dev/null | head -1
 echo "$SEP"
 echo | openssl s_client -servername ${DOMAIN} -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
 echo "$SEP"
 echo | openssl s_client -servername "*.${DOMAIN}" -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
+echo "$SEP"
+command -v dig >/dev/null && echo yes || echo no
 `
-	res := RunSSH(ctx, node, cmd)
+
+func collectDNS(ctx context.Context, node Node) *DNSData {
+	data := &DNSData{
+		BaseTLSDaysLeft: -1,
+		WildTLSDaysLeft: -1,
+	}
+
+	// Get the domain from the node's role (e.g. "nameserver-ns1" -> we need the domain)
+	// We'll discover the domain from Corefile
+	res := RunSSH(ctx, node, dnsCollectScript)
 	if !res.OK() && res.Stdout == "" {
 		return data
 	}
@@ -786,6 +802,10 @@ echo | openssl s_client -servername "*.${DOMAIN}" -connect localhost:443 2>/dev/
 	// TLS cert days left (wildcard)
 	if len(parts) > 15 {
 		data.WildTLSDaysLeft = parseTLSExpiry(strings.TrimSpace(parts[15]))
+	}
+
+	if len(parts) > 16 {
+		data.DigMissing = strings.TrimSpace(parts[16]) == "no"
 	}
 
 	return data

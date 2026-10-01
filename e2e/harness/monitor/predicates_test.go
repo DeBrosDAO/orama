@@ -62,7 +62,7 @@ func TestConverged_rejects(t *testing.T) {
 		"incomplete mesh": {func(r *Report) { r.Nodes[0].Report.WireGuard.Peers = r.Nodes[0].Report.WireGuard.Peers[:1] }, "1 wg peers, want 2"},
 		"crash loop":      {func(r *Report) { r.Nodes[0].Report.Services.Services[0].RestartLoopRisk = true }, "crash-looping"},
 		"failed unit":     {func(r *Report) { r.Nodes[1].Report.Services.FailedUnits = []string{"orama-turn"} }, "failed units"},
-		"stale report":    {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 31s old"},
+		"stale report":    {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 91s old"},
 		"unreachable node": {func(r *Report) {
 			r.Nodes[2].Status, r.Nodes[2].Error, r.Nodes[2].Report = "unreachable", "timeout", nil
 		}, "no report (timeout)"},

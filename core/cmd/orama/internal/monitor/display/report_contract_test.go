@@ -183,7 +183,7 @@ func TestFullReport_reportAgeReachesTheHarness(t *testing.T) {
 	if r.Nodes[2].ReportAgeSec != lifecycle.MaxReportAgeSec+10 {
 		t.Fatalf("report_age_sec = %d", r.Nodes[2].ReportAgeSec)
 	}
-	if err := r.Converged(3); err == nil || !strings.Contains(err.Error(), "report is 40s old") {
+	if err := r.Converged(3); err == nil || !strings.Contains(err.Error(), "report is 100s old") {
 		t.Fatalf("a stale report counted as converged: %v", err)
 	}
 }

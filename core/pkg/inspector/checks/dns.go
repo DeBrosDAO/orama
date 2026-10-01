@@ -46,10 +46,10 @@ func checkDNSPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	// 4.47 Caddy service running
 	if dns.CaddyActive {
 		r = append(r, inspector.Pass("dns.caddy_active", "Caddy service active", dnsSub, node,
-			"caddy is active", inspector.Critical))
+			"orama-namespace-caddy@index is active", inspector.Critical))
 	} else {
 		r = append(r, inspector.Fail("dns.caddy_active", "Caddy service active", dnsSub, node,
-			"caddy is not active", inspector.Critical))
+			"orama-namespace-caddy@index is not active", inspector.Critical))
 	}
 
 	// 4.8 DNS port 53 bound
@@ -126,40 +126,44 @@ func checkDNSPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 			"/etc/coredns/Corefile NOT found", inspector.High))
 	}
 
-	// 4.20 SOA resolution
-	if dns.SOAResolves {
-		r = append(r, inspector.Pass("dns.soa_resolves", "SOA record resolves", dnsSub, node,
-			"dig SOA returned result", inspector.Critical))
+	if dns.DigMissing {
+		r = append(r, digMissingSkips(node)...)
 	} else {
-		r = append(r, inspector.Fail("dns.soa_resolves", "SOA record resolves", dnsSub, node,
-			"dig SOA returned no result", inspector.Critical))
-	}
+		// 4.20 SOA resolution
+		if dns.SOAResolves {
+			r = append(r, inspector.Pass("dns.soa_resolves", "SOA record resolves", dnsSub, node,
+				"dig SOA returned result", inspector.Critical))
+		} else {
+			r = append(r, inspector.Fail("dns.soa_resolves", "SOA record resolves", dnsSub, node,
+				"dig SOA returned no result", inspector.Critical))
+		}
 
-	// 4.21 NS records resolve
-	if dns.NSResolves {
-		r = append(r, inspector.Pass("dns.ns_resolves", "NS records resolve", dnsSub, node,
-			fmt.Sprintf("%d NS records returned", dns.NSRecordCount), inspector.Critical))
-	} else {
-		r = append(r, inspector.Fail("dns.ns_resolves", "NS records resolve", dnsSub, node,
-			"dig NS returned no results", inspector.Critical))
-	}
+		// 4.21 NS records resolve
+		if dns.NSResolves {
+			r = append(r, inspector.Pass("dns.ns_resolves", "NS records resolve", dnsSub, node,
+				fmt.Sprintf("%d NS records returned", dns.NSRecordCount), inspector.Critical))
+		} else {
+			r = append(r, inspector.Fail("dns.ns_resolves", "NS records resolve", dnsSub, node,
+				"dig NS returned no results", inspector.Critical))
+		}
 
-	// 4.23 Wildcard DNS resolution
-	if dns.WildcardResolves {
-		r = append(r, inspector.Pass("dns.wildcard_resolves", "Wildcard DNS resolves", dnsSub, node,
-			"test-wildcard.<domain> returned IP", inspector.Critical))
-	} else {
-		r = append(r, inspector.Fail("dns.wildcard_resolves", "Wildcard DNS resolves", dnsSub, node,
-			"test-wildcard.<domain> returned no IP", inspector.Critical))
-	}
+		// 4.23 Wildcard DNS resolution
+		if dns.WildcardResolves {
+			r = append(r, inspector.Pass("dns.wildcard_resolves", "Wildcard DNS resolves", dnsSub, node,
+				"test-wildcard.<domain> returned IP", inspector.Critical))
+		} else {
+			r = append(r, inspector.Fail("dns.wildcard_resolves", "Wildcard DNS resolves", dnsSub, node,
+				"test-wildcard.<domain> returned no IP", inspector.Critical))
+		}
 
-	// 4.24 Base domain A record
-	if dns.BaseAResolves {
-		r = append(r, inspector.Pass("dns.base_a_resolves", "Base domain A record resolves", dnsSub, node,
-			"<domain> A record returned IP", inspector.High))
-	} else {
-		r = append(r, inspector.Warn("dns.base_a_resolves", "Base domain A record resolves", dnsSub, node,
-			"<domain> A record returned no IP", inspector.High))
+		// 4.24 Base domain A record
+		if dns.BaseAResolves {
+			r = append(r, inspector.Pass("dns.base_a_resolves", "Base domain A record resolves", dnsSub, node,
+				"<domain> A record returned IP", inspector.High))
+		} else {
+			r = append(r, inspector.Warn("dns.base_a_resolves", "Base domain A record resolves", dnsSub, node,
+				"<domain> A record returned no IP", inspector.High))
+		}
 	}
 
 	// 4.50 TLS certificate - base domain
@@ -221,4 +225,17 @@ func checkDNSCrossNode(data *inspector.ClusterData) []inspector.CheckResult {
 	}
 
 	return r
+}
+
+const digMissingMsg = "dig is not installed on this node (apt install bind9-dnsutils), so resolution cannot be checked"
+
+// digMissingSkips is the four resolution checks as skipped: a missing dig
+// says nothing about whether the zone resolves.
+func digMissingSkips(node string) []inspector.CheckResult {
+	return []inspector.CheckResult{
+		inspector.Skip("dns.soa_resolves", "SOA record resolves", dnsSub, node, digMissingMsg, inspector.Critical),
+		inspector.Skip("dns.ns_resolves", "NS records resolve", dnsSub, node, digMissingMsg, inspector.Critical),
+		inspector.Skip("dns.wildcard_resolves", "Wildcard DNS resolves", dnsSub, node, digMissingMsg, inspector.Critical),
+		inspector.Skip("dns.base_a_resolves", "Base domain A record resolves", dnsSub, node, digMissingMsg, inspector.High),
+	}
 }

@@ -92,7 +92,7 @@ var convergedRejections = map[string]struct {
 		r.Nodes[1].Report.Services.FailedUnits = []string{"orama-namespace-turn@anchat"}
 	}, "failed units"},
 	"a node reporting not-ok": {func(r *Report) { r.Nodes[2].Status = "degraded" }, `status "degraded"`},
-	"a stale report":          {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 31s old"},
+	"a stale report":          {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 91s old"},
 	"an unreachable node": {func(r *Report) {
 		r.Nodes[2].Status, r.Nodes[2].Error, r.Nodes[2].Report = "unreachable", "SSH failed", nil
 	}, "no report (SSH failed)"},

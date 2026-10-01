@@ -31,9 +31,13 @@ const (
 )
 
 // MaxReportAgeSec is the oldest a node's report may be for the cluster to
-// count as converged: the gateway gathers telemetry every 10s and caches it
-// 5s, so an older report describes the cluster as it was.
-const MaxReportAgeSec = 30
+// count as converged: the age after which the gateway itself stops counting a
+// report (pkg/gateway/telemetry.go telemetryStaleAfter: three missed 10s
+// collections plus the 60s collection timeout). A node under load takes a
+// while to collect, so its report's age legitimately swings between 0 and the
+// collection time plus the 10s interval; a tighter bound failed a healthy
+// node whose collection took 25s.
+const MaxReportAgeSec = 90
 
 // Report is the whole `orama monitor report --json` document.
 type Report struct {
