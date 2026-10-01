@@ -337,12 +337,7 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string, walletC
 	// count, and a wallet capped at ten was seen owning twelve. Raft applies
 	// one statement at a time, so the count in its WHERE sees every grant
 	// committed before it.
-	res, err = h.ormClient.Exec(ctx,
-		`INSERT INTO grants(principal_id, namespace_id, role, created_by)
-		 SELECT id, ?, 'owner', ? FROM principals WHERE type = 'wallet' AND identifier = ?
-		   AND (SELECT COUNT(*) FROM grants g JOIN principals p ON p.id = g.principal_id
-		         WHERE p.type = 'wallet' AND p.identifier = ? AND g.role = 'owner' AND g.revoked_at IS NULL) < ?`,
-		rows[0].ID, owner, owner, owner, walletCap)
+	res, err = h.ormClient.Exec(ctx, ownerGrantUnderCap, rows[0].ID, owner, owner, owner, walletCap)
 	if err != nil {
 		return 0, fmt.Errorf("the namespace was created but its owner grant could not be recorded, "+
 			"so it would be unowned and claimable: %w", err)
@@ -361,6 +356,14 @@ func (h *CreateHandler) create(ctx context.Context, name, wallet string, walletC
 	}
 	return rows[0].ID, nil
 }
+
+// ownerGrantUnderCap writes a namespace's owner grant only while the wallet
+// owns fewer than the cap: args are the namespace id, the owner (created_by),
+// the owner (principal), the owner (counted) and the cap.
+const ownerGrantUnderCap = `INSERT INTO grants(principal_id, namespace_id, role, created_by)
+		 SELECT id, ?, 'owner', ? FROM principals WHERE type = 'wallet' AND identifier = ?
+		   AND (SELECT COUNT(*) FROM grants g JOIN principals p ON p.id = g.principal_id
+		         WHERE p.type = 'wallet' AND p.identifier = ? AND g.role = 'owner' AND g.revoked_at IS NULL) < ?`
 
 // errNamespaceQuota is create's answer when the wallet reached its cap
 // between the handler's count and the owner grant.
