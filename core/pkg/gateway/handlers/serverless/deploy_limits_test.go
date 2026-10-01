@@ -104,6 +104,36 @@ func TestDeployFunction_acceptsLimitsInRangeAndAbsent(t *testing.T) {
 	}
 }
 
+// TestDeployFunction_acceptsZeroRetries: "never retry" is a retry count of 0,
+// the default; a definition that states it must deploy (the reference apps'
+// function.yaml does, and every one of their deploys was refused).
+func TestDeployFunction_acceptsZeroRetries(t *testing.T) {
+	reg := &recordingRegistry{mockRegistry: newMockRegistry()}
+	h := newTestHandlers(reg)
+	rec := httptest.NewRecorder()
+
+	h.DeployFunction(rec, limitsDeployRequest(t, "", map[string]string{"retry_count": "0", "retry_delay_seconds": "0"}))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	if def := reg.registered[0]; def.RetryCount != 0 || def.RetryDelaySeconds != 0 {
+		t.Errorf("registered retry=%d delay=%d, want 0/0", def.RetryCount, def.RetryDelaySeconds)
+	}
+}
+
+func TestDeployFunction_refusesNegativeRetries(t *testing.T) {
+	reg := &recordingRegistry{mockRegistry: newMockRegistry()}
+	h := newTestHandlers(reg)
+	rec := httptest.NewRecorder()
+
+	h.DeployFunction(rec, limitsDeployRequest(t, "", map[string]string{"retry_count": "-1"}))
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "retry_count") {
+		t.Fatalf("status = %d, want 400 naming retry_count: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestDeployFunction_usesConfiguredMaxima(t *testing.T) {
 	reg := &recordingRegistry{mockRegistry: newMockRegistry()}
 	h := newTestHandlers(reg)

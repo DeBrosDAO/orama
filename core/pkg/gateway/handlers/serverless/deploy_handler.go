@@ -60,16 +60,16 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		}
 		var limitErr error
 		if v := r.FormValue(fieldMemoryLimitMB); v != "" {
-			def.MemoryLimitMB, limitErr = parseDeployInt(fieldMemoryLimitMB, v, h.maxMemoryLimitMB)
+			def.MemoryLimitMB, limitErr = parseDeployInt(fieldMemoryLimitMB, v, minLimitValue, h.maxMemoryLimitMB)
 		}
 		if v := r.FormValue(fieldTimeoutSeconds); v != "" && limitErr == nil {
-			def.TimeoutSeconds, limitErr = parseDeployInt(fieldTimeoutSeconds, v, h.maxTimeoutSeconds)
+			def.TimeoutSeconds, limitErr = parseDeployInt(fieldTimeoutSeconds, v, minLimitValue, h.maxTimeoutSeconds)
 		}
 		if v := r.FormValue(fieldRetryCount); v != "" && limitErr == nil {
-			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, noMaximum)
+			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, minRetryValue, noMaximum)
 		}
 		if v := r.FormValue(fieldRetryDelaySeconds); v != "" && limitErr == nil {
-			def.RetryDelaySeconds, limitErr = parseDeployInt(fieldRetryDelaySeconds, v, noMaximum)
+			def.RetryDelaySeconds, limitErr = parseDeployInt(fieldRetryDelaySeconds, v, minRetryValue, noMaximum)
 		}
 		if limitErr != nil {
 			writeError(w, http.StatusBadRequest, limitErr.Error())

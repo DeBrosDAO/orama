@@ -19,16 +19,23 @@ const (
 // whole number, not against a configured ceiling.
 const noMaximum = 0
 
+// Smallest value a present deploy field may carry. Memory and timeout have no
+// meaningful zero; a retry count or delay of 0 means "never retry" / "retry at
+// once", which is the registry's default and a value a definition may state.
+const (
+	minLimitValue = 1
+	minRetryValue = 0
+)
+
 // parseDeployInt reads one numeric deploy form field. A present field must be
-// a whole number of at least 1 and at most maxValue (noMaximum = no ceiling):
-// an absent field is the caller's business (it keeps the default), a
-// present-but-zero one is not.
-func parseDeployInt(field, raw string, maxValue int) (int, error) {
+// a whole number of at least minValue and at most maxValue (noMaximum = no
+// ceiling); an absent field is the caller's business (it keeps the default).
+func parseDeployInt(field, raw string, minValue, maxValue int) (int, error) {
 	n, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a whole number, got %q", field, raw)
 	}
-	return n, checkDeployInt(field, n, maxValue, 1)
+	return n, checkDeployInt(field, n, maxValue, minValue)
 }
 
 // checkDeployInt refuses a value below minValue or above maxValue.

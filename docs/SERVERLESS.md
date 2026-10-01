@@ -60,14 +60,15 @@ memory: 64              # Memory limit in MB (1-256, default: 64). Enforced per
                         # is below 1, or is above the gateway's maximum (256 MB,
                         # 60 s) is refused 400 VALIDATION_FAILED naming the field.
 timeout: 30             # Execution timeout in seconds (1-60, default: 30)
-                        # Bump to 60-300 for batch DB ops, schema migrations,
+                        # Raise it toward the 60 s maximum for batch DB ops, schema migrations,
                         # or anything that does many sequential host calls.
                         # Exceeding this timeout on a direct invoke returns
                         # HTTP 429 {ok:false, error:{code:"RATE_LIMITED",...}}
                         # (retryable). The code "TIMEOUT" (HTTP 504) appears
                         # only when the namespace-proxy budget is exceeded.
 retry:
-  count: 0              # Retry attempts on failure (default: 0)
+  count: 0              # Retry attempts on failure (default: 0 = never retry;
+                        # a negative count or delay is refused 400 VALIDATION_FAILED)
   delay: 5              # Seconds between retries (default: 5)
 env:                    # Environment variables (accessible via get_env)
   MY_VAR: "value"
