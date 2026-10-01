@@ -94,6 +94,26 @@ func LoadCredentials() (*CredentialStore, error) {
 	return &store, nil
 }
 
+// UpdateCredentials is UpdateEnhancedCredentials for the legacy store: load,
+// apply and save under the credential file's lock. update must not take the
+// lock itself.
+func UpdateCredentials(update func(*CredentialStore) error) error {
+	unlock, err := lockCredentialFile()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	store, err := LoadCredentials()
+	if err != nil {
+		return err
+	}
+	if err := update(store); err != nil {
+		return err
+	}
+	return store.SaveCredentials()
+}
+
 // SaveCredentials saves credentials to ~/.orama/credentials.json
 func (store *CredentialStore) SaveCredentials() error {
 	credPath, err := GetCredentialsPath()
@@ -264,22 +284,24 @@ func HasValidCredentials() (bool, error) {
 
 // SaveCredentialsForDefaultGateway saves credentials for the default gateway
 func SaveCredentialsForDefaultGateway(creds *Credentials) error {
-	store, err := LoadCredentials()
-	if err != nil {
-		return err
-	}
-
 	gatewayURL, err := ResolveGatewayURL()
 	if err != nil {
 		return err
 	}
-	store.SetCredentialsForGateway(gatewayURL, creds)
-
-	return store.SaveCredentials()
+	return UpdateCredentials(func(store *CredentialStore) error {
+		store.SetCredentialsForGateway(gatewayURL, creds)
+		return nil
+	})
 }
 
 // ClearAllCredentials removes all stored credentials
 func ClearAllCredentials() error {
+	unlock, err := lockCredentialFile()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	store := &CredentialStore{
 		Gateways: make(map[string]*Credentials),
 		Version:  "1.0",

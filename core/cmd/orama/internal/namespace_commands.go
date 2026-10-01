@@ -374,17 +374,15 @@ func NamespaceDelete(force bool) error {
 
 	// The remote namespace is gone either way, so a failure to tidy the local
 	// credential file is reported without failing the command.
-	store, err := auth.LoadEnhancedCredentials()
+	removed := false
+	err = auth.UpdateEnhancedCredentials(func(store *auth.EnhancedCredentialStore) error {
+		removed = store.RemoveCredentialByNamespace(gatewayURL, namespace)
+		return nil
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to clean up local credentials: %v\n", err)
-		return nil
-	}
-	if store.RemoveCredentialByNamespace(gatewayURL, namespace) {
-		if err := store.Save(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to clean up local credentials: %v\n", err)
-		} else {
-			fmt.Printf("Local credentials for '%s' cleared.\n", namespace)
-		}
+	} else if removed {
+		fmt.Printf("Local credentials for '%s' cleared.\n", namespace)
 	}
 
 	fmt.Printf("Run 'orama auth login' to create a new namespace.\n")

@@ -78,6 +78,13 @@ otherwise refreshes and writes the rotated refresh token back before releasing
 the lock. Two commands renewing at once would otherwise both present the same
 refresh token, and the second would be refused as a replay.
 
+Every other change to `~/.orama/credentials.json` (`auth login`, `auth switch`,
+logout, `namespace delete`) takes the same lock around its load, change and
+save, so two commands saving at once, such as two terminals or two runners signing
+in under one `HOME`, both land instead of the last save dropping the other's
+entry. A menu pick is re-found by wallet and namespace under the lock, since the
+file may have changed while the menu waited.
+
 ### The lobby
 
 A challenge with no namespace signs you in to `default`. That is the **lobby**:

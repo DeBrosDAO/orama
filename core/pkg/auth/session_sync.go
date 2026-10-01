@@ -60,7 +60,9 @@ func renewStoredSession(gatewayURL string, creds *Credentials) (string, error) {
 	}
 	defer unlock()
 
-	disk, err := LoadEnhancedCredentials()
+	// loadEnhancedStore, not LoadEnhancedCredentials: the lock is already held,
+	// and a migration save would take it a second time.
+	disk, _, err := loadEnhancedStore()
 	if err != nil {
 		return "", fmt.Errorf("reload the stored session before renewing it: %w", err)
 	}

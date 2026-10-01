@@ -54,23 +54,10 @@ func AuthLogin(namespace, deviceKeyPath string) error {
 
 		switch choice {
 		case auth.AuthChoiceUseCredential:
-			selectedCreds := gwCreds.Credentials[credIndex]
-			store.SetDefaultCredential(gatewayURL, credIndex)
-			selectedCreds.UpdateLastUsed()
-			if err := store.Save(); err != nil {
-				return clierr.Failure("failed to save credentials: %w", err)
-			}
-			fmt.Printf("Switched to wallet: %s\n", selectedCreds.Wallet)
-			fmt.Printf("Namespace: %s\n", selectedCreds.Namespace)
-			return nil
+			return switchToCredential(gatewayURL, gwCreds.Credentials[credIndex])
 
 		case auth.AuthChoiceLogout:
-			store.ClearAllCredentials()
-			if err := store.Save(); err != nil {
-				return clierr.Failure("failed to clear credentials: %w", err)
-			}
-			fmt.Println("All credentials cleared")
-			return nil
+			return clearStoredCredentials()
 
 		case auth.AuthChoiceExit:
 			return clierr.Aborted("cancelled")
@@ -110,9 +97,11 @@ func AuthLogin(namespace, deviceKeyPath string) error {
 	// existing one for the same wallet and namespace it keeps that slot, which
 	// is not necessarily the last; defaulting to the last slot used to leave
 	// the next command acting on another namespace.
-	store.SetDefaultCredential(gatewayURL, store.AddCredential(gatewayURL, creds))
-
-	if err := store.Save(); err != nil {
+	err = auth.UpdateEnhancedCredentials(func(locked *auth.EnhancedCredentialStore) error {
+		locked.SetDefaultCredential(gatewayURL, locked.AddCredential(gatewayURL, creds))
+		return nil
+	})
+	if err != nil {
 		return clierr.Failure("failed to save credentials: %w", err)
 	}
 
@@ -296,28 +285,54 @@ func AuthSwitch() error {
 
 	switch choice {
 	case auth.AuthChoiceUseCredential:
-		selectedCreds := gwCreds.Credentials[credIndex]
-		store.SetDefaultCredential(gatewayURL, credIndex)
-		selectedCreds.UpdateLastUsed()
-		if err := store.Save(); err != nil {
-			return clierr.Failure("failed to save credentials: %w", err)
-		}
-		fmt.Printf("Switched to wallet: %s\n", selectedCreds.Wallet)
-		fmt.Printf("Namespace: %s\n", selectedCreds.Namespace)
+		return switchToCredential(gatewayURL, gwCreds.Credentials[credIndex])
 
 	case auth.AuthChoiceAddCredential:
 		fmt.Println("Use 'orama auth login' to add a new credential.")
 
 	case auth.AuthChoiceLogout:
-		store.ClearAllCredentials()
-		if err := store.Save(); err != nil {
-			return clierr.Failure("failed to clear credentials: %w", err)
-		}
-		fmt.Println("All credentials cleared")
+		return clearStoredCredentials()
 
 	case auth.AuthChoiceExit:
 		return clierr.Aborted("cancelled")
 	}
+	return nil
+}
+
+// switchToCredential makes the picked credential the default. The menu showed
+// a snapshot, so the pick is found again by wallet and namespace in the file as
+// it is when saving, under the credential lock; the picked entry may have been
+// renewed or signed out since.
+func switchToCredential(gatewayURL string, picked *auth.Credentials) error {
+	err := auth.UpdateEnhancedCredentials(func(locked *auth.EnhancedCredentialStore) error {
+		if locked.SelectCredential(gatewayURL, picked.Wallet, picked.Namespace) == nil {
+			return clierr.Failure("the credential for wallet %s in namespace %s was signed out meanwhile; run 'orama auth login'",
+				picked.Wallet, picked.Namespace)
+		}
+		return nil
+	})
+	if err != nil {
+		var cliErr *clierr.Error
+		if errors.As(err, &cliErr) {
+			return err
+		}
+		return clierr.Failure("failed to save credentials: %w", err)
+	}
+	fmt.Printf("Switched to wallet: %s\n", picked.Wallet)
+	fmt.Printf("Namespace: %s\n", picked.Namespace)
+	return nil
+}
+
+// clearStoredCredentials removes every stored credential under the lock.
+func clearStoredCredentials() error {
+	err := auth.UpdateEnhancedCredentials(func(locked *auth.EnhancedCredentialStore) error {
+		locked.ClearAllCredentials()
+		return nil
+	})
+	if err != nil {
+		return clierr.Failure("failed to clear credentials: %w", err)
+	}
+	fmt.Println("All credentials cleared")
 	return nil
 }
 
