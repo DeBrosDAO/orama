@@ -13,8 +13,14 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// domainStatusSQL derives a domain's status. The table has no status column:
+// a domain is verified exactly when verified_at is set, which is also what the
+// gateway's host routing requires before it serves the domain.
+const domainStatusSQL = `CASE WHEN dd.verified_at IS NULL THEN 'pending' ELSE 'verified' END`
 
 // DomainHandler handles custom domain management
 type DomainHandler struct {
@@ -101,12 +107,16 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 	// Check if domain already exists
 	var existingCount int
-	checkQuery := `SELECT COUNT(*) FROM deployment_domains WHERE domain = ?`
+	checkQuery := `SELECT COUNT(*) AS count FROM deployment_domains WHERE domain = ?`
 	var counts []struct {
 		Count int `db:"count"`
 	}
-	err = h.service.db.Query(ctx, &counts, checkQuery, domain)
-	if err == nil && len(counts) > 0 {
+	if err := h.service.db.Query(ctx, &counts, checkQuery, domain); err != nil {
+		h.logger.Error("Failed to check for an existing domain", zap.Error(err))
+		http.Error(w, "Failed to add domain", http.StatusInternalServerError)
+		return
+	}
+	if len(counts) > 0 {
 		existingCount = counts[0].Count
 	}
 
@@ -117,11 +127,12 @@ func (h *DomainHandler) HandleAddDomain(w http.ResponseWriter, r *http.Request) 
 
 	// Insert domain record
 	query := `
-		INSERT INTO deployment_domains (deployment_id, domain, verification_token, verification_status, created_at)
-		VALUES (?, ?, ?, 'pending', ?)
+		INSERT INTO deployment_domains (id, deployment_id, namespace, domain, is_custom, verification_token, created_at, updated_at)
+		VALUES (?, ?, ?, ?, TRUE, ?, ?, ?)
 	`
 
-	_, err = h.service.db.Exec(ctx, query, deployment.ID, domain, token, time.Now())
+	now := time.Now()
+	_, err = h.service.db.Exec(ctx, query, uuid.New().String(), deployment.ID, namespace, domain, token, now, now)
 	if err != nil {
 		h.logger.Error("Failed to insert domain", zap.Error(err))
 		http.Error(w, "Failed to add domain", http.StatusInternalServerError)
@@ -192,7 +203,7 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 
 	var rows []domainRow
 	query := `
-		SELECT dd.deployment_id, dd.verification_token, dd.verification_status
+		SELECT dd.deployment_id, dd.verification_token, ` + domainStatusSQL + ` AS verification_status
 		FROM deployment_domains dd
 		JOIN deployments d ON dd.deployment_id = d.id
 		WHERE dd.domain = ? AND d.namespace = ?
@@ -229,11 +240,11 @@ func (h *DomainHandler) HandleVerifyDomain(w http.ResponseWriter, r *http.Reques
 	// Update status (scoped to deployment_id for defense-in-depth)
 	updateQuery := `
 		UPDATE deployment_domains
-		SET verification_status = 'verified', verified_at = ?
+		SET verified_at = ?, updated_at = ?
 		WHERE domain = ? AND deployment_id = ?
 	`
 
-	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), domain, domainRecord.DeploymentID)
+	_, err = h.service.db.Exec(ctx, updateQuery, time.Now(), time.Now(), domain, domainRecord.DeploymentID)
 	if err != nil {
 		h.logger.Error("Failed to update verification status", zap.Error(err))
 		http.Error(w, "Failed to update verification status", http.StatusInternalServerError)
@@ -292,7 +303,7 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 	}
 
 	query := `
-		SELECT d.name, dd.domain, dd.verification_status, dd.created_at, dd.verified_at
+		SELECT d.name, dd.domain, ` + domainStatusSQL + ` AS verification_status, dd.created_at, dd.verified_at
 		FROM deployment_domains dd
 		JOIN deployments d ON dd.deployment_id = d.id
 		WHERE d.namespace = ?
@@ -307,7 +318,7 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 			return
 		}
 		query = `
-			SELECT d.name, dd.domain, dd.verification_status, dd.created_at, dd.verified_at
+			SELECT d.name, dd.domain, ` + domainStatusSQL + ` AS verification_status, dd.created_at, dd.verified_at
 			FROM deployment_domains dd
 			JOIN deployments d ON dd.deployment_id = d.id
 			WHERE d.namespace = ? AND dd.deployment_id = ?
