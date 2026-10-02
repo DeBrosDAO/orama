@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/url"
+	"sync"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/edge"
@@ -20,7 +21,7 @@ import (
 // capabilityUpgradeBurst, rate_limiter.go).
 const (
 	upgradeBurst  = 20
-	floodUpgrades = upgradeBurst + 5
+	floodUpgrades = 2 * upgradeBurst
 	// forgedBytes is the random payload of the capability the flood presents.
 	forgedBytes = 48
 	// noSuchFunction is judged like any other capability: the same 403
@@ -30,33 +31,50 @@ const (
 
 // TestCapabilityUpgrades_limitedPerAddress: past the burst, capability
 // upgrades from one address to one gateway are refused with 429 before they
-// are judged; the ones judged are the capability's 403.
+// are judged; the ones judged are the capability's 403. The upgrades are
+// sent at once: the bucket refills a token a second, and a handshake takes
+// 0.2-1.3s over the edge, so a serial flood of 25 refills about as many tokens
+// as it spends and is never limited.
 func TestCapabilityUpgrades_limitedPerAddress(t *testing.T) {
 	f := harness.Fleet(t)
 	quiesce(t, f)
 	c := harness.GW(t).Unpaced().PinTo(f.State.Nodes[0].PublicIP)
 	path := "/v1/functions/" + noSuchFunction + "/ws?" +
 		url.Values{"namespace": {gw.LobbyNamespace}, "cap": {forgedCapability(t)}}.Encode()
-	limited := 0
+	statuses := make([]int, floodUpgrades)
+	opened := make([]bool, floodUpgrades)
+	var wg sync.WaitGroup
 	for i := range floodUpgrades {
-		conn, resp, _ := c.DialWS(t.Context(), path, "", nil)
-		if conn != nil {
-			conn.Close()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, resp, _ := c.DialWS(t.Context(), path, "", nil)
+			if conn != nil {
+				conn.Close()
+				opened[i] = true
+			}
+			if resp != nil {
+				statuses[i] = resp.StatusCode
+			}
+		}()
+	}
+	wg.Wait()
+	limited := 0
+	for i, status := range statuses {
+		switch {
+		case opened[i]:
 			t.Fatalf("upgrade %d: a forged capability opened a socket", i+1)
-		}
-		if resp == nil {
-			t.Fatalf("upgrade %d: no handshake answer", i+1)
-		}
-		switch resp.StatusCode {
-		case http.StatusForbidden:
-		case http.StatusTooManyRequests:
+		case status == http.StatusForbidden:
+		case status == http.StatusTooManyRequests:
 			limited++
+		case status == 0:
+			t.Fatalf("upgrade %d: no handshake answer", i+1)
 		default:
-			t.Errorf("upgrade %d answered %d", i+1, resp.StatusCode)
+			t.Errorf("upgrade %d answered %d", i+1, status)
 		}
 	}
 	if limited == 0 {
-		t.Fatalf("%d capability upgrades from one address in a burst were all judged; the burst is %d", floodUpgrades, upgradeBurst)
+		t.Fatalf("%d capability upgrades from one address at once were all judged; the burst is %d", floodUpgrades, upgradeBurst)
 	}
 }
 

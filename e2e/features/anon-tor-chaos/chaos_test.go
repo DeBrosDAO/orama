@@ -39,18 +39,22 @@ const (
 	// anonProxyUnavailable is checks.anon_proxy.status with the SOCKS port
 	// down (gateway/status_handlers.go anonProxyCheck; never "error").
 	anonProxyUnavailable = "unavailable"
+	// gatewayActive is systemd's state of a running unit.
+	gatewayActive = "active"
 )
 
-// TestTorDown_failsClosedNodeStaysServing stops node-1's Tor client (the
-// cleanup restarts it and waits) and checks, on node-1: /v1/proxy/anon is 503
+// TestTorDown_failsClosedNodeStaysServing stops the Tor client of the node
+// that runs the namespace's gateway (the cleanup restarts it and waits) and
+// checks, on that node: /v1/proxy/anon is 503
 // and never fetched directly; the tunnel is refused; /v1/health stays 200
 // with checks.anon_proxy "unavailable"; and the node stays in the gateway's
-// DNS answer (docs/ARCHITECTURE.md "Health", SECURITY.md).
+// DNS answer when it is a nameserver (docs/ARCHITECTURE.md "Health",
+// SECURITY.md).
 func TestTorDown_failsClosedNodeStaysServing(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
 	owner := member(t, f, n)
-	victim := f.Node(t, "node-1")
+	victim := gatewayHost(t, f, n.Name)
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name)).PinTo(victim.PublicIP)
 	t.Run("tor stopped", func(t *testing.T) {
 		stopTor(t, f, victim)
@@ -70,8 +74,8 @@ func TestTorDown_failsClosedNodeStaysServing(t *testing.T) {
 	requireProxyBack(t, c, owner)
 }
 
-// TestTorDown_anonFetchFailsClosed: with node-1's Tor client stopped, a
-// function's anon_fetch on node-1 gets status 0 with an error, never a
+// TestTorDown_anonFetchFailsClosed: with the Tor client of the node that runs
+// the namespace's gateway stopped, a function's anon_fetch there gets status 0 with an error, never a
 // direct fetch (docs/SERVERLESS.md#http). It needs tinygo to build the
 // fixture function.
 func TestTorDown_anonFetchFailsClosed(t *testing.T) {
@@ -82,13 +86,31 @@ func TestTorDown_anonFetchFailsClosed(t *testing.T) {
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
 	deployFixture(t, n)
 	owner := member(t, f, n)
-	victim := f.Node(t, "node-1")
+	victim := gatewayHost(t, f, n.Name)
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name)).PinTo(victim.PublicIP)
 	t.Run("tor stopped", func(t *testing.T) {
 		stopTor(t, f, victim)
 		anonFetchFailsClosed(t, c)
 	})
 	requireProxyBack(t, c, owner)
+}
+
+// gatewayHost is a node that runs the namespace's gateway. The Tor client a
+// namespace's /v1/proxy/anon, tunnel and anon_fetch use is the one on the
+// node of the gateway that serves the request, and an edge node forwards to
+// the namespace's gateway over the mesh: pinning to the wrong node leaves the
+// request on a gateway whose Tor is up. A namespace sits on as many nodes as
+// were eligible when it was created, so the host is read, not assumed.
+func gatewayHost(t *testing.T, f *fleet.Fleet, name string) fleet.Node {
+	t.Helper()
+	unit := tenancy.UnitGateway(name)
+	for _, node := range f.State.Nodes {
+		if f.Unit(t, node, unit) == gatewayActive {
+			return node
+		}
+	}
+	t.Fatalf("no node of run %s runs %s", f.State.RunID, unit)
+	return fleet.Node{}
 }
 
 // stopTor stops victim's Tor client until the (sub)test ends and waits for
@@ -145,8 +167,13 @@ func anonFetchFailsClosed(t *testing.T, c *gw.Client) {
 	}
 }
 
+// stillInDNS checks a nameserver victim stays in the gateway's DNS answer. A
+// node of another role is never in it, so there is nothing to keep.
 func stillInDNS(t *testing.T, f *fleet.Fleet, victim fleet.Node) {
 	t.Helper()
+	if victim.Role != fleet.RoleNameserver {
+		return
+	}
 	u, err := url.Parse(f.State.GatewayURL)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +202,7 @@ func deployFixture(t *testing.T, n *ns.Namespace) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "function.yaml"), []byte("name: "+fnName+"\npublic: true\ntimeout: 90\n"), fixturePerm); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "function.yaml"), []byte("name: "+fnName+"\npublic: true\ntimeout: 60\n"), fixturePerm); err != nil {
 		t.Fatal(err)
 	}
 	n.CLI.MustOK(t, "function", "deploy", dir)
