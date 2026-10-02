@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
+	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
@@ -37,50 +38,112 @@ func TestDeploySandbox_fromInside(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
 	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "sb"), "sandbox")
-	other := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "sb2"), "neighbour")
 	serving(t, tn.app(u), "/health", "")
-	serving(t, tn.app(other), "/health", "")
 	// Each node that runs the app gives it its own PORT, and DNS is round
 	// robin: every probe goes to one node, or PORT would change between them.
 	// The two apps are compared on a node that runs both: a dynamic user's uid
 	// is allocated per host, so the same number on two hosts proves nothing.
-	node := tn.sharedRunner(t, "sandbox", "neighbour")
-	c, oc := tn.app(u).PinTo(node.PublicIP), tn.app(other).PinTo(node.PublicIP)
+	node, neighbour, enforced := tn.sharedRunner(t)
+	other := tn.app(neighbour.url)
+	c, oc := tn.app(u).PinTo(node.PublicIP), other.PinTo(node.PublicIP)
 	uid, otherUID := probe(t, c, "/uid", nil).Detail, probe(t, oc, "/uid", nil).Detail
 	if strings.HasPrefix(uid, "0 ") || uid == otherUID {
 		t.Errorf("uids: app %q, neighbour %q; want non-root and distinct", uid, otherUID)
 	}
-	tn.checkFiles(t, c)
-	tn.checkNetwork(t, c)
+	tn.checkFiles(t, c, neighbour.name)
+	tn.checkWireGuard(t, c)
+	if !enforced {
+		if !t.Failed() {
+			harness.SkipNotApplicable(t, "no node that runs both apps has systemd with +BPF_FRAMEWORK, so SocketBindDeny is not enforced there and the bind checks cannot hold; "+
+				"the files, uid and WireGuard checks passed on "+node.Name+"; this applies where a node running both apps enforces it (mew, mewtwo)")
+		}
+		return
+	}
+	tn.checkBinds(t, c)
 }
 
-// sharedRunner is a node whose units of both apps are active, once replica
-// setup (asynchronous) has placed them. Each app runs on two of the three
-// nodes, so two apps always share one.
-func (tn *tenant) sharedRunner(t testing.TB, a, b string) fleet.Node {
+// neighbourApp is a second app of the tenant, deployed to share a node with
+// the sandbox app.
+type neighbourApp struct{ name, url string }
+
+const (
+	// maxNeighbours bounds how many neighbours are deployed looking for a node
+	// shared with the sandbox app (and, preferably, one that enforces bind
+	// policy): the platform offers no way to ask for a node, it places a
+	// deployment's replicas on the nodes with the most capacity.
+	maxNeighbours = 4
+	// settleBudget is how long a neighbour's replicas are given to appear
+	// (placement is asynchronous) before a different neighbour is tried.
+	settleBudget = 2 * time.Minute
+	// bpfFramework is the systemd build feature SocketBindAllow and
+	// SocketBindDeny depend on.
+	bpfFramework = "+BPF_FRAMEWORK"
+)
+
+// sharedRunner finds a node on which the units of the sandbox app and of a neighbour are both active, deploying up to
+// maxNeighbours neighbours until one shares a node with it. It prefers a node
+// whose systemd enforces bind policy and reports whether the node returned does.
+func (tn *tenant) sharedRunner(t testing.TB) (fleet.Node, neighbourApp, bool) {
 	t.Helper()
-	unitA, unitB := "orama-deploy-go@"+tn.instance(a)+".service", "orama-deploy-go@"+tn.instance(b)+".service"
-	var shared fleet.Node
-	eventually.Require(t, pollEvery, startBudget, "a node running both "+unitA+" and "+unitB, func() (bool, error) {
-		runsB := map[string]bool{}
-		for _, n := range unitNodes(t, tn.f, unitB) {
-			runsB[n.Name] = true
+	sandbox := "orama-deploy-go@" + tn.instance("sandbox") + ".service"
+	var fallback *fleet.Node
+	var fallbackApp neighbourApp
+	for i := 1; i <= maxNeighbours; i++ {
+		name := "neighbour"
+		if i > 1 {
+			name += strconv.Itoa(i)
 		}
-		for _, n := range unitNodes(t, tn.f, unitA) {
-			if runsB[n.Name] {
-				shared = n
-				return true, nil
+		n := neighbourApp{name: name, url: tn.deploy(t, "go", tenancy.WriteProbeApp(t, "sb"+strconv.Itoa(i+1)), name)}
+		serving(t, tn.app(n.url), "/health", "")
+		unit := "orama-deploy-go@" + tn.instance(name) + ".service"
+		var shared []fleet.Node
+		_ = eventually.Poll(t.Context(), pollEvery, settleBudget, "a node running both "+sandbox+" and "+unit, func() (bool, error) {
+			shared = tn.overlap(t, sandbox, unit)
+			return len(shared) > 0, nil
+		})
+		for _, node := range shared {
+			if tn.bindEnforced(t, node) {
+				return node, n, true
+			}
+			if fallback == nil {
+				node := node
+				fallback, fallbackApp = &node, n
 			}
 		}
-		return false, nil
-	})
-	return shared
+	}
+	if fallback == nil {
+		t.Fatalf("none of %d neighbours was placed on a node that runs %s", maxNeighbours, sandbox)
+	}
+	return *fallback, fallbackApp, false
+}
+
+// overlap is the nodes where both units are active.
+func (tn *tenant) overlap(t testing.TB, a, b string) []fleet.Node {
+	t.Helper()
+	runsB := map[string]bool{}
+	for _, n := range unitNodes(t, tn.f, b) {
+		runsB[n.Name] = true
+	}
+	var out []fleet.Node
+	for _, n := range unitNodes(t, tn.f, a) {
+		if runsB[n.Name] {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// bindEnforced is whether systemd on node can enforce SocketBindAllow and
+// SocketBindDeny (it needs +BPF_FRAMEWORK).
+func (tn *tenant) bindEnforced(t testing.TB, node fleet.Node) bool {
+	t.Helper()
+	return strings.Contains(tn.f.MustExec(t, node, "systemctl --version").Stdout, bpfFramework)
 }
 
 // checkFiles: the app writes and reads back its state directory (the
 // control: /read and /write work in the sandbox), and reads or writes nothing
 // of the node's, a neighbour's or its own code.
-func (tn *tenant) checkFiles(t testing.TB, c *gw.Client) {
+func (tn *tenant) checkFiles(t testing.TB, c *gw.Client, neighbour string) {
 	t.Helper()
 	state := probe(t, c, "/getenv", url.Values{"k": {"ORAMA_STATE_DIR"}}).Detail
 	if a := probe(t, c, "/write", url.Values{"p": {state + "/probe"}}); !a.OK {
@@ -90,8 +153,8 @@ func (tn *tenant) checkFiles(t testing.TB, c *gw.Client) {
 		t.Fatalf("the app cannot read back what it wrote in %s, so a refused read proves nothing: %s", state, a.Detail)
 	}
 	for _, p := range []string{"/opt/orama/.orama/secrets/cluster-secret", "/opt/orama/.orama/configs/node.yaml",
-		"/opt/orama/.orama/data/identity.key", deploymentsDir + "/" + tn.instance("neighbour") + "/app", "/etc/shadow",
-		"/proc/1/environ", deploySecretsDir + "/orama-deploy-" + tn.instance("neighbour") + ".env"} {
+		"/opt/orama/.orama/data/identity.key", deploymentsDir + "/" + tn.instance(neighbour) + "/app", "/etc/shadow",
+		"/proc/1/environ", deploySecretsDir + "/orama-deploy-" + tn.instance(neighbour) + ".env"} {
 		if a := probe(t, c, "/read", url.Values{"p": {p}}); a.OK {
 			t.Errorf("the app read %s", p)
 		}
@@ -106,13 +169,12 @@ func (tn *tenant) checkFiles(t testing.TB, c *gw.Client) {
 	}
 }
 
-// checkNetwork: only PORT may be bound (SocketBindDeny=any plus the
-// per-instance allow), and no node's WireGuard address answers. The controls:
-// binding PORT reaches the kernel's address check (it is in use by the app
-// itself, so "address already in use", not a policy refusal), every other
-// bind is refused by the policy ("operation not permitted"), and the app
-// dials its own gateway, the address it is given to reach.
-func (tn *tenant) checkNetwork(t testing.TB, c *gw.Client) {
+// checkBinds: only PORT may be bound (SocketBindDeny=any plus the
+// per-instance allow). The controls: binding PORT reaches the kernel's address
+// check (it is in use by the app itself, so "address already in use", not a
+// policy refusal), every other bind is refused by the policy ("operation not
+// permitted").
+func (tn *tenant) checkBinds(t testing.TB, c *gw.Client) {
 	t.Helper()
 	port, err := strconv.Atoi(probe(t, c, "/getenv", url.Values{"k": {"PORT"}}).Detail)
 	if err != nil {
@@ -126,6 +188,12 @@ func (tn *tenant) checkNetwork(t testing.TB, c *gw.Client) {
 			t.Errorf("binding %s answered ok=%v %q, want a policy refusal %q (its PORT is %d)", addr, a.OK, a.Detail, bindDenied, port)
 		}
 	}
+}
+
+// checkWireGuard: no node's WireGuard address answers the app, which can dial
+// its own gateway (the control).
+func (tn *tenant) checkWireGuard(t testing.TB, c *gw.Client) {
+	t.Helper()
 	gateway := gatewayAddr(t, probe(t, c, "/getenv", url.Values{"k": {"ORAMA_GATEWAY_URL"}}).Detail)
 	if a := probe(t, c, "/dial", url.Values{"addr": {gateway}}); !a.OK {
 		t.Fatalf("the app cannot dial its own gateway %s, so a refused dial proves nothing: %s", gateway, a.Detail)
