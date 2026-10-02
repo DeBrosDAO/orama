@@ -64,14 +64,20 @@ func allocations(t testing.TB, f *fleet.Fleet) map[string]int {
 	return out
 }
 
-// freeSlots is how many more namespaces the fullest node has room for.
+// freeSlots is how many more namespaces the fleet has room for: each takes a
+// block on each of the nodes that host a namespace, so a node with no room
+// left is one fewer to place on.
 func freeSlots(t testing.TB, f *fleet.Fleet) int {
 	t.Helper()
-	most := 0
-	for _, c := range allocations(t, f) {
-		most = max(most, c)
+	allocs := allocations(t, f)
+	free := make([]int, 0, len(f.State.Nodes))
+	for _, c := range allocs {
+		free = append(free, tenancy.MaxPerNode-c)
 	}
-	return tenancy.MaxPerNode - most
+	for range len(f.State.Nodes) - len(allocs) {
+		free = append(free, tenancy.MaxPerNode)
+	}
+	return ns.Placeable(free, tenancy.ExpectedMembers(len(f.State.Nodes)))
 }
 
 // createAll posts count creations as owner and adopts each (waiting until it
@@ -113,9 +119,9 @@ func TestNamespaceCapacity_walletQuota(t *testing.T) {
 	}
 }
 
-// TestNamespaceCapacity_perNodeCapRefusesCleanly fills every node to its
-// twenty tenant blocks (core/pkg/namespace MaxNamespacesPerNode), then asks
-// for one more: it must be refused or reported failed, never provisioned into
+// TestNamespaceCapacity_perNodeCapRefusesCleanly fills the nodes' twenty
+// tenant blocks each (core/pkg/namespace MaxNamespacesPerNode) until too few
+// have a block left to place a namespace, then asks for one more: it must be refused or reported failed, never provisioned into
 // a port outside the tenant range, and every existing namespace keeps serving.
 func TestNamespaceCapacity_perNodeCapRefusesCleanly(t *testing.T) {
 	f := harness.Fleet(t)
@@ -129,13 +135,24 @@ func TestNamespaceCapacity_perNodeCapRefusesCleanly(t *testing.T) {
 	if len(allocs) != len(f.State.Nodes) {
 		t.Errorf("tenant blocks are allocated on %d nodes after filling, want all %d: %v", len(allocs), len(f.State.Nodes), allocs)
 	}
-	for id, got := range allocs {
-		if got != tenancy.MaxPerNode {
-			t.Errorf("node %s has %d tenant blocks allocated after filling, want %d", id, got, tenancy.MaxPerNode)
+	// A namespace takes a block on each of its members only, so the fleet is
+	// full once fewer nodes than a namespace needs have a block left.
+	roomLeft := 0
+	for _, got := range allocs {
+		if got < tenancy.MaxPerNode {
+			roomLeft++
 		}
 	}
-	for _, node := range f.State.Nodes {
-		for _, n := range all {
+	if roomLeft >= tenancy.ExpectedMembers(len(f.State.Nodes)) {
+		t.Errorf("%d nodes still have a free tenant block after filling (allocations %v), enough to place another namespace", roomLeft, allocs)
+	}
+	names := make([]string, 0, len(all))
+	for _, n := range all {
+		names = append(names, n.Name)
+	}
+	placed := tenancy.MembersOf(t, f, names...)
+	for _, n := range all {
+		for _, node := range placed[n.Name] {
 			block := tenancy.PortBlock(t, f, node, n.Name)
 			if block[0] < tenancy.PortRangeStart || block[len(block)-1] > tenancy.PortRangeEnd {
 				t.Errorf("%s: %s was given %v, outside the tenant range", node.Name, n.Name, block)

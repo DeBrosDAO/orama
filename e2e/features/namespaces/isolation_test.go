@@ -22,17 +22,26 @@ func TestNamespacePorts_blockInRangeAndDisjoint(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	pair := tenancy.Namespaces(t, f, 2, ns.Options{})
-	for _, node := range f.State.Nodes {
-		a := tenancy.PortBlock(t, f, node, pair[0].Name)
-		b := tenancy.PortBlock(t, f, node, pair[1].Name)
-		for _, block := range [][]int{a, b} {
+	blocks := map[string]map[string][]int{}
+	for _, n := range pair {
+		blocks[n.Name] = map[string][]int{}
+		for _, node := range tenancy.Members(t, f, n.Name) {
+			block := tenancy.PortBlock(t, f, node, n.Name)
+			blocks[n.Name][node.Name] = block
 			if block[0] < tenancy.PortRangeStart || block[len(block)-1] > tenancy.PortRangeEnd {
-				t.Errorf("%s: block %v is outside %d-%d", node.Name, block, tenancy.PortRangeStart, tenancy.PortRangeEnd)
+				t.Errorf("%s: block %v of %s is outside %d-%d", node.Name, block, n.Name, tenancy.PortRangeStart, tenancy.PortRangeEnd)
 			}
+		}
+	}
+	// Two namespaces share a node only where both are placed.
+	for node, a := range blocks[pair[0].Name] {
+		b, shared := blocks[pair[1].Name][node]
+		if !shared {
+			continue
 		}
 		for _, p := range a {
 			if slices.Contains(b, p) {
-				t.Errorf("%s: port %d is in both %s's and %s's blocks", node.Name, p, pair[0].Name, pair[1].Name)
+				t.Errorf("%s: port %d is in both %s's and %s's blocks", node, p, pair[0].Name, pair[1].Name)
 			}
 		}
 	}
@@ -47,7 +56,7 @@ func TestNamespaceIsolation_nothingListensPublicly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	for _, node := range f.State.Nodes {
+	for _, node := range tenancy.Members(t, f, n.Name) {
 		block := tenancy.PortBlock(t, f, node, n.Name)
 		listeners := f.Listeners(t, node)
 		fw := f.Firewall(t, node)
@@ -82,7 +91,7 @@ func TestNamespaceIsolation_unitsAreConfined(t *testing.T) {
 	f := harness.Fleet(t)
 	pair := tenancy.Namespaces(t, f, 2, ns.Options{})
 	a, b := pair[0], pair[1]
-	node := f.State.Nodes[0]
+	node := tenancy.Members(t, f, a.Name)[0]
 	gwProps := unitProps(t, f, node, tenancy.UnitGateway(a.Name), "User", "ReadWritePaths", "ProtectProc", "NoNewPrivileges", "TemporaryFileSystem")
 	if gwProps["User"] != "orama" || gwProps["ProtectProc"] != "invisible" || gwProps["NoNewPrivileges"] != "yes" {
 		t.Errorf("%s runs with %v", tenancy.UnitGateway(a.Name), gwProps)
@@ -107,7 +116,7 @@ func TestNamespaceIsolation_configFilesArePrivate(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	for _, node := range f.State.Nodes {
+	for _, node := range tenancy.Members(t, f, n.Name) {
 		out := f.MustExec(t, node, "stat -c '%a %U %n' "+tenancy.NamespacesDir+"/"+n.Name+"/configs/gateway-*.yaml "+tenancy.UnitEnvDir+"/"+n.Name).Stdout
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 			fields := strings.Fields(line)

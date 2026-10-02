@@ -39,7 +39,7 @@ func leader(t testing.TB, f *fleet.Fleet, n *ns.Namespace) fleet.Node {
 	t.Helper()
 	var best fleet.Node
 	var bestAt float64
-	for _, node := range f.State.Nodes {
+	for _, node := range tenancy.Members(t, f, n.Name) {
 		out := f.Exec(t, node, "journalctl -u "+tenancy.UnitRQLite(n.Name)+" -o short-unix --no-pager | grep '"+leaderLine+"' | tail -1").Stdout
 		fields := strings.Fields(out)
 		if len(fields) == 0 {

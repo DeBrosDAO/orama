@@ -4,7 +4,7 @@ package deployments
 
 import "testing"
 
-func TestBuildInstallFinished(t *testing.T) {
+func TestBuildInstallFinished_recognisesTheFinishedLine(t *testing.T) {
 	const finished = "Starting orama-deploy-build@ns-app.service - Orama Deployment dependency install - ns-app...\n" +
 		"added 1 package in 751ms\n" +
 		"orama-deploy-build@ns-app.service: Deactivated successfully.\n" +

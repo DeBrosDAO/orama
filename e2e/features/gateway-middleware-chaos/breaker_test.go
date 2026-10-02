@@ -42,7 +42,7 @@ func TestBreaker_localNamespaceGatewayDownFailsOver(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.RequireHealthy(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	node := f.State.Nodes[0]
+	node := tenancy.Members(t, f, n.Name)[0]
 	edge.CutOff(t, f, node, indexGatewayUser, node.WGIP, namespaceGatewayPort(t, f, n.Name, node))
 	c := n.Client.PinTo(node.PublicIP)
 	failures, lastFailure := 0, -1

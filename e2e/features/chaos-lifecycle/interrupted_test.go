@@ -52,7 +52,7 @@ func TestChaosLifecycle_gatewayKilledMidDeploy(t *testing.T) {
 	t.Cleanup(func() { deleteApp(t, tn, "chaosapp") })
 	p := start(t, tn.N.CLI, "deploy", "go", dir, "--name", "chaosapp", "--env", "APP_VERSION=chaos-v1")
 	waitLine(t, p, uploadingLine)
-	f.Kill(t, f.State.Nodes[0], tenancy.UnitGateway(tn.N.Name))
+	f.Kill(t, tenancy.Members(t, f, tn.N.Name)[0], tenancy.UnitGateway(tn.N.Name))
 	res := finish(t, p, deployBudget)
 	t.Logf("the interrupted deploy exited %d", res.Exit)
 	if res.Exit != 0 {

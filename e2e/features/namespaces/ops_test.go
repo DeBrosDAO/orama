@@ -21,14 +21,15 @@ func TestNamespaceRepair_onANodeIsIdempotent(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	node := f.State.Nodes[0]
+	members := tenancy.Members(t, f, n.Name)
+	node := members[0]
 	for range 2 {
 		out := f.MustExec(t, node, "orama namespace repair "+n.Name)
 		if !strings.Contains(out.Stdout, "repaired") {
 			t.Fatalf("repair printed %q", out.Stdout)
 		}
 	}
-	for _, other := range f.State.Nodes {
+	for _, other := range members {
 		for _, unit := range tenancy.TenantUnits(n.Name) {
 			if s := f.Unit(t, other, unit); s != "active" {
 				t.Errorf("%s: %s is %s after repair", other.Name, unit, s)

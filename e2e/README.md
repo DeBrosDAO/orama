@@ -145,6 +145,12 @@ rejects other `Test*` names and flags a `func(*testing.T)` that is not named
   below.
 - **One namespace per test** (`ns.New`), never a shared one. Tests call
   `t.Parallel()` unless they are in a destructive package.
+- **A namespace lives on three nodes, not on every node** (core
+  `DefaultRQLiteNodeCount`). A per-namespace check on a node (units, files,
+  ports, DNS records, faults) loops over `tenancy.Members(t, f, name)`, which
+  reads the placement from the nodes (`orama monitor namespaces`); a check that
+  something is gone (teardown residue) and every fleet-wide check loops over
+  `f.State.Nodes`.
 - **Real paths only.** Requests go to the public name through DNS, TLS pinned to
   the run's CA, HTTP/1.1. Logins are real signatures. Operator actions go
   through the CLI under test. SSH is for observing nodes and for injecting

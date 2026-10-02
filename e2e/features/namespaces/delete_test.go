@@ -67,7 +67,7 @@ func TestNamespaceDelete_tearsEverythingDown(t *testing.T) {
 	key := tenancy.APIKeyDroppedWithNamespace(t, n, "cache")
 	tenancy.Post(t, n.Client, "/v1/cache/put", tenancy.Owner(n), map[string]any{"dmap": "m", "key": "k", "value": "old"}).Expect(t, http.StatusOK)
 	blocks := map[string][]int{}
-	for _, node := range f.State.Nodes {
+	for _, node := range tenancy.Members(t, f, n.Name) {
 		blocks[node.Name] = tenancy.PortBlock(t, f, node, n.Name)
 	}
 	host := tenancy.NamespaceHost(f, n.Name)

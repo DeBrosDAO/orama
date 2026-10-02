@@ -17,14 +17,14 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// waitPlaced waits until the SFU runs on every node and exactly two nodes'
+// waitPlaced waits until the SFU runs on every member and exactly two nodes'
 // shared TURN list the namespace (docs/WEBRTC.md#turn-topology), and returns
 // the TURN holders.
 func waitPlaced(t *testing.T, fx *fixture) []fleet.Node {
 	t.Helper()
 	var holders []fleet.Node
 	eventually.Require(t, pollEvery, readyBudget, "SFU on 3 nodes and TURN on 2", func() (bool, error) {
-		for _, n := range fx.f.State.Nodes {
+		for _, n := range fx.members {
 			if s := fx.f.Unit(t, n, sfuUnit(fx.n.Name)); s != "active" {
 				return false, fmt.Errorf("%s: sfu %s", n.Name, s)
 			}
@@ -47,8 +47,10 @@ func TestPlacement_sfuEverywhereWGOnlyTurnOnTwo(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
 	holders := waitPlaced(t, fx)
-	for _, n := range fx.f.State.Nodes {
+	for _, n := range fx.members {
 		sfuBindsWGOnly(t, fx, n)
+	}
+	for _, n := range fx.f.State.Nodes {
 		// The per-namespace TURN unit was retired for the shared one (bug-283;
 		// core/pkg/namespace/host_turn.go stopLegacyPerNamespaceTURN).
 		if s := fx.f.Unit(t, n, "orama-namespace-turn@"+fx.n.Name+".service"); s == "active" {

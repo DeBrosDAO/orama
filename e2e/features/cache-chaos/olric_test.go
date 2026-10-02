@@ -32,13 +32,13 @@ func TestOlricChaos_memberLossServedAndRejoined(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
-	victim := f.State.Nodes[1]
-	survivors := []int{0, 2}
+	members := tenancy.Members(t, f, n.Name)
+	victim, survivors := members[1], append(members[:1:1], members[2:]...)
 	f.StopService(t, victim, tenancy.UnitOlric(n.Name))
-	for _, i := range survivors {
-		c := n.Client.PinTo(f.State.Nodes[i].PublicIP)
-		key := "during-" + f.State.Nodes[i].Name
-		eventually.Require(t, pollEvery, servingBudget, f.State.Nodes[i].Name+" to serve with a member down", func() (bool, error) {
+	for _, node := range survivors {
+		c := n.Client.PinTo(node.PublicIP)
+		key := "during-" + node.Name
+		eventually.Require(t, pollEvery, servingBudget, node.Name+" to serve with a member down", func() (bool, error) {
 			resp, err := cachePut(t, c, n, key, "v")
 			return wantStatus(resp, err, http.StatusOK)
 		})
@@ -50,8 +50,8 @@ func TestOlricChaos_memberLossServedAndRejoined(t *testing.T) {
 		return true, nil
 	})
 	rejoined := n.Client.PinTo(victim.PublicIP)
-	for _, i := range survivors {
-		key := "during-" + f.State.Nodes[i].Name
+	for _, node := range survivors {
+		key := "during-" + node.Name
 		eventually.Require(t, pollEvery, servingBudget, victim.Name+" to read "+key, func() (bool, error) {
 			resp, err := cacheGet(t, rejoined, n, key)
 			return wantStatus(resp, err, http.StatusOK)
@@ -67,14 +67,15 @@ func TestOlricChaos_unreachableCacheAnswers503ThenReconnects(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
+	members := tenancy.Members(t, f, n.Name)
 	started := map[string]string{}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		started[node.Name] = tenancy.ActiveSince(t, f, node, tenancy.UnitGateway(n.Name))
 	}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		tenancy.Freeze(t, f, node, tenancy.UnitOlric(n.Name))
 	}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		c := n.Client.PinTo(node.PublicIP)
 		eventually.Require(t, pollEvery, dropBudget, node.Name+" to answer 503 without a cache", func() (bool, error) {
 			resp, err := cachePut(t, c, n, "k", "v")
@@ -84,10 +85,10 @@ func TestOlricChaos_unreachableCacheAnswers503ThenReconnects(t *testing.T) {
 			t.Errorf("%s: cache health answered %d while Olric is unreachable", node.Name, resp.Status)
 		}
 	}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		tenancy.Thaw(t, f, node, tenancy.UnitOlric(n.Name))
 	}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		c := n.Client.PinTo(node.PublicIP)
 		eventually.Require(t, pollEvery, reconnectBudget, node.Name+" to reconnect to Olric", func() (bool, error) {
 			resp, err := cachePut(t, c, n, "after-"+node.Name, "v")
@@ -106,13 +107,14 @@ func TestOlricChaos_memoryOnly(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
+	members := tenancy.Members(t, f, n.Name)
 	c := n.Client.For(t)
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		assertNoDataDir(t, f, node, n)
 	}
 	put, err := cachePut(t, c, n, "volatile", "v")
 	mustAnswer(t, put, err).Expect(t, http.StatusOK)
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		f.Kill(t, node, tenancy.UnitOlric(n.Name))
 	}
 	eventually.Require(t, pollEvery, reconcileBudget, "the cache to serve again after every member crashed", func() (bool, error) {

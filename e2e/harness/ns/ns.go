@@ -151,3 +151,24 @@ func creationMode(out string) (string, error) {
 	}
 	return "", fmt.Errorf("`orama cluster settings show` printed no namespace-creation line: %q", out)
 }
+
+// Placeable is how many more namespaces fit on nodes whose free tenant blocks
+// are free, one per node, when each namespace takes one block on each of
+// members distinct nodes: the largest k for which every one of the k
+// namespaces can still find members nodes with a block left.
+func Placeable(free []int, members int) int {
+	if members < 1 {
+		return 0
+	}
+	k := 0
+	for {
+		room := 0
+		for _, f := range free {
+			room += min(max(f, 0), k+1)
+		}
+		if room < members*(k+1) {
+			return k
+		}
+		k++
+	}
+}

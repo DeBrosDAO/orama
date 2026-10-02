@@ -78,6 +78,9 @@ type fixture struct {
 	n     *ns.Namespace
 	c     *gw.Client
 	token string
+	// members are the nodes the namespace is placed on; a larger fleet has
+	// others, which run none of its services.
+	members []fleet.Node
 }
 
 // setup creates the namespace and enables WebRTC; the cleanup disables it.
@@ -92,7 +95,7 @@ func setup(t *testing.T) *fixture {
 	n.CLI.MustOK(t, "namespace", "enable", "webrtc", "--namespace", n.Name)
 	t.Cleanup(func() { disable(t, n) })
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
-	return &fixture{f: f, n: n, c: c, token: member(t, n, "runtime")}
+	return &fixture{f: f, n: n, c: c, token: member(t, n, "runtime"), members: tenancy.Members(t, f, n.Name)}
 }
 
 func disable(t *testing.T, n *ns.Namespace) {

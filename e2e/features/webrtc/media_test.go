@@ -14,11 +14,11 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 )
 
-// joinPeer joins room through node i's gateway as a fresh runtime member,
+// joinPeer joins room through member i's gateway as a fresh runtime member,
 // and starts relay-only media.
 func joinPeer(t *testing.T, fx *fixture, i int, room string, publish bool) *services.RTCPeer {
 	t.Helper()
-	c := fx.c.PinTo(fx.f.State.Nodes[i%len(fx.f.State.Nodes)].PublicIP)
+	c := fx.c.PinTo(fx.members[i%len(fx.members)].PublicIP)
 	token := member(t, fx.n, "runtime")
 	p, err := services.JoinRoom(t.Context(), c, token, room, "user-"+strconv.Itoa(i))
 	if err != nil {
@@ -52,8 +52,8 @@ func waitMedia(t *testing.T, pubs, subs []*services.RTCPeer) {
 	})
 }
 
-// TestMedia_oneToOneRelayOnly: a publisher on node-1's gateway and a
-// subscriber on node-2's, both relay-only through the namespace's TURN,
+// TestMedia_oneToOneRelayOnly: a publisher on the first member's gateway and a
+// subscriber on the second's, both relay-only through the namespace's TURN,
 // exchange real RTP through the SFU (docs/WEBRTC.md#architecture:
 // iceTransportPolicy relay, TURN-shielded SFU).
 func TestMedia_oneToOneRelayOnly(t *testing.T) {

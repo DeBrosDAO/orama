@@ -132,7 +132,7 @@ func TestPrivhelper_tenantGatewayRefusedIndexGatewayNarrowed(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	node := f.State.Nodes[0]
+	node := tenancy.Members(t, f, n.Name)[0]
 	call := edge.PrivhelperBin + " call "
 	tenant := inUnitCgroup(t, f, node, tenancy.UnitGateway(n.Name), call+"systemctl daemon-reload")
 	if tenant.Exit != edge.ExitRefused || !strings.Contains(tenant.Stdout+tenant.Stderr, "may not use the privileged helper") {

@@ -107,7 +107,11 @@ func TestInternalAuth_forgedHeadersGrantNothingOnTheNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
-	from, to := f.State.Nodes[0], f.State.Nodes[1]
+	to := tenancy.Members(t, f, n.Name)[0]
+	from := f.State.Nodes[0]
+	if from.Name == to.Name {
+		from = f.State.Nodes[1]
+	}
 	headers := curlHeaders(forged(n.Name, n.Owner.Wallet.Address()))
 	port := namespaceGatewayPort(t, n.Name, to)
 	for what, url := range map[string]string{

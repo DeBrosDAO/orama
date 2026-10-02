@@ -61,17 +61,18 @@ func TestNamespaceHealth_dnsWithdrawAndRestore(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
-	host, victim := tenancy.NamespaceHost(f, n.Name), f.State.Nodes[1]
-	eventually.Require(t, pollEvery, dnsFlipBudget, "every node advertised", advertised(t, f, host, victim.PublicIP, true))
+	members := tenancy.Members(t, f, n.Name)
+	host, victim := tenancy.NamespaceHost(f, n.Name), members[1]
+	eventually.Require(t, pollEvery, dnsFlipBudget, "every member advertised", advertised(t, f, host, victim.PublicIP, true))
 	tenancy.Freeze(t, f, victim, tenancy.UnitGateway(n.Name))
 	eventually.Require(t, pollEvery, dnsFlipBudget, victim.Name+" withdrawn from "+host, advertised(t, f, host, victim.PublicIP, false))
-	for _, other := range f.State.Nodes {
+	for _, other := range members {
 		if other.Name != victim.Name {
 			eventually.Require(t, pollEvery, dnsFlipBudget, other.Name+" still advertised", advertised(t, f, host, other.PublicIP, true))
 		}
 	}
 	// Pinned to a survivor: a resolver may still hold the victim's record.
-	tenancy.Get(t, n.Client.PinTo(f.State.Nodes[0].PublicIP), "/health", tenancy.Cred{}).Expect(t, http.StatusOK)
+	tenancy.Get(t, n.Client.PinTo(members[0].PublicIP), "/health", tenancy.Cred{}).Expect(t, http.StatusOK)
 	tenancy.Thaw(t, f, victim, tenancy.UnitGateway(n.Name))
 	eventually.Require(t, pollEvery, dnsFlipBudget, victim.Name+" advertised again", advertised(t, f, host, victim.PublicIP, true))
 }
@@ -84,7 +85,8 @@ func TestNamespaceHealth_lastRecordNeverWithdrawn(t *testing.T) {
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
 	host := tenancy.NamespaceHost(f, n.Name)
-	for _, node := range f.State.Nodes {
+	members := tenancy.Members(t, f, n.Name)
+	for _, node := range members {
 		tenancy.Freeze(t, f, node, tenancy.UnitGateway(n.Name))
 	}
 	// Every node withdraws itself except the one that would leave the name
@@ -104,10 +106,10 @@ func TestNamespaceHealth_lastRecordNeverWithdrawn(t *testing.T) {
 		}
 		return true, nil
 	})
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		tenancy.Thaw(t, f, node, tenancy.UnitGateway(n.Name))
 	}
-	for _, node := range f.State.Nodes {
+	for _, node := range members {
 		eventually.Require(t, pollEvery, dnsFlipBudget, node.Name+" advertised again", advertised(t, f, host, node.PublicIP, true))
 	}
 }
@@ -119,7 +121,7 @@ func TestNamespaceReconciler_startsStoppedUnits(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
-	victim := f.State.Nodes[2]
+	victim := tenancy.Members(t, f, n.Name)[2]
 	for _, unit := range tenancy.TenantUnits(n.Name) {
 		f.StopService(t, victim, unit)
 	}
@@ -153,7 +155,7 @@ func TestNamespaceReconciler_rewritesDriftedConfig(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.HealthyAround(t)
 	n := ns.New(t, f, ns.Options{})
-	node := f.State.Nodes[0]
+	node := tenancy.Members(t, f, n.Name)[0]
 	cfg := tenancy.NamespacesDir + "/" + n.Name + "/configs"
 	gwYAML, olricYAML := cfg+"/gateway-*.yaml", cfg+"/olric-*.yaml"
 	orig := listenLine.FindStringSubmatch(f.MustExec(t, node, "grep -h '^listen_addr:' "+gwYAML).Stdout)

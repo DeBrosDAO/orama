@@ -34,14 +34,22 @@ type reading struct {
 }
 
 // watched are the daemons whose footprint the soak bounds, by node.
-func watched(f *fleet.Fleet, namespace string) map[string][]string {
+func watched(t testing.TB, f *fleet.Fleet, namespace string) map[string][]string {
+	t.Helper()
+	members := map[string]bool{}
+	for _, n := range tenancy.Members(t, f, namespace) {
+		members[n.Name] = true
+	}
 	nameservers := map[string]bool{}
 	for _, n := range tenancy.Nameservers(f) {
 		nameservers[n.Name] = true
 	}
 	out := map[string][]string{}
 	for _, n := range f.State.Nodes {
-		units := tenancy.TenantUnits(namespace)
+		var units []string
+		if members[n.Name] {
+			units = tenancy.TenantUnits(namespace)
+		}
 		for _, sc := range realistic.ServiceClasses {
 			if !sc.NameserverOnly || nameservers[n.Name] {
 				units = append(units, sc.Unit)

@@ -10,8 +10,10 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/services"
+	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
+	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
 const (
@@ -39,11 +41,11 @@ func TestReferenceCall_groupCallThroughEveryNode(t *testing.T) {
 	t.Cleanup(func() { disableWebRTC(t, tn) })
 	web := tn.Deploy(t, "static", realistic.CopyApp(t, realistic.AppCallWeb, nil, nil), "call")
 	tn.EveryNodeServes(t, web, "/", "reference-call")
-	waitSFU(t, tn)
+	members := waitSFU(t, tn)
 	room := "standup-" + randomTopic(t)[6:14]
 	var peers []*services.RTCPeer
 	for i, u := range realistic.NewUsers(t, tn, roleRuntime, callPeers) {
-		node := tn.F.State.Nodes[i]
+		node := members[i]
 		p, err := services.JoinRoom(t.Context(), tn.C.PinTo(node.PublicIP), u.Token(), room, fmt.Sprintf("user-%d", i))
 		if err != nil {
 			t.Fatalf("user %d joining through %s: %v", i, node.Name, err)
@@ -69,18 +71,21 @@ func TestReferenceCall_groupCallThroughEveryNode(t *testing.T) {
 	})
 }
 
-// waitSFU waits until the namespace's SFU is active on every node.
-func waitSFU(t *testing.T, tn *realistic.Tenant) {
+// waitSFU waits until the namespace's SFU is active on every member and
+// returns the members: the namespace's other nodes, on a larger fleet, run no SFU.
+func waitSFU(t *testing.T, tn *realistic.Tenant) []fleet.Node {
 	t.Helper()
+	members := tenancy.Members(t, tn.F, tn.N.Name)
 	unit := "orama-namespace-sfu@" + tn.N.Name + ".service"
-	eventually.Require(t, pollEvery, placeBudget, "the SFU on every node", func() (bool, error) {
-		for _, n := range tn.F.State.Nodes {
+	eventually.Require(t, pollEvery, placeBudget, "the SFU on every member", func() (bool, error) {
+		for _, n := range members {
 			if s := tn.F.Unit(t, n, unit); s != "active" {
 				return false, fmt.Errorf("%s: %s is %s", n.Name, unit, s)
 			}
 		}
 		return true, nil
 	})
+	return members
 }
 
 func disableWebRTC(t *testing.T, tn *realistic.Tenant) {

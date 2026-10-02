@@ -42,6 +42,9 @@ type fixture struct {
 	n     *ns.Namespace
 	c     *gw.Client
 	token string
+	// members are the nodes the namespace is placed on (a larger fleet has
+	// others, which hold none of its units).
+	members []fleet.Node
 }
 
 func setup(t *testing.T) *fixture {
@@ -67,16 +70,16 @@ func setup(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{f: f, n: n, c: c, token: s.AccessToken}
+	return &fixture{f: f, n: n, c: c, token: s.AccessToken, members: tenancy.Members(t, f, n.Name)}
 }
 
-// TestSFUDown_drainAndReconnect: stopping node-1's SFU tells its peers
+// TestSFUDown_drainAndReconnect: stopping the first member's SFU tells its peers
 // server-draining (or closes them), and a client that reconnects through
 // another node's gateway gets media again (docs/WEBRTC.md#3-connect-signaling-websocket).
 func TestSFUDown_drainAndReconnect(t *testing.T) {
 	fx := setup(t)
 	room := "e2e-drain-" + fx.n.Name
-	victim := fx.f.Node(t, "node-1")
+	victim := fx.members[0]
 	unit := "orama-namespace-sfu@" + fx.n.Name + ".service"
 	eventually.Require(t, pollEvery, readyBudget, "the SFU on "+victim.Name, func() (bool, error) {
 		return fx.f.Unit(t, victim, unit) == "active", nil
@@ -103,18 +106,19 @@ func TestSFUDown_drainAndReconnect(t *testing.T) {
 	})
 }
 
-// requireMediaThroughOthers rejoins room through node-2 (publisher) and
-// node-3 (subscriber) and waits for media to flow between them.
+// requireMediaThroughOthers rejoins room through the second member
+// (publisher) and the third (subscriber) and waits for media to flow between them.
 func requireMediaThroughOthers(t *testing.T, fx *fixture, room string) {
 	t.Helper()
-	pub, err := services.JoinRoom(t.Context(), fx.c.PinTo(fx.f.Node(t, "node-2").PublicIP), fx.token, room, "rejoined-pub")
+	pubNode, subNode := fx.members[1], fx.members[2]
+	pub, err := services.JoinRoom(t.Context(), fx.c.PinTo(pubNode.PublicIP), fx.token, room, "rejoined-pub")
 	if err != nil {
-		t.Fatalf("reconnecting through node-2: %v", err)
+		t.Fatalf("reconnecting through %s: %v", pubNode.Name, err)
 	}
 	defer pub.Close()
-	sub, err := services.JoinRoom(t.Context(), fx.c.PinTo(fx.f.Node(t, "node-3").PublicIP), fx.token, room, "rejoined-sub")
+	sub, err := services.JoinRoom(t.Context(), fx.c.PinTo(subNode.PublicIP), fx.token, room, "rejoined-sub")
 	if err != nil {
-		t.Fatalf("reconnecting through node-3: %v", err)
+		t.Fatalf("reconnecting through %s: %v", subNode.Name, err)
 	}
 	defer sub.Close()
 	if err := pub.Start(true); err != nil {
@@ -134,26 +138,27 @@ func requireMediaThroughOthers(t *testing.T, fx *fixture, room string) {
 // TestNodeDeath_rolesReallocated: a TURN holder cut off from the other two for
 // longer than the viability grace loses its roles: TURN DNS for the namespace
 // stops naming it and names only live nodes, which serve relays; when the
-// partition heals the cluster converges again. Two of the three nodes hold
-// TURN, so the victim is whichever of node-2 and node-3 does (node-1 is the
-// resolver): cutting off a node that never held it would prove nothing.
+// partition heals the cluster converges again. Two of the namespace's three
+// members hold TURN, so the victim is whichever of them does that is not the
+// resolver (the first nameserver): cutting off a node that never held TURN
+// would prove nothing.
 func TestNodeDeath_rolesReallocated(t *testing.T) {
 	fx := setup(t)
 	host := "turn.ns-" + fx.n.Name + "." + fx.f.State.BaseDomain
-	resolver := fx.f.Node(t, "node-1").PublicIP
+	resolver := tenancy.Nameservers(fx.f)[0]
 	var dead fleet.Node
 	eventually.Require(t, pollEvery, readyBudget, "TURN DNS for "+host+" to name two nodes", func() (bool, error) {
-		got, err := tenancy.ResolveAt(t.Context(), resolver, host)
+		got, err := tenancy.ResolveAt(t.Context(), resolver.PublicIP, host)
 		if len(got) != 2 {
 			return false, fmt.Errorf("%v %v", got, err)
 		}
-		for _, name := range []string{"node-2", "node-3"} {
-			if n := fx.f.Node(t, name); slices.Contains(got, n.PublicIP) {
+		for _, n := range fx.members {
+			if n.Name != resolver.Name && slices.Contains(got, n.PublicIP) {
 				dead = n
 				return true, nil
 			}
 		}
-		return false, eventually.Stop(fmt.Errorf("neither node-2 nor node-3 holds TURN: %v", got))
+		return false, eventually.Stop(fmt.Errorf("no member besides the resolver %s holds TURN: %v", resolver.Name, got))
 	})
 	t.Run(dead.Name+" partitioned", func(t *testing.T) {
 		for _, peer := range fx.f.State.Nodes {
@@ -161,8 +166,8 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 				fx.f.IPTablesBlock(t, dead, peer)
 			}
 		}
-		eventually.Require(t, time.Minute, reallocBudget, "TURN roles off node-3", func() (bool, error) {
-			got, err := tenancy.ResolveAt(t.Context(), resolver, host)
+		eventually.Require(t, time.Minute, reallocBudget, "TURN roles off "+dead.Name, func() (bool, error) {
+			got, err := tenancy.ResolveAt(t.Context(), resolver.PublicIP, host)
 			if err != nil {
 				return false, err
 			}
@@ -171,7 +176,7 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 			}
 			return false, fmt.Errorf("TURN DNS %v", got)
 		})
-		r := fx.c.PinTo(fx.f.Node(t, "node-1").PublicIP).MustSend(t, gw.Req{Method: http.MethodPost, Path: "/v1/webrtc/turn/credentials", Bearer: fx.token})
+		r := fx.c.PinTo(survivor(fx, dead).PublicIP).MustSend(t, gw.Req{Method: http.MethodPost, Path: "/v1/webrtc/turn/credentials", Bearer: fx.token})
 		var cr services.TURNCreds
 		if err := r.Expect(t, http.StatusOK).Decode(&cr); err != nil {
 			t.Fatal(err)
@@ -185,6 +190,16 @@ func TestNodeDeath_rolesReallocated(t *testing.T) {
 	})
 	infra.WaitConverged(t, len(fx.f.State.Nodes), reallocBudget, "the cluster after the partition heals")
 	requireChainAdvances(t, fx.f)
+}
+
+// survivor is a member of the namespace other than dead.
+func survivor(fx *fixture, dead fleet.Node) fleet.Node {
+	for _, n := range fx.members {
+		if n.Name != dead.Name {
+			return n
+		}
+	}
+	panic("the namespace has no member besides " + dead.Name)
 }
 
 // requireChainAdvances: when the run co-hosts a chain, cutting one of its

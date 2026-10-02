@@ -270,3 +270,25 @@ func fakeCLI(t *testing.T, mode string) (*oramacli.Runner, string) {
 	return &oramacli.Runner{Bin: bin, Home: dir, AgentSock: filepath.Join(dir, "a.sock"),
 		RealHome: func() (string, error) { return "/nonexistent/home", nil }}, log
 }
+
+func TestPlaceable_countsWholeNamespacesNotBlocks(t *testing.T) {
+	cases := []struct {
+		name    string
+		free    []int
+		members int
+		want    int
+	}{
+		{"three nodes, every namespace on every node", []int{20, 20, 20}, 3, 20},
+		{"fullest node bounds a three-node fleet", []int{5, 20, 12}, 3, 5},
+		{"five nodes, three per namespace", []int{20, 20, 20, 20, 20}, 3, 33},
+		{"fewer nodes with room than members", []int{20, 20, 0, 0, 0}, 3, 0},
+		{"empty fleet", nil, 3, 0},
+		{"no members", []int{20}, 0, 0},
+		{"negative free counts as none", []int{-4, 20, 20, 20}, 3, 20},
+	}
+	for _, c := range cases {
+		if got := Placeable(c.free, c.members); got != c.want {
+			t.Errorf("%s: Placeable(%v, %d) = %d, want %d", c.name, c.free, c.members, got, c.want)
+		}
+	}
+}

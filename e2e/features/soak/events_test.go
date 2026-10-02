@@ -88,9 +88,10 @@ func schedule(f *fleet.Fleet, w *workload) []event {
 			holdServing(t, w, others(n, pick(2)))
 		}},
 		{name: "clock skew on " + pick(0).Name, run: func(t *testing.T) { f.ClockSkew(t, pick(0), clockSkew); holdServing(t, w, n) }},
-		{name: "restart the namespace gateway on " + pick(1).Name, run: func(t *testing.T) {
-			f.StopService(t, pick(1), tenancy.UnitGateway(w.tn.N.Name))
-			holdServing(t, w, others(n, pick(1)))
+		{name: "restart the namespace gateway on a member", run: func(t *testing.T) {
+			victim := tenancy.Members(t, f, w.tn.N.Name)[1]
+			f.StopService(t, victim, tenancy.UnitGateway(w.tn.N.Name))
+			holdServing(t, w, others(n, victim))
 		}},
 		kill(pick(2), "rqlite", edge.IndexRQLiteUnit),
 		kill(pick(0), "olric", realistic.IndexOlricUnit),

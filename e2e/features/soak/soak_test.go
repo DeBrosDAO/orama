@@ -65,7 +65,7 @@ func TestSoak_mixedTrafficUnderScheduledChaos(t *testing.T) {
 	d := soakDuration(t, len(schedule(f, nil)))
 	infra.RequireHealthy(t)
 	w := setupWorkload(t)
-	units := watched(f, w.tn.N.Name)
+	units := watched(t, f, w.tn.N.Name)
 	before := readAll(t, f, units)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
