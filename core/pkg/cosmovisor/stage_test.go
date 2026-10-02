@@ -124,6 +124,33 @@ func TestStageUpgrade_tamperedBinaryIsNotStaged(t *testing.T) {
 	f.assertNoBinary(t)
 }
 
+func TestStageUpgrade_refusedStageLeavesNoUpgradeDirectory(t *testing.T) {
+	f := newFixture(t)
+	refuse := func(*os.File) error { return errors.New("not in the release") }
+	upgrades := filepath.Join(f.layout.Root(), "upgrades")
+	if _, err := f.layout.StageUpgrade("v2", f.binary, refuse); err == nil {
+		t.Fatal("staged a binary that did not verify")
+	}
+	if _, err := os.Stat(filepath.Join(upgrades, "v2")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused stage left upgrades/v2: %v", err)
+	}
+	if _, err := os.Stat(upgrades); err != nil {
+		t.Fatalf("a refused stage removed upgrades/ itself: %v", err)
+	}
+}
+
+func TestStageUpgrade_refusedStageKeepsDirectoriesItDidNotCreate(t *testing.T) {
+	f := newFixture(t)
+	bin := f.mkdir(t, "upgrades/v2/bin")
+	refuse := func(*os.File) error { return errors.New("not in the release") }
+	if _, err := f.layout.StageUpgrade("v2", f.binary, refuse); err == nil {
+		t.Fatal("staged a binary that did not verify")
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Fatalf("a refused stage removed a directory that was already there: %v", err)
+	}
+}
+
 func TestStageUpgrade_symlinkedUpgradesDirIsRefused(t *testing.T) {
 	f := newFixture(t)
 	elsewhere := t.TempDir()

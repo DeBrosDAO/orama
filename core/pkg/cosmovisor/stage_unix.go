@@ -77,7 +77,15 @@ func (l Layout) StageUpgrade(name, src string, verify Verify) (dst string, err e
 	if upgradesFD, err = l.openDir(rootFD, upgradesDir, true, false); err != nil {
 		return "", err
 	}
+	nameExisted, err := entryExists(upgradesFD, name)
+	if err != nil {
+		return "", err
+	}
 	if nameFD, err = l.openDir(upgradesFD, name, true, false); err != nil {
+		return "", err
+	}
+	binExisted, err := entryExists(nameFD, binDir)
+	if err != nil {
 		return "", err
 	}
 	if binFD, err = l.openDir(nameFD, binDir, true, false); err != nil {
@@ -85,6 +93,14 @@ func (l Layout) StageUpgrade(name, src string, verify Verify) (dst string, err e
 	}
 	dst, _ = l.UpgradeBinary(name)
 	if err := l.place(rootFD, binFD, src, dst, verify); err != nil {
+		// A refused stage leaves no upgrade directory behind: cosmovisor
+		// treats upgrades/<name> as a staged upgrade.
+		if !binExisted {
+			err = errors.Join(err, removeEmptyDir(nameFD, binDir))
+		}
+		if !nameExisted {
+			err = errors.Join(err, removeEmptyDir(upgradesFD, name))
+		}
 		return "", err
 	}
 	return dst, linkUpgradeInfo(nameFD, name)
@@ -221,6 +237,28 @@ func linkUpgradeInfo(nameFD int, name string) error {
 func unlinkIfPresent(dirFD int, name string) error {
 	if err := unix.Unlinkat(dirFD, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return fmt.Errorf("remove the staged %s: %w", name, err)
+	}
+	return nil
+}
+
+// entryExists reports whether name is present in dirFD, without following a
+// symlink.
+func entryExists(dirFD int, name string) (bool, error) {
+	var st unix.Stat_t
+	err := unix.Fstatat(dirFD, name, &st, unix.AT_SYMLINK_NOFOLLOW)
+	if errors.Is(err, unix.ENOENT) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// removeEmptyDir removes a directory this call created.
+func removeEmptyDir(parentFD int, name string) error {
+	if err := unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR); err != nil {
+		return fmt.Errorf("remove the empty %s: %w", name, err)
 	}
 	return nil
 }
