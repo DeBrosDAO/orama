@@ -48,7 +48,7 @@ export interface StoragePinResponse {
 export interface StorageStatus {
   cid: string;
   name: string;
-  status: string; // "pinned", "pinning", "queued", "unpinned", "error"
+  status: string; // "pinned", "pinning", "queued", "unpinned", "error", "unknown"
   replication_min: number;
   replication_max: number;
   replication_factor: number;

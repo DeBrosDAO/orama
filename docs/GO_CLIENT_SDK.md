@@ -237,7 +237,7 @@ fmt.Printf("Status: %s, Replication factor: %d, Peers: %v\n",
     status.Status, status.ReplicationFactor, status.Peers)
 ```
 
-`StorageStatus` includes `Cid`, `Name`, `Status` (`"pinned"`, `"pinning"`, `"queued"`, `"unpinned"`, `"error"`), `ReplicationMin`, `ReplicationMax`, `ReplicationFactor`, `Peers`, and `Error`.
+`StorageStatus` includes `Cid`, `Name`, `Status` (`"pinned"`, `"pinning"`, `"queued"`, `"unpinned"`, `"error"`, `"unknown"`; the cluster-wide state across the peers the pin is allocated to, a peer it is not allocated to never counts), `ReplicationMin`, `ReplicationMax`, `ReplicationFactor`, `Peers`, and `Error`.
 
 ## Cache Client
 

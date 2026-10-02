@@ -86,13 +86,18 @@ type PinStatus struct {
 }
 
 // Aggregated PinStatus.Status values. IPFS-Cluster reports a per-peer status;
-// these are the honest cluster-wide rollups PinStatus computes from the peer_map.
+// these are the honest cluster-wide rollups PinStatus computes from the peer_map's
+// allocated peers (peers reporting "remote" are not allocated and are ignored).
 const (
 	PinStatusPinned  = "pinned"  // every peer holds the block
 	PinStatusPinning = "pinning" // at least one peer is still fetching
 	PinStatusError   = "error"   // at least one peer failed to pin
-	PinStatusUnknown = "unknown" // no peers reported (cluster can't confirm)
+	PinStatusUnknown = "unknown" // no allocated peers reported (cluster can't confirm)
 )
+
+// peerStatusRemote is the per-peer status ipfs-cluster gives a peer the pin is
+// not allocated to (it is tracked elsewhere).
+const peerStatusRemote = "remote"
 
 const (
 	// evictPinPropagationTimeout bounds how long an immediate eviction waits
@@ -563,8 +568,14 @@ func (c *Client) PinStatus(ctx context.Context, cid string) (*PinStatus, error) 
 	anyError := false
 	anyPinning := false
 	for peerID, pinInfo := range gpi.PeerMap {
-		peers = append(peers, peerID)
 		s := normalizePeerStatus(pinInfo.Status)
+		if s == peerStatusRemote {
+			// peer_map lists every cluster peer; "remote" is a peer the pin is
+			// not allocated to, so it holds no replica and says nothing about
+			// the pin's health. Only the allocated peers decide the status.
+			continue
+		}
+		peers = append(peers, peerID)
 		switch {
 		case s == PinStatusPinned:
 			pinnedPeers++
@@ -636,7 +647,8 @@ func isPinningStatus(s string) bool {
 
 // aggregatePinStatus rolls the per-peer tallies into a single honest cluster
 // status. "pinned" requires EVERY peer pinned; errors win over in-progress; an
-// empty peer_map is "unknown" (the cluster couldn't confirm anything).
+// peer_map with no allocated peer is "unknown" (the cluster couldn't confirm
+// anything).
 func aggregatePinStatus(totalPeers, pinnedPeers int, anyError, anyPinning bool, firstNonPinned string) string {
 	switch {
 	case totalPeers == 0:

@@ -446,9 +446,43 @@ func TestClient_PinStatus_aggregation(t *testing.T) {
 				"peer1": map[string]interface{}{"status": "remote"},
 				"peer2": map[string]interface{}{"status": "remote"},
 			},
-			wantStatus: "remote",
+			wantStatus: "unknown",
 			wantPinned: 0,
+			wantTotal:  0,
+		},
+		{
+			name: "remote_peers_ignored_all_allocated_pinned",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinned"},
+				"peer3": map[string]interface{}{"status": "pinned"},
+				"peer4": map[string]interface{}{"status": "remote"},
+				"peer5": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "pinned",
+			wantPinned: 3,
+			wantTotal:  3,
+		},
+		{
+			name: "remote_peers_ignored_allocated_pinning",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pinned"},
+				"peer2": map[string]interface{}{"status": "pinning"},
+				"peer3": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "pinning",
+			wantPinned: 1,
 			wantTotal:  2,
+		},
+		{
+			name: "remote_peers_ignored_allocated_error",
+			peerMap: map[string]interface{}{
+				"peer1": map[string]interface{}{"status": "pin_error", "error": "boom"},
+				"peer2": map[string]interface{}{"status": "remote"},
+			},
+			wantStatus: "error",
+			wantPinned: 0,
+			wantTotal:  1,
 		},
 	}
 
