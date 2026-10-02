@@ -6,6 +6,7 @@ import (
 	"cosmossdk.io/collections"
 	"cosmossdk.io/math"
 
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -143,8 +144,14 @@ func (q queryServer) Queue(goCtx context.Context, _ *types.QueryQueueRequest) (*
 	return &types.QueryQueueResponse{Pending: tail - head, Head: head, Tail: tail}, nil
 }
 
+// Invariants walks every deal and its slots to sum escrow, so its cost grows with the chain's
+// history, not with a request. The node's query-gas-limit (app.toml) bounds the public point
+// lookups; this audit query is withheld from the public route (core chainread withheldQuery), so
+// it runs on a meter of its own. Under the limit it ran out of gas once the deal count passed a
+// couple of hundred, and the e2e invariant check reported query_failed.
 func (q queryServer) Invariants(goCtx context.Context, _ *types.QueryInvariantsRequest) (*types.QueryInvariantsResponse, error) {
-	got, err := q.Keeper.CheckInvariants(sdk.UnwrapSDKContext(goCtx))
+	ctx := sdk.UnwrapSDKContext(goCtx).WithGasMeter(storetypes.NewInfiniteGasMeter())
+	got, err := q.Keeper.CheckInvariants(ctx)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

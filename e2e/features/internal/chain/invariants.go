@@ -25,6 +25,17 @@ var requiredTrue = map[string][]string{"shielded": {"balance_matches", "pools_no
 // invariantMark separates the modules' answers in one node's output.
 const invariantMark = "__E2E_INVARIANTS__ "
 
+// queryFailedMark opens a module's answer when its query exited non-zero; the line after it is the
+// last line oramad wrote to stderr, the actual error.
+const queryFailedMark = "__E2E_QUERY_FAILED__"
+
+// invariantScript is one module's query: its stdout is the answer, and a failed query leaves
+// queryFailedMark and oramad's error line in its place.
+func (c *Chain) invariantScript(module string) string {
+	return fmt.Sprintf("echo '%s%s'; e=$(mktemp); %s 2>\"$e\" || { echo '%s'; tail -n 1 \"$e\"; }; rm -f \"$e\"\n",
+		invariantMark, module, c.OramadCmd("query", module, "invariants", "--node", c.RPC(), "--output", "json"), queryFailedMark)
+}
+
 // NodeInvariants runs every module's Invariants query on n in one remote
 // command and returns, per module, the boolean members that are false (an
 // empty slice: all hold) and the response's detail text.
@@ -32,8 +43,7 @@ func (c *Chain) NodeInvariants(t testing.TB, n fleet.Node) map[string][]string {
 	t.Helper()
 	var script strings.Builder
 	for _, m := range InvariantModules {
-		fmt.Fprintf(&script, "echo '%s%s'; %s || echo '{\"query_failed\": false}'\n", invariantMark, m,
-			c.OramadCmd("query", m, "invariants", "--node", c.RPC(), "--output", "json"))
+		script.WriteString(c.invariantScript(m))
 	}
 	out := c.Run(t, n, QueryBudget, script.String())
 	got := map[string][]string{}
@@ -52,6 +62,9 @@ func (c *Chain) NodeInvariants(t testing.TB, n fleet.Node) map[string][]string {
 // brokenOf lists the false boolean members of one Invariants response.
 func brokenOf(t testing.TB, n fleet.Node, module, body string) []string {
 	t.Helper()
+	if failed, ok := strings.CutPrefix(strings.TrimSpace(body), queryFailedMark); ok {
+		return []string{"query_failed (" + strings.TrimSpace(failed) + ")"}
+	}
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(body), &doc); err != nil {
 		t.Fatalf("%s: %s invariants: %v: %s", n.Name, module, err, body)

@@ -2202,7 +2202,10 @@ carries `query-gas-limit = "2000000"` (`oramad init` writes it, so `orama global
 the stagenet deploy script's fresh install get it, and the script asserts it after the install; nothing
 patches an `app.toml` that already exists), which stops a query that scans state after about two thousand
 store reads. A limit of 0 means unbounded in the SDK, so `oramad start` refuses to start with one on
-any chain id that does not contain `-localnet-`, and its error names the setting to fix.
+any chain id that does not contain `-localnet-`, and its error names the setting to fix. The x/storage
+`Invariants` query is the one exception: it sums every deal and its slots, so its cost grows with the
+chain's history (it ran past the limit at a few thousand deals), and it runs on its own gas meter. It is
+withheld from the public route above, so only a caller that can reach the node's own RPC or gRPC runs it.
 
 The route's rate-limit bucket is per client address, except that an IPv6 client is limited by its /64
 (a subscriber is routinely handed a whole /64 and can source a request from any address in it). The

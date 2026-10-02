@@ -11,6 +11,7 @@ import (
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/stretchr/testify/require"
 
+	"cosmossdk.io/collections"
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/math"
 
@@ -588,4 +589,32 @@ func eventTypes(ctx sdk.Context) []string {
 		out = append(out, e.Type)
 	}
 	return out
+}
+
+// TestInvariantsQuery_runsPastTheQueryGasLimit pins the root cause of the fleet e2e
+// "storage: query_failed": the Invariants query sums every deal, so under the node's
+// query-gas-limit (2,000,000) it ran out of gas once a chain held a few hundred deals.
+func TestInvariantsQuery_runsPastTheQueryGasLimit(t *testing.T) {
+	const queryGasLimit = 2_000_000
+	f := newFixture(t)
+	f.init(t, nil)
+	for id := uint64(1); id <= 3000; id++ {
+		require.NoError(t, f.Keeper.Deals.Set(f.Ctx, id, types.Deal{
+			Id: id, Escrow: math.ZeroInt(), Status: types.DealStatus_DEAL_STATUS_REFUNDED,
+		}))
+		for index := uint32(0); index < 3; index++ {
+			require.NoError(t, f.Keeper.Slots.Set(f.Ctx, collections.Join(id, index), types.Slot{
+				DealId: id, Index: index, NodeId: fmt.Sprintf("node-%d-%d", id, index), Operator: fmt.Sprintf("operator-%d-%d", id, index),
+			}))
+		}
+	}
+
+	bounded := f.Ctx.WithGasMeter(storetypes.NewGasMeter(queryGasLimit))
+	got, err := f.Query.Invariants(bounded, &types.QueryInvariantsRequest{})
+	require.NoError(t, err)
+	require.True(t, got.EscrowConserved && got.QueueWellFormed, got.Detail)
+
+	// The walk itself exceeds the limit: only the query's own meter lets it finish.
+	over := f.Ctx.WithGasMeter(storetypes.NewGasMeter(queryGasLimit))
+	require.Panics(t, func() { _, _ = f.Keeper.CheckInvariants(over) })
 }

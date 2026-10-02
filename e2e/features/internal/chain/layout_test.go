@@ -3,6 +3,7 @@
 package chain
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -104,5 +105,38 @@ func TestValidator_skipsOnStagenetBeforeAnyKeyringRead(t *testing.T) {
 	skipped, failed := skips(t, func(t testing.TB) { chainFor(config.TargetStagenet).Validator(t, fleet.Node{Name: "node-1"}) })
 	if !skipped || failed {
 		t.Errorf("skipped=%v failed=%v, want a skip", skipped, failed)
+	}
+}
+
+func TestBrokenOf_queryFailedCarriesTheError(t *testing.T) {
+	body := queryFailedMark + "\nfailed to query storage invariants: rpc error: code = Unknown desc = {ValuePerByte}: panic\n"
+	got := brokenOf(t, fleet.Node{Name: "node-1"}, "storage", body)
+	if len(got) != 1 || !strings.Contains(got[0], "query_failed") || !strings.Contains(got[0], "{ValuePerByte}: panic") {
+		t.Fatalf("brokenOf = %v, want one query_failed entry carrying the error text", got)
+	}
+}
+
+func TestBrokenOf_answerWithoutFailureMark(t *testing.T) {
+	if got := brokenOf(t, fleet.Node{Name: "node-1"}, "fees", `{"fees_balance":true}`); len(got) != 0 {
+		t.Fatalf("brokenOf = %v, want none", got)
+	}
+	if got := brokenOf(t, fleet.Node{Name: "node-1"}, "fees", `{"fees_balance":false,"detail":"d"}`); len(got) != 1 {
+		t.Fatalf("brokenOf = %v, want the false member", got)
+	}
+}
+
+func TestInvariantScript_failedQueryLeavesTheErrorLine(t *testing.T) {
+	c := chainFor(config.TargetFleet)
+	script := c.invariantScript("storage")
+	// Swap the real command for one that fails with an error line on stderr, run the rest as written.
+	cmd := c.OramadCmd("query", "storage", "invariants", "--node", c.RPC(), "--output", "json")
+	script = strings.Replace(script, cmd, "{ echo usage >&2; echo 'boom: out of gas' >&2; false; }", 1)
+	out, err := exec.Command("sh", "-c", script).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := invariantMark + "storage\n" + queryFailedMark + "\nboom: out of gas\n"
+	if string(out) != want {
+		t.Fatalf("script output %q, want %q", out, want)
 	}
 }
