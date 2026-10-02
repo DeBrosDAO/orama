@@ -314,7 +314,16 @@ sub-name, `turn.ns-<ns>.<base>` included, was unresolvable.
 supervisor that probes its Olric client every 10s and, after three consecutive
 failures, drops it so cache handlers answer 503 — the honest answer — instead of
 returning transport errors from a client that cannot reach anything. It then
-reconnects with backoff, and re-wires without a restart.
+reconnects with backoff, and re-wires without a restart. Dropping the client
+also drops the cache handlers built on it, so the routes answer 503 at once.
+
+Every Olric round trip is bounded by a 10s I/O deadline (`olric.OperationTimeout`,
+no retries): the client does not apply a request's context to its socket, so
+against an Olric that accepts connections and never answers (a frozen process)
+the deadline is the only bound. A cache call that hits it, or a refused or reset
+connection, answers 503 `cache unavailable; retry` with `Retry-After`. The
+serverless cache host functions and the pub/sub dispatch dedup share the same
+client and the same bound.
 
 It replaces a one-shot loop that returned as soon as it connected once, and
 which was armed only when the INITIAL connection had failed. So the common case

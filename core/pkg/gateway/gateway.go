@@ -1183,9 +1183,13 @@ func (g *Gateway) setOlricClient(client *olric.Client) {
 	g.olricMu.Lock()
 	defer g.olricMu.Unlock()
 	g.olricClient = client
-	if client != nil {
-		g.cacheHandlers = cache.NewCacheHandlers(g.logger, client)
+	if client == nil {
+		// Handlers built on the dropped client would keep calling it; with none
+		// the cache routes answer 503 (see cachePutHandler).
+		g.cacheHandlers = nil
+		return
 	}
+	g.cacheHandlers = cache.NewCacheHandlers(g.logger, client)
 }
 
 // getOlricClient atomically retrieves the current Olric client.

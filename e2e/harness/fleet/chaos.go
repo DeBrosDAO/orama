@@ -25,7 +25,16 @@ const (
 	// a skew is undone.
 	ClockTolerance = 5 * time.Second
 	recoverPoll    = 2 * time.Second
+	// killRetryBudget is how long Kill keeps trying while systemd refuses the
+	// signal because the unit is mid-transition.
+	killRetryBudget = 30 * time.Second
 )
+
+// systemdTransitionRefusal is what systemctl kill prints when the unit's
+// cgroup is being torn down or rebuilt (a start or restart in flight): the
+// unit reads active a moment earlier, then the signal is refused with EINVAL
+// and nothing was killed.
+const systemdTransitionRefusal = "Invalid argument"
 
 const unitActive = "active"
 
@@ -37,7 +46,33 @@ func (f *Fleet) Kill(t testing.TB, n Node, unit string) {
 	requireSafe(t, "unit", unit)
 	prior := f.Unit(t, n, unit)
 	t.Cleanup(func() { f.restoreUnit(t, n, unit, prior) })
-	f.MustExec(t, n, "systemctl kill --signal=SIGKILL "+unit)
+	f.killWhenSettled(t, n, unit)
+}
+
+// killWhenSettled sends the SIGKILL, trying again while systemd refuses it
+// for a unit in transition. Any other failure ends the test.
+func (f *Fleet) killWhenSettled(t testing.TB, n Node, unit string) {
+	t.Helper()
+	cmd := "systemctl kill --signal=SIGKILL " + unit
+	ctx, cancel := context.WithTimeout(t.Context(), killRetryBudget)
+	defer cancel()
+	sh := f.shellFor(t.Name(), n)
+	err := eventually.Poll(ctx, recoverPoll, killRetryBudget, n.Name+" "+unit+" to accept SIGKILL", func() (bool, error) {
+		out, err := sh.Run(ctx, cmd)
+		if err != nil {
+			t.Fatal(f.Redact(fmt.Sprintf("failed to run on %s (%s): %v", n.Name, cmd, err)))
+		}
+		if out.Exit == 0 {
+			return true, nil
+		}
+		if !strings.Contains(out.Stderr, systemdTransitionRefusal) {
+			t.Fatal(f.Redact(fmt.Sprintf("%s: %q exited %d\nstdout: %s\nstderr: %s", n.Name, cmd, out.Exit, out.Stdout, out.Stderr)))
+		}
+		return false, fmt.Errorf("systemd refused the signal: %s", strings.TrimSpace(out.Stderr))
+	})
+	if err != nil {
+		t.Fatal(f.Redact(err.Error()))
+	}
 }
 
 // StopService stops unit cleanly; the cleanup puts it back in the state it

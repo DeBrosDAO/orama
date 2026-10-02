@@ -92,6 +92,10 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 			zap.String("dmap", req.DMap),
 			zap.String("key", req.Key),
 			zap.Error(err))
+		if isCacheUnreachable(err) {
+			writeUnavailable(w)
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to get key")
 		return
 	}
@@ -240,5 +244,9 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 // addresses on the overlay — goes to the log only.
 func (h *CacheHandlers) writeCacheFailure(w http.ResponseWriter, code int, what string, err error) {
 	h.logger.ComponentError(logging.ComponentGeneral, what, zap.Error(err))
+	if isCacheUnreachable(err) {
+		writeUnavailable(w)
+		return
+	}
 	writeError(w, code, what)
 }

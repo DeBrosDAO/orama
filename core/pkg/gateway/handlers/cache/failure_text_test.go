@@ -51,8 +51,8 @@ func TestCacheHandlers_aFailingCacheShowsTheClientNoOlricError(t *testing.T) {
 		"get":    post(h.GetHandler, "/v1/cache/get", `{"dmap":"d","key":"k"}`),
 		"list":   post(h.ScanHandler, "/v1/cache/scan", `{"dmap":"d"}`),
 	} {
-		if rec.Code != http.StatusInternalServerError {
-			t.Errorf("%s: status %d, want 500: %s", name, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: status %d, want 503: %s", name, rec.Code, rec.Body.String())
 		}
 		body := rec.Body.String()
 		for _, leak := range []string{host, port, "refused", "dial", "%!"} {

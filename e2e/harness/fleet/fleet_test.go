@@ -202,6 +202,29 @@ func TestKill_restoresAnInactiveUnitToInactive(t *testing.T) {
 	}
 }
 
+// TestKill_retriesWhileSystemdRefusesForATransition: the signal is refused
+// once with EINVAL (stage 11: unit mid-restart), then lands.
+func TestKill_retriesWhileSystemdRefusesForATransition(t *testing.T) {
+	refused := false
+	sh := &fakeShell{answer: func(cmd string) (Output, error) {
+		if strings.HasPrefix(cmd, "systemctl is-active") {
+			return Output{Stdout: "active\n"}, nil
+		}
+		if strings.HasPrefix(cmd, "systemctl kill") && !refused {
+			refused = true
+			return Output{Exit: 1, Stderr: "Failed to send signal SIGKILL to auxiliary processes: Invalid argument\n"}, nil
+		}
+		return Output{}, nil
+	}}
+	f := newFake(t, sh)
+	t.Run("kill", func(t *testing.T) {
+		f.Kill(t, f.Node(t, "node-1"), "orama-node.service")
+	})
+	if got := countCmds(sh, "systemctl kill"); got != 2 {
+		t.Fatalf("kill ran %d times, want 2: %v", got, sh.cmds)
+	}
+}
+
 func TestShellQuote_escapes(t *testing.T) {
 	if got := ShellQuote(`a'b`); got != `'a'"'"'b'` {
 		t.Fatalf("got %s", got)

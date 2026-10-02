@@ -143,9 +143,14 @@ func TestSetHandler_aValueTooBigForTheStoreIsRefusedAsAClientError(t *testing.T)
 // Olric's error text can name cluster members; the tenant gets a fixed
 // message and the detail goes to the log (security review, 2026-09-30).
 func TestPutFailure_keepsInternalTextOut(t *testing.T) {
-	status, msg := putFailure(errors.New("dial tcp 10.0.0.3:3320: connection refused"))
-	if status != http.StatusInternalServerError || strings.Contains(msg, "10.0.0.3") || strings.Contains(msg, "dial") {
-		t.Fatalf("status %d message %q exposes the internal error", status, msg)
+	for err, want := range map[string]int{
+		"dial tcp 10.0.0.3:3320: connection refused": http.StatusServiceUnavailable,
+		"member 10.0.0.3:3320 failed internally":     http.StatusInternalServerError,
+	} {
+		status, msg := putFailure(errors.New(err))
+		if status != want || strings.Contains(msg, "10.0.0.3") || strings.Contains(msg, "dial") {
+			t.Fatalf("%q: status %d (want %d) message %q exposes the internal error", err, status, want, msg)
+		}
 	}
 }
 

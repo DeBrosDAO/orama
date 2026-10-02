@@ -2,8 +2,14 @@ package gateway
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/olric"
+	"github.com/DeBrosOfficial/network/pkg/olric/olrictest"
+	"go.uber.org/zap"
 )
 
 func TestSleepCtx(t *testing.T) {
@@ -58,5 +64,30 @@ func TestGateway_setAndGetOlricClient(t *testing.T) {
 	g.setOlricClient(nil)
 	if g.getOlricClient() != nil {
 		t.Fatal("setOlricClient(nil) did not clear the client")
+	}
+}
+
+// Dropping the client must also drop the cache handlers built on it: left in
+// place they keep calling the dead client and the routes never answer 503.
+func TestGateway_droppingTheClientDropsTheCacheHandlers(t *testing.T) {
+	g := &Gateway{}
+	srv := olrictest.Start(t)
+	client, err := olric.NewClient(olric.Config{Servers: []string{srv.Addr}}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.setOlricClient(client)
+	if g.cacheHandlers == nil {
+		t.Fatal("connecting did not wire the cache handlers")
+	}
+	g.setOlricClient(nil)
+	if g.cacheHandlers != nil {
+		t.Fatal("setOlricClient(nil) left the cache handlers wired to the dropped client")
+	}
+
+	rec := httptest.NewRecorder()
+	g.cachePutHandler(rec, httptest.NewRequest(http.MethodPost, "/v1/cache/put", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("put with no cache answered %d, want 503", rec.Code)
 	}
 }
