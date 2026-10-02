@@ -9,7 +9,6 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	olriclib "github.com/olric-data/olric"
-	"go.uber.org/zap"
 )
 
 // A publish made from inside a triggered function reaches the dispatcher a
@@ -42,6 +41,18 @@ const (
 	// publish that needs a record is refused (ErrPublishDepthFull) rather than
 	// dispatched without its depth.
 	localDepthMaxEntries = 65536
+
+	// depthMissTTL is how long "the shared store holds no depth for this
+	// message" is remembered. A message reaches a gateway more than once
+	// (gossipsub fan-out, self-delivery); the repeats must not each pay an
+	// Olric read. A record is written before its publish, so a miss can only
+	// go stale for an identical payload re-published within this window by a
+	// function on another gateway; the same-bytes dedup key already swallows
+	// that case at the depth the first copy ran at.
+	depthMissTTL = 2 * time.Second
+
+	// depthMissMaxEntries bounds the miss cache; it is dropped whole when full.
+	depthMissMaxEntries = 4096
 )
 
 // ErrPublishDepthFull is returned by RecordPublishDepth when the gateway holds
@@ -142,6 +153,46 @@ func (l *depthLedger) lookup(key string) (int, bool) {
 	return e.depth, true
 }
 
+// depthMissCache remembers keys the shared store had no depth record for.
+type depthMissCache struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+	now     func() time.Time // injectable clock for tests
+}
+
+func newDepthMissCache() *depthMissCache {
+	return &depthMissCache{entries: make(map[string]time.Time), now: time.Now}
+}
+
+func (c *depthMissCache) has(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exp, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	if !c.now().Before(exp) {
+		delete(c.entries, key)
+		return false
+	}
+	return true
+}
+
+func (c *depthMissCache) add(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) >= depthMissMaxEntries {
+		c.entries = make(map[string]time.Time)
+	}
+	c.entries[key] = c.now().Add(depthMissTTL)
+}
+
+func (c *depthMissCache) forget(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.entries, key)
+}
+
 // RecordPublishDepth notes that the message (namespace, topic, data) is being
 // published by a function invocation running at trigger depth `depth`, so the
 // dispatch of that message — on this gateway or another — runs at no less than
@@ -158,6 +209,7 @@ func (d *PubSubDispatcher) RecordPublishDepth(ctx context.Context, namespace, to
 	if err := d.depthLedger.record(key, depth); err != nil {
 		return fmt.Errorf("failed to record trigger depth %d for %s on %s: %w", depth, namespace, topic, err)
 	}
+	d.depthMisses.forget(key)
 	if d.depthStore == nil {
 		return nil
 	}
@@ -184,18 +236,19 @@ func (d *PubSubDispatcher) publishedDepth(ctx context.Context, namespace, topic 
 	if d.depthStore == nil {
 		return depth
 	}
-	shared, ok, err := d.depthStore.get(ctx, key)
-	if err != nil {
-		d.logger.Error("Could not read the recorded trigger depth of a published message; "+
-			"dispatching at the depth this gateway knows",
-			zap.String("namespace", namespace),
-			zap.String("topic", topic),
-			zap.Int("local_depth", depth),
-			zap.Error(err),
-		)
+	if d.depthMisses.has(key) {
 		return depth
 	}
-	if ok && shared > depth {
+	shared, ok, err := d.depthStore.get(ctx, key)
+	if err != nil {
+		d.warnDedupDegraded("trigger depth read failed; dispatching at the depth this gateway knows", namespace, topic, err)
+		return depth
+	}
+	if !ok {
+		d.depthMisses.add(key)
+		return depth
+	}
+	if shared > depth {
 		depth = shared
 	}
 	return depth

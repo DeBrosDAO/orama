@@ -53,7 +53,7 @@ func TestClaimDispatch_failsOpenWhenNoOlric(t *testing.T) {
 	// silently drop the wake. This is the single-node / cache-disabled
 	// path and the fail-open guarantee.
 	d := &PubSubDispatcher{logger: zap.NewNop()} // olricClient nil
-	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x")) {
+	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"), 0) {
 		t.Error("claimDispatch must fail-open (true) when Olric is unavailable — a dropped wake is worse than a dup")
 	}
 }
@@ -85,7 +85,7 @@ func TestClaimDispatch_loserOfTheClusterClaimSkips(t *testing.T) {
 		logger:      zap.NewNop(),
 		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("key found")}},
 	}
-	if d.claimDispatch(context.Background(), "ns", "orders", []byte("x")) {
+	if d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
 		t.Error("a node whose claim lost to another node's must skip, got dispatch")
 	}
 }
@@ -95,7 +95,7 @@ func TestClaimDispatch_transientOlricErrorStillFiresOpen(t *testing.T) {
 		logger:      zap.NewNop(),
 		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("write quorum cannot be reached")}},
 	}
-	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x")) {
+	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
 		t.Error("an Olric outage must fail open, got skip")
 	}
 }

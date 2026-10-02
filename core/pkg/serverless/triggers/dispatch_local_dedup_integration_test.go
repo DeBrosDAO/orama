@@ -120,7 +120,7 @@ func TestClaimDispatch_degradedWarnWhenOlricDown(t *testing.T) {
 		olricClient: failingOlricClient{},
 	}
 
-	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x")) {
+	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"), 0) {
 		t.Fatal("claimDispatch must fail-open (true) when Olric is degraded — never drop the wake")
 	}
 	if observed.FilterMessageSnippet("dedup degraded").Len() == 0 {
@@ -137,7 +137,7 @@ func TestClaimDispatch_degradedWarnRateLimited(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"))
+		d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"), 0)
 	}
 	if got := observed.FilterMessageSnippet("dedup degraded").Len(); got != 1 {
 		t.Errorf("degraded WARN must be rate-limited to 1 per interval; got %d", got)
@@ -150,7 +150,7 @@ func TestClaimDispatch_nilOlricStaysQuiet(t *testing.T) {
 	core, observed := observer.New(zapcore.WarnLevel)
 	d := &PubSubDispatcher{logger: zap.New(core)} // olricClient nil
 
-	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x")) {
+	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"), 0) {
 		t.Fatal("nil Olric must fail-open (true)")
 	}
 	if observed.Len() != 0 {

@@ -239,3 +239,108 @@ func (f *fakeDepthStore) get(_ context.Context, key string) (int, bool, error) {
 	v, ok := f.m[key]
 	return v, ok, nil
 }
+
+// A function that republishes the same bytes every time (a retry, a heartbeat)
+// sends one message per hop. The once-per-publish claims were keyed on the bytes
+// alone, so the second hop was swallowed as a duplicate of the first and the
+// chain stalled at depth 2 instead of running to the limit.
+func TestDispatch_constantPayloadRepublishChainReachesTheLimit(t *testing.T) {
+	d := newDepthDispatcher()
+	ctx := context.Background()
+	payload := []byte(`{"again":true}`)
+
+	if !reachesTriggerLookup(d, "ns", "loop", []byte(`{"start":true}`), true) {
+		t.Fatal("the client's first publish must dispatch")
+	}
+	dispatched := 0
+	for handlerDepth := 1; handlerDepth <= maxTriggerDepth+2; handlerDepth++ {
+		if err := d.RecordPublishDepth(ctx, "ns", "loop", payload, handlerDepth); err != nil {
+			t.Fatalf("RecordPublishDepth: %v", err)
+		}
+		if !reachesTriggerLookup(d, "ns", "loop", payload, true) {
+			break
+		}
+		dispatched++
+	}
+	if want := maxTriggerDepth - 1; dispatched != want {
+		t.Fatalf("a constant-payload chain dispatched %d hops, want %d (one per depth below the limit)", dispatched, want)
+	}
+}
+
+// The same message delivered twice at one depth is still a duplicate.
+func TestDispatch_sameMessageSameDepthStaysDeduped(t *testing.T) {
+	d := newDepthDispatcher()
+	payload := []byte(`{"again":true}`)
+	if err := d.RecordPublishDepth(context.Background(), "ns", "loop", payload, 2); err != nil {
+		t.Fatalf("RecordPublishDepth: %v", err)
+	}
+	if !reachesTriggerLookup(d, "ns", "loop", payload, true) {
+		t.Fatal("the first delivery must dispatch")
+	}
+	if reachesTriggerLookup(d, "ns", "loop", payload, true) {
+		t.Fatal("a second delivery of the same message at the same depth must be deduped")
+	}
+}
+
+type countingDepthStore struct {
+	*fakeDepthStore
+	mu   sync.Mutex
+	gets int
+}
+
+func (c *countingDepthStore) get(ctx context.Context, key string) (int, bool, error) {
+	c.mu.Lock()
+	c.gets++
+	c.mu.Unlock()
+	return c.fakeDepthStore.get(ctx, key)
+}
+
+// Repeat deliveries of a message nothing recorded must not each read Olric.
+func TestPublishedDepth_repeatDeliveriesOfAnUnrecordedMessageReadOnce(t *testing.T) {
+	d := newDepthDispatcher()
+	store := &countingDepthStore{fakeDepthStore: newFakeDepthStore()}
+	d.depthStore = store
+	for i := 0; i < 5; i++ {
+		if got := d.publishedDepth(context.Background(), "ns", "t", []byte("x")); got != 0 {
+			t.Fatalf("depth = %d; want 0", got)
+		}
+	}
+	if store.gets != 1 {
+		t.Errorf("shared reads = %d; want 1", store.gets)
+	}
+}
+
+func TestPublishedDepth_missExpiresAndRecordClearsIt(t *testing.T) {
+	d := newDepthDispatcher()
+	now := time.Now()
+	d.depthMisses.now = func() time.Time { return now }
+	store := &countingDepthStore{fakeDepthStore: newFakeDepthStore()}
+	d.depthStore = store
+	data := []byte("x")
+
+	d.publishedDepth(context.Background(), "ns", "t", data)
+	now = now.Add(depthMissTTL + time.Millisecond)
+	d.publishedDepth(context.Background(), "ns", "t", data)
+	if store.gets != 2 {
+		t.Errorf("reads after the miss expired = %d; want 2", store.gets)
+	}
+
+	if err := d.RecordPublishDepth(context.Background(), "ns", "t", data, 4); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.publishedDepth(context.Background(), "ns", "t", data); got != 4 {
+		t.Errorf("depth after a record = %d; want 4", got)
+	}
+}
+
+func TestPublishedDepth_readFailureIsNotCachedAsAMiss(t *testing.T) {
+	d := newDepthDispatcher()
+	store := &countingDepthStore{fakeDepthStore: &fakeDepthStore{m: map[string]int{}, getErr: errors.New("olric down")}}
+	d.depthStore = store
+	for i := 0; i < 3; i++ {
+		d.publishedDepth(context.Background(), "ns", "t", []byte("x"))
+	}
+	if store.gets != 3 {
+		t.Errorf("reads = %d; a failed read must be retried, not cached", store.gets)
+	}
+}

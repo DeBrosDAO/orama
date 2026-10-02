@@ -264,7 +264,7 @@ func (s *FunctionStore) ListVersions(ctx context.Context, namespace, name string
 	return functions, nil
 }
 
-// Delete marks a function as inactive (soft delete).
+// Delete marks a function as deleted (soft delete).
 func (s *FunctionStore) Delete(ctx context.Context, namespace, name string, version int) error {
 	namespace = strings.TrimSpace(namespace)
 	name = strings.TrimSpace(name)
@@ -274,10 +274,10 @@ func (s *FunctionStore) Delete(ctx context.Context, namespace, name string, vers
 
 	if version == 0 {
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name}
 	} else {
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND version = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name, version}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name, version}
 	}
 
 	result, err := s.db.Exec(ctx, query, args...)
@@ -323,8 +323,8 @@ func (s *FunctionStore) SetStatus(ctx context.Context, namespace, name string, s
 		return fmt.Errorf("invalid status %q (must be active/inactive/error)", status)
 	}
 
-	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-	result, err := s.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND status != ?`
+	result, err := s.db.Exec(ctx, query, string(status), time.Now(), namespace, name, string(FunctionStatusDeleted))
 	if err != nil {
 		return fmt.Errorf("failed to set function status: %w", err)
 	}

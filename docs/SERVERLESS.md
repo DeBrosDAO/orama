@@ -633,7 +633,7 @@ orama function secrets delete APNS_KEY_ID --force
 
 ## PubSub Triggers
 
-Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously. Each publish fires a trigger once across the namespace's gateways: every gateway that subscribes to the topic receives the message, and the first to claim it in the namespace's Olric dispatches while the others skip. Two byte-identical publishes within 30 seconds count as one, and if Olric cannot be reached the claim is skipped and a gateway fires on its own, so a duplicate is possible then (the gateway logs `PubSub dispatch dedup degraded`).
+Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously. Each publish fires a trigger once across the namespace's gateways: every gateway that subscribes to the topic receives the message, and the first to claim it in the namespace's Olric dispatches while the others skip. Two byte-identical publishes at the same trigger depth within 30 seconds count as one (the same bytes republished one level deeper by a triggered function are a new publish), and if Olric cannot be reached the claim is skipped and a gateway fires on its own, so a duplicate is possible then (the gateway logs `PubSub dispatch dedup degraded`).
 
 ### CLI Commands
 
@@ -703,7 +703,10 @@ curl -X POST .../v1/functions/my-function@2/invoke
   invocation history stays readable under the function's name.
 - `delete` without a version, `disable` and `enable` act on every version of the
   function. A deleted function's versions are no longer invocable, and the next
-  deploy continues the numbering.
+  deploy continues the numbering. A function deleted by a release before this
+  one carries status `inactive`, the same status `disable` sets, so `enable`
+  cannot tell it from a disabled function and brings it back; only deletes made
+  with this release or later are protected from `enable`.
 
 ### Invocation Logging
 
@@ -734,7 +737,7 @@ is generated from the command tree.
 | `orama function logs <name>` | View invocation logs |
 | `orama function versions <name>` | List function versions |
 | `orama function disable <name>` | Stop serving a function without deleting it |
-| `orama function enable <name>` | Serve a previously disabled function again |
+| `orama function enable <name>` | Serve a previously disabled function again (a deleted function stays deleted: 404) |
 | `orama function secrets set <name> <value>` | Set an encrypted secret |
 | `orama function secrets list` | List secret names |
 | `orama function secrets delete <name>` | Delete a secret |

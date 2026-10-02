@@ -144,6 +144,8 @@ type PubSubDispatcher struct {
 	// namespace has no Olric, leaving only same-gateway depth.
 	depthLedger *depthLedger
 	depthStore  depthStore
+	// depthMisses spares repeat deliveries of one message the shared read.
+	depthMisses *depthMissCache
 
 	// degradedDedupWarn rate-limits the "Olric dedup degraded" WARN so a
 	// misconfigured cluster doesn't flood the log on every publish.
@@ -175,6 +177,7 @@ func NewPubSubDispatcher(
 	}
 	return &PubSubDispatcher{
 		depthLedger:    newDepthLedger(),
+		depthMisses:    newDepthMissCache(),
 		depthStore:     shared,
 		store:          store,
 		topicLister:    store, // defaults to the real store; tests override
@@ -375,32 +378,11 @@ func (d *PubSubDispatcher) dispatch(ctx context.Context, namespace, topic string
 		return
 	}
 
-	// Local once-per-publish dedup (bugboard #555). gossipsub can deliver
-	// the SAME publish to this node's subscribe handler more than once
-	// (self-delivery / fan-out), and the cross-node Olric claim below is a
-	// no-op when Olric is down. This in-process guard ensures a SINGLE node
-	// never invokes the same (namespace, topic, payload) twice, regardless
-	// of Olric health.
-	dedupKey := dispatchDedupKey(namespace, topic, data)
-	if !d.localDedup.claim(dedupKey) {
-		d.logger.Debug("PubSub dispatch deduped (local duplicate on this node)",
-			zap.String("namespace", namespace),
-			zap.String("topic", topic))
-		return
-	}
-
-	// Cluster-wide once-per-publish dedup (bugboard #30). gossipsub
-	// delivers a publish to every subscribed gateway node; only the node
-	// that wins the Olric claim for this (namespace, topic, payload)
-	// proceeds, so the trigger fires once cluster-wide instead of once
-	// per gateway node.
-	if !d.claimDispatch(ctx, namespace, topic, data) {
-		d.logger.Debug("PubSub dispatch deduped (claimed by another node)",
-			zap.String("namespace", namespace),
-			zap.String("topic", topic))
-		return
-	}
-
+	// A message from the wire is dispatched at the depth the publishing
+	// function recorded, never lower. The depth is settled before the dedup
+	// claims because it is part of their key: a function that republishes
+	// the same bytes one level deeper is a new dispatch, not a duplicate of
+	// the one that ran it.
 	if fromWire {
 		if recorded := d.publishedDepth(ctx, namespace, topic, data); recorded > depth {
 			depth = recorded
@@ -413,6 +395,31 @@ func (d *PubSubDispatcher) dispatch(ctx context.Context, namespace, topic string
 			)
 			return
 		}
+	}
+
+	// Local once-per-publish dedup (bugboard #555). gossipsub can deliver
+	// the SAME publish to this node's subscribe handler more than once
+	// (self-delivery / fan-out), and the cross-node Olric claim below is a
+	// no-op when Olric is down. This in-process guard ensures a SINGLE node
+	// never invokes the same (namespace, topic, payload, depth) twice,
+	// regardless of Olric health.
+	if !d.localDedup.claim(dispatchClaimKey(namespace, topic, data, depth)) {
+		d.logger.Debug("PubSub dispatch deduped (local duplicate on this node)",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic))
+		return
+	}
+
+	// Cluster-wide once-per-publish dedup (bugboard #30). gossipsub
+	// delivers a publish to every subscribed gateway node; only the node
+	// that wins the Olric claim for this (namespace, topic, payload, depth)
+	// proceeds, so the trigger fires once cluster-wide instead of once
+	// per gateway node.
+	if !d.claimDispatch(ctx, namespace, topic, data, depth) {
+		d.logger.Debug("PubSub dispatch deduped (claimed by another node)",
+			zap.String("namespace", namespace),
+			zap.String("topic", topic))
+		return
 	}
 
 	matches, err := d.getMatches(ctx, namespace, topic)
@@ -630,6 +637,17 @@ func dispatchDedupKey(namespace, topic string, data []byte) string {
 	return fmt.Sprintf("%s|%s|%x", namespace, topic, sum[:16])
 }
 
+// dispatchClaimKey is the key of the once-per-publish claims: the message's
+// dispatchDedupKey plus the depth it is dispatched at. A function that
+// republishes constant bytes to its own topic (a retry, a heartbeat) sends the
+// same message one level deeper each time; keyed on the bytes alone, the
+// second step was swallowed as a duplicate of the first and the chain stalled
+// at depth 2. Every gateway resolves the same depth for one message (the
+// publisher records it cluster-wide), so a true duplicate still collides.
+func dispatchClaimKey(namespace, topic string, data []byte, depth int) string {
+	return fmt.Sprintf("%s|d%d", dispatchDedupKey(namespace, topic, data), depth)
+}
+
 // claimDispatch returns true if THIS node should dispatch the given
 // (namespace, topic, payload) — i.e. it won the cluster-wide claim.
 // Bugboard #30.
@@ -642,7 +660,7 @@ func dispatchDedupKey(namespace, topic string, data []byte) string {
 // non-"key found" error) this returns true. Dedup is a de-duplication
 // optimization, not a correctness gate — a rare duplicate dispatch is
 // far better than silently dropping a wake-up across the whole cluster.
-func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte) bool {
+func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte, depth int) bool {
 	if d.olricClient == nil {
 		return true // no shared store → can't coordinate → fire
 	}
@@ -651,7 +669,7 @@ func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic s
 		d.warnDedupDegraded("NewDMap failed", namespace, topic, err)
 		return true
 	}
-	key := dispatchDedupKey(namespace, topic, data)
+	key := dispatchClaimKey(namespace, topic, data, depth)
 	err = dm.Put(ctx, key, 1, olriclib.NX(), olriclib.EX(dispatchDedupTTL))
 	if err == nil {
 		return true // we claimed it → dispatch

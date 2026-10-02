@@ -17,6 +17,9 @@ const (
 	FunctionStatusActive   FunctionStatus = "active"
 	FunctionStatusInactive FunctionStatus = "inactive"
 	FunctionStatusError    FunctionStatus = "error"
+	// FunctionStatusDeleted marks a deleted version. It is distinct from
+	// inactive (a disabled function) so enabling can never revive a delete.
+	FunctionStatusDeleted FunctionStatus = "deleted"
 )
 
 // TriggerType identifies the type of event that triggered a function invocation.

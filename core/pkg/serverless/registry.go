@@ -361,8 +361,8 @@ func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabl
 	if enabled {
 		status = FunctionStatusActive
 	}
-	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND status != ?`
+	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name, string(FunctionStatusDeleted))
 	if err != nil {
 		return fmt.Errorf("failed to set function enabled state: %w", err)
 	}
@@ -388,12 +388,12 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	var args []interface{}
 
 	if version == 0 {
-		// Mark all versions as inactive (soft delete)
+		// Mark all versions as deleted (soft delete)
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name}
 	} else {
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND version = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name, version}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name, version}
 	}
 
 	result, err := r.db.Exec(ctx, query, args...)
