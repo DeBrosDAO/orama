@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
@@ -30,13 +31,20 @@ func (r fnRegistry) Get(_ context.Context, namespace, name string, _ int) (*serv
 // running the function panics, and that panic is the proof it was allowed.
 func invokeThroughTheChain(t *testing.T, g *Gateway, fn string, public bool) (status int, reachedEngine bool) {
 	t.Helper()
+	r := hop(t, g, http.MethodPost, "/v1/functions/"+fn+"/invoke", hopNamespace, workloadSub)
+	return invokeRequestThroughTheChain(t, g, fn, public, r)
+}
+
+// invokeRequestThroughTheChain is invokeThroughTheChain for a forwarded
+// request the caller built.
+func invokeRequestThroughTheChain(t *testing.T, g *Gateway, fn string, public bool, r *http.Request) (status int, reachedEngine bool) {
+	t.Helper()
 	reg := fnRegistry{fns: map[string]*serverless.Function{
 		hopNamespace + "/" + fn: {Name: fn, Namespace: hopNamespace, IsPublic: public},
 	}}
 	h := serverlesshandlers.NewServerlessHandlers(
 		serverless.NewInvoker(nil, reg, nil, hopNamespace, zap.NewNop()),
 		nil, reg, nil, nil, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
-	r := hop(t, g, http.MethodPost, "/v1/functions/"+fn+"/invoke", hopNamespace, workloadSub)
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -75,5 +83,39 @@ func TestForwardedWorkload_aRuntimeAppInvokesPrivate(t *testing.T) {
 
 	if status, reached := invokeThroughTheChain(t, g, "secret", false); !reached {
 		t.Errorf("a runtime app was refused a private function: status %d", status)
+	}
+}
+
+// hopWithToken is hop for a workload whose token carries jti.
+func hopWithToken(t *testing.T, g *Gateway, path, jti string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(http.MethodPost, path, nil)
+	r.Header.Set(HeaderInternalAuthValidated, "true")
+	r.Header.Set(HeaderInternalAuthNamespace, hopNamespace)
+	r.Header.Set(HeaderInternalAuthJWTSub, workloadSub)
+	r.Header.Set(HeaderInternalAuthJWTJti, jti)
+	if err := signInternalAuthHeaders(g.internalAuthKey, r.Header, http.MethodPost, path, time.Now()); err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	return r
+}
+
+// An app's grant is cached for ten seconds, and a redeploy mints it a new
+// token: the grant the redeploy applied has to be the one the invoke sees, not
+// the previous token's cached runtime grant. The stagenet e2e stored a todo as
+// a reader app on the one node whose gateway had cached the app's grant seconds
+// earlier.
+func TestForwardedWorkload_aNewTokenReadsTheLiveGrantNotTheCachedOne(t *testing.T) {
+	g, registry := namespaceGatewayForHops(t, "runtime")
+	registry.principalType = "app"
+	const path = "/v1/functions/secret/invoke"
+
+	if status, reached := invokeRequestThroughTheChain(t, g, "secret", false, hopWithToken(t, g, path, "token-1")); !reached {
+		t.Fatalf("a runtime app was refused a private function: status %d", status)
+	}
+
+	registry.role = "reader"
+	if status, reached := invokeRequestThroughTheChain(t, g, "secret", false, hopWithToken(t, g, path, "token-2")); reached || status != http.StatusForbidden {
+		t.Errorf("a reader app on its redeployed token: status %d, reached %v, want 403", status, reached)
 	}
 }

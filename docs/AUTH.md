@@ -983,7 +983,8 @@ running, and reads the registry without writing to it.
 The token's scopes are the grant at the moment it was minted. What
 the app may do is not read from them. The gateway reads the app's grant on every
 route, under the app principal, so a grant given or taken away after the token was
-minted applies within the grant cache's ten seconds on every node — including
+minted applies within the grant cache's ten seconds on every node, and at once for a
+token minted after it (a redeploy or a renewal: the cache is keyed by the token) — including
 invoking a function, which an app deployed before its owner granted it anything
 needs from its first request — and a selector on it (`"resource":
 "fn:name=checkout"` in `POST /v1/deployments/grants`) narrows the app as it narrows a

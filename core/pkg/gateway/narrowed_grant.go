@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,14 @@ func grantIsDataPlane(policy routepolicy.Policy) bool {
 // for the grant for the cache's lifetime.
 func (g *Gateway) cachedRequestGrant(r *http.Request, subject string) (*auth.Grant, error) {
 	key := g.requestNamespace(r) + "\x00" + strings.TrimSpace(subject)
+	// A workload's token is minted when its unit starts, which is when a
+	// redeploy or a renewal has just applied the grant it was given. Keying the
+	// entry by the token makes a new token a miss, so the grant a redeploy
+	// applies is read live and not out of the previous token's entry; the
+	// ten seconds bound only a grant changed under a token already running.
+	if claims, _ := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims); claims != nil && auth.IsWorkloadSubject(subject) {
+		key += "\x00" + claims.Jti + "\x00" + strconv.FormatInt(claims.Iat, 10)
+	}
 	if grant, ok := g.narrowedGrants.get(key, time.Now()); ok {
 		return grant, nil
 	}
