@@ -52,13 +52,3 @@ accepted:
       call that. No transaction, contract or peer message reaches a msgpack
       decoder.
     review_by: 2026-12-29
-  - module: chain
-    id: GO-2024-2584
-    reason: >-
-      cosmos-sdk slashing evasion through re-delegation (GHSA-86h5-xcpx-cfqc,
-      ASA-2024-005). The advisory covers versions <= 0.50.4 and <= 0.47.9 and
-      the chain is on v0.54.4, which is later than both; the vulndb entry has no
-      fixed version, so govulncheck reports it for every release. The reported
-      trace is app/slash_base_fix.go calling x/staking Keeper.Slash, our own
-      wrapper that fixes the slash base amount.
-    review_by: 2026-12-29
