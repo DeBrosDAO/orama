@@ -184,7 +184,7 @@ func collectSystem() *SystemReport {
 		if err != nil {
 			r.OOMKillsError = fmt.Sprintf("cannot read kernel log for OOM kills (journalctl -k): %v", err)
 		} else {
-			r.OOMKills = CountOOMKills(out)
+			r.applyOOMCounts(ClassifyOOMKills(out))
 		}
 	}
 
@@ -206,25 +206,4 @@ func collectSystem() *SystemReport {
 	r.TimeUnix = time.Now().Unix()
 
 	return r
-}
-
-// OOMKillWindowArg is the journalctl --since offset (without the leading "-")
-// that bounds the OOM kill count; OOMKillWindowLabel is how alerts name it.
-const (
-	OOMKillWindowArg   = "1h"
-	OOMKillWindowLabel = "the last hour"
-	oomKillMarker      = "Killed process"
-)
-
-// CountOOMKills counts the OOM kills in kernel journal output. The kernel
-// logs one "Out of memory: Killed process N (name)" line per victim, for
-// global and memory-cgroup OOMs alike.
-func CountOOMKills(journal string) int {
-	n := 0
-	for _, line := range strings.Split(journal, "\n") {
-		if strings.Contains(line, oomKillMarker) {
-			n++
-		}
-	}
-	return n
 }

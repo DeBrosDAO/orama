@@ -61,9 +61,17 @@ type SystemReport struct {
 	DiskAvailGB   string  `json:"disk_avail_gb"`
 	DiskUsePct    int     `json:"disk_use_pct"`
 	InodePct      int     `json:"inode_use_pct"`
-	// OOMKills counts kernel OOM kills in the last hour (OOMKillWindowArg),
-	// not since boot. Meaningless when OOMKillsError is set.
+	// OOMKills counts kernel OOM kills of the node itself in the last hour
+	// (OOMKillWindowArg), not since boot: global OOMs and kills inside
+	// platform cgroups. Kills inside a tenant deployment's own cgroup are
+	// TenantOOMKills and never count here. Meaningless when OOMKillsError
+	// is set.
 	OOMKills int `json:"oom_kills"`
+	// TenantOOMKills counts kills inside tenant deployment cgroups
+	// (orama-deploy-*@): a tenant hitting its own MemoryMax, not a node
+	// fault. TenantOOMKillsByUnit attributes them per deployment instance.
+	TenantOOMKills       int            `json:"tenant_oom_kills,omitempty"`
+	TenantOOMKillsByUnit map[string]int `json:"tenant_oom_kills_by_unit,omitempty"`
 	// OOMKillsError is why the count is unknown; empty when OOMKills is real.
 	OOMKillsError string `json:"oom_kills_error,omitempty"`
 	KernelVersion string `json:"kernel_version"`

@@ -256,27 +256,31 @@ type WGPeer struct {
 
 // SystemData holds parsed system-level data from a node.
 type SystemData struct {
-	Services       map[string]string // service name → status
-	FailedUnits    []string          // systemd units in failed state
-	MemTotalMB     int
-	MemUsedMB      int
-	MemFreeMB      int
-	DiskTotalGB    string
-	DiskUsedGB     string
-	DiskAvailGB    string
-	DiskUsePct     int
-	UptimeRaw      string
-	LoadAvg        string
-	CPUCount       int
-	OOMKills       int    // kills within report.OOMKillWindowArg
-	OOMKillsError  string // non-empty when the count is unknown
-	SwapUsedMB     int
-	SwapTotalMB    int
-	InodePct       int   // inode usage percentage
-	ListeningPorts []int // ports from ss -tlnp
-	UFWActive      bool
-	ProcessUser    string // user running orama-node (e.g. "orama")
-	PanicCount     int    // panic/fatal in recent logs
+	Services      map[string]string // service name → status
+	FailedUnits   []string          // systemd units in failed state
+	MemTotalMB    int
+	MemUsedMB     int
+	MemFreeMB     int
+	DiskTotalGB   string
+	DiskUsedGB    string
+	DiskAvailGB   string
+	DiskUsePct    int
+	UptimeRaw     string
+	LoadAvg       string
+	CPUCount      int
+	OOMKills      int    // node kills (global or platform cgroup) within report.OOMKillWindowArg
+	OOMKillsError string // non-empty when the count is unknown
+	// TenantOOMKills are kills inside tenant deployment cgroups (a tenant at
+	// its own MemoryMax), per deployment unit in TenantOOMKillsByUnit.
+	TenantOOMKills       int
+	TenantOOMKillsByUnit map[string]int
+	SwapUsedMB           int
+	SwapTotalMB          int
+	InodePct             int   // inode usage percentage
+	ListeningPorts       []int // ports from ss -tlnp
+	UFWActive            bool
+	ProcessUser          string // user running orama-node (e.g. "orama")
+	PanicCount           int    // panic/fatal in recent logs
 }
 
 // NetworkData holds parsed network-level data from a node.
@@ -1038,7 +1042,7 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	cmd += ` && echo "$SEP"`
 	// A journal the SSH user cannot read still exits 0 with a "not seeing
 	// messages" hint; any such text means the count is unknown, never 0.
-	cmd += ` && { out=$(sudo -n journalctl -k --no-pager -o cat --since "-` + report.OOMKillWindowArg + `" 2>&1) && ! printf '%s\n' "$out" | grep -qiE 'not seeing messages|permission|no journal files|a password is required|hint:' && { printf '%s\n' "$out" | grep -c 'Killed process' || true; } || echo unknown; }`
+	cmd += ` && { out=$(sudo -n journalctl -k --no-pager -o cat --since "-` + report.OOMKillWindowArg + `" 2>&1) && ! printf '%s\n' "$out" | grep -qiE 'not seeing messages|permission|no journal files|a password is required|hint:' && { echo ok; printf '%s\n' "$out" | grep -E 'oom-kill:|invoked oom-killer|Killed process' || true; } || echo unknown; }`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && df -i / 2>/dev/null | awk 'NR==2{print $5}' | tr -d '%'`
 	cmd += ` && echo "$SEP"`
@@ -1126,7 +1130,9 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 
 	// Part 7: OOM kills
 	if len(parts) > 7 {
-		data.OOMKills, data.OOMKillsError = parseOOMKillsField(parts[7])
+		var c report.OOMCounts
+		c, data.OOMKillsError = parseOOMKillsField(parts[7])
+		data.OOMKills, data.TenantOOMKills, data.TenantOOMKillsByUnit = c.System, c.Tenant, c.TenantUnits
 	}
 
 	// Part 8: inode usage
@@ -1407,16 +1413,16 @@ func parseNamespaceRegistry(raw string) map[string]registryEntry {
 
 // Parse helper functions
 
-// parseOOMKillsField reads the OOM section of the system probe: a count of
-// kills in the window, or "unknown" when the kernel log could not be read.
-// Anything else is an error too, never a silent zero.
-func parseOOMKillsField(field string) (int, string) {
-	v := strings.TrimSpace(field)
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return 0, fmt.Sprintf("kernel log unreadable for OOM kills (journalctl -k): %q", v)
+// parseOOMKillsField reads the OOM section of the system probe: "ok"
+// followed by the kernel's OOM lines of the window (classified by
+// report.ClassifyOOMKills), or "unknown" when the kernel log could not be
+// read. Anything else is an error too, never a silent zero.
+func parseOOMKillsField(field string) (report.OOMCounts, string) {
+	head, rest, _ := strings.Cut(strings.TrimSpace(field), "\n")
+	if strings.TrimSpace(head) != "ok" {
+		return report.OOMCounts{}, fmt.Sprintf("kernel log unreadable for OOM kills (journalctl -k): %q", strings.TrimSpace(field))
 	}
-	return n, ""
+	return report.ClassifyOOMKills(rest), ""
 }
 
 func parseIntDefault(s string, def int) int {

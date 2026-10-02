@@ -77,9 +77,9 @@ const memHogPrefix = "e2e-memhog-"
 // it (reclaim pressure, never a kill) a little above its size; MemoryMax is
 // only a backstop well above that. Hitting MemoryMax would be a cgroup OOM
 // kill, which writes "Memory cgroup out of memory" to the kernel log and
-// raises the node's permanent critical OOM alert
-// (core/pkg/telemetry/report/system.go counts `dmesg | grep -ci 'out of
-// memory'`): a pressure test must never cause one (OOMKills checks it).
+// raises the node's critical OOM alert (the hog's cgroup is not a tenant
+// deployment's, so it counts as a node kill): a pressure test must never
+// cause one (OOMKills checks it).
 const (
 	hogHighPct = 110
 	hogMaxPct  = 150
@@ -113,14 +113,25 @@ const HogFootprintPct = hogMaxPct
 // (this module does not link core's telemetry packages).
 const oomKillWindow = "1h"
 
-// OOMKills is the node's count of kernel OOM kills in the telemetry window
-// (oomKillWindow), read from the same
+// nodeOOMKillAwk counts the kernel's OOM kills that are the node's own, the
+// ones the telemetry reports as oom_kills (a critical alert): every kill
+// except a memory-cgroup OOM whose victim is in a tenant deployment cgroup
+// (task_memcg=.../orama-deploy-*), which is the tenant at its own MemoryMax.
+// Mirrors report.ClassifyOOMKills: the "oom-kill:" summary line precedes its
+// "Killed process" line and a new "invoked oom-killer" event clears it.
+const nodeOOMKillAwk = `/invoked oom-killer/ {p=""} ` +
+	`/oom-kill:/ {p=$0} ` +
+	`/Killed process/ {if (!(p ~ /constraint=CONSTRAINT_MEMCG/ && p ~ /task_memcg=[^,]*\/orama-deploy-/)) n++; p=""} ` +
+	`END {print n+0}`
+
+// OOMKills is the node's count of its own kernel OOM kills in the telemetry
+// window (oomKillWindow), tenant-cgroup kills excluded, read from the same
 // journal query: a pressure test records it before and asserts it unchanged
 // after, since a kill inside the window is a critical alert on that node.
 func OOMKills(t testing.TB, f *fleet.Fleet, n fleet.Node) int {
 	t.Helper()
-	cmd := fmt.Sprintf("sudo -n journalctl -k --no-pager -o cat --since %s | grep -c 'Killed process' || true",
-		fleet.ShellQuote("-"+oomKillWindow))
+	cmd := fmt.Sprintf("sudo -n journalctl -k --no-pager -o cat --since %s | awk %s",
+		fleet.ShellQuote("-"+oomKillWindow), fleet.ShellQuote(nodeOOMKillAwk))
 	out := strings.TrimSpace(f.MustExec(t, n, cmd).Stdout)
 	v, err := strconv.Atoi(out)
 	if err != nil {

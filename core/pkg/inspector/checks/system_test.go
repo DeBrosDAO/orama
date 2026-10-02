@@ -263,6 +263,15 @@ func TestCheckSystem_OOMKills(t *testing.T) {
 	expectStatus(t, results, "system.oom", inspector.StatusFail)
 }
 
+func TestCheckSystem_TenantOOMKills_neverFailsTheNode(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.System = &inspector.SystemData{Services: map[string]string{}, TenantOOMKills: 1,
+		TenantOOMKillsByUnit: map[string]int{"orama-deploy-node@app-1": 1}}
+	results := CheckSystem(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+	expectStatus(t, results, "system.oom", inspector.StatusPass)
+	expectStatus(t, results, "system.tenant_oom", inspector.StatusPass)
+}
+
 func TestCheckSystem_OOMKills_unknown(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.System = &inspector.SystemData{Services: map[string]string{}, OOMKillsError: "journalctl failed"}

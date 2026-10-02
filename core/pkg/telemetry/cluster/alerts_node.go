@@ -138,6 +138,13 @@ func checkNodeSystem(r *report.NodeReport, host string) []Alert {
 		alerts = append(alerts, Alert{AlertCritical, "system", host,
 			fmt.Sprintf("%d OOM kills in %s", r.System.OOMKills, report.OOMKillWindowLabel)})
 	}
+	// A tenant hitting its own MemoryMax is the cgroup doing its job, not a
+	// node fault: reported, never degrading.
+	if r.System.TenantOOMKills > 0 {
+		alerts = append(alerts, Alert{AlertInfo, "system", host,
+			fmt.Sprintf("%d tenant deployment OOM kills in %s (%s)", r.System.TenantOOMKills,
+				report.OOMKillWindowLabel, report.TenantOOMSummary(r.System.TenantOOMKillsByUnit))})
+	}
 	if r.System.SwapUsedMB > 0 && r.System.SwapTotalMB > 0 {
 		pct := r.System.SwapUsedMB * 100 / r.System.SwapTotalMB
 		if pct > 30 {

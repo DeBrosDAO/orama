@@ -177,6 +177,14 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 			fmt.Sprintf("%d OOM kills in %s", sys.OOMKills, report.OOMKillWindowLabel), inspector.Critical))
 	}
 
+	// 6.18b Tenant OOM kills: a tenant at its own MemoryMax is the tenant's
+	// limit working, never a node failure, so this never fails.
+	if sys.TenantOOMKills > 0 {
+		r = append(r, inspector.Pass("system.tenant_oom", "Tenant deployment OOM kills", systemSub, node,
+			fmt.Sprintf("%d tenant deployment OOM kills in %s (%s); not a node fault", sys.TenantOOMKills,
+				report.OOMKillWindowLabel, report.TenantOOMSummary(sys.TenantOOMKillsByUnit)), inspector.Low))
+	}
+
 	// 6.19 Swap usage
 	if sys.SwapTotalMB > 0 {
 		pct := float64(sys.SwapUsedMB) / float64(sys.SwapTotalMB) * 100

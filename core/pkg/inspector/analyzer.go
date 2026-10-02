@@ -558,8 +558,8 @@ func buildSystemContext(data *ClusterData) string {
 		b.WriteString(fmt.Sprintf("### %s\n", host))
 		b.WriteString(fmt.Sprintf("  mem=%d%% (%d/%dMB) disk=%d%% load=%s cpus=%d\n",
 			memPct, s.MemUsedMB, s.MemTotalMB, s.DiskUsePct, s.LoadAvg, s.CPUCount))
-		b.WriteString(fmt.Sprintf("  oom=%d swap=%d/%dMB inodes=%d%% ufw=%v user=%s panics=%d\n",
-			s.OOMKills, s.SwapUsedMB, s.SwapTotalMB, s.InodePct, s.UFWActive, s.ProcessUser, s.PanicCount))
+		b.WriteString(fmt.Sprintf("  oom=%d tenant_oom=%d swap=%d/%dMB inodes=%d%% ufw=%v user=%s panics=%d\n",
+			s.OOMKills, s.TenantOOMKills, s.SwapUsedMB, s.SwapTotalMB, s.InodePct, s.UFWActive, s.ProcessUser, s.PanicCount))
 		if len(s.FailedUnits) > 0 {
 			b.WriteString(fmt.Sprintf("  failed_units: %s\n", strings.Join(s.FailedUnits, ", ")))
 		}
