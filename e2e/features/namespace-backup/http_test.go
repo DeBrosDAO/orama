@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
+	backuphandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/backup"
 )
 
 const (
@@ -153,13 +154,15 @@ func TestBackup_malformedRequests(t *testing.T) {
 }
 
 // TestBackup_restoreSizeCap: a restore request over the frame limit (a
-// 256 MiB database plus headers, handlers/backup/restore.go MaxRestoreBytes)
-// is refused with 413 and nothing is written.
+// 256 MiB database plus the 8 MiB header allowance, handlers/backup
+// MaxRestoreBytes) is refused with 413 and nothing is written. The body is one
+// byte over, so a smaller one would be a legal-sized frame that is read in full
+// and refused as malformed (400).
 func TestBackup_restoreSizeCap(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
 	tenancy.NotesSeed(t, n, "intact")
-	huge := make([]byte, 256<<20+64<<10)
+	huge := make([]byte, backuphandlers.MaxRestoreBytes+1)
 	// Send, not MustSend: 256 MiB does not go up in the client's default
 	// per-request budget (gw.RequestBudget).
 	ctx, cancel := context.WithTimeout(t.Context(), hugeUploadBudget)
