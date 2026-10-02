@@ -13,9 +13,9 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// TestStatus_threeGuardiansQuorum: /v1/vault/status reports every node as a
+// TestStatus_everyNodeIsAGuardian: /v1/vault/status reports every node as a
 // guardian with K=2, W=3 and /v1/vault/health says healthy, anonymously.
-func TestStatus_threeGuardiansQuorum(t *testing.T) {
+func TestStatus_everyNodeIsAGuardian(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
 	var s struct {
@@ -27,6 +27,7 @@ func TestStatus_threeGuardiansQuorum(t *testing.T) {
 	if err := c.MustSend(t, gw.Req{Path: services.VaultStatus}).Expect(t, http.StatusOK).Decode(&s); err != nil {
 		t.Fatal(err)
 	}
+	guardians3, threshold3, writeQuorum3 := quorum(t)
 	if s.Guardians != guardians3 || s.Healthy != guardians3 || s.Threshold != threshold3 || s.WriteQuorum != writeQuorum3 {
 		t.Errorf("vault status %+v, want %d guardians, all healthy, K %d, W %d", s, guardians3, threshold3, writeQuorum3)
 	}
