@@ -1330,7 +1330,7 @@ With no `--env`, push targets the active environment (`orama env current`).
 **Important notes about invite tokens:**
 
 - **Tokens are single-use.** Once a node consumes a token during the join handshake, it cannot be reused. Generate a separate token for each node you want to join.
-- **Expiry is checked in UTC.** RQLite uses `datetime('now')` which is always UTC. If your local timezone differs, account for the offset when choosing expiry durations.
+- **Expiry is checked in UTC.** RQLite evaluates `datetime('now')` in UTC because `orama-namespace-rqlite@.service` runs `rqlited` with `TZ=UTC` (rqlited otherwise stamps it in the host's zone, which on a node set to `Europe/Berlin` put every registry timestamp two hours ahead). A node upgraded from before that unit change needs its `orama-namespace-rqlite@*` instances restarted, one node at a time, to pick it up.
 - **Use longer expiry for multi-node deployments.** When deploying multiple nodes, use `--expiry 24h` to avoid tokens expiring mid-deployment.
 
 #### `orama node upgrade`

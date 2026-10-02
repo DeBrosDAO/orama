@@ -77,3 +77,21 @@ func TestTemplateUnits_hostStackAdoptsExistingPaths(t *testing.T) {
 		}
 	}
 }
+
+// rqlited rewrites datetime('now') into a literal in its own zone, so a host
+// set to Europe/Berlin made every registry timestamp two hours ahead of UTC and
+// the device-login prune delete live logins. The unit pins the process to UTC.
+func TestNamespaceRqliteUnit_runsInUTC(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(file), "..", "..", "systemd", "orama-namespace-rqlite@.service")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\nEnvironment=TZ=UTC\n") {
+		t.Errorf("%s must set Environment=TZ=UTC: rqlited stamps datetime('now') in its local zone", path)
+	}
+}

@@ -27,6 +27,13 @@ ReadWritePaths=/opt/orama/.orama/data /opt/orama/.orama/data/namespaces/%i /opt/
 InaccessiblePaths=/opt/orama/.orama/secrets
 WorkingDirectory=/opt/orama
 
+# rqlited rewrites datetime('now') and CURRENT_TIMESTAMP into a literal in ITS
+# OWN local zone before SQLite sees it, so on a host set to Europe/Berlin every
+# timestamp a gateway writes this way is two hours ahead of UTC and every
+# `expires_at < datetime('now')` is judged against the wrong clock (a pending
+# device login was pruned seconds after it started). All of the schema compares
+# against UTC, so the process runs in it whatever the host's zone is.
+Environment=TZ=UTC
 EnvironmentFile=/var/lib/orama-unit-env/%i/rqlite.env
 
 # Start rqlited with args from environment (using shell to properly expand JOIN_ARGS)
