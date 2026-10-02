@@ -832,6 +832,17 @@ type mockProvisioner struct {
 		deploymentID string
 		nodeID       string
 	}
+	setupEnvs []map[string]string
+	codec     *deployments.EnvCodec
+}
+
+// DecodeEnvironment reads the column with the real codec when the test gave
+// one, and treats it as empty otherwise.
+func (m *mockProvisioner) DecodeEnvironment(_, _, stored string) (map[string]string, error) {
+	if m.codec == nil {
+		return map[string]string{}, nil
+	}
+	return m.codec.Decode(stored)
 }
 
 func (m *mockProvisioner) SetupDynamicReplica(_ context.Context, dep *deployments.Deployment, nodeID string) {
@@ -840,7 +851,85 @@ func (m *mockProvisioner) SetupDynamicReplica(_ context.Context, dep *deployment
 		deploymentID string
 		nodeID       string
 	}{dep.ID, nodeID})
+	m.setupEnvs = append(m.setupEnvs, dep.Environment)
 	m.mu.Unlock()
+}
+
+// reconcileWithEnvironment runs one reconciliation of an under-replicated
+// deployment whose environment column holds stored.
+func reconcileWithEnvironment(t *testing.T, stored string, rp *mockProvisioner) {
+	t.Helper()
+	leaderSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"store":{"raft":{"state":"Leader"}}}`))
+	}))
+	defer leaderSrv.Close()
+	db := &mockDB{
+		queryFunc: func(dest interface{}, query string, args ...interface{}) error {
+			if strings.Contains(query, "active_replicas") {
+				appendRows(dest, []map[string]interface{}{{
+					"ID": "dep-env", "Namespace": "test", "Name": "env-app", "Type": "nodejs-backend",
+					"HomeNodeID": "node-home", "Environment": stored, "Port": 10001,
+					"RestartPolicy": "on-failure", "ActiveReplicas": 1,
+				}})
+			}
+			return nil
+		},
+	}
+	hc := NewHealthChecker(db, zap.NewNop(), "node-1", nil)
+	hc.SetReconciler(leaderSrv.URL, &mockReconciler{selectResult: []string{"node-new"}}, rp)
+	hc.reconcileDeployments(context.Background())
+	time.Sleep(50 * time.Millisecond)
+}
+
+// The environment column is sealed with the cluster key. A replica provisioned
+// by the reconciler used to be started with an empty environment, because the
+// column was parsed as JSON and the failure ignored.
+func TestReconcileDeployments_replicaGetsTheSealedEnvironment(t *testing.T) {
+	codec, err := deployments.NewEnvCodec("test-encryption-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := codec.Encode(map[string]string{"STORE_FN": "todo-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &mockProvisioner{codec: codec}
+
+	reconcileWithEnvironment(t, stored, rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupEnvs) != 1 || rp.setupEnvs[0]["STORE_FN"] != "todo-store" {
+		t.Errorf("the replica was set up with environment %v, want STORE_FN=todo-store", rp.setupEnvs)
+	}
+}
+
+func TestReconcileDeployments_unreadableEnvironmentProvisionsNothing(t *testing.T) {
+	codec, err := deployments.NewEnvCodec("test-encryption-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &mockProvisioner{codec: codec}
+
+	reconcileWithEnvironment(t, "not an environment", rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupCalls) != 0 {
+		t.Errorf("a replica was set up for a deployment whose environment cannot be read: %v", rp.setupCalls)
+	}
+}
+
+func TestReconcileDeployments_emptyEnvironmentStillProvisions(t *testing.T) {
+	rp := &mockProvisioner{}
+
+	reconcileWithEnvironment(t, "", rp)
+
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if len(rp.setupCalls) != 1 {
+		t.Errorf("an app with no environment was not re-replicated: %v", rp.setupCalls)
+	}
 }
 
 func TestReconcileDeployments_UnderReplicated(t *testing.T) {

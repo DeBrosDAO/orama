@@ -289,7 +289,10 @@ A setup that fails is not dropped. The replica's row in `deployment_replicas` is
 written with status `failed` and a `replica_setup_failed` event carrying the
 reason is added to the deployment's events (`GET /v1/deployments/events`). The
 cluster leader's reconciliation, every 5 minutes, sees the deployment
-under-replicated and sets a replica up again.
+under-replicated and sets a replica up again, with the deployment's stored
+(sealed) environment decoded first. A deployment whose environment cannot be
+read is not re-replicated, and the failure is logged, rather than started
+without its variables.
 
 An **update** (`orama deploy ... --update`) and a **rollback** are applied on the
 home node, then on every active replica, and the command waits for each (the

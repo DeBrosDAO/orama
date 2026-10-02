@@ -47,6 +47,9 @@ type ReplicaReconciler interface {
 // ReplicaProvisioner provisions new replicas on remote nodes.
 type ReplicaProvisioner interface {
 	SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string)
+	// DecodeEnvironment reads the environment column back: it is stored sealed
+	// with the cluster key, so it is not JSON.
+	DecodeEnvironment(namespace, name, stored string) (map[string]string, error)
 }
 
 // deploymentRow represents a deployment record for health checking.
@@ -607,9 +610,19 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 			RestartPolicy:   deployments.RestartPolicy(row.RestartPolicy),
 			MaxRestartCount: row.MaxRestartCount,
 		}
-		if row.Environment != "" {
-			json.Unmarshal([]byte(row.Environment), &dep.Environment)
+		// An environment that cannot be read is not an empty one: a replica
+		// started without the tenant's variables answers requests the home
+		// node's replica would not, so it is not provisioned at all.
+		env, err := hc.provisioner.DecodeEnvironment(row.Namespace, row.Name, row.Environment)
+		if err != nil {
+			hc.logger.Error("Cannot re-replicate a deployment whose environment cannot be read",
+				zap.String("deployment", row.Name),
+				zap.String("namespace", row.Namespace),
+				zap.Error(err),
+			)
+			continue
 		}
+		dep.Environment = env
 
 		for _, nodeID := range newNodes {
 			hc.logger.Info("Provisioning replacement replica",

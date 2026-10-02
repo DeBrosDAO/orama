@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
+	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 )
 
@@ -107,12 +108,16 @@ func (ch *chat) topic() string { return "chat." + ch.room }
 // requirePresent waits until the room lists want members. A gateway lists
 // the members whose socket it holds (core/pkg/gateway/handlers/pubsub
 // presence_handler.go keeps presence in the process), so the room is the
-// union of every node's list, with nobody listed twice.
+// union of every namespace gateway's list, with nobody listed twice. The
+// namespace's gateways run on its members only, so those are asked: a node
+// that hosts none proxies the request to one of them (a member serves it from
+// its own gateway), which would list that gateway's members a second time.
 func (ch *chat) requirePresent(t *testing.T, want int) {
 	t.Helper()
+	gateways := tenancy.Members(t, ch.tn.F, ch.tn.N.Name)
 	eventually.Require(t, pollEvery, deliveryBudget, fmt.Sprintf("%d members present", want), func() (bool, error) {
 		seen := map[string]int{}
-		for _, node := range ch.tn.F.State.Nodes {
+		for _, node := range gateways {
 			var out struct {
 				Members []struct {
 					MemberID string `json:"member_id"`

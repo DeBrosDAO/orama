@@ -115,6 +115,12 @@ func (s *DeploymentService) EncodeEnvironment(env map[string]string) (string, er
 	return s.envCodec.Encode(env)
 }
 
+// DecodeEnvironment reads a stored environment back, for a caller that loaded
+// the column itself.
+func (s *DeploymentService) DecodeEnvironment(namespace, name, stored string) (map[string]string, error) {
+	return s.decodeEnvironment(namespace, name, stored)
+}
+
 // decodeEnvironment reads a stored environment back.
 //
 // A failure here is returned, not swallowed. An environment that cannot be read
