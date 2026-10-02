@@ -109,7 +109,7 @@ func (fp *FirewallProvisioner) Install() error {
 		return nil
 	}
 
-	cmd := exec.Command("apt-get", "install", "-y", "ufw")
+	cmd := aptCommand("install", "-y", "ufw")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to install ufw: %w\n%s", err, string(output))
 	}

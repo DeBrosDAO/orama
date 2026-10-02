@@ -3,7 +3,6 @@ package install
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -258,17 +257,8 @@ func containsString(list []string, s string) bool {
 	return false
 }
 
-const (
-	aptGetPath = "/usr/bin/apt-get"
-	aptPath    = "/usr/sbin:/usr/bin:/sbin:/bin"
-	// aptLockTimeout is how long apt-get waits for a dpkg lock another apt
-	// (unattended-upgrades) holds before it fails.
-	aptLockTimeout = "DPkg::Lock::Timeout=60"
-)
-
 func aptInstall(pkg string) error {
-	cmd := exec.Command(aptGetPath, "-o", aptLockTimeout, "install", "-y", "-qq", pkg)
-	cmd.Env = []string{"DEBIAN_FRONTEND=noninteractive", "PATH=" + aptPath}
+	cmd := aptCommand("install", "-y", "-qq", pkg)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s install %s: %w: %s", aptGetPath, pkg, err, strings.TrimSpace(string(out)))
 	}

@@ -54,7 +54,7 @@ func (wp *WireGuardProvisioner) Install() error {
 		return nil
 	}
 
-	cmd := exec.Command("apt-get", "install", "-y", "wireguard", "wireguard-tools")
+	cmd := aptCommand("install", "-y", "wireguard", "wireguard-tools")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to install wireguard: %w\n%s", err, string(output))
 	}

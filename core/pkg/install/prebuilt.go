@@ -122,18 +122,16 @@ func (ps *ProductionSetup) installFromPreBuilt(detected *PreBuiltManifest) (err 
 func (ps *ProductionSetup) installMinimalSystemDeps() error {
 	ps.logf("  Installing minimal system dependencies...")
 
-	cmd := exec.Command("apt-get", "update")
-	if err := cmd.Run(); err != nil {
-		ps.logf("    Warning: apt update failed")
+	if out, err := aptCommand("update").CombinedOutput(); err != nil {
+		return fmt.Errorf("apt-get update failed: %w\n%s", err, out)
 	}
 
 	// Only install runtime deps — no build-essential or make. Node.js is the
 	// pinned nodejs.org release (installers/nodejs.go), not the distro's.
 	// sudo: the orama user's root actions go through `sudo orama-privhelper`,
 	// and minimal Debian images ship without it.
-	cmd = exec.Command("apt-get", "install", "-y", "curl", "wget", "unzip", "sudo")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to install minimal dependencies: %w", err)
+	if out, err := aptCommand("install", "-y", "curl", "wget", "unzip", "sudo").CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install minimal dependencies: %w\n%s", err, out)
 	}
 
 	ps.logf("  ✓ Minimal system dependencies installed (no build tools needed)")

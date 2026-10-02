@@ -181,15 +181,14 @@ func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
 
 	fmt.Fprintf(os.Stderr, "  Installing missing dependencies: %s\n", strings.Join(names, ", "))
 
-	// apt-get update first
-	update := exec.Command("apt-get", "update", "-qq")
+	update := aptCommand("update", "-qq")
 	update.Stdout = os.Stdout
 	update.Stderr = os.Stderr
-	update.Run() // best-effort, don't fail on update
+	if err := update.Run(); err != nil {
+		return missing, fmt.Errorf("apt-get update before installing %s failed: %w", strings.Join(names, ", "), err)
+	}
 
-	// apt-get install
-	args := append([]string{"install", "-y", "-qq"}, pkgs...)
-	install := exec.Command("apt-get", args...)
+	install := aptCommand(append([]string{"install", "-y", "-qq"}, pkgs...)...)
 	install.Stdout = os.Stdout
 	install.Stderr = os.Stderr
 	if err := install.Run(); err != nil {
