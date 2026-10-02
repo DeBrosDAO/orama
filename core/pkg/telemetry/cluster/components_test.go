@@ -304,3 +304,31 @@ func TestCheckNodeSystem_unenforcedSocketBindWarns(t *testing.T) {
 		}
 	}
 }
+
+// Only nameservers serve DNS. A plain node whose report still carries a DNS
+// section (CoreDNS stopped, /etc/coredns left behind) is not applicable, not
+// an unhealthy DNS node.
+func TestComponents_dnsCountsOnlyNameservers(t *testing.T) {
+	ns := healthyReport("Leader")
+	ns.DNS = &report.DNSReport{CoreDNSActive: true, CaddyActive: true}
+	plain := healthyReport("Follower")
+	plain.DNS = &report.DNSReport{CoreDNSActive: false, CaddyActive: true}
+	snap := snapshotOf(reported("a", "nameserver", ns), reported("b", "node", plain))
+
+	dns := componentByID(t, Components(snap), "dns")
+	if dns.Total != 1 || dns.Healthy != 1 || dns.State != StateOperational {
+		t.Errorf("dns = %s %d/%d, want operational 1/1", dns.State, dns.Healthy, dns.Total)
+	}
+}
+
+func TestComponents_dnsFailingNameserverStillDegrades(t *testing.T) {
+	up := healthyReport("Leader")
+	up.DNS = &report.DNSReport{CoreDNSActive: true, CaddyActive: true}
+	down := healthyReport("Follower")
+	down.DNS = &report.DNSReport{CoreDNSActive: false, CaddyActive: true}
+	snap := snapshotOf(reported("a", "nameserver", up), reported("b", "nameserver", down))
+
+	if dns := componentByID(t, Components(snap), "dns"); dns.State != StateDegraded || dns.Total != 2 {
+		t.Errorf("dns = %s %d/%d, want degraded x/2", dns.State, dns.Healthy, dns.Total)
+	}
+}

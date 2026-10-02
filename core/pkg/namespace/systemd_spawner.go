@@ -780,7 +780,15 @@ func (s *SystemdSpawner) RestartGateway(ctx context.Context, namespace, nodeID s
 	}
 
 	// Re-spawn with updated config
-	return s.SpawnGateway(ctx, namespace, nodeID, cfg)
+	if err := s.SpawnGateway(ctx, namespace, nodeID, cfg); err != nil {
+		return err
+	}
+
+	// Active in systemd only means the binary was exec'd. The gateway then
+	// spends seconds opening its dependencies before it binds, and a caller
+	// that reads "restarted" as "serving" (the stealth toggle, whose
+	// turn.credentials answered 503 straight after) is wrong for that long.
+	return awaitGatewayServing(ctx, namespace, cfg.HTTPPort, gatewayServingBudget)
 }
 
 // gatewayYAMLFor is the gateway YAML SpawnGateway writes for cfg: cfg with the

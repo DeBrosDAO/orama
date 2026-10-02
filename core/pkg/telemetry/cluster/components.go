@@ -66,6 +66,12 @@ type componentDef struct {
 	// voters that sent no report). Without it, a component is down only when no
 	// node serves it.
 	outage func(snap *ClusterSnapshot) bool
+	// appliesTo says whether a node is meant to run the component at all.
+	// A node it excludes is not applicable: left out of the count even when
+	// its report carries data for the component (a node that once hosted a
+	// nameserver keeps /etc/coredns, so its report has a DNS section with
+	// CoreDNS stopped). Nil means every node.
+	appliesTo func(NodeRef) bool
 	// runsOn says whether a node that sent no report runs the component, so
 	// its silence counts against it. Nil means every node runs it.
 	runsOn func(NodeRef) bool
@@ -82,7 +88,7 @@ var componentDefs = []componentDef{
 	{id: "cache", name: "Cache (Olric)", probe: probeCache},
 	{id: "storage", name: "Storage (IPFS)", probe: probeStorage},
 	{id: "vault", name: "Secrets Vault", probe: probeVault},
-	{id: "dns", name: "DNS & TLS", probe: probeDNS, runsOn: NodeRef.IsNameserver},
+	{id: "dns", name: "DNS & TLS", probe: probeDNS, appliesTo: NodeRef.IsNameserver, runsOn: NodeRef.IsNameserver},
 	{id: "mesh", name: "Private Network (WireGuard)", probe: probeMesh},
 	{id: "chain", name: "Orama L1 Chain", probe: probeChain, runsOn: unknownPlacement},
 }
@@ -107,7 +113,7 @@ func Components(snap *ClusterSnapshot) []Component {
 func judge(def componentDef, snap *ClusterSnapshot) Component {
 	c := Component{ID: def.id, Name: def.name}
 	for _, n := range snap.Nodes {
-		if n.Unknown {
+		if n.Unknown || (def.appliesTo != nil && !def.appliesTo(n.Node)) {
 			continue
 		}
 		if n.Report == nil {

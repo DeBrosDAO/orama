@@ -60,12 +60,17 @@ func TestStealth_enableDisableOrRollBack(t *testing.T) {
 		return stealthURI(t, fx) != "", nil
 	})
 	fx.n.CLI.MustOK(t, "namespace", "disable", "webrtc-stealth", "--namespace", fx.n.Name)
-	eventually.Require(t, pollEvery, readyBudget, "the stealth rung withdrawn", func() (bool, error) {
-		return stealthURI(t, fx) == "", nil
+	// A 503 while the gateway restarts carries no URIs either; only a served
+	// ladder without the rung counts as withdrawn.
+	eventually.Require(t, pollEvery, readyBudget, "the stealth rung withdrawn from a served ladder", func() (bool, error) {
+		r, cr := restCreds(t, fx.c, fx.token)
+		return r.Status == http.StatusOK && len(cr.URIs) > 0 && stealthURI(t, fx) == "", nil
 	})
-	if _, cr := restCreds(t, fx.c, fx.token); len(cr.URIs) < 3 {
-		t.Errorf("disabling stealth removed the baseline ladder: %v", cr.URIs)
+	if r, cr := restCreds(t, fx.c, fx.token); r.Status != http.StatusOK || len(cr.URIs) < 3 {
+		t.Errorf("disabling stealth removed the baseline ladder (HTTP %d): %v", r.Status, cr.URIs)
 	}
+	// Disabling what is already off is idempotent.
+	fx.n.CLI.MustOK(t, "namespace", "disable", "webrtc-stealth", "--namespace", fx.n.Name)
 }
 
 // TestWebRTC_notEnabledAndPrerequisites: without WebRTC the credential and

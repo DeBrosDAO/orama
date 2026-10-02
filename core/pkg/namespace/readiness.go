@@ -202,6 +202,42 @@ func gatewayReady(ctx context.Context, hostPort string) error {
 	return nil
 }
 
+// gatewayServingBudget bounds how long a restarted gateway gets to start
+// answering its health endpoint.
+const gatewayServingBudget = 30 * time.Second
+
+// awaitGatewayServing waits until this node's copy of the namespace gateway has
+// finished starting, so a restart that reports success has left a gateway that
+// serves.
+//
+// /v1/health answers 503 for a gateway that is merely degraded (a non-critical
+// subsystem in error) as well as for one that is starting or blocked. Only the
+// second kind is a restart that has not finished; the body tells them apart, so
+// a degraded gateway counts as serving and aggregate health stays the health
+// monitor's concern.
+func awaitGatewayServing(ctx context.Context, namespace string, port int, budget time.Duration) error {
+	url := namespaceGatewayHealthURL(namespace, port)
+	return awaitReady(ctx, budget, fmt.Sprintf("restarted %s gateway at %s", namespace, url), func(ctx context.Context) error {
+		code, body, err := httpGetAny(ctx, url)
+		if err != nil {
+			return err
+		}
+		if code >= 200 && code < 300 {
+			return nil
+		}
+		var report struct {
+			Status string `json:"status"`
+		}
+		if code == http.StatusServiceUnavailable && json.Unmarshal(body, &report) == nil {
+			switch report.Status {
+			case "degraded", "unhealthy":
+				return nil
+			}
+		}
+		return fmt.Errorf("HTTP %d status %q", code, report.Status)
+	})
+}
+
 // healthyState reads the vocabulary the health endpoint uses.
 func healthyState(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
@@ -214,27 +250,37 @@ func healthyState(s string) bool {
 // httpGet performs one bounded GET and returns the body, treating any non-2xx
 // as a failure.
 func httpGet(ctx context.Context, url string) ([]byte, error) {
+	code, body, err := httpGetAny(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	if code < 200 || code >= 300 {
+		return nil, fmt.Errorf("HTTP %d", code)
+	}
+	return body, nil
+}
+
+// httpGetAny performs one bounded GET and returns the status code and body
+// whatever the code is.
+func httpGetAny(ctx context.Context, url string) (int, []byte, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	resp, err := tlsutil.NewHTTPClient(probeTimeout).Do(req)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return 0, nil, fmt.Errorf("read response: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return body, nil
+	return resp.StatusCode, body, nil
 }
 
 // nodeInternalIP resolves a node's WireGuard overlay address.

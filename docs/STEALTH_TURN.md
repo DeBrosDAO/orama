@@ -134,8 +134,14 @@ This drives `POST /v1/namespace/webrtc/stealth/{enable|disable}`, which:
 4. Refreshes the namespace gateways so `turn.credentials` advertises
    `turns:<stealth-host>:443` as the final rung of the ICE URI ladder.
 
+A gateway restart returns only once the restarted gateway answers
+`/v1/health`, so the request does not complete while `turn.credentials` still
+refuses connections (HTTP 503 from the namespace proxy).
+
 Disabling keeps TURN and the baseline ladder (udp/tcp 3478, turns:5349)
-running — only the `:443` rung is removed.
+running — only the `:443` rung is removed. Disabling stealth that is already
+off is idempotent (200, "already disabled"); enabling it twice, or toggling it
+on a namespace without WebRTC, answers 409; an unknown namespace answers 404.
 
 The gateway side is config-driven (`Config.StealthCDNDomain` in
 `pkg/gateway/config.go`) — no code edit is needed to advertise the

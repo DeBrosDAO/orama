@@ -254,7 +254,22 @@ type ProvisioningResponse struct {
 type ClusterError struct {
 	Message string
 	Cause   error
+	// Code names the condition for callers that cannot import this package
+	// (the gateway: it would close an import cycle through pkg/install). Empty
+	// for errors no caller tells apart.
+	Code string
 }
+
+// ErrorCode is the condition's name, read by callers through an interface.
+func (e *ClusterError) ErrorCode() string { return e.Code }
+
+// Codes of the ClusterErrors a caller outside this package tells apart.
+const (
+	CodeClusterNotFound             = "cluster_not_found"
+	CodeWebRTCNotEnabled            = "webrtc_not_enabled"
+	CodeWebRTCStealthAlreadyEnabled = "webrtc_stealth_already_enabled"
+	CodeWebRTCStealthNotEnabled     = "webrtc_stealth_not_enabled"
+)
 
 func (e *ClusterError) Error() string {
 	if e.Cause != nil {
@@ -277,16 +292,16 @@ var (
 	// ErrEvalClusterNoReplacement: an N=1 eval tenant lives on one machine. There
 	// is no spare VPS to fail over onto; bounce is local restore, not replace.
 	ErrEvalClusterNoReplacement    = &ClusterError{Message: "eval cluster of size 1 cannot be replaced onto another machine; waiting for this node to return"}
-	ErrClusterNotFound             = &ClusterError{Message: "namespace cluster not found"}
+	ErrClusterNotFound             = &ClusterError{Message: "namespace cluster not found", Code: CodeClusterNotFound}
 	ErrClusterAlreadyExists        = &ClusterError{Message: "namespace cluster already exists"}
 	ErrProvisioningFailed          = &ClusterError{Message: "cluster provisioning failed"}
 	ErrNamespaceNotFound           = &ClusterError{Message: "namespace not found"}
 	ErrInvalidClusterStatus        = &ClusterError{Message: "invalid cluster status for operation"}
 	ErrRecoveryInProgress          = &ClusterError{Message: "recovery already in progress for this cluster"}
 	ErrWebRTCAlreadyEnabled        = &ClusterError{Message: "WebRTC is already enabled for this namespace"}
-	ErrWebRTCNotEnabled            = &ClusterError{Message: "WebRTC is not enabled for this namespace"}
-	ErrWebRTCStealthAlreadyEnabled = &ClusterError{Message: "WebRTC stealth is already enabled for this namespace"}
-	ErrWebRTCStealthNotEnabled     = &ClusterError{Message: "WebRTC stealth is not enabled for this namespace"}
+	ErrWebRTCNotEnabled            = &ClusterError{Message: "WebRTC is not enabled for this namespace", Code: CodeWebRTCNotEnabled}
+	ErrWebRTCStealthAlreadyEnabled = &ClusterError{Message: "WebRTC stealth is already enabled for this namespace", Code: CodeWebRTCStealthAlreadyEnabled}
+	ErrWebRTCStealthNotEnabled     = &ClusterError{Message: "WebRTC stealth is not enabled for this namespace", Code: CodeWebRTCStealthNotEnabled}
 	ErrNoWebRTCPortsAvailable      = &ClusterError{Message: "no WebRTC ports available on node"}
 )
 
