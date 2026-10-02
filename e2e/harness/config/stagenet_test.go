@@ -10,7 +10,7 @@ import (
 
 func goodPins() StagenetPins {
 	return StagenetPins{RunID: "stagenet-20260930-101500", Env: StagenetEnv, BaseDomain: StagenetBaseDomain, OperatorNamespace: StagenetOperatorNamespace,
-		GatewayURL: StagenetGatewayURL, ChainID: "orama-stagenet-4", NodeIPs: []string{"57.128.226.141", "37.59.116.212", "141.227.165.168"}}
+		GatewayURL: StagenetGatewayURL, ChainID: "orama-stagenet-4", NodeIPs: StagenetIPs()}
 }
 
 func TestCheckStagenet_acceptsThePinnedValues(t *testing.T) {
@@ -58,8 +58,8 @@ func TestStagenetPins_neverNameASharedEnvironment(t *testing.T) {
 			t.Errorf("%q names a shared environment", v)
 		}
 	}
-	if len(StagenetNodes) != 3 || len(StagenetIPs()) != 3 {
-		t.Fatalf("want 3 stagenet nodes, have %d", len(StagenetNodes))
+	if len(StagenetNodes) != 5 || len(StagenetIPs()) != 5 {
+		t.Fatalf("want 5 stagenet nodes, have %d", len(StagenetNodes))
 	}
 }
 

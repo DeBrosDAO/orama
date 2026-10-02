@@ -10,19 +10,19 @@ import (
 )
 
 func TestParseNodes(t *testing.T) {
-	got, err := parseNodes("athena=athena=37.59.116.212,superman=superman=141.227.165.168")
+	got, err := parseNodes("mew=mew=57.129.166.16,mewtwo=mewtwo=57.129.166.17")
 	require.NoError(t, err)
-	require.Equal(t, []nodeRef{{"athena", "athena", "37.59.116.212"}, {"superman", "superman", "141.227.165.168"}}, got)
+	require.Equal(t, []nodeRef{{"mew", "mew", "57.129.166.16"}, {"mewtwo", "mewtwo", "57.129.166.17"}}, got)
 }
 
 func TestParseNodes_refusesBadInput(t *testing.T) {
 	for _, bad := range []string{
-		"", "athena", "athena=athena", "a=b=c=d",
-		"Athena=athena=1.2.3.4",                  // name is lowercase
-		"athena=-x=1.2.3.4",                      // alias may not start with a dash (it goes to ssh)
-		"athena=athena=1.2.3",                    // not an address
-		"athena=athena;id=1.2.3.4",               // shell syntax in the alias
-		"athena=athena=1.2.3.4,athena=b=1.2.3.5", // duplicate
+		"", "mew", "mew=mew", "a=b=c=d",
+		"Mew=mew=1.2.3.4",                // name is lowercase
+		"mew=-x=1.2.3.4",                  // alias may not start with a dash (it goes to ssh)
+		"mew=mew=1.2.3",                  // not an address
+		"mew=mew;id=1.2.3.4",             // shell syntax in the alias
+		"mew=mew=1.2.3.4,mew=b=1.2.3.5", // duplicate
 	} {
 		_, err := parseNodes(bad)
 		require.Error(t, err, bad)

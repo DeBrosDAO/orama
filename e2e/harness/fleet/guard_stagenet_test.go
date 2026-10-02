@@ -19,7 +19,11 @@ func stagenetState() *State {
 		SSHKeyFile: config.StagenetPath(stagenetHome, config.StagenetSSHKeyRel),
 	}
 	for _, n := range config.StagenetNodes {
-		st.Nodes = append(st.Nodes, Node{Name: n.Name, Role: RoleNameserver, PublicIP: n.IP, WGIP: n.WGIP, SSHUser: n.User})
+		role := RoleNode
+		if n.Nameserver {
+			role = RoleNameserver
+		}
+		st.Nodes = append(st.Nodes, Node{Name: n.Name, Role: role, PublicIP: n.IP, WGIP: n.WGIP, SSHUser: n.User})
 	}
 	return st
 }

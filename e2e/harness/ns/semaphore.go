@@ -41,7 +41,7 @@ func DefaultMaxLive(coreNodes int) int {
 	return max(1, coreNodes*blocksPerNode/nodesPerNamespace-liveHeadroom)
 }
 
-// StagenetMaxLive is the default cap on the stagenet target. Its three nodes
+// StagenetMaxLive is the default cap on the stagenet target. Its five nodes
 // are shared, small VPSs that also serve the owner's own namespaces, and a
 // namespace that nobody can delete (its owner was a run's throwaway wallet)
 // keeps its port block: sixteen at once starved them until provisioning

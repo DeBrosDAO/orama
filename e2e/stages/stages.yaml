@@ -37,7 +37,7 @@ stages:
   - id: 3
     name: auth
     # auth-devices and auth-keys-roles each provision a namespace per test; on
-    # the three-node stagenet they took 23-30m and were cut off at 30m.
+    # the former three-node stagenet they took 23-30m and were cut off at 30m.
     timeout: 45m
   - id: 4
     name: data-plane

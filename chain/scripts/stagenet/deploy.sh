@@ -35,8 +35,9 @@
 #
 # Environment (all optional except where noted):
 #   CHAIN_ID                 orama-stagenet-1; must contain -stagenet- or -devnet-.
-#   ASN_athena ASN_superman ASN_poseidon
-#                            the autonomous system each node declares; 16276 (OVH), the true one.
+#   ASN_mew ASN_mewtwo ASN_gengar ASN_magicarp ASN_froakie
+#                            the autonomous system each node declares; the true one of its provider:
+#                            16276 (OVH) for mew and mewtwo, 51167 (Contabo) for gengar, magicarp, froakie.
 #   PUBLIC_STORAGE_GB        capacity each provider declares, in GB (10).
 #   STORAGE_BOND_NORAMA      the STORAGE bond; default is the least that backs the capacity.
 #   ARCHIVER_BOND_NORAMA     the ARCHIVER bond (1 ORAMA, the role minimum).
@@ -72,9 +73,11 @@ DENOM="norama"
 # name:ssh-alias:public-ip. The public address is what peers and clients dial: the global services
 # run in a network namespace that cannot reach the WireGuard mesh, so the chain peers over the
 # public network (docs/RUN_A_GLOBAL_NODE.md, "Sharing a machine with a cluster node").
-NODES=("athena:athena:37.59.116.212" "superman:superman:141.227.165.168" "poseidon:poseidon:57.128.226.141")
+# All five stagenet nodes are validators: nothing here fixes the committee size (build_genesis sets it
+# to the number of NODES) and every loop below runs over NODES.
+NODES=("mew:mew:57.129.166.16" "mewtwo:mewtwo:57.129.166.17" "gengar:gengar:161.97.184.199" "magicarp:magicarp:161.97.184.202" "froakie:froakie:161.97.151.255")
 # The node that also runs the chain indexer (it serves the read API a gateway proxies).
-INDEXER_NODE="athena"
+INDEXER_NODE="mew"
 P2P_PORT=31000
 PROVIDER_PORT=31013
 BIN_DIR="/usr/lib/orama-global/bin"
@@ -103,7 +106,10 @@ TX_GAS="${TX_GAS:-600000}"
 CA_FILE="${CA_FILE:-/Users/pen/orama-stagenet-handoff/le-staging-roots.pem}"
 GATEWAY_URL="${GATEWAY_URL:-https://stagenet.dbrsteting.bid}"
 SHIELDED_SCENARIO="${SHIELDED_SCENARIO:-}"
-DEFAULT_ASN=16276
+# The true ASN of each node's provider: mew and mewtwo are OVH (AS16276), gengar, magicarp and froakie
+# are Contabo (AS51167; whois -h whois.radb.net <ip>). ASN_<name> overrides it.
+ASN_OVH=16276
+ASN_CONTABO=51167
 
 # Pinned release artifacts. Each digest is the release's own: the Kubo sha512 is the release's
 # published kubo_<version>_linux-amd64.tar.gz.sha512 (the same file dist.ipfs.tech serves), and its
@@ -149,8 +155,16 @@ fi
 # The autonomous system each node declares (docs/CHAIN.md, "Node network identity"): the operator's
 # true ASN. It is read from ASN_<name> and validated before it reaches a remote command.
 asn_of() {
-	local var="ASN_$1" value
-	value="${!var:-$DEFAULT_ASN}"
+	local var="ASN_$1" default value
+	case "$1" in
+	mew|mewtwo) default=$ASN_OVH ;;
+	gengar|magicarp|froakie) default=$ASN_CONTABO ;;
+	*)
+		echo "no default ASN for node $1; set $var" >&2
+		exit 1
+		;;
+	esac
+	value="${!var:-$default}"
 	if ! [[ "$value" =~ ^[0-9]{1,10}$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 4294967295 ]; then
 		echo "invalid $var (expected an ASN, 1 to 4294967295): $value" >&2
 		exit 1
@@ -596,8 +610,8 @@ cmd_up() {
 	cmd_status
 }
 
-# cmd_start runs `orama global start` on every node at once: a chain of three needs two of them up
-# before any block, so starting one after the other would only wait on each RPC.
+# cmd_start runs `orama global start` on every node at once: a chain of five needs four of them up
+# (more than two thirds of the committee) before any block, so starting one after the other would only wait on each RPC.
 cmd_start() {
 	local pids=() n
 	for n in "${NODES[@]}"; do

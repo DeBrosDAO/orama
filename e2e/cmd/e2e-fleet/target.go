@@ -119,7 +119,11 @@ func writeStagenetState(ctx context.Context, in targetInput) (*fleet.State, erro
 		ArtifactDir: filepath.Join(in.lay.module, artifactsDirName, runID),
 	}
 	for _, n := range config.StagenetNodes {
-		st.Nodes = append(st.Nodes, fleet.Node{Name: n.Name, Role: fleet.RoleNameserver, PublicIP: n.IP, WGIP: n.WGIP, SSHUser: n.User})
+		role := fleet.RoleNode
+		if n.Nameserver {
+			role = fleet.RoleNameserver
+		}
+		st.Nodes = append(st.Nodes, fleet.Node{Name: n.Name, Role: role, PublicIP: n.IP, WGIP: n.WGIP, SSHUser: n.User})
 	}
 	if err := fleet.CheckState(st, in.realHome); err != nil {
 		return nil, fmt.Errorf("the stagenet state fails the run guards: %w", err)
@@ -148,7 +152,7 @@ func readOperatorAddress(path string) (string, error) {
 	return ready.Address, nil
 }
 
-// pinStagenetHostKeys scans the three nodes' host keys and writes to hosts
+// pinStagenetHostKeys scans the stagenet nodes' host keys and writes to hosts
 // only the keys the owner's own known_hosts also holds for that address. A
 // scanned key that differs from a key of the same type in the owner's file
 // is refused (a changed host key), and so is a node the owner's file has no

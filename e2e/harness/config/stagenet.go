@@ -54,16 +54,34 @@ const (
 	StagenetKnownHostsRel = ".ssh/known_hosts"
 )
 
-// StagenetNode is one stagenet node.
+// StagenetNode is one stagenet node. Nameserver says whether it runs the
+// zone's CoreDNS; the others are plain cluster nodes.
 type StagenetNode struct {
 	Name, Label, IP, User, WGIP string
+	Nameserver                  bool
 }
 
-// StagenetNodes are the three stagenet nodes, in state order. Every one is a nameserver.
+// StagenetNodes are the five stagenet nodes, in state order (the join order;
+// node-1 is the genesis nameserver). WGIP is the overlay address the join
+// assigned. The machines differ in ways the tests see:
+//
+//   - mew and mewtwo: OVH (ASN 16276), Ubuntu 26.04, systemd 259 built with
+//     BPF_FRAMEWORK, so SocketBindDeny is enforced and the deployment sandbox
+//     test sees a refused bind there.
+//   - gengar, magicarp and froakie: Contabo (ASN 51167), Ubuntu 24.04, systemd
+//     255 without BPF_FRAMEWORK, so SocketBindDeny is accepted and not
+//     enforced and the sandbox test's outcome on these three is the
+//     unenforced one.
+//
+// The first three are nameservers (mew, mewtwo, gengar); magicarp and froakie
+// are plain nodes. Gengar, magicarp and froakie log in as root, the others as
+// ubuntu.
 var StagenetNodes = []StagenetNode{
-	{Name: "node-1", Label: "athena", IP: "37.59.116.212", User: "debian", WGIP: "10.0.0.1"},
-	{Name: "node-2", Label: "superman", IP: "141.227.165.168", User: "ubuntu", WGIP: "10.0.0.2"},
-	{Name: "node-3", Label: "poseidon", IP: "57.128.226.141", User: "ubuntu", WGIP: "10.0.0.3"},
+	{Name: "node-1", Label: "mew", IP: "57.129.166.16", User: "ubuntu", WGIP: "10.0.0.1", Nameserver: true},
+	{Name: "node-2", Label: "mewtwo", IP: "57.129.166.17", User: "ubuntu", WGIP: "10.0.0.2", Nameserver: true},
+	{Name: "node-3", Label: "gengar", IP: "161.97.184.199", User: "root", WGIP: "10.0.0.3", Nameserver: true},
+	{Name: "node-4", Label: "magicarp", IP: "161.97.184.202", User: "root", WGIP: "10.0.0.4"},
+	{Name: "node-5", Label: "froakie", IP: "161.97.151.255", User: "root", WGIP: "10.0.0.5"},
 }
 
 var (

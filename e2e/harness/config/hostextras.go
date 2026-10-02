@@ -39,32 +39,18 @@ type HostUFWRule struct {
 	Why  string
 }
 
-const (
-	whyTailscale = "tailscale is the operator's own access path to the stagenet nodes"
-	// tailnetNet is Tailscale's CGNAT range, where tailscaled's TCP sockets bind
-	// the node's tailnet address.
-	tailnetNet = "100.64.0.0/10"
-	whyRPCBind = "rpcbind is socket-activated by the machine image (an NFS client package); Orama neither installs nor starts it, and ufw's default deny keeps 111 off the internet"
-)
-
 // StagenetHostListeners are the listeners on the stagenet nodes that are not
-// Orama's. Tailscale is on node-1 and node-3 only; its sockets are the
-// WireGuard UDP port on every address and ephemeral TCP ports bound only to
-// the tailnet address (100.64.0.0/10): a tailscaled TCP socket on any other
-// address is not excused.
-var StagenetHostListeners = []HostListener{
-	{Node: "node-1", Process: "tailscaled", Proto: "udp", Why: whyTailscale},
-	{Node: "node-1", Process: "tailscaled", Proto: "tcp", Net: tailnetNet, Why: whyTailscale},
-	{Node: "node-3", Process: "tailscaled", Proto: "udp", Why: whyTailscale},
-	{Node: "node-3", Process: "tailscaled", Proto: "tcp", Net: tailnetNet, Why: whyTailscale},
-	{Node: "node-2", Process: "rpcbind", Proto: "tcp", Port: 111, Why: whyRPCBind},
-	{Node: "node-2", Process: "rpcbind", Proto: "udp", Port: 111, Why: whyRPCBind},
-}
+// Orama's. The five nodes (mew, mewtwo, gengar, magicarp, froakie) are fresh OVH
+// and Contabo images: what the audit saw there beyond Orama's own sockets is
+// the image's systemd-resolved stub and chrony on loopback and systemd-networkd's
+// DHCP client on UDP 68, none of which the audit counts as public, so nothing is
+// declared. The old nodes' tailscale and rpcbind declarations are gone with
+// those machines; to admit a new extra, add a declaration with its reason.
+var StagenetHostListeners []HostListener
 
-// StagenetHostUFWRules are the operator's untagged ufw rules, on every node.
-var StagenetHostUFWRules = []HostUFWRule{
-	{To: "Anywhere on tailscale0", Why: whyTailscale},
-}
+// StagenetHostUFWRules are the operator's untagged ufw rules. The new nodes
+// carry none (ufw holds only rules tagged orama), so none is declared.
+var StagenetHostUFWRules []HostUFWRule
 
 // StagenetHostListener returns the declaration that covers a listener on node.
 func StagenetHostListener(node, proto, addr string, port int, process string) (HostListener, bool) {

@@ -107,12 +107,12 @@ func TestWriteStagenetState_writesTheGuardedState(t *testing.T) {
 		t.Fatalf("the written state fails its own guards: %v", err)
 	}
 	if st.Target != config.TargetStagenet || st.RunID != "stagenet-20260930-101500" || st.OperatorAddress != testAddress ||
-		st.ChainID != "orama-stagenet-1" || st.ChainRPC != "http://198.18.0.2:31001" || len(st.Nodes) != 3 {
+		st.ChainID != "orama-stagenet-1" || st.ChainRPC != "http://198.18.0.2:31001" || len(st.Nodes) != len(config.StagenetNodes) {
 		t.Fatalf("state %+v", st)
 	}
 	for i, want := range config.StagenetNodes {
 		n := st.Nodes[i]
-		if n.Name != want.Name || n.PublicIP != want.IP || n.SSHUser != want.User || n.WGIP != want.WGIP || n.Role != fleet.RoleNameserver {
+		if n.Name != want.Name || n.PublicIP != want.IP || n.SSHUser != want.User || n.WGIP != want.WGIP || (n.Role == fleet.RoleNameserver) != want.Nameserver {
 			t.Errorf("node %d = %+v, want %+v", i, n, want)
 		}
 	}
@@ -145,14 +145,15 @@ func TestWriteStagenetState_refusals(t *testing.T) {
 			want: "HOST KEY MISMATCH",
 		},
 		"node missing from known_hosts": {
-			lines: func(e *targetEnv) []string { return matching(e)[:2] },
+			lines: func(e *targetEnv) []string { return matching(e)[:len(config.StagenetNodes)-1] },
 			want:  "not in your known_hosts",
 		},
 		"known key of another type only": {
 			lines: func(e *targetEnv) []string {
 				l := matching(e)
-				rsaLine := "57.128.226.141 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7vbqajDw4o6gJy8UtmIbkcfu6/UrCa/rzWApN6E0kNXSXSJs0PB2vXo0Wrp2RHqwVbhWOfJ3Tj6MV+7kxRd0uOhGYNSvMiIhkGcL3pL7KwvxA4zqz/7oPJgxvSDUaYWn7wEwXhqW5kg0q0YQQsFO8CtiWY4hTVaJxDbsVW08mQw=="
-				return append(l[:2], rsaLine)
+				last := config.StagenetNodes[len(config.StagenetNodes)-1].IP
+				rsaLine := last + " ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7vbqajDw4o6gJy8UtmIbkcfu6/UrCa/rzWApN6E0kNXSXSJs0PB2vXo0Wrp2RHqwVbhWOfJ3Tj6MV+7kxRd0uOhGYNSvMiIhkGcL3pL7KwvxA4zqz/7oPJgxvSDUaYWn7wEwXhqW5kg0q0YQQsFO8CtiWY4hTVaJxDbsVW08mQw=="
+				return append(l[:len(l)-1], rsaLine)
 			},
 			want: "none of the host keys",
 		},
@@ -248,9 +249,9 @@ func TestServerCommands_refuseTheStagenetTarget(t *testing.T) {
 		"teardown":  func() (int, error) { return cmdTeardown(ctx, nil) },
 		"sweep":     func() (int, error) { return cmdSweep(ctx, []string{"--max-age", "48h"}) },
 		"hook destroy": func() (int, error) {
-			return cmdHook(ctx, []string{"destroy", "37.59.116.212"})
+			return cmdHook(ctx, []string{"destroy", "57.129.166.16"})
 		},
-		"hook break": func() (int, error) { return cmdHook(ctx, []string{"break", "37.59.116.212"}) },
+		"hook break": func() (int, error) { return cmdHook(ctx, []string{"break", "57.129.166.16"}) },
 		"hook provision": func() (int, error) {
 			return cmdHook(ctx, []string{"provision"})
 		},

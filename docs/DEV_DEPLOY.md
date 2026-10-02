@@ -572,7 +572,7 @@ Two related orderings changed in the same commit:
 ### Stagenet: the chain and the global services
 
 `chain/scripts/stagenet/deploy.sh` deploys the L1 chain and the global services (provider, archiver, indexer,
-public Kubo) to the three stagenet nodes (`athena`, `superman`, `poseidon`, ssh aliases from `~/.ssh/config`)
+public Kubo) to the five stagenet nodes (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`, ssh aliases from `~/.ssh/config`)
 through the product's own commands, so the stagenet deploy exercises the code operators run. It is separate from
 the cluster deploy above: `orama build`, `orama node push` and `orama node upgrade --env stagenet` deploy the
 private-cluster node, and the global services are installed beside it, co-located in the `orama-global` network
@@ -586,6 +586,17 @@ not contain `-stagenet-` or `-devnet-`. Because it never restarts a cluster serv
 that started before `up` keeps reading the chain at loopback for its `/v1/chain/` route: restart the cluster
 node (`orama node restart`, one node at a time) after the first `up`, as the co-located install's output says.
 The node report needs no restart.
+
+| Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Role |
+|---|---|---|---|---|---|---|
+| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | genesis, nameserver, chain indexer |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | nameserver |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | nameserver |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
+
+All five are chain validators (the bootstrap committee is the five of them). Without BPF_FRAMEWORK systemd accepts
+`SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
 
 Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
 `curl` and `ssh` access to the nodes. On each node: `apt-get` (the install adds iproute2 and nftables if they are missing), an **active** ufw (the install
@@ -617,11 +628,11 @@ SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke 
 (`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.43.1 and cosmovisor v1.7.3 from their
 official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
 directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
-chain,ipfs,provider,archiver` (plus `indexer` on athena) twice: first with `--init-chain` and a placeholder genesis
+chain,ipfs,provider,archiver` (plus `indexer` on mew) twice: first with `--init-chain` and a placeholder genesis
 so each node creates its own keys, then, once the script has built the real genesis from the three public keys and
 put it in place, with `--persistent-peers`. The keys are generated on the node and never copied off it. The chain
 peers over the nodes' **public** addresses, because the namespace cannot reach the WireGuard mesh. `orama global
-start chain ipfs` (plus `indexer` on athena) then starts the chain first and waits for its RPC; the provider and
+start chain ipfs` (plus `indexer` on mew) then starts the chain first and waits for its RPC; the provider and
 archiver need a node id, so `register` starts them once it has written it.
 
 `register` waits until the chain is at epoch 2 (polled), then, for each node, runs the commands an operator runs
@@ -638,7 +649,7 @@ cause the script detected in the chain's state and is never used to hide a failu
 | Variable | Default | Meaning |
 |---|---|---|
 | `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
-| `ASN_athena`, `ASN_superman`, `ASN_poseidon` | `16276` | the ASN each node declares; the true one (all three are OVH). Protocol deals need distinct ASNs per slot, so with one shared ASN the ARCHIVE deals stay unassigned |
+| `ASN_mew`, `ASN_mewtwo`, `ASN_gengar`, `ASN_magicarp`, `ASN_froakie` | `16276` for mew and mewtwo (OVH), `51167` for the other three (Contabo) | the ASN each node declares; the true one of its provider. Protocol deals need distinct ASNs per slot and the five nodes span only two, so a range's three ARCHIVE slots cannot all be assigned and its deals stay unassigned (the smoke check SKIPs naming that cause) |
 | `PUBLIC_STORAGE_GB` | `10` | capacity each provider declares, and the size of its public Kubo |
 | `STORAGE_BOND_NORAMA` | the least that backs the capacity | 1 ORAMA of bond backs 1 GiB |
 | `ARCHIVER_BOND_NORAMA` | `1000000000` | 1 ORAMA, the role minimum |

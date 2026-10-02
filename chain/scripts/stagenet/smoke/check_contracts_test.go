@@ -47,5 +47,5 @@ func TestCW20InstantiateMsg_holdsTheSupplyForTheOperator(t *testing.T) {
 }
 
 func TestNodeID(t *testing.T) {
-	require.Equal(t, "stagenet-athena", nodeID("athena"))
+	require.Equal(t, "stagenet-mew", nodeID("mew"))
 }

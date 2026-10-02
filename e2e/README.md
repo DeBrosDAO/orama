@@ -603,10 +603,15 @@ and keeps the other packages' results in the artifact dir's timeline and report:
 fix to one package is rechecked in minutes instead of a whole stage. An unknown
 package name is a usage error.
 
-`target stagenet` writes the state (`"target": "stagenet"`): `node-1` athena
-`37.59.116.212` (user `debian`, WG `10.0.0.1`), `node-2` superman
-`141.227.165.168` and `node-3` poseidon `57.128.226.141` (user `ubuntu`, WG
-`10.0.0.2` / `10.0.0.3`), all three nameservers; the SSH key `~/.ssh/debros-nodes`;
+`target stagenet` writes the state (`"target": "stagenet"`), five nodes in join
+order: `node-1` mew `57.129.166.16` (WG `10.0.0.1`), `node-2` mewtwo `57.129.166.17`
+(WG `10.0.0.2`) and `node-3` gengar `161.97.184.199` (WG `WG3`), all nameservers;
+`node-4` magicarp `161.97.184.202` (WG `10.0.0.4`) and `node-5` froakie `161.97.151.255`
+(WG `10.0.0.5`), plain nodes. mew and mewtwo are OVH (ASN 16276, Ubuntu 26.04, systemd
+259 with BPF_FRAMEWORK, login user `ubuntu`); gengar, magicarp and froakie are Contabo
+(ASN 51167, Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK, login user `root`),
+so `SocketBindDeny` is enforced on the first two and only accepted on the other
+three; the SSH key `~/.ssh/debros-nodes`;
 the CA bundle `~/orama-stagenet-handoff/le-staging-roots.pem`; the CLI HOME
 `~/orama-stagenet-handoff/cli-home` (its `.orama/environments.json` must hold the
 `stagenet` env); `core/bin/orama` as the CLI under test (build it first); the
@@ -614,7 +619,7 @@ operator address from the dev RootWallet agent's `~/rwdev/ready.json` (that agen
 `~/rwdev/agent.sock`, must be running and unlocked); the chain id
 `orama-stagenet-1`, the default `CHAIN_ID` of `chain/scripts/stagenet/deploy.sh` (`--chain-id` to change it) and the run id
 `stagenet-<yyyymmdd>-<hhmmss>`; artifacts in `e2e/artifacts/stagenet-<ts>`. The
-host keys come from `ssh-keyscan` of the three addresses and are written to
+host keys come from `ssh-keyscan` of the five addresses and are written to
 `<state>.known_hosts` only when your `~/.ssh/known_hosts` holds the same key for
 that address: a changed key, or an address your file has never seen, is refused
 (`ssh` to it once and verify the fingerprint first).
@@ -622,7 +627,7 @@ that address: a changed key, or an address your file has never seen, is refused
 **Safety pins.** Every loader of a state (`test`, `report`, `harness.Main`) runs
 `fleet.CheckState`, which for this target accepts exactly: env `stagenet`, base
 domain `stagenet.dbrsteting.bid`, gateway `https://stagenet.dbrsteting.bid`, a chain id
-matching `^orama-stagenet-[0-9]+$`, the three node addresses above and nothing
+matching `^orama-stagenet-[0-9]+$`, the five node addresses above and nothing
 else (no extra, no probe), the agent socket `$HOME/rwdev/agent.sock` (never
 under `~/.rootwallet`), the CLI HOME, CA bundle and SSH key above. Anything else,
 including devnet/testnet names and domains or a fleet state carrying
@@ -638,7 +643,7 @@ target has no extra server, probe VM or DNS broker), as does the probe vantage o
 (`AddExtra/RemoveExtra/AddEvalCluster/DestroyNode/BreakUpgrade/RestoreUpgrade/UpgradeToHead`)
 still return the "not available on the stagenet target" error to any other
 caller. After a destructive package the
-runner still removes the iptables rules tagged `e2e-<run>-` on the three nodes and
+runner still removes the iptables rules tagged `e2e-<run>-` on every node of the target and
 turns NTP back on where a test left it off (`Fleet.RestoreNodes`).
 
 **What runs.** Stages 1-7 and 9 are tests of the running cluster. A test whose
@@ -687,11 +692,12 @@ stagenet are legitimately more, and the audits know them differently:
   inside the namespace, so a host listener on it fails. A tagged rule on any
   other port is not excused.
 - **Operator and image extras**, declared in `harness/config/hostextras.go`
-  (`StagenetHostListeners`, `StagenetHostUFWRules`): tailscale (its sockets and
-  its untagged `ufw allow in on tailscale0`) and the image's rpcbind on node-2.
-  Each declaration names the node, the process, the protocol, the port
-  (0 = any), optionally the network the bound address must lie in (tailscale's
-  TCP sockets: `100.64.0.0/10`), and why it is there. The audit logs every use of one, and **fails**
+  (`StagenetHostListeners`, `StagenetHostUFWRules`). None are declared on the
+  current five nodes: read-only checks found only loopback stubs
+  (systemd-resolved, chrony), systemd-networkd's DHCP client on UDP 68, and no
+  untagged ufw rule. A declaration names the node (empty = every node), the
+  process, the protocol, the port (0 = any), optionally the network the bound
+  address must lie in, and why it is there. The audit logs every use of one, and **fails**
   when a declaration no longer matches anything on the node, so the list cannot
   outlive the thing it excuses. A fleet run has no declarations: nothing is
   excused there. To admit a new extra, add a declaration with its reason; an

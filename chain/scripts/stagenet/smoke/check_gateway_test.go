@@ -13,16 +13,16 @@ import (
 )
 
 func TestParseGatewayNode(t *testing.T) {
-	require.NoError(t, parseGatewayNode([]byte(`{"node":{"node_id":"stagenet-athena","operator":"orama1x","status":"NODE_STATUS_ACTIVE"}}`), "stagenet-athena"))
-	require.ErrorContains(t, parseGatewayNode([]byte(`{"node":{"node_id":"other","operator":"orama1x"}}`), "stagenet-athena"), "names node")
+	require.NoError(t, parseGatewayNode([]byte(`{"node":{"node_id":"stagenet-mew","operator":"orama1x","status":"NODE_STATUS_ACTIVE"}}`), "stagenet-mew"))
+	require.ErrorContains(t, parseGatewayNode([]byte(`{"node":{"node_id":"other","operator":"orama1x"}}`), "stagenet-mew"), "names node")
 	require.ErrorContains(t, parseGatewayNode([]byte(`{"node":{"node_id":"a"}}`), "a"), "no operator")
 	require.ErrorContains(t, parseGatewayNode([]byte(`{}`), "a"), "names node")
 	require.Error(t, parseGatewayNode([]byte(`<html>`), "a"))
 }
 
 func TestGatewayNodeURL(t *testing.T) {
-	got := gatewayNodeURL("https://stagenet.dbrsteting.bid/", "stagenet-athena")
-	require.Equal(t, "https://stagenet.dbrsteting.bid/v1/chain/query/orama.nodes.v1.Query/Node?json=%7B%22node_id%22%3A%22stagenet-athena%22%7D", got)
+	got := gatewayNodeURL("https://stagenet.dbrsteting.bid/", "stagenet-mew")
+	require.Equal(t, "https://stagenet.dbrsteting.bid/v1/chain/query/orama.nodes.v1.Query/Node?json=%7B%22node_id%22%3A%22stagenet-mew%22%7D", got)
 }
 
 func TestGatewayClient_refusesAMissingOrEmptyCAFile(t *testing.T) {
@@ -39,10 +39,10 @@ func TestCheckGateway_readsEveryNodeOverTLSWithTheGivenCA(t *testing.T) {
 		require.Equal(t, "/v1/chain/query/orama.nodes.v1.Query/Node", r.URL.Path)
 		id := r.URL.Query().Get("json")
 		switch {
-		case id == `{"node_id":"stagenet-athena"}`:
-			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-athena","operator":"orama1a"}}`))
-		case id == `{"node_id":"stagenet-superman"}`:
-			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-superman","operator":"orama1b"}}`))
+		case id == `{"node_id":"stagenet-mew"}`:
+			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-mew","operator":"orama1a"}}`))
+		case id == `{"node_id":"stagenet-mewtwo"}`:
+			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-mewtwo","operator":"orama1b"}}`))
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -52,11 +52,11 @@ func TestCheckGateway_readsEveryNodeOverTLSWithTheGivenCA(t *testing.T) {
 	cert := srv.TLS.Certificates[0].Certificate[0]
 	require.NoError(t, os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert}), 0o600))
 
-	e := &env{gateway: srv.URL, caFile: ca, nodes: []nodeRef{{Name: "athena"}, {Name: "superman"}}}
+	e := &env{gateway: srv.URL, caFile: ca, nodes: []nodeRef{{Name: "mew"}, {Name: "mewtwo"}}}
 	r := checkGateway(context.Background(), e)
 	require.Equal(t, Pass, r.Status, r.Detail)
 
-	e.nodes = append(e.nodes, nodeRef{Name: "poseidon"})
+	e.nodes = append(e.nodes, nodeRef{Name: "gengar"})
 	r = checkGateway(context.Background(), e)
 	require.Equal(t, Fail, r.Status)
 	require.Contains(t, r.Detail, "HTTP 404")

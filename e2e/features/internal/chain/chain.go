@@ -92,7 +92,7 @@ func New(t testing.TB) *Chain {
 	return &Chain{F: f, ID: id}
 }
 
-// Nodes are the co-hosted validators, node-1..node-3.
+// Nodes are the co-hosted validators, one per node (node-1..node-5 on stagenet).
 func (c *Chain) Nodes() []fleet.Node { return c.F.State.Nodes }
 
 // Node returns the i-th validator node (0-based).
