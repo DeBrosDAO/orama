@@ -58,7 +58,10 @@ type HostFunctions struct {
 	// dbNamespace is the namespace db belongs to; see checkDatabaseAccess.
 	dbNamespace string
 
-	cacheClient olriclib.Client
+	// cacheClient yields the Olric client connected right now, nil when there
+	// is none; read on every operation because the gateway replaces the client
+	// when it reconnects.
+	cacheClient func() olriclib.Client
 	storage     ipfs.IPFSClient
 	ipfsAPIURL  string
 	pubsub      pubsub.Bus

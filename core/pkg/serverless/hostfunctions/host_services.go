@@ -28,7 +28,7 @@ import (
 // absence of a requested bridge should be visible (callers asked for it).
 func NewHostFunctions(
 	db rqlite.Client,
-	cacheClient olriclib.Client,
+	cacheClient func() olriclib.Client,
 	storage ipfs.IPFSClient,
 	pubsubAdapter pubsub.Bus,
 	wsManager serverless.WebSocketManager,

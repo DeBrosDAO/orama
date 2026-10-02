@@ -36,7 +36,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/serverless/triggers"
 	"github.com/DeBrosOfficial/network/pkg/serverless/wsbridge"
 	"github.com/multiformats/go-multiaddr"
-	olriclib "github.com/olric-data/olric"
 	"go.uber.org/zap"
 
 	_ "github.com/rqlite/gorqlite/stdlib"
@@ -71,6 +70,11 @@ type Dependencies struct {
 
 	// Olric distributed cache client
 	OlricClient *olric.Client
+
+	// OlricCurrent is the client connected right now. Long-lived consumers read
+	// it per operation; the gateway updates it as the supervisor drops and
+	// reconnects the client.
+	OlricCurrent *olric.Current
 
 	// OlricServers is the address list the client above was built from, after
 	// discovery has resolved it. The supervisor needs it to reconnect: it used
@@ -144,7 +148,7 @@ type Dependencies struct {
 // It establishes connections to RQLite, Olric, IPFS, initializes the serverless engine, and creates
 // the authentication service.
 func NewDependencies(logger *logging.ColoredLogger, cfg *Config) (*Dependencies, error) {
-	deps := &Dependencies{WSSessions: wssession.NewRegistry(logger.Logger)}
+	deps := &Dependencies{WSSessions: wssession.NewRegistry(logger.Logger), OlricCurrent: &olric.Current{}}
 
 	// Before anything connects: a gateway that cannot write its own state
 	// cannot hold a signing key, and there is no point dialling the cluster to
@@ -504,6 +508,7 @@ func initializeOlric(logger *logging.ColoredLogger, cfg *Config, deps *Dependenc
 		// Note: Background reconnection will be handled by the Gateway itself
 	} else {
 		deps.OlricClient = olricClient
+		deps.OlricCurrent.Set(olricClient)
 		logger.ComponentInfo(logging.ComponentGeneral, "Olric cache client ready",
 			zap.Strings("servers", olricCfg.Servers),
 			zap.Duration("timeout", olricCfg.Timeout),
@@ -689,10 +694,6 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.ServerlessWSMgr = serverless.NewWSManager(logger.Logger)
 
 	// Get underlying Olric client if available
-	var olricClient olriclib.Client
-	if deps.OlricClient != nil {
-		olricClient = deps.OlricClient.UnderlyingClient()
-	}
 
 	// Get pubsub adapter from client for serverless functions
 	var pubsubAdapter pubsub.Bus
@@ -799,7 +800,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 
 	hostFuncs := hostfunctions.NewHostFunctions(
 		deps.ORMClient,
-		olricClient,
+		deps.OlricCurrent.Underlying,
 		deps.IPFSClient,
 		pubsubAdapter, // pubsub adapter for serverless functions
 		deps.ServerlessWSMgr,
@@ -839,10 +840,6 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	// Create PubSub trigger store and dispatcher
 	triggerStore := triggers.NewPubSubTriggerStore(deps.ORMClient, logger.Logger)
 
-	var olricUnderlying olriclib.Client
-	if deps.OlricClient != nil {
-		olricUnderlying = deps.OlricClient.UnderlyingClient()
-	}
 	// Pass the pubsub adapter so the dispatcher can subscribe to libp2p
 	// for every literal trigger pattern (bugboard #282 fix). nil-safe:
 	// dispatcher's Start/Refresh become no-ops when adapter is unavailable,
@@ -850,7 +847,7 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 	deps.PubSubDispatcher = triggers.NewPubSubDispatcher(
 		triggerStore,
 		deps.ServerlessInvoker,
-		olricUnderlying,
+		deps.OlricCurrent.Underlying,
 		pubsubAdapter,
 		logger.Logger,
 	)

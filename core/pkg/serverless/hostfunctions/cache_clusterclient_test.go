@@ -27,7 +27,7 @@ func (plainMissClient) NewDMap(string, ...olriclib.DMapOption) (olriclib.DMap, e
 }
 
 func TestCacheGet_missFromClusterClientIsACacheMiss(t *testing.T) {
-	h := &HostFunctions{cacheClient: plainMissClient{}}
+	h := &HostFunctions{cacheClient: fixedOlric(plainMissClient{})}
 	_, err := h.CacheGet(nsCtx(), "absent")
 	if !errors.Is(err, serverless.ErrCacheMiss) {
 		t.Errorf("CacheGet of a missing key: err = %v, want ErrCacheMiss", err)
@@ -56,7 +56,7 @@ func TestCacheIncrBy_concurrentIncrementsAcrossMembersAreAllCounted(t *testing.T
 		wg.Add(1)
 		go func(m *olrictest.Server) {
 			defer wg.Done()
-			h := &HostFunctions{cacheClient: clusterClient(t, m)}
+			h := &HostFunctions{cacheClient: fixedOlric(clusterClient(t, m))}
 			if _, err := h.CacheIncr(nsCtx(), "counter"); err != nil {
 				t.Errorf("CacheIncr: %v", err)
 			}
@@ -64,9 +64,12 @@ func TestCacheIncrBy_concurrentIncrementsAcrossMembersAreAllCounted(t *testing.T
 	}
 	wg.Wait()
 
-	h := &HostFunctions{cacheClient: clusterClient(t, members[0])}
+	h := &HostFunctions{cacheClient: fixedOlric(clusterClient(t, members[0]))}
 	got, err := h.CacheIncrBy(nsCtx(), "counter", 0)
 	if err != nil || got != workers {
 		t.Errorf("%d concurrent increments across 3 members left %d (err %v)", workers, got, err)
 	}
 }
+
+// fixedOlric is a provider that always yields c.
+func fixedOlric(c olriclib.Client) func() olriclib.Client { return func() olriclib.Client { return c } }

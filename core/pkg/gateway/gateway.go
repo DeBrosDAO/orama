@@ -122,6 +122,7 @@ type Gateway struct {
 
 	// Olric cache client
 	olricClient   *olric.Client
+	olricCurrent  *olric.Current
 	olricMu       sync.RWMutex
 	cacheHandlers *cache.CacheHandlers
 
@@ -408,6 +409,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		registry:               deps.GlobalORMClient,
 		encHolder:              deps.EncHolder,
 		olricClient:            deps.OlricClient,
+		olricCurrent:           deps.OlricCurrent,
 		ipfsClient:             deps.IPFSClient,
 		serverlessEngine:       deps.ServerlessEngine,
 		serverlessRegistry:     deps.ServerlessRegistry,
@@ -1183,6 +1185,7 @@ func (g *Gateway) setOlricClient(client *olric.Client) {
 	g.olricMu.Lock()
 	defer g.olricMu.Unlock()
 	g.olricClient = client
+	g.olricCurrent.Set(client)
 	if client == nil {
 		// Handlers built on the dropped client would keep calling it; with none
 		// the cache routes answer 503 (see cachePutHandler).

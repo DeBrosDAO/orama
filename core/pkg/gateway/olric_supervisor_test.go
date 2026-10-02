@@ -70,7 +70,7 @@ func TestGateway_setAndGetOlricClient(t *testing.T) {
 // Dropping the client must also drop the cache handlers built on it: left in
 // place they keep calling the dead client and the routes never answer 503.
 func TestGateway_droppingTheClientDropsTheCacheHandlers(t *testing.T) {
-	g := &Gateway{}
+	g := &Gateway{olricCurrent: &olric.Current{}}
 	srv := olrictest.Start(t)
 	client, err := olric.NewClient(olric.Config{Servers: []string{srv.Addr}}, zap.NewNop())
 	if err != nil {
@@ -80,7 +80,13 @@ func TestGateway_droppingTheClientDropsTheCacheHandlers(t *testing.T) {
 	if g.cacheHandlers == nil {
 		t.Fatal("connecting did not wire the cache handlers")
 	}
+	if g.olricCurrent.Underlying() == nil {
+		t.Fatal("connecting did not reach the consumers that read the current client")
+	}
 	g.setOlricClient(nil)
+	if g.olricCurrent.Underlying() != nil {
+		t.Fatal("dropping the client left consumers holding it")
+	}
 	if g.cacheHandlers != nil {
 		t.Fatal("setOlricClient(nil) left the cache handlers wired to the dropped client")
 	}

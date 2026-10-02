@@ -117,7 +117,7 @@ func TestClaimDispatch_degradedWarnWhenOlricDown(t *testing.T) {
 	core, observed := observer.New(zapcore.WarnLevel)
 	d := &PubSubDispatcher{
 		logger:      zap.New(core),
-		olricClient: failingOlricClient{},
+		olricClient: fixedOlric(failingOlricClient{}),
 	}
 
 	if !d.claimDispatch(context.Background(), "ns", "messages:new", []byte("x"), 0) {
@@ -133,7 +133,7 @@ func TestClaimDispatch_degradedWarnRateLimited(t *testing.T) {
 	core, observed := observer.New(zapcore.WarnLevel)
 	d := &PubSubDispatcher{
 		logger:      zap.New(core),
-		olricClient: failingOlricClient{},
+		olricClient: fixedOlric(failingOlricClient{}),
 	}
 
 	for i := 0; i < 5; i++ {

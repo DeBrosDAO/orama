@@ -104,7 +104,7 @@ type topicLister interface {
 type PubSubDispatcher struct {
 	store       *PubSubTriggerStore
 	invoker     *serverless.Invoker
-	olricClient olriclib.Client // may be nil (cache disabled)
+	olricClient func() olriclib.Client // may be nil (cache disabled); yields nil while Olric is down
 	aggregator  *aggregator.Aggregator
 	logger      *zap.Logger
 
@@ -167,18 +167,13 @@ const degradedDedupWarnInterval = 60 * time.Second
 func NewPubSubDispatcher(
 	store *PubSubTriggerStore,
 	invoker *serverless.Invoker,
-	olricClient olriclib.Client,
+	olricClient func() olriclib.Client,
 	ps dispatcherPubSub,
 	logger *zap.Logger,
 ) *PubSubDispatcher {
-	var shared depthStore
-	if olricClient != nil {
-		shared = olricDepthStore{client: olricClient}
-	}
 	return &PubSubDispatcher{
 		depthLedger:    newDepthLedger(),
 		depthMisses:    newDepthMissCache(),
-		depthStore:     shared,
 		store:          store,
 		topicLister:    store, // defaults to the real store; tests override
 		invoker:        invoker,
@@ -661,10 +656,11 @@ func dispatchClaimKey(namespace, topic string, data []byte, depth int) string {
 // optimization, not a correctness gate — a rare duplicate dispatch is
 // far better than silently dropping a wake-up across the whole cluster.
 func (d *PubSubDispatcher) claimDispatch(ctx context.Context, namespace, topic string, data []byte, depth int) bool {
-	if d.olricClient == nil {
+	client := d.currentOlric()
+	if client == nil {
 		return true // no shared store → can't coordinate → fire
 	}
-	dm, err := d.olricClient.NewDMap(dispatchDedupDMap)
+	dm, err := client.NewDMap(dispatchDedupDMap)
 	if err != nil {
 		d.warnDedupDegraded("NewDMap failed", namespace, topic, err)
 		return true

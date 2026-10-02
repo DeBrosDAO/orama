@@ -83,7 +83,7 @@ func (c messageOnlyClient) NewDMap(string, ...olriclib.DMapOption) (olriclib.DMa
 func TestClaimDispatch_loserOfTheClusterClaimSkips(t *testing.T) {
 	d := &PubSubDispatcher{
 		logger:      zap.NewNop(),
-		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("key found")}},
+		olricClient: fixedOlric(messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("key found")}}),
 	}
 	if d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
 		t.Error("a node whose claim lost to another node's must skip, got dispatch")
@@ -93,9 +93,43 @@ func TestClaimDispatch_loserOfTheClusterClaimSkips(t *testing.T) {
 func TestClaimDispatch_transientOlricErrorStillFiresOpen(t *testing.T) {
 	d := &PubSubDispatcher{
 		logger:      zap.NewNop(),
-		olricClient: messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("write quorum cannot be reached")}},
+		olricClient: fixedOlric(messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("write quorum cannot be reached")}}),
 	}
 	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
 		t.Error("an Olric outage must fail open, got skip")
+	}
+}
+
+// fixedOlric is a provider that always yields c.
+func fixedOlric(c olriclib.Client) func() olriclib.Client { return func() olriclib.Client { return c } }
+
+// A dispatcher built while Olric was down, or before a reconnect, must coordinate
+// through the client that is current at the claim.
+func TestClaimDispatch_followsTheCurrentClient(t *testing.T) {
+	var current olriclib.Client
+	d := &PubSubDispatcher{logger: zap.NewNop(), olricClient: func() olriclib.Client { return current }}
+
+	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
+		t.Fatal("with no client the dedup must fail open")
+	}
+	current = messageOnlyClient{dm: messageOnlyDMap{putErr: errors.New("key found")}}
+	if d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
+		t.Fatal("after reconnect the claim must go through the new client and lose")
+	}
+	current = nil
+	if !d.claimDispatch(context.Background(), "ns", "orders", []byte("x"), 0) {
+		t.Fatal("after the drop the dedup must fail open again")
+	}
+}
+
+func TestSharedDepthStore_followsTheCurrentClient(t *testing.T) {
+	var current olriclib.Client
+	d := &PubSubDispatcher{logger: zap.NewNop(), olricClient: func() olriclib.Client { return current }}
+	if d.sharedDepthStore() != nil {
+		t.Fatal("no client must mean no shared store")
+	}
+	current = messageOnlyClient{}
+	if d.sharedDepthStore() == nil {
+		t.Fatal("a reconnected client must provide the shared store")
 	}
 }

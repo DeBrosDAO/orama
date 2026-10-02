@@ -323,7 +323,10 @@ against an Olric that accepts connections and never answers (a frozen process)
 the deadline is the only bound. A cache call that hits it, or a refused or reset
 connection, answers 503 `cache unavailable; retry` with `Retry-After`. The
 serverless cache host functions and the pub/sub dispatch dedup share the same
-client and the same bound.
+bound, and read the gateway's current client (`olric.Current`) on every
+operation, so they follow the supervisor's drop and reconnect: while there is
+no client a host function returns `ErrCacheUnavailable` and the dedup fails
+open.
 
 It replaces a one-shot loop that returned as soon as it connected once, and
 which was armed only when the INITIAL connection had failed. So the common case

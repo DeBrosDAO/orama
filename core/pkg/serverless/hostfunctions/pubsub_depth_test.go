@@ -23,7 +23,7 @@ func depthHost(t *testing.T) (*HostFunctions, *publishingBus) {
 	t.Helper()
 	bus := &publishingBus{}
 	h := &HostFunctions{logger: zap.NewNop(), pubsub: bus}
-	h.SetTriggerDispatcher(triggers.NewPubSubDispatcher(nil, nil, downOlric{}, nil, zap.NewNop()))
+	h.SetTriggerDispatcher(triggers.NewPubSubDispatcher(nil, nil, fixedOlric(downOlric{}), nil, zap.NewNop()))
 	return h, bus
 }
 

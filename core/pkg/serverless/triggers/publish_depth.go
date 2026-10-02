@@ -96,6 +96,27 @@ func (s olricDepthStore) get(ctx context.Context, key string) (int, bool, error)
 	return depth, true, nil
 }
 
+// currentOlric is the Olric client connected right now, nil when there is none.
+func (d *PubSubDispatcher) currentOlric() olriclib.Client {
+	if d.olricClient == nil {
+		return nil
+	}
+	return d.olricClient()
+}
+
+// sharedDepthStore is the cluster-wide ledger on the current Olric client, nil
+// while there is none (the ledger is then this gateway's alone, as it is when
+// the cache is disabled). A store set on the dispatcher directly wins.
+func (d *PubSubDispatcher) sharedDepthStore() depthStore {
+	if d.depthStore != nil {
+		return d.depthStore
+	}
+	if client := d.currentOlric(); client != nil {
+		return olricDepthStore{client: client}
+	}
+	return nil
+}
+
 // depthLedger is the gateway-local half: a bounded, TTL'd map of recorded
 // depths. Safe for concurrent use.
 type depthLedger struct {
@@ -210,17 +231,18 @@ func (d *PubSubDispatcher) RecordPublishDepth(ctx context.Context, namespace, to
 		return fmt.Errorf("failed to record trigger depth %d for %s on %s: %w", depth, namespace, topic, err)
 	}
 	d.depthMisses.forget(key)
-	if d.depthStore == nil {
+	store := d.sharedDepthStore()
+	if store == nil {
 		return nil
 	}
 	// Only ever raise the shared record: a lower depth must not overwrite a
 	// higher one another function recorded for the same bytes.
-	if cur, ok, err := d.depthStore.get(ctx, key); err != nil {
+	if cur, ok, err := store.get(ctx, key); err != nil {
 		return fmt.Errorf("failed to read shared trigger depth for %s on %s: %w", namespace, topic, err)
 	} else if ok && cur >= depth {
 		return nil
 	}
-	if err := d.depthStore.put(ctx, key, depth); err != nil {
+	if err := store.put(ctx, key, depth); err != nil {
 		return fmt.Errorf("failed to record trigger depth %d for %s on %s in the shared store: %w", depth, namespace, topic, err)
 	}
 	return nil
@@ -233,13 +255,14 @@ func (d *PubSubDispatcher) RecordPublishDepth(ctx context.Context, namespace, to
 func (d *PubSubDispatcher) publishedDepth(ctx context.Context, namespace, topic string, data []byte) int {
 	key := dispatchDedupKey(namespace, topic, data)
 	depth, _ := d.depthLedger.lookup(key)
-	if d.depthStore == nil {
+	store := d.sharedDepthStore()
+	if store == nil {
 		return depth
 	}
 	if d.depthMisses.has(key) {
 		return depth
 	}
-	shared, ok, err := d.depthStore.get(ctx, key)
+	shared, ok, err := store.get(ctx, key)
 	if err != nil {
 		d.warnDedupDegraded("trigger depth read failed; dispatching at the depth this gateway knows", namespace, topic, err)
 		return depth

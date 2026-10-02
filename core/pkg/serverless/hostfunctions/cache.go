@@ -22,14 +22,18 @@ const maxCacheTTLSeconds = int64(olric.MaxEntryTTL / time.Second)
 // now runs only its own namespace's functions (bugboard #427), and the name
 // still keeps each namespace's keys apart on any Olric more than one reaches.
 func (h *HostFunctions) cacheDMap(ctx context.Context, fn string) (olriclib.DMap, error) {
-	if h.cacheClient == nil {
+	var client olriclib.Client
+	if h.cacheClient != nil {
+		client = h.cacheClient()
+	}
+	if client == nil {
 		return nil, &serverless.HostFunctionError{Function: fn, Cause: serverless.ErrCacheUnavailable}
 	}
 	cur := h.currentInvocationContext(ctx)
 	if cur == nil || cur.Namespace == "" {
 		return nil, &serverless.HostFunctionError{Function: fn, Cause: errors.New("cache requires an invocation namespace")}
 	}
-	dm, err := h.cacheClient.NewDMap(cacheDMapName + ":" + cur.Namespace)
+	dm, err := client.NewDMap(cacheDMapName + ":" + cur.Namespace)
 	if err != nil {
 		return nil, &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("failed to get cache DMap for namespace %s: %w", cur.Namespace, err)}
 	}

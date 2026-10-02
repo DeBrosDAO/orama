@@ -20,7 +20,7 @@ const testNamespace = "anchat"
 
 func newEmbeddedCache(t *testing.T) *HostFunctions {
 	t.Helper()
-	return &HostFunctions{cacheClient: olrictest.Start(t).EmbeddedClient()}
+	return &HostFunctions{cacheClient: fixedOlric(olrictest.Start(t).EmbeddedClient())}
 }
 
 // nsCtx is an invocation in testNamespace; the cache is scoped by it.
@@ -30,7 +30,7 @@ func nsCtx() context.Context {
 
 func storedTTL(t *testing.T, h *HostFunctions, key string) int64 {
 	t.Helper()
-	dm, err := h.cacheClient.NewDMap(cacheDMapName + ":" + testNamespace)
+	dm, err := h.cacheClient().NewDMap(cacheDMapName + ":" + testNamespace)
 	if err != nil {
 		t.Fatalf("failed to open DMap: %v", err)
 	}
@@ -198,5 +198,30 @@ func TestCacheGet_missIsErrCacheMiss(t *testing.T) {
 	}
 	if _, err := (&HostFunctions{}).CacheGet(nsCtx(), "k"); errors.Is(err, serverless.ErrCacheMiss) {
 		t.Fatal("an unavailable cache reported a miss; it must be distinguishable")
+	}
+}
+
+// The gateway replaces its Olric client when the supervisor reconnects; a host
+// function must use the client current at the call, not the one at startup.
+func TestCacheHostFunctions_followTheCurrentClient(t *testing.T) {
+	var current olriclib.Client
+	h := &HostFunctions{cacheClient: func() olriclib.Client { return current }}
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "k", []byte("v"), 0); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("with no client CacheSet = %v, want ErrCacheUnavailable", err)
+	}
+
+	current = olrictest.Start(t).EmbeddedClient() // reconnected
+	if err := h.CacheSet(ctx, "k", []byte("v"), 0); err != nil {
+		t.Fatalf("after reconnect CacheSet: %v", err)
+	}
+	if got, err := h.CacheGet(ctx, "k"); err != nil || string(got) != "v" {
+		t.Fatalf("after reconnect CacheGet = %q, %v", got, err)
+	}
+
+	current = nil // dropped again
+	if _, err := h.CacheGet(ctx, "k"); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("after the drop CacheGet = %v, want ErrCacheUnavailable", err)
 	}
 }
