@@ -37,6 +37,39 @@ func Burst(ctx context.Context, workers, total int, op Op) []Sample {
 	return s.Snapshot()
 }
 
+// Paced runs total calls of op from workers goroutines, each worker starting
+// its next call interval after the previous one started (never sooner), and
+// returns every observation. It is the latency measurement under a request
+// rate the caller chose, workers/interval, instead of the fastest rate the
+// workers can reach. A call slower than interval starts the next at once.
+func Paced(ctx context.Context, workers, total int, interval time.Duration, op Op) []Sample {
+	var s Samples
+	var next atomic.Int64
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				if n := next.Add(1); n > int64(total) || ctx.Err() != nil {
+					return
+				}
+				start := time.Now()
+				s.Add(start, op(ctx, w, i))
+				if wait := interval - time.Since(start); wait > 0 {
+					select {
+					case <-time.After(wait):
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	return s.Snapshot()
+}
+
 // maxLoad bounds a paced load that nobody stops: longer than any stage.
 const maxLoad = 24 * time.Hour
 

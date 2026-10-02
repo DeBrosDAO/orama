@@ -23,9 +23,14 @@ const (
 	warmBound      = 2 * time.Second
 	warmWorkers    = 5
 	warmInvokes    = 100
-	dnsWorkers     = 4
-	dnsQueries     = 150
-	dnsBound       = 500 * time.Millisecond
+	// warmInterval paces each worker to 5 invokes a second in all, half the
+	// gateway's sustained per-wallet limit of 10 a second (docs/SERVERLESS.md,
+	// "Invoke rate limits"). Faster, the gateway answers 429 once its
+	// 60-invoke burst is spent, and that measures the limiter, not the function.
+	warmInterval = time.Second
+	dnsWorkers   = 4
+	dnsQueries   = 150
+	dnsBound     = 500 * time.Millisecond
 )
 
 // TestPerf_namespaceProvision: from the create request until the namespace
@@ -58,7 +63,7 @@ func TestPerf_functionColdAndWarm(t *testing.T) {
 	start := time.Now()
 	_, err := realistic.Invoke(t.Context(), tn.C, "perf-store", tn.Admin.Bearer, map[string]string{"op": "count"})
 	record(t, tn.F, once("function-cold-invoke", start, err), coldBound)
-	warm := realistic.Burst(t.Context(), warmWorkers, warmInvokes, func(ctx context.Context, _, _ int) error {
+	warm := realistic.Paced(t.Context(), warmWorkers, warmInvokes, warmInterval, func(ctx context.Context, _, _ int) error {
 		_, err := realistic.Invoke(ctx, tn.C, "perf-store", tn.Admin.Bearer, map[string]string{"op": "count"})
 		return err
 	})

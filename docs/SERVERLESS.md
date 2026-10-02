@@ -773,6 +773,25 @@ the namespace named by `?namespace=`, otherwise the credential's; an anonymous
 call that names neither is refused with 400. A public function is invocable
 without a credential, but the request has to say whose it is.
 
+### Invoke rate limits
+
+Each gateway holds token buckets for invokes, checked in this order, and the
+first to refuse answers `429 RATE_LIMITED` with `scope=` and `retry_after=` in
+the message and a `Retry-After` header:
+
+| Scope | Key | Sustained | Burst |
+|-------|-----|-----------|-------|
+| `per_function_wallet` | namespace, function, wallet | the function's own limit, only when it declares one | its own burst |
+| `per_wallet` | namespace, wallet | 600 a minute (10 a second) | 60 |
+| `per_ip` | namespace, address (callers with no wallet) | 120 a minute (2 a second) | 30 |
+| `per_namespace` | namespace | 60,000 a minute (1,000 a second) | 6,000 |
+
+An invoke is charged once, by the gateway that runs it; the hop that proxies a
+request to a namespace gateway is not charged. The buckets are per gateway, not
+shared across a namespace's gateways. A caller that sends 100 invokes at 30 a
+second from one wallet spends the 60-invoke burst in about two seconds and then
+gets 429s at the 10-a-second refill (the `per_wallet` scope).
+
 ## WebSockets
 
 `/v1/functions/{name}/ws` runs a function over a WebSocket. With
