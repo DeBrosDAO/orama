@@ -160,6 +160,30 @@ func TestStopService_cleanupStartsAndWaits(t *testing.T) {
 	}
 }
 
+// TestHoldDown_masksThenUnmasksBeforeRestoring: the unit cannot be started
+// while held, and the cleanup unmasks it before it starts it again.
+func TestHoldDown_masksThenUnmasksBeforeRestoring(t *testing.T) {
+	sh := &fakeShell{answer: func(cmd string) (Output, error) {
+		return Output{Stdout: "active\n"}, nil
+	}}
+	f := newFake(t, sh)
+	t.Run("hold", func(t *testing.T) {
+		f.HoldDown(t, f.Node(t, "node-1"), "orama-node.service")
+	})
+	idx := func(prefix string) int {
+		for i, c := range sh.cmds {
+			if strings.HasPrefix(c, prefix) {
+				return i
+			}
+		}
+		return -1
+	}
+	mask, unmask, start := idx("systemctl mask --runtime orama-node.service && systemctl stop"), idx("systemctl unmask --runtime orama-node.service"), idx("systemctl is-active orama-node.service ||")
+	if mask < 0 || unmask < mask || start < unmask {
+		t.Fatalf("want mask, unmask, then start; got %v", sh.cmds)
+	}
+}
+
 // TestKill_restoresAnInactiveUnitToInactive: a unit that was not running
 // before the test is stopped again by the cleanup, not started.
 func TestKill_restoresAnInactiveUnitToInactive(t *testing.T) {

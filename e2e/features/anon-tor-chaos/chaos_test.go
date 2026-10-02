@@ -117,7 +117,7 @@ func gatewayHost(t *testing.T, f *fleet.Fleet, name string) fleet.Node {
 // its /v1/health to report checks.anon_proxy unavailable, with HTTP 200.
 func stopTor(t *testing.T, f *fleet.Fleet, victim fleet.Node) {
 	t.Helper()
-	f.StopService(t, victim, torUnit)
+	f.HoldDown(t, victim, torUnit)
 	eventually.Require(t, pollEvery, budget, "health to report anon_proxy "+anonProxyUnavailable, func() (bool, error) {
 		r := harness.GW(t).PinTo(victim.PublicIP).MustSend(t, gw.Req{Path: "/v1/health"})
 		var h struct {

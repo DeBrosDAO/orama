@@ -48,8 +48,11 @@ func nameservers(f *fleet.Fleet) []fleet.Node {
 // node, every nameserver still answers for the zone at once, from its stale
 // cache, instead of SERVFAIL for every name (lifecycle
 // TestIndexRQLiteDown_dnsServesStale; docs/ARCHITECTURE.md CoreDNS reads
-// dns_records from the index rqlite). The cleanup starts rqlite again and
-// waits for the cluster.
+// dns_records from the index rqlite at its own node's WireGuard address, so
+// the nameservers' rqlite is the one that matters). The units are held down:
+// orama-node's supervisor restarts a component whose health check fails
+// within seconds, which would end the outage mid-test. The cleanup unmasks
+// them, starts rqlite again and waits for the cluster.
 func TestIndexRQLiteDown_dnsServesStale(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.RequireHealthy(t)
@@ -70,9 +73,9 @@ func TestIndexRQLiteDown_dnsServesStale(t *testing.T) {
 		infra.ConvergeInCleanup(t, len(f.State.Nodes), infra.ColdStartBudget, "the cluster after rqlite came back")
 	})
 	for _, n := range f.State.Nodes {
-		f.StopService(t, n, infra.IndexRQLiteUnit)
+		f.HoldDown(t, n, infra.IndexRQLiteUnit)
 	}
-	requireRQLiteDown(t, f, "before resolving")
+	requireRQLiteDown(t, f, nss, "before resolving")
 	for _, ns := range nss {
 		got, err := resolveAt(t.Context(), ns.PublicIP, name)
 		if err != nil || len(got) == 0 {
@@ -83,15 +86,15 @@ func TestIndexRQLiteDown_dnsServesStale(t *testing.T) {
 			t.Logf("%s answers %v, before %v", ns.Name, got, want[ns.Name])
 		}
 	}
-	requireRQLiteDown(t, f, "after resolving")
+	requireRQLiteDown(t, f, nss, "after resolving")
 }
 
-// requireRQLiteDown fails unless the index rqlite is stopped on every node:
-// the supervisor starting it again would mean the answers were not served
-// with rqlite down.
-func requireRQLiteDown(t testing.TB, f *fleet.Fleet, when string) {
+// requireRQLiteDown fails unless the index rqlite is stopped on every
+// nameserver (the nodes whose answers the test reads): it being active again
+// would mean the answers were not served with rqlite down.
+func requireRQLiteDown(t testing.TB, f *fleet.Fleet, nss []fleet.Node, when string) {
 	t.Helper()
-	for _, n := range f.State.Nodes {
+	for _, n := range nss {
 		if st := f.Unit(t, n, infra.IndexRQLiteUnit); st == unitActive || st == unitActivating {
 			t.Fatalf("%s: %s is %s %s: DNS was not observed with the index rqlite down", n.Name, infra.IndexRQLiteUnit, st, when)
 		}

@@ -49,7 +49,7 @@ func TestGuardianDown_readsSurviveWritesRefused(t *testing.T) {
 	env := randomEnvelope(t)
 	mustPush(t, c, o, 1, env, http.StatusOK)
 	t.Run("one guardian down", func(t *testing.T) {
-		f.StopService(t, f.Node(t, "node-3"), vaultUnit)
+		f.HoldDown(t, f.Node(t, "node-3"), vaultUnit)
 		eventually.Require(t, pollEvery, probeBudget, "status to see the guardian gone", func() (bool, error) {
 			var s status
 			if err := c.MustSend(t, gw.Req{Path: services.VaultStatus}).Decode(&s); err != nil {

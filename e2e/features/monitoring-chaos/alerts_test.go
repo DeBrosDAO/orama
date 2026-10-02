@@ -130,7 +130,7 @@ func TestAlerts_coreServiceStoppedWarned(t *testing.T) {
 	f := harness.Fleet(t)
 	n := target(t)
 	t.Cleanup(func() { awaitCleared(t, "service", "orama-namespace-tor@index is") })
-	f.StopService(t, n, edge.TorUnit)
+	f.HoldDown(t, n, edge.TorUnit)
 	awaitAlert(t, "warning", "service", "orama-namespace-tor@index is inactive")
 }
 

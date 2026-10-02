@@ -66,7 +66,7 @@ func TestEdgePromise_caddyDownLeavesTheRoundRobin(t *testing.T) {
 	f := harness.Fleet(t)
 	v := victim(t)
 	t.Cleanup(func() { requireBackInBase(t, f, v) })
-	f.StopService(t, v, edge.CaddyUnit)
+	f.HoldDown(t, v, edge.CaddyUnit)
 	pinned := harness.GW(t).PinTo(v.PublicIP)
 	if resp, err := pinned.Send(t.Context(), gw.Req{Path: "/health"}); err == nil && resp.Status == http.StatusOK {
 		t.Fatalf("%s still serves HTTPS with Caddy stopped", v.Name)
@@ -95,7 +95,7 @@ func TestEdgePromise_auxUnitsDownKeepTheNode(t *testing.T) {
 	stopped := 0
 	for _, unit := range []string{edge.TorUnit, edge.NtfyUnit} {
 		if f.Unit(t, v, unit) == "active" {
-			f.StopService(t, v, unit)
+			f.HoldDown(t, v, unit)
 			stopped++
 		}
 	}

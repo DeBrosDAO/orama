@@ -47,7 +47,7 @@ func TestIPFSDown_contentStillServedAndRecovers(t *testing.T) {
 	var cidDuring string
 	var during []byte
 	t.Run("daemon down", func(t *testing.T) {
-		f.StopService(t, victim, ipfsUnit)
+		f.HoldDown(t, victim, ipfsUnit)
 		if s := f.Unit(t, victim, clusterUnit); s == "active" {
 			t.Errorf("%s stayed active with its daemon stopped (Requires=)", clusterUnit)
 		}

@@ -50,6 +50,22 @@ func (f *Fleet) StopService(t testing.TB, n Node, unit string) {
 	f.MustExec(t, n, "systemctl stop "+unit)
 }
 
+// HoldDown stops unit and keeps it stopped until the test ends: the unit is
+// runtime-masked first, so the node's supervisor (orama-node's boot
+// reconciler restarts a component whose health check fails, within its
+// health interval) cannot start it again while the test observes the
+// outage. The cleanup unmasks it, then puts it back in the state it was in
+// before (see restoreUnit). Use it when the test asserts the unit stays
+// down; StopService when the unit coming back is part of the test.
+func (f *Fleet) HoldDown(t testing.TB, n Node, unit string) {
+	t.Helper()
+	requireSafe(t, "unit", unit)
+	prior := f.Unit(t, n, unit)
+	t.Cleanup(func() { f.restoreUnit(t, n, unit, prior) })
+	t.Cleanup(func() { f.cleanupExec(t, n, "systemctl unmask --runtime "+unit) })
+	f.MustExec(t, n, "systemctl mask --runtime "+unit+" && systemctl stop "+unit)
+}
+
 // restoreUnit clears the failed state the disturbance left (a killed unit
 // past its start limit would otherwise refuse to start) and puts unit back
 // in its prior state: active again, or stopped when it was not running.
