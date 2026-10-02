@@ -185,17 +185,38 @@ func (s *DeploymentService) UpdateReplicas(ctx context.Context, deployment *depl
 	})
 }
 
-// updateReplicaBudget is how long an update's response may be delayed by the
-// replicas. It is longer than the server's write deadline, so the handler moves
-// its deadline; the gateway hops in front move theirs to match.
-const updateReplicaBudget = constants.DeploymentUpdateBudget
+// changeResponseBudget is how long the home node's response to an update or
+// rollback may take from the moment the request arrives: the whole handler
+// budget with room to answer. It is longer than the server's write deadline,
+// so the handler moves its deadlines before it does anything else, and shorter
+// than the gateway hop in front (constants/timeouts.go).
+const changeResponseBudget = constants.DeploymentUpdateBudget + 20*time.Second
 
-// updateReplicasWithin is UpdateReplicas for a handler that must still be able
-// to answer when the replicas have taken their whole time.
-func (s *DeploymentService) updateReplicasWithin(ctx context.Context, w http.ResponseWriter, deployment *deployments.Deployment, path string) error {
-	if err := httputil.ExtendIO(w, updateReplicaBudget); err != nil {
-		return fmt.Errorf("the response could not be given time to wait for the replicas: %w", err)
+// extendForChange gives an update or rollback the time its work needs. It is
+// called first, before the request is read or the lock is waited for: a
+// deadline moved only once the replicas are being waited on is one the upload
+// and the lock wait have already run into.
+func extendForChange(w http.ResponseWriter) error {
+	if err := httputil.ExtendIO(w, changeResponseBudget); err != nil {
+		return fmt.Errorf("the request could not be given time to finish: %w", err)
 	}
-	_, err := s.UpdateReplicas(context.WithoutCancel(ctx), deployment, path)
+	return nil
+}
+
+// localChangeContext bounds the lock wait and the work on the home node. The
+// replicas are waited for under their own segment (updateReplicas), so a slow
+// local step cannot leave them without time.
+func localChangeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, constants.DeploymentUpdateLocalBudget)
+}
+
+// updateReplicas is UpdateReplicas for a handler that must still be able to
+// answer when the replicas have taken their whole segment: it runs detached
+// from the request, so a client that hangs up does not abandon the fan-out half
+// way, and bounded by DeploymentUpdateReplicaBudget.
+func (s *DeploymentService) updateReplicas(ctx context.Context, deployment *deployments.Deployment, path string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.DeploymentUpdateReplicaBudget)
+	defer cancel()
+	_, err := s.UpdateReplicas(ctx, deployment, path)
 	return err
 }

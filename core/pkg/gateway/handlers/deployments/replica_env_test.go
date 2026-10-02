@@ -420,11 +420,11 @@ func TestPersistEnv_refusesToOverwriteARowThatMoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.persistEnv(context.Background(), d, map[string]string{"A": "1"}, stored); err != nil {
+	if err := h.persistEnv(context.Background(), d, map[string]string{"A": "1"}, stored, time.Now()); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 	// A second writer still holding the old token is refused.
-	if err := h.persistEnv(context.Background(), d, map[string]string{"B": "2"}, stored); !errors.Is(err, errEnvChangedConcurrently) {
+	if err := h.persistEnv(context.Background(), d, map[string]string{"B": "2"}, stored, time.Now()); !errors.Is(err, errEnvChangedConcurrently) {
 		t.Fatalf("stale write: err = %v, want errEnvChangedConcurrently", err)
 	}
 }
@@ -457,7 +457,7 @@ func TestNextEnvVersion_isStrictlyIncreasing(t *testing.T) {
 	svc, _ := replicaEnvService(t, nil)
 	last := int64(0)
 	for i := 0; i < 1000; i++ {
-		v := svc.nextEnvVersion("acme", "api")
+		v := svc.nextEnvVersion("acme", "api", time.Time{})
 		if v <= last {
 			t.Fatalf("version %d after %d", v, last)
 		}

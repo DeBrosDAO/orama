@@ -188,6 +188,11 @@ func TestMonitorAlerts_noCriticalOnFreshCluster(t *testing.T) {
 	}
 }
 
+// namespaceNodes is how many nodes a tenant namespace is placed on in a
+// larger cluster (core/pkg/namespace DefaultRQLiteNodeCount; the e2e module
+// cannot import that package).
+const namespaceNodes = 3
+
 type namespaceEntry struct {
 	Namespace string `json:"namespace"`
 	Host      string `json:"host"`
@@ -197,8 +202,9 @@ type namespaceEntry struct {
 }
 
 // TestMonitorNamespaces_newNamespaceHealthyOnEveryNode: a namespace created
-// through the API shows up in `monitor namespaces` on every node with its
-// RQLite, Olric and gateway up.
+// through the API shows up in `monitor namespaces` on every node it is placed on
+// (as many as the cluster places, at most namespaceNodes)
+// with its RQLite, Olric and gateway up.
 func TestMonitorNamespaces_newNamespaceHealthyOnEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -216,10 +222,11 @@ func TestMonitorNamespaces_newNamespaceHealthyOnEveryNode(t *testing.T) {
 				healthy++
 			}
 		}
-		if healthy == len(f.State.Nodes) {
+		want := min(len(f.State.Nodes), namespaceNodes)
+		if healthy == want {
 			return true, nil
 		}
-		return false, fmt.Errorf("%s healthy on %d of %d nodes", n.Name, healthy, len(f.State.Nodes))
+		return false, fmt.Errorf("%s healthy on %d of the %d nodes it is placed on", n.Name, healthy, want)
 	})
 }
 

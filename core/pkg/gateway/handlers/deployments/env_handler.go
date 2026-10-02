@@ -153,9 +153,11 @@ func (h *EnvHandler) HandleSetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The change outlives a client that hangs up: abandoning it half way would
-	// leave nodes on different environments. What bounds it is the budget, which
-	// ends before the gateway's own limits and the CLI's wait do.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), constants.DeploymentEnvChangeBudget)
+	// leave nodes on different environments. What bounds the lock wait, the write
+	// and the local restart is the local budget; the replicas are waited for
+	// under their own segment after it (restartEverywhere), so the whole ends
+	// within DeploymentEnvChangeBudget, before the gateway's limits and the CLI's.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), constants.DeploymentEnvLocalBudget)
 	defer cancel()
 
 	result, status, err := h.applyChange(ctx, namespace, name, req.Set, req.Unset)
@@ -204,7 +206,11 @@ func (h *EnvHandler) applyChange(ctx context.Context, namespace, name string, se
 		zap.Strings("unset", unset),
 	)
 
-	if err := h.persistEnv(ctx, deployment, updated, stored); err != nil {
+	// The version is issued before the write and recorded as the row's
+	// updated_at, so the next change, even after this process restarted with its
+	// clock behind, starts above it (nextEnvVersion).
+	version := h.service.nextEnvVersion(namespace, name, deployment.UpdatedAt)
+	if err := h.persistEnv(ctx, deployment, updated, stored, time.Unix(0, version)); err != nil {
 		if errors.Is(err, errEnvChangedConcurrently) {
 			return nil, http.StatusConflict, fmt.Errorf("%w; run the command again", err)
 		}
@@ -213,7 +219,7 @@ func (h *EnvHandler) applyChange(ctx context.Context, namespace, name string, se
 	}
 	deployment.Environment = updated
 
-	replicas, restarted, status, err := h.restartEverywhere(ctx, deployment)
+	replicas, restarted, status, err := h.restartEverywhere(ctx, deployment, version)
 	if err != nil {
 		return nil, status, err
 	}
@@ -234,7 +240,7 @@ func (h *EnvHandler) applyChange(ctx context.Context, namespace, name string, se
 // Success is reported only when each node applied the change. A replica that did
 // not is named, with how many did, and running the same command again retries
 // (applying an environment is idempotent).
-func (h *EnvHandler) restartEverywhere(ctx context.Context, deployment *deployments.Deployment) (replicas int, restarted bool, status int, err error) {
+func (h *EnvHandler) restartEverywhere(ctx context.Context, deployment *deployments.Deployment, version int64) (replicas int, restarted bool, status int, err error) {
 	if deployment.Type == deployments.DeploymentTypeStatic || deployment.Type == deployments.DeploymentTypeNextJSStatic {
 		return 0, false, http.StatusOK, nil
 	}
@@ -245,14 +251,17 @@ func (h *EnvHandler) restartEverywhere(ctx context.Context, deployment *deployme
 			"environment saved but the process could not be restarted: %w", err)
 	}
 
-	version := h.service.nextEnvVersion(deployment.Namespace, deployment.Name)
+	// The replicas have a segment of their own, whatever the local restart took,
+	// so a slow restart is not reported as the replicas timing out.
+	replicaCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), constants.DeploymentEnvCallTimeout)
+	defer cancel()
 	// The payload is built from what is stored now, read under the lock.
-	fresh, err := h.service.GetDeployment(ctx, deployment.Namespace, deployment.Name)
+	fresh, err := h.service.GetDeployment(replicaCtx, deployment.Namespace, deployment.Name)
 	if err != nil {
 		return 0, true, http.StatusInternalServerError, fmt.Errorf(
 			"environment saved and applied on the home node, but the replicas could not be told: %w; run the command again", err)
 	}
-	replicas, err = h.service.ReconfigureReplicas(ctx, fresh, version)
+	replicas, err = h.service.ReconfigureReplicas(replicaCtx, fresh, version)
 	if err != nil {
 		h.logger.Error("Environment not applied on every replica", zap.Error(err))
 		return replicas, true, http.StatusBadGateway, fmt.Errorf(
@@ -324,7 +333,7 @@ var errEnvChangedConcurrently = errors.New("the environment was changed by anoth
 // This is also what migrates a deployment created before the column was
 // encrypted: the row is read as plaintext and written back encrypted, so the
 // plaintext form is not a permanent second format.
-func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string, expected string) error {
+func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string, expected string, at time.Time) error {
 	encoded, err := h.service.EncodeEnvironment(env)
 	if err != nil {
 		return fmt.Errorf("encode environment: %w", err)
@@ -332,7 +341,7 @@ func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Dep
 	res, err := h.service.db.Exec(ctx,
 		`UPDATE deployments SET environment = ?, updated_at = ?
 		  WHERE namespace = ? AND name = ? AND COALESCE(environment, '') = ?`,
-		encoded, time.Now(), deployment.Namespace, deployment.Name, expected)
+		encoded, at, deployment.Namespace, deployment.Name, expected)
 	if err != nil {
 		return fmt.Errorf("update deployments: %w", err)
 	}

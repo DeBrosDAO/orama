@@ -100,3 +100,22 @@ func removeAppliedVersions(deployPath string) {
 		_ = os.Remove(appliedVersionPath(deployPath, kind))
 	}
 }
+
+// sweepStaleVersionTemps removes the temp files a record that died half way
+// (a crash between create and rename) left beside the deployments. It runs when
+// the handler starts, before any record is written, so no live write is
+// removed. It returns how many it removed.
+func sweepStaleVersionTemps(baseDeployPath string) (int, error) {
+	stale, err := filepath.Glob(filepath.Join(baseDeployPath, "*-version.*.tmp"))
+	if err != nil {
+		return 0, fmt.Errorf("failed to list stale version files in %s: %w", baseDeployPath, err)
+	}
+	removed := 0
+	for _, path := range stale {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return removed, fmt.Errorf("failed to remove the stale version file %s: %w", path, err)
+		}
+		removed++
+	}
+	return removed, nil
+}

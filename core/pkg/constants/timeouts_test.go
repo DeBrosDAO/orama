@@ -36,6 +36,7 @@ func TestUpdateBudgets_areStrictlyNested(t *testing.T) {
 		d    int64
 	}{
 		{"DeploymentReplicaCallTimeout", int64(DeploymentReplicaCallTimeout)},
+		{"DeploymentUpdateReplicaBudget", int64(DeploymentUpdateReplicaBudget)},
 		{"DeploymentUpdateBudget", int64(DeploymentUpdateBudget)},
 		{"GatewayDeploymentProxyTimeout", int64(GatewayDeploymentProxyTimeout)},
 		{"GatewayDeploymentWriteBudget", int64(GatewayDeploymentWriteBudget)},
@@ -47,5 +48,22 @@ func TestUpdateBudgets_areStrictlyNested(t *testing.T) {
 	}
 	if DeploymentEnvChangeBudget >= GatewayDeploymentProxyTimeout {
 		t.Errorf("an env change's budget %v must end before the deployment proxy hop %v", DeploymentEnvChangeBudget, GatewayDeploymentProxyTimeout)
+	}
+}
+
+// Each segment of a change is bounded on its own, so the replicas keep their
+// whole segment however long the local step took.
+func TestChangeBudgets_reserveTheReplicaSegment(t *testing.T) {
+	if DeploymentEnvLocalBudget+DeploymentEnvCallTimeout != DeploymentEnvChangeBudget {
+		t.Errorf("env local %v + replica call %v != change budget %v", DeploymentEnvLocalBudget, DeploymentEnvCallTimeout, DeploymentEnvChangeBudget)
+	}
+	if DeploymentEnvLocalBudget <= DeploymentEnvReconfigureTimeout {
+		t.Errorf("the local budget %v must outlast the local restart %v", DeploymentEnvLocalBudget, DeploymentEnvReconfigureTimeout)
+	}
+	if DeploymentUpdateLocalBudget+DeploymentUpdateReplicaBudget != DeploymentUpdateBudget {
+		t.Errorf("update segments %v + %v != %v", DeploymentUpdateLocalBudget, DeploymentUpdateReplicaBudget, DeploymentUpdateBudget)
+	}
+	if DeploymentUpdateBudget >= GatewayDeploymentProxyTimeout {
+		t.Errorf("the handler's whole budget %v must end before the hop %v", DeploymentUpdateBudget, GatewayDeploymentProxyTimeout)
 	}
 }

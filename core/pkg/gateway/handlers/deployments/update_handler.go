@@ -55,6 +55,10 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
 		return
 	}
+	if err := extendForChange(w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Parse multipart form
 	if err := r.ParseMultipartForm(200 << 20); err != nil {
@@ -67,6 +71,11 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// The lock wait and the work here share one budget; the replicas have
+	// their own after it.
+	ctx, cancel := localChangeContext(ctx)
+	defer cancel()
 
 	// An update, a rollback and an environment change each restart the unit;
 	// taking turns keeps one from restarting it onto a mix of two of them.
@@ -125,7 +134,7 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	// The update is not done until every replica runs it: until then the
 	// hostname answers with two versions. A replica that did not apply it is
 	// named, and running the update again retries.
-	if err := h.service.updateReplicasWithin(ctx, w, updated, replicaUpdatePath); err != nil {
+	if err := h.service.updateReplicas(ctx, updated, replicaUpdatePath); err != nil {
 		h.logger.Error("Update not applied on every replica", zap.Error(err))
 		http.Error(w, fmt.Sprintf(
 			"updated to version %d on the home node, but %v. Those nodes still serve the old version; "+

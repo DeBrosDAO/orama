@@ -3,6 +3,7 @@ package gateway
 import (
 	"net/http"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
@@ -344,7 +345,7 @@ func (g *Gateway) Routes() http.Handler {
 		// Deployment management
 		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
 		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)
-		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeOnly(g.listHandler.HandleDelete))
+		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeProxy(g.listHandler.HandleDelete))
 		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeOnly(g.rollbackHandler.HandleRollback))
 		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
 		mux.HandleFunc("/v1/deployments/logs", g.withHomeNodeProxy(g.logsHandler.HandleLogs))
@@ -385,7 +386,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/db/sqlite/backups", g.sqliteBackupHandler.ListBackups)
 	}
 
-	return g.withMiddleware(mux)
+	return dropForgedProxyNode(g.withMiddleware(mux))
 }
 
 // withHomeNodeProxy wraps a deployment handler to proxy requests to the home node
@@ -396,23 +397,27 @@ func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 // withHomeNodeOnly is withHomeNodeProxy for a route that changes the deployment
-// (update, rollback, environment, delete). Those hold the home node's
-// per-deployment lock and version stamps, so running one on another node would
-// change the deployment under a lock nobody else takes. When the home node
-// cannot be reached the request is refused, not run here.
+// under the home node's version stamps (update, rollback, environment). Running
+// one on another node would change the deployment under a lock and a counter
+// nobody else uses. When the home node cannot be reached the request is
+// refused, not run here. Delete is not one of them: it carries no version stamp
+// and takes the lock wherever it runs, so a deployment whose home node is gone
+// for good can still be deleted.
 func (g *Gateway) withHomeNodeOnly(handler http.HandlerFunc) http.HandlerFunc {
 	return g.homeNodeHandler(handler, true)
 }
 
 func (g *Gateway) homeNodeHandler(handler http.HandlerFunc, mutating bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Already proxied — prevent loops
-		if r.Header.Get("X-Orama-Proxy-Node") != "" {
+		// Already proxied — prevent loops. The header is only ever set by a peer
+		// node's own hop: dropForgedProxyNode removes it from every other request.
+		if r.Header.Get(headerProxyNode) != "" {
 			handler(w, r)
 			return
 		}
 		name := r.URL.Query().Get("name")
-		if name == "" {
+		id := r.URL.Query().Get("id")
+		if name == "" && id == "" {
 			handler(w, r)
 			return
 		}
@@ -422,7 +427,17 @@ func (g *Gateway) homeNodeHandler(handler http.HandlerFunc, mutating bool) http.
 			handler(w, r)
 			return
 		}
-		deployment, err := g.deploymentService.GetDeployment(ctx, namespace, name)
+		// A request may name the deployment by id (delete does): it is routed
+		// to the same node as one that names it.
+		var (
+			deployment *deployments.Deployment
+			err        error
+		)
+		if name != "" {
+			deployment, err = g.deploymentService.GetDeployment(ctx, namespace, name)
+		} else {
+			deployment, err = g.deploymentService.GetDeploymentByID(ctx, namespace, id)
+		}
 		if err != nil {
 			handler(w, r) // let handler return proper error
 			return
@@ -461,4 +476,22 @@ func (g *Gateway) routeToHomeNode(w http.ResponseWriter, r *http.Request, deploy
 	w.Header().Set("Retry-After", "5")
 	http.Error(w, "the home node of this deployment did not answer, so the change was not made from this node; run the command again", http.StatusServiceUnavailable)
 	return true
+}
+
+// headerProxyNode marks a request one gateway forwarded to another, so the
+// second does not forward it again.
+const headerProxyNode = "X-Orama-Proxy-Node"
+
+// dropForgedProxyNode removes headerProxyNode from a request that did not come
+// from a peer node on the overlay. The header decides that a request is run on
+// this node rather than routed to the deployment's home node, so a client able
+// to set it could run an update, a rollback or an environment change on any
+// node, outside the home node's lock and version stamps.
+func dropForgedProxyNode(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(headerProxyNode) != "" && !nodeauth.IsWireGuardPeer(r.RemoteAddr) {
+			r.Header.Del(headerProxyNode)
+		}
+		next.ServeHTTP(w, r)
+	})
 }

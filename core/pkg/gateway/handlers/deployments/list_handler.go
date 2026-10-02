@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -221,6 +222,19 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Delete takes turns with updates, rollbacks and environment changes: it
+	// removes the unit and files they are restarting. It carries no version
+	// stamp, so it does not need the home node, and a deployment whose home
+	// node is gone for good can still be deleted from any node.
+	lockCtx, cancelLock := context.WithTimeout(ctx, constants.DeploymentEnvLocalBudget)
+	defer cancelLock()
+	unlock, err := h.service.lockDeployment(lockCtx, namespace, deployment.Name)
+	if err != nil {
+		http.Error(w, err.Error()+"; run the command again", http.StatusServiceUnavailable)
+		return
+	}
+	defer unlock()
+
 	// 0. Fan out teardown to replica nodes (before local cleanup so replicas can stop processes)
 	h.service.FanOutToReplicas(ctx, deployment, "/v1/internal/deployments/replica/teardown", nil)
 
@@ -261,6 +275,8 @@ func (h *ListHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to delete deployment", http.StatusInternalServerError)
 		return
 	}
+
+	h.service.forgetDeployment(namespace, deployment.Name)
 
 	h.logger.Info("Deployment deleted",
 		zap.String("id", deployment.ID),

@@ -38,6 +38,10 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Namespace not found in context", http.StatusUnauthorized)
 		return
 	}
+	if err := extendForChange(w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
 	var req struct {
@@ -65,6 +69,11 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		zap.String("name", req.Name),
 		zap.Int("target_version", req.Version),
 	)
+
+	// The lock wait and the work here share one budget; the replicas have
+	// their own after it.
+	ctx, cancel := localChangeContext(ctx)
+	defer cancel()
 
 	unlock, err := h.service.lockDeployment(ctx, namespace, req.Name)
 	if err != nil {
@@ -128,7 +137,7 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// The rollback is not done until every replica runs it.
-	if err := h.service.updateReplicasWithin(ctx, w, rolled, replicaRollbackPath); err != nil {
+	if err := h.service.updateReplicas(ctx, rolled, replicaRollbackPath); err != nil {
 		h.logger.Error("Rollback not applied on every replica", zap.Error(err))
 		http.Error(w, fmt.Sprintf(
 			"rolled back to version %d on the home node, but %v. Those nodes still serve the old version; "+

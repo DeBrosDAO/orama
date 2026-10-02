@@ -54,11 +54,17 @@ func (s *DeploymentService) lockDeployment(ctx context.Context, namespace, name 
 
 // nextEnvVersion issues the version an environment change travels with: a
 // timestamp, made strictly greater than the last one issued for the deployment
-// so two changes in the same instant, or a clock that stepped back, still order.
-// A replica refuses a version older than the one it applied. The home node of a
-// deployment is fixed, so one clock issues them all. Call it with the
-// deployment's lock held.
-func (s *DeploymentService) nextEnvVersion(namespace, name string) int64 {
+// and than recorded, so two changes in the same instant, or a clock that stepped
+// back, still order. A replica refuses a version older than the one it applied.
+// The home node of a deployment is fixed, so one clock issues them all. Call it
+// with the deployment's lock held.
+//
+// recorded is the deployment row's updated_at: an environment change writes its
+// version there, so after a restart (the in-memory last one is gone) with the
+// clock behind, the next version still starts above the previous one instead of
+// being refused by every replica for good. The floor is as exact as the
+// database keeps the time; an update only ever raises it.
+func (s *DeploymentService) nextEnvVersion(namespace, name string, recorded time.Time) int64 {
 	s.envVersionMu.Lock()
 	defer s.envVersionMu.Unlock()
 	if s.envVersions == nil {
@@ -69,6 +75,18 @@ func (s *DeploymentService) nextEnvVersion(namespace, name string) int64 {
 	if last := s.envVersions[key]; version <= last {
 		version = last + 1
 	}
+	if !recorded.IsZero() {
+		if floor := recorded.UnixNano(); version <= floor {
+			version = floor + 1
+		}
+	}
 	s.envVersions[key] = version
 	return version
+}
+
+// forgetDeployment drops what the service remembers of a deleted deployment.
+func (s *DeploymentService) forgetDeployment(namespace, name string) {
+	s.envVersionMu.Lock()
+	defer s.envVersionMu.Unlock()
+	delete(s.envVersions, deploymentKey(namespace, name))
 }

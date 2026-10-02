@@ -40,6 +40,9 @@ func NewReplicaHandler(
 	if baseDeployPath == "" {
 		baseDeployPath = filepath.Join(os.Getenv("HOME"), ".orama", "deployments")
 	}
+	if _, err := sweepStaleVersionTemps(baseDeployPath); err != nil {
+		logger.Error("Failed to sweep stale version files", zap.Error(err))
+	}
 	return &ReplicaHandler{
 		service:        service,
 		processManager: processManager,

@@ -306,16 +306,30 @@ Each call carries the deployment's version; a replica refuses (409) a version
 older than the one it applied, so an older update that arrives late cannot put it
 back. Update, rollback and environment changes of one deployment take turns on
 the home node and on the replica, and a replica's setup and teardown take the same lock.
-The waits nest, each strictly shorter than the one around it: a replica call is
-bounded at 180 s, the home node's response waits at most 210 s, the gateway hop
-to the home node allows 240 s, and the entry gateway's own write deadline is
-moved to 270 s, for the routes that change a deployment (update, rollback,
-environment, delete). Such a request that reaches a gateway other than the home
-node is forwarded; if the home node does not answer it is refused with 503 and
-`Retry-After`, and never run on the node that took the request, because the lock
-and the version stamps live on the home node. Run the command again. An
-environment change that finds an update holding the lock waits at most its own
-60 s budget, then is refused with 503 (run it again). (Deleting a deployment still tells its replicas
+The waits nest, each strictly shorter than the one around it, and an update
+or rollback has two segments so a slow local step cannot starve the replicas: the
+lock wait and the work on the home node (extract, pin, start, health) share
+120 s, then the replicas get their own 210 s (one replica call is bounded at
+180 s, with room to report). The home node's whole handler is therefore bounded
+at 330 s; the gateway hop to the home node allows 360 s and the entry gateway's
+write deadline is moved to 390 s, for the routes that change a deployment
+(update, rollback, environment, delete). The home node moves its own deadlines
+before it reads the upload or waits for the lock. An update or rollback that
+finds the lock held past its 120 s is refused with 503 (run it again).
+
+Update, rollback and environment change are made on the home node only, because
+the lock and the version stamps live there. One that reaches another gateway is
+forwarded; if the home node does not answer it is refused with 503 and
+`Retry-After`, and never run on the node that took the request. The marker
+header that says a request was already forwarded (`X-Orama-Proxy-Node`) is
+honoured only from a peer on the WireGuard overlay: the entry gateway removes it
+from every other request, so a client cannot use it to run a change on any node.
+**Delete** is not tied to the home node: it carries no version stamp, takes the
+deployment lock on whichever node runs it, and falls through to that node when
+the home node cannot be reached, so a deployment whose home node is gone for
+good can still be deleted (by `name` or by `id`; both are routed the same way).
+An environment change that finds an update holding the lock waits at most its
+own 30 s local budget, then is refused with 503 (run it again). (Deleting a deployment still tells its replicas
 to tear down without waiting; that is not an update.)
 
 The node's health checker probes each local replica's own port every 30 s. A
@@ -743,7 +757,9 @@ the command succeeds only when all of them applied it.
   `POST /v1/internal/deployments/replica/env` in parallel and waits for every
   answer. The environment goes sealed with the cluster key, as in a replica
   setup, with a version stamp (a nanosecond timestamp made strictly increasing
-  per deployment).
+  per deployment). The stamp is also written as the row's `updated_at`, so after
+  a restart with the clock behind, the next stamp starts above the previous one
+  and no replica refuses it for good (409).
 - A replica takes the deployment's type, limits and port from its own registry
   row, found by deployment id, namespace and name together on this node's active
   replica; a request that pairs an id with another deployment's name is refused
@@ -766,8 +782,10 @@ the user instead of a timeout: a replica's restart is bounded at 20 s, the home
 node waits at most 30 s for one replica, the whole change (lock wait included)
 is bounded at 60 s, and `orama app env set` / `unset` wait 90 s (every other CLI
 call keeps its 30 s). The gateway's own limits sit outside all of them: the
-hop to the home node for a deployment change allows 240 s and the entry
-gateway's write deadline is 270 s.
+hop to the home node for a deployment change allows 360 s and the entry
+gateway's write deadline is 390 s. The environment change's 60 s is split the same
+way: 30 s for the lock wait, the write and the local restart, then 30 s for the
+replicas whatever the local step took.
 
 **The whole fleet must run the version that has this endpoint.** A replica that
 does not know `/v1/internal/deployments/replica/env` answers 404, so during a

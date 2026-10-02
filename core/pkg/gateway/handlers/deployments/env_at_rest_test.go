@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"go.uber.org/zap"
@@ -106,7 +107,7 @@ func TestPersistEnv_writesTheEnvironmentSealed(t *testing.T) {
 
 	err := handler.persistEnv(context.Background(),
 		&deployments.Deployment{Namespace: "acme", Name: "api"},
-		map[string]string{"STRIPE_KEY": "sk_live_supersecret"}, "")
+		map[string]string{"STRIPE_KEY": "sk_live_supersecret"}, "", time.Now())
 	if err != nil {
 		t.Fatalf("persistEnv: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestPersistEnv_aMissingResultIsAnError(t *testing.T) {
 		logger:  zap.NewNop(),
 	}
 	err := handler.persistEnv(context.Background(),
-		&deployments.Deployment{Namespace: "acme", Name: "api"}, map[string]string{"A": "1"}, "")
+		&deployments.Deployment{Namespace: "acme", Name: "api"}, map[string]string{"A": "1"}, "", time.Now())
 	if err == nil {
 		t.Fatal("a write with no result was reported as saved")
 	}
