@@ -26,18 +26,10 @@ func TestPaced_holdsTheRate(t *testing.T) {
 
 func TestPaced_stopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan []Sample)
-	go func() {
-		done <- Paced(ctx, 1, 1000, time.Hour, func(context.Context, int, int) error { return nil })
-	}()
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-	select {
-	case got := <-done:
-		if len(got) != 1 {
-			t.Errorf("got %d samples, want 1", len(got))
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("Paced did not return after cancel")
+	// The first call cancels: Paced must then return instead of waiting out
+	// the hour-long interval (the test binary's timeout fails it otherwise).
+	got := Paced(ctx, 1, 1000, time.Hour, func(context.Context, int, int) error { cancel(); return nil })
+	if len(got) != 1 {
+		t.Errorf("got %d samples, want 1", len(got))
 	}
 }

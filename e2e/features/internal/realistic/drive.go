@@ -50,20 +50,17 @@ func Paced(ctx context.Context, workers, total int, interval time.Duration, op O
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; ; i++ {
-				if n := next.Add(1); n > int64(total) || ctx.Err() != nil {
-					return
+			// eventually.Poll's ticker paces the worker: a call slower than
+			// interval delays the next instead of piling calls up.
+			i := 0
+			_ = eventually.Poll(ctx, interval, maxLoad, "paced calls", func() (bool, error) {
+				if n := next.Add(1); n > int64(total) {
+					return true, nil
 				}
-				start := time.Now()
-				s.Add(start, op(ctx, w, i))
-				if wait := interval - time.Since(start); wait > 0 {
-					select {
-					case <-time.After(wait):
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
+				s.Add(time.Now(), op(ctx, w, i))
+				i++
+				return false, nil
+			})
 		}()
 	}
 	wg.Wait()
