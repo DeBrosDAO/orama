@@ -279,7 +279,7 @@ polls for it (every 2 s, up to 60 s) instead of failing on the first miss, and
 only then extracts it, starts the unit and answers its port. Only "not
 retrievable yet" is waited for; any other fetch failure is answered at once.
 
-The internal replica routes (`setup`, `update`, `rollback`, `teardown`) answer
+The internal replica routes (`setup`, `update`, `rollback`, `teardown`, `env`) answer
 every error as JSON, `{"error": "<reason>"}`, with the status that fits. The home
 node carries that reason into its own error and log, so a failed setup reads
 `node <id> returned status 500: Failed to extract content: ...` rather than a
@@ -290,6 +290,33 @@ written with status `failed` and a `replica_setup_failed` event carrying the
 reason is added to the deployment's events (`GET /v1/deployments/events`). The
 cluster leader's reconciliation, every 5 minutes, sees the deployment
 under-replicated and sets a replica up again.
+
+An **update** (`orama deploy ... --update`) and a **rollback** are applied on the
+home node, then on every active replica, and the command waits for each (the
+response's deadline is moved to cover one replica call, 180 s plus 30 s). It
+succeeds only when all replicas applied it. A replica that did not is reported
+with status 502, naming how many replicas applied it and each node that did not
+with a generic reason (refused with a status, did not answer in time, or could
+not be reached; the peer's own text and overlay addresses go to the home node's
+log, not to the response), and a `replica_update_failed` event is
+added to the deployment's events; the home node already runs the new version,
+and the failed nodes keep serving the old one. Running the same update or
+rollback again retries: it makes a new version and sends it to every replica.
+Each call carries the deployment's version; a replica refuses (409) a version
+older than the one it applied, so an older update that arrives late cannot put it
+back. Update, rollback and environment changes of one deployment take turns on
+the home node and on the replica, and a replica's setup and teardown take the same lock.
+The waits nest, each strictly shorter than the one around it: a replica call is
+bounded at 180 s, the home node's response waits at most 210 s, the gateway hop
+to the home node allows 240 s, and the entry gateway's own write deadline is
+moved to 270 s, for the routes that change a deployment (update, rollback,
+environment, delete). Such a request that reaches a gateway other than the home
+node is forwarded; if the home node does not answer it is refused with 503 and
+`Retry-After`, and never run on the node that took the request, because the lock
+and the version stamps live on the home node. Run the command again. An
+environment change that finds an update holding the lock waits at most its own
+60 s budget, then is refused with 503 (run it again). (Deleting a deployment still tells its replicas
+to tear down without waiting; that is not an update.)
 
 The node's health checker probes each local replica's own port every 30 s. A
 replica row with no port (a failed setup) is not probed, and a `failed` replica
@@ -704,6 +731,50 @@ orama app env unset my-api OLD_FLAG DEBUG_MODE
 Setting or removing a variable rewrites the app's environment file and restarts
 it, so the change takes effect immediately. A static site has no process, so its
 variables are recorded and nothing is restarted.
+
+The change reaches **every node that runs the app**, not only the home node, and
+the command succeeds only when all of them applied it.
+
+- The home node takes the deployment's lock (an environment change, an update and
+  a rollback of one deployment take turns), reads the deployment inside it, and
+  writes the new environment with a compare-and-swap on the stored value; a write
+  that finds the row moved is refused (409, run the command again).
+- It restarts its own unit, then calls each active replica's internal
+  `POST /v1/internal/deployments/replica/env` in parallel and waits for every
+  answer. The environment goes sealed with the cluster key, as in a replica
+  setup, with a version stamp (a nanosecond timestamp made strictly increasing
+  per deployment).
+- A replica takes the deployment's type, limits and port from its own registry
+  row, found by deployment id, namespace and name together on this node's active
+  replica; a request that pairs an id with another deployment's name is refused
+  (404), and so is a deployment with no process (400). It refuses a version older
+  than the one it already applied (409; the applied version is a file beside the
+  deployment's directory, so it survives a restart), re-writes its env file,
+  re-mints the workload token and restarts the unit.
+- If a replica could not be reached or refused, the command fails with status 502
+  and a message naming how many replicas applied the change and each node that did
+  not, with a generic reason (never the peer's own text or its address). A
+  `replica_env_failed` event is added to the deployment's events. The change is
+  already saved and applied on the home node and on the replicas that answered;
+  the failed nodes keep the old environment until the command is run again.
+  **Retry is the same command, which re-sends the environment to every replica**
+  (applying an environment is idempotent); there is no retry of only the failed
+  nodes.
+
+The waits nest, each strictly shorter than the one around it, so the 502 reaches
+the user instead of a timeout: a replica's restart is bounded at 20 s, the home
+node waits at most 30 s for one replica, the whole change (lock wait included)
+is bounded at 60 s, and `orama app env set` / `unset` wait 90 s (every other CLI
+call keeps its 30 s). The gateway's own limits sit outside all of them: the
+hop to the home node for a deployment change allows 240 s and the entry
+gateway's write deadline is 270 s.
+
+**The whole fleet must run the version that has this endpoint.** A replica that
+does not know `/v1/internal/deployments/replica/env` answers 404, so during a
+rolling upgrade an environment change on an app with a not-yet-upgraded replica
+fails with 502 naming that node (`refused the change (status 404)`). The change is
+saved and applied on the home node; run the command again once that node is
+upgraded.
 
 **`list` shows names, never values.** Environment variables are where secrets
 live, so an endpoint that echoed them would put every secret behind nothing more
@@ -1279,8 +1350,8 @@ orama app get my-react-app
 # View last 100 lines
 orama app logs my-nextjs
 
-# Follow logs in real-time
-orama app logs my-nextjs --follow
+# The last 500 lines (1 to 1000; --follow is not supported)
+orama app logs my-nextjs --lines 500
 ```
 
 ### Rollback to Previous Version

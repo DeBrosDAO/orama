@@ -198,7 +198,7 @@ func TestRecordReplicaSetupFailure_writesFailedRowAndReason(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // the request that started the setup is long gone
 
-	cause := fmt.Errorf("node n2 returned status 500: Failed to extract content: kubo stream failed")
+	cause := &replicaStatusError{nodeID: "n2", status: 500, text: "Failed to extract content: kubo stream failed"}
 	s.recordReplicaSetupFailure(ctx, &deployments.Deployment{ID: "dep-1"}, "n2", cause)
 
 	var rowFailed, eventHasReason bool
@@ -208,7 +208,11 @@ func TestRecordReplicaSetupFailure_writesFailedRowAndReason(t *testing.T) {
 		}
 		if strings.Contains(e.query, "deployment_events") && containsArg(e.args, replicaSetupFailedEvent) {
 			for _, a := range e.args {
-				if msg, ok := a.(string); ok && strings.Contains(msg, "kubo stream failed") && strings.Contains(msg, "n2") {
+				msg, ok := a.(string)
+				if ok && strings.Contains(msg, "kubo stream failed") {
+					t.Errorf("the peer's own text reached the tenant-readable event: %q", msg)
+				}
+				if ok && strings.Contains(msg, "n2") && strings.Contains(msg, "refused the change (status 500)") {
 					eventHasReason = true
 				}
 			}
@@ -218,7 +222,7 @@ func TestRecordReplicaSetupFailure_writesFailedRowAndReason(t *testing.T) {
 		t.Error("the replica was not recorded as failed")
 	}
 	if !eventHasReason {
-		t.Error("the failure and the peer's reason were not recorded as an event")
+		t.Error("the failure and a generic reason were not recorded as an event")
 	}
 }
 

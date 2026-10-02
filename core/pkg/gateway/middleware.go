@@ -2180,6 +2180,13 @@ serveLocal:
 // proxyCrossNode forwards a request to the home node of a deployment
 // Returns true if the request was successfully forwarded, false otherwise
 func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment) bool {
+	return g.proxyCrossNodeWithin(w, r, deployment, constants.GatewayProxyTimeout)
+}
+
+// proxyCrossNodeWithin is proxyCrossNode with the time the home node is given
+// to answer. A route whose work on the home node outlasts GatewayProxyTimeout
+// (an update waiting for its replicas) passes a longer one.
+func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment, timeout time.Duration) bool {
 	// Get home node IP from dns_nodes table
 	db := g.client.Database()
 	internalCtx := client.WithInternalAuth(r.Context())
@@ -2257,7 +2264,7 @@ func (g *Gateway) proxyCrossNode(w http.ResponseWriter, r *http.Request, deploym
 	}
 
 	// Internal node-to-node communication using shared transport
-	httpClient := &http.Client{Timeout: 120 * time.Second, Transport: g.proxyTransport}
+	httpClient := &http.Client{Timeout: timeout, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		cb.RecordFailure()

@@ -47,6 +47,22 @@ func Request(method, path string, body any) ([]byte, error) {
 	return raw, err
 }
 
+// RequestWithin is Request for the few calls whose gateway work is known to
+// outlast RequestTimeout, with the wait they are given. Everything else keeps
+// the short default, so a gateway that is not answering is still reported fast.
+func RequestWithin(timeout time.Duration, method, path string, body any) ([]byte, error) {
+	gatewayURL, err := GetAPIURL()
+	if err != nil {
+		return nil, err
+	}
+	token, err := GetAuthToken()
+	if err != nil {
+		return nil, err
+	}
+	raw, _, err := RequestWith(&http.Client{Timeout: timeout}, gatewayURL, token, method, path, body)
+	return raw, err
+}
+
 // RequestWith performs one call to gatewayURL through client with token as
 // the bearer credential, and also returns the TLS state of the connection it
 // was answered on — for a caller that needs to know which certificate the

@@ -143,27 +143,26 @@ func TestDeployNode_startScriptRunsUnderNPM(t *testing.T) {
 		t.Error("no node runs the app under orama-deploy-npm@")
 	}
 	for _, node := range tn.f.State.Nodes {
-		if buildInstallRan(tn.f.Exec(t, node, "systemctl show -p Result -p ExecMainExitTimestamp orama-deploy-build@"+tn.instance("npmapp")+".service").Stdout) {
+		if buildInstallFinished(tn.f.Exec(t, node, "journalctl -u orama-deploy-build@"+tn.instance("npmapp")+".service --no-pager -q -o cat").Stdout) {
 			return
 		}
 	}
-	t.Error("no node shows a successful orama-deploy-build@ install for the app")
+	t.Error("no node's journal shows a finished orama-deploy-build@ install for the app")
 }
 
-// buildInstallRan reads `systemctl show -p Result -p ExecMainExitTimestamp` of
-// a build unit: Result is "success" for a unit that never ran too, so the
-// install counts only when it also recorded an exit time.
-func buildInstallRan(show string) bool {
-	var result, exited string
-	for _, line := range strings.Split(show, "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "Result="); ok {
-			result = v
-		}
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "ExecMainExitTimestamp="); ok {
-			exited = v
+// buildInstallFinished reads the journal of a build unit (`journalctl -o cat`):
+// the install succeeded when systemd logged "Finished <unit>". The unit's
+// properties cannot say so: a oneshot that exits 0 goes inactive and is
+// unloaded, and `systemctl show` of an unloaded unit reports Result=success
+// with no exit timestamp, exactly as for one that never ran. Only a failed
+// unit stays loaded.
+func buildInstallFinished(journal string) bool {
+	for _, line := range strings.Split(journal, "\n") {
+		if strings.HasPrefix(line, "Finished orama-deploy-build@") {
+			return true
 		}
 	}
-	return result == "success" && exited != ""
+	return false
 }
 
 // TestDeployGo_cliCrossCompilesAndServes: `orama deploy go` builds

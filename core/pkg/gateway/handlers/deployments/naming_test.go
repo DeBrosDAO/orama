@@ -34,6 +34,8 @@ func registryWith(t *testing.T, rows ...[2]string) *DeploymentService {
 		t.Fatalf("open sqlite: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// Each connection to :memory: is its own empty database.
+	db.SetMaxOpenConns(1)
 	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}

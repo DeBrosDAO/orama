@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway"
 	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -57,7 +58,7 @@ func main() {
 		Handler:           gw.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
+		WriteTimeout:      constants.GatewayServerWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}

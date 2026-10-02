@@ -28,6 +28,7 @@ var toolPaths = map[string][]string{
 	privhelper.ToolSystemctl: {"/usr/bin/systemctl", "/bin/systemctl"},
 	privhelper.ToolUFW:       {"/usr/sbin/ufw", "/sbin/ufw"},
 	"wg":                     {"/usr/bin/wg", "/bin/wg"},
+	"journalctl":             {"/usr/bin/journalctl", "/bin/journalctl"},
 }
 
 // maxToolOutput bounds what a tool may write back: the response has to fit in
@@ -59,6 +60,39 @@ func (b *cappedBuffer) String() string {
 	return b.Buffer.String()
 }
 
+// tailBuffer keeps the last limit bytes: journalctl prints oldest first, so
+// the newest lines are the ones a log read is for. It does not put a notice in
+// the text; truncated says the oldest bytes were dropped.
+type tailBuffer struct {
+	buf       []byte
+	limit     int
+	truncated bool
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.limit {
+		b.buf = append([]byte(nil), b.buf[len(b.buf)-b.limit:]...)
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+// String is the kept tail from its first whole line, so a cut never leaves a
+// partial line at the top.
+func (b *tailBuffer) String() string {
+	if !b.truncated {
+		return string(b.buf)
+	}
+	if i := bytes.IndexByte(b.buf, '\n'); i >= 0 {
+		return string(b.buf[i+1:])
+	}
+	return string(b.buf)
+}
+
+// maxToolStderr bounds the error text a journal read may report.
+const maxToolStderr = 4096
+
 // commandTimeout bounds one tool run, inside the service's RuntimeMaxSec.
 const commandTimeout = 5 * time.Minute
 
@@ -87,6 +121,8 @@ func execute(inv privhelper.Invocation, input []byte) privhelper.Response {
 		return gatewayKey(inv.Args, input)
 	case privhelper.ToolNodeReport:
 		return nodeReport(collectNodeReport)
+	case privhelper.ToolJournal:
+		return runTool("journalctl", []string{"-u", inv.Args[0], "-n", inv.Args[1], "--no-pager", "-q"})
 	default:
 		return failure(fmt.Errorf("no executor for %s", inv.Tool))
 	}
@@ -394,6 +430,9 @@ func runToolAtFixedPath(tool string, args []string) privhelper.Response {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C.UTF-8"}
+	if tool == "journalctl" {
+		return runJournalctl(cmd)
+	}
 	out := &cappedBuffer{limit: maxToolOutput}
 	cmd.Stdout, cmd.Stderr = out, out
 	err := cmd.Run()
@@ -405,6 +444,25 @@ func runToolAtFixedPath(tool string, args []string) privhelper.Response {
 		return privhelper.Response{ExitCode: exitErr.ExitCode(), Output: out.String()}
 	default:
 		return failure(fmt.Errorf("run %s: %w", tool, err))
+	}
+}
+
+// runJournalctl runs a prepared journalctl: stdout is the log, kept from its
+// tail, and stderr is not part of it; stderr is only reported when the run
+// fails.
+func runJournalctl(cmd *exec.Cmd) privhelper.Response {
+	logs := &tailBuffer{limit: maxToolOutput}
+	errs := &cappedBuffer{limit: maxToolStderr}
+	cmd.Stdout, cmd.Stderr = logs, errs
+	err := cmd.Run()
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		return privhelper.Response{Output: logs.String(), Truncated: logs.truncated}
+	case errors.As(err, &exitErr):
+		return privhelper.Response{ExitCode: exitErr.ExitCode(), Output: errs.String()}
+	default:
+		return failure(fmt.Errorf("run journalctl: %w", err))
 	}
 }
 

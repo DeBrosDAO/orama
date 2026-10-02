@@ -146,6 +146,7 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/storage/evict",
 		"/v1/internal/deployments/replica/setup", "/v1/internal/deployments/replica/update",
 		"/v1/internal/deployments/replica/rollback", "/v1/internal/deployments/replica/teardown",
+		"/v1/internal/deployments/replica/env",
 		// Rate-limited per identity hash inside the handler.
 		"/v1/vault/push", "/v1/vault/pull", "/v1/vault/status", "/v1/vault/health",
 	)

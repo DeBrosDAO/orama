@@ -258,6 +258,7 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 |-------|-------|-------|
 | `/v1/internal/acme/cleanup` | internal | Caddy on this host, with a MAC under the ACME challenge key install gives it (`/etc/caddy/orama-acme.key`); only `_acme-challenge` records under the base domain. Anything else is 404 (unsigned) or 400 (a record it has no business writing). |
 | `/v1/internal/acme/present` | internal | Same as cleanup. |
+| `/v1/internal/deployments/replica/env` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
 | `/v1/internal/deployments/replica/rollback` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
 | `/v1/internal/deployments/replica/setup` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |
 | `/v1/internal/deployments/replica/teardown` | internal | Node-to-node over the WireGuard overlay. Coordination MAC v2 signed for the receiving node's peer id (body and nonce covered) + overlay source; the former constant header is refused. Never reachable by a client. |

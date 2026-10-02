@@ -68,6 +68,15 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// An update, a rollback and an environment change each restart the unit;
+	// taking turns keeps one from restarting it onto a mix of two of them.
+	unlock, err := h.service.lockDeployment(ctx, namespace, name)
+	if err != nil {
+		http.Error(w, err.Error()+"; run the command again", http.StatusServiceUnavailable)
+		return
+	}
+	defer unlock()
+
 	// Get existing deployment
 	existing, err := h.service.GetDeployment(ctx, namespace, name)
 	if err != nil {
@@ -109,14 +118,20 @@ func (h *UpdateHandler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fan out update to replica nodes
-	h.service.FanOutToReplicas(ctx, updated, "/v1/internal/deployments/replica/update", map[string]interface{}{
-		"new_version": updated.Version,
-	})
-
 	// An update replaces what is running under an existing name, so it is a
 	// deploy in the record.
 	h.service.RecordAudit(r, updated.Namespace, auth.AuditDeploymentCreated, updated.Name)
+
+	// The update is not done until every replica runs it: until then the
+	// hostname answers with two versions. A replica that did not apply it is
+	// named, and running the update again retries.
+	if err := h.service.updateReplicasWithin(ctx, w, updated, replicaUpdatePath); err != nil {
+		h.logger.Error("Update not applied on every replica", zap.Error(err))
+		http.Error(w, fmt.Sprintf(
+			"updated to version %d on the home node, but %v. Those nodes still serve the old version; "+
+				"run the same update again to retry", updated.Version, err), http.StatusBadGateway)
+		return
+	}
 
 	// Return response
 	resp := map[string]interface{}{

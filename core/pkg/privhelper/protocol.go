@@ -15,9 +15,13 @@ type Request struct {
 
 // Response is how it went: the command's exit status and combined output.
 // ExitCode ExitRefused means the helper refused the request itself.
+//
+// Truncated says the tool wrote more than the helper returns; it is reported
+// apart from Output so the notice never lands inside the tool's own text.
 type Response struct {
-	ExitCode int    `json:"exit_code"`
-	Output   string `json:"output"`
+	ExitCode  int    `json:"exit_code"`
+	Output    string `json:"output"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // ExitRefused is the exit status of a refused or undeliverable request, apart

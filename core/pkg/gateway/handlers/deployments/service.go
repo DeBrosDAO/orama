@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -42,6 +43,17 @@ type DeploymentService struct {
 	// coordinationSecret is the cluster secret the replica coordination calls
 	// to and from other nodes are stamped with.
 	coordinationSecret string
+
+	// callReplica replaces callInternalAPI where set; tests use it to stand in
+	// for the peer node. It must give up when ctx ends.
+	callReplica func(ctx context.Context, nodeID, nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error)
+
+	// deploymentLocks and envVersions serialize and order the changes the home
+	// node makes to one deployment (deployment_lock.go).
+	deploymentLockMu sync.Mutex
+	deploymentLocks  map[string]*deploymentLock
+	envVersionMu     sync.Mutex
+	envVersions      map[string]int64
 
 	// envCodec seals a deployment's environment before it is stored. The
 	// column held plaintext JSON, and it is where the platform's own guide
@@ -474,6 +486,7 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 		"content_cid":       deployment.ContentCID,
 		"build_cid":         deployment.BuildCID,
 		"environment":       storedEnv,
+		"version":           deployment.Version,
 		"health_check_path": deployment.HealthCheckPath,
 		"memory_limit_mb":   deployment.MemoryLimitMB,
 		"cpu_limit_percent": deployment.CPULimitPercent,
@@ -515,8 +528,9 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 // recordReplicaSetupFailure keeps a replica whose setup failed: its row is
 // written as failed (so the deployment reports it and the leader's
 // reconciliation retries it, rather than the node silently missing) and the
-// reason, including the peer's own error text, goes into the deployment's
-// events. It runs after the request that started the setup may have ended, so
+// reason goes into the deployment's events, which the tenant can read: it names
+// the node and says what kind of failure it was, and the peer's own text, which
+// can carry overlay addresses and ports, stays in this node's log. It runs after the request that started the setup may have ended, so
 // it does not take that request's cancellation.
 func (s *DeploymentService) recordReplicaSetupFailure(ctx context.Context, deployment *deployments.Deployment, nodeID string, cause error) {
 	ctx = context.WithoutCancel(ctx)
@@ -537,7 +551,7 @@ func (s *DeploymentService) recordReplicaSetupFailure(ctx context.Context, deplo
 	_, err := s.db.Exec(ctx,
 		`INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, ?, ?, ?)`,
 		deployment.ID, replicaSetupFailedEvent,
-		fmt.Sprintf("Replica setup on node %s failed: %v", nodeID, cause), time.Now())
+		fmt.Sprintf("Replica setup on node %s failed: %s", nodeID, publicReplicaReason(cause)), time.Now())
 	if err != nil {
 		s.logger.Error("Failed to record the replica setup failure event",
 			zap.String("deployment_id", deployment.ID),
@@ -574,6 +588,12 @@ func (s *DeploymentService) publishReplicaRecord(ctx context.Context, deployment
 // callInternalAPI makes an HTTP POST to the internal API of the node nodeID,
 // stamped for that node.
 func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
+	return s.callInternalAPIWithin(context.Background(), nodeID, nodeIP, path, payload, replicaCallTimeout)
+}
+
+// callInternalAPIWithin is callInternalAPI for a caller that waits for the
+// answer: it gives up when ctx ends or timeout passes.
+func (s *DeploymentService) callInternalAPIWithin(ctx context.Context, nodeID, nodeIP, path string, payload map[string]interface{}, timeout time.Duration) (map[string]interface{}, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
@@ -581,7 +601,7 @@ func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload
 
 	url := fmt.Sprintf("http://%s:%d%s", nodeIP, constants.GatewayAPIPort, path)
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -591,7 +611,7 @@ func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: replicaCallTimeout}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request to node %s failed: %w", nodeID, err)
@@ -608,6 +628,16 @@ func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload
 
 // GetDeployment retrieves a deployment by namespace and name
 func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name string) (*deployments.Deployment, error) {
+	deployment, _, err := s.getDeploymentSealed(ctx, namespace, name)
+	return deployment, err
+}
+
+// getDeploymentSealed is GetDeployment that also returns the environment column
+// as stored, sealed, from the same row. It is the compare-and-swap token for a
+// change to the environment (persistEnv): read in one query with the
+// deployment, it is by construction the value the deployment's environment was
+// decoded from, so a change landing between two reads cannot pass the swap.
+func (s *DeploymentService) getDeploymentSealed(ctx context.Context, namespace, name string) (*deployments.Deployment, string, error) {
 	type deploymentRow struct {
 		ID                  string    `db:"id"`
 		Namespace           string    `db:"namespace"`
@@ -637,17 +667,17 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 	query := `SELECT * FROM deployments WHERE namespace = ? AND name = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query deployment: %w", err)
+		return nil, "", fmt.Errorf("failed to query deployment: %w", err)
 	}
 
 	if len(rows) == 0 {
-		return nil, deployments.ErrDeploymentNotFound
+		return nil, "", deployments.ErrDeploymentNotFound
 	}
 
 	row := rows[0]
 	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	return &deployments.Deployment{
@@ -673,7 +703,7 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,
 		DeployedBy:          row.DeployedBy,
-	}, nil
+	}, row.Environment, nil
 }
 
 // GetDeploymentByID retrieves a deployment by namespace and ID

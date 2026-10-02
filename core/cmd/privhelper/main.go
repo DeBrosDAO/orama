@@ -52,6 +52,9 @@ func main() {
 		}
 		resp := execute(inv, input)
 		fmt.Print(resp.Output)
+		if resp.Truncated {
+			fmt.Fprintln(os.Stderr, privhelper.TruncatedNotice)
+		}
 		os.Exit(resp.ExitCode)
 	default:
 		fail("unknown mode %q", mode)

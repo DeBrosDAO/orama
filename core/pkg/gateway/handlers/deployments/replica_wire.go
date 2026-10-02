@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"go.uber.org/zap"
 )
@@ -24,7 +25,7 @@ const (
 	replicaContentPollInterval = 2 * time.Second
 	// replicaCallTimeout bounds one internal replica call: the content wait
 	// plus the replica's own health wait.
-	replicaCallTimeout = 180 * time.Second
+	replicaCallTimeout = constants.DeploymentReplicaCallTimeout
 	// maxReplicaResponseBytes bounds how much of a peer's reply is read.
 	maxReplicaResponseBytes = 1 << 20
 	// replicaSetupFailedEvent is the deployment event a failed replica setup
@@ -95,11 +96,23 @@ func awaitContent(ctx context.Context, get func(context.Context) (io.ReadCloser,
 	}
 }
 
+// replicaStatusError is a peer's refusal of an internal call. Its text is the
+// peer's own, so it is for logs, not for the tenant: see publicReplicaReason.
+type replicaStatusError struct {
+	nodeID string
+	status int
+	text   string
+}
+
+func (e *replicaStatusError) Error() string {
+	return fmt.Sprintf("node %s returned status %d: %s", e.nodeID, e.status, e.text)
+}
+
 // parseReplicaResponse turns a peer's reply to an internal call into its JSON
 // result, or, for a refusal, an error carrying the peer's own reason.
 func parseReplicaResponse(nodeID string, status int, body []byte) (map[string]interface{}, error) {
 	if status != http.StatusOK && status != http.StatusCreated {
-		return nil, fmt.Errorf("node %s returned status %d: %s", nodeID, status, remoteErrorText(body))
+		return nil, &replicaStatusError{nodeID: nodeID, status: status, text: remoteErrorText(body)}
 	}
 	var result map[string]interface{}
 	if err := json.Unmarshal(body, &result); err != nil {

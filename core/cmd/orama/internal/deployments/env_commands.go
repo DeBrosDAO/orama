@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/spf13/cobra"
 )
 
@@ -23,7 +24,10 @@ var EnvCmd = &cobra.Command{
 	Short: "Manage an app's environment variables",
 	Long: `Read and change the environment variables a deployed app runs with.
 
-Setting or removing a variable restarts the app so it picks up the change.
+Setting or removing a variable restarts the app, on every node that runs it,
+so it picks up the change. The command succeeds only when every node applied
+it. If a node could not be reached it is named in the error, still runs the old
+environment, and running the same command again retries it.
 
 Values are never printed back. They are where secrets live, so 'list' shows
 names only.`,
@@ -127,13 +131,16 @@ func runEnvUnset(cmd *cobra.Command, args []string) error {
 
 // applyEnv sends one change and reports what happened to the app.
 func applyEnv(app string, body map[string]any, keys []string, verb string) error {
-	raw, err := shared.Request("POST", "/v1/deployments/env/set?name="+url.QueryEscape(app), body)
+	// The gateway waits for every replica to restart before it answers, which
+	// takes longer than the default call is given.
+	raw, err := shared.RequestWithin(constants.DeploymentEnvClientTimeout, "POST", "/v1/deployments/env/set?name="+url.QueryEscape(app), body)
 	if err != nil {
 		return err
 	}
 
 	var resp struct {
 		Restarted bool `json:"restarted"`
+		Replicas  int  `json:"replicas"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return fmt.Errorf("parse gateway response: %w", err)
@@ -143,10 +150,21 @@ func applyEnv(app string, body map[string]any, keys []string, verb string) error
 		fmt.Printf("  %s %s\n", verb, key)
 	}
 	if resp.Restarted {
-		fmt.Printf("\n✓ %s restarted with the new environment.\n", app)
+		fmt.Printf("\n✓ %s restarted with the new environment%s.\n", app, replicaNote(resp.Replicas))
 	} else {
 		// A static site has no process to restart.
 		fmt.Printf("\n✓ %s updated. It has no running process, so nothing was restarted.\n", app)
 	}
 	return nil
+}
+
+// replicaNote says how many other nodes applied the change too.
+func replicaNote(replicas int) string {
+	switch replicas {
+	case 0:
+		return ""
+	case 1:
+		return " on this node and 1 replica"
+	}
+	return fmt.Sprintf(" on this node and %d replicas", replicas)
 }

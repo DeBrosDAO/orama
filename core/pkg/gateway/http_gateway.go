@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
@@ -198,7 +199,7 @@ func (hg *HTTPGateway) Start(ctx context.Context) error {
 		Handler:           hg.router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
+		WriteTimeout:      constants.GatewayServerWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}

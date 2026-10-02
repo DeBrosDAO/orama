@@ -91,6 +91,7 @@ var publicRoutes = []string{
 	"/v1/health",
 	"/v1/internal/acme/cleanup",
 	"/v1/internal/acme/present",
+	"/v1/internal/deployments/replica/env",
 	"/v1/internal/deployments/replica/rollback",
 	"/v1/internal/deployments/replica/setup",
 	"/v1/internal/deployments/replica/teardown",

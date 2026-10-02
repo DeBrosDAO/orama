@@ -96,7 +96,7 @@ func TestPersistEnv_writesTheEnvironmentSealed(t *testing.T) {
 			if strings.Contains(query, "UPDATE deployments SET environment") && len(args) > 0 {
 				written, _ = args[0].(string)
 			}
-			return nil, nil
+			return rowsAffected(1), nil
 		},
 	}
 	handler := &EnvHandler{
@@ -106,7 +106,7 @@ func TestPersistEnv_writesTheEnvironmentSealed(t *testing.T) {
 
 	err := handler.persistEnv(context.Background(),
 		&deployments.Deployment{Namespace: "acme", Name: "api"},
-		map[string]string{"STRIPE_KEY": "sk_live_supersecret"})
+		map[string]string{"STRIPE_KEY": "sk_live_supersecret"}, "")
 	if err != nil {
 		t.Fatalf("persistEnv: %v", err)
 	}
@@ -147,5 +147,26 @@ func TestValidateEnvKey_refusesEveryNameThePlatformOwns(t *testing.T) {
 	}
 	if err := validateEnvKey("DATABASE_URL"); err != nil {
 		t.Errorf("an ordinary name was refused: %v", err)
+	}
+}
+
+// rowsAffected is a sql.Result for a double that stands in for a successful write.
+type rowsAffected int64
+
+func (rowsAffected) LastInsertId() (int64, error)   { return 0, nil }
+func (n rowsAffected) RowsAffected() (int64, error) { return int64(n), nil }
+
+// A database that answers a write with no result cannot say whether the swap
+// happened; reporting success would hide a lost write.
+func TestPersistEnv_aMissingResultIsAnError(t *testing.T) {
+	db := &mockRQLiteClient{} // Exec returns (nil, nil)
+	handler := &EnvHandler{
+		service: &DeploymentService{db: db, logger: zap.NewNop(), envCodec: testEnvCodec()},
+		logger:  zap.NewNop(),
+	}
+	err := handler.persistEnv(context.Background(),
+		&deployments.Deployment{Namespace: "acme", Name: "api"}, map[string]string{"A": "1"}, "")
+	if err == nil {
+		t.Fatal("a write with no result was reported as saved")
 	}
 }

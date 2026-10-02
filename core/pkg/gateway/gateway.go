@@ -1541,15 +1541,18 @@ func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *
 	}
 
 	var err error
-	action := "disabled"
 	if enable {
-		action = "enabled"
 		err = g.webrtcManager.EnableWebRTCStealth(r.Context(), namespaceName)
 	} else {
 		err = g.webrtcManager.DisableWebRTCStealth(r.Context(), namespaceName)
 	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	status, message := stealthToggleOutcome(enable, err)
+	if status == http.StatusInternalServerError {
+		g.logger.ComponentError(logging.ComponentGeneral, "WebRTC stealth toggle failed",
+			zap.String("namespace", namespaceName), zap.Bool("enable", enable), zap.Error(err))
+	}
+	if status != http.StatusOK {
+		writeError(w, status, message)
 		return
 	}
 
@@ -1558,7 +1561,7 @@ func (g *Gateway) namespaceWebRTCStealthPublicHandler(w http.ResponseWriter, r *
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":    "ok",
 		"namespace": namespaceName,
-		"message":   "WebRTC stealth " + action + " successfully",
+		"message":   message,
 	})
 }
 

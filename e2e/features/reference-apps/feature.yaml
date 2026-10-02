@@ -44,6 +44,7 @@ covers:
     - /v1/internal/deployments/replica/rollback
     - /v1/deployments/rollback
     - /v1/internal/deployments/replica/teardown
+    - /v1/internal/deployments/replica/env
     - /v1/auth/renew
     - /v1/auth/whoami
     - /v1/auth/refresh

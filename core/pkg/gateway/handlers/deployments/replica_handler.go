@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 type ReplicaHandler struct {
 	service        *DeploymentService
 	processManager *process.Manager
+	reconfigurer   envReconfigurer
 	ipfsClient     ipfs.IPFSClient
 	logger         *zap.Logger
 	baseDeployPath string
@@ -41,6 +43,7 @@ func NewReplicaHandler(
 	return &ReplicaHandler{
 		service:        service,
 		processManager: processManager,
+		reconfigurer:   processManager,
 		ipfsClient:     ipfsClient,
 		logger:         logger,
 		baseDeployPath: baseDeployPath,
@@ -56,6 +59,7 @@ type replicaSetupRequest struct {
 	ContentCID      string `json:"content_cid"`
 	BuildCID        string `json:"build_cid"`
 	Environment     string `json:"environment"` // JSON-encoded env vars
+	Version         int    `json:"version"`
 	HealthCheckPath string `json:"health_check_path"`
 	MemoryLimitMB   int    `json:"memory_limit_mb"`
 	CPULimitPercent int    `json:"cpu_limit_percent"`
@@ -94,6 +98,15 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	)
 
 	ctx := r.Context()
+
+	// A setup, an update, an environment change and a teardown of one
+	// deployment take turns on this node.
+	unlock, err := h.service.lockDeployment(ctx, req.Namespace, req.Name)
+	if err != nil {
+		writeReplicaError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer unlock()
 
 	// Allocate a port on this node
 	port, err := h.service.portAllocator.AllocatePort(ctx, h.service.nodePeerID, req.DeploymentID)
@@ -192,6 +205,10 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("Replica did not become healthy", zap.Error(err))
 	}
 
+	if err := recordAppliedVersion(deployPath, deployVersion, int64(req.Version)); err != nil {
+		h.logger.Error("Replica set up but its version could not be recorded", zap.Error(err))
+	}
+
 	// Update replica record to active with the port
 	if h.service.replicaManager != nil {
 		h.service.replicaManager.CreateReplica(ctx, req.DeploymentID, h.service.nodePeerID, port, false, deployments.ReplicaStatusActive)
@@ -254,7 +271,36 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 	)
 
 	ctx := r.Context()
-	deployType := deployments.DeploymentType(req.Type)
+
+	// The id, namespace and name must be one deployment with an active replica
+	// here, and its type is the registry's: a caller's is not trusted.
+	if h.service.replicaManager == nil {
+		writeReplicaError(w, http.StatusInternalServerError, "This node has no replica registry")
+		return
+	}
+	binding, err := h.service.replicaManager.LookupReplicaBinding(ctx, req.DeploymentID, req.Namespace, req.Name, h.service.nodePeerID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, deployments.ErrReplicaNotBound) {
+			status = http.StatusNotFound
+		}
+		writeReplicaError(w, status, err.Error())
+		return
+	}
+	deployType := binding.Type
+
+	// One change at a time per deployment, and never an older one over a newer.
+	unlock, err := h.service.lockDeployment(ctx, req.Namespace, req.Name)
+	if err != nil {
+		writeReplicaError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer unlock()
+	deployBase := process.DeployDir(h.baseDeployPath, req.Namespace, req.Name)
+	if err := checkVersionNotStale(deployBase, deployVersion, int64(req.NewVersion)); err != nil {
+		writeReplicaError(w, http.StatusConflict, err.Error())
+		return
+	}
 
 	isStatic := deployType == deployments.DeploymentTypeStatic ||
 		deployType == deployments.DeploymentTypeNextJSStatic ||
@@ -357,6 +403,12 @@ func (h *ReplicaHandler) applyUpdate(w http.ResponseWriter, r *http.Request) {
 
 	os.RemoveAll(oldPath)
 
+	if err := recordAppliedVersion(deployPath, deployVersion, int64(req.NewVersion)); err != nil {
+		h.logger.Error("Applied the update but could not record its version", zap.Error(err))
+		writeReplicaError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	resp := map[string]interface{}{"status": "updated"}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -418,6 +470,15 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
+	// A teardown must not run under an update or an environment change that is
+	// restarting the unit it removes.
+	unlock, err := h.service.lockDeployment(ctx, req.Namespace, req.Name)
+	if err != nil {
+		writeReplicaError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	defer unlock()
+
 	// The unit and the directory are this deployment's only if the directory
 	// on this host is: another gateway here may run a deployment whose
 	// instance this one maps to, and stopping it or deleting its files would
@@ -463,6 +524,7 @@ func (h *ReplicaHandler) HandleTeardown(w http.ResponseWriter, r *http.Request) 
 			writeReplicaError(w, http.StatusInternalServerError, "Failed to remove the replica's files")
 			return
 		}
+		removeAppliedVersions(deployPath)
 	} else {
 		h.logger.Warn("Left the replica's unit and directory alone: another deployment on this host holds its instance",
 			zap.String("instance", process.InstanceName(req.Namespace, req.Name)))

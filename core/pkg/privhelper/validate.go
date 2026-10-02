@@ -123,9 +123,11 @@ func Validate(argv []string) (Invocation, error) {
 		err = validateGatewayKey(args)
 	case ToolNodeReport:
 		err = validateNodeReport(args)
+	case ToolJournal:
+		err = validateJournal(args)
 	default:
-		err = fmt.Errorf("tool %q is not allowed (allowed: %s, %s, %s, %s, %s, %s, %s)", tool,
-			ToolSystemctl, ToolUFW, ToolWireGuard, ToolDeploy, ToolUnitEnv, ToolGatewayKey, ToolNodeReport)
+		err = fmt.Errorf("tool %q is not allowed (allowed: %s, %s, %s, %s, %s, %s, %s, %s)", tool,
+			ToolSystemctl, ToolUFW, ToolWireGuard, ToolDeploy, ToolUnitEnv, ToolGatewayKey, ToolNodeReport, ToolJournal)
 	}
 	if err != nil {
 		return Invocation{}, err

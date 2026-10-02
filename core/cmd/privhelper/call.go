@@ -52,5 +52,8 @@ func call(argv []string) int {
 		return privhelper.ExitRefused
 	}
 	fmt.Print(resp.Output)
+	if resp.Truncated {
+		fmt.Fprintln(os.Stderr, privhelper.TruncatedNotice)
+	}
 	return resp.ExitCode
 }

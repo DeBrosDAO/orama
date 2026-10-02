@@ -66,6 +66,13 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		zap.Int("target_version", req.Version),
 	)
 
+	unlock, err := h.service.lockDeployment(ctx, namespace, req.Name)
+	if err != nil {
+		http.Error(w, err.Error()+"; run the command again", http.StatusServiceUnavailable)
+		return
+	}
+	defer unlock()
+
 	// Get current deployment
 	current, err := h.service.GetDeployment(ctx, namespace, req.Name)
 	if err != nil {
@@ -120,10 +127,14 @@ func (h *RollbackHandler) HandleRollback(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Fan out rollback to replica nodes
-	h.service.FanOutToReplicas(ctx, rolled, "/v1/internal/deployments/replica/rollback", map[string]interface{}{
-		"new_version": rolled.Version,
-	})
+	// The rollback is not done until every replica runs it.
+	if err := h.service.updateReplicasWithin(ctx, w, rolled, replicaRollbackPath); err != nil {
+		h.logger.Error("Rollback not applied on every replica", zap.Error(err))
+		http.Error(w, fmt.Sprintf(
+			"rolled back to version %d on the home node, but %v. Those nodes still serve the old version; "+
+				"run the same rollback again to retry", req.Version, err), http.StatusBadGateway)
+		return
+	}
 
 	// Return response
 	resp := map[string]interface{}{

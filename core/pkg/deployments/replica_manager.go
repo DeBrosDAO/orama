@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -308,4 +309,52 @@ func nodeOverlayIP(internal, public string) string {
 		return ip
 	}
 	return strings.TrimSpace(public)
+}
+
+// ReplicaBinding is a node's active replica of a deployment, with the facts a
+// replica must take from the registry and not from the caller.
+type ReplicaBinding struct {
+	Type            DeploymentType
+	Port            int
+	MemoryLimitMB   int
+	CPULimitPercent int
+}
+
+// ErrReplicaNotBound is returned when this node has no active replica of the
+// deployment that namespace and name identify under deploymentID.
+var ErrReplicaNotBound = errors.New("no active replica of that deployment on this node")
+
+// LookupReplicaBinding finds nodeID's active replica of the deployment. The id,
+// the namespace and the name must all name the same deployment row: a request
+// that pairs one deployment's id with another's name is refused, not trusted.
+func (rm *ReplicaManager) LookupReplicaBinding(ctx context.Context, deploymentID, namespace, name, nodeID string) (*ReplicaBinding, error) {
+	internalCtx := client.WithInternalAuth(ctx)
+
+	type bindingRow struct {
+		Type            string `db:"type"`
+		Port            int    `db:"port"`
+		MemoryLimitMB   int    `db:"memory_limit_mb"`
+		CPULimitPercent int    `db:"cpu_limit_percent"`
+	}
+
+	var rows []bindingRow
+	query := `SELECT d.type AS type, COALESCE(r.port, 0) AS port,
+	                 COALESCE(d.memory_limit_mb, 0) AS memory_limit_mb,
+	                 COALESCE(d.cpu_limit_percent, 0) AS cpu_limit_percent
+	            FROM deployment_replicas r
+	            JOIN deployments d ON d.id = r.deployment_id
+	           WHERE d.id = ? AND d.namespace = ? AND d.name = ? AND r.node_id = ? AND r.status = ?
+	           LIMIT 1`
+	if err := rm.db.Query(internalCtx, &rows, query, deploymentID, namespace, name, nodeID, ReplicaStatusActive); err != nil {
+		return nil, fmt.Errorf("failed to look up the replica: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil, ErrReplicaNotBound
+	}
+	return &ReplicaBinding{
+		Type:            DeploymentType(rows[0].Type),
+		Port:            rows[0].Port,
+		MemoryLimitMB:   rows[0].MemoryLimitMB,
+		CPULimitPercent: rows[0].CPULimitPercent,
+	}, nil
 }

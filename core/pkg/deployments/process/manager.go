@@ -784,8 +784,10 @@ func (m *Manager) Status(ctx context.Context, deployment *deployments.Deployment
 	return strings.TrimSpace(string(output)), nil
 }
 
-// GetLogs retrieves logs for a deployment
-func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deployment, lines int, follow bool) ([]byte, error) {
+// GetLogs returns the last lines of a deployment's log, and whether the oldest
+// of them were cut to fit. On a node it reads the unit's journal through the
+// privileged helper: the gateway's own user cannot.
+func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deployment, lines int) ([]byte, bool, error) {
 	serviceName := m.getServiceName(deployment)
 
 	if !m.useSystemd {
@@ -793,7 +795,7 @@ func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deploymen
 		logFile := filepath.Join(os.Getenv("HOME"), ".orama", "logs", "deployments", serviceName+".log")
 		data, err := os.ReadFile(logFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read log file: %w", err)
+			return nil, false, fmt.Errorf("failed to read log file: %w", err)
 		}
 		// Return last N lines if specified
 		if lines > 0 {
@@ -801,25 +803,16 @@ func (m *Manager) GetLogs(ctx context.Context, deployment *deployments.Deploymen
 			if len(logLines) > lines {
 				logLines = logLines[len(logLines)-lines:]
 			}
-			return []byte(strings.Join(logLines, "\n")), nil
+			return []byte(strings.Join(logLines, "\n")), false, nil
 		}
-		return data, nil
+		return data, false, nil
 	}
 
 	unit, err := m.unitName(deployment)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	args := []string{"-u", unit, "--no-pager"}
-	if lines > 0 {
-		args = append(args, "-n", fmt.Sprintf("%d", lines))
-	}
-	if follow {
-		args = append(args, "-f")
-	}
-
-	cmd := exec.CommandContext(ctx, "journalctl", args...)
-	return cmd.Output()
+	return privhelper.DeploymentJournal(ctx, unit, lines)
 }
 
 // getStartCommand determines the start command for a deployment

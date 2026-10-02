@@ -3,12 +3,14 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"go.uber.org/zap"
@@ -22,13 +24,13 @@ import (
 // could set one.
 type EnvHandler struct {
 	service        *DeploymentService
-	processManager *process.Manager
+	processManager envReconfigurer
 	logger         *zap.Logger
 	baseDeployPath string
 }
 
 // NewEnvHandler creates a new environment handler.
-func NewEnvHandler(service *DeploymentService, processManager *process.Manager, logger *zap.Logger, baseDeployPath string) *EnvHandler {
+func NewEnvHandler(service *DeploymentService, processManager envReconfigurer, logger *zap.Logger, baseDeployPath string) *EnvHandler {
 	return &EnvHandler{
 		service:        service,
 		processManager: processManager,
@@ -150,54 +152,115 @@ func (h *EnvHandler) HandleSetEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deployment, err := h.service.GetDeployment(ctx, namespace, name)
+	// The change outlives a client that hangs up: abandoning it half way would
+	// leave nodes on different environments. What bounds it is the budget, which
+	// ends before the gateway's own limits and the CLI's wait do.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), constants.DeploymentEnvChangeBudget)
+	defer cancel()
+
+	result, status, err := h.applyChange(ctx, namespace, name, req.Set, req.Unset)
 	if err != nil {
-		http.Error(w, "Deployment not found", http.StatusNotFound)
+		http.Error(w, err.Error(), status)
 		return
 	}
+	writeJSON(w, result)
+}
 
-	updated, err := applyEnvChanges(deployment.Environment, req.Set, req.Unset)
+// applyChange makes one environment change on every node that runs the
+// deployment, under the deployment's lock, and returns the status to refuse
+// with when it cannot.
+//
+// The lock makes this read-change-write-restart a unit: two changes, or a
+// change and an update, cannot interleave. The deployment is read inside it,
+// so the change is applied to what is stored now and not to what was stored
+// when the request arrived, and the write is refused if the row moved anyway.
+func (h *EnvHandler) applyChange(ctx context.Context, namespace, name string, set map[string]string, unset []string) (map[string]any, int, error) {
+	unlock, err := h.service.lockDeployment(ctx, namespace, name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("%w; run the command again", err)
+	}
+	defer unlock()
+
+	// One read gives the deployment and the sealed environment it was decoded
+	// from, which persistEnv compares against: two reads would let a change land
+	// between them and pass the comparison while being lost.
+	deployment, stored, err := h.service.getDeploymentSealed(ctx, namespace, name)
+	if errors.Is(err, deployments.ErrDeploymentNotFound) {
+		return nil, http.StatusNotFound, errors.New("deployment not found")
+	}
+	if err != nil {
+		h.logger.Error("Failed to read the deployment", zap.Error(err))
+		return nil, http.StatusInternalServerError, errors.New("failed to read the deployment")
+	}
+	updated, err := applyEnvChanges(deployment.Environment, set, unset)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
 	}
 
 	h.logger.Info("Updating deployment environment",
 		zap.String("namespace", namespace),
 		zap.String("deployment", name),
-		zap.Strings("set", sortedKeys(req.Set)),
-		zap.Strings("unset", req.Unset),
+		zap.Strings("set", sortedKeys(set)),
+		zap.Strings("unset", unset),
 	)
 
-	if err := h.persistEnv(ctx, deployment, updated); err != nil {
+	if err := h.persistEnv(ctx, deployment, updated, stored); err != nil {
+		if errors.Is(err, errEnvChangedConcurrently) {
+			return nil, http.StatusConflict, fmt.Errorf("%w; run the command again", err)
+		}
 		h.logger.Error("Failed to persist environment", zap.Error(err))
-		http.Error(w, "Failed to save environment", http.StatusInternalServerError)
-		return
+		return nil, http.StatusInternalServerError, errors.New("failed to save the environment")
 	}
 	deployment.Environment = updated
 
-	// A static deployment has no process, so there is nothing to restart. The
-	// variables are still recorded, because a redeploy as a dynamic type or a
-	// build step may read them.
-	restarted := false
-	if deployment.Type != deployments.DeploymentTypeStatic && deployment.Type != deployments.DeploymentTypeNextJSStatic {
-		workDir := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
-		if err := h.processManager.Reconfigure(ctx, deployment, workDir); err != nil {
-			h.logger.Error("Failed to reconfigure process", zap.Error(err))
-			http.Error(w, fmt.Sprintf(
-				"environment saved but the process could not be restarted: %v", err),
-				http.StatusInternalServerError)
-			return
-		}
-		restarted = true
+	replicas, restarted, status, err := h.restartEverywhere(ctx, deployment)
+	if err != nil {
+		return nil, status, err
 	}
-
-	writeJSON(w, map[string]any{
+	return map[string]any{
 		"deployment_name": deployment.Name,
 		"keys":            sortedKeys(updated),
 		"restarted":       restarted,
+		"replicas":        replicas,
 		"updated_at":      time.Now(),
-	})
+	}, http.StatusOK, nil
+}
+
+// restartEverywhere applies the saved environment on this node and then on
+// every replica. A static deployment has no process, so nothing is restarted;
+// its variables are still recorded, because a redeploy as a dynamic type or a
+// build step may read them.
+//
+// Success is reported only when each node applied the change. A replica that did
+// not is named, with how many did, and running the same command again retries
+// (applying an environment is idempotent).
+func (h *EnvHandler) restartEverywhere(ctx context.Context, deployment *deployments.Deployment) (replicas int, restarted bool, status int, err error) {
+	if deployment.Type == deployments.DeploymentTypeStatic || deployment.Type == deployments.DeploymentTypeNextJSStatic {
+		return 0, false, http.StatusOK, nil
+	}
+	workDir := process.DeployDir(h.baseDeployPath, deployment.Namespace, deployment.Name)
+	if err := h.processManager.Reconfigure(ctx, deployment, workDir); err != nil {
+		h.logger.Error("Failed to reconfigure process", zap.Error(err))
+		return 0, false, http.StatusInternalServerError, fmt.Errorf(
+			"environment saved but the process could not be restarted: %w", err)
+	}
+
+	version := h.service.nextEnvVersion(deployment.Namespace, deployment.Name)
+	// The payload is built from what is stored now, read under the lock.
+	fresh, err := h.service.GetDeployment(ctx, deployment.Namespace, deployment.Name)
+	if err != nil {
+		return 0, true, http.StatusInternalServerError, fmt.Errorf(
+			"environment saved and applied on the home node, but the replicas could not be told: %w; run the command again", err)
+	}
+	replicas, err = h.service.ReconfigureReplicas(ctx, fresh, version)
+	if err != nil {
+		h.logger.Error("Environment not applied on every replica", zap.Error(err))
+		return replicas, true, http.StatusBadGateway, fmt.Errorf(
+			"environment saved and applied on the home node, but %w. "+
+				"Those nodes still run the old environment; run the same command again to retry "+
+				"(every replica applies it again, which is harmless)", err)
+	}
+	return replicas, true, http.StatusOK, nil
 }
 
 // applyEnvChanges merges set and unset into the current environment.
@@ -249,21 +312,39 @@ func validateEnvKey(key string) error {
 	return deployments.ValidateEnvName(key)
 }
 
-// persistEnv writes the environment back to the deployment row, sealed.
+// errEnvChangedConcurrently is a write refused because the stored environment
+// is not the one the change was made against.
+var errEnvChangedConcurrently = errors.New("the environment was changed by another request while this one was being applied")
+
+// persistEnv writes the environment back to the deployment row, sealed, if the
+// row still holds expected (compare-and-swap). expected is the sealed value
+// getDeploymentSealed returned: the sealing is randomised, so two writes never
+// leave the same value.
 //
 // This is also what migrates a deployment created before the column was
 // encrypted: the row is read as plaintext and written back encrypted, so the
 // plaintext form is not a permanent second format.
-func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string) error {
+func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string, expected string) error {
 	encoded, err := h.service.EncodeEnvironment(env)
 	if err != nil {
 		return fmt.Errorf("encode environment: %w", err)
 	}
-	_, err = h.service.db.Exec(ctx,
-		`UPDATE deployments SET environment = ?, updated_at = ? WHERE namespace = ? AND name = ?`,
-		encoded, time.Now(), deployment.Namespace, deployment.Name)
+	res, err := h.service.db.Exec(ctx,
+		`UPDATE deployments SET environment = ?, updated_at = ?
+		  WHERE namespace = ? AND name = ? AND COALESCE(environment, '') = ?`,
+		encoded, time.Now(), deployment.Namespace, deployment.Name, expected)
 	if err != nil {
 		return fmt.Errorf("update deployments: %w", err)
+	}
+	if res == nil {
+		return errors.New("cannot tell whether the environment was saved: the database gave no result")
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the environment was saved: %w", err)
+	}
+	if changed == 0 {
+		return errEnvChangedConcurrently
 	}
 	return nil
 }

@@ -3,7 +3,11 @@ package gateway
 import (
 	"net/http"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/statuspage"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/chainread"
@@ -319,29 +323,29 @@ func (g *Gateway) Routes() http.Handler {
 	if g.deploymentService != nil {
 		// Static deployments
 		mux.HandleFunc("/v1/deployments/static/upload", g.staticHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/static/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+		mux.HandleFunc("/v1/deployments/static/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 
 		// Next.js deployments
 		mux.HandleFunc("/v1/deployments/nextjs/upload", g.nextjsHandler.HandleUpload)
-		mux.HandleFunc("/v1/deployments/nextjs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+		mux.HandleFunc("/v1/deployments/nextjs/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 
 		// Go backend deployments
 		if g.goHandler != nil {
 			mux.HandleFunc("/v1/deployments/go/upload", g.goHandler.HandleUpload)
-			mux.HandleFunc("/v1/deployments/go/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+			mux.HandleFunc("/v1/deployments/go/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 		}
 
 		// Node.js backend deployments
 		if g.nodejsHandler != nil {
 			mux.HandleFunc("/v1/deployments/nodejs/upload", g.nodejsHandler.HandleUpload)
-			mux.HandleFunc("/v1/deployments/nodejs/update", g.withHomeNodeProxy(g.updateHandler.HandleUpdate))
+			mux.HandleFunc("/v1/deployments/nodejs/update", g.withHomeNodeOnly(g.updateHandler.HandleUpdate))
 		}
 
 		// Deployment management
 		mux.HandleFunc("/v1/deployments/list", g.listHandler.HandleList)
 		mux.HandleFunc("/v1/deployments/get", g.listHandler.HandleGet)
-		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeProxy(g.listHandler.HandleDelete))
-		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeProxy(g.rollbackHandler.HandleRollback))
+		mux.HandleFunc("/v1/deployments/delete", g.withHomeNodeOnly(g.listHandler.HandleDelete))
+		mux.HandleFunc("/v1/deployments/rollback", g.withHomeNodeOnly(g.rollbackHandler.HandleRollback))
 		mux.HandleFunc("/v1/deployments/versions", g.rollbackHandler.HandleListVersions)
 		mux.HandleFunc("/v1/deployments/logs", g.withHomeNodeProxy(g.logsHandler.HandleLogs))
 		mux.HandleFunc("/v1/deployments/stats", g.withHomeNodeProxy(g.statsHandler.HandleStats))
@@ -353,7 +357,7 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/deployments/grants", g.appGrantsHandler)
 
 		mux.HandleFunc("/v1/deployments/env", g.envHandler.HandleGetEnv)
-		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeProxy(g.envHandler.HandleSetEnv))
+		mux.HandleFunc("/v1/deployments/env/set", g.withHomeNodeOnly(g.envHandler.HandleSetEnv))
 
 		// Internal replica coordination endpoints
 		if g.replicaHandler != nil {
@@ -361,6 +365,7 @@ func (g *Gateway) Routes() http.Handler {
 			mux.HandleFunc("/v1/internal/deployments/replica/update", g.replicaHandler.HandleUpdate)
 			mux.HandleFunc("/v1/internal/deployments/replica/rollback", g.replicaHandler.HandleRollback)
 			mux.HandleFunc("/v1/internal/deployments/replica/teardown", g.replicaHandler.HandleTeardown)
+			mux.HandleFunc("/v1/internal/deployments/replica/env", g.replicaHandler.HandleEnv)
 		}
 
 		// Custom domains
@@ -384,8 +389,22 @@ func (g *Gateway) Routes() http.Handler {
 }
 
 // withHomeNodeProxy wraps a deployment handler to proxy requests to the home node
-// if the current node is not the home node for the deployment.
+// if the current node is not the home node for the deployment. When the home node
+// cannot be reached the handler runs here: for reads, which any node can answer.
 func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
+	return g.homeNodeHandler(handler, false)
+}
+
+// withHomeNodeOnly is withHomeNodeProxy for a route that changes the deployment
+// (update, rollback, environment, delete). Those hold the home node's
+// per-deployment lock and version stamps, so running one on another node would
+// change the deployment under a lock nobody else takes. When the home node
+// cannot be reached the request is refused, not run here.
+func (g *Gateway) withHomeNodeOnly(handler http.HandlerFunc) http.HandlerFunc {
+	return g.homeNodeHandler(handler, true)
+}
+
+func (g *Gateway) homeNodeHandler(handler http.HandlerFunc, mutating bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Already proxied — prevent loops
 		if r.Header.Get("X-Orama-Proxy-Node") != "" {
@@ -410,10 +429,36 @@ func (g *Gateway) withHomeNodeProxy(handler http.HandlerFunc) http.HandlerFunc {
 		}
 		if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
 			deployment.HomeNodeID != g.nodePeerID {
-			if g.proxyCrossNode(w, r, deployment) {
+			if g.routeToHomeNode(w, r, deployment, mutating) {
 				return
 			}
 		}
 		handler(w, r)
 	}
+}
+
+// routeToHomeNode forwards the request to the deployment's home node and
+// reports whether it answered it. A request that changes the deployment is
+// answered here with 503 when the home node did not answer, and gets the longer
+// limits its work there needs, on this gateway's response and on the hop
+// (constants/timeouts.go).
+func (g *Gateway) routeToHomeNode(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment, mutating bool) bool {
+	timeout := constants.GatewayProxyTimeout
+	if mutating {
+		timeout = constants.GatewayDeploymentProxyTimeout
+		if err := httputil.ExtendIO(w, constants.GatewayDeploymentWriteBudget); err != nil {
+			g.logger.Error("Failed to extend the deadlines of a deployment change", zap.Error(err))
+			http.Error(w, "the request could not be given time to finish", http.StatusInternalServerError)
+			return true
+		}
+	}
+	if g.proxyCrossNodeWithin(w, r, deployment, timeout) {
+		return true
+	}
+	if !mutating {
+		return false
+	}
+	w.Header().Set("Retry-After", "5")
+	http.Error(w, "the home node of this deployment did not answer, so the change was not made from this node; run the command again", http.StatusServiceUnavailable)
+	return true
 }

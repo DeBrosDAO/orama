@@ -270,7 +270,10 @@ orama app env
 
 Read and change the environment variables a deployed app runs with.
 
-Setting or removing a variable restarts the app so it picks up the change.
+Setting or removing a variable restarts the app, on every node that runs it,
+so it picks up the change. The command succeeds only when every node applied
+it. If a node could not be reached it is named in the error, still runs the old
+environment, and running the same command again retries it.
 
 Values are never printed back. They are where secrets live, so 'list' shows
 names only.
