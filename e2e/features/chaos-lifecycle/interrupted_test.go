@@ -89,7 +89,7 @@ func appURL(t *testing.T, tn *realistic.Tenant, name string) string {
 	var d struct {
 		URLs []string `json:"urls"`
 	}
-	if _, err := tn.C.JSON(t.Context(), http.MethodGet, "/v1/deployments/get?name="+name, tn.Admin.Bearer, nil, &d); err != nil || len(d.URLs) == 0 {
+	if _, err := tn.C.JSON(t.Context(), http.MethodGet, "/v1/deployments/get?name="+name, tn.AdminToken(), nil, &d); err != nil || len(d.URLs) == 0 {
 		t.Fatalf("the deployment %s has no URL: %v", name, err)
 	}
 	return d.URLs[0]
@@ -98,7 +98,7 @@ func appURL(t *testing.T, tn *realistic.Tenant, name string) string {
 func deleteApp(t *testing.T, tn *realistic.Tenant, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
 	defer cancel()
-	r, err := tn.C.Send(ctx, gw.Req{Method: http.MethodDelete, Path: "/v1/deployments/delete?name=" + name, Bearer: tn.Admin.Bearer})
+	r, err := tn.C.Send(ctx, gw.Req{Method: http.MethodDelete, Path: "/v1/deployments/delete?name=" + name, Bearer: tn.AdminToken()})
 	if err != nil || (r.Status != http.StatusOK && r.Status != http.StatusNotFound) {
 		t.Errorf("cleanup: deleting %s: %v %v", name, err, r)
 	}

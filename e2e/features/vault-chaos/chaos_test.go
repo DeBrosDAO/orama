@@ -25,8 +25,6 @@ const (
 	// pushPerMinutePerIP is the gateway's per-address push limit
 	// (core/pkg/gateway/handlers/vault/ratelimit.go).
 	pushPerMinutePerIP = 30
-	threshold          = 2
-	total              = 3
 )
 
 type status struct {
@@ -36,39 +34,52 @@ type status struct {
 	WriteQuorum int `json:"write_quorum"`
 }
 
-// TestGuardianDown_readsSurviveWritesRefused: with one of three guardians
-// stopped, status shows 2 healthy and health "degraded" (K <= healthy < W),
-// a pull still reconstructs from K=2, and a push is refused 503
-// insufficient_quorum rather than reported stored with fewer than W=3
-// shares (core/pkg/shamir WriteQuorum: W > K). After the restart a push
-// succeeds again.
+// TestGuardianDown_readsSurviveWritesRefused: with just enough guardians
+// stopped that the rest are one short of the write quorum W (one of three,
+// two of five), status shows them gone and health "degraded" (K <= healthy
+// < W), a pull still reconstructs from K, and a push is refused 503
+// insufficient_quorum rather than reported stored with fewer than W shares
+// (core/pkg/shamir WriteQuorum: W > K). After the restart a push succeeds
+// again. The cluster's own status gives N and W.
 func TestGuardianDown_readsSurviveWritesRefused(t *testing.T) {
 	c := harness.GW(t)
 	f := harness.Fleet(t)
 	o := services.NewVaultOwner(t)
 	env := randomEnvelope(t)
 	mustPush(t, c, o, 1, env, http.StatusOK)
-	t.Run("one guardian down", func(t *testing.T) {
-		f.HoldDown(t, f.Node(t, "node-3"), vaultUnit)
-		eventually.Require(t, pollEvery, probeBudget, "status to see the guardian gone", func() (bool, error) {
+	var before status
+	if err := c.MustSend(t, gw.Req{Path: services.VaultStatus}).Decode(&before); err != nil {
+		t.Fatal(err)
+	}
+	total := before.Guardians
+	down := total - before.WriteQuorum + 1
+	if before.Healthy != total || down < 1 || total-down < before.Threshold || len(f.State.Nodes) < down {
+		t.Fatalf("vault status %+v: cannot stop guardians to one below the write quorum and keep the read threshold", before)
+	}
+	t.Run("one below the write quorum", func(t *testing.T) {
+		nodes := f.State.Nodes[len(f.State.Nodes)-down:]
+		for _, n := range nodes {
+			f.HoldDown(t, n, vaultUnit)
+		}
+		eventually.Require(t, pollEvery, probeBudget, "status to see the guardians gone", func() (bool, error) {
 			var s status
 			if err := c.MustSend(t, gw.Req{Path: services.VaultStatus}).Decode(&s); err != nil {
 				return false, err
 			}
-			return s.Guardians == total && s.Healthy == total-1, nil
+			return s.Guardians == total && s.Healthy == total-down, nil
 		})
 		var h struct{ Status string }
 		if err := c.MustSend(t, gw.Req{Path: services.VaultHealth}).Decode(&h); err != nil || h.Status != "degraded" {
-			t.Errorf("health with 2 of 3 guardians: %q (%v), want degraded", h.Status, err)
+			t.Errorf("health with %d of %d guardians: %q (%v), want degraded", total-down, total, h.Status, err)
 		}
 		mustPull(t, c, o, env)
 		refused := randomEnvelope(t)
 		var r services.PushResult
 		if err := json.Unmarshal(mustPush(t, c, o, 2, refused, http.StatusServiceUnavailable).Body, &r); err != nil || r.Status != "insufficient_quorum" {
-			t.Errorf("push with 2 of 3 guardians: %+v, want insufficient_quorum", r)
+			t.Errorf("push with %d of %d guardians: %+v, want insufficient_quorum", total-down, total, r)
 		}
-		// Refusing the push does not undo it: the two live guardians stored
-		// their shares of version 2, and two is the read threshold, so a pull
+		// Refusing the push does not undo it: the live guardians stored their
+		// shares of version 2, at least the read threshold, so a pull
 		// reconstructs the newer envelope ("a sub-quorum write may be
 		// unrecoverable", handlers/vault/push_handler.go). What it must never
 		// be is neither: an error, or something that was never pushed.
@@ -137,12 +148,16 @@ func mustPullOneOf(t testing.TB, c *gw.Client, o *services.VaultOwner, want ...[
 		Expect(t, http.StatusOK).Decode(&r); err != nil {
 		t.Fatal(err)
 	}
+	var st status
+	if err := c.MustSend(t, gw.Req{Path: services.VaultStatus}).Decode(&st); err != nil {
+		t.Fatal(err)
+	}
 	got, err := base64.StdEncoding.DecodeString(r.Envelope)
 	matched := false
 	for _, w := range want {
 		matched = matched || bytes.Equal(got, w)
 	}
-	if err != nil || !matched || r.Threshold != threshold {
-		t.Errorf("pull: %d bytes, K %d, want one of the %d pushed envelope(s) with K %d", len(got), r.Threshold, len(want), threshold)
+	if err != nil || !matched || r.Threshold != st.Threshold {
+		t.Errorf("pull: %d bytes, K %d, want one of the %d pushed envelope(s) with the cluster's K %d", len(got), r.Threshold, len(want), st.Threshold)
 	}
 }

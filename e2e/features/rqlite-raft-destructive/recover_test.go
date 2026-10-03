@@ -51,7 +51,7 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 // TestRecoverRaft_afterQuorumLossKeepsTheLeadersData: with quorum lost
 // (both followers down) the operator reforms the cluster around the
 // surviving leader with --leader-raft-addr: the followers are wiped and
-// re-sync from it, every node keeps its raft id, the three converge again,
+// re-sync from it, every node keeps its raft id, all of them converge again,
 // and data written before the loss (an invite, a namespace) is still there
 // (docs/CLI_REFERENCE.md "orama node recover-raft": use --leader-raft-addr
 // when quorum is already lost).

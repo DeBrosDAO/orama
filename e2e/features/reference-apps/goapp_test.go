@@ -132,7 +132,7 @@ func readNotes(t *testing.T, c *gw.Client, notes []note) {
 // the replica is torn down over /v1/internal/deployments/replica/teardown.
 func deleteAndCheckTeardown(t *testing.T, tn *realistic.Tenant, name string) {
 	t.Helper()
-	r := tn.C.MustSend(t, gw.Req{Method: http.MethodDelete, Path: "/v1/deployments/delete?name=" + url.QueryEscape(name), Bearer: tn.Admin.Bearer})
+	r := tn.C.MustSend(t, gw.Req{Method: http.MethodDelete, Path: "/v1/deployments/delete?name=" + url.QueryEscape(name), Bearer: tn.AdminToken()})
 	r.Expect(t, http.StatusOK)
 	eventually.Require(t, pollEvery, teardownWait, name+" stopped on every node", func() (bool, error) {
 		left := appUnitNodes(t, tn, "go", name)

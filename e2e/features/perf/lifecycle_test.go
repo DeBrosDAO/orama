@@ -61,10 +61,10 @@ func TestPerf_functionColdAndWarm(t *testing.T) {
 	tn := realistic.NewTenant(t)
 	tn.DeployFunction(t, "perf-store", "store", false)
 	start := time.Now()
-	_, err := realistic.Invoke(t.Context(), tn.C, "perf-store", tn.Admin.Bearer, map[string]string{"op": "count"})
+	_, err := realistic.Invoke(t.Context(), tn.C, "perf-store", tn.AdminToken(), map[string]string{"op": "count"})
 	record(t, tn.F, once("function-cold-invoke", start, err), coldBound)
 	warm := realistic.Paced(t.Context(), warmWorkers, warmInvokes, warmInterval, func(ctx context.Context, _, _ int) error {
-		_, err := realistic.Invoke(ctx, tn.C, "perf-store", tn.Admin.Bearer, map[string]string{"op": "count"})
+		_, err := realistic.Invoke(ctx, tn.C, "perf-store", tn.AdminToken(), map[string]string{"op": "count"})
 		return err
 	})
 	record(t, tn.F, realistic.Summarize("function-warm-invoke", warm, nil), warmBound)

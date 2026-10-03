@@ -93,8 +93,8 @@ func TestLeaderLoss_survivorsElectAndServe(t *testing.T) {
 	}
 }
 
-// TestQuorumLoss_refusesStrongReadsThenRecovers: with two of three voters
-// forced down the survivor cannot serve a strong read (no quorum) but still
+// TestQuorumLoss_refusesStrongReadsThenRecovers: with every follower forced
+// down the surviving leader cannot serve a strong read (no quorum) but still
 // answers a local read, and bringing the voters back (the cleanup) restores a
 // converged cluster with the same members.
 func TestQuorumLoss_refusesStrongReadsThenRecovers(t *testing.T) {

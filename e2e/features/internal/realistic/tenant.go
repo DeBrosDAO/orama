@@ -45,12 +45,19 @@ var deployURL = regexp.MustCompile(`•\s+(https://\S+)`)
 // customer's own signed-in CLI), an admin member for the HTTP calls the CLI
 // does not make, and the namespace gateway.
 type Tenant struct {
-	F     *fleet.Fleet
-	N     *ns.Namespace
-	Admin tenancy.Cred
+	F *fleet.Fleet
+	N *ns.Namespace
+	// admin is the namespace's admin member. Its token is read at each use,
+	// never kept: a soak or a chaos package outlives one access token, and a
+	// copy taken at creation answered 401 to the cleanup an hour later.
+	admin *gw.User
 	// C is the namespace gateway, https://ns-<name>.<base>.
 	C *gw.Client
 }
+
+// AdminToken is the admin member's current access token, refreshed when it is
+// close to expiring (gw.User.Token).
+func (tn *Tenant) AdminToken() string { return tn.admin.Token() }
 
 // NewTenant creates the namespace within the package's namespace budget.
 func NewTenant(t testing.TB) *Tenant {
@@ -59,7 +66,7 @@ func NewTenant(t testing.TB) *Tenant {
 	n := tenancy.Namespace(t, f, ns.Options{Via: ns.ViaOperator})
 	admin := tenancy.OperatorMember(t, f, n, tenancy.RoleAdmin)
 	c := harness.GW(t).WithBase(gw.NamespaceURL(f.State, n.Name))
-	return &Tenant{F: f, N: n, Admin: tenancy.Cred{Bearer: admin.Token()}, C: c}
+	return &Tenant{F: f, N: n, admin: admin, C: c}
 }
 
 // Deploy runs `orama deploy <runtime> <dir> --name <name> <extra...>` as the
@@ -93,7 +100,7 @@ func (tn *Tenant) deleteApp(t testing.TB, name string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
 	defer cancel()
-	r, err := tn.C.Send(ctx, gw.Req{Method: http.MethodDelete, Path: pathDeploymentDelete + "?name=" + url.QueryEscape(name), Bearer: tn.Admin.Bearer})
+	r, err := tn.C.Send(ctx, gw.Req{Method: http.MethodDelete, Path: pathDeploymentDelete + "?name=" + url.QueryEscape(name), Bearer: tn.AdminToken()})
 	if err != nil || (r.Status != http.StatusOK && r.Status != http.StatusNotFound) {
 		t.Errorf("cleanup: deleting app %s: %v %v", name, err, r)
 	}

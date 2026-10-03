@@ -33,6 +33,23 @@ type reading struct {
 	Restarts int `json:"restarts"`
 }
 
+// cacheCeilingMB is what the namespace's Olric may grow to as the soak fills
+// its one DMap ("soak", traffic_test.go): that DMap's LRU bound (core pkg/olric
+// DMapMaxInuseBytes, 256 MiB of in-use bytes) plus 256 MiB for what in-use
+// leaves out (Olric's runtime, memberlist, and deleted entries waiting for
+// compaction). A cache past it is not being held by its eviction.
+const cacheCeilingMB = 512
+
+// cacheUnit reports whether unit is a namespace's Olric cache, whose memory
+// grows by design as it fills, until LRU eviction holds it.
+func cacheUnit(unit string) bool { return strings.HasPrefix(unit, "orama-namespace-olric@") }
+
+// unitOf is the unit of a footprint key, "<node>/<unit>".
+func unitOf(key string) string {
+	_, unit, _ := strings.Cut(key, "/")
+	return unit
+}
+
 // watched are the daemons whose footprint the soak bounds, by node.
 func watched(t testing.TB, f *fleet.Fleet, namespace string) map[string][]string {
 	t.Helper()
@@ -86,7 +103,14 @@ func checkFootprint(t *testing.T, before, after map[string]reading, killed map[s
 			t.Errorf("%s: no reading at the end", key)
 			continue
 		}
-		if grew(b.MemMB, a.MemMB, memGrowthPct, memGrowthFloorMB) && killed[key] == 0 {
+		switch {
+		case cacheUnit(unitOf(key)):
+			// A cache grows as it fills; what must hold is that its eviction
+			// bounds it.
+			if a.MemMB > cacheCeilingMB {
+				t.Errorf("%s: cache at %d MiB, over the %d MiB its LRU eviction allows: eviction is not bounding it", key, a.MemMB, cacheCeilingMB)
+			}
+		case grew(b.MemMB, a.MemMB, memGrowthPct, memGrowthFloorMB) && killed[key] == 0:
 			t.Errorf("%s: memory grew %d -> %d MiB (over %d%%)", key, b.MemMB, a.MemMB, memGrowthPct)
 		}
 		if grew(b.FDs, a.FDs, fdGrowthPct, fdGrowthFloor) && killed[key] == 0 {
@@ -145,7 +169,7 @@ func checkSockets(t *testing.T, subs []*subscriber, fd *feed, ws *windows, end t
 		s.mu.Lock()
 		want, got := 0, 0
 		for _, c := range s.conns {
-			if c.Code != closeExpired && !c.Close.IsZero() && c.Close.Before(end) && !ws.covers(c.Close) {
+			if c.Code != closeExpired && !c.Close.IsZero() && c.Close.Before(end) && !ws.covers(c.Close) && !ws.lostToFault(c.Open, c.Close) {
 				t.Errorf("%s: socket lost at %s outside any fault (code %d): %s", s.name, c.Close.Format(time.RFC3339), c.Code, c.Err)
 			}
 			w, g := delivered(c, published, s.got, ws, end)

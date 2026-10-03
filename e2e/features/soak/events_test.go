@@ -35,6 +35,9 @@ type window struct {
 	Name  string    `json:"name"`
 	Start time.Time `json:"start"`
 	End   time.Time `json:"end"`
+	// Blackholes says the fault dropped traffic silently (a partition), so a
+	// socket held through it dies only once its pong wait runs out.
+	Blackholes bool `json:"blackholes,omitempty"`
 }
 
 // windows are the injected windows; traffic in them is not held to the SLOs.
@@ -61,6 +64,31 @@ func (ws *windows) covers(at time.Time) bool {
 	return false
 }
 
+// deadPeerAfter is how long a subscriber socket that went silent stays open
+// before the gateway declares it dead: the pubsub pong wait (core
+// pkg/gateway/handlers/pubsub defaultWSPongWait, two missed 30s pings and
+// slack).
+const deadPeerAfter = 75 * time.Second
+
+// lostToFault reports whether a socket open from open until close was broken
+// by a window that black-holed traffic: it was open while the window ran, and
+// it closed by the time the gateway notices a dead peer after the window ends.
+// A socket held through a partition is already dead when the network heals; it
+// is only declared so once its pong wait runs out, after the window (soak
+// 2026-10-03: partition 14:31:37-14:33:04, socket lost 14:33:46). A fault that
+// kills or restarts a process closes its sockets at once, so a socket lost
+// long after one is not excused.
+func (ws *windows) lostToFault(open, close time.Time) bool {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+	for _, w := range ws.list {
+		if w.Blackholes && !open.After(w.End) && !close.Before(w.Start) && !close.After(w.End.Add(deadPeerAfter+deliverGrace)) {
+			return true
+		}
+	}
+	return false
+}
+
 // event is one fault; its t.Cleanup restores what it broke.
 type event struct {
 	name string
@@ -68,6 +96,8 @@ type event struct {
 	// kills are the node/unit daemons the event SIGKILLs: each explains one
 	// restart and a reset footprint.
 	kills []string
+	// blackholes says the event drops traffic silently (see window).
+	blackholes bool
 }
 
 // schedule is the soak's faults, in the order they fire.
@@ -86,7 +116,7 @@ func schedule(f *fleet.Fleet, w *workload) []event {
 				}
 			}
 			holdServing(t, w, others(n, pick(2)))
-		}},
+		}, blackholes: true},
 		{name: "clock skew on " + pick(0).Name, run: func(t *testing.T) { f.ClockSkew(t, pick(0), clockSkew); holdServing(t, w, n) }},
 		{name: "restart the namespace gateway on a member", run: func(t *testing.T) {
 			victim := tenancy.Members(t, f, w.tn.N.Name)[1]
@@ -181,5 +211,5 @@ func fire(t *testing.T, ws *windows, ev event) {
 	start := time.Now()
 	t.Run(ev.name, ev.run)
 	infra.WaitConverged(t, len(harness.Fleet(t).State.Nodes), infra.ConvergeBudget, "the cluster after "+ev.name)
-	ws.add(window{Name: ev.name, Start: start, End: time.Now()})
+	ws.add(window{Name: ev.name, Start: start, End: time.Now(), Blackholes: ev.blackholes})
 }
