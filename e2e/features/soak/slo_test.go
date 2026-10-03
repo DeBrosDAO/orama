@@ -26,7 +26,10 @@ const (
 	fdGrowthFloor    = 64
 )
 
-// reading is one daemon's footprint at one moment.
+// reading is one daemon's footprint at one moment. MemMB is its anonymous
+// memory: the page cache of the files it wrote is the kernel's to reclaim, and
+// an IPFS node storing the soak's uploads grew memory.current by 190 MiB that
+// way with a flat 30 MiB heap (stagenet, 2026-10-03).
 type reading struct {
 	MemMB    int `json:"mem_mb"`
 	FDs      int `json:"fds"`
@@ -87,7 +90,7 @@ func readAll(t *testing.T, f *fleet.Fleet, units map[string][]string) map[string
 			if err != nil {
 				t.Fatalf("%s: NRestarts of %s: %v", n.Name, u, err)
 			}
-			out[n.Name+"/"+u] = reading{MemMB: realistic.MemoryCurrentMB(t, f, n, u), FDs: realistic.FDCount(t, f, n, u), Restarts: restarts}
+			out[n.Name+"/"+u] = reading{MemMB: realistic.AnonMemoryMB(t, f, n, u), FDs: realistic.FDCount(t, f, n, u), Restarts: restarts}
 		}
 	}
 	return out

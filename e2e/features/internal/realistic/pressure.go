@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/edge"
+	"github.com/DeBrosOfficial/network/e2e/harness/cgroupmem"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
@@ -147,6 +148,24 @@ func MemoryCurrentMB(t testing.TB, f *fleet.Fleet, n fleet.Node, unit string) in
 	v, err := strconv.ParseInt(out, 10, 64)
 	if err != nil {
 		t.Fatalf("%s: %s has no memory reading (MemoryCurrent=%q): memory accounting is off", n.Name, unit, out)
+	}
+	return int(v >> mbShift)
+}
+
+// AnonMemoryMB is the unit's anonymous memory in MiB, from its cgroup's
+// memory.stat: what its processes allocated, without the reclaimable page cache
+// of the files they wrote, which memory.current counts too.
+func AnonMemoryMB(t testing.TB, f *fleet.Fleet, n fleet.Node, unit string) int {
+	t.Helper()
+	cg := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p ControlGroup --value "+unit).Stdout)
+	if cg == "" {
+		t.Fatalf("%s: %s has no control group: it is not running", n.Name, unit)
+	}
+	// Quoted: systemd escapes the '-' of a slice name as a literal \x2d.
+	stat := f.MustExec(t, n, "cat '/sys/fs/cgroup"+cg+"/memory.stat'").Stdout
+	v, err := cgroupmem.Field(stat, cgroupmem.Anon)
+	if err != nil {
+		t.Fatalf("%s: %s: %v", n.Name, unit, err)
 	}
 	return int(v >> mbShift)
 }
