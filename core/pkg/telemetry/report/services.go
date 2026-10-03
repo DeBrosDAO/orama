@@ -222,11 +222,20 @@ func discoverNamespaceServices() []string {
 		return nil
 	}
 
+	return namespaceServiceNames(matches)
+}
+
+// namespaceServiceNames turns unit file paths into service names. A template
+// (orama-namespace-wireguard@.service) matches the glob too but is not a
+// service: systemctl reports it "unknown", and listing it put a phantom
+// service in every report.
+func namespaceServiceNames(paths []string) []string {
 	var services []string
-	for _, path := range matches {
-		base := filepath.Base(path)
-		// Strip the .service suffix to get the unit name.
-		name := strings.TrimSuffix(base, ".service")
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".service")
+		if strings.HasSuffix(name, "@") {
+			continue
+		}
 		services = append(services, name)
 	}
 	return services

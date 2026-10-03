@@ -217,8 +217,10 @@ func shouldSkipServiceAlert(svcName, state string, nc *nodeContext) bool {
 		return false // always report active (no alert) and failed (always alert)
 	}
 
-	// CoreDNS: only expected on nameserver nodes
-	if svcName == "coredns" && (nc == nil || !nc.isNameserver) {
+	// CoreDNS: only expected on nameserver nodes. The unit is
+	// orama-namespace-coredns@nameserver; matching only the old host unit
+	// name "coredns" warned that it was inactive on every plain node.
+	if isCoreDNSUnit(svcName) && (nc == nil || !nc.isNameserver) {
 		return true
 	}
 
@@ -306,4 +308,10 @@ func checkCPUContention(s *report.SystemReport, host string) []Alert {
 			fmt.Sprintf("CPU pressure at %.0f%%: tasks waited for a CPU that much of the last minute", s.PressureCPUPct)})
 	}
 	return alerts
+}
+
+// isCoreDNSUnit reports whether svcName is CoreDNS: the nameserver unit, or
+// the host unit an older install ran.
+func isCoreDNSUnit(svcName string) bool {
+	return svcName == "coredns" || svcName == report.CoreDNSUnit
 }

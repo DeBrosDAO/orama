@@ -13,7 +13,7 @@ const (
 	// They run from the namespace templates; the host units coredns.service
 	// and caddy.service they replaced are retired by the index migration, so
 	// asking systemd about those names reports a live nameserver as down.
-	coreDNSUnit = "orama-namespace-coredns@nameserver"
+	coreDNSUnit = CoreDNSUnit
 	caddyUnit   = "orama-namespace-caddy@index"
 
 	// corefilePath is CoreDNS's configuration, which names the zone served.
@@ -113,3 +113,7 @@ func domainFromCorefile(content string) string {
 	}
 	return ""
 }
+
+// CoreDNSUnit is the nameserver's DNS unit. It runs only on nameservers, and
+// every node's report lists it among the core services.
+const CoreDNSUnit = "orama-namespace-coredns@nameserver"
