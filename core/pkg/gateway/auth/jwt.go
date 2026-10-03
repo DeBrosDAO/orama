@@ -242,7 +242,7 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 		return nil, errors.New("token not yet valid")
 	}
 	if claims.Exp != 0 && now-skew > claims.Exp {
-		return nil, errors.New("token expired")
+		return nil, ErrTokenExpired
 	}
 	if claims.Iat != 0 && claims.Iat-skew > now {
 		return nil, errors.New("invalid iat")

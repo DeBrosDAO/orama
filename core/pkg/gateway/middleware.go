@@ -259,6 +259,11 @@ const sessionRevokedMessage = "this session was ended, or the key it came from w
 // from a refused credential: it answers 503, not 401, and the client retries.
 const authUnavailableMessage = "cannot check whether this credential was revoked; retry shortly"
 
+// tokenExpiredMessage is what a refused expired token says. The namespace proxy
+// carries a refusal as a message, so the message is also how the caller tells an
+// expired token from an unknown credential (namespaceProxyAuthCode).
+const tokenExpiredMessage = "this token has expired"
+
 // namespaceProxyAuthCode is the code a refused namespace-proxy credential
 // answers with: a revoked session is AUTH_REVOKED, any other refusal names a
 // credential this cluster does not know.
@@ -268,6 +273,9 @@ func namespaceProxyAuthCode(errMsg string) string {
 	}
 	if errMsg == authUnavailableMessage {
 		return CodeAuthUnavailable
+	}
+	if errMsg == tokenExpiredMessage {
+		return CodeAuthExpired
 	}
 	return CodeAuthInvalidKey
 }
@@ -312,6 +320,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 				if errors.Is(err, auth.ErrRevocationsUnavailable) {
 					return "", nil, "", authUnavailableMessage
 				}
+				if errors.Is(err, auth.ErrTokenExpired) {
+					return "", nil, "", tokenExpiredMessage
+				}
 				// JWT verification failed - fall through to API key check
 			}
 		}
@@ -342,6 +353,9 @@ func (g *Gateway) validateAuthForNamespaceProxy(r *http.Request) (namespace stri
 			}
 			if errors.Is(err, auth.ErrRevocationsUnavailable) {
 				return "", nil, "", authUnavailableMessage
+			}
+			if errors.Is(err, auth.ErrTokenExpired) {
+				return "", nil, "", tokenExpiredMessage
 			}
 		}
 	}
@@ -837,6 +851,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 						unavailable(w, CodeAuthUnavailable, authUnavailableMessage)
 						return
 					}
+					if errors.Is(err, auth.ErrTokenExpired) && !isPublic {
+						unauthorized(w, CodeAuthExpired, tokenExpiredMessage, nil)
+						return
+					}
 					// If it looked like a JWT but failed verification, fall through to API key check
 				}
 			}
@@ -872,6 +890,10 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 				claims, err := g.authService.ParseAndVerifyJWT(tok)
 				if errors.Is(err, auth.ErrRevocationsUnavailable) && !isPublic {
 					unavailable(w, CodeAuthUnavailable, authUnavailableMessage)
+					return
+				}
+				if errors.Is(err, auth.ErrTokenExpired) && !isPublic {
+					unauthorized(w, CodeAuthExpired, tokenExpiredMessage, nil)
 					return
 				}
 				if err == nil {

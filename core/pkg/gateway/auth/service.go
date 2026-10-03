@@ -66,6 +66,10 @@ const minRSAKeyBits = 2048
 // has been revoked — a key that was revoked, or a session that was ended.
 var ErrTokenRevoked = errors.New("token revoked")
 
+// ErrTokenExpired is returned for a token whose signature verifies but whose
+// lifetime has run out. Its text is what callers have always seen.
+var ErrTokenExpired = errors.New("token expired")
+
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
 	s := &Service{
 		logger:    logger,

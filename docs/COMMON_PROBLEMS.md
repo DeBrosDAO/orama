@@ -99,6 +99,14 @@ If every UDP ping fails but TCP stream connections succeed, it's the WireGuard p
 
 **Cause:** Before the spawn handler fix, `spawnGatewayRemote()` didn't send `global_rqlite_dsn` or `olric_timeout` to remote nodes.
 
+`global_rqlite_dsn` is the cluster registry (API keys, namespace records) the gateway reads. A remote spawn
+request only says whether the gateway needs one; the receiving node fills in its **own** registry address
+(`gatewayRegistryDSN` in `core/pkg/gateway/handlers/namespace/spawn_handler.go`), so each member's gateway
+reads the registry through its own node. A node with no registry address configured refuses the spawn rather
+than starting a gateway without one. The index gateway is its own registry and carries none. Gateways spawned
+before this release kept the DSN of the node that created the namespace (every member depended on that one
+node) and keep it until they are re-spawned or restarted.
+
 **Fix:** Edit the gateway config manually:
 
 ```bash

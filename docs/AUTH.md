@@ -802,7 +802,7 @@ about it — plus the fields that make it actionable.
 | `AUTH_INVALID_KEY` | the key is not one this cluster knows |
 | `AUTH_REVOKED` | the credential was revoked — sign in again |
 | `AUTH_UNAVAILABLE` | the gateway could not tell whether the credential was revoked (503, `Retry-After`) — retry with the same credential |
-| `AUTH_EXPIRED` | the token expired — refresh |
+| `AUTH_EXPIRED` | the access token expired — refresh it (hint: "refresh the token, or sign in again"). Every auth path answers it: the gateway middleware, the namespace proxy and the serverless router; an expired token is never reported as `AUTH_MISSING` |
 | `USER_JWT_REQUIRED` | this operation needs a logged-in user (on storage and WebRTC, a deployed app's own token also qualifies); a key alone is not enough |
 | `INSUFFICIENT_SCOPE` | the credential lacks a grant; `required_scope` names it |
 | `NAMESPACE_MISMATCH` | the credential belongs to another namespace |
