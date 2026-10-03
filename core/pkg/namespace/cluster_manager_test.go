@@ -81,9 +81,9 @@ func TestRQLiteMemberConfigs_threeNodeJoin(t *testing.T) {
 }
 
 func TestNewProvisioningClusterFrom_evalEligibleWritesStoredCounts(t *testing.T) {
-	bp, err := TenantBlueprintForEligibleCount(1)
+	bp, err := TenantBlueprintForFleetSize(1)
 	if err != nil {
-		t.Fatalf("TenantBlueprintForEligibleCount(1): %v", err)
+		t.Fatalf("TenantBlueprintForFleetSize(1): %v", err)
 	}
 	cluster := newProvisioningClusterFrom(bp, 1, "solo", "w")
 	if cluster.RQLiteNodeCount != 1 || cluster.OlricNodeCount != 1 || cluster.GatewayNodeCount != 1 {
@@ -91,9 +91,9 @@ func TestNewProvisioningClusterFrom_evalEligibleWritesStoredCounts(t *testing.T)
 			cluster.RQLiteNodeCount, cluster.OlricNodeCount, cluster.GatewayNodeCount)
 	}
 
-	prod, err := TenantBlueprintForEligibleCount(10)
+	prod, err := TenantBlueprintForFleetSize(10)
 	if err != nil {
-		t.Fatalf("TenantBlueprintForEligibleCount(10): %v", err)
+		t.Fatalf("TenantBlueprintForFleetSize(10): %v", err)
 	}
 	wide := newProvisioningClusterFrom(prod, 1, "prod", "w")
 	if wide.RQLiteNodeCount != 3 || wide.OlricNodeCount != 3 || wide.GatewayNodeCount != 3 {

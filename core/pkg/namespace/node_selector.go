@@ -93,6 +93,27 @@ func (cns *ClusterNodeSelector) ListEligibleNodes(ctx context.Context) ([]NodeCa
 	return eligibleNodes, nil
 }
 
+// fleetMembersSQL lists the fleet's members: every registered node that has
+// not been retired, whether or not it is heartbeating or has room.
+const fleetMembersSQL = `SELECT id FROM dns_nodes WHERE last_seen != ? ORDER BY id`
+
+// fleetMember is one row of fleetMembersSQL.
+type fleetMember struct {
+	ID string `db:"id"`
+}
+
+// FleetMemberCount is how many nodes the fleet has: every node registered and
+// not retired. It is deliberately not liveness: a production fleet whose nodes
+// stopped heartbeating for a while is still a production fleet, and must not
+// look like a one-node eval fleet to a namespace created in that window.
+func (cns *ClusterNodeSelector) FleetMemberCount(ctx context.Context) (int, error) {
+	var members []fleetMember
+	if err := cns.db.Query(client.WithInternalAuth(ctx), &members, fleetMembersSQL, RetiredNodeLastSeen); err != nil {
+		return 0, &ClusterError{Message: "failed to count the fleet's nodes", Cause: err}
+	}
+	return len(members), nil
+}
+
 // SelectNodesForCluster selects the optimal N nodes for a new namespace cluster.
 // Returns the node IDs sorted by score (best first).
 func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeCount int) ([]NodeCapacity, error) {
@@ -102,10 +123,7 @@ func (cns *ClusterNodeSelector) SelectNodesForCluster(ctx context.Context, nodeC
 	}
 
 	if len(eligibleNodes) < nodeCount {
-		return nil, &ClusterError{
-			Message: ErrInsufficientNodes.Message,
-			Cause:   nil,
-		}
+		return nil, capacityShortfall(nodeCount, len(eligibleNodes))
 	}
 
 	selectedNodes := eligibleNodes[:nodeCount]
@@ -432,4 +450,12 @@ func (cns *ClusterNodeSelector) calculateCapacityScore(
 	)
 
 	return totalScore
+}
+
+// capacityShortfall is the refusal when fewer nodes than a namespace needs
+// have a free namespace slot. It wraps ErrInsufficientNodes, which the create
+// handler answers as a capacity refusal, and says how far short the fleet is.
+func capacityShortfall(need, withRoom int) error {
+	return fmt.Errorf("%w: a namespace needs %d nodes with a free namespace slot and %d have one",
+		ErrInsufficientNodes, need, withRoom)
 }

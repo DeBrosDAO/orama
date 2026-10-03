@@ -73,7 +73,7 @@ Install enables **only** `orama-node.service`. That process is a supervisor: it 
 | **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
 | **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
 
-Default tenant provision is N=3. A fleet with one eligible node provisions N=1 (eval, not HA; see [EVAL.md](EVAL.md)). Two eligible nodes are refused. A larger fleet still provisions tenants at N=3, not at fleet size. WebRTC still requires 3 members.
+Default tenant provision is N=3. A one-node fleet provisions N=1 (eval, not HA; see [EVAL.md](EVAL.md)). A two-node fleet is refused. The size is the fleet's members (registered and not retired, heartbeating or not), not those with a free slot: a full fleet refuses the create with 503 `NAMESPACE_CAPACITY` rather than falling back to eval. A larger fleet still provisions tenants at N=3, not at fleet size. WebRTC still requires 3 members.
 
 Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-provisionable.
 

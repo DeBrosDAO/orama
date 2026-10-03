@@ -1635,14 +1635,36 @@ func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespa
 	return cluster.ID, pollURL, nil
 }
 
-// tenantBlueprintForFleet lists eligible nodes and picks N=1 (eval) or N=3
-// (production). It does not retry a failed N=3 select as N=1.
+// tenantBlueprintForFleet counts the fleet's members and picks N=1 (eval) or
+// N=3 (production), then checks that enough of them have room. A fleet that is
+// full is refused here, before anything is recorded, so the create answers a
+// capacity refusal instead of leaving a cluster that fails in the background.
+// It does not retry a failed N=3 select as N=1. Provisioning selects again,
+// and that select stays the check a concurrent create can still lose to.
 func (cm *ClusterManager) tenantBlueprintForFleet(ctx context.Context) (Blueprint, error) {
+	members, err := cm.nodeSelector.FleetMemberCount(ctx)
+	if err != nil {
+		return Blueprint{}, err
+	}
 	eligible, err := cm.nodeSelector.ListEligibleNodes(ctx)
 	if err != nil {
 		return Blueprint{}, err
 	}
-	return TenantBlueprintForEligibleCount(len(eligible))
+	return chooseTenantBlueprint(members, len(eligible))
+}
+
+// chooseTenantBlueprint is the recipe for a fleet of members nodes, withRoom
+// of which have a free namespace slot: sized by the fleet, refused when too
+// few have room.
+func chooseTenantBlueprint(members, withRoom int) (Blueprint, error) {
+	bp, err := TenantBlueprintForFleetSize(members)
+	if err != nil {
+		return Blueprint{}, err
+	}
+	if withRoom < bp.SelectCount {
+		return Blueprint{}, capacityShortfall(bp.SelectCount, withRoom)
+	}
+	return bp, nil
 }
 
 func (cm *ClusterManager) logEvalProvision(namespaceName string, bp Blueprint) {

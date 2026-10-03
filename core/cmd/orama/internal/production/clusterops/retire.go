@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/namespace"
 )
 
 // RetireStep is one statement of the retirement, with what it is for.
@@ -91,8 +92,9 @@ func RetirementPlan(rec NodeRecord) []RetireStep {
 // that window, so the node is backdated past it. The date is fixed rather than
 // computed: rqlite replicates the statement text and each node applies it
 // locally, so datetime('now', '-1 day') in a write would land differently on
-// every replica.
-const retiredLastSeen = "1970-01-01 00:00:00"
+// every replica. The namespace package reads it to leave retired nodes out of
+// the fleet's size.
+const retiredLastSeen = namespace.RetiredNodeLastSeen
 
 // Retire takes the node out of every membership store.
 //

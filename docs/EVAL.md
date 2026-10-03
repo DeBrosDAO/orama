@@ -7,13 +7,17 @@ tenant namespace on the same machine, then an app with a database. That path is
 ## What the code does
 
 Index membership is every node (`MembersAll`). One machine *is* the whole
-index. Tenant provision looks at how many nodes have a free namespace slot:
+index. Tenant provision looks at how many members the fleet has: every node
+registered and not retired (`orama node remove`), whether or not it is
+heartbeating or has a free namespace slot. A stopped or stale node that was
+never removed still counts.
 
-| Eligible nodes | Tenant size | Notes |
+| Members | Tenant size | Notes |
 |---|---|---|
 | 1 | `BlueprintTenantN(1)` | Same units (`orama-namespace-{rqlite,olric,gateway}@<name>`), replica count 1. RQLite is leader, no `-join`. |
 | 3 or more | `BlueprintTenant()` — N=3 | Production default. A 10-node fleet still provisions tenants at 3, not 10. |
 | 0 | refused | Nobody to run on. |
+| 3 or more, fewer than 3 with a free slot | refused | The fleet is full. The create answers 503 `NAMESPACE_CAPACITY` ("a namespace needs 3 nodes with a free namespace slot and N have one"); nothing is created and the name is not taken. It used to count free slots, so a full five-node fleet with one slot left provisioned an eval namespace on that node, all three roles on one machine, and reported it ready. |
 | 2 | refused | Neither eval nor HA. Even-sized Raft is a split-brain. Add a third node. |
 
 There is no second “dev mode” that skips systemd or blueprints, and no

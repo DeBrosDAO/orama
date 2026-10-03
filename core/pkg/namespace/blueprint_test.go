@@ -263,35 +263,38 @@ func TestBlueprintTenantN_1_and_5(t *testing.T) {
 	}
 }
 
-func TestTenantBlueprintForEligibleCount(t *testing.T) {
+func TestTenantBlueprintForFleetSize(t *testing.T) {
 	tests := []struct {
-		eligible int
-		wantN    int
-		wantErr  error
+		members int
+		wantN   int
+		wantErr error
 	}{
 		{0, 0, ErrInsufficientNodes},
 		{1, 1, nil},
 		{2, 0, ErrTwoNodeFleet},
 		{3, 3, nil},
+		// A full five-node fleet is still a five-node fleet: N=3, never the
+		// eval fallback onto whichever single node has room.
+		{5, 3, nil},
 		{10, 3, nil},
 	}
 	for _, tt := range tests {
-		bp, err := TenantBlueprintForEligibleCount(tt.eligible)
+		bp, err := TenantBlueprintForFleetSize(tt.members)
 		if tt.wantErr != nil {
 			if err != tt.wantErr {
-				t.Errorf("eligible=%d err = %v, want %v", tt.eligible, err, tt.wantErr)
+				t.Errorf("members=%d err = %v, want %v", tt.members, err, tt.wantErr)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("eligible=%d unexpected err %v", tt.eligible, err)
+			t.Errorf("members=%d unexpected err %v", tt.members, err)
 			continue
 		}
 		if bp.SelectCount != tt.wantN {
-			t.Errorf("eligible=%d SelectCount = %d, want %d", tt.eligible, bp.SelectCount, tt.wantN)
+			t.Errorf("members=%d SelectCount = %d, want %d", tt.members, bp.SelectCount, tt.wantN)
 		}
 		if err := bp.Validate(); err != nil {
-			t.Errorf("eligible=%d blueprint invalid: %v", tt.eligible, err)
+			t.Errorf("members=%d blueprint invalid: %v", tt.members, err)
 		}
 	}
 }

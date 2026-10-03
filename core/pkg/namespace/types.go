@@ -288,7 +288,7 @@ var (
 	ErrInsufficientNodes = &ClusterError{Message: "insufficient nodes available for cluster"}
 	// ErrTwoNodeFleet is a 2-node fleet: not eval (1) and not HA (3). Even-sized
 	// Raft is a split-brain, and vault at N=2 has no spare share. Add a third node.
-	ErrTwoNodeFleet = &ClusterError{Message: "2 eligible nodes is not eval (1) and not HA (3); add a third node"}
+	ErrTwoNodeFleet = &ClusterError{Message: "a 2-node fleet is not eval (1) and not HA (3); add a third node"}
 	// ErrEvalClusterNoReplacement: an N=1 eval tenant lives on one machine. There
 	// is no spare VPS to fail over onto; bounce is local restore, not replace.
 	ErrEvalClusterNoReplacement    = &ClusterError{Message: "eval cluster of size 1 cannot be replaced onto another machine; waiting for this node to return"}
@@ -359,3 +359,9 @@ type WebRTCPortBlock struct {
 
 	AllocatedAt time.Time `json:"allocated_at" db:"allocated_at"`
 }
+
+// RetiredNodeLastSeen is the last_seen `orama node remove` gives a node it
+// retires (cmd/orama/internal/production/clusterops). A retired node keeps its
+// dns_nodes row, so the cluster can still find and purge its DNS records; this
+// date is what says it is no longer a member.
+const RetiredNodeLastSeen = "1970-01-01 00:00:00"

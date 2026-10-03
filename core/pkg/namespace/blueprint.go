@@ -253,18 +253,23 @@ func BlueprintNameserver() Blueprint {
 	}
 }
 
-// TenantBlueprintForEligibleCount picks the tenant recipe for a fleet of this
-// many eligible nodes. Production stays N=3 whenever the fleet can support it
-// (never N=fleet). A single eligible node is eval — the same units, replica
-// count 1, not HA. Two nodes are refused: that size is neither eval nor a
-// Raft quorum. Zero is insufficient.
-func TenantBlueprintForEligibleCount(eligible int) (Blueprint, error) {
+// TenantBlueprintForFleetSize picks the tenant recipe for a fleet of this many
+// members (FleetMemberCount: registered and not retired). Production stays N=3
+// whenever the fleet has three nodes (never N=fleet). A one-node fleet is eval:
+// the same units, replica count 1, not HA. Two nodes are refused: that size is
+// neither eval nor a Raft quorum. Zero is insufficient.
+//
+// It is the fleet's size, not how many of its nodes have a free namespace slot
+// or are heartbeating. Counting free slots made a full five-node fleet with one
+// slot left provision an eval namespace, all three roles on that one node, and
+// report it ready; a full fleet is now refused (chooseTenantBlueprint).
+func TenantBlueprintForFleetSize(members int) (Blueprint, error) {
 	switch {
-	case eligible >= DefaultRQLiteNodeCount:
+	case members >= DefaultRQLiteNodeCount:
 		return BlueprintTenant(), nil
-	case eligible == 1:
+	case members == 1:
 		return BlueprintTenantN(1), nil
-	case eligible == 2:
+	case members == 2:
 		return Blueprint{}, ErrTwoNodeFleet
 	default:
 		return Blueprint{}, ErrInsufficientNodes
