@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/evidence"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
@@ -225,4 +227,26 @@ func protect(t testing.TB, c *gw.Client, values ...string) {
 	if err := red.Add(values...); err != nil {
 		t.Errorf("failed to register a capability for redaction: %v", err)
 	}
+}
+
+// refusedAsRevoked requires an upgrade on token to be refused as revoked within
+// revokedRefusalBound of revokedAt (docs/AUTH.md, "How long a change takes to
+// land": within 10 seconds). Every gateway reloads its own
+// list, so an upgrade that reaches another of the namespace's gateways may be
+// accepted inside the bound; one accepted past it, or refused for any other
+// reason, fails.
+func refusedAsRevoked(t *testing.T, fx *fixture, node fleet.Node, token string, revokedAt time.Time, what string) {
+	t.Helper()
+	timeout := max(time.Until(revokedAt.Add(revokedRefusalBound)), revokedPoll)
+	eventually.Eventually(t, revokedPoll, timeout, what+" refused as revoked", func() (bool, error) {
+		conn, status, body := dialAt(t, fx.c, node, capPath(capFunction, fx.n.Name, token), nil)
+		if conn != nil {
+			conn.Close()
+			return false, fmt.Errorf("upgraded %s after the revocation", time.Since(revokedAt).Round(time.Millisecond))
+		}
+		if status != http.StatusForbidden || body != revokedBody {
+			return false, eventually.Stop(fmt.Errorf("want 403 %q, got %d %q", revokedBody, status, body))
+		}
+		return true, nil
+	})
 }

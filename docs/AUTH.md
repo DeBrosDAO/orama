@@ -597,8 +597,8 @@ every request that run makes.
 
 | Change | When it takes effect |
 |--------|----------------------|
-| Revoking a key | at once, everywhere — the revocation list is replicated and consulted before any cache |
-| Revoking a token | at once, by its `jti` |
+| Revoking a key | at once on the gateway that records it; within 10 seconds on every other, which reloads the replicated revocation list and consults it before any cache |
+| Revoking a token | by its `jti`: at once on the gateway that records it, within 10 seconds on every other |
 | Narrowing a **wallet's** grant, or changing its role | on the next request on routes that resolve the grant; within 10 seconds on the data plane (storage, pubsub, cache, push, webrtc, proxy), where it is read through a short cache |
 | Narrowing a **key** — editing its scopes, or revoking a grant it holds | within one minute, on every gateway that had seen it |
 | Revoking the token an open WebSocket was opened with | the socket is closed within 10 seconds (`4403`) |

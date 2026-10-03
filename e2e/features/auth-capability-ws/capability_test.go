@@ -19,19 +19,27 @@ import (
 
 // Capability rules (docs/AUTH.md#capability-websockets, docs/SERVERLESS.md#capabilities).
 const (
-	minTTL            = time.Minute
-	maxTTL            = 7 * 24 * time.Hour
-	maxResourceBytes  = 256
-	socketsPerCap     = 16
-	expiryGrace       = 2 * time.Minute
-	sweep             = 10 * time.Second
-	slack             = 5 * time.Second
-	closeExpired      = 4401
-	closeRevoked      = 4403
-	invalidBody       = "forbidden: the capability is not valid for this function"
-	revokedBody       = "forbidden: this capability, or the device that issued it, was revoked"
-	tooManyBody       = "too many sockets are open on this capability"
-	upgradeRetryAfter = "60"
+	minTTL           = time.Minute
+	maxTTL           = 7 * 24 * time.Hour
+	maxResourceBytes = 256
+	socketsPerCap    = 16
+	expiryGrace      = 2 * time.Minute
+	sweep            = 10 * time.Second
+	slack            = 5 * time.Second
+	// revokedPoll is how often a revoked capability's upgrade is retried while
+	// the gateways' revocation lists catch up.
+	revokedPoll = time.Second
+	// revokedRefusalBound is how long after a revocation another gateway may
+	// still accept its upgrade: its list is used until it is 10 seconds old
+	// (core pkg/gateway/auth RevocationStaleness), and a reload past that
+	// takes at most 3 more (revocationReloadTimeout).
+	revokedRefusalBound = 13 * time.Second
+	closeExpired        = 4401
+	closeRevoked        = 4403
+	invalidBody         = "forbidden: the capability is not valid for this function"
+	revokedBody         = "forbidden: this capability, or the device that issued it, was revoked"
+	tooManyBody         = "too many sockets are open on this capability"
+	upgradeRetryAfter   = "60"
 )
 
 // TestCapabilitySocket_lifecycle walks a capability from mint to expiry in
@@ -168,12 +176,11 @@ func revokeCapability(t *testing.T, fx *fixture) {
 	if !strings.Contains(string(resp.Expect(t, http.StatusOK).Body), `"revoked":true`) {
 		t.Fatalf("capability_revoke: %s", resp.Body)
 	}
+	revokedAt := time.Now()
 	if code := closeCode(t, conn, sweep+slack); code != closeRevoked {
 		t.Errorf("the revoked capability's socket closed with %d, want %d within %s", code, closeRevoked, sweep)
 	}
-	if _, status, body := dialAt(t, fx.c, node, capPath(capFunction, fx.n.Name, m.Token), nil); status != http.StatusForbidden || body != revokedBody {
-		t.Errorf("reopening a revoked capability: want 403 %q, got %d %q", revokedBody, status, body)
-	}
+	refusedAsRevoked(t, fx, node, m.Token, revokedAt, "reopening a revoked capability")
 }
 
 func revokeDevice(t *testing.T, fx *fixture) {
@@ -187,12 +194,11 @@ func revokeDevice(t *testing.T, fx *fixture) {
 	if _, err := fx.c.For(t).RevokeDevice(t.Context(), fx.plain.AccessToken, d2.ID(), nil); err != nil {
 		t.Fatalf("revoking the issuing device: %v", err)
 	}
+	revokedAt := time.Now()
 	if code := closeCode(t, conn, sweep+slack); code != closeRevoked {
 		t.Errorf("a capability of a revoked device kept its socket (close %d)", code)
 	}
-	if _, status, body := dialAt(t, fx.c, node, capPath(capFunction, fx.n.Name, m.Token), nil); status != http.StatusForbidden || body != revokedBody {
-		t.Errorf("a revoked device's capability: want 403 %q, got %d %q", revokedBody, status, body)
-	}
+	refusedAsRevoked(t, fx, node, m.Token, revokedAt, "a revoked device's capability")
 }
 
 func expiry(t *testing.T, fx *fixture) {
