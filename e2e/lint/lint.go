@@ -160,6 +160,7 @@ func checkBuildTag(fset *token.FileSet, path string, f *ast.File) []Problem {
 func checkFile(fset *token.FileSet, path string, f *ast.File) ([]Problem, bool, bool) {
 	harnessPkg := importName(f, harnessImport)
 	out := append(bannedCalls(fset, f), alwaysErrorPolls(fset, f)...)
+	out = append(out, cancelledCleanupContexts(fset, f)...)
 	hasMain, hasTests := false, false
 	isTestFile := strings.HasSuffix(path, "_test.go")
 	for _, d := range f.Decls {
@@ -206,6 +207,60 @@ func alwaysErrorPolls(fset *token.FileSet, f *ast.File) []Problem {
 			out = append(out, Problem{Pos: fset.Position(ret.Pos()).String(),
 				Msg: "return of a condition with an error built unconditionally: a poll closure must return true, nil when the condition holds (eventually.Poll treats done with an error as not done)"})
 		}
+		return true
+	})
+	return out
+}
+
+// cleanupContextUsers are calls that wait on the test's own context, which Go
+// cancels before the cleanups run: inside a cleanup they give up at once.
+var cleanupContextUsers = map[string]string{
+	"Context":       "t.Context() is cancelled before the cleanups run: use context.Background() with a timeout",
+	"WaitConverged": "infra.WaitConverged waits on the test's context, cancelled before the cleanups run: use infra.ConvergeInCleanup",
+}
+
+// cancelledCleanupContexts reports a call in cleanupContextUsers inside a
+// function literal passed to Cleanup. A Context() counts only on the value the
+// cleanup was registered on (t.Context() inside t.Cleanup): req.Context() or
+// cmd.Context() there is some other context. It sees the literal only: a named
+// function passed to Cleanup, or a helper it calls, is not followed.
+func cancelledCleanupContexts(fset *token.FileSet, f *ast.File) []Problem {
+	var out []Problem
+	seen := map[token.Pos]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		reg, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || reg.Sel.Name != "Cleanup" {
+			return true
+		}
+		body, ok := call.Args[0].(*ast.FuncLit)
+		if !ok {
+			return true
+		}
+		owner, _ := reg.X.(*ast.Ident)
+		ast.Inspect(body, func(m ast.Node) bool {
+			inner, ok := m.(*ast.CallExpr)
+			if !ok || seen[inner.Pos()] {
+				return true
+			}
+			sel, ok := inner.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			msg, bad := cleanupContextUsers[sel.Sel.Name]
+			if sel.Sel.Name == "Context" {
+				recv, _ := sel.X.(*ast.Ident)
+				bad = len(inner.Args) == 0 && owner != nil && recv != nil && recv.Name == owner.Name
+			}
+			if bad {
+				seen[inner.Pos()] = true
+				out = append(out, Problem{Pos: fset.Position(inner.Pos()).String(), Msg: msg})
+			}
+			return true
+		})
 		return true
 	})
 	return out

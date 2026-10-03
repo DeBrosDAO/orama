@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,45 +16,46 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
+	"github.com/DeBrosOfficial/network/e2e/harness/rqlitelog"
 )
 
 const (
 	// electionBudget bounds a namespace rqlite electing a new leader and the
 	// gateway serving a backup again.
 	electionBudget = 3 * time.Minute
-	// leaderLine is what rqlite (hashicorp raft) logs on becoming leader.
-	leaderLine = "entering leader state"
 	// webrtcEnable gives the namespace a stored secret (its TURN secret,
 	// core/pkg/secrets NamespaceColumns namespace_webrtc_config).
 	pathWebRTCEnable  = "/v1/namespace/webrtc/enable"
 	pathWebRTCDisable = "/v1/namespace/webrtc/disable"
 )
 
-// leader finds the node whose namespace rqlite most recently logged becoming
-// leader. The journal is the only place that says so without reading the
-// rqlite credentials, which must not reach evidence.
+// leader finds the node the namespace's rqlite most recently named leader.
+// Every member's store logs "node <id> at <raft addr> is now Leader" when the
+// leader changes; the newest such line across the members names the current
+// one by its overlay address. The journal is the only place that says so
+// without reading the rqlite credentials, which must not reach evidence.
 func leader(t testing.TB, f *fleet.Fleet, n *ns.Namespace) fleet.Node {
 	t.Helper()
-	var best fleet.Node
-	var bestAt float64
-	for _, node := range tenancy.Members(t, f, n.Name) {
-		out := f.Exec(t, node, "journalctl -u "+tenancy.UnitRQLite(n.Name)+" -o short-unix --no-pager | grep '"+leaderLine+"' | tail -1").Stdout
-		fields := strings.Fields(out)
-		if len(fields) == 0 {
-			continue
-		}
-		at, err := strconv.ParseFloat(fields[0], 64)
-		if err != nil {
-			t.Fatalf("%s: unparseable journal line %q", node.Name, out)
-		}
-		if at > bestAt {
-			best, bestAt = node, at
+	members := tenancy.Members(t, f, n.Name)
+	var addr string
+	var newest float64
+	for _, node := range members {
+		out := f.Exec(t, node, "journalctl -u "+tenancy.UnitRQLite(n.Name)+" -o short-unix --no-pager | grep '"+rqlitelog.LeaderLine+"' | tail -1").Stdout
+		at, leaderAddr, ok := rqlitelog.ParseLeaderLine(out)
+		if ok && at > newest {
+			newest, addr = at, leaderAddr
 		}
 	}
-	if bestAt == 0 {
-		t.Fatalf("no node of %s logged %q", n.Name, leaderLine)
+	if newest == 0 {
+		t.Fatalf("no member of %s logged %q", n.Name, rqlitelog.LeaderLine)
 	}
-	return best
+	for _, node := range members {
+		if node.WGIP == addr {
+			return node
+		}
+	}
+	t.Fatalf("%s's newest leader, %s, is none of its members", n.Name, addr)
+	return fleet.Node{}
 }
 
 // TestBackupChaos_duringLeaderChange: a backup taken while the namespace's

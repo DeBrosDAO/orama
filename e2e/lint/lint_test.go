@@ -96,26 +96,28 @@ func TestCheck_violations(t *testing.T) {
 	cases := map[string]struct {
 		file, body, want string
 	}{
-		"sleep":          {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.Sleep(1) }\n", "time.Sleep"},
-		"aliased sleep":  {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport tm \"time\"\n\nfunc h() { tm.Sleep(1) }\n", "time.Sleep"},
-		"time after":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.After(1) }\n", "time.After"},
-		"new timer":      {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTimer(1) }\n", "time.NewTimer"},
-		"tick":           {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.Tick(1) }\n", "time.Tick"},
-		"new ticker":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTicker(1) }\n", "time.NewTicker"},
-		"after func":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.AfterFunc(1, nil) }\n", "time.AfterFunc"},
-		"always error":   {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"fmt\"\n\nfunc h(n int) (bool, error) { return n == 2, fmt.Errorf(\"%d\", n) }\n", "poll closure must return true, nil"},
-		"bare skip":      {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.Skip("later")`, 1), "bare Skip"},
-		"skipnow":        {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.SkipNow()`, 1), "bare SkipNow"},
-		"no tag":         {"x_test.go", strings.Replace(goodTest, "//go:build e2e_fleet\n", "", 1), "missing //go:build"},
-		"wrong tag":      {"x_test.go", strings.Replace(goodTest, "e2e_fleet", "e2e", 1), "does not require"},
-		"or tag":         {"x_test.go", strings.Replace(goodTest, "e2e_fleet", "e2e_fleet || linux", 1), "does not require"},
-		"bad name":       {"x_test.go", strings.Replace(goodTest, "TestHealth_ok", "TestHealth", 1), "Test{Function}_{scenario}"},
-		"not run":        {"x_test.go", goodTest + "\nfunc HealthCheck(t *testing.T) {}\n", "never runs"},
-		"lower not run":  {"x_test.go", goodTest + "\nfunc testHealth(t *testing.T) {}\n", "never runs"},
-		"bad signature":  {"x_test.go", goodTest + "\nfunc TestX_y(t *testing.T, n int) {}\n", "signature"},
-		"no main":        {"main_test.go", strings.Replace(goodMain, "harness.Main(m)", "m.Run()", 1), "no TestMain"},
-		"no manifest":    {"feature.yaml", "id: other\ntitle: t\narea: a\nstage: 1\ncovers:\n  routes: [\"/x\"]\n", "manifest"},
-		"does not parse": {"z_test.go", "//go:build e2e_fleet\n\npackage good\nfunc {", "does not parse"},
+		"sleep":             {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.Sleep(1) }\n", "time.Sleep"},
+		"aliased sleep":     {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport tm \"time\"\n\nfunc h() { tm.Sleep(1) }\n", "time.Sleep"},
+		"time after":        {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.After(1) }\n", "time.After"},
+		"new timer":         {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTimer(1) }\n", "time.NewTimer"},
+		"tick":              {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { <-time.Tick(1) }\n", "time.Tick"},
+		"new ticker":        {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.NewTicker(1) }\n", "time.NewTicker"},
+		"after func":        {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"time\"\n\nfunc h() { time.AfterFunc(1, nil) }\n", "time.AfterFunc"},
+		"always error":      {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"fmt\"\n\nfunc h(n int) (bool, error) { return n == 2, fmt.Errorf(\"%d\", n) }\n", "poll closure must return true, nil"},
+		"bare skip":         {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.Skip("later")`, 1), "bare Skip"},
+		"skipnow":           {"x_test.go", strings.Replace(goodTest, `harness.SkipNotApplicable(t, "reason")`, `t.SkipNow()`, 1), "bare SkipNow"},
+		"no tag":            {"x_test.go", strings.Replace(goodTest, "//go:build e2e_fleet\n", "", 1), "missing //go:build"},
+		"wrong tag":         {"x_test.go", strings.Replace(goodTest, "e2e_fleet", "e2e", 1), "does not require"},
+		"or tag":            {"x_test.go", strings.Replace(goodTest, "e2e_fleet", "e2e_fleet || linux", 1), "does not require"},
+		"bad name":          {"x_test.go", strings.Replace(goodTest, "TestHealth_ok", "TestHealth", 1), "Test{Function}_{scenario}"},
+		"not run":           {"x_test.go", goodTest + "\nfunc HealthCheck(t *testing.T) {}\n", "never runs"},
+		"lower not run":     {"x_test.go", goodTest + "\nfunc testHealth(t *testing.T) {}\n", "never runs"},
+		"bad signature":     {"x_test.go", goodTest + "\nfunc TestX_y(t *testing.T, n int) {}\n", "signature"},
+		"no main":           {"main_test.go", strings.Replace(goodMain, "harness.Main(m)", "m.Run()", 1), "no TestMain"},
+		"no manifest":       {"feature.yaml", "id: other\ntitle: t\narea: a\nstage: 1\ncovers:\n  routes: [\"/x\"]\n", "manifest"},
+		"cleanup t.Context": {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(t *testing.T) { t.Cleanup(func() { _ = t.Context() }) }\n", "cancelled before the cleanups run"},
+		"cleanup converge":  {"y_test.go", "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(t *testing.T) { t.Cleanup(func() { infra.WaitConverged(t, 3, 0, \"x\") }) }\n", "use infra.ConvergeInCleanup"},
+		"does not parse":    {"z_test.go", "//go:build e2e_fleet\n\npackage good\nfunc {", "does not parse"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -125,6 +127,40 @@ func TestCheck_violations(t *testing.T) {
 				t.Fatalf("want a problem containing %q, got:\n%s", c.want, got)
 			}
 		})
+	}
+}
+
+// t.Context() and infra.WaitConverged are fine in the test body; only a
+// cleanup runs after the context is cancelled.
+func TestCheck_contextOutsideCleanupPasses(t *testing.T) {
+	files := base()
+	files["y_test.go"] = "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(t *testing.T) { _ = t.Context(); infra.WaitConverged(t, 3, 0, \"x\"); t.Cleanup(func() { infra.ConvergeInCleanup(t, 3, 0, \"x\") }) }\n"
+	if got := problems(t, files); strings.Contains(got, "cleanups run") {
+		t.Fatalf("flagged a use outside a cleanup:\n%s", got)
+	}
+}
+
+func TestCheck_otherContextsInCleanupPass(t *testing.T) {
+	files := base()
+	files["y_test.go"] = "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(t *testing.T, req interface{ Context() int }) { t.Cleanup(func() { _ = req.Context() }) }\n"
+	if got := problems(t, files); strings.Contains(got, "cleanups run") {
+		t.Fatalf("flagged a request's context in a cleanup:\n%s", got)
+	}
+}
+
+func TestCheck_nestedCleanupReportedOnce(t *testing.T) {
+	files := base()
+	files["y_test.go"] = "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(t *testing.T) { t.Cleanup(func() { t.Cleanup(func() { _ = t.Context() }) }) }\n"
+	if got := problems(t, files); strings.Count(got, "cancelled before the cleanups run") != 1 {
+		t.Fatalf("want exactly one report for a nested cleanup, got:\n%s", got)
+	}
+}
+
+func TestCheck_benchmarkCleanupFlagged(t *testing.T) {
+	files := base()
+	files["y_test.go"] = "//go:build e2e_fleet\n\npackage good\n\nimport \"testing\"\n\nfunc h(b *testing.B) { b.Cleanup(func() { _ = b.Context() }) }\n"
+	if got := problems(t, files); !strings.Contains(got, "cancelled before the cleanups run") {
+		t.Fatalf("b.Context() in b.Cleanup was not flagged:\n%s", got)
 	}
 }
 

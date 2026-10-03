@@ -75,7 +75,7 @@ func TestRing_hungGatewaySuspectedThenRecovered(t *testing.T) {
 	id := nodeID(t, f, observer, victim)
 	since := sqliteNow(t, f, observer)
 	t.Cleanup(func() {
-		infra.WaitConverged(t, len(f.State.Nodes), infra.ConvergeBudget, "the cluster after the hung gateway")
+		infra.ConvergeInCleanup(t, len(f.State.Nodes), infra.ConvergeBudget, "the cluster after the hung gateway")
 	})
 	tenancy.Freeze(t, f, victim, edge.IndexGatewayUnit)
 	start := time.Now()

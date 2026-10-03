@@ -19,25 +19,36 @@ import (
 // round or two.
 const electionBudget = 3 * time.Minute
 
-// TestQuorum_stopRefusedWhenItWouldBreakQuorum: with one voter down, stopping
-// a second is refused as a conflict that names the arithmetic and the way to
-// force it, and removing a second is refused before anything changes
-// (docs/CLI_REFERENCE.md "orama node stop", "orama node remove").
+// TestQuorum_stopRefusedWhenItWouldBreakQuorum: with as many voters down as
+// the cluster can spare, stopping one more is refused as a conflict that names
+// the arithmetic and the way to force it, and removing it is refused before
+// anything changes (docs/CLI_REFERENCE.md "orama node stop", "orama node
+// remove"). A cluster of n voters can spare n - (n/2+1): one of three, two of
+// five.
 func TestQuorum_stopRefusedWhenItWouldBreakQuorum(t *testing.T) {
 	f := harness.Fleet(t)
 	r := infra.RequireHealthy(t)
 	followers := infra.Followers(t, r)
-	s := newStopped(t)
-	first, second := followers[0], followers[1]
-	if out := s.stop(t, first, false); out.Exit != 0 {
-		t.Fatalf("stopping one voter of three was refused (exit %d):\n%s", out.Exit, f.Redact(out.Stdout+out.Stderr))
+	voters := voterCount(r)
+	spare := voters - (voters/2 + 1)
+	if spare < 1 || len(followers) < spare+1 {
+		t.Fatalf("%d voters and %d followers: no voter can be spared and then one more refused", voters, len(followers))
 	}
+	s := newStopped(t)
+	for _, fo := range followers[:spare] {
+		if out := s.stop(t, fo, false); out.Exit != 0 {
+			t.Fatalf("stopping %s, one of the %d voters a cluster of %d can spare, was refused (exit %d):\n%s",
+				fo.Name, spare, voters, out.Exit, f.Redact(out.Stdout+out.Stderr))
+		}
+	}
+	second := followers[spare]
 	// Through s.stop, so a stop that regresses into going through is
 	// started again by the cleanup.
 	out := s.stop(t, second, false)
 	if out.Exit != infra.ExitConflict || !strings.Contains(out.Stdout+out.Stderr, "would break RQLite quorum") ||
 		!strings.Contains(out.Stdout+out.Stderr, "--force") {
-		t.Errorf("stopping a second voter: exit %d, want %d naming the quorum and --force:\n%s", out.Exit, infra.ExitConflict, out.Stdout+out.Stderr)
+		t.Errorf("stopping voter %d of %d with %d down: exit %d, want %d naming the quorum and --force:\n%s",
+			spare+1, voters, spare, out.Exit, infra.ExitConflict, f.Redact(out.Stdout+out.Stderr))
 	}
 	if st := f.Unit(t, second, infra.IndexRQLiteUnit); st != "active" {
 		t.Errorf("a refused stop left %s %s", infra.IndexRQLiteUnit, st)
@@ -106,4 +117,15 @@ func TestQuorumLoss_refusesStrongReadsThenRecovers(t *testing.T) {
 	if q, err := infra.IndexQueryAt(t, f, leader, "none", "SELECT COUNT(*) FROM node_credentials"); err != nil || len(q.Values) != 1 {
 		t.Errorf("a local read (level none) on the survivor failed: %v", err)
 	}
+}
+
+// voterCount is how many nodes report themselves an rqlite voter.
+func voterCount(r *monitor.Report) int {
+	n := 0
+	for _, e := range r.Nodes {
+		if e.Report != nil && e.Report.RQLite != nil && e.Report.RQLite.Voter {
+			n++
+		}
+	}
+	return n
 }
