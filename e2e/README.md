@@ -356,6 +356,7 @@ command documents, and on its stderr.
 | `(*Client).Challenge / Verify / APIKey / Token / Refresh / Logout / Whoami / Sessions / EndSession / Devices / RevokeDevice` | each auth route, typed |
 | `(*Client).SignIn(ctx, w, namespace, dev) (*Session, error)` | challenge → real EIP-191 signature → verify (device-bound when dev != nil) |
 | `NewUser(t, f, namespace, gw.WithDevice(wallet.AlgEd25519)) *User` | a fresh wallet signed in (`gw.LobbyNamespace` for the lobby); logs out at cleanup |
+| `(*User).Token()`, `(*Session).Stale(now)` | the current access token; a session two-thirds through its lifetime is refreshed first (with a device proof when device-bound), so a test that outlives one access token keeps a valid credential; a failed refresh is in the evidence and the stale token is returned |
 | `NewDevice(t, alg) *wallet.Device` | a device key |
 
 ### ns
@@ -611,7 +612,7 @@ package name is a usage error.
 
 `target stagenet` writes the state (`"target": "stagenet"`), five nodes in join
 order: `node-1` mew `57.129.166.16` (WG `10.0.0.1`), `node-2` mewtwo `57.129.166.17`
-(WG `10.0.0.2`) and `node-3` gengar `161.97.184.199` (WG `WG3`), all nameservers;
+(WG `10.0.0.2`) and `node-3` gengar `161.97.184.199` (WG `10.0.0.3`), all nameservers;
 `node-4` magicarp `161.97.184.202` (WG `10.0.0.4`) and `node-5` froakie `161.97.151.255`
 (WG `10.0.0.5`), plain nodes. mew and mewtwo are OVH (ASN 16276, Ubuntu 26.04, systemd
 259 with BPF_FRAMEWORK, login user `ubuntu`); gengar, magicarp and froakie are Contabo
@@ -799,7 +800,19 @@ subtest of a passing test included, a feature that never ran or executed no
 test, a coverage gap), **FAIL** (a test, package or
 run step failed; a package whose `go test` exited non-zero fails with the tail
 of its stderr even when every parsed test passed; a failed teardown is a run
-error; a flaky failure is still a failure). Exit codes 0, 3, 1 (2 for usage).
+error; a flaky failure is still a failure; a package during which the
+host running the suite slept for 30s or more fails with "the host running the
+suite was asleep for ..." instead of being taken as a verdict on the fleet).
+Exit codes 0, 3, 1 (2 for usage).
+
+**The runner's host must stay awake.** A sleeping laptop freezes the tests
+while the fleet keeps running: connections drop, deadlines and timings span
+the sleep, and the run fills with failures the fleet never had. On macOS
+`test` and `run` hold `caffeinate -i -s -w <runner pid>` for their lifetime,
+which stops idle and system sleep on AC power; closing the lid on battery
+still sleeps. Every package compares wall-clock and monotonic time (the
+monotonic clock stops while the host sleeps) and reports any sleep it
+could not prevent, as above.
 
 ## Scanners
 

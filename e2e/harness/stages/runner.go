@@ -173,8 +173,15 @@ func (r *Runner) runPackage(ctx context.Context, stage Stage, feature string) Pa
 	rel := filepath.Join(GoTestDir, name+".json")
 	pr := PackageRun{Feature: feature, Output: rel, Evidence: filepath.Join(evidence.DirName, name), Start: r.Now()}
 	args := append(r.goTestArgs(binaryTimeout(stage.Timeout)), "./features/"+feature)
+	// time.Now, not r.Now: only a reading with the monotonic clock can tell
+	// the host's sleep apart from the package's own time.
+	awake := time.Now()
 	pr.Exit, pr.Error = r.execTo(ctx, rel, pr.Evidence, args, time.Duration(stage.Timeout))
 	pr.End = r.Now()
+	if slept := suspendedError(hostSuspended(awake, time.Now())); slept != "" {
+		pr.Error = strings.Join(slices.DeleteFunc([]string{pr.Error, slept}, func(s string) bool { return s == "" }), "; ")
+		r.Logf("stage %d: %s: %s", stage.ID, feature, slept)
+	}
 	r.Logf("stage %d: %s exit %d", stage.ID, feature, pr.Exit)
 	return pr
 }

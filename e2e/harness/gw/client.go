@@ -226,6 +226,16 @@ func (c *Client) record(req *http.Request, body []byte, resp *Response, err erro
 	return nil
 }
 
+// note records a failure that sent no request of its own (a refresh whose
+// proof could not be signed) so the evidence explains the 401 that follows.
+// note has no caller to fail, so a recorder that cannot write reports both to
+// stderr, which the runner keeps beside the package's output.
+func (c *Client) note(summary string, err error) {
+	if recErr := c.rec.Add(evidence.Record{Kind: evidence.KindHTTP, Test: c.test, Summary: summary, Error: err.Error()}); recErr != nil {
+		fmt.Fprintf(os.Stderr, "%s: %s: %v (and recording it failed: %v)\n", c.test, summary, err, recErr)
+	}
+}
+
 func dumpHeaders(h http.Header) string {
 	keys := make([]string, 0, len(h))
 	for k := range h {

@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -104,6 +106,11 @@ func cmdTest(parent context.Context, args []string) (int, error) {
 		return exitFail, err
 	}
 	defer release()
+	wake, err := keepAwake(runtime.GOOS, exec.LookPath)
+	if err != nil {
+		return exitFail, err
+	}
+	defer wake()
 	steps, err := planStages(lay)
 	if err != nil {
 		return exitFail, err

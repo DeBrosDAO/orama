@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -95,6 +97,11 @@ func cmdRun(parent context.Context, args []string) (int, error) {
 		return exitFail, err
 	}
 	defer release()
+	wake, err := keepAwake(runtime.GOOS, exec.LookPath)
+	if err != nil {
+		return exitFail, err
+	}
+	defer wake()
 	return rs.run(ctx, parent, *keep)
 }
 

@@ -2,6 +2,8 @@ package gw
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,13 @@ const LobbyNamespace = "default"
 
 // logoutBudget bounds the logout a user's cleanup performs.
 const logoutBudget = 30 * time.Second
+
+// refreshBudget bounds the refresh Token performs on a stale session.
+const refreshBudget = 30 * time.Second
+
+// refreshRetryAfter is how long Token waits after a failed refresh before
+// trying again, so a refused refresh is not resent on every request.
+const refreshRetryAfter = 30 * time.Second
 
 // ForFleet returns the client for the run's public gateway, attributed to t.
 func ForFleet(t testing.TB, f *fleet.Fleet) *Client {
@@ -45,6 +54,11 @@ type User struct {
 	Namespace string
 	// Client is the public gateway client, attributed to the test.
 	Client *Client
+	// mu serialises Token's refresh: a refresh rotates the refresh token, so
+	// two concurrent refreshes would spend it twice.
+	mu sync.Mutex
+	// refreshFailedAt is when the last refresh failed, zero after a success.
+	refreshFailedAt time.Time
 }
 
 // UserOption configures NewUser.
@@ -121,6 +135,8 @@ func (u *User) logoutAll(t testing.TB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), logoutBudget)
 	defer cancel()
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	resp, err := u.Client.Logout(ctx, u.Session.AccessToken, u.Session.RefreshToken, u.Session.Namespace, true)
 	if err != nil && (resp == nil || resp.Status != 401) {
 		// 401 means a test already ended the session, which is not a leak.
@@ -128,5 +144,60 @@ func (u *User) logoutAll(t testing.TB) {
 	}
 }
 
-// Token is the current access token.
-func (u *User) Token() string { return u.Session.AccessToken }
+// Token is the current access token. A session far enough into its lifetime is
+// refreshed first, so a test that outlives one access token (a package that
+// provisions namespaces one after another, a chaos test waiting out a fault)
+// keeps a valid credential. A failed refresh is recorded in the run's
+// evidence and retried after refreshRetryAfter, and the stale token is
+// returned: the request it is used for then fails with AUTH_EXPIRED.
+func (u *User) Token() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.Session.Stale(time.Now()) {
+		u.refreshLocked()
+	}
+	return u.Session.AccessToken
+}
+
+func (u *User) refreshLocked() {
+	now := time.Now()
+	if !u.refreshFailedAt.IsZero() && now.Sub(u.refreshFailedAt) < refreshRetryAfter {
+		return
+	}
+	if err := u.rotate(); err != nil {
+		u.refreshFailedAt = now
+		u.Client.note("refresh of "+u.Session.Subject+"'s session", err)
+		return
+	}
+	u.refreshFailedAt = time.Time{}
+}
+
+// rotate refreshes the session in place. A refresh answers only the rotated
+// credentials, so everything else the session carries (its API key, device,
+// subject) is kept.
+func (u *User) rotate() error {
+	ctx, cancel := context.WithTimeout(context.Background(), refreshBudget)
+	defer cancel()
+	var proof *wallet.Proof
+	if u.Device != nil {
+		p, err := u.Device.NewProof(wallet.ProofRefresh, u.Session.Namespace, u.Session.RefreshToken)
+		if err != nil {
+			return fmt.Errorf("failed to sign the refresh proof: %w", err)
+		}
+		proof = p
+	}
+	next, _, err := u.Client.Refresh(ctx, u.Session.RefreshToken, u.Session.Namespace, proof)
+	if err != nil {
+		return err
+	}
+	if next.AccessToken == "" || next.RefreshToken == "" {
+		return fmt.Errorf("the refresh answered no access or refresh token")
+	}
+	s := *u.Session
+	s.AccessToken, s.RefreshToken, s.ExpiresIn, s.issuedAt = next.AccessToken, next.RefreshToken, next.ExpiresIn, next.issuedAt
+	if next.TokenType != "" {
+		s.TokenType = next.TokenType
+	}
+	u.Session = &s
+	return nil
+}

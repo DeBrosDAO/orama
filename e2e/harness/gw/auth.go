@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
@@ -61,6 +62,26 @@ type Session struct {
 	DeviceID     string `json:"device_id,omitempty"`
 	// Status is "provisioning" on a 202 from a namespace still being built.
 	Status string `json:"status,omitempty"`
+	// issuedAt is when the request that returned the session was sent, zero
+	// for a session the harness did not receive itself. Wall clock only: the
+	// token expires by the wall clock, which keeps running while the host
+	// sleeps and the monotonic clock does not.
+	issuedAt time.Time
+}
+
+// refreshAfter is how far into its lifetime a session is refreshed: early
+// enough that a request sent just before cannot outlive the access token.
+const refreshAfter = 2.0 / 3.0
+
+// Stale reports whether the access token is far enough into its lifetime to be
+// refreshed before use. A session with no refresh token, no lifetime or no
+// recorded issue time is never stale: there is nothing to refresh it with.
+func (s *Session) Stale(now time.Time) bool {
+	if s == nil || s.issuedAt.IsZero() || s.ExpiresIn <= 0 || s.RefreshToken == "" {
+		return false
+	}
+	lifetime := time.Duration(s.ExpiresIn) * time.Second
+	return now.Round(0).Sub(s.issuedAt) >= time.Duration(float64(lifetime)*refreshAfter)
 }
 
 // Challenge asks for a sign-in message.
@@ -79,7 +100,7 @@ func (c *Client) Challenge(ctx context.Context, req ChallengeRequest) (*Challeng
 // Verify exchanges a signed message for a session. A 202 (namespace still
 // provisioning) is returned as a session with Status set, not as an error.
 func (c *Client) Verify(ctx context.Context, req VerifyRequest) (*Session, *Response, error) {
-	var out Session
+	out := Session{issuedAt: time.Now().Round(0)}
 	resp, err := c.JSON(ctx, http.MethodPost, PathVerify, "", req, &out)
 	if err != nil {
 		return nil, resp, err
@@ -107,6 +128,7 @@ func (c *Client) APIKey(ctx context.Context, message, signature string) (string,
 
 // Token exchanges an API key for a short-lived JWT.
 func (c *Client) Token(ctx context.Context, apiKey string) (*Session, *Response, error) {
+	sent := time.Now().Round(0)
 	resp, err := c.Send(ctx, Req{Method: http.MethodPost, Path: PathToken, APIKey: apiKey})
 	if err != nil {
 		return nil, resp, err
@@ -114,7 +136,7 @@ func (c *Client) Token(ctx context.Context, apiKey string) (*Session, *Response,
 	if resp.Status != http.StatusOK {
 		return nil, resp, &StatusError{Method: http.MethodPost, Path: PathToken, Status: resp.Status, Body: string(resp.Body)}
 	}
-	var out Session
+	out := Session{issuedAt: sent}
 	if err := resp.Decode(&out); err != nil {
 		return nil, resp, err
 	}
@@ -130,7 +152,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken, namespace string, pr
 	if proof != nil {
 		body["device_proof"] = proof
 	}
-	var out Session
+	out := Session{issuedAt: time.Now().Round(0)}
 	resp, err := c.JSON(ctx, http.MethodPost, PathRefresh, "", body, &out)
 	if err != nil {
 		return nil, resp, err
