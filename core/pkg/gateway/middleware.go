@@ -1750,12 +1750,14 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	// This provides automatic failover when a namespace gateway node is down.
 	var selected namespaceGatewayTarget
 	var cb *CircuitBreaker
-	for _, candidate := range orderedTargets {
+	selectedIdx := -1
+	for i, candidate := range orderedTargets {
 		cbKey := "ns:" + candidate.ip
 		candidateCB := g.circuitBreakers.Get(cbKey)
 		if candidateCB.Allow() {
 			selected = candidate
 			cb = candidateCB
+			selectedIdx = i
 			break
 		}
 	}
@@ -1838,66 +1840,20 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Proxy regular HTTP request to the namespace gateway
-	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
-
-	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
-	if err != nil {
-		g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
-			zap.String("namespace", namespaceName),
-			zap.Error(err),
-		)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
+	// Proxy regular HTTP request to the namespace gateway. A member that cannot
+	// be dialed (its gateway restarting, its node down) never received the
+	// request, so the next member whose circuit allows it is tried instead of
+	// answering 503 until that member's circuit opens (a soak restarting one
+	// member's gateway saw another node answer "connection refused", stagenet
+	// 2026-10-04). The body goes along only while nothing has read from it.
+	// An empty body stays http.NoBody: the transport sends a length of 0 only
+	// for that, and any other body of length 0 as one of unknown length.
+	var body io.ReadCloser = http.NoBody
+	var undialed *undialedBody
+	if r.Body != nil && r.Body != http.NoBody {
+		undialed = &undialedBody{ReadCloser: r.Body}
+		body = undialed
 	}
-	keepBodyLength(proxyReq, r)
-
-	// Copy headers
-	for key, values := range r.Header {
-		for _, value := range values {
-			proxyReq.Header.Add(key, value)
-		}
-	}
-	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
-	proxyReq.Header.Set("X-Forwarded-Proto", "https")
-	proxyReq.Header.Set("X-Forwarded-Host", r.Host)
-	proxyReq.Header.Set("X-Original-Host", r.Host)
-
-	// SECURITY (bug #215 follow-up): drop any X-Internal-Auth-* headers
-	// the header-copy loop above may have inherited from the inbound
-	// request BEFORE writing the trusted values. The namespace gateway
-	// gates on source IP only; without this strip, an external attacker
-	// could forge X-Internal-Auth-JWT-Sub and impersonate any wallet.
-	stripInboundInternalAuthHeaders(proxyReq.Header)
-	// Set internal auth headers if auth was validated by main gateway
-	// This allows the namespace gateway to trust the authentication
-	if validatedNamespace != "" {
-		proxyReq.Header.Set(HeaderInternalAuthValidated, "true")
-		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
-		// Bug #215: forward validated JWT subject + custom claims so the
-		// namespace gateway's auth middleware can hydrate ctxKeyJWT and
-		// host functions see a non-empty caller_jwt_subject.
-		setInternalAuthJWTHeaders(proxyReq.Header, validatedClaims)
-		// #148: forward the API-key caller's effective scopes.
-		if validatedScopes != "" {
-			proxyReq.Header.Set(HeaderInternalAuthScopes, validatedScopes)
-		}
-		// The MAC is what makes any of this believable on the other side.
-		// Without it the namespace gateway would drop every header above, so a
-		// hop that cannot be signed is refused rather than sent as an assertion
-		// this gateway cannot back.
-		//
-		// The MAC covers the proxied request's own method and path, not the
-		// inbound one, because that is what the other end will verify against.
-		if err := signInternalAuthHeaders(g.internalAuthKey, proxyReq.Header, proxyReq.Method, proxyReq.URL.Path, time.Now()); err != nil {
-			g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
-				zap.String("namespace", validatedNamespace), zap.Error(err))
-			writeError(w, http.StatusServiceUnavailable,
-				"this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
-			return
-		}
-	}
-
 	// Pick the proxy timeout based on the path's expected work bound.
 	// Defaults to 30s for fast paths; bumps to 300s for known long-running
 	// classes (uploads, function invocations) so we don't truncate before
@@ -1913,28 +1869,66 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		proxyTimeout = longProxyTimeout
 	}
 
-	// Execute proxy request using shared transport for connection pooling
 	httpClient := &http.Client{Timeout: proxyTimeout, Transport: g.proxyTransport}
-	resp, err := httpClient.Do(proxyReq)
-	if err != nil {
-		cb.RecordFailure()
+	var resp *http.Response
+	var lastErr error
+	for i := selectedIdx; i < len(orderedTargets); i++ {
+		candidate := orderedTargets[i]
+		candidateCB := cb
+		if i != selectedIdx {
+			if candidateCB = g.circuitBreakers.Get("ns:" + candidate.ip); !candidateCB.Allow() {
+				continue
+			}
+		}
+		proxyReq, err := g.namespaceProxyRequest(r, candidate.ip+":"+strconv.Itoa(candidate.port), body,
+			validatedNamespace, validatedClaims, validatedScopes)
+		if errors.Is(err, errNoClusterSecret) {
+			g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
+				zap.String("namespace", validatedNamespace), zap.Error(err))
+			writeError(w, http.StatusServiceUnavailable, errNoClusterSecret.Error())
+			return
+		}
+		if err != nil {
+			g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
+				zap.String("namespace", namespaceName), zap.Error(err))
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		resp, err = httpClient.Do(proxyReq)
+		if err == nil {
+			cb = candidateCB
+			break
+		}
+		lastErr = err
+		// A client that left says nothing about the member: its dial fails
+		// with the cancelled context, and counting that against every member
+		// would let aborted requests open their circuits.
+		if r.Context().Err() != nil {
+			break
+		}
+		candidateCB.RecordFailure()
 		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
 			zap.String("namespace", namespaceName),
-			zap.String("target", gatewayIP),
+			zap.String("target", candidate.ip),
 			zap.Error(err),
 		)
+		if !isDialFailure(err) || (undialed != nil && undialed.read) {
+			break
+		}
+	}
+	if resp == nil {
 		// Distinguish timeout from connection failure so clients get an
 		// actionable code (#219). "Namespace gateway unavailable" was
 		// emitted indiscriminately and sent operators down the wrong
 		// debug path.
-		if isProxyTimeoutErr(err) {
+		if isProxyTimeoutErr(lastErr) {
 			httputil.WriteRPCError(w, http.StatusGatewayTimeout,
 				httputil.ErrCodeTimeout, proxyTimeoutMessage(r.URL.Path, proxyTimeout))
 			return
 		}
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
 			httputil.ErrCodeServiceUnavailable,
-			"namespace gateway unavailable: "+err.Error())
+			"namespace gateway unavailable: "+lastErr.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -2472,4 +2466,59 @@ func getInt(v interface{}) int {
 // the answer was for a login that named no device.
 func keepBodyLength(out, in *http.Request) {
 	out.ContentLength = in.ContentLength
+}
+
+// namespaceProxyRequest is the request r becomes on its hop to the namespace
+// gateway at targetHost, carrying body and the identity this gateway validated.
+func (g *Gateway) namespaceProxyRequest(r *http.Request, targetHost string, body io.ReadCloser,
+	validatedNamespace string, validatedClaims *auth.JWTClaims, validatedScopes string) (*http.Request, error) {
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, proxyTargetURL("http://"+targetHost, r.URL), body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create the namespace gateway proxy request: %w", err)
+	}
+	keepBodyLength(proxyReq, r)
+
+	// Copy headers
+	for key, values := range r.Header {
+		for _, value := range values {
+			proxyReq.Header.Add(key, value)
+		}
+	}
+	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
+	proxyReq.Header.Set("X-Forwarded-Proto", "https")
+	proxyReq.Header.Set("X-Forwarded-Host", r.Host)
+	proxyReq.Header.Set("X-Original-Host", r.Host)
+
+	// SECURITY (bug #215 follow-up): drop any X-Internal-Auth-* headers
+	// the header-copy loop above may have inherited from the inbound
+	// request BEFORE writing the trusted values. The namespace gateway
+	// gates on source IP only; without this strip, an external attacker
+	// could forge X-Internal-Auth-JWT-Sub and impersonate any wallet.
+	stripInboundInternalAuthHeaders(proxyReq.Header)
+	// Set internal auth headers if auth was validated by main gateway
+	// This allows the namespace gateway to trust the authentication
+	if validatedNamespace != "" {
+		proxyReq.Header.Set(HeaderInternalAuthValidated, "true")
+		proxyReq.Header.Set(HeaderInternalAuthNamespace, validatedNamespace)
+		// Bug #215: forward validated JWT subject + custom claims so the
+		// namespace gateway's auth middleware can hydrate ctxKeyJWT and
+		// host functions see a non-empty caller_jwt_subject.
+		setInternalAuthJWTHeaders(proxyReq.Header, validatedClaims)
+		// #148: forward the API-key caller's effective scopes.
+		if validatedScopes != "" {
+			proxyReq.Header.Set(HeaderInternalAuthScopes, validatedScopes)
+		}
+		// The MAC is what makes any of this believable on the other side.
+		// Without it the namespace gateway would drop every header above, so a
+		// hop that cannot be signed is refused rather than sent as an assertion
+		// this gateway cannot back.
+		//
+		// The MAC covers the proxied request's own method and path, not the
+		// inbound one, because that is what the other end will verify against.
+		if err := signInternalAuthHeaders(g.internalAuthKey, proxyReq.Header, proxyReq.Method, proxyReq.URL.Path, time.Now()); err != nil {
+			return nil, fmt.Errorf("%w: %w", errNoClusterSecret, err)
+		}
+	}
+
+	return proxyReq, nil
 }

@@ -1450,7 +1450,13 @@ database host functions serve a function only when its namespace owns the
 gateway's database (`hostfunctions.checkDatabaseAccess`). Management requests
 act on the credential's namespace; one naming another namespace is refused. A wallet's grant is read from the cluster registry when a control-plane route
 needs it (`forwardedCallerNeedsGrant`), on a direct call and on a forwarded
-one. A data-plane route does not read it.
+one. A data-plane route does not read it. A request proxied to a namespace's
+gateway goes to this node's member gateway when there is one, else to the
+member its credential hashes to, then the others; a member whose circuit is
+open is skipped, and one that refuses the connection (its gateway restarting,
+its node down) is passed over for the next while none of the request body has
+been read, because the request never reached it. A member that was reached and
+failed is not retried elsewhere, and neither is a request whose client has gone.
 
 ## Security Architecture
 
