@@ -1,14 +1,14 @@
 package sandbox
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 
-	"github.com/DeBrosOfficial/network/cmd/orama/internal"
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
 
 // Destroy tears down a sandbox cluster.
@@ -26,13 +26,10 @@ func Destroy(name string, force bool) error {
 
 	// Confirm destruction
 	if !force {
-		reader := bufio.NewReader(os.Stdin)
 		fmt.Printf("Destroy sandbox %q? This deletes %d servers. [y/N]: ", state.Name, len(state.Servers))
-		choice, _ := reader.ReadString('\n')
-		choice = strings.TrimSpace(strings.ToLower(choice))
-		if choice != "y" && choice != "yes" {
+		if err := clierr.Confirm(os.Stdin, "y", "Y", "yes", "YES", "Yes"); err != nil {
 			fmt.Println("Aborted.")
-			return nil
+			return err
 		}
 	}
 

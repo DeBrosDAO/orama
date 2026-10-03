@@ -1,10 +1,8 @@
 package decommission
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
@@ -112,8 +110,8 @@ func execute(flags *Flags) error {
 	}
 	fmt.Printf("\n  Quorum after removing %s:\n%s", target.Host, clusterops.FormatImpacts(impacts))
 
-	if !clusterops.Safe(impacts) {
-		return fmt.Errorf("refusing to remove %s: it would cost a cluster its quorum (see above)", target.Host)
+	if err := quorumRefusal(target.Host, impacts); err != nil {
+		return err
 	}
 
 	if flags.DryRun {
@@ -134,10 +132,9 @@ func execute(flags *Flags) error {
 			fmt.Printf(", then ERASES it")
 		}
 		fmt.Printf(".\nType 'yes' to confirm: ")
-		input, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.TrimSpace(input) != "yes" {
+		if err := clierr.Confirm(os.Stdin, "yes"); err != nil {
 			fmt.Println("Aborted.")
-			return nil
+			return err
 		}
 		fmt.Println()
 	}
@@ -185,4 +182,14 @@ func forgetRetiredKey(target inspector.Node) error {
 	}
 	fmt.Printf("  ✓ %s@%s SSH key removed from the vault\n", target.User, target.Host)
 	return nil
+}
+
+// quorumRefusal is the refusal for a removal that would cost any cluster its
+// quorum, nil when every cluster survives it. It is a Conflict: the cluster's
+// state forbids it, and retrying unchanged is refused again.
+func quorumRefusal(host string, impacts []clusterops.Impact) error {
+	if clusterops.Safe(impacts) {
+		return nil
+	}
+	return clierr.Conflict("refusing to remove %s: it would cost a cluster its quorum (see above)", host)
 }

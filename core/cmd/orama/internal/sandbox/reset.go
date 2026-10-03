@@ -1,10 +1,10 @@
 package sandbox
 
 import (
-	"bufio"
 	"fmt"
 	"os"
-	"strings"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
 
 // Reset tears down all sandbox infrastructure (floating IPs, firewall, SSH key)
@@ -44,13 +44,10 @@ func Reset() error {
 	fmt.Println("  ~/.orama/sandbox.yaml")
 	fmt.Println()
 
-	reader := bufio.NewReader(os.Stdin)
 	fmt.Print("Delete all sandbox resources? [y/N]: ")
-	choice, _ := reader.ReadString('\n')
-	choice = strings.TrimSpace(strings.ToLower(choice))
-	if choice != "y" && choice != "yes" {
+	if err := clierr.Confirm(os.Stdin, "y", "Y", "yes", "YES", "Yes"); err != nil {
 		fmt.Println("Aborted.")
-		return nil
+		return err
 	}
 
 	client := NewHetznerClient(cfg.HetznerAPIToken)

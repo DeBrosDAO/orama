@@ -43,8 +43,7 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 		t.Errorf("a refused recovery moved the leadership from %s", leader.Name)
 	}
 	if res.Exit != infra.ExitAborted {
-		t.Errorf("a declined recover-raft exited %d, want %d (aborted); known product defect: recover.go prints "+
-			"\"Aborted.\" and returns nil instead of clierr.Aborted, so it exits %d", res.Exit, infra.ExitAborted, infra.ExitOK)
+		t.Errorf("a declined recover-raft exited %d, want %d (aborted): a script cannot tell it from a recovery", res.Exit, infra.ExitAborted)
 	}
 }
 

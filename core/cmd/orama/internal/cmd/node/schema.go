@@ -22,9 +22,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
+	"os"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/migrations"
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -135,11 +136,9 @@ safe because each migration is independently versioned.`,
 
 		if !schemaYes {
 			fmt.Print("\nProceed? [y/N]: ")
-			var ans string
-			_, _ = fmt.Scanln(&ans)
-			if strings.ToLower(strings.TrimSpace(ans)) != "y" {
+			if err := clierr.Confirm(os.Stdin, "y", "Y"); err != nil {
 				fmt.Println("Aborted.")
-				return nil
+				return err
 			}
 		}
 

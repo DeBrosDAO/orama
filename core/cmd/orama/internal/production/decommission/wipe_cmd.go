@@ -1,7 +1,6 @@
 package decommission
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -85,10 +84,9 @@ func executeWipe(flags *WipeFlags) error {
 	if !flags.Force {
 		fmt.Printf("This will DESTROY all data on these nodes.\n")
 		fmt.Printf("Type 'yes' to confirm: ")
-		input, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.TrimSpace(input) != "yes" {
+		if err := clierr.Confirm(os.Stdin, "yes"); err != nil {
 			fmt.Println("Aborted.")
-			return nil
+			return err
 		}
 		fmt.Println()
 	}

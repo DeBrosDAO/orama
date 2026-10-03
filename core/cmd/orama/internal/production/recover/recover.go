@@ -1,7 +1,6 @@
 package recover
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -135,11 +134,9 @@ func execute(flags *Flags) error {
 		fmt.Printf("     and record the leader as the member they re-join\n")
 		fmt.Printf("  4. Restart leader (single-node), then followers re-join as voters\n")
 		fmt.Printf("\nType 'yes' to confirm: ")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		if strings.TrimSpace(input) != "yes" {
+		if err := clierr.Confirm(os.Stdin, "yes"); err != nil {
 			fmt.Println("Aborted.")
-			return nil
+			return err
 		}
 		fmt.Println()
 	}

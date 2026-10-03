@@ -45,9 +45,8 @@ func TestQuorum_stopRefusedWhenItWouldBreakQuorum(t *testing.T) {
 	rm := infra.Run(t, harness.CLI(t), "node", "remove", "--env", f.State.Env, "--node", second.PublicIP, "--dry-run")
 	infra.ExpectRefused(t, rm, "would cost a cluster its quorum")
 	if rm.Exit != infra.ExitConflict {
-		t.Errorf("a quorum refusal of remove exited %d, want %d (conflict: the cluster refused, retrying unchanged is refused again); "+
-			"known product defect: decommission.go returns a plain fmt.Errorf for the quorum refusal, not clierr.Conflict, so it exits %d",
-			rm.Exit, infra.ExitConflict, infra.ExitFailure)
+		t.Errorf("a quorum refusal of remove exited %d, want %d (conflict: the cluster refused, retrying unchanged is refused again)",
+			rm.Exit, infra.ExitConflict)
 	}
 }
 

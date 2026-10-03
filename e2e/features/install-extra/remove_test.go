@@ -53,8 +53,7 @@ func removeWithoutConfirmationAborts(t *testing.T, f *fleet.Fleet, extra harness
 	}
 	requireMember(t, f, extra, len(f.State.Nodes)+1)
 	if res.Exit != infra.ExitAborted {
-		t.Errorf("a declined removal exited %d, want %d (aborted): a script cannot tell it from a removal; known product defect: "+
-			"decommission.go prints \"Aborted.\" and returns nil instead of clierr.Aborted, so it exits %d", res.Exit, infra.ExitAborted, infra.ExitOK)
+		t.Errorf("a declined removal exited %d, want %d (aborted): a script cannot tell it from a removal", res.Exit, infra.ExitAborted)
 	}
 }
 

@@ -16,7 +16,6 @@
 package raftid
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"net"
@@ -186,10 +185,9 @@ func execute(flags *Flags) error {
 		fmt.Printf("Each node is removed from raft and rejoins under its peer id, one at a time.\n")
 		fmt.Printf("Its local raft state is discarded and replicated back from the leader.\n")
 		fmt.Printf("Type 'yes' to confirm: ")
-		input, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if strings.TrimSpace(input) != "yes" {
+		if err := clierr.Confirm(os.Stdin, "yes"); err != nil {
 			fmt.Println("Aborted.")
-			return nil
+			return err
 		}
 		fmt.Println()
 	}
