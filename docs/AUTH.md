@@ -912,7 +912,10 @@ half **to the cluster registry** — not to the tenant database it may also be
 holding — so the rest of the cluster can verify what it mints. It publishes
 once its schema is up, and stays not ready (refusing everything, so minting
 nothing) until the key is published. A token's `kid`
-names the key. A key file that holds the old cluster-derived key (what a
+names the key. Every gateway re-reads the published keys every 30 seconds, and
+at once — at most once a second — when a token names a key it does not have, so
+a namespace gateway's tokens are accepted everywhere as soon as it has published
+its key, not after the next periodic read. A key file that holds the old cluster-derived key (what a
 0.122.x node wrote, carried into the index gateway's key by the
 upgrade) is replaced with a key of the gateway's own on load, never signed with.
 

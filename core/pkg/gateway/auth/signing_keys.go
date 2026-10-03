@@ -101,6 +101,20 @@ func decodePublicKey(encoded string) (ed25519.PublicKey, error) {
 // rollout that looks like an outage.
 const signingKeyReloadInterval = 30 * time.Second
 
+// signingKeyMissReloadInterval is how often a token naming a key this gateway
+// does not know may make it re-read the published keys. A namespace gateway's
+// key is published moments before its first token is presented anywhere, so
+// waiting for the next periodic reload refused that token for up to
+// signingKeyReloadInterval on every gateway that had loaded before it ("no
+// credential was presented", stagenet e2e 2026-10-03). The bound is what keeps
+// tokens naming made-up kids from becoming one registry read each.
+const signingKeyMissReloadInterval = time.Second
+
+// signingKeyReadTimeout bounds one read of the published keys made on the
+// request path, so a registry that does not answer holds a verification for
+// at most this long rather than for as long as it stalls.
+const signingKeyReadTimeout = 3 * time.Second
+
 // SigningKeys is every key this gateway will verify a token from.
 type SigningKeys struct {
 	// registry resolves the database the published keys live in, at call
@@ -111,6 +125,10 @@ type SigningKeys struct {
 	// where the tenant could write one.
 	registry func() client.DatabaseClient
 	logger   *logging.ColoredLogger
+
+	// missMu serialises the reloads a lookup miss makes, so a burst of
+	// unknown kids reads the registry once.
+	missMu sync.Mutex
 
 	mu        sync.RWMutex
 	keys      map[string]SigningKey
@@ -201,13 +219,45 @@ func (s *SigningKeys) Lookup(kid string) (SigningKey, bool) {
 	}
 	s.refreshIfStale()
 
-	s.mu.RLock()
-	key, ok := s.keys[kid]
-	s.mu.RUnlock()
+	key, ok := s.find(kid)
+	// Only a kid that names a published key's shape can be one published since
+	// the last read: an empty one, or the RS256 key's, never is.
+	if !ok && strings.HasPrefix(kid, KeyIDPrefix) {
+		s.reloadOnMiss()
+		key, ok = s.find(kid)
+	}
 	if !ok || !key.Live(s.now()) {
 		return SigningKey{}, false
 	}
 	return key, true
+}
+
+// find is the cached key a kid names, live or not.
+func (s *SigningKeys) find(kid string) (SigningKey, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key, ok := s.keys[kid]
+	return key, ok
+}
+
+// reloadOnMiss re-reads the published keys for a kid the cached set does not
+// have, unless they were read within signingKeyMissReloadInterval. A kid that
+// is present but retired does not come here: it is refused as it stands.
+func (s *SigningKeys) reloadOnMiss() {
+	s.missMu.Lock()
+	defer s.missMu.Unlock()
+	s.mu.RLock()
+	recent := s.now().Sub(s.loadedAt) < signingKeyMissReloadInterval
+	s.mu.RUnlock()
+	if recent {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), signingKeyReadTimeout)
+	defer cancel()
+	if err := s.Reload(ctx); err != nil && s.logger != nil {
+		s.logger.ComponentWarn(logging.ComponentGeneral,
+			"could not read the published signing keys for a token naming an unknown key; refusing it", zap.Error(err))
+	}
 }
 
 // All returns every live key, for the JWKS.
@@ -240,7 +290,9 @@ func (s *SigningKeys) refreshIfStale() {
 	if fresh {
 		return
 	}
-	if err := s.Reload(context.Background()); err != nil && s.logger != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), signingKeyReadTimeout)
+	defer cancel()
+	if err := s.Reload(ctx); err != nil && s.logger != nil {
 		s.logger.ComponentWarn(logging.ComponentGeneral,
 			"could not read the published signing keys; keeping the ones already known", zap.Error(err))
 	}

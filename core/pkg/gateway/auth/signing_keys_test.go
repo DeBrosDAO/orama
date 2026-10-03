@@ -9,6 +9,8 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -574,5 +576,143 @@ func TestSigningKeys_publishToTheRegistryAndNotTheTenantsDatabase(t *testing.T) 
 	}
 	if inTenant != 0 {
 		t.Error("the key was published into the tenant's own database, where the tenant can add one of their own")
+	}
+}
+
+// countingDatabase counts the registry reads a SigningKeys makes.
+type countingDatabase struct {
+	client.DatabaseClient
+	queries atomic.Int64
+}
+
+func (c *countingDatabase) Query(ctx context.Context, sql string, args ...interface{}) (*client.QueryResult, error) {
+	c.queries.Add(1)
+	return c.DatabaseClient.Query(ctx, sql, args...)
+}
+
+// A namespace gateway publishes its key moments before its first token is
+// presented anywhere. A gateway that loaded the keys just before that refused
+// the token until its next periodic reload, as "no credential was presented"
+// (stagenet e2e, 2026-10-03): a lookup miss re-reads the published keys.
+func TestSigningKeys_aKeyPublishedSinceTheLastLoadIsFoundAtOnce(t *testing.T) {
+	publisher, db := signingKeyStore(t)
+	elsewhere := NewSigningKeys(registryOf(&sqliteNet{db: &sqliteDatabase{db: db}}), nil)
+	loaded := time.Now()
+	elsewhere.now = func() time.Time { return loaded }
+	if err := elsewhere.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, _ := newKey(t)
+	key := SigningKey{KID: KeyIDFor(pub), Namespace: "acme", Public: pub}
+	if err := publisher.Publish(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere.now = func() time.Time { return loaded.Add(5 * time.Second) }
+	if _, ok := elsewhere.Lookup(key.KID); !ok {
+		t.Fatalf("a key published 5s after this gateway loaded is refused until the %s reload", signingKeyReloadInterval)
+	}
+}
+
+// Tokens naming made-up kids must not become one registry read each.
+func TestSigningKeys_unknownKidsReloadAtMostOncePerInterval(t *testing.T) {
+	_, db := signingKeyStore(t)
+	counting := &countingDatabase{DatabaseClient: &sqliteDatabase{db: db}}
+	keys := NewSigningKeys(func() client.DatabaseClient { return counting }, nil)
+	now := time.Now()
+	keys.now = func() time.Time { return now }
+	if err := keys.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(2 * signingKeyMissReloadInterval)
+	before := counting.queries.Load()
+	for i := 0; i < 50; i++ {
+		pub, _ := newKey(t)
+		if _, ok := keys.Lookup(KeyIDFor(pub)); ok {
+			t.Fatal("an unpublished kid was accepted")
+		}
+	}
+	if got := counting.queries.Load() - before; got != 1 {
+		t.Fatalf("50 unknown kids read the registry %d times, want 1", got)
+	}
+}
+
+// A retired key is refused as it stands: knowing it is not a miss.
+func TestSigningKeys_aRetiredKeyDoesNotReload(t *testing.T) {
+	_, db := signingKeyStore(t)
+	counting := &countingDatabase{DatabaseClient: &sqliteDatabase{db: db}}
+	keys := NewSigningKeys(func() client.DatabaseClient { return counting }, nil)
+	now := time.Now()
+	keys.now = func() time.Time { return now }
+	pub, _ := newKey(t)
+	keys.Add(SigningKey{KID: KeyIDFor(pub), Public: pub, RetiredAt: now.Add(-time.Minute)})
+	if err := keys.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(2 * signingKeyMissReloadInterval)
+	before := counting.queries.Load()
+	if _, ok := keys.Lookup(KeyIDFor(pub)); ok {
+		t.Fatal("a retired key was accepted")
+	}
+	if got := counting.queries.Load() - before; got != 0 {
+		t.Fatalf("a retired key read the registry %d times, want 0", got)
+	}
+}
+
+// A burst of unknown kids arriving together reads the registry once: the
+// reloads a miss makes are serialised, and the ones queued behind the first
+// find the set just read.
+func TestSigningKeys_concurrentUnknownKidsReloadOnce(t *testing.T) {
+	_, db := signingKeyStore(t)
+	counting := &countingDatabase{DatabaseClient: &sqliteDatabase{db: db}}
+	keys := NewSigningKeys(func() client.DatabaseClient { return counting }, nil)
+	start := time.Now()
+	if err := keys.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	keys.mu.Lock()
+	keys.loadedAt = start.Add(-2 * signingKeyMissReloadInterval)
+	keys.mu.Unlock()
+
+	before := counting.queries.Load()
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		pub, _ := newKey(t)
+		wg.Add(1)
+		go func(kid string) {
+			defer wg.Done()
+			if _, ok := keys.Lookup(kid); ok {
+				t.Error("an unpublished kid was accepted")
+			}
+		}(KeyIDFor(pub))
+	}
+	wg.Wait()
+	if got := counting.queries.Load() - before; got != 1 {
+		t.Fatalf("32 concurrent unknown kids read the registry %d times, want 1", got)
+	}
+}
+
+// A kid no published key could have — empty, or the RS256 key's — is refused
+// without reading the registry.
+func TestSigningKeys_aKidOfNoPublishedShapeDoesNotReload(t *testing.T) {
+	_, db := signingKeyStore(t)
+	counting := &countingDatabase{DatabaseClient: &sqliteDatabase{db: db}}
+	keys := NewSigningKeys(func() client.DatabaseClient { return counting }, nil)
+	now := time.Now()
+	keys.now = func() time.Time { return now }
+	if err := keys.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * signingKeyMissReloadInterval)
+	before := counting.queries.Load()
+	for _, kid := range []string{"", "rsa-legacy", "not-a-kid"} {
+		if _, ok := keys.Lookup(kid); ok {
+			t.Fatalf("kid %q was accepted", kid)
+		}
+	}
+	if got := counting.queries.Load() - before; got != 0 {
+		t.Fatalf("kids of no published shape read the registry %d times, want 0", got)
 	}
 }

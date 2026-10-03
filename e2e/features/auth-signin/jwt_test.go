@@ -120,6 +120,24 @@ func TestJWKS_namespaceGatewayKeyIsBound(t *testing.T) {
 	}
 }
 
+// TestJWT_freshNamespaceTokenAcceptedOnEveryGateway: a token a namespace
+// gateway has just signed is accepted at once through every node, not only
+// after each gateway's periodic reload of the published keys. A gateway that
+// had loaded them before the namespace's key was published answered its
+// tokens "no credential was presented" for up to 30 seconds
+// (core/pkg/gateway/auth/signing_keys.go signingKeyMissReloadInterval).
+func TestJWT_freshNamespaceTokenAcceptedOnEveryGateway(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	n := ns.New(t, f, ns.Options{})
+	s := signIn(t, n.Client, n.Owner.Wallet, n.Name)
+	for _, nc := range perNode(t, f, n.Client) {
+		if resp := whoami(t, nc.Client, s.AccessToken); resp.Status != http.StatusOK {
+			t.Errorf("%s: a fresh namespace token answered %d %s, want 200", nc.Node.Name, resp.Status, resp.ErrorCode())
+		}
+	}
+}
+
 // TestJWT_forgedTokensRefused: a token with no kid, an unknown kid, alg none,
 // an edited payload or a cut signature authenticates nothing. A JWT-shaped
 // token (exactly two dots) that does not verify is no credential: the gateway
