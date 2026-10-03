@@ -81,6 +81,7 @@ func WireCoreGateway(ctx context.Context, apiGateway *gateway.Gateway, cfg *gate
 
 	spawnHandler := NewSpawnHandler(clusterManager.Spawner(), clusterSecretPath, peerID, logger)
 	spawnHandler.SetHostTURN(clusterManager)
+	spawnHandler.SetRegistryDSN(cfg.RQLiteDSN)
 	apiGateway.SetSpawnHandler(spawnHandler)
 	deletes := NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), apiGateway.GetAuditLog(), logger)
 	deletes.SetClusterSecretPath(clusterSecretPath)

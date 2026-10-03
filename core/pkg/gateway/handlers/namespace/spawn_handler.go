@@ -128,6 +128,12 @@ type SpawnHandler struct {
 	// hostTURN applies this host's shared TURN tenant set and confirms the
 	// namespace is served (action = "reconcile-host-turn").
 	hostTURN HostTURNConfirmer
+	// registryDSN is this node's own connection to the cluster registry (its
+	// local rqlite). A gateway spawned here reads the registry through it, not
+	// through the DSN the requesting node sent: that one names the requester's
+	// rqlite, and a gateway reading the registry through another node stops
+	// working the moment that node is cut off.
+	registryDSN string
 }
 
 // hostTURNRequestTimeout bounds a reconcile-host-turn request. It runs under its
@@ -146,6 +152,22 @@ type HostTURNConfirmer interface {
 
 // SetHostTURN wires the confirmer for the "reconcile-host-turn" action.
 func (h *SpawnHandler) SetHostTURN(c HostTURNConfirmer) { h.hostTURN = c }
+
+// SetRegistryDSN sets the registry connection gateways spawned on this node use.
+func (h *SpawnHandler) SetRegistryDSN(dsn string) { h.registryDSN = dsn }
+
+// gatewayRegistryDSN is the registry DSN a gateway spawned by req gets. A
+// request carrying none is the index gateway's, which is its own registry and
+// stays without one.
+func (h *SpawnHandler) gatewayRegistryDSN(req SpawnRequest) (string, error) {
+	if req.GatewayGlobalRQLiteDSN == "" {
+		return "", nil
+	}
+	if h.registryDSN == "" {
+		return "", fmt.Errorf("node %s has no registry rqlite address configured, so gateway %s cannot be given one", h.nodeID, req.Namespace)
+	}
+	return h.registryDSN, nil
+}
 
 // NewSpawnHandler creates a new spawn handler
 func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath, nodeID string, logger *zap.Logger) *SpawnHandler {
@@ -316,13 +338,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			olricTimeout = 30 * time.Second
 		}
 
+		registryDSN, err := h.gatewayRegistryDSN(req)
+		if err != nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
 		cfg := gateway.InstanceConfig{
 			Namespace:             req.Namespace,
 			NodeID:                req.NodeID,
 			HTTPPort:              req.GatewayHTTPPort,
 			BaseDomain:            req.GatewayBaseDomain,
 			RQLiteDSN:             req.GatewayRQLiteDSN,
-			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
+			GlobalRQLiteDSN:       registryDSN,
 			OlricServers:          req.GatewayOlricServers,
 			OlricTimeout:          olricTimeout,
 			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
@@ -372,13 +399,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			olricTimeout = 30 * time.Second
 		}
+		registryDSN, err := h.gatewayRegistryDSN(req)
+		if err != nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
 		cfg := gateway.InstanceConfig{
 			Namespace:             req.Namespace,
 			NodeID:                req.NodeID,
 			HTTPPort:              req.GatewayHTTPPort,
 			BaseDomain:            req.GatewayBaseDomain,
 			RQLiteDSN:             req.GatewayRQLiteDSN,
-			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
+			GlobalRQLiteDSN:       registryDSN,
 			OlricServers:          req.GatewayOlricServers,
 			OlricTimeout:          olricTimeout,
 			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
