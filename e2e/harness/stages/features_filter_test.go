@@ -2,7 +2,10 @@ package stages
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/manifest"
@@ -61,5 +64,77 @@ func TestCheckFeatures(t *testing.T) {
 	}
 	if err := CheckFeatures(steps, nil); err != nil {
 		t.Errorf("no features: %v", err)
+	}
+}
+
+// TestRun_concurrentRunnersKeepEachOthersResults: two runners of one artifact
+// dir, one rerunning a package while the other reruns another, each keep the
+// other's result. Every runner used to save the timeline it loaded at its
+// start, so the one that saved last put back the other's stale result (a
+// passed rerun reported as failed, stagenet 2026-10-04).
+func TestRun_concurrentRunnersKeepEachOthersResults(t *testing.T) {
+	first := &fakeExec{exit: map[string]int{"./features/a": 1, "./features/b": 1}}
+	r := newRunner(t, first)
+	steps, err := Plan(testStages(), []manifest.Manifest{{ID: "a", Stage: 1}, {ID: "b", Stage: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background(), steps, Options{}); err != nil {
+		t.Fatal(err)
+	}
+
+	other := *r
+	other.Exec = (&fakeExec{}).run // b passes on its rerun
+	mine := &fakeExec{}            // a passes on its rerun
+	r.Exec = func(ctx context.Context, c Command) (int, error) {
+		// While a reruns here, the other runner reruns b to completion.
+		if _, err := other.Run(ctx, steps, Options{Features: []string{"b"}}); err != nil {
+			t.Error(err)
+		}
+		return mine.run(ctx, c)
+	}
+	tl, err := r.Run(context.Background(), steps, Options{Features: []string{"a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range tl.Stages[0].Packages {
+		if p.Exit != 0 {
+			t.Errorf("%s exit %d: a concurrent runner's passed rerun was lost", p.Feature, p.Exit)
+		}
+	}
+	saved, err := LoadTimeline(filepath.Join(r.ArtifactDir, StateFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range saved.Stages[0].Packages {
+		if p.Exit != 0 {
+			t.Errorf("on disk, %s exit %d after both reruns passed", p.Feature, p.Exit)
+		}
+	}
+}
+
+// TestRecord_concurrentSavesKeepEveryResult: saves that race for the state
+// file each land, whatever their order.
+func TestRecord_concurrentSavesKeepEveryResult(t *testing.T) {
+	path := filepath.Join(t.TempDir(), StateFileName)
+	const n = 16
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			run := StageRun{Stage: Stage{ID: 1}, Packages: []PackageRun{{Feature: fmt.Sprintf("f%02d", i)}}}
+			if _, err := record(path, run, true, false); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	tl, err := LoadTimeline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tl.Stages) != 1 || len(tl.Stages[0].Packages) != n {
+		t.Fatalf("%d stages, %d packages on disk after %d concurrent saves, want 1 and %d", len(tl.Stages), len(tl.Stages[0].Packages), n, n)
 	}
 }

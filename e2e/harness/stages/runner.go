@@ -91,7 +91,9 @@ type Options struct {
 func (r *Runner) Run(ctx context.Context, steps []Step, opt Options) (*Timeline, error) {
 	statePath := filepath.Join(r.ArtifactDir, StateFileName)
 	tl := &Timeline{}
-	if opt.Resume || opt.Only != 0 || len(opt.Features) > 0 {
+	// A full run starts a new timeline; the others build on the one on disk.
+	fresh := !opt.Resume && opt.Only == 0 && len(opt.Features) == 0
+	if !fresh {
 		loaded, err := LoadTimeline(statePath)
 		if err != nil {
 			return nil, err
@@ -115,14 +117,11 @@ func (r *Runner) Run(ctx context.Context, steps []Step, opt Options) (*Timeline,
 			return tl, fmt.Errorf("stopped before stage %d (%s): %w", step.Stage.ID, step.Stage.Name, err)
 		}
 		run := r.runStep(ctx, step)
-		if len(opt.Features) > 0 {
-			tl.merge(run)
-		} else {
-			tl.put(run)
-		}
-		if err := tl.Save(statePath); err != nil {
+		saved, err := record(statePath, run, len(opt.Features) > 0, fresh)
+		if err != nil {
 			return tl, err
 		}
+		tl, fresh = saved, false
 	}
 	return tl, nil
 }

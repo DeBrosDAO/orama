@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // StateFileName is the runner's timeline and resume state, in the artifact dir.
@@ -103,4 +105,38 @@ func (t *Timeline) Save(path string) error {
 		return fmt.Errorf("failed to replace stage state %s: %w", path, err)
 	}
 	return nil
+}
+
+// record writes run into the timeline at path and returns the timeline as
+// written. It holds an exclusive lock on path+".lock" and re-reads the file
+// first, so runners of one artifact dir that save while others run (a stage
+// and a features rerun of another, as the shared run lock allows) each keep
+// what the others recorded: every runner used to save the copy it loaded at
+// its start, and the last to save dropped the rest. partial merges run's
+// packages into its stage; otherwise run replaces the stage. A fresh timeline
+// starts empty instead of from the file.
+func record(path string, run StageRun, partial, fresh bool) (*Timeline, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open the stage state lock %s.lock: %w", path, err)
+	}
+	defer lock.Close()
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("failed to lock the stage state %s: %w", path, err)
+	}
+	tl := &Timeline{}
+	if !fresh {
+		if tl, err = LoadTimeline(path); err != nil {
+			return nil, err
+		}
+	}
+	if partial {
+		tl.merge(run)
+	} else {
+		tl.put(run)
+	}
+	if err := tl.Save(path); err != nil {
+		return nil, err
+	}
+	return tl, nil
 }

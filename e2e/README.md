@@ -566,7 +566,10 @@ process group, so running tests finish and their `t.Cleanup`s restore the fleet,
 and SIGKILL `StopGrace` (10 minutes) later; an overrun is reported as an error
 and never as a pass. A stage's failures never stop later stages. `e2e-fleet test --stage N`
 runs one stage against an existing fleet and replaces only that stage in
-`stages-state.json` (the other stages' results stay in the report);
+`stages-state.json` (the other stages' results stay in the report; each save
+re-reads the file under a lock, so runners of one artifact dir running at once
+keep each other's results; a full run starts a new timeline with its first
+stage);
 `--resume` skips the stages it records as completed (a completed stage is
 never re-run, failed or not). A package run replaces its earlier attempt
 whole: output and evidence dir. After every destructive package, even on an
