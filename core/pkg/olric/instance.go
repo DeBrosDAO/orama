@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -35,8 +34,6 @@ type OlricInstance struct {
 	PID            int
 	StartedAt      time.Time
 
-	// mu protects mutable state (Status, LastHealthCheck) accessed concurrently.
-	mu              sync.RWMutex
 	Status          InstanceNodeStatus
 	LastHealthCheck time.Time
 }

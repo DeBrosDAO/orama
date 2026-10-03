@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -1173,6 +1174,14 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	return data, nil
 }
 
+// reachabilityProbe is how a host is pinged to call it reachable: three
+// packets 0.2 s apart, each answered within 2 s. ping exits 0 when any reply
+// comes back, so only a host that answers none is unreachable. One packet was
+// sent before, and a single loss over a WireGuard tunnel crossing the
+// internet reported a healthy peer as unreachable, a critical failure
+// (stagenet e2e, 2026-10-03).
+const reachabilityProbe = "ping -c 3 -i 0.2 -W 2"
+
 func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) (*NetworkData, error) {
 	data := &NetworkData{
 		PingResults: make(map[string]bool),
@@ -1182,19 +1191,23 @@ func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) (*Network
 	var pingCmds string
 	if wg != nil {
 		for _, peer := range wg.Peers {
-			// Extract IP from AllowedIPs (e.g. "10.0.0.2/32")
-			ip := strings.Split(peer.AllowedIPs, "/")[0]
-			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
-				pingCmds += fmt.Sprintf(`echo "PING:%s:$(ping -c 1 -W 2 %s >/dev/null 2>&1 && echo ok || echo fail)"
-`, ip, ip)
+			// Extract IP from AllowedIPs (e.g. "10.0.0.2/32"). It goes into a
+			// remote shell command, so only a parsed IPv4 address in the mesh,
+			// re-serialised, is used.
+			parsed := net.ParseIP(strings.Split(peer.AllowedIPs, "/")[0]).To4()
+			if parsed == nil || !strings.HasPrefix(parsed.String(), "10.0.0.") {
+				continue
 			}
+			ip := parsed.String()
+			pingCmds += fmt.Sprintf(`echo "PING:%s:$(%s %s >/dev/null 2>&1 && echo ok || echo fail)"
+`, ip, reachabilityProbe, ip)
 		}
 	}
 
 	cmd := fmt.Sprintf(`
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no
+%s 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no
 echo "$SEP"
 ss -s 2>/dev/null | awk '/^TCP:/{print $0}'
 echo "$SEP"
@@ -1205,7 +1218,7 @@ echo "$SEP"
 awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null; sleep 1; awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null
 echo "$SEP"
 %s
-`, pingCmds)
+`, reachabilityProbe, pingCmds)
 
 	res := RunSSH(ctx, node, cmd)
 	parts, err := splitSections(res, networkMinSections)

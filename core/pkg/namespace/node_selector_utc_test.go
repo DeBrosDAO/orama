@@ -18,21 +18,25 @@ import (
 //
 // These tests pin the cutoff to UTC regardless of the process timezone.
 
-// withLocalZone temporarily moves time.Local, restoring it afterwards.
-func withLocalZone(t *testing.T, offsetHours int) {
-	t.Helper()
-	saved := time.Local
-	time.Local = time.FixedZone("TEST", offsetHours*3600)
-	t.Cleanup(func() { time.Local = saved })
+// cutoffLayout is how the cutoff is rendered for the string comparison.
+const cutoffLayout = "2006-01-02 15:04:05"
+
+// zoned is one instant as a clock in a zone offsetHours from UTC would report
+// it. The tests hand it to the selector instead of moving time.Local, which is
+// process-wide: a goroutine still running from another test read it while one
+// of these wrote it, and -race failed the package.
+func zoned(instant time.Time, offsetHours int) func() time.Time {
+	return func() time.Time { return instant.In(time.FixedZone("TEST", offsetHours*3600)) }
 }
 
-// capturedCutoff runs getActiveNodes and returns the cutoff argument the query was
-// issued with.
-func capturedCutoff(t *testing.T) string {
+// capturedCutoff runs getActiveNodes on clock now and returns the cutoff argument
+// the query was issued with.
+func capturedCutoff(t *testing.T, now func() time.Time) string {
 	t.Helper()
 	logger := zap.NewNop()
 	mockDB := newMockRQLiteClient()
 	selector := NewClusterNodeSelector(mockDB, NewNamespacePortAllocator(mockDB, logger), logger)
+	selector.now = now
 
 	if _, err := selector.getActiveNodes(context.Background()); err != nil {
 		t.Fatalf("getActiveNodes: %v", err)
@@ -52,24 +56,12 @@ func capturedCutoff(t *testing.T) string {
 }
 
 // TestGetActiveNodes_cutoffIsUTCUnderNonUTCLocalZone is the direct reproduction: a
-// process running two hours ahead of UTC must still emit a UTC cutoff.
+// clock two hours ahead of UTC must still yield a UTC cutoff.
 func TestGetActiveNodes_cutoffIsUTCUnderNonUTCLocalZone(t *testing.T) {
-	withLocalZone(t, +2)
-
-	got := capturedCutoff(t)
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", got, time.UTC)
-	if err != nil {
-		t.Fatalf("cutoff %q not in expected layout: %v", got, err)
-	}
-
-	want := time.Now().UTC().Add(-2 * time.Minute)
-	drift := parsed.Sub(want)
-	if drift < 0 {
-		drift = -drift
-	}
-	// A local-time cutoff under a +2 zone would be ~2h off; allow only clock jitter.
-	if drift > 30*time.Second {
-		t.Errorf("cutoff %q is %v away from UTC now-2m — the node-selection window is skewed by the local timezone", got, drift)
+	instant := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	got := capturedCutoff(t, zoned(instant, +2))
+	if want := instant.Add(-2 * time.Minute).Format(cutoffLayout); got != want {
+		t.Errorf("cutoff %q, want %q: the node-selection window is skewed by the clock's zone", got, want)
 	}
 }
 
@@ -78,26 +70,10 @@ func TestGetActiveNodes_cutoffIsUTCUnderNonUTCLocalZone(t *testing.T) {
 // different zones must compute the same cutoff, otherwise provisioning succeeds or
 // fails depending on which node the round-robin picked.
 func TestGetActiveNodes_cutoffSameAcrossZones(t *testing.T) {
-	withLocalZone(t, 0)
-	utcCutoff := capturedCutoff(t)
-
-	withLocalZone(t, -7)
-	westCutoff := capturedCutoff(t)
-
-	a, err := time.ParseInLocation("2006-01-02 15:04:05", utcCutoff, time.UTC)
-	if err != nil {
-		t.Fatalf("parse %q: %v", utcCutoff, err)
-	}
-	b, err := time.ParseInLocation("2006-01-02 15:04:05", westCutoff, time.UTC)
-	if err != nil {
-		t.Fatalf("parse %q: %v", westCutoff, err)
-	}
-
-	diff := a.Sub(b)
-	if diff < 0 {
-		diff = -diff
-	}
-	if diff > 30*time.Second {
-		t.Errorf("cutoff differs by %v between timezones (%q vs %q) — same command, different outcome depending on which node serves it", diff, utcCutoff, westCutoff)
+	instant := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	utc := capturedCutoff(t, zoned(instant, 0))
+	west := capturedCutoff(t, zoned(instant, -7))
+	if utc != west {
+		t.Errorf("cutoff differs between zones (%q vs %q) — same command, different outcome depending on which node serves it", utc, west)
 	}
 }

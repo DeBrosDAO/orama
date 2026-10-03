@@ -20,17 +20,20 @@ func (c *cutoffCaptureDB) Query(_ context.Context, _ any, _ string, args ...any)
 	return nil
 }
 
-// withZone runs the test with the process-local zone set to name.
-func withZone(t *testing.T, name string) {
+// zoneClock is one instant as a clock in zone name reports it. The tests hand
+// it to the manager instead of moving time.Local, which is process-wide:
+// another goroutine reading it while a test wrote it failed -race.
+func zoneClock(t *testing.T, name string, instant time.Time) func() time.Time {
 	t.Helper()
 	loc, err := time.LoadLocation(name)
 	if err != nil {
 		t.Skipf("zone %s unavailable: %v", name, err)
 	}
-	prev := time.Local
-	time.Local = loc
-	t.Cleanup(func() { time.Local = prev })
+	return func() time.Time { return instant.In(loc) }
 }
+
+// tzInstant is the instant every test's clock reports.
+var tzInstant = time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 
 func parseCutoff(t *testing.T, args []any) time.Time {
 	t.Helper()
@@ -52,43 +55,40 @@ func parseCutoff(t *testing.T, args []any) time.Time {
 // node whose zone is ahead of UTC; a local cutoff filtered out every node and
 // no replica could be placed (stagenet nodes run Europe/Berlin).
 func TestGetActiveNodes_cutoff_is_UTC_in_zone_ahead_of_UTC(t *testing.T) {
-	withZone(t, "Europe/Berlin")
 	db := &cutoffCaptureDB{}
 	hnm := NewHomeNodeManager(db, nil, zap.NewNop())
+	hnm.now = zoneClock(t, "Europe/Berlin", tzInstant)
 
 	if _, err := hnm.getActiveNodes(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := time.Now().UTC().Add(-activeNodeWindow)
-	if d := parseCutoff(t, db.args).Sub(want); d < -5*time.Second || d > 5*time.Second {
-		t.Fatalf("cutoff is %v off the UTC expectation", d)
+	if got, want := parseCutoff(t, db.args), tzInstant.Add(-activeNodeWindow); !got.Equal(want) {
+		t.Fatalf("cutoff %v, want %v (UTC)", got, want)
 	}
 }
 
 func TestGetStaleNamespaces_cutoff_is_UTC_in_zone_ahead_of_UTC(t *testing.T) {
-	withZone(t, "Europe/Berlin")
 	db := &cutoffCaptureDB{}
 	hnm := NewHomeNodeManager(db, nil, zap.NewNop())
+	hnm.now = zoneClock(t, "Europe/Berlin", tzInstant)
 
 	if _, err := hnm.GetStaleNamespaces(context.Background(), time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	want := time.Now().UTC().Add(-time.Hour)
-	if d := parseCutoff(t, db.args).Sub(want); d < -5*time.Second || d > 5*time.Second {
-		t.Fatalf("cutoff is %v off the UTC expectation", d)
+	if got, want := parseCutoff(t, db.args), tzInstant.Add(-time.Hour); !got.Equal(want) {
+		t.Fatalf("cutoff %v, want %v (UTC)", got, want)
 	}
 }
 
 func TestGetActiveNodes_cutoff_is_UTC_in_zone_behind_UTC(t *testing.T) {
-	withZone(t, "America/Los_Angeles")
 	db := &cutoffCaptureDB{}
 	hnm := NewHomeNodeManager(db, nil, zap.NewNop())
+	hnm.now = zoneClock(t, "America/Los_Angeles", tzInstant)
 
 	if _, err := hnm.getActiveNodes(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := time.Now().UTC().Add(-activeNodeWindow)
-	if d := parseCutoff(t, db.args).Sub(want); d < -5*time.Second || d > 5*time.Second {
-		t.Fatalf("cutoff is %v off the UTC expectation", d)
+	if got, want := parseCutoff(t, db.args), tzInstant.Add(-activeNodeWindow); !got.Equal(want) {
+		t.Fatalf("cutoff %v, want %v (UTC)", got, want)
 	}
 }

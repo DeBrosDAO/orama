@@ -19,6 +19,10 @@ type ClusterNodeSelector struct {
 	db            rqlite.Client
 	portAllocator *NamespacePortAllocator
 	logger        *zap.Logger
+	// now is the clock the liveness cutoff is taken from; time.Now outside
+	// tests, which give it a time in a zone of their choosing instead of moving
+	// the process-wide time.Local.
+	now func() time.Time
 }
 
 // NodeCapacity represents the capacity metrics for a single node
@@ -43,6 +47,7 @@ func NewClusterNodeSelector(db rqlite.Client, portAllocator *NamespacePortAlloca
 		db:            db,
 		portAllocator: portAllocator,
 		logger:        logger.With(zap.String("component", "cluster-node-selector")),
+		now:           time.Now,
 	}
 }
 
@@ -213,7 +218,7 @@ func (cns *ClusterNodeSelector) getActiveNodes(ctx context.Context) ([]nodeInfo,
 	// of every stored last_seen, so every OTHER node was filtered out and
 	// provisioning failed with "insufficient nodes available for cluster",
 	// non-deterministically depending on which node served the request.
-	cutoff := time.Now().UTC().Add(-2 * time.Minute)
+	cutoff := cns.now().UTC().Add(-2 * time.Minute)
 
 	var results []nodeInfo
 	query := `
