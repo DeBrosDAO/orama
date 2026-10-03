@@ -38,3 +38,12 @@ func TestCaddyTemplate_configHomeIsWritable(t *testing.T) {
 		t.Error("/var/lib/caddy is not writable to the unit")
 	}
 }
+
+// Caddy's threads are bounded by its own cgroup, not by an rlimit the whole
+// orama user shares: with LimitNPROC=512 the namespaces' threads used up the
+// budget and Caddy aborted on its next thread (stagenet e2e, 2026-10-03).
+func TestCaddyTemplate_threadsBoundedByItsOwnCgroup(t *testing.T) {
+	if !strings.Contains(readCaddyTemplate(t), "\nTasksMax=512\n") {
+		t.Error("the Caddy unit does not bound its own tasks with TasksMax=512")
+	}
+}

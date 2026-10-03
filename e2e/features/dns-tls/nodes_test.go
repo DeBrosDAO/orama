@@ -166,3 +166,22 @@ func plainGet(t *testing.T, ip, host, path string) *http.Response {
 	resp.Body.Close()
 	return resp
 }
+
+// TestCaddy_threadsBoundedByItsOwnCgroup: Caddy carries no per-user process
+// limit of its own, only the service manager's DefaultLimitNPROC, and is
+// bounded by its cgroup with TasksMax. Its LimitNPROC=512 counted every thread
+// the orama user owns, so a fleet full of namespaces made Caddy abort and every
+// HTTPS request on the node fail (core/systemd/orama-namespace-caddy@.service).
+func TestCaddy_threadsBoundedByItsOwnCgroup(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	for _, n := range f.State.Nodes {
+		hostDefault := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p DefaultLimitNPROC --value").Stdout)
+		if got := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p LimitNPROC --value "+edge.CaddyUnit).Stdout); got != hostDefault {
+			t.Errorf("%s: %s LimitNPROC=%s, want the host default %s", n.Name, edge.CaddyUnit, got, hostDefault)
+		}
+		if got := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p TasksMax --value "+edge.CaddyUnit).Stdout); got != "512" {
+			t.Errorf("%s: %s TasksMax=%s, want 512", n.Name, edge.CaddyUnit, got)
+		}
+	}
+}

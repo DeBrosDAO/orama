@@ -95,3 +95,33 @@ func TestNamespaceRqliteUnit_runsInUTC(t *testing.T) {
 		t.Errorf("%s must set Environment=TZ=UTC: rqlited stamps datetime('now') in its local zone", path)
 	}
 }
+
+// RLIMIT_NPROC is checked against every process and thread the unit's user owns
+// on the host, not the unit's own. The units share their users (orama runs every
+// namespace's processes), so a LimitNPROC in one of them fails that unit when the
+// others grow: Caddy aborted that way and took the node's HTTPS with it. A unit
+// bounds itself with TasksMax, which counts its own cgroup.
+func TestTemplateUnits_noPerUserProcessLimit(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	units, err := filepath.Glob(filepath.Join(filepath.Dir(file), "..", "..", "systemd", "*.service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(units) == 0 {
+		t.Fatal("no unit templates found")
+	}
+	for _, path := range units {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "LimitNPROC") {
+				t.Errorf("%s sets %s; bound the unit with TasksMax instead", filepath.Base(path), strings.TrimSpace(line))
+			}
+		}
+	}
+}

@@ -68,6 +68,9 @@ func TestInstall_ramHygiene(t *testing.T) {
 		if s := strings.TrimSpace(f.Exec(t, n, "systemctl show -p LoadState --value apport.service").Stdout); s != "masked" && s != "not-found" {
 			t.Errorf("%s: apport.service LoadState is %q, want masked or not-found", n.Name, s)
 		}
+		if v := sysctlValue(t, f, n, "kernel.core_pattern"); v != "|/bin/false" {
+			t.Errorf("%s: kernel.core_pattern = %s, want |/bin/false (dumps discarded)", n.Name, v)
+		}
 		requireContains(t, f, n, infra.RAMHygieneConf, "fs.suid_dumpable = 0")
 		requireContains(t, f, n, infra.CoredumpConf, "Storage=none", "ProcessSizeMax=0")
 	}

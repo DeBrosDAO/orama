@@ -47,7 +47,12 @@ ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
 ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --address unix//run/orama-caddy/admin.sock
 TimeoutStopSec=5s
 LimitNOFILE=1048576
-LimitNPROC=512
+# Caddy's threads are bounded by its own cgroup. LimitNPROC=512 was here, and
+# that limit counts every thread the orama user owns on the host: with the
+# fleet full of namespaces their rqlite, Olric and gateway threads passed 512,
+# Caddy could not start a thread, the Go runtime aborted, and every HTTPS
+# request on the node failed with it (stagenet e2e, 2026-10-03).
+TasksMax=512
 PrivateTmp=true
 Restart=always
 RestartSec=5s
