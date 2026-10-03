@@ -15,3 +15,7 @@ memberlist:
     - "{{.}}"
 {{- end}}
 {{- end}}
+
+dmaps:
+  maxInuse: {{.DMapMaxInuse}}
+  evictionPolicy: "{{.DMapEvictionPolicy}}"

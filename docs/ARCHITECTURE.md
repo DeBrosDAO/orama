@@ -337,6 +337,22 @@ labels, so `x.ns-anchat.orama-devnet.network.` became
 `*.ns-<ns>.<base>.` rows the namespace manager writes. Every per-namespace
 sub-name, `turn.ns-<ns>.<base>` included, was unresolvable.
 
+**Olric bounds its own memory.** Every Olric config (the index's, written by
+install and upgrade, and each namespace's, written by the spawner and kept in
+sync by the reconcile) sets `dmaps.evictionPolicy: LRU` and
+`dmaps.maxInuse: 268435456`: one DMap may hold 256 MiB on a node before its
+least recently used keys are evicted (`pkg/olric` `DMapMaxInuseBytes`). Olric's
+default is no eviction and no limit, so a cache in use grew until the unit's
+2G `MemoryMax` killed it and lost every key. The limit counts in-use bytes;
+the process's resident memory runs higher (Olric's runtime, memberlist, and
+deleted entries waiting for compaction). Olric reads its config only at start,
+and the reconcile rewrites a namespace's config without restarting it (Olric is
+never restarted as a side effect), so a running Olric takes the limit at its
+next restart: the rolling upgrade that ships it. The limit is per DMap, and a
+tenant names its own DMaps, so a namespace using very many can still reach its
+`MemoryMax`; each namespace runs its own Olric, so that stays the tenant's own
+cache.
+
 **Olric is supervised, not connected once.** The gateway keeps a background
 supervisor that probes its Olric client every 10s and, after three consecutive
 failures, drops it so cache handlers answer 503 — the honest answer — instead of

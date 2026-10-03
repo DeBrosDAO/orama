@@ -1,8 +1,12 @@
 package templates
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	olricconfig "github.com/olric-data/olric/config"
 )
 
 func TestRenderNodeConfig(t *testing.T) {
@@ -237,5 +241,29 @@ func TestRenderNodeConfig_libp2pListensOnTheOverlay(t *testing.T) {
 	}
 	if strings.Contains(result, "0.0.0.0") {
 		t.Error("the node config binds something to every interface")
+	}
+}
+
+// The index Olric config, as olric-server's own loader reads it, bounds every
+// DMap with LRU eviction.
+func TestRenderOlricConfig_boundsEveryDMapWithLRU(t *testing.T) {
+	out, err := RenderOlricConfig(OlricConfigData{
+		ServerBindAddr: "10.0.0.1", HTTPPort: 10102, MemberlistBindAddr: "10.0.0.1", MemberlistPort: 10103,
+		MemberlistEnvironment: "lan", Peers: []string{"10.0.0.2:10103"},
+		DMapMaxInuse: 256 << 20, DMapEvictionPolicy: "LRU",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(out), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := olricconfig.Load(path)
+	if err != nil {
+		t.Fatalf("olric-server would not load the config: %v\n%s", err, out)
+	}
+	if loaded.DMaps.EvictionPolicy != olricconfig.LRUEviction || loaded.DMaps.MaxInuse != 256<<20 {
+		t.Fatalf("olric reads eviction %q, maxInuse %d; want LRU, %d", loaded.DMaps.EvictionPolicy, loaded.DMaps.MaxInuse, 256<<20)
 	}
 }

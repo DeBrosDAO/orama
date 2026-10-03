@@ -129,6 +129,10 @@ type OlricConfigData struct {
 	MemberlistEnvironment   string   // "local", "lan", or "wan"
 	MemberlistAdvertiseAddr string   // Advertise address (WG IP) so other nodes can reach us
 	Peers                   []string // Seed peers for memberlist (host:port)
+	// DMapMaxInuse and DMapEvictionPolicy bound every DMap's memory
+	// (pkg/olric DMapMaxInuseBytes, DMapEvictionPolicy).
+	DMapMaxInuse       int
+	DMapEvictionPolicy string
 }
 
 // RenderNodeConfig renders the node config template with the given data

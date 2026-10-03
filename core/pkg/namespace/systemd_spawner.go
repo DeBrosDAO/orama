@@ -456,10 +456,18 @@ type olricMemberlistConfig struct {
 	Peers       []string `yaml:"peers,omitempty"`
 }
 
+// olricDMapsConfig is every DMap's default: LRU eviction past a memory limit
+// (pkg/olric DMapEvictionPolicy, DMapMaxInuseBytes).
+type olricDMapsConfig struct {
+	MaxInuse       int    `yaml:"maxInuse"`
+	EvictionPolicy string `yaml:"evictionPolicy"`
+}
+
 type olricConfig struct {
 	Server         olricServerConfig     `yaml:"server"`
 	Memberlist     olricMemberlistConfig `yaml:"memberlist"`
 	PartitionCount uint64                `yaml:"partitionCount"`
+	DMaps          olricDMapsConfig      `yaml:"dmaps"`
 }
 
 // olricPartitionCount is tuned for namespace clusters, against Olric's 256
@@ -479,6 +487,10 @@ func buildOlricConfig(cfg olric.InstanceConfig) olricConfig {
 			Peers:       cfg.PeerAddresses,
 		},
 		PartitionCount: olricPartitionCount,
+		DMaps: olricDMapsConfig{
+			MaxInuse:       olric.DMapMaxInuseBytes,
+			EvictionPolicy: olric.DMapEvictionPolicy,
+		},
 	}
 }
 
@@ -497,7 +509,7 @@ func olricConfigInSync(onDisk, desired olricConfig) bool {
 		onDisk.Memberlist.BindPort != desired.Memberlist.BindPort {
 		return false
 	}
-	if onDisk.PartitionCount != desired.PartitionCount {
+	if onDisk.PartitionCount != desired.PartitionCount || onDisk.DMaps != desired.DMaps {
 		return false
 	}
 	return sameStringSet(onDisk.Memberlist.Peers, desired.Memberlist.Peers)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/install/templates"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -602,6 +603,8 @@ func (cg *ConfigGenerator) GenerateOlricConfig(serverBindAddr string, httpPort i
 		MemberlistEnvironment:   memberlistEnv,
 		MemberlistAdvertiseAddr: advertiseAddr,
 		Peers:                   peers,
+		DMapMaxInuse:            olric.DMapMaxInuseBytes,
+		DMapEvictionPolicy:      olric.DMapEvictionPolicy,
 	}
 	return templates.RenderOlricConfig(data)
 }
