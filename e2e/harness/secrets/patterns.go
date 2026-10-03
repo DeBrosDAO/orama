@@ -39,6 +39,25 @@ const headerSep = q + `\s*[:=](?:\[|\s*)` + q
 // already masked value is left alone: redaction is idempotent.
 const headerValue = `[^\s"\\\[\]][^\r\n"\\\]]*`
 
+// jwtShape and oramaKeyShape mask the JWTs and Orama API keys that were never
+// registered; a registered one is masked by its literal first (redact.go).
+var (
+	jwtShape      = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}`)
+	oramaKeyShape = regexp.MustCompile(`orama_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+`)
+	shapes        = []*regexp.Regexp{jwtShape, oramaKeyShape}
+)
+
+// wholeToken reports whether v is, whole, a JWT or an Orama API key: a value
+// the redactor keeps among its tokens rather than its other literals.
+func wholeToken(v string) bool {
+	for _, re := range shapes {
+		if loc := re.FindStringIndex(v); loc != nil && loc[0] == 0 && loc[1] == len(v) {
+			return true
+		}
+	}
+	return false
+}
+
 var patterns = []pattern{
 	// PEM private keys (SSH, TLS, anything the collector reads off a node).
 	{re: regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----`), repl: maskAll},
@@ -84,9 +103,9 @@ var patterns = []pattern{
 	// Credentials in URLs: scheme://user:password@host.
 	{re: regexp.MustCompile(`(\b[A-Za-z][A-Za-z0-9+.-]*://)[^/\s:@"'\\]+:[^/\s@"'\\]+@`), repl: keepURLTop},
 	// JWTs anywhere (three base64url segments, header starting {"...).
-	{re: regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}`), repl: maskAll},
+	{re: jwtShape, repl: maskAll},
 	// Orama API keys: orama_<type>_<payload>_<checksum>, base62.
-	{re: regexp.MustCompile(`orama_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+`), repl: maskAll},
+	{re: oramaKeyShape, repl: maskAll},
 }
 
 func redactPatterns(s string) string {

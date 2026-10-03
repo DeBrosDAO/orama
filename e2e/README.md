@@ -776,7 +776,9 @@ by `[withheld: redaction failed]` (the next package loads the redactor
 afresh). Over-long lines are cut and marked, never a reason to skip
 redaction. Credentials a feature
 process mints are appended to the run's token registry (`redact-tokens`,
-mode 0600, beside `state.json`, never in the artifact dir); the runner reads
+mode 0600, beside `state.json`, never in the artifact dir). A redactor holds
+at most 10000 literal values, and JWTs and Orama API keys apart from them, up
+to 100000, replaced in one pass; past either bound it fails closed. The runner reads
 it to redact each package's `gotest/` output and stderr after the package
 ends, the collected artifacts, and everything the report shows. The
 provisioning logs (`provision-NN-*.log`), the errors quoting a command's

@@ -24,6 +24,15 @@ const minValueLength = 8
 // forgetting one.
 const MaxValues = 10000
 
+// MaxTokenValues caps the JWTs and Orama API keys one redactor holds. They are
+// kept apart from the other values and replaced in one pass of a
+// strings.Replacer, so they do not spend MaxValues: a run resumed across
+// deploys mints thousands of them. Their shape patterns alone are not enough:
+// two tokens printed back to back, or a token after a fragment that looks like
+// a JWT's start, are matched across the boundary and leave the second token's
+// payload and signature in clear text, where its literal masks it whole.
+const MaxTokenValues = 100000
+
 // MaxInputBytes bounds what one Redact call scans. Longer input is cut (on a
 // rune boundary, with TruncatedMarker) before any pattern runs, so a runaway
 // output cannot make redaction quadratic. Callers bound far below this.
@@ -32,7 +41,8 @@ const MaxInputBytes = 8 << 20
 // TruncatedMarker ends input that Redact cut at MaxInputBytes.
 const TruncatedMarker = "\n…[truncated before redaction]"
 
-// ErrTooManyValues is returned by Add when MaxValues would be exceeded.
+// ErrTooManyValues is returned by Add when MaxValues or MaxTokenValues would be
+// exceeded.
 var ErrTooManyValues = errors.New("secrets: too many literal values to redact")
 
 // SecretEnvNames are the variables `infisical run` injects whose values are
@@ -55,6 +65,17 @@ var SecretEnvNames = []string{
 type Redactor struct {
 	mu     sync.RWMutex
 	values []string
+	// tokens are the values that are wholly a JWT or an Orama API key. They
+	// are held apart from values only for their own cap: replacer replaces
+	// both in one pass, longest first at each position, so a value that
+	// contains another (a token, or a "key:secret" around one) is masked whole.
+	// It is rebuilt by the first Redact after either changed.
+	tokens   []string
+	replacer *strings.Replacer
+	stale    bool
+	// seen holds every value accepted, so a repeat is not added twice. A value
+	// refused at a cap is not in it: offered again, it is refused again.
+	seen map[string]bool
 	// sink persists newly added values (the run's token registry), so other
 	// processes of the run redact them too.
 	sink func([]string) error
@@ -64,8 +85,8 @@ type Redactor struct {
 // patterns. Values shorter than 8 characters are ignored.
 func NewRedactor(values ...string) *Redactor {
 	r := &Redactor{}
-	r.values = normalizeNew(nil, values)
-	sortLongestFirst(r.values)
+	literals, tokens := r.normalizeNew(values)
+	r.accept(literals, tokens)
 	return r
 }
 
@@ -83,21 +104,26 @@ func FromEnv(lookup func(string) (string, bool)) *Redactor {
 
 // Add registers more literal values, for example a token minted during a test,
 // and persists the new ones to the sink when one is set. It fails when the
-// values cannot be persisted or would exceed MaxValues; the values it could
-// hold are registered either way.
+// values cannot be persisted or would exceed MaxValues (MaxTokenValues for
+// JWTs and Orama API keys); the values it could hold are registered either way.
 func (r *Redactor) Add(values ...string) error {
 	r.mu.Lock()
-	fresh := normalizeNew(r.values, values)
+	literals, tokens := r.normalizeNew(values)
 	var capErr error
-	if room := MaxValues - len(r.values); len(fresh) > room {
-		capErr = fmt.Errorf("%w: %d held, %d more offered, cap %d", ErrTooManyValues, len(r.values), len(fresh), MaxValues)
-		fresh = fresh[:max(room, 0)]
+	if room := MaxValues - len(r.values); len(literals) > room {
+		capErr = fmt.Errorf("%w: %d held, %d more offered, cap %d", ErrTooManyValues, len(r.values), len(literals), MaxValues)
+		literals = literals[:max(room, 0)]
 	}
-	r.values = append(r.values, fresh...)
-	// Longest first, so a value that contains another is masked whole.
-	sortLongestFirst(r.values)
+	if room := MaxTokenValues - len(r.tokens); len(tokens) > room {
+		capErr = errors.Join(capErr, fmt.Errorf("%w: %d tokens held, %d more offered, cap %d",
+			ErrTooManyValues, len(r.tokens), len(tokens), MaxTokenValues))
+		tokens = tokens[:max(room, 0)]
+	}
+	r.accept(literals, tokens)
 	sink := r.sink
 	r.mu.Unlock()
+	fresh := make([]string, 0, len(literals)+len(tokens))
+	fresh = append(append(fresh, literals...), tokens...)
 	if sink != nil && len(fresh) > 0 {
 		if err := sink(fresh); err != nil {
 			return errors.Join(capErr, fmt.Errorf("failed to persist minted credentials for redaction: %w", err))
@@ -106,23 +132,45 @@ func (r *Redactor) Add(values ...string) error {
 	return capErr
 }
 
-// normalizeNew returns the trimmed values long enough to redact that are not
-// in have and not repeated.
-func normalizeNew(have, values []string) []string {
-	seen := make(map[string]bool, len(have))
-	for _, v := range have {
-		seen[v] = true
-	}
-	var out []string
+// normalizeNew returns the trimmed values long enough to redact that this
+// redactor does not hold yet, without repeats, split into the tokens (wholly a
+// JWT or an Orama API key) and the other literals. r.mu is held, or r is not
+// shared yet.
+func (r *Redactor) normalizeNew(values []string) (literals, tokens []string) {
+	batch := make(map[string]bool, len(values))
 	for _, v := range values {
 		v = strings.TrimSpace(v)
-		if len(v) < minValueLength || seen[v] || strings.ContainsAny(v, "\r\n") {
+		if len(v) < minValueLength || r.seen[v] || batch[v] || strings.ContainsAny(v, "\r\n") {
 			continue
 		}
-		seen[v] = true
-		out = append(out, v)
+		batch[v] = true
+		if wholeToken(v) {
+			tokens = append(tokens, v)
+		} else {
+			literals = append(literals, v)
+		}
 	}
-	return out
+	return literals, tokens
+}
+
+// accept holds literals and tokens and marks them seen. r.mu is held, or r is
+// not shared yet.
+func (r *Redactor) accept(literals, tokens []string) {
+	if len(literals)+len(tokens) == 0 {
+		return
+	}
+	if r.seen == nil {
+		r.seen = make(map[string]bool, len(literals)+len(tokens))
+	}
+	for _, v := range literals {
+		r.seen[v] = true
+	}
+	for _, v := range tokens {
+		r.seen[v] = true
+	}
+	r.values = append(r.values, literals...)
+	r.tokens = append(r.tokens, tokens...)
+	r.stale = true
 }
 
 func sortLongestFirst(vs []string) {
@@ -133,13 +181,41 @@ func sortLongestFirst(vs []string) {
 func (r *Redactor) Redact(s string) string {
 	s = boundTo(s, MaxInputBytes)
 	if r != nil {
-		r.mu.RLock()
-		for _, v := range r.values {
-			s = strings.ReplaceAll(s, v, Mask)
+		if replacer := r.valueReplacer(); replacer != nil {
+			s = replacer.Replace(s)
 		}
-		r.mu.RUnlock()
 	}
 	return redactPatterns(s)
+}
+
+// valueReplacer is the replacer of every held value, rebuilt when they
+// changed; nil when there are none. strings.Replacer tries its pairs in order
+// at each position, so with the values longest first a value that contains
+// another is masked whole.
+func (r *Redactor) valueReplacer() *strings.Replacer {
+	r.mu.RLock()
+	replacer, stale := r.replacer, r.stale
+	r.mu.RUnlock()
+	if !stale {
+		return replacer
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stale {
+		all := make([]string, 0, len(r.values)+len(r.tokens))
+		all = append(append(all, r.values...), r.tokens...)
+		sortLongestFirst(all)
+		pairs := make([]string, 0, 2*len(all))
+		for _, v := range all {
+			pairs = append(pairs, v, Mask)
+		}
+		r.replacer = nil
+		if len(pairs) > 0 {
+			r.replacer = strings.NewReplacer(pairs...)
+		}
+		r.stale = false
+	}
+	return r.replacer
 }
 
 // boundTo cuts s at limit bytes on a rune boundary.
