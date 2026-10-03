@@ -2,6 +2,7 @@ package install
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -363,12 +364,17 @@ const ramHygieneSysctl = "# Orama: keep secret-bearing pages off the block devic
 	"fs.suid_dumpable = 0\n" +
 	"kernel.yama.ptrace_scope = 1\n"
 
-// persistRAMHygiene turns off swap, disables suid core dumps, restricts ptrace
-// to descendants, and stops systemd-coredump from writing crash images to disk
-// (bugboard #233).
+// persistRAMHygiene turns off swap, disables suid core dumps (and masks apport,
+// which would turn them back on at boot), restricts ptrace to descendants, and
+// stops systemd-coredump from writing crash images to disk (bugboard #233).
 func (fp *FirewallProvisioner) persistRAMHygiene() error {
 	_ = exec.Command("swapoff", "-a").Run()
 	_ = exec.Command("systemctl", "mask", "swap.target").Run()
+
+	// Before the sysctl is applied: apport's start writes suid_dumpable=2.
+	if err := disableApport(runCommand); err != nil {
+		return err
+	}
 
 	cmd := exec.Command("tee", ramHygieneSysctlPath)
 	cmd.Stdin = strings.NewReader(ramHygieneSysctl)
@@ -377,6 +383,9 @@ func (fp *FirewallProvisioner) persistRAMHygiene() error {
 	}
 	if output, err := exec.Command("sysctl", "-p", ramHygieneSysctlPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to apply %s: %w\n%s", ramHygieneSysctlPath, err, string(output))
+	}
+	if err := verifySuidDumpable(os.ReadFile); err != nil {
+		return err
 	}
 
 	if err := exec.Command("mkdir", "-p", "/etc/systemd/coredump.conf.d").Run(); err != nil {

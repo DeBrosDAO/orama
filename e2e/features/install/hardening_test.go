@@ -63,6 +63,11 @@ func TestInstall_ramHygiene(t *testing.T) {
 		if v := sysctlValue(t, f, n, "fs.suid_dumpable"); v != "0" {
 			t.Errorf("%s: fs.suid_dumpable = %s, want 0", n.Name, v)
 		}
+		// apport's start writes fs.suid_dumpable=2 after the sysctl at boot
+		// (core/pkg/install apportUnit): masked, or not shipped (Debian).
+		if s := strings.TrimSpace(f.Exec(t, n, "systemctl show -p LoadState --value apport.service").Stdout); s != "masked" && s != "not-found" {
+			t.Errorf("%s: apport.service LoadState is %q, want masked or not-found", n.Name, s)
+		}
 		requireContains(t, f, n, infra.RAMHygieneConf, "fs.suid_dumpable = 0")
 		requireContains(t, f, n, infra.CoredumpConf, "Storage=none", "ProcessSizeMax=0")
 	}

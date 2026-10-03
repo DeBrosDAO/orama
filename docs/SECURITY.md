@@ -618,7 +618,7 @@ Note: CLONE_NEWPID is intentionally omitted — it makes services PID 1 in their
 
 Guest `mlock`/`mlockall` is **not** used in the Go services. `mlock(2)` does not survive `execve`, so a launcher that locks then execs `rqlited`/`caddy`/`olric-server` gives those binaries zero locked pages. Go `string` values are also unzeroable. Against a hosting-provider RAM snapshot, mlock buys nothing.
 
-The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`. That does **not** stop a RAM snapshot or provider VM-suspend.
+The control that keeps secrets off the **block device** is cgroup `MemorySwapMax=0` on secret-bearing units, plus install-time `swapoff` / `fs.suid_dumpable=0` / systemd-coredump `Storage=none`, with Ubuntu's apport stopped and masked (install and upgrade): its start writes `fs.suid_dumpable=2` after the sysctl is applied, so before it was masked every reboot turned suid core dumps back on. Install and upgrade read `/proc/sys/fs/suid_dumpable` back after applying the sysctl and fail unless it is 0. That does **not** stop a RAM snapshot or provider VM-suspend.
 
 The same install-time drop-in (`/etc/sysctl.d/99-orama-ram-hygiene.conf`, applied with `sysctl -p`; an install or upgrade fails if it cannot be applied) sets `kernel.yama.ptrace_scope=1`, so a process can attach only to its own descendants. Ubuntu ships that value; Debian ships 0, under which any orama daemon could attach to any other and read its memory.
 
