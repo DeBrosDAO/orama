@@ -433,7 +433,12 @@ writes (node selection, port allocation, the ready/failed status) wait, with
 backoff, while the registry has no raft leader, and fail at once on any other
 error. Port allocation is idempotent per (cluster, node): a retry whose first
 INSERT committed but whose reply was lost gets that block back instead of a
-UNIQUE failure, and its backoff ends with the context. A failed run is rolled
+UNIQUE failure, and its backoff ends with the context. Nodes are chosen from a
+read of the registry, so a cluster provisioning at the same time can take a
+chosen node's last port block first; the blocks already taken are given back and
+the nodes chosen again from a fresh read (up to 5 times), so a namespace the
+fleet has room for is not failed with "no ports available on node", and a fleet
+that is really full fails on the selection. A failed run is rolled
 back on its own 3-minute context (the provisioning one is often the one that
 just expired) and the failure is recorded once, with the most informative
 message, on a fresh 2-minute context; a cluster that came up but whose ready

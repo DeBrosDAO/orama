@@ -163,8 +163,11 @@ func holdServing(t *testing.T, w *workload, nodes []fleet.Node) {
 	})
 }
 
-// quiet holds, for d, a converged cluster whose rqlite applied index lag
-// stays bounded: between faults nothing may flap.
+// quiet holds, for d, a converged cluster in which every node keeps applying:
+// between faults nothing may flap. A node is lagging when it is more than
+// maxAppliedLag short of where the cluster had applied by the previous
+// observation (monitor.Report.AppliedBehind), which the read skew between
+// nodes under the soak's own writes cannot produce.
 func quiet(t *testing.T, d time.Duration) {
 	t.Helper()
 	if d < observeEvery {
@@ -172,6 +175,8 @@ func quiet(t *testing.T, d time.Duration) {
 	}
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
+	var prevMax uint64
+	havePrev := false
 	edge.Hold(t, observeEvery, d, "a converged cluster between faults", func() (bool, error) {
 		r, err := monitor.Get(t.Context(), cli, f.State.Env)
 		if err != nil {
@@ -180,28 +185,15 @@ func quiet(t *testing.T, d time.Duration) {
 		if err := r.Converged(len(f.State.Nodes)); err != nil {
 			return false, err
 		}
-		if lag := appliedLag(r); lag > maxAppliedLag {
-			return false, fmt.Errorf("rqlite applied index lag %d over %d", lag, maxAppliedLag)
+		if havePrev {
+			if behind := r.AppliedBehind(prevMax); behind > maxAppliedLag {
+				return false, fmt.Errorf("a node's rqlite applied index is %d short of where the cluster was at the previous observation, over %d",
+					behind, maxAppliedLag)
+			}
 		}
+		prevMax, havePrev = r.MaxApplied()
 		return true, nil
 	})
-}
-
-// appliedLag is the spread of rqlite applied indexes across nodes.
-func appliedLag(r *monitor.Report) uint64 {
-	var lo, hi uint64
-	seen := false
-	for _, n := range r.Nodes {
-		if n.Report == nil || n.Report.RQLite == nil {
-			continue
-		}
-		a := n.Report.RQLite.Applied
-		if !seen || a < lo {
-			lo = a
-		}
-		hi, seen = max(hi, a), true
-	}
-	return hi - lo
 }
 
 // fire runs ev and records its window, which ends once the cluster has

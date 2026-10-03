@@ -453,34 +453,12 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Log event
 	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
 
-	nodes, err := cm.selectNodesWaitingForLeader(ctx, bp.SelectCount)
+	nodes, portBlocks, err := cm.placeCluster(ctx, cluster.ID, bp)
 	if err != nil {
 		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
-		return nil, fmt.Errorf("failed to select nodes: %w", err)
+		return nil, err
 	}
-
-	nodeIDs := make([]string, len(nodes))
-	for i, n := range nodes {
-		nodeIDs[i] = n.NodeID
-	}
-	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
-
-	// Allocate ports on each node
-	portBlocks := make([]*PortBlock, len(nodes))
-	for i, node := range nodes {
-		block, err := cm.allocatePortsWaitingForLeader(ctx, node.NodeID, cluster.ID, bp)
-		if err != nil {
-			// Rollback previous allocations
-			for j := 0; j < i; j++ {
-				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
-			}
-			cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
-			return nil, fmt.Errorf("failed to allocate ports on node %s: %w", node.NodeID, err)
-		}
-		portBlocks[i] = block
-		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
-			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
-	}
+	cm.logPlacement(ctx, cluster.ID, nodes, portBlocks)
 
 	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
@@ -1733,38 +1711,14 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Bl
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	nodes, err := cm.selectNodesWaitingForLeader(ctx, bp.SelectCount)
+	nodes, portBlocks, err := cm.placeCluster(ctx, cluster.ID, bp)
 	if err != nil {
 		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
-		cm.logger.Error("Failed to select nodes for cluster",
+		cm.logger.Error("Failed to place the cluster on nodes",
 			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
 		return
 	}
-
-	nodeIDs := make([]string, len(nodes))
-	for i, n := range nodes {
-		nodeIDs[i] = n.NodeID
-	}
-	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
-
-	// Allocate ports on each node
-	portBlocks := make([]*PortBlock, len(nodes))
-	for i, node := range nodes {
-		block, err := cm.allocatePortsWaitingForLeader(ctx, node.NodeID, cluster.ID, bp)
-		if err != nil {
-			// Rollback previous allocations
-			for j := 0; j < i; j++ {
-				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
-			}
-			cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
-			cm.logger.Error("Failed to allocate ports",
-				zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
-			return
-		}
-		portBlocks[i] = block
-		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
-			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
-	}
+	cm.logPlacement(ctx, cluster.ID, nodes, portBlocks)
 
 	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
