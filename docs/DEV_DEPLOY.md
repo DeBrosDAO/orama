@@ -1205,9 +1205,21 @@ This document used to say "backup + delete"; there was never a backup.
 
 What happens:
 1. Stop orama-node on every node
-2. Reset the kept node to a single-member cluster, preserving its data. The
-   recovery `peers.json` names it under the raft id its rqlited runs with and at
-   its raft address, which are different values: the id is what the node
+2. Reset the kept node to a single-member cluster, preserving its data. Its
+   `raft.db` is kept: rqlited recovers from the `peers.json` by restoring its
+   latest snapshot, replaying every log entry after it, and writing a recovery
+   snapshot at the last index and term, and `raft.db` is also where it keeps
+   its current term. Leftovers of an earlier recovery (`recovery.db*`,
+   `restore-wal-*.tmp`) are removed first: they make the recovery fail. This
+   used to delete `raft.db`, which lost the entries after the last snapshot and
+   restarted the recovered cluster at term 1 under a recovery snapshot of the
+   old term; rqlite orders snapshots by term first, so it served that snapshot
+   as the newest forever and a node that needed a snapshot never caught up
+   (stagenet, 2026-10-03).
+
+   The recovery `peers.json` names the kept node under the raft id its rqlited
+   runs with and at its raft address, which are different values: the id is
+   what the node
    records in `data/rqlite/raft-node-id` (its address only when there is no such
    file, i.e. it was started without `-node-id`), the address comes from
    `--leader-raft-addr` or from the leader's entry in `/nodes` (its `addr`

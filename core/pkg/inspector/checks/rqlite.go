@@ -436,19 +436,7 @@ func checkRQLiteCrossNode(data *inspector.ClusterData, leaderNodes map[string]*i
 	for _, n := range nodes {
 		terms[n.status.Term] = append(terms[n.status.Term], n.name)
 	}
-	if len(terms) == 1 {
-		for t := range terms {
-			r = append(r, inspector.Pass("rqlite.term_consistent", "All nodes same Raft term", rqliteSub, "",
-				fmt.Sprintf("term=%d across %d nodes", t, len(nodes)), inspector.Critical))
-		}
-	} else {
-		var parts []string
-		for t, names := range terms {
-			parts = append(parts, fmt.Sprintf("term=%d: %s", t, strings.Join(names, ",")))
-		}
-		r = append(r, inspector.Fail("rqlite.term_consistent", "All nodes same Raft term", rqliteSub, "",
-			"term divergence: "+strings.Join(parts, "; "), inspector.Critical))
-	}
+	r = append(r, termConsistency(terms))
 
 	// 1.36 All nodes agree on same leader
 	leaderIDs := map[string][]string{}

@@ -39,11 +39,13 @@ type RQLite struct {
 	LeaderID   string `json:"leader_id,omitempty"`
 	NodeID     string `json:"node_id,omitempty"`
 	Term       uint64 `json:"term,omitempty"`
-	Applied    uint64 `json:"applied_index,omitempty"`
-	Commit     uint64 `json:"commit_index,omitempty"`
-	NumPeers   int    `json:"num_peers,omitempty"`
-	Voter      bool   `json:"voter,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// LastSnapshotTerm is the term of the node's latest raft snapshot.
+	LastSnapshotTerm uint64 `json:"last_snapshot_term,omitempty"`
+	Applied          uint64 `json:"applied_index,omitempty"`
+	Commit           uint64 `json:"commit_index,omitempty"`
+	NumPeers         int    `json:"num_peers,omitempty"`
+	Voter            bool   `json:"voter,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 // Gateway is the node's gateway.

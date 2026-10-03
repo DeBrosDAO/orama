@@ -26,14 +26,25 @@ type Flags struct {
 }
 
 // rqlite on-disk layout (rqlite v10, as deployed by the production installer).
-// The committed data lives in db.sqlite* and wsnapshots/ (rsnapshots/ before the node first starts under v10), which are SEPARATE
-// from the Raft log/stable store (raft.db). This separation is what lets us
-// reset the Raft configuration on the leader while preserving all data.
+// The committed data lives in db.sqlite*, wsnapshots/ (rsnapshots/ before the
+// node first starts under v10) and the Raft log in raft.db, which is also the
+// stable store holding the node's current raft term.
+//
+// The leader's recovery keeps raft.db. rqlited acts on a recovery peers.json
+// whenever one is present (rqlite v10 store.Open → RecoverNode): it restores the
+// latest snapshot, replays every log entry after it from raft.db, writes a
+// recovery snapshot at the last index and term, and compacts the log, while
+// the stable store keeps the term. Deleting raft.db lost both: entries committed
+// after the last snapshot, and the term, so the recovered cluster restarted
+// at term 1 below its own recovery snapshot. rqlite orders snapshots by term
+// first, so that snapshot stayed "newest" forever: every later snapshot was
+// reaped as older, and a node that needed a snapshot was sent the recovery
+// snapshot and could never catch up (stagenet, 2026-10-03).
 const (
 	rqliteRoot     = "/opt/orama/.orama/data/rqlite"
 	raftDBFile     = rqliteRoot + "/raft.db"         // Raft log + stable store (BoltDB)
 	raftSubdir     = rqliteRoot + "/raft"            // recovery peers.json lives here
-	peersFile      = rqliteRoot + "/raft/peers.json" // rqlite reads this iff raft.db is absent
+	peersFile      = rqliteRoot + "/raft/peers.json" // rqlited recovers from this on start
 	discoveryPeers = rqliteRoot + "/discovery-peers.json"
 	// raftAddrMarkerFile records the address the node is a member at.
 	raftAddrMarkerFile = rqliteRoot + "/" + rqlite.RaftAddrMarkerName
@@ -128,8 +139,8 @@ func execute(flags *Flags) error {
 	if !flags.Force {
 		fmt.Printf("⚠️  THIS WILL:\n")
 		fmt.Printf("  1. Stop orama-node on ALL %d survivor nodes (brief main-cluster outage)\n", len(nodes))
-		fmt.Printf("  2. On %s: delete raft.db and write a single-node recovery peers.json\n", leader.Host)
-		fmt.Printf("     (db.sqlite + snapshots preserved — no data loss)\n")
+		fmt.Printf("  2. On %s: write a single-node recovery peers.json\n", leader.Host)
+		fmt.Printf("     (raft log, term, db.sqlite and snapshots preserved — no data loss)\n")
 		fmt.Printf("  3. On %d follower(s): WIPE all rqlite state (raft + db.sqlite) so they re-sync fresh,\n", len(followers))
 		fmt.Printf("     and record the leader as the member they re-join\n")
 		fmt.Printf("  4. Restart leader (single-node), then followers re-join as voters\n")
@@ -147,8 +158,8 @@ func execute(flags *Flags) error {
 	}
 
 	// Phase 2: Reset the leader's Raft config to a single-node cluster while
-	// preserving its data. rqlite honours peers.json only when raft.db is
-	// absent, so we remove raft.db and write the recovery file.
+	// preserving its data and raft term: write the recovery peers.json and keep
+	// raft.db (see the layout comment above).
 	if err := phase2ResetLeader(leader, leaderRaft); err != nil {
 		return fmt.Errorf("phase 2 (reset leader): %w", err)
 	}
@@ -272,7 +283,7 @@ func parseMarkerRead(out string) (string, error) {
 func resolveLiveLeader(leader inspector.Node) (leaderRaft, error) {
 	// Cross-check: the node the operator named must ITSELF currently be the raft
 	// leader. Otherwise its /nodes view could name a different (partitioned)
-	// node, and we'd reset THIS node's raft.db while writing a peers.json whose
+	// node, and we'd reset THIS node's raft configuration with a peers.json whose
 	// sole member is someone else — producing a node that isn't in its own
 	// cluster config.
 	if state := raftState(leader); state != "Leader" {
@@ -386,7 +397,7 @@ func phase1StopAll(nodes []inspector.Node) error {
 	}
 
 	// Enforce quiescence: a lingering rqlited still holds raft.db open and would
-	// race the phase-2 `rm -f raft.db` on the leader (data corruption). Poll
+	// race the phase-2 recovery on the leader (data corruption). Poll
 	// until every node reports no orama-node/rqlited process, and ABORT if any
 	// node can't be quiesced — never proceed to destructive phases otherwise.
 	fmt.Printf("\nVerifying all nodes are fully stopped...\n")
@@ -452,12 +463,15 @@ func phase2ResetLeader(leader inspector.Node, lr leaderRaft) error {
 }
 
 // leaderResetScript is the root script phase 2 runs on the leader: refuse if
-// orama-node is up, then, as the orama user, drop raft.db and write peersJSON
-// as the recovery peers.json. It also records addr as the address the leader
-// is a member at, and a membership record naming it alone: the configuration
-// the recovery installs, so a restart before the membership recorder has run
-// does not read a stale address marker as an address change and try to join
-// members that are no longer in the cluster (pkg/namespace indexJoinTargets).
+// orama-node is up, then, as the orama user, remove what an earlier recovery
+// left behind (rqlite.RemoveRecoveryLeftovers: a leftover recovery.db-wal makes
+// rqlited's recovery fail) and write peersJSON as the recovery peers.json,
+// keeping raft.db and with it the log and the term. It also records addr as
+// the address the leader is a member at, and a membership record naming it
+// alone: the configuration the recovery installs, so a restart before the
+// membership recorder has run does not read a stale address marker as an
+// address change and try to join members that are no longer in the cluster
+// (pkg/namespace indexJoinTargets).
 // Everything written travels base64-encoded to sidestep every shell-quoting
 // hazard; addr is a validated raft address.
 func leaderResetScript(peersJSON, addr, record string) string {
@@ -465,7 +479,7 @@ func leaderResetScript(peersJSON, addr, record string) string {
 	encodedRecord := base64.StdEncoding.EncodeToString([]byte(record))
 	recordPath := rqlite.ClusterMembershipPath(rqliteRoot)
 	asOrama := fmt.Sprintf(`set -e
-rm -f %[1]s
+rm -f %[1]s/recovery.db* %[1]s/restore-wal-*.tmp
 mkdir -p %[2]s
 printf %%s %[3]s | base64 -d > %[4]s
 echo %[5]s > %[6]s.tmp
@@ -473,7 +487,7 @@ mv %[6]s.tmp %[6]s
 printf %%s %[7]s | base64 -d > %[8]s.tmp
 mv %[8]s.tmp %[8]s
 echo "LEADER_RESET_DONE peers=$(tr -d "\n" < %[4]s)"
-`, raftDBFile, raftSubdir, encoded, peersFile, addr, raftAddrMarkerFile, encodedRecord, recordPath)
+`, rqliteRoot, raftSubdir, encoded, peersFile, addr, raftAddrMarkerFile, encodedRecord, recordPath)
 	return fmt.Sprintf(`set -e
 if systemctl is-active --quiet orama-node; then
   echo "ERROR: orama-node still active on leader — aborting"; exit 1

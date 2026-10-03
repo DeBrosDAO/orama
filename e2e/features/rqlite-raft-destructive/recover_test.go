@@ -5,6 +5,7 @@ package rqliteraftdestructive
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{})
-	r := infra.RequireHealthy(t)
+	r := raiseTerm(t, f, termElections)
 	leader := infra.Leader(t, r)
 	leaderEntry, err := infra.ReportFor(r, leader)
 	if err != nil {
@@ -67,6 +68,7 @@ func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	for _, e := range r.Nodes {
 		ids[e.Host] = e.Report.RQLite.NodeID
 	}
+	termBefore := leaderEntry.Report.RQLite.Term
 	token := mintInvite(t, leader)
 	loseQuorum(t, r)
 	addr := fmt.Sprintf("%s:%d", leaderEntry.Report.WGIP, infra.IndexRQLiteRaft)
@@ -77,6 +79,17 @@ func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	for _, e := range after.Nodes {
 		if ids[e.Host] != e.Report.RQLite.NodeID {
 			t.Errorf("%s changed raft id %s -> %s in the recovery", e.Host, ids[e.Host], e.Report.RQLite.NodeID)
+		}
+		// The recovery keeps the leader's raft term: a cluster restarted below
+		// the term of its own recovery snapshot serves that snapshot as the
+		// newest forever, and a lagging node never catches up
+		// (docs/COMMON_PROBLEMS.md #21).
+		if rq := e.Report.RQLite; rq.LastSnapshotTerm > rq.Term {
+			t.Errorf("%s holds a snapshot of term %d above its raft term %d after the recovery", e.Host, rq.LastSnapshotTerm, rq.Term)
+		}
+		if e.Report.RQLite.Term < termBefore {
+			t.Errorf("%s is at raft term %d after the recovery, below the leader's %d before it: the recovery reset the term",
+				e.Host, e.Report.RQLite.Term, termBefore)
 		}
 	}
 	for _, node := range f.State.Nodes {
@@ -119,6 +132,41 @@ func loseQuorum(t testing.TB, r *monitor.Report) {
 			t.Fatalf("%s still runs %s after stopping %s: quorum is not lost, refusing to force a recovery", fo.Name, infra.IndexRQLiteUnit, infra.NodeUnit)
 		}
 	}
+}
+
+// termElections is how many elections raiseTerm forces before the recovery:
+// enough that a recovery restarting the cluster at term 1 lands below the term
+// of its own recovery snapshot, which the test then sees.
+const termElections = 2
+
+// raiseTerm kills the leader's index rqlite elections times, waiting for the
+// cluster to converge after each, and returns the healthy report after the
+// last: each kill is an election, so the term ends at least elections above
+// where it started.
+func raiseTerm(t testing.TB, f *fleet.Fleet, elections int) *monitor.Report {
+	t.Helper()
+	r := infra.RequireHealthy(t)
+	start := maxTerm(r)
+	for i := 0; i < elections; i++ {
+		f.Kill(t, infra.Leader(t, r), infra.IndexRQLiteUnit)
+		r = infra.WaitConverged(t, len(f.State.Nodes), infra.ConvergeBudget, "the cluster after election "+strconv.Itoa(i+1))
+	}
+	if end := maxTerm(r); end < start+uint64(elections) {
+		t.Fatalf("the raft term went from %d to %d over %d forced elections", start, end, elections)
+	}
+	return r
+}
+
+// maxTerm is the highest raft term any node reports: a follower can briefly
+// trail the leader by one.
+func maxTerm(r *monitor.Report) uint64 {
+	var hi uint64
+	for _, e := range r.Nodes {
+		if e.Report != nil && e.Report.RQLite != nil && e.Report.RQLite.Term > hi {
+			hi = e.Report.RQLite.Term
+		}
+	}
+	return hi
 }
 
 // requireServes waits until n answers through its own gateway.

@@ -534,6 +534,22 @@ replicas from the other two.
 
 **Fix (one node, rolling, never two voters at once):** stop the unit with the `orama` CLI, then as `orama` delete `recovery.db*` and `restore-wal-*.tmp` from `/opt/orama/.orama/data/namespaces/<ns>/rqlite/<node-id>/`, keep `raft/peers.json` (the recovery it carries is still wanted), and start the unit again. rqlited renames `peers.json` to `peers.info` once the recovery succeeds. If the file lists members that no longer exist, correct it first — it replaces the node's raft configuration.
 
+## 21. A node never catches up: "no WAL data available for snapshot", snapshot term above the raft term
+
+**Symptom:** the monitor raises "Raft snapshot term N is above the current term M" (critical), and one node's applied index stays put while the cluster's grows ("Applied index lag" keeps rising). On that node, `orama-namespace-rqlite@index` logs `failed to take snapshot: ... no WAL data available for snapshot` every few seconds and `node restored` every few minutes. The leader logs `failed to get log: index=<the node's index> error="log not found"` at the same moments. Every node's `wsnapshots/` holds a full snapshot named `<N>-<index>-…` whose term N is above the cluster's term in `/status` (`store.raft.term`).
+
+**Cause:** the cluster was recovered with `orama node recover-raft` before 2026-10-03, which deleted the leader's `raft.db`. That file is also raft's stable store, so the recovered cluster restarted at term 1, while rqlited's recovery snapshot kept the old term N. rqlite orders snapshots by term first, so that snapshot stays "newest". Every later snapshot is reaped as older while raft truncates its log as if it had been kept. A node that needs a snapshot is sent the stale one and is then missing the log after it, so it loops and never catches up. **Restarting any node's rqlite puts it in the same loop**: it restores the stale snapshot on start. `recover-raft` now keeps `raft.db`, so a recovery cannot leave this state.
+
+**Do not restart rqlite or roll an upgrade until it is repaired.** The repair needs no restart. It uses rqlite's HTTP API, run over SSH on a node against overlay addresses (`10.0.0.x:<http port>`) only, never against a public address. Stepdown, load and backup are forwarded to the leader. Pass the credentials from `rqlite-auth.json` in a config read from stdin or a mode-0600 file (`curl -K -`), never as `-u user:pass` on the command line, where `ps` and shell history keep them. The backups hold the whole registry: write them mode 0600 on the node, never copy them off it, and delete them once the cluster is healthy.
+
+1. `GET /db/backup` from the leader, as a safety copy.
+2. `POST /leader?wait` (stepdown) until `store.raft.term` is N-1 or higher. Each stepdown is one election and usually raises the term by one; a split vote can skip one, and if the term has already reached N, go straight to step 3. A snapshot at a term below N still sorts below the stale one, so nothing is lost.
+3. Take a fresh `GET /db/backup` and `POST /db/load` it straight back (`Content-Type: application/octet-stream`). Applying a load makes every node's next snapshot a **full** one.
+4. Immediately `POST /leader?wait` once more (the term is now N), then `POST /snapshot` on every node (a 204 means the node had nothing new to snapshot: write something, or wait for the next entry, and repeat for that node). Each node writes a full snapshot `<N>-<index>-…` above the stale one. An incremental snapshot at term N chained to the stale full would be corrupt, and the load in step 3 is what prevents it.
+5. Check each node's newest `wsnapshots/` entry contains `data.db`, then `POST /reap` on every node, which removes the stale snapshot. The stuck node is sent the new snapshot on the leader's next attempt (within a few minutes) and catches up.
+
+Writes made between the backup and the load in step 3 (seconds) are rolled back, so do it when nothing is writing. Stagenet was repaired this way on 2026-10-03.
+
 ---
 
 ## General Debugging Tips

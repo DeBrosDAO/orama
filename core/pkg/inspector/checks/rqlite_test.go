@@ -329,7 +329,7 @@ func TestCheckRQLite_CrossNode_SplitBrain(t *testing.T) {
 
 func TestCheckRQLite_CrossNode_TermDivergence(t *testing.T) {
 	nodes := map[string]*inspector.NodeData{}
-	terms := map[string]uint64{"1.1.1.1": 5, "2.2.2.2": 5, "3.3.3.3": 6}
+	terms := map[string]uint64{"1.1.1.1": 5, "2.2.2.2": 5, "3.3.3.3": 7}
 	for host, term := range terms {
 		nd := makeNodeData(host, "node")
 		nd.RQLite = &inspector.RQLiteData{

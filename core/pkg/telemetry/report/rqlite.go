@@ -49,30 +49,7 @@ func collectRQLite() *RQLiteReport {
 	}
 	r.Responsive = true
 
-	// Extract fields from the nested status JSON.
-	r.RaftState = getNestedString(status, "store", "raft", "state")
-	r.LeaderAddr = getNestedString(status, "store", "leader", "addr")
-	r.LeaderID = getNestedString(status, "store", "leader", "node_id")
-	r.NodeID = getNestedString(status, "store", "node_id")
-	r.Term = uint64(getNestedFloat(status, "store", "raft", "current_term"))
-	r.Applied = uint64(getNestedFloat(status, "store", "raft", "applied_index"))
-	r.Commit = uint64(getNestedFloat(status, "store", "raft", "commit_index"))
-	r.FsmPending = uint64(getNestedFloat(status, "store", "raft", "fsm_pending"))
-	r.LastContact = getNestedString(status, "store", "raft", "last_contact")
-	r.Voter = getNestedBool(status, "store", "raft", "voter")
-	r.DBSize = getNestedString(status, "store", "sqlite3", "db_size_friendly")
-	r.Uptime = getNestedString(status, "http", "uptime")
-	r.Version = getNestedString(status, "build", "version")
-	r.Goroutines = int(getNestedFloat(status, "runtime", "num_goroutine"))
-
-	// HeapMB: bytes → MB.
-	heapBytes := getNestedFloat(status, "runtime", "memory", "heap_alloc")
-	if heapBytes > 0 {
-		r.HeapMB = int(heapBytes / (1024 * 1024))
-	}
-
-	// NumPeers may be a number or a string in the JSON; handle both.
-	r.NumPeers = getNestedInt(status, "store", "raft", "num_peers")
+	applyRQLiteStatus(r, status)
 
 	// 2. GET /nodes?nonvoters — cluster node list. rqlite asks every member
 	// for this, waiting its own default per-node timeout for an unreachable
@@ -275,4 +252,33 @@ func jsonUint64(m map[string]interface{}, key string) uint64 {
 		}
 	}
 	return 0
+}
+
+// applyRQLiteStatus copies the fields the report keeps from rqlite's /status.
+func applyRQLiteStatus(r *RQLiteReport, status map[string]interface{}) {
+	// Extract fields from the nested status JSON.
+	r.RaftState = getNestedString(status, "store", "raft", "state")
+	r.LeaderAddr = getNestedString(status, "store", "leader", "addr")
+	r.LeaderID = getNestedString(status, "store", "leader", "node_id")
+	r.NodeID = getNestedString(status, "store", "node_id")
+	r.Term = uint64(getNestedFloat(status, "store", "raft", "term"))
+	r.LastSnapshotTerm = uint64(getNestedFloat(status, "store", "raft", "last_snapshot_term"))
+	r.Applied = uint64(getNestedFloat(status, "store", "raft", "applied_index"))
+	r.Commit = uint64(getNestedFloat(status, "store", "raft", "commit_index"))
+	r.FsmPending = uint64(getNestedFloat(status, "store", "raft", "fsm_pending"))
+	r.LastContact = getNestedString(status, "store", "raft", "last_contact")
+	r.Voter = getNestedBool(status, "store", "raft", "voter")
+	r.DBSize = getNestedString(status, "store", "sqlite3", "db_size_friendly")
+	r.Uptime = getNestedString(status, "http", "uptime")
+	r.Version = getNestedString(status, "build", "version")
+	r.Goroutines = int(getNestedFloat(status, "runtime", "num_goroutine"))
+
+	// HeapMB: bytes → MB.
+	heapBytes := getNestedFloat(status, "runtime", "memory", "heap_alloc")
+	if heapBytes > 0 {
+		r.HeapMB = int(heapBytes / (1024 * 1024))
+	}
+
+	// NumPeers may be a number or a string in the JSON; handle both.
+	r.NumPeers = getNestedInt(status, "store", "raft", "num_peers")
 }

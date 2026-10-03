@@ -136,7 +136,7 @@ type RQLiteStatus struct {
 	LeaderNodeID   string // store.leader.node_id
 	LeaderAddr     string // store.leader.addr
 	NodeID         string // store.node_id
-	Term           uint64 // store.raft.term (current_term)
+	Term           uint64 // store.raft.term
 	AppliedIndex   uint64 // store.raft.applied_index
 	CommitIndex    uint64 // store.raft.commit_index
 	FsmPending     uint64 // store.raft.fsm_pending
@@ -513,7 +513,7 @@ func parseRQLiteStatus(raw string) *RQLiteStatus {
 	raft, _ := store["raft"].(map[string]interface{})
 	if raft != nil {
 		s.RaftState, _ = raft["state"].(string)
-		s.Term = jsonUint64(raft, "current_term")
+		s.Term = jsonUint64(raft, "term")
 		s.AppliedIndex = jsonUint64(raft, "applied_index")
 		s.CommitIndex = jsonUint64(raft, "commit_index")
 		s.FsmPending = jsonUint64(raft, "fsm_pending")

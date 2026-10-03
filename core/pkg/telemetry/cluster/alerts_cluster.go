@@ -79,11 +79,14 @@ func checkRQLiteQuorum(reports []*report.NodeReport) []Alert {
 	return nil
 }
 
+// checkRaftTermConsistency warns when the responsive nodes' raft terms are more
+// than one apart. A term of 0 is a report that carried none (an agent from
+// before the term was read, mid rolling upgrade) and is left out.
 func checkRaftTermConsistency(reports []*report.NodeReport) []Alert {
 	var minTerm, maxTerm uint64
 	first := true
 	for _, r := range reports {
-		if r.RQLite == nil || !r.RQLite.Responsive {
+		if r.RQLite == nil || !r.RQLite.Responsive || r.RQLite.Term == 0 {
 			continue
 		}
 		if first {

@@ -119,27 +119,30 @@ type ServiceInfo struct {
 // --- RQLite ---
 
 type RQLiteReport struct {
-	Responsive  bool                      `json:"responsive"`
-	Ready       bool                      `json:"ready"`
-	StrongRead  bool                      `json:"strong_read"`
-	RaftState   string                    `json:"raft_state,omitempty"`
-	LeaderAddr  string                    `json:"leader_addr,omitempty"`
-	LeaderID    string                    `json:"leader_id,omitempty"`
-	NodeID      string                    `json:"node_id,omitempty"`
-	Term        uint64                    `json:"term,omitempty"`
-	Applied     uint64                    `json:"applied_index,omitempty"`
-	Commit      uint64                    `json:"commit_index,omitempty"`
-	FsmPending  uint64                    `json:"fsm_pending,omitempty"`
-	LastContact string                    `json:"last_contact,omitempty"`
-	NumPeers    int                       `json:"num_peers,omitempty"`
-	Voter       bool                      `json:"voter,omitempty"`
-	DBSize      string                    `json:"db_size,omitempty"`
-	Uptime      string                    `json:"uptime,omitempty"`
-	Version     string                    `json:"version,omitempty"`
-	Goroutines  int                       `json:"goroutines,omitempty"`
-	HeapMB      int                       `json:"heap_mb,omitempty"`
-	Nodes       map[string]RQLiteNodeInfo `json:"nodes,omitempty"`
-	DebugVars   *RQLiteDebugVarsReport    `json:"debug_vars,omitempty"`
+	Responsive bool   `json:"responsive"`
+	Ready      bool   `json:"ready"`
+	StrongRead bool   `json:"strong_read"`
+	RaftState  string `json:"raft_state,omitempty"`
+	LeaderAddr string `json:"leader_addr,omitempty"`
+	LeaderID   string `json:"leader_id,omitempty"`
+	NodeID     string `json:"node_id,omitempty"`
+	Term       uint64 `json:"term,omitempty"`
+	// LastSnapshotTerm is the term of the node's latest raft snapshot, which
+	// can never be above Term on a healthy node (checkSnapshotTermAhead).
+	LastSnapshotTerm uint64                    `json:"last_snapshot_term,omitempty"`
+	Applied          uint64                    `json:"applied_index,omitempty"`
+	Commit           uint64                    `json:"commit_index,omitempty"`
+	FsmPending       uint64                    `json:"fsm_pending,omitempty"`
+	LastContact      string                    `json:"last_contact,omitempty"`
+	NumPeers         int                       `json:"num_peers,omitempty"`
+	Voter            bool                      `json:"voter,omitempty"`
+	DBSize           string                    `json:"db_size,omitempty"`
+	Uptime           string                    `json:"uptime,omitempty"`
+	Version          string                    `json:"version,omitempty"`
+	Goroutines       int                       `json:"goroutines,omitempty"`
+	HeapMB           int                       `json:"heap_mb,omitempty"`
+	Nodes            map[string]RQLiteNodeInfo `json:"nodes,omitempty"`
+	DebugVars        *RQLiteDebugVarsReport    `json:"debug_vars,omitempty"`
 	// Error says why rqlite could not be queried at all (e.g. node.yaml
 	// lacks its address or credentials), as opposed to it not answering.
 	Error string `json:"error,omitempty"`

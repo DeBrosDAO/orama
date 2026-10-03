@@ -3113,7 +3113,8 @@ if the surviving node might not be the right one.
 
 What happens:
   1. Stop orama-node on every node
-  2. Reset the kept node to a single-member cluster, preserving its data
+  2. Reset the kept node to a single-member cluster, preserving its data,
+     raft log and raft term
   3. Start it and confirm it comes back as Leader with its data intact
   4. Delete raft.db, raft/, db.sqlite (+shm/wal) and wsnapshots (rsnapshots) on every other
      node, and record the kept node as the member each one re-joins
