@@ -360,8 +360,18 @@ const ramHygieneSysctlPath = "/etc/sysctl.d/99-orama-ram-hygiene.conf"
 // ramHygieneSysctl keeps secret-bearing pages off the block device and stops
 // one process from reading another's memory. Ubuntu ships ptrace_scope=1;
 // Debian ships 0, which lets any orama daemon attach to any other.
+//
+// discardCorePattern pipes every core dump to /bin/false, which discards it.
+const discardCorePattern = "|/bin/false"
+
+// kernel.core_pattern pipes every core dump to /bin/false, which discards it:
+// the same outcome as systemd-coredump's Storage=none, without depending on
+// which crash handler a distribution installs. Ubuntu's apport sets the
+// pattern to its own script when it starts, and the kernel runs that script on
+// a crash whether or not the service is still running.
 const ramHygieneSysctl = "# Orama: keep secret-bearing pages off the block device and out of other processes\n" +
 	"fs.suid_dumpable = 0\n" +
+	"kernel.core_pattern = " + discardCorePattern + "\n" +
 	"kernel.yama.ptrace_scope = 1\n"
 
 // persistRAMHygiene turns off swap, disables suid core dumps (and masks apport,
@@ -384,7 +394,7 @@ func (fp *FirewallProvisioner) persistRAMHygiene() error {
 	if output, err := exec.Command("sysctl", "-p", ramHygieneSysctlPath).CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to apply %s: %w\n%s", ramHygieneSysctlPath, err, string(output))
 	}
-	if err := verifySuidDumpable(os.ReadFile); err != nil {
+	if err := verifyRAMHygiene(os.ReadFile); err != nil {
 		return err
 	}
 

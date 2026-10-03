@@ -41,9 +41,15 @@ func TestRAMHygieneSysctl_disablesSuidDumps(t *testing.T) {
 	}
 }
 
+func TestRAMHygieneSysctl_discardsCoreDumps(t *testing.T) {
+	if got := ramHygieneSettings(t, ramHygieneSysctl)["kernel.core_pattern"]; got != "|/bin/false" {
+		t.Errorf("kernel.core_pattern = %q, want |/bin/false (every dump discarded, whatever crash handler is installed)", got)
+	}
+}
+
 func TestRAMHygieneSysctl_setsNothingElse(t *testing.T) {
-	if got := ramHygieneSettings(t, ramHygieneSysctl); len(got) != 2 {
-		t.Errorf("the drop-in sets %v, want exactly suid_dumpable and ptrace_scope", got)
+	if got := ramHygieneSettings(t, ramHygieneSysctl); len(got) != 3 {
+		t.Errorf("the drop-in sets %v, want exactly suid_dumpable, core_pattern and ptrace_scope", got)
 	}
 	if !strings.HasSuffix(ramHygieneSysctl, "\n") {
 		t.Error("the drop-in must end in a newline")

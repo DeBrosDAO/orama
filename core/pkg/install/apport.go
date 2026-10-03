@@ -32,19 +32,25 @@ func disableApport(run commandRunner) error {
 	return nil
 }
 
-// suidDumpablePath is the kernel's live fs.suid_dumpable.
-const suidDumpablePath = "/proc/sys/fs/suid_dumpable"
+// ramHygieneLive are the kernel values ramHygieneSysctl sets that something
+// else is known to change after it is applied: apport's start rewrites both.
+var ramHygieneLive = []struct{ path, want string }{
+	{"/proc/sys/fs/suid_dumpable", "0"},
+	{"/proc/sys/kernel/core_pattern", discardCorePattern},
+}
 
-// verifySuidDumpable fails unless the kernel reports suid core dumps off. The
-// sysctl applying cleanly is not the proof: a writer that runs afterwards
+// verifyRAMHygiene fails unless the kernel reports the hardening in effect.
+// The sysctl applying cleanly is not the proof: a writer that runs afterwards
 // (apport did) changes the live value silently.
-func verifySuidDumpable(read func(string) ([]byte, error)) error {
-	b, err := read(suidDumpablePath)
-	if err != nil {
-		return fmt.Errorf("failed to read %s after applying %s: %w", suidDumpablePath, ramHygieneSysctlPath, err)
-	}
-	if v := strings.TrimSpace(string(b)); v != "0" {
-		return fmt.Errorf("fs.suid_dumpable is %s after applying %s, want 0: another writer re-enabled suid core dumps (apport, /etc/sysctl.conf, a later sysctl.d file)", v, ramHygieneSysctlPath)
+func verifyRAMHygiene(read func(string) ([]byte, error)) error {
+	for _, v := range ramHygieneLive {
+		b, err := read(v.path)
+		if err != nil {
+			return fmt.Errorf("failed to read %s after applying %s: %w", v.path, ramHygieneSysctlPath, err)
+		}
+		if got := strings.TrimSpace(string(b)); got != v.want {
+			return fmt.Errorf("%s is %q after applying %s, want %q: another writer changed it (apport, /etc/sysctl.conf, a later sysctl.d file)", v.path, got, ramHygieneSysctlPath, v.want)
+		}
 	}
 	return nil
 }
