@@ -49,6 +49,15 @@ func (n *Node) startIndexStorage(_ context.Context) error {
 	return nil
 }
 
+// indexStorageHealthy is the storage watchdog's health check.
+func (n *Node) indexStorageHealthy(context.Context) error {
+	sup, _, err := n.indexSupervisor()
+	if err != nil {
+		return err
+	}
+	return sup.StorageHealthy()
+}
+
 // startIndexEdgeServing starts the units that make this node able to answer
 // public traffic: the vault guardian, the optional SNI router, and Caddy, which
 // terminates TLS and reverse_proxies the index gateway.

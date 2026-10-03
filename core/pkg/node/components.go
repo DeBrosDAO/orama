@@ -22,6 +22,7 @@ const (
 	compIPFSClusterConfig = "ipfs-cluster-config"
 	compClusterDiscovery  = "cluster-discovery"
 	compStorage           = "storage"
+	compStorageWatch      = "storage-watch"
 	compRQLiteLocal       = "rqlite-local"
 	compNameserver        = "nameserver"
 	compPubsub            = "pubsub"
@@ -165,6 +166,18 @@ func (n *Node) clusterBootComponents() []boot.Component {
 			Name:      compStorage,
 			DependsOn: []string{compLegacyLayout},
 			Reconcile: n.startIndexStorage,
+		},
+		// The storage watchdog keeps the storage units up after boot. Storage
+		// itself has no health check on purpose: rqlite-local and the gateway
+		// depend on it, and an IPFS outage must not block them. Nothing
+		// depends on the watchdog, so its failing check only reconciles
+		// storage again: the cluster peer, which systemd stops with the daemon
+		// and never restarts, stayed down until orama-node restarted.
+		{
+			Name:      compStorageWatch,
+			DependsOn: []string{compStorage},
+			Reconcile: n.startIndexStorage,
+			Health:    n.indexStorageHealthy,
 		},
 		// Cluster discovery is separate from rqlite-local because the
 		// goroutines it starts must live as long as the node does; folding it

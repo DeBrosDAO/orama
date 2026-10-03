@@ -214,8 +214,20 @@ On a cluster node, components come in two tiers:
 
 | Tier | Components | Needs |
 |---|---|---|
-| **local** | `data-dir`, `wireguard`, `libp2p`, `peer-info`, `monitoring`, `pubsub`, `ipfs-cluster-config`, `storage`, `cluster-discovery`, `rqlite-local`, `nameserver`, `gateway`, `edge-serving`, `edge-aux`, `wireguard-sync`, `ipfs-swarm-sync` | this machine only |
+| **local** | `data-dir`, `wireguard`, `libp2p`, `peer-info`, `monitoring`, `pubsub`, `ipfs-cluster-config`, `storage`, `storage-watch`, `cluster-discovery`, `rqlite-local`, `nameserver`, `gateway`, `edge-serving`, `edge-aux`, `wireguard-sync`, `ipfs-swarm-sync` | this machine only |
 | **cluster** | `rqlite-cluster`, `membership`, `membership-record`, `dns-registration` | a raft quorum |
+
+`storage` starts the IPFS daemon, the IPFS Cluster peer and the GC timer;
+`storage-watch` keeps them up afterwards. Its health check fails while any of
+the three is inactive, and its reconcile starts them again (a running unit with
+unchanged inputs is left alone). The check is not on `storage` itself, because
+`rqlite-local` and `gateway` depend on `storage` and an IPFS outage must not
+block them, and nothing depends on `storage-watch`. It exists because the
+cluster peer `Requires=` the daemon: systemd stops the peer with the daemon as
+a stop job, which `Restart=` never undoes, so a peer stopped that way stayed
+down until `orama-node` restarted. It also starts a storage unit an operator
+stopped by hand while `orama-node` keeps running; stop the node with
+`orama node stop` to keep storage down.
 
 `edge-serving` is vault, the optional SNI router and Caddy; `edge-aux` is ntfy
 and the Tor client. They are separate because `dns-registration` depends on
@@ -223,6 +235,21 @@ the first and not the second: a `dns_nodes` row saying `active` is a promise
 that this node terminates TLS and proxies tenants, so a node whose Caddy never
 started must not advertise itself — while a broken ntfy, which serves no
 traffic, must not take a healthy node out of DNS.
+
+The promise holds at runtime too. Every 30-second DNS heartbeat checks that
+Caddy (and the SNI router, when enabled) is active. Once two heartbeats in a
+row find it inactive (one is a Caddy restart, not an outage), the node
+removes its own A records from the base names and from every `ns-<name>`
+gateway round-robin, never the last record of a name, and leaves TURN records
+alone. It keeps heartbeating, because an active, fresh `dns_nodes` row is also
+what namespace recovery, vault guardian discovery and the overlay fan-outs read
+as "this node is alive", and a stopped Caddy is not a dead node. The first
+heartbeat after Caddy is back re-adds the records. Before this the edge was
+checked only at start-up, so a Caddy that stopped later kept its node in the
+round-robin. The nameservers stop answering the address within about a minute;
+a recursive resolver that already cached it can keep it for the record's TTL
+(300 seconds for the base names, 60 for `ns-<name>`). A tenant deployment's own
+records and custom domains are not withdrawn.
 
 The `dns_nodes` row itself is written by the index gateway on this host, not by
 the node process: the node POSTs to `/v1/internal/node/register` and

@@ -227,3 +227,50 @@ func (s *IndexSupervisor) EnsureCoreDNS(nodeID string) error {
 	}
 	return disableLeftoverUnits(leftover...)
 }
+
+// indexStorageUnits are what EnsureIPFS, EnsureIPFSCluster and EnsureIPFSGC
+// start: the daemon, the cluster peer and the GC timer.
+var indexStorageUnits = []string{
+	systemd.NamespaceUnit(systemd.ServiceTypeIPFS, BlueprintNameIndex) + ".service",
+	systemd.NamespaceUnit(systemd.ServiceTypeIPFSCluster, BlueprintNameIndex) + ".service",
+	systemd.NamespaceUnit(systemd.ServiceTypeIPFSGC, BlueprintNameIndex) + ".timer",
+}
+
+// StorageHealthy reports whether every index storage unit is active. The
+// cluster peer Requires= the daemon, so systemd stops it with the daemon as a
+// stop job, which its Restart= never undoes: once the daemon is back, only a
+// reconcile starts the peer again.
+func (s *IndexSupervisor) StorageHealthy() error {
+	return inactiveUnits(indexStorageUnits, unitActive)
+}
+
+// inactiveUnits is an error naming every unit active reports down, nil when
+// all are up.
+func inactiveUnits(units []string, active func(string) bool) error {
+	var down []string
+	for _, u := range units {
+		if !active(u) {
+			down = append(down, u)
+		}
+	}
+	if len(down) > 0 {
+		return fmt.Errorf("not active: %s", strings.Join(down, ", "))
+	}
+	return nil
+}
+
+// edgeUnits are the units that terminate TLS for this node: Caddy, behind the
+// SNI router when that is enabled.
+func edgeUnits(sniEnabled bool) []string {
+	units := []string{systemd.NamespaceUnit(systemd.ServiceTypeCaddy, BlueprintNameIndex) + ".service"}
+	if sniEnabled {
+		units = append(units, systemd.NamespaceUnit(systemd.ServiceTypeSNIRouter, BlueprintNameIndex)+".service")
+	}
+	return units
+}
+
+// EdgeServing reports whether this node terminates TLS now, which is what an
+// active dns_nodes row promises.
+func (s *IndexSupervisor) EdgeServing(sniEnabled bool) error {
+	return inactiveUnits(edgeUnits(sniEnabled), unitActive)
+}

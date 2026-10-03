@@ -81,6 +81,17 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 
 // startDNSHeartbeat starts a goroutine that periodically updates the node's last_seen timestamp
 func (n *Node) startDNSHeartbeat(ctx context.Context) {
+	tick := &heartbeatTick{
+		heartbeat: func(ctx context.Context) {
+			if err := n.updateDNSHeartbeat(ctx); err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "Failed to update DNS heartbeat", zap.Error(err))
+			}
+		},
+		edgeServing: n.edgeServing,
+		advertise:   n.advertiseInDNS,
+		withdraw:    n.withdrawFromDNS,
+		maintain:    n.maintainClusterDNS,
+	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -91,33 +102,88 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 				n.logger.ComponentInfo(logging.ComponentNode, "DNS heartbeat stopped")
 				return
 			case <-ticker.C:
-				if err := n.updateDNSHeartbeat(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to update DNS heartbeat", zap.Error(err))
-				}
-				// Self-healing: ensure this node's DNS records exist on every heartbeat
-				if err := n.ensureBaseDNSRecords(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure DNS records on heartbeat", zap.Error(err))
-				}
-				// Re-advertise this node in the namespace gateway round-robin.
-				// MUST run after the heartbeat above (which re-asserts 'active')
-				// and before the purge below, so a just-recovered node is no
-				// longer purge-eligible by the time it re-adds itself.
-				n.ensureNamespaceHostRecords(ctx)
-				// Retract this node's own TURN records for namespaces it is no
-				// longer a TURN node for. The inactive-node purge cannot catch
-				// these: the node is alive, it just does not serve that namespace.
-				n.retractForeignTURNRecords(ctx)
-				// Remove DNS records for nodes that stopped heartbeating
-				n.cleanupStaleNodeRecords(ctx)
-				// Purge per-namespace records (gateway host, TURN, stealth) that
-				// still point at inactive nodes (bugboard #158) — neither an RPC/
-				// WebSocket client nor a relay-only call must resolve a removed node.
-				n.purgeInactiveNodeRecords(ctx)
+				tick.run(ctx)
 			}
 		}
 	}()
 
 	n.logger.ComponentInfo(logging.ComponentNode, "Started DNS heartbeat (30s interval)")
+}
+
+// heartbeatTick is one DNS heartbeat. The heartbeat itself always runs: an
+// active, fresh dns_nodes row is what namespace recovery, vault guardian
+// discovery and the overlay fan-outs read as "this node is alive", and a
+// stopped Caddy does not make it dead. This node's A records are a different
+// promise, that it terminates TLS, so they are advertised only while its edge
+// serves and withdrawn while it does not. The edge used to be checked only at
+// start-up, so a Caddy that stopped later kept its node in the round-robin and
+// clients were sent to a closed port.
+type heartbeatTick struct {
+	heartbeat   func(context.Context)
+	edgeServing func() error
+	// advertise keeps this node's own base and namespace records in place.
+	advertise func(context.Context)
+	// withdraw removes them, naming why.
+	withdraw func(context.Context, error)
+	// maintain keeps the cluster's records right whatever this node's state.
+	maintain func(context.Context)
+	// edgeDown counts consecutive ticks the edge was not serving.
+	edgeDown int
+}
+
+// edgeDownTicks is how many consecutive failed edge checks withdraw the node:
+// a Caddy restart reads as inactive for a moment, and withdrawing on it would
+// flap the node's records in and out of the round-robin.
+const edgeDownTicks = 2
+
+func (h *heartbeatTick) run(ctx context.Context) {
+	h.heartbeat(ctx)
+	if err := h.edgeServing(); err != nil {
+		h.edgeDown++
+		if h.edgeDown >= edgeDownTicks {
+			h.withdraw(ctx, err)
+		}
+	} else {
+		h.edgeDown = 0
+		h.advertise(ctx)
+	}
+	h.maintain(ctx)
+}
+
+// edgeServing reports whether this node terminates TLS now.
+func (n *Node) edgeServing() error {
+	sup, _, err := n.indexSupervisor()
+	if err != nil {
+		return err
+	}
+	return sup.EdgeServing(n.config.SNIRouter.Enabled)
+}
+
+// advertiseInDNS keeps this node's own records in place.
+func (n *Node) advertiseInDNS(ctx context.Context) {
+	// Self-healing: ensure this node's DNS records exist on every heartbeat
+	if err := n.ensureBaseDNSRecords(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure DNS records on heartbeat", zap.Error(err))
+	}
+	// Re-advertise this node in the namespace gateway round-robin. MUST run
+	// after the heartbeat (which re-asserts 'active') and before the purge in
+	// maintainClusterDNS, so a just-recovered node is no longer
+	// purge-eligible by the time it re-adds itself.
+	n.ensureNamespaceHostRecords(ctx)
+}
+
+// maintainClusterDNS removes records that no longer point at a serving node.
+func (n *Node) maintainClusterDNS(ctx context.Context) {
+	// Retract this node's own TURN records for namespaces it is no longer a
+	// TURN node for. The inactive-node purge cannot catch these: the node is
+	// alive, it just does not serve that namespace.
+	n.retractForeignTURNRecords(ctx)
+	// Remove DNS records for nodes that stopped heartbeating
+	n.cleanupStaleNodeRecords(ctx)
+	// Purge per-namespace records (gateway host, TURN, stealth) that still
+	// point at inactive nodes (bugboard #158) — neither an RPC/WebSocket client
+	// nor a relay-only call must resolve a removed node.
+	n.purgeInactiveNodeRecords(ctx)
 }
 
 // updateDNSHeartbeat refreshes this node's last_seen timestamp in dns_nodes.
@@ -347,12 +413,7 @@ func (n *Node) reapInactiveNodeDNS(ctx context.Context, db *sql.DB, baseDomain s
 		return
 	}
 
-	// Build all FQDNs to clean: base domain + node domain
-	var fqdnsToClean []string
-	fqdnsToClean = append(fqdnsToClean, baseDomain+".", "*."+baseDomain+".")
-	if n.config.Node.Domain != "" && n.config.Node.Domain != baseDomain {
-		fqdnsToClean = append(fqdnsToClean, n.config.Node.Domain+".", "*."+n.config.Node.Domain+".")
-	}
+	fqdnsToClean := n.baseRecordFQDNs(baseDomain)
 
 	// Read the whole set before writing. A write while this cursor is open
 	// locks the table on SQLite, and the writes below are what mark the node

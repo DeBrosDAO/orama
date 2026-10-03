@@ -60,8 +60,8 @@ func victim(t *testing.T) fleet.Node {
 // down must leave the base round-robin, or clients resolving the base name
 // are sent to a closed port (core/pkg/node/components.go compDNSRegistration:
 // "A dns_nodes row saying `active` is a promise"; docs/MONITORING.md "DNS").
-// The heartbeat today is gated on Caddy only at start-up, so a Caddy that
-// stops later keeps its record: this test fails until that holds at runtime.
+// Every DNS heartbeat checks the edge: while Caddy is down the node withdraws
+// its own A records and keeps heartbeating (core/pkg/node/dns_withdraw.go).
 func TestEdgePromise_caddyDownLeavesTheRoundRobin(t *testing.T) {
 	f := harness.Fleet(t)
 	v := victim(t)

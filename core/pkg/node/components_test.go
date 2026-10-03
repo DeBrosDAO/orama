@@ -208,7 +208,7 @@ func TestBootComponents_onlyTheQuorumGateAndItsDependentsNeedALeader(t *testing.
 
 	// These must keep serving on a node that cannot reach a quorum.
 	mustServeWithoutQuorum := []string{
-		compWireGuard, compLibP2P, compStorage, compClusterDiscovery, compRQLiteLocal,
+		compWireGuard, compLibP2P, compStorage, compStorageWatch, compClusterDiscovery, compRQLiteLocal,
 		compNameserver, compPubsub, compGateway, compEdgeServing, compEdgeAux, compMonitoring,
 		compWireGuardSync, compIPFSSwarmSync,
 	}
