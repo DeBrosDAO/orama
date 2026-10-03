@@ -472,7 +472,7 @@ could not work; bug 2701.) Its predicates assert:
 
 - **`Converged(n)`** — exactly `n` nodes, every report at most 90s old (`report_age_sec`: the age at which the gateway itself stops counting a report, three missed 10s collections plus the 60s collection timeout, so a loaded node whose collection takes a while still reads converged), quorum `ok`, a leader (not `"none"`), WG mesh `ok`,
   zero critical alerts, and per node: responsive rqlite in `Leader`/`Follower`,
-  gateway 200, `wg0` up with N-1 peers, no service with `restart_loop_risk`, no failed unit.
+  gateway 200, `wg0` up with N-1 peers, no service with `restart_loop_risk`, no failed Orama unit (`orama-*`, `wg-quick@wg0`, `caddy`, `coredns`: the inspector's rule; a failed unit the host image ships is a warning alert, not an unconverged cluster).
 - **`LeaderAgreement()`** — every responsive node names the same leader
   (`rqlite.leader_addr`). Split
   brain is failed on by name, because both halves look healthy from inside.

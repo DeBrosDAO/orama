@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/oramaunit"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
@@ -188,8 +189,8 @@ func serviceProblems(host string, s *report.ServicesReport) []string {
 			p = append(p, fmt.Sprintf("%s: %s is crash-looping (%d restarts)", host, svc.Name, svc.NRestarts))
 		}
 	}
-	if len(s.FailedUnits) > 0 {
-		p = append(p, fmt.Sprintf("%s: failed units %v", host, s.FailedUnits))
+	if failed := oramaunit.Filter(s.FailedUnits); len(failed) > 0 {
+		p = append(p, fmt.Sprintf("%s: failed units %v", host, failed))
 	}
 	return p
 }

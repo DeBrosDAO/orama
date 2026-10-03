@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/oramaunit"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
@@ -96,7 +97,7 @@ func checkSystemPerNode(nd *inspector.NodeData) []inspector.CheckResult {
 	// 6.6 Failed systemd units (only orama-related units count as failures)
 	var oramaUnits, externalUnits []string
 	for _, u := range sys.FailedUnits {
-		if strings.HasPrefix(u, "orama-") || u == "wg-quick@wg0.service" || u == "caddy.service" || u == "coredns.service" {
+		if oramaunit.Is(u) {
 			oramaUnits = append(oramaUnits, u)
 		} else {
 			externalUnits = append(externalUnits, u)

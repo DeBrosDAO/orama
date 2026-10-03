@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var coreServices = []string{
@@ -180,25 +181,33 @@ func parseInt64(s string) int64 {
 	return v
 }
 
-// collectFailedUnits runs `systemctl --failed` and extracts unit names from the first column.
+// collectFailedUnits runs `systemctl --failed` and returns the failed units' names.
 func collectFailedUnits(ctx context.Context) []string {
-	out, err := runCmd(ctx, "systemctl", "--failed", "--no-legend", "--no-pager")
+	out, err := runCmd(ctx, "systemctl", "--failed", "--no-legend", "--no-pager", "--plain")
 	if err != nil {
 		return nil
 	}
+	return parseFailedUnits(out)
+}
 
+// parseFailedUnits takes the unit name from each line of `systemctl --failed
+// --no-legend`. Without --plain, systemd prints a status glyph as a field of
+// its own ("● name.service loaded failed failed …"; other versions use × or
+// ○), and the name is the first field holding a letter or digit, with any of
+// those glyphs joined to it trimmed (and nothing else: "-.mount" is a name). Taking the first field, as this used to, read the
+// bullet, trimmed it to nothing and dropped every failed unit, so the "Failed
+// systemd unit" alert could never fire.
+// statusGlyphs are the unit-state markers systemd prints before a name.
+const statusGlyphs = "●○×*"
+
+func parseFailedUnits(out string) []string {
 	var units []string
 	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			// First column may have a bullet prefix; strip common markers.
-			unit := strings.TrimLeft(fields[0], "●* ")
-			if unit != "" {
-				units = append(units, unit)
+		for _, field := range strings.Fields(line) {
+			name := strings.TrimLeft(field, statusGlyphs)
+			if strings.IndexFunc(name, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0 {
+				units = append(units, name)
+				break
 			}
 		}
 	}

@@ -1005,6 +1005,11 @@ sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 	return data, nil
 }
 
+// failedUnitsCmd prints one failed unit name per line. --plain drops the status
+// bullet systemd otherwise prints as a field of its own, which made $1 the
+// bullet and every failed unit read as "●".
+const failedUnitsCmd = `systemctl --failed --no-legend --no-pager --plain 2>/dev/null | awk '{print $1}'`
+
 func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	data := &SystemData{
 		Services: make(map[string]string),
@@ -1038,7 +1043,7 @@ func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	cmd += ` && echo "$SEP"`
 	cmd += ` && uptime | grep -oP 'load average: \K.*'`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{print $1}'`
+	cmd += ` && ` + failedUnitsCmd
 	cmd += ` && echo "$SEP"`
 	// A journal the SSH user cannot read still exits 0 with a "not seeing
 	// messages" hint; any such text means the count is unknown, never 0.

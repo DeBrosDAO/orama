@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/oramaunit"
 )
 
 // HasLeader reports whether the summary names an rqlite leader.
@@ -97,8 +99,8 @@ func serviceProblems(host string, s *Services) []string {
 			p = append(p, fmt.Sprintf("%s: %s is crash-looping (%d restarts)", host, svc.Name, svc.NRestarts))
 		}
 	}
-	if len(s.FailedUnits) > 0 {
-		p = append(p, fmt.Sprintf("%s: failed units %v", host, s.FailedUnits))
+	if failed := oramaunit.Filter(s.FailedUnits); len(failed) > 0 {
+		p = append(p, fmt.Sprintf("%s: failed units %v", host, failed))
 	}
 	return p
 }

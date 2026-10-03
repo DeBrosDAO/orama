@@ -61,7 +61,7 @@ func TestConverged_rejects(t *testing.T) {
 		"wg0 down":        {func(r *Report) { r.Nodes[2].Report.WireGuard.InterfaceUp = false }, "wg0 down"},
 		"incomplete mesh": {func(r *Report) { r.Nodes[0].Report.WireGuard.Peers = r.Nodes[0].Report.WireGuard.Peers[:1] }, "1 wg peers, want 2"},
 		"crash loop":      {func(r *Report) { r.Nodes[0].Report.Services.Services[0].RestartLoopRisk = true }, "crash-looping"},
-		"failed unit":     {func(r *Report) { r.Nodes[1].Report.Services.FailedUnits = []string{"orama-turn"} }, "failed units"},
+		"failed unit":     {func(r *Report) { r.Nodes[1].Report.Services.FailedUnits = []string{"cloud-init.service", "orama-turn"} }, "failed units [orama-turn]"},
 		"stale report":    {func(r *Report) { r.Nodes[1].ReportAgeSec = MaxReportAgeSec + 1 }, "report is 91s old"},
 		"unreachable node": {func(r *Report) {
 			r.Nodes[2].Status, r.Nodes[2].Error, r.Nodes[2].Report = "unreachable", "timeout", nil
@@ -159,5 +159,15 @@ func TestServing_independentOfRaft(t *testing.T) {
 func TestParse_garbage(t *testing.T) {
 	if _, err := Parse([]byte("not json")); err == nil {
 		t.Fatal("garbage parsed")
+	}
+}
+
+// A unit the host image ships failing is the operator's warning, not a
+// cluster that has not converged.
+func TestConverged_foreignFailedUnitDoesNotBlock(t *testing.T) {
+	r := healthy()
+	r.Nodes[1].Report.Services.FailedUnits = []string{"cloud-init.service"}
+	if err := r.Converged(3); err != nil {
+		t.Fatalf("a failed cloud-init kept the cluster from converging: %v", err)
 	}
 }
