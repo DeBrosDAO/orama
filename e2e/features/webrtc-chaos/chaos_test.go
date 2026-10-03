@@ -4,6 +4,8 @@ package webrtcchaos
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"slices"
@@ -73,17 +75,22 @@ func setup(t *testing.T) *fixture {
 	return &fixture{f: f, n: n, c: c, token: s.AccessToken, members: tenancy.Members(t, f, n.Name)}
 }
 
-// TestSFUDown_drainAndReconnect: stopping the first member's SFU tells its peers
+// TestSFUDown_drainAndReconnect: stopping the SFU that hosts a room tells its peers
 // server-draining (or closes them), and a client that reconnects through
 // another node's gateway gets media again (docs/WEBRTC.md#3-connect-signaling-websocket).
 func TestSFUDown_drainAndReconnect(t *testing.T) {
 	fx := setup(t)
 	room := "e2e-drain-" + fx.n.Name
-	victim := fx.members[0]
 	unit := "orama-namespace-sfu@" + fx.n.Name + ".service"
-	eventually.Require(t, pollEvery, readyBudget, "the SFU on "+victim.Name, func() (bool, error) {
-		return fx.f.Unit(t, victim, unit) == "active", nil
-	})
+	for _, m := range fx.members {
+		eventually.Require(t, pollEvery, readyBudget, "the SFU on "+m.Name, func() (bool, error) {
+			return fx.f.Unit(t, m, unit) == "active", nil
+		})
+	}
+	// The room lives on the SFU its rendezvous rank puts first, whichever
+	// gateway the join lands on: stopping any other member's SFU leaves the
+	// participant untouched.
+	victim := roomOwner(t, fx, room)
 	p, err := services.JoinRoom(t.Context(), fx.c.PinTo(victim.PublicIP), fx.token, room, "drained")
 	if err != nil {
 		t.Fatal(err)
@@ -102,15 +109,52 @@ func TestSFUDown_drainAndReconnect(t *testing.T) {
 				return false, nil
 			}
 		})
-		requireMediaThroughOthers(t, fx, room)
+		requireMediaThroughOthers(t, fx, room, victim)
 	})
 }
 
-// requireMediaThroughOthers rejoins room through the second member
-// (publisher) and the third (subscriber) and waits for media to flow between them.
-func requireMediaThroughOthers(t *testing.T, fx *fixture, room string) {
+// roomOwner is the member whose SFU hosts room when every SFU is healthy and
+// the room is new: the top of the rendezvous rank every gateway computes,
+// sha256 of namespace|room|node id, the id being the node's dns_nodes id
+// (docs/WEBRTC.md "Room Placement"; core pkg/gateway/handlers/webrtc
+// rankSFUNodes).
+func roomOwner(t *testing.T, fx *fixture, room string) fleet.Node {
 	t.Helper()
-	pubNode, subNode := fx.members[1], fx.members[2]
+	var owner fleet.Node
+	var ownerID string
+	var best uint64
+	for i, m := range fx.members {
+		q := infra.IndexQuery(t, fx.f, m, "SELECT id FROM dns_nodes WHERE internal_ip = ?", m.WGIP)
+		if len(q.Values) != 1 {
+			t.Fatalf("dns_nodes has %d rows for %s (%s)", len(q.Values), m.Name, m.WGIP)
+		}
+		id, ok := q.Values[0][0].(string)
+		if !ok || id == "" {
+			t.Fatalf("dns_nodes id of %s is %v: the room's owner cannot be computed", m.Name, q.Values[0][0])
+		}
+		sum := sha256.Sum256([]byte(fx.n.Name + "\x00" + room + "\x00" + id))
+		score := binary.BigEndian.Uint64(sum[:8])
+		if i == 0 || score > best || (score == best && id < ownerID) {
+			owner, ownerID, best = m, id, score
+		}
+	}
+	return owner
+}
+
+// requireMediaThroughOthers rejoins room through two members other than
+// stopped (publisher and subscriber) and waits for media to flow between them.
+func requireMediaThroughOthers(t *testing.T, fx *fixture, room string, stopped fleet.Node) {
+	t.Helper()
+	var rest []fleet.Node
+	for _, m := range fx.members {
+		if m.Name != stopped.Name {
+			rest = append(rest, m)
+		}
+	}
+	if len(rest) < 2 {
+		t.Fatalf("%d members besides %s: need a publisher and a subscriber", len(rest), stopped.Name)
+	}
+	pubNode, subNode := rest[0], rest[1]
 	pub, err := services.JoinRoom(t.Context(), fx.c.PinTo(pubNode.PublicIP), fx.token, room, "rejoined-pub")
 	if err != nil {
 		t.Fatalf("reconnecting through %s: %v", pubNode.Name, err)
