@@ -115,7 +115,7 @@ func (o *Orchestrator) realOps() upgradeOps {
 		templates:        s.InstallNamespaceTemplates,
 		systemdUnits: func() error {
 			enableHTTPS, _, _ := o.extractGatewayConfig()
-			return s.Phase5CreateSystemdServices(enableHTTPS)
+			return s.Phase5WriteSystemdServices(enableHTTPS)
 		},
 		firewall:       func() error { return s.Phase6bSetupFirewall(false) },
 		restart:        o.restartServices,

@@ -566,7 +566,7 @@ The first component that does not come up is named, install exits **non-zero**, 
 
 Two related orderings changed in the same commit:
 
-- **Namespace systemd templates install before the services that use them.** Phase 5 starts `orama-node`, whose first act is to start `orama-namespace-wireguard@index`; with no template installed systemd answers `Unit ... not found` and the supervisor exits. Install used to depend on systemd's restart loop to converge past that. Any missing or unwritable template is now fatal and the error names it.
+- **Namespace systemd templates install before the services that use them.** Install's Phase 5 starts `orama-node` (an upgrade's Phase 5 only writes and enables it; the upgrade starts it once, in its restart step, which then waits for the node to serve, so the node's stack is not bounced twice), whose first act is to start `orama-namespace-wireguard@index`; with no template installed systemd answers `Unit ... not found` and the supervisor exits. Install used to depend on systemd's restart loop to converge past that. Any missing or unwritable template is now fatal and the error names it.
 - **Install and upgrade seed no DNS records.** They used to write `ns1`..`ns3` NS records, an `ns1` SOA and apex/wildcard A records on every run, whatever slots the cluster had. `orama-node`'s DNS component owns the zone: each `--nameserver` node claims an `nsN` slot and writes its glue and its apex/wildcard A records, and the NS set and SOA follow the glued slots, on the sweep 30 seconds after it starts (see [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)).
 
 ### Stagenet: the chain and the global services

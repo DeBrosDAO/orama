@@ -605,6 +605,18 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 //
 // enableHTTPS selects the SNI-aware RQLite Raft advertise port.
 func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
+	if err := ps.Phase5WriteSystemdServices(enableHTTPS); err != nil {
+		return err
+	}
+	return ps.startNode()
+}
+
+// Phase5WriteSystemdServices is Phase5CreateSystemdServices without starting
+// orama-node: an upgrade starts it once, in its restart step, which waits for
+// the node to serve again. Starting it here as well restarted the node's whole
+// stack twice within seconds — every index daemon, rqlite included, bounced a
+// second time while the node was rejoining (stagenet 2026-10-04).
+func (ps *ProductionSetup) Phase5WriteSystemdServices(enableHTTPS bool) error {
 	ps.logf("Phase 5: Creating systemd services...")
 
 	if err := ps.chownOramaTree(); err != nil {
@@ -642,7 +654,7 @@ func (ps *ProductionSetup) Phase5CreateSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	return ps.enableAndStartNode()
+	return ps.enableNode()
 }
 
 // nodeServiceName is the supervisor's unit, the one host unit install writes.
@@ -694,10 +706,7 @@ func ensureCaddyDataDir() error {
 	return nil
 }
 
-// enableAndStartNode enables and (re)starts the supervisor.
-//
-// orama-node starts the orama-namespace-*@index host daemons and, on
-// nameservers, orama-namespace-coredns@nameserver.
+// enableNode enables the supervisor.
 //
 // The WireGuard unit is enabled alongside it, NOT left to the supervisor.
 // wg0 previously existed only if Node.Start got as far as
@@ -707,7 +716,7 @@ func ensureCaddyDataDir() error {
 // The overlay must come up at boot on its own; the unit is idempotent
 // (`wg show wg0 || wg-quick up wg0`), so the supervisor starting it again is
 // a no-op.
-func (ps *ProductionSetup) enableAndStartNode() error {
+func (ps *ProductionSetup) enableNode() error {
 	for _, svc := range []string{nodeServiceName, "orama-namespace-wireguard@index.service"} {
 		if err := ps.serviceController.EnableService(svc); err != nil {
 			return err
@@ -721,7 +730,13 @@ func (ps *ProductionSetup) enableAndStartNode() error {
 		return err
 	}
 	ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
+	return nil
+}
 
+// startNode (re)starts the supervisor. orama-node starts the
+// orama-namespace-*@index host daemons and, on nameservers,
+// orama-namespace-coredns@nameserver.
+func (ps *ProductionSetup) startNode() error {
 	ps.logf("  Starting orama-node (supervisor starts @index host stack and @nameserver CoreDNS)...")
 	if err := ps.serviceController.RestartService(nodeServiceName); err != nil {
 		return err
