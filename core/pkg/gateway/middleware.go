@@ -712,8 +712,10 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		srw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		r, attribution := withTrafficAttribution(r)
+		r, phases := withRequestPhases(r, start)
 		next.ServeHTTP(srw, r)
-		dur := time.Since(start)
+		end := time.Now()
+		dur := end.Sub(start)
 		g.recordTraffic(r, attribution, srw.status, srw.bytes, dur)
 		g.logger.ComponentInfo(logging.ComponentGeneral, "request",
 			zap.String("method", r.Method),
@@ -722,6 +724,13 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 			zap.Int("bytes", srw.bytes),
 			zap.String("duration", dur.String()),
 		)
+		// A WebSocket's duration is the life of its connection, not a stall.
+		if dur >= slowRequestThreshold && !isWebSocketUpgrade(r) {
+			g.logger.ComponentWarn(logging.ComponentGeneral, "slow request",
+				append([]zap.Field{zap.String("method", r.Method), zap.String("path", r.URL.Path),
+					zap.Int("status", srw.status), zap.Int64("duration_ms", dur.Milliseconds())},
+					phases.fields(end)...)...)
+		}
 
 		// Enqueue log entry for batched persistence (replaces per-request DB writes)
 		if g.logBatcher != nil {
@@ -1525,7 +1534,10 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 func (g *Gateway) handleNamespaceGatewayRequest(w http.ResponseWriter, r *http.Request, namespaceName string) {
 	// Validate auth against main cluster RQLite BEFORE proxying
 	// This ensures API keys work even though they're not in the namespace's RQLite
-	g.proxyToNamespaceGateway(w, r, namespaceName, g.namespaceProxyAuthFor(r))
+	markPhase(r, "routing")
+	a := g.namespaceProxyAuthFor(r)
+	markPhase(r, "auth")
+	g.proxyToNamespaceGateway(w, r, namespaceName, a)
 }
 
 // namespaceProxyAuth is the outcome of validateAuthForNamespaceProxy, carried
@@ -1702,6 +1714,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Namespace gateway not available", http.StatusServiceUnavailable)
 		return
 	}
+	markPhase(r, "targets")
 
 	// Keep ordering deterministic before hashing, otherwise DB row order can vary.
 	sort.Slice(targets, func(i, j int) bool {
@@ -1921,6 +1934,8 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 			break
 		}
 	}
+	// Every attempt, failed-over members included, is one step.
+	markPhase(r, "upstream")
 	if resp == nil {
 		// Distinguish timeout from connection failure so clients get an
 		// actionable code (#219). "Namespace gateway unavailable" was

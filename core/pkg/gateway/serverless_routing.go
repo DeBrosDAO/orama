@@ -64,7 +64,9 @@ func (g *Gateway) clusterServerlessRoutingMiddleware(next http.Handler) http.Han
 // A request that stays here is authenticated again by authMiddleware; only
 // the "default" namespace's own traffic takes that path.
 func (g *Gateway) routeServerlessByCredential(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	markPhase(r, "routing")
 	a := g.namespaceProxyAuthFor(r)
+	markPhase(r, "auth")
 	switch {
 	case a.errMsg != "":
 		unauthorized(w, namespaceProxyAuthCode(a.errMsg), a.errMsg, nil)

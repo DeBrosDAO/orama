@@ -556,6 +556,15 @@ and read with `Gateway.TrafficSnapshot()` as a `report.TrafficReport`.
 - **Excluded:** the gateway's own health and telemetry plumbing, so monitoring
   does not measure itself: `/health`, `/v1/health`, `/v1/internal/ping`, and
   everything under `/v1/internal/telemetry` and `/v1/operator/telemetry`.
+- **Slow requests:** a request that takes a second or more is also logged at
+  warning level as `slow request`, with the time each step took: `routing_ms`
+  (from the request's arrival until it is routed to a namespace), `auth_ms` (validating the credential for a
+  namespace proxy), `targets_ms` (looking the namespace's gateways up),
+  `upstream_ms` (until the namespace gateway's response headers) and `rest_ms`
+  (everything after the last step, including streaming the response body, so a
+  large download is slow there by design). A step the request did not take is
+  absent. WebSocket upgrades are not logged: their duration is the connection's. Read it with
+  `orama node logs orama-namespace-gateway@index`.
 
 ## Monitor vs Inspector
 
