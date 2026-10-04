@@ -27,8 +27,14 @@ import (
 
 // Budgets and bounds.
 const (
-	// RequestBudget bounds one request when the caller's context has no deadline.
+	// RequestBudget bounds one request when the caller's context has no
+	// deadline, plus requestBodyAllowance for the body it sends.
 	RequestBudget = 30 * time.Second
+	// minUplinkBytesPerSecond is the slowest uplink a runner is expected to
+	// have (2 Mbit/s): a body is given the time to cross it at that rate. A
+	// 20 MiB upload took 29 s from a runner whose other packages were also
+	// sending, and a flat budget timed it out before the gateway had it.
+	minUplinkBytesPerSecond = 256 << 10
 	// MaxResponseBytes bounds a response body read into memory.
 	MaxResponseBytes = 32 << 20
 	// Connection reuse bounds: a package builds many clients (one per
@@ -160,7 +166,7 @@ func (c *Client) Do(req *http.Request) (*Response, error) {
 	ctx := req.Context()
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, RequestBudget)
+		ctx, cancel = context.WithTimeout(ctx, RequestBudget+requestBodyAllowance(req.ContentLength))
 		defer cancel()
 		req = req.WithContext(ctx)
 	}
@@ -191,6 +197,15 @@ func (c *Client) Do(req *http.Request) (*Response, error) {
 func inFleetMode() bool {
 	mode, err := config.FromEnv(os.LookupEnv)
 	return err != nil || mode.StatePath != ""
+}
+
+// requestBodyAllowance is the time a body of n bytes is given to be sent at
+// minUplinkBytesPerSecond; nothing for no body or one of unknown length.
+func requestBodyAllowance(n int64) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second / minUplinkBytesPerSecond
 }
 
 // snapshotBody reads a replayable copy of the request body for evidence.

@@ -90,28 +90,41 @@ func TestInstall_nameserversRunCoreDNS(t *testing.T) {
 	}
 }
 
-// servicesRunning is the summary line `orama node status` ends with, "5 of 5
-// running" (production/status/command.go).
-var servicesRunning = regexp.MustCompile(`(?m)^(\d+) of (\d+) running$`)
+// statusRow is one SERVICE/STATE row of `orama node status`
+// (production/status/command.go).
+var statusRow = regexp.MustCompile(`(?m)^(orama-\S+)\s+(active|inactive)\s`)
 
-// allServicesRunning reports whether that line says every listed service runs
-// and lists at least one: a bare "running" substring is also in "0 of 5
-// running".
-func allServicesRunning(out string) bool {
-	m := servicesRunning.FindStringSubmatch(out)
-	return m != nil && m[1] == m[2] && m[2] != "0"
+// installUnitsDown returns the install's own units that `orama node status`
+// lists as not running — orama-node and the @index stack — and whether it
+// listed orama-node at all. Tenant namespace units are not the install's:
+// packages running beside this one create and tear namespaces down, and a
+// namespace being torn down is listed inactive between its units stopping and
+// its unit env being cleared (stagenet 2026-10-04).
+func installUnitsDown(out string) (down []string, listed bool) {
+	for _, m := range statusRow.FindAllStringSubmatch(out, -1) {
+		unit, state := m[1], m[2]
+		if unit != "orama-node" && !strings.Contains(unit, "@index") {
+			continue
+		}
+		listed = listed || unit == "orama-node"
+		if state != "active" {
+			down = append(down, unit)
+		}
+	}
+	return down, listed
 }
 
 // TestInstall_nodeStatusAndDoctor: the local commands an operator runs on
-// the node itself report a healthy install: `orama node status` lists the
-// services running, `orama node doctor` passes every check
+// the node itself report a healthy install: `orama node status` lists
+// orama-node and the @index stack running, `orama node doctor` passes every check
 // (docs/CLI_REFERENCE.md "orama node status", "orama node doctor").
 func TestInstall_nodeStatusAndDoctor(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	for _, n := range f.State.Nodes {
 		st := infra.OnNode(t, f, n, "node", "status")
-		if st.Exit != 0 || strings.Contains(st.Stdout, "No Orama services") || !allServicesRunning(st.Stdout) {
+		down, listed := installUnitsDown(st.Stdout)
+		if st.Exit != 0 || !listed || len(down) > 0 {
 			t.Errorf("%s: orama node status exit %d:\n%s%s", n.Name, st.Exit, st.Stdout, st.Stderr)
 		}
 		doc := infra.OnNode(t, f, n, "node", "doctor")

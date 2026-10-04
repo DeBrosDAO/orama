@@ -50,7 +50,20 @@ type Summary struct {
 	MaxMS      float64 `json:"max_ms"`
 	Throughput float64 `json:"throughput_per_sec"`
 	FirstError string  `json:"first_error,omitempty"`
+	// Slowest are the slowest successful operations, slowest first, with when
+	// they started: a tail over its bound is read against the server's logs
+	// at those times.
+	Slowest []Slow `json:"slowest,omitempty"`
 }
+
+// Slow is one slow operation.
+type Slow struct {
+	At time.Time `json:"at"`
+	MS float64   `json:"ms"`
+}
+
+// slowestKept is how many of the slowest operations a Summary keeps.
+const slowestKept = 10
 
 // Summarize computes a Summary of the samples that satisfy keep (all when nil).
 // Latencies are over successful operations only; throughput is successes per
@@ -58,6 +71,7 @@ type Summary struct {
 func Summarize(name string, samples []Sample, keep func(Sample) bool) Summary {
 	sum := Summary{Name: name}
 	var ok []time.Duration
+	var okSamples []Sample
 	var first, last time.Time
 	for _, s := range samples {
 		if keep != nil && !keep(s) {
@@ -78,7 +92,9 @@ func Summarize(name string, samples []Sample, keep func(Sample) bool) Summary {
 			continue
 		}
 		ok = append(ok, s.Duration)
+		okSamples = append(okSamples, s)
 	}
+	sum.Slowest = slowest(okSamples)
 	if sum.Count > 0 {
 		sum.ErrorRate = float64(sum.Errors) / float64(sum.Count)
 	}
@@ -91,6 +107,16 @@ func Summarize(name string, samples []Sample, keep func(Sample) bool) Summary {
 		sum.Throughput = float64(len(ok)) / span
 	}
 	return sum
+}
+
+// slowest is the slowestKept slowest of samples, slowest first.
+func slowest(samples []Sample) []Slow {
+	sort.Slice(samples, func(i, j int) bool { return samples[i].Duration > samples[j].Duration })
+	out := make([]Slow, 0, min(len(samples), slowestKept))
+	for _, s := range samples[:min(len(samples), slowestKept)] {
+		out = append(out, Slow{At: s.At, MS: ms(s.Duration)})
+	}
+	return out
 }
 
 // percentile is the nearest-rank percentile of sorted durations.

@@ -130,8 +130,9 @@ func TestOlricChaos_memoryOnly(t *testing.T) {
 var olricConfigLine = regexp.MustCompile(`(?m)^OLRIC_SERVER_CONFIG=(\S+)$`)
 
 // olricTopLevelKeys is everything the spawner writes (core/pkg/namespace
-// systemd_spawner.go olricConfig): no storage or data directory.
-var olricTopLevelKeys = map[string]bool{"server": true, "memberlist": true, "partitionCount": true}
+// systemd_spawner.go olricConfig): no storage or data directory. dmaps is the
+// per-DMap memory bound and its LRU eviction, which keep the cache in memory.
+var olricTopLevelKeys = map[string]bool{"server": true, "memberlist": true, "partitionCount": true, "dmaps": true}
 
 func assertNoDataDir(t testing.TB, f *fleet.Fleet, node fleet.Node, n *ns.Namespace) {
 	t.Helper()

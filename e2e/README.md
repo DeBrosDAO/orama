@@ -341,7 +341,7 @@ command documents, and on its stderr.
 | Signature | Does |
 |-----------|------|
 | `ForFleet(t, f) *Client`, `(*Client).WithBase(url)`, `NamespaceURL(st, ns)` | clients for the public and the namespace gateway |
-| `(*Client).Send(ctx, gw.Req) (*Response, error)` | `Req{Method, Path, Query, Header, Body, Bearer, APIKey, Host}`; header values are sent as given (duplicates allowed), body verbatim |
+| `(*Client).Send(ctx, gw.Req) (*Response, error)` | `Req{Method, Path, Query, Header, Body, Bearer, APIKey, Host}`; header values are sent as given (duplicates allowed), body verbatim; a ctx with no deadline gets `RequestBudget` (30 s) plus the time the body takes at 2 Mbit/s, so a large upload is not timed out by the runner's uplink |
 | `(*Client).MustSend(t, gw.Req) *Response` | fails only when the request could not be made; safe inside `t.Cleanup` (sends on `fleet.ContextFor(t)`) |
 | `(*Client).Stream(ctx, gw.Req) (*StreamResp, error)` | a streaming (SSE) response once its headers arrive, body left open, no `RequestBudget` (the stream lasts as long as ctx); `Accept: text/event-stream` by default; `StreamResp{Status, Header}`, `.Next() (Event, error)` (`Event{ID, Event, Data, Retry}`, multi-line data joined with `\n`, comments skipped, `io.EOF` at the end), `.Events()`, `.Close()` (always call it: it records the exchange with every event read, once) |
 | `(*Client).JSON(ctx, method, path, bearer, in, out) (*Response, error)` | non-2xx returns `*gw.StatusError` |
