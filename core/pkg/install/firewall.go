@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/hardening"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
 )
 
@@ -359,27 +360,31 @@ const ramHygieneSysctlPath = "/etc/sysctl.d/99-orama-ram-hygiene.conf"
 
 // ramHygieneSysctl keeps secret-bearing pages off the block device and stops
 // one process from reading another's memory. Ubuntu ships ptrace_scope=1;
-// Debian ships 0, which lets any orama daemon attach to any other.
-//
-// discardCorePattern pipes every core dump to /bin/false, which discards it.
-const discardCorePattern = "|/bin/false"
+// Debian ships 0, which lets any orama daemon attach to any other. The
+// settings live in pkg/hardening, which the node report reads back at runtime.
+var ramHygieneSysctl = hardening.DropIn()
 
-// kernel.core_pattern pipes every core dump to /bin/false, which discards it:
-// the same outcome as systemd-coredump's Storage=none, without depending on
-// which crash handler a distribution installs. Ubuntu's apport sets the
-// pattern to its own script when it starts, and the kernel runs that script on
-// a crash whether or not the service is still running.
-const ramHygieneSysctl = "# Orama: keep secret-bearing pages off the block device and out of other processes\n" +
-	"fs.suid_dumpable = 0\n" +
-	"kernel.core_pattern = " + discardCorePattern + "\n" +
-	"kernel.yama.ptrace_scope = 1\n"
+// disableSwap turns swap off now and keeps it off at boot. `swapoff -a` exits
+// 0 when no swap is configured, so a non-zero exit is a real failure (pages
+// that cannot be moved back into RAM, or no permission): the node would keep
+// writing secret-bearing pages to disk, so it is an error, not a shrug.
+func disableSwap(run commandRunner) error {
+	if out, err := run("swapoff", "-a"); err != nil {
+		return fmt.Errorf("failed to turn swap off (secret-bearing pages could reach the disk; check free memory and /proc/swaps): %w\n%s", err, out)
+	}
+	if out, err := run("systemctl", "mask", "swap.target"); err != nil {
+		return fmt.Errorf("failed to mask swap.target, so swap could come back at boot: %w\n%s", err, out)
+	}
+	return nil
+}
 
 // persistRAMHygiene turns off swap, disables suid core dumps (and masks apport,
 // which would turn them back on at boot), restricts ptrace to descendants, and
 // stops systemd-coredump from writing crash images to disk (bugboard #233).
 func (fp *FirewallProvisioner) persistRAMHygiene() error {
-	_ = exec.Command("swapoff", "-a").Run()
-	_ = exec.Command("systemctl", "mask", "swap.target").Run()
+	if err := disableSwap(runCommand); err != nil {
+		return err
+	}
 
 	// Before the sysctl is applied: apport's start writes suid_dumpable=2.
 	if err := disableApport(runCommand); err != nil {

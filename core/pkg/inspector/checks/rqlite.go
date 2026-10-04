@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
 func init() {
@@ -216,8 +217,13 @@ func checkRQLitePerNode(nd *inspector.NodeData, data *inspector.ClusterData, lea
 
 	// 1.13 Last contact (followers only)
 	if s.RaftState == "Follower" && s.LastContact != "" {
-		r = append(r, inspector.Pass("rqlite.last_contact", "Follower last contact recent", rqliteSub, node,
-			fmt.Sprintf("last_contact=%s", s.LastContact), inspector.Critical))
+		if rqlite.ParseLastContact(s.LastContact) > rqlite.StalenessMaxLastContact {
+			r = append(r, inspector.Warn("rqlite.last_contact", "Follower last contact recent", rqliteSub, node,
+				fmt.Sprintf("last_contact=%s (over %s)", s.LastContact, rqlite.StalenessMaxLastContact), inspector.Critical))
+		} else {
+			r = append(r, inspector.Pass("rqlite.last_contact", "Follower last contact recent", rqliteSub, node,
+				fmt.Sprintf("last_contact=%s", s.LastContact), inspector.Critical))
+		}
 	}
 
 	// 1.14 Last log term matches current term
@@ -459,41 +465,6 @@ func checkRQLiteCrossNode(data *inspector.ClusterData, leaderNodes map[string]*i
 		}
 		r = append(r, inspector.Fail("rqlite.leader_agreement", "All nodes agree on leader", rqliteSub, "",
 			"leader disagreement: "+strings.Join(parts, "; "), inspector.Critical))
-	}
-
-	// 1.38 Applied index convergence
-	var minApplied, maxApplied uint64
-	hasApplied := false
-	for _, n := range nodes {
-		idx := n.status.AppliedIndex
-		if idx == 0 {
-			continue
-		}
-		if !hasApplied {
-			minApplied = idx
-			maxApplied = idx
-			hasApplied = true
-			continue
-		}
-		if idx < minApplied {
-			minApplied = idx
-		}
-		if idx > maxApplied {
-			maxApplied = idx
-		}
-	}
-	if hasApplied && maxApplied > 0 {
-		gap := maxApplied - minApplied
-		if gap < 100 {
-			r = append(r, inspector.Pass("rqlite.index_convergence", "Applied index convergence", rqliteSub, "",
-				fmt.Sprintf("min=%d max=%d gap=%d", minApplied, maxApplied, gap), inspector.Critical))
-		} else if gap < 1000 {
-			r = append(r, inspector.Warn("rqlite.index_convergence", "Applied index convergence", rqliteSub, "",
-				fmt.Sprintf("min=%d max=%d gap=%d (lagging)", minApplied, maxApplied, gap), inspector.Critical))
-		} else {
-			r = append(r, inspector.Fail("rqlite.index_convergence", "Applied index convergence", rqliteSub, "",
-				fmt.Sprintf("min=%d max=%d gap=%d (severely behind)", minApplied, maxApplied, gap), inspector.Critical))
-		}
 	}
 
 	// 1.35 Version consistency

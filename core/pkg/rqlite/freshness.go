@@ -55,7 +55,7 @@ func LocalFollowerFresh(ep Endpoint) (fresh bool, reason string, err error) {
 	if strings.EqualFold(raft.State, "Leader") {
 		return true, "leader", nil
 	}
-	lastContact := parseLastContact(raft.LastContact.String())
+	lastContact := ParseLastContact(raft.LastContact.String())
 	if lastContact > StalenessMaxLastContact {
 		return false, fmt.Sprintf("follower last_contact=%q exceeds max %s (%s) — degrading none-read to leader-routed weak", raft.LastContact, StalenessMaxLastContact, ep), nil
 	}
@@ -68,10 +68,10 @@ func LocalFollowerFresh(ep Endpoint) (fresh bool, reason string, err error) {
 	return true, "follower fresh", nil
 }
 
-// parseLastContact converts rqlite's last_contact string into a duration.
+// ParseLastContact converts rqlite's last_contact string into a duration.
 // "never" or any unparseable value maps to staleNeverContact (effectively
 // infinite) so the follower is judged stale — never accidentally fresh.
-func parseLastContact(s string) time.Duration {
+func ParseLastContact(s string) time.Duration {
 	s = strings.TrimSpace(s)
 	if s == "" || strings.EqualFold(s, "never") {
 		return staleNeverContact

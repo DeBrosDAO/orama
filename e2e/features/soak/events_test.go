@@ -25,7 +25,8 @@ const (
 	clockSkew     = 10 * time.Second // well past monitoring's 5s skew warning
 	observeEvery  = 30 * time.Second
 	restartBudget = 2 * time.Minute
-	// maxAppliedLag is monitoring's warning threshold (docs/MONITORING.md).
+	// maxAppliedLag is the size monitoring's commit-applied gap warning uses
+	// (docs/MONITORING.md).
 	maxAppliedLag = 100
 )
 

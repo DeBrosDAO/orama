@@ -83,13 +83,13 @@ func TestRQLiteStatus_lastContact_rejectsUnexpectedShape(t *testing.T) {
 // The freshness gate's whole point: a Leader is always fresh enough to serve a
 // local read. That branch was unreachable while decoding failed first.
 func TestParseLastContact_leaderZeroIsFresh(t *testing.T) {
-	if got := parseLastContact("0s"); got != 0 {
-		t.Errorf("parseLastContact(%q) = %v; want 0", "0s", got)
+	if got := ParseLastContact("0s"); got != 0 {
+		t.Errorf("ParseLastContact(%q) = %v; want 0", "0s", got)
 	}
-	if got := parseLastContact("never"); got != staleNeverContact {
-		t.Errorf("parseLastContact(never) = %v; want staleNeverContact", got)
+	if got := ParseLastContact("never"); got != staleNeverContact {
+		t.Errorf("ParseLastContact(never) = %v; want staleNeverContact", got)
 	}
-	if got := parseLastContact("garbage"); got != staleNeverContact {
-		t.Errorf("parseLastContact(garbage) = %v; want staleNeverContact (fail-safe)", got)
+	if got := ParseLastContact("garbage"); got != staleNeverContact {
+		t.Errorf("ParseLastContact(garbage) = %v; want staleNeverContact (fail-safe)", got)
 	}
 }

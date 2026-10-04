@@ -3,6 +3,7 @@ package cluster
 import (
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
@@ -108,23 +109,22 @@ func checkRaftTermConsistency(reports []*report.NodeReport) []Alert {
 	return nil
 }
 
-func checkAppliedIndexLag(reports []*report.NodeReport) []Alert {
-	var maxApplied uint64
-	for _, r := range reports {
-		if r.RQLite != nil && r.RQLite.Applied > maxApplied {
-			maxApplied = r.RQLite.Applied
-		}
-	}
-
+// checkFollowerContact warns about a follower that has not heard from the
+// leader within rqlite.StalenessMaxLastContact, the bound after which the
+// gateway stops serving none-reads from it. It judges each node from its own
+// /status read. Comparing applied indexes across the reports instead measures
+// the writes made between the nodes' collection moments, not lag: a healthy
+// cluster under steady writes read as 101 behind. The node's own apply backlog
+// is the commit-applied gap (checkNode).
+func checkFollowerContact(reports []*report.NodeReport) []Alert {
 	var alerts []Alert
 	for _, r := range reports {
-		if r.RQLite == nil || !r.RQLite.Responsive {
+		if r.RQLite == nil || !r.RQLite.Responsive || r.RQLite.RaftState != report.RaftFollower || r.RQLite.LastContact == "" {
 			continue
 		}
-		lag := maxApplied - r.RQLite.Applied
-		if lag > 100 {
+		if rqlite.ParseLastContact(r.RQLite.LastContact) > rqlite.StalenessMaxLastContact {
 			alerts = append(alerts, Alert{AlertWarning, "rqlite", nodeHost(r),
-				fmt.Sprintf("Applied index lag: %d behind leader (local=%d, max=%d)", lag, r.RQLite.Applied, maxApplied)})
+				fmt.Sprintf("Follower out of contact with the leader: last contact %s (over %s)", r.RQLite.LastContact, rqlite.StalenessMaxLastContact)})
 		}
 	}
 	return alerts

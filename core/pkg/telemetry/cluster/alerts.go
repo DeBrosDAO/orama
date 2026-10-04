@@ -114,7 +114,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 	alerts = append(alerts, checkRQLiteLeader(reports)...)
 	alerts = append(alerts, checkRQLiteQuorum(reports)...)
 	alerts = append(alerts, checkRaftTermConsistency(reports)...)
-	alerts = append(alerts, checkAppliedIndexLag(reports)...)
+	alerts = append(alerts, checkFollowerContact(reports)...)
 	alerts = append(alerts, checkSnapshotTermAhead(reports)...)
 	alerts = append(alerts, checkWGPeerSymmetry(reports)...)
 	alerts = append(alerts, checkClockSkew(snap)...)

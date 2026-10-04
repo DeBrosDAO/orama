@@ -7,7 +7,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/hardening"
 )
+
+// collectHardening reads the live values of the settings install hardened.
+func collectHardening() *hardening.Live {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	live := hardening.Read(os.ReadFile, func(name string, args ...string) (string, error) {
+		return runCmd(ctx, name, args...)
+	})
+	return &live
+}
 
 // collectSystem gathers system-level metrics using local commands and /proc files.
 func collectSystem() *SystemReport {
@@ -201,6 +213,7 @@ func collectSystem() *SystemReport {
 	collectCPUContention(r)
 	enforced := socketBindEnforced()
 	r.SocketBindEnforced = &enforced
+	r.Hardening = collectHardening()
 
 	// 12. Current unix timestamp
 	r.TimeUnix = time.Now().Unix()

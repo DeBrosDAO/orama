@@ -39,7 +39,7 @@ func checkNodeRQLite(r *report.NodeReport, host string, nodeCtxMap map[string]*n
 			fmt.Sprintf("RQLite FSM backlog: %d entries pending", r.RQLite.FsmPending)})
 	}
 
-	// Commit-applied gap (per-node, distinct from cross-node applied index lag)
+	// Commit-applied gap: the node's own apply backlog, read in one /status call
 	if r.RQLite.Commit > 0 && r.RQLite.Applied > 0 && r.RQLite.Commit > r.RQLite.Applied {
 		gap := r.RQLite.Commit - r.RQLite.Applied
 		if gap > 100 {
@@ -145,6 +145,7 @@ func checkNodeSystem(r *report.NodeReport, host string) []Alert {
 			fmt.Sprintf("%d tenant deployment OOM kills in %s (%s)", r.System.TenantOOMKills,
 				report.OOMKillWindowLabel, report.TenantOOMSummary(r.System.TenantOOMKillsByUnit))})
 	}
+	alerts = append(alerts, hardeningAlerts(r.System.Hardening, host)...)
 	if r.System.SwapUsedMB > 0 && r.System.SwapTotalMB > 0 {
 		pct := r.System.SwapUsedMB * 100 / r.System.SwapTotalMB
 		if pct > 30 {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/hardening"
 )
 
 type recordedRun struct {
@@ -65,15 +67,27 @@ func TestVerifyRAMHygiene(t *testing.T) {
 	live := func(values map[string]string, err error) func(string) ([]byte, error) {
 		return func(p string) ([]byte, error) { return []byte(values[p] + "\n"), err }
 	}
-	good := map[string]string{"/proc/sys/fs/suid_dumpable": "0", "/proc/sys/kernel/core_pattern": "|/bin/false"}
+	good := map[string]string{
+		"/proc/sys/fs/suid_dumpable":         "0",
+		"/proc/sys/kernel/core_pattern":      "|/bin/false",
+		"/proc/sys/kernel/yama/ptrace_scope": "1",
+	}
+	with := func(path, value string) map[string]string {
+		m := map[string]string{}
+		for k, v := range good {
+			m[k] = v
+		}
+		m[path] = value
+		return m
+	}
 	if err := verifyRAMHygiene(live(good, nil)); err != nil {
 		t.Fatalf("hardened kernel: %v", err)
 	}
-	dumpable := map[string]string{"/proc/sys/fs/suid_dumpable": "2", "/proc/sys/kernel/core_pattern": "|/bin/false"}
+	dumpable := with("/proc/sys/fs/suid_dumpable", "2")
 	if err := verifyRAMHygiene(live(dumpable, nil)); err == nil || !strings.Contains(err.Error(), "suid_dumpable") {
 		t.Fatalf("suid_dumpable 2: err = %v, want a refusal naming it", err)
 	}
-	apportPipe := map[string]string{"/proc/sys/fs/suid_dumpable": "0", "/proc/sys/kernel/core_pattern": "|/usr/share/apport/apport -p%p"}
+	apportPipe := with("/proc/sys/kernel/core_pattern", "|/usr/share/apport/apport -p%p")
 	if err := verifyRAMHygiene(live(apportPipe, nil)); err == nil || !strings.Contains(err.Error(), "core_pattern") {
 		t.Fatalf("apport's pipe: err = %v, want a refusal naming core_pattern", err)
 	}
@@ -82,13 +96,44 @@ func TestVerifyRAMHygiene(t *testing.T) {
 	}
 }
 
-// The read-back checks what the drop-in sets, value for value.
-func TestRAMHygieneLive_matchesTheDropIn(t *testing.T) {
+// The drop-in is generated from the same list the read-back and the runtime
+// drift check use, so the three cannot disagree.
+func TestRAMHygieneSysctl_isTheHardeningList(t *testing.T) {
 	set := ramHygieneSettings(t, ramHygieneSysctl)
-	for _, v := range ramHygieneLive {
-		key := strings.ReplaceAll(strings.TrimPrefix(v.path, "/proc/sys/"), "/", ".")
-		if set[key] != v.want {
-			t.Errorf("read-back expects %s = %q, the drop-in sets %q", key, v.want, set[key])
+	for _, v := range hardening.Sysctls {
+		if set[v.Key] != v.Want {
+			t.Errorf("drop-in sets %s = %q, hardening expects %q", v.Key, set[v.Key], v.Want)
 		}
+	}
+}
+
+func TestDisableSwap_runsSwapoffThenMasksTarget(t *testing.T) {
+	r := &recordedRun{}
+	if err := disableSwap(r.run); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"swapoff -a", "systemctl mask swap.target"}
+	if strings.Join(r.calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls %v, want %v", r.calls, want)
+	}
+}
+
+// swapoff -a exits 0 with no swap configured, so a failure is never "nothing
+// to do": it used to be discarded.
+func TestDisableSwap_swapoffFailureIsAnActionableError(t *testing.T) {
+	r := &recordedRun{failOn: "swapoff"}
+	err := disableSwap(r.run)
+	if err == nil || !strings.Contains(err.Error(), "/proc/swaps") || !strings.Contains(err.Error(), "Failed to connect") {
+		t.Fatalf("err = %v, want a failure that names where to look and carries the command output", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("calls %v: the target was masked after swap stayed on", r.calls)
+	}
+}
+
+func TestDisableSwap_maskFailureIsAnError(t *testing.T) {
+	r := &recordedRun{failOn: "mask swap.target"}
+	if err := disableSwap(r.run); err == nil || !strings.Contains(err.Error(), "swap.target") {
+		t.Fatalf("err = %v, want a failure naming swap.target", err)
 	}
 }

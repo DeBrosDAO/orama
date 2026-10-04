@@ -3,13 +3,51 @@
 package install
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/pkg/hardening"
 )
+
+// TestInstall_nodeReportShowsHardeningHeld: the node report reads the
+// hardened kernel settings back at runtime (docs/SECURITY.md "RAM-to-disk"),
+// so a drift after install (apport, a package postinst, sysctl -w, swap on)
+// raises the "RAM hardening drifted" warning in `orama monitor`. On a healthy
+// node the report carries the values install set and no drift.
+func TestInstall_nodeReportShowsHardeningHeld(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	for _, n := range f.State.Nodes {
+		out := infra.OnNode(t, f, n, "node", "report")
+		if out.Exit != 0 {
+			t.Fatalf("%s: orama node report exit %d: %s", n.Name, out.Exit, f.Redact(out.Stderr))
+		}
+		var r struct {
+			System struct {
+				Hardening *hardening.Live `json:"hardening"`
+			} `json:"system"`
+		}
+		if err := json.Unmarshal([]byte(out.Stdout), &r); err != nil {
+			t.Fatalf("%s: node report is not JSON: %v", n.Name, err)
+		}
+		live := r.System.Hardening
+		if live == nil {
+			t.Fatalf("%s: the node report has no system.hardening section", n.Name)
+		}
+		for _, s := range hardening.Sysctls {
+			if got := live.Sysctls[s.Key]; got != s.Want {
+				t.Errorf("%s: report shows %s = %q, want %q", n.Name, s.Key, got, s.Want)
+			}
+		}
+		if drift := live.Drift(); len(drift) != 0 {
+			t.Errorf("%s: the report shows hardening drift on a freshly installed node: %v", n.Name, drift)
+		}
+	}
+}
 
 // sysctlValue reads one live kernel setting.
 func sysctlValue(t testing.TB, f *fleet.Fleet, n fleet.Node, key string) string {

@@ -1,6 +1,10 @@
 package report
 
-import "time"
+import (
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/hardening"
+)
 
 // NodeReport is the top-level JSON output of `orama node report --json`.
 type NodeReport struct {
@@ -94,6 +98,11 @@ type SystemReport struct {
 	// settings without a word.
 	// Nil in a report from a release that did not check.
 	SocketBindEnforced *bool `json:"socket_bind_enforced,omitempty"`
+
+	// Hardening is what the kernel says now about the settings install
+	// hardened (core dumps, swap, ptrace, apport), read at every report.
+	// Nil in a report from a release that did not check.
+	Hardening *hardening.Live `json:"hardening,omitempty"`
 }
 
 // --- Systemd Services ---

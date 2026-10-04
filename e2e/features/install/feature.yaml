@@ -29,6 +29,7 @@ covers:
   claims:
     - "docs/SECURITY.md#network-isolation: IPv6 is disabled at runtime and on every boot"
     - "docs/SECURITY.md#ram-to-disk-swap-and-cores: swap off, swap.target masked, fs.suid_dumpable=0, coredump Storage=none, secret units MemorySwapMax=0"
+    - "docs/SECURITY.md#ram-to-disk-swap-and-cores: the node report reads core dumps, swap, ptrace and apport back at runtime and shows no drift on a healthy node (a drift raises the RAM hardening drifted warning)"
     - "docs/SECURITY.md#tls--transport: wg0.conf is 0600"
     - "docs/SECURITY.md#process-isolation: /opt/orama/bin is root:orama 0750 and the orama user cannot replace a binary"
     - "docs/SECURITY.md#process-isolation: orama-node and the index daemons run as orama; CoreDNS as orama-coredns"

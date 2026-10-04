@@ -157,15 +157,15 @@ func TestParseLastContact(t *testing.T) {
 		{"garbage", true, 0},
 	}
 	for _, tc := range cases {
-		got := parseLastContact(tc.in)
+		got := ParseLastContact(tc.in)
 		if tc.wantHuge {
 			if got != staleNeverContact {
-				t.Errorf("parseLastContact(%q) = %v; want staleNeverContact", tc.in, got)
+				t.Errorf("ParseLastContact(%q) = %v; want staleNeverContact", tc.in, got)
 			}
 			continue
 		}
 		if got != tc.want {
-			t.Errorf("parseLastContact(%q) = %v; want %v", tc.in, got, tc.want)
+			t.Errorf("ParseLastContact(%q) = %v; want %v", tc.in, got, tc.want)
 		}
 	}
 }

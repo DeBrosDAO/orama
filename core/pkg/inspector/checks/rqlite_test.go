@@ -285,7 +285,6 @@ func TestCheckRQLite_CrossNode_SingleLeader(t *testing.T) {
 	expectStatus(t, results, "rqlite.single_leader", inspector.StatusPass)
 	expectStatus(t, results, "rqlite.term_consistent", inspector.StatusPass)
 	expectStatus(t, results, "rqlite.leader_agreement", inspector.StatusPass)
-	expectStatus(t, results, "rqlite.index_convergence", inspector.StatusPass)
 	expectStatus(t, results, "rqlite.version_consistent", inspector.StatusPass)
 	expectStatus(t, results, "rqlite.quorum", inspector.StatusPass)
 }
@@ -349,9 +348,12 @@ func TestCheckRQLite_CrossNode_TermDivergence(t *testing.T) {
 	expectStatus(t, results, "rqlite.term_consistent", inspector.StatusFail)
 }
 
-func TestCheckRQLite_CrossNode_IndexLagging(t *testing.T) {
+// The nodes are read one after another over ssh, so their applied indexes
+// differ by the writes made in between. That spread is not lag and no check
+// may turn it into a verdict; a node's own backlog is rqlite.commit_applied_gap.
+func TestCheckRQLite_CrossNode_AppliedSpreadIsNotJudged(t *testing.T) {
 	nodes := map[string]*inspector.NodeData{}
-	applied := map[string]uint64{"1.1.1.1": 1000, "2.2.2.2": 1000, "3.3.3.3": 500}
+	applied := map[string]uint64{"1.1.1.1": 1500, "2.2.2.2": 1000, "3.3.3.3": 500}
 	for host, idx := range applied {
 		nd := makeNodeData(host, "node")
 		state := "Follower"
@@ -361,19 +363,40 @@ func TestCheckRQLite_CrossNode_IndexLagging(t *testing.T) {
 		nd.RQLite = &inspector.RQLiteData{
 			Responsive: true,
 			Status: &inspector.RQLiteStatus{
-				RaftState:    state,
-				LeaderNodeID: "1.1.1.1",
-				Voter:        true,
-				Term:         5,
-				AppliedIndex: idx,
-				CommitIndex:  idx,
+				RaftState: state, LeaderNodeID: "1.1.1.1", Voter: true, Term: 5,
+				AppliedIndex: idx, CommitIndex: idx, LastContact: "20ms",
 			},
 		}
 		nodes[host] = nd
 	}
-	data := makeCluster(nodes)
-	results := CheckRQLite(data)
-	expectStatus(t, results, "rqlite.index_convergence", inspector.StatusWarn)
+	for _, c := range CheckRQLite(makeCluster(nodes)) {
+		if c.ID == "rqlite.index_convergence" {
+			t.Errorf("check %q (status=%s, msg=%s): the applied spread across nodes must not be judged", c.ID, c.Status, c.Message)
+		}
+	}
+}
+
+func TestCheckRQLite_FollowerLastContact(t *testing.T) {
+	tests := []struct {
+		name        string
+		lastContact string
+		want        inspector.Status
+	}{
+		{"recent", "30ms", inspector.StatusPass},
+		{"stale", "9s", inspector.StatusWarn},
+		{"never", "never", inspector.StatusWarn},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nd := makeNodeData("2.2.2.2", "node")
+			nd.RQLite = &inspector.RQLiteData{
+				Responsive: true,
+				Status:     &inspector.RQLiteStatus{RaftState: "Follower", Voter: true, Term: 5, LastContact: tt.lastContact},
+			}
+			results := CheckRQLite(makeCluster(map[string]*inspector.NodeData{"2.2.2.2": nd}))
+			expectStatus(t, results, "rqlite.last_contact", tt.want)
+		})
+	}
 }
 
 func TestCheckRQLite_CrossNode_SkipSingleNode(t *testing.T) {
