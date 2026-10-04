@@ -3,7 +3,10 @@ package gateway
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 
 	backuphandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/backup"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
@@ -38,7 +41,7 @@ func isWholeDatabasePath(p string) bool {
 	return false
 }
 
-// transferBudget is the time a whole-database request is given on this
+// transferBudget is the time a long-running request is given on this
 // gateway's server. A variable so a test can shorten it.
 var transferBudget = httputil.TransferBudget
 
@@ -53,13 +56,16 @@ func (g *Gateway) renewTransferDeadlines(w http.ResponseWriter) {
 	}
 }
 
-// extendTransferDeadlines gives a whole-database request its time budget on
-// this gateway's server, whose own read and write timeouts (60s and 120s,
-// cmd/gateway/main.go) would cut a large database off however long the proxy
-// would wait. Any other route keeps the server's. It writes the refusal and
+// extendTransferDeadlines gives a long-running request (isLongRunningProxyPath:
+// a whole database, a storage upload or pin, a function deploy or invocation)
+// its time budget on this gateway's server, whose own read and write timeouts
+// (60s and 120s, cmd/gateway/main.go) would cut it off however long the proxy
+// would wait: a 20 MiB upload from a client on a 2 Mbit/s uplink had its body
+// cut off at 60s and was answered 504 "did not answer within the proxy budget
+// (5m0s)". Any other route keeps the server's. It writes the refusal and
 // returns false if the deadlines cannot be moved.
 func extendTransferDeadlines(w http.ResponseWriter, r *http.Request) bool {
-	if !isWholeDatabasePath(r.URL.Path) {
+	if !isLongRunningProxyPath(r.URL.Path) {
 		return true
 	}
 	if err := httputil.ExtendIO(w, transferBudget); err != nil {
@@ -84,4 +90,35 @@ func refuseOversizedProxyBody(w http.ResponseWriter, r *http.Request) bool {
 	}
 	writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("the request is %d bytes; %s accepts at most %d", r.ContentLength, r.URL.Path, limit))
 	return true
+}
+
+// longRequestDeadlines gives the long-running routes this gateway serves
+// itself their time budget (extendTransferDeadlines), for an authenticated
+// caller only. It sits innermost, after auth, and an anonymous call to a
+// public route (a function invocation) keeps the server's 60s and 120s: a
+// client with no credential must not hold a connection five times longer. A
+// request this gateway proxies to a namespace gateway gets it in the proxy,
+// on the same condition.
+func longRequestDeadlines(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if callerAuthenticated(r) && !extendTransferDeadlines(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// callerAuthenticated reports whether auth validated a credential for r: a
+// JWT, an API key, or a namespace another gateway of this cluster vouched for
+// (internalAuthMiddleware deleted the header unless its MAC verified).
+func callerAuthenticated(r *http.Request) bool {
+	ctx := r.Context()
+	if claims, _ := ctx.Value(ctxKeyJWT).(*auth.JWTClaims); claims != nil {
+		return true
+	}
+	if ctx.Value(ctxKeyAPIKey) != nil {
+		return true
+	}
+	return r.Header.Get(HeaderInternalAuthValidated) == "true" &&
+		strings.TrimSpace(r.Header.Get(HeaderInternalAuthNamespace)) != ""
 }

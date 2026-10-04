@@ -220,9 +220,14 @@ func slowPost(t *testing.T, url string, bodyTime time.Duration, body string) (in
 	return resp.StatusCode, nil
 }
 
+// slowClientRoutes are the other long-running routes: a 20 MiB upload from a
+// runner on a 2 Mbit/s uplink had its body cut off at the server's 60s
+// ReadTimeout and was answered 504 (stagenet 2026-10-04).
+var slowClientRoutes = []string{"/v1/storage/upload", "/v1/storage/pin", "/v1/functions", "/v1/invoke/acme/fn"}
+
 // The gateways' http.Server cuts a request's body off at its ReadTimeout (60s;
-// 200ms here). The four whole-database routes move their deadlines and every
-// other route keeps the server's.
+// 200ms here). The long-running routes move their deadlines and every other
+// route keeps the server's.
 func TestWholeDatabaseRoutes_slowBodiesAreNotCutOffAtTheServersTimeout(t *testing.T) {
 	rqlite, _ := countingRQLite(t)
 	g := nsGateway(t, rqlite.URL, &fakeLoadGuard{})
@@ -231,7 +236,7 @@ func TestWholeDatabaseRoutes_slowBodiesAreNotCutOffAtTheServersTimeout(t *testin
 		r = markGrant(r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, "anchat")), &auth.Grant{Role: auth.RoleOwner})
 		g.rqliteImportHandler(w, r)
 	})
-	for _, p := range []string{"/v1/namespace/backup", "/v1/namespace/restore", "/v1/rqlite/export", "/v1/other"} {
+	for _, p := range append([]string{"/v1/namespace/backup", "/v1/namespace/restore", "/v1/rqlite/export", "/v1/other"}, slowClientRoutes...) {
 		mux.HandleFunc(p, func(w http.ResponseWriter, r *http.Request) {
 			if !extendTransferDeadlines(w, r) {
 				return
@@ -246,7 +251,7 @@ func TestWholeDatabaseRoutes_slowBodiesAreNotCutOffAtTheServersTimeout(t *testin
 	srv.Start()
 	defer srv.Close()
 
-	for _, p := range []string{"/v1/rqlite/import", "/v1/namespace/backup", "/v1/namespace/restore", "/v1/rqlite/export"} {
+	for _, p := range append([]string{"/v1/rqlite/import", "/v1/namespace/backup", "/v1/namespace/restore", "/v1/rqlite/export"}, slowClientRoutes...) {
 		if status, err := slowPost(t, srv.URL+p, 600*time.Millisecond, sqliteHead); err != nil || status != http.StatusOK {
 			t.Errorf("%s: a slow body was cut off (%d, %v)", p, status, err)
 		}

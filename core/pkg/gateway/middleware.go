@@ -643,7 +643,7 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 	// Order: internal-auth -> route policy -> logging -> security headers ->
 	// rate limit -> CORS -> readiness -> domain routing -> cluster serverless
 	// routing -> auth -> authorization -> scope -> namespace rate limit ->
-	// handler
+	// long-request deadlines -> handler
 	//
 	// Cluster serverless routing sits beside domain routing and does the same
 	// kind of thing: on the cluster gateway it proxies a tenant's function
@@ -687,7 +687,7 @@ func (g *Gateway) withMiddleware(next http.Handler) http.Handler {
 											g.trafficAttributionMiddleware(
 												g.authorizationMiddleware(
 													g.scopeMiddleware(
-														g.namespaceRateLimitMiddleware(next))))))))))))))
+														g.namespaceRateLimitMiddleware(longRequestDeadlines(next)))))))))))))))
 }
 
 // securityHeadersMiddleware adds standard security headers to all responses
@@ -1836,7 +1836,12 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if refuseOversizedProxyBody(w, r) || !extendTransferDeadlines(w, r) {
+	if refuseOversizedProxyBody(w, r) {
+		return
+	}
+	// Only a caller whose credential the proxy validated gets the long
+	// budget; an anonymous call to a public function keeps the server's.
+	if validatedNamespace != "" && !extendTransferDeadlines(w, r) {
 		return
 	}
 

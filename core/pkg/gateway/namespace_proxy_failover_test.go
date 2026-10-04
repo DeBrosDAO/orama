@@ -160,3 +160,29 @@ func TestIsDialFailure_onlyAFailedConnect(t *testing.T) {
 		t.Fatal("a failure after connecting counted as a dial failure")
 	}
 }
+
+// The proxy gives a caller it validated the long budget: a slow upload body
+// reaches the namespace gateway in full instead of being cut off at the
+// server's ReadTimeout and answered 504 (stagenet 2026-10-04).
+func TestNamespaceProxy_aValidatedSlowUploadReachesTheMember(t *testing.T) {
+	got := make(chan int, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- len(b)
+	}))
+	defer upstream.Close()
+	g := proxyGateway(t, gatewayTarget{ip: "127.0.0.1", port: serverPort(upstream)})
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.proxyToNamespaceGateway(w, r, "acme", namespaceProxyAuth{namespace: "acme"})
+	}))
+	front.Config.ReadTimeout = 200 * time.Millisecond
+	front.Start()
+	defer front.Close()
+
+	if status, err := slowPost(t, front.URL+"/v1/storage/upload", 600*time.Millisecond, "head"); err != nil || status != http.StatusOK {
+		t.Fatalf("a validated slow upload was cut off (%d, %v)", status, err)
+	}
+	if n := <-got; n != len("headtail") {
+		t.Fatalf("the member received %d bytes, want %d", n, len("headtail"))
+	}
+}

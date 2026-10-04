@@ -552,6 +552,16 @@ Writes made between the backup and the load in step 3 (seconds) are rolled back,
 
 ---
 
+## 22. A large upload from a slow client: 504 "did not answer within the proxy budget (5m0s)" after about a minute
+
+**Symptom:** a storage upload (or pin, function deploy or invocation) whose body takes over a minute to arrive is answered 504 `TIMEOUT` well before the five minutes the message names.
+
+**Cause:** before 1.0.0 only the whole-database routes moved the gateway server's own read and write deadlines (60s and 120s). Caddy streams a request body through at the client's speed, so on every other long-running route the body was cut off at 60s, and the read error surfaced as the proxy's timeout.
+
+**Now:** every route with the long proxy budget (`isLongRunningProxyPath`: whole-database transfers, `/v1/storage/upload`, `/v1/storage/pin`, `/v1/functions`, function invocations) gets five minutes to be read and written, in the proxy and on the namespace gateway that serves it, once the caller's credential is validated. An anonymous call to a public function keeps the server's 60s and 120s, so a client with no credential cannot hold a connection longer. Both gateways must run this build: a namespace gateway on an older one still cuts the body at 60s. A body that still does not arrive within five minutes is a client too slow for the route.
+
+---
+
 ## General Debugging Tips
 
 - **Always use `sudo orama node restart`** instead of raw `systemctl` commands

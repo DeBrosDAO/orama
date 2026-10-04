@@ -7,11 +7,12 @@ import (
 	"time"
 )
 
-// TransferBudget is how long a whole-database transfer (a namespace backup or
-// restore, an RQLite export or import) may take to be read and written, on
-// every gateway it passes through. The gateways' http.Server read and write
-// timeouts (60s and 120s) would otherwise cut a database of a few hundred MiB
-// off mid-transfer whatever any proxy allowed it.
+// TransferBudget is how long a long-running request (a whole-database
+// transfer, a storage upload or pin, a function deploy or invocation) may take
+// to be read and written, on every gateway it passes through. The gateways'
+// http.Server read and write timeouts (60s and 120s) would otherwise cut a
+// database of a few hundred MiB, or an upload from a slow client, off
+// mid-transfer whatever any proxy allowed it.
 const TransferBudget = 5 * time.Minute
 
 // ExtendIO moves this request's read and write deadlines to budget from now,
