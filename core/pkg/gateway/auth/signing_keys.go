@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +102,17 @@ func decodePublicKey(encoded string) (ed25519.PublicKey, error) {
 // rollout that looks like an outage.
 const signingKeyReloadInterval = 30 * time.Second
 
+// signingKeyStaleness is how old the cached keys may be and still answer a
+// verification while a reload is in flight. Past it — or before the first load
+// — a verification waits for the reload. A key's retirement therefore takes
+// effect within this bound.
+const signingKeyStaleness = 2 * signingKeyReloadInterval
+
+// signingKeyRetryInterval is the least time between two periodic reload
+// attempts, so a registry that does not answer is asked once a second, not
+// once per verification.
+const signingKeyRetryInterval = time.Second
+
 // signingKeyMissReloadInterval is how often a token naming a key this gateway
 // does not know may make it re-read the published keys. A namespace gateway's
 // key is published moments before its first token is presented anywhere, so
@@ -129,13 +141,29 @@ type SigningKeys struct {
 	// missMu serialises the reloads a lookup miss makes, so a burst of
 	// unknown kids reads the registry once.
 	missMu sync.Mutex
+	// reloadMu serialises every read-and-replace of the set, so a read that
+	// began earlier never replaces one that began later: a periodic reload
+	// still in flight would otherwise overwrite the set a lookup miss had just
+	// read, dropping a key published in between.
+	reloadMu sync.Mutex
 
-	mu        sync.RWMutex
-	keys      map[string]SigningKey
-	loadedAt  time.Time
-	now       func() time.Time
-	published map[string]struct{}
+	mu       sync.RWMutex
+	keys     map[string]SigningKey
+	loadedAt time.Time
+	// lastAttempt is when a read of the published keys last began, whether it
+	// succeeded or not.
+	lastAttempt time.Time
+	// readAbandoned is set while a read given up at its deadline is still
+	// running.
+	readAbandoned bool
+	now           func() time.Time
+	published     map[string]struct{}
+	// flight is the periodic reload in progress, if any; done closes when it
+	// has finished.
+	flight *keyReloadFlight
 }
+
+type keyReloadFlight struct{ done chan struct{} }
 
 // NewSigningKeys returns an empty set. A registry that resolves to nil makes it
 // local-only, which is the single-node and test case: the gateway still
@@ -247,7 +275,7 @@ func (s *SigningKeys) reloadOnMiss() {
 	s.missMu.Lock()
 	defer s.missMu.Unlock()
 	s.mu.RLock()
-	recent := s.now().Sub(s.loadedAt) < signingKeyMissReloadInterval
+	recent := s.now().Sub(s.lastAttempt) < signingKeyMissReloadInterval
 	s.mu.RUnlock()
 	if recent {
 		return
@@ -279,17 +307,50 @@ func (s *SigningKeys) All() []SigningKey {
 	return out
 }
 
-// refreshIfStale re-reads the published keys when the cached set has aged out.
+// refreshIfStale re-reads the published keys when the cached set has aged out,
+// with at most one reload in flight, run in the background.
+//
+// A verification is answered from the cached set while the reload runs, unless
+// the set is older than signingKeyStaleness or was never loaded; only then does
+// it wait, for the reload in flight rather than a read of its own. Every
+// verification used to make its own blocking read once the set was 30s old,
+// and the set aged until one of them finished, so every authenticated request
+// arriving in that window queued on a registry read of up to 3s — the soak saw
+// all of them stall together for 3-5s every ~36s (stagenet 2026-10-04).
 //
 // A failed read keeps the previous set rather than emptying it: forgetting
 // every key because one query failed would refuse every token in the cluster.
+// It does not make the set fresh either. During a registry outage the
+// revocation list, which every verification consults and which refuses once it
+// is older than RevocationStaleness, is what stops tokens being accepted.
 func (s *SigningKeys) refreshIfStale() {
-	s.mu.RLock()
-	fresh := s.now().Sub(s.loadedAt) < signingKeyReloadInterval
-	s.mu.RUnlock()
-	if fresh {
+	s.mu.Lock()
+	age := s.now().Sub(s.loadedAt)
+	if age < signingKeyReloadInterval {
+		s.mu.Unlock()
 		return
 	}
+	f := s.flight
+	if f == nil && s.now().Sub(s.lastAttempt) >= signingKeyRetryInterval {
+		f = &keyReloadFlight{done: make(chan struct{})}
+		s.flight = f
+		go s.reloadInBackground(f)
+	}
+	mustWait := f != nil && (s.loadedAt.IsZero() || age >= signingKeyStaleness)
+	s.mu.Unlock()
+	if mustWait {
+		<-f.done
+	}
+}
+
+// reloadInBackground runs one periodic reload and releases its waiters.
+func (s *SigningKeys) reloadInBackground(f *keyReloadFlight) {
+	defer func() {
+		s.mu.Lock()
+		s.flight = nil
+		s.mu.Unlock()
+		close(f.done)
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), signingKeyReadTimeout)
 	defer cancel()
 	if err := s.Reload(ctx); err != nil && s.logger != nil {
@@ -303,21 +364,23 @@ func (s *SigningKeys) Reload(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
-	// The clock moves whether or not there is a database, or a gateway with
-	// none re-reads on every single verification.
-	defer func() {
-		s.mu.Lock()
-		s.loadedAt = s.now()
-		s.mu.Unlock()
-	}()
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	// An attempt is recorded whatever its outcome, so a registry that does not
+	// answer costs one read per retry interval rather than one per
+	// verification. Only a read that succeeded makes the set fresh: a failed
+	// one leaves it as old as it was, so the staleness bound keeps counting.
+	s.mu.Lock()
+	s.lastAttempt = s.now()
+	s.mu.Unlock()
 
 	db := s.database()
 	if db == nil {
+		s.markLoaded()
 		return nil
 	}
 
-	res, err := db.Query(client.WithInternalAuth(ctx),
-		`SELECT kid, namespace, public_key, retired_at FROM signing_keys`)
+	res, err := s.readPublished(ctx, db)
 	if err != nil {
 		return fmt.Errorf("read the published signing keys: %w", err)
 	}
@@ -356,7 +419,62 @@ func (s *SigningKeys) Reload(ctx context.Context) error {
 		}
 	}
 	s.keys = loaded
+	s.loadedAt = s.now()
 	return nil
+}
+
+// errKeyReadStillRunning refuses a read while one abandoned at its deadline
+// has not returned, so a hung registry holds one goroutine, not one per retry.
+var errKeyReadStillRunning = errors.New("a read of the published keys that timed out has still not returned")
+
+// readPublished reads the published keys, giving up at ctx's deadline.
+//
+// The read runs in its own goroutine and is abandoned at the deadline, because
+// the registry client does not pass its context to the HTTP request: a hung
+// registry otherwise held reloadMu, and every verification waiting on the
+// reload, for as long as it hung. An abandoned read's result is discarded.
+func (s *SigningKeys) readPublished(ctx context.Context, db client.DatabaseClient) (*client.QueryResult, error) {
+	s.mu.Lock()
+	if s.readAbandoned {
+		s.mu.Unlock()
+		return nil, errKeyReadStillRunning
+	}
+	s.mu.Unlock()
+
+	type keyRead struct {
+		res *client.QueryResult
+		err error
+	}
+	done := make(chan keyRead, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		res, err := db.Query(client.WithInternalAuth(ctx),
+			`SELECT kid, namespace, public_key, retired_at FROM signing_keys`)
+		done <- keyRead{res, err}
+	}()
+	select {
+	case r := <-done:
+		return r.res, r.err
+	case <-ctx.Done():
+		s.mu.Lock()
+		s.readAbandoned = true
+		s.mu.Unlock()
+		go func() {
+			<-finished
+			s.mu.Lock()
+			s.readAbandoned = false
+			s.mu.Unlock()
+		}()
+		return nil, fmt.Errorf("the registry did not answer in time: %w", ctx.Err())
+	}
+}
+
+// markLoaded records a load that had nothing to read.
+func (s *SigningKeys) markLoaded() {
+	s.mu.Lock()
+	s.loadedAt = s.now()
+	s.mu.Unlock()
 }
 
 // retirementFrom reads a retired_at column.

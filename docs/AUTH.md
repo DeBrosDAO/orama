@@ -912,8 +912,14 @@ half **to the cluster registry** — not to the tenant database it may also be
 holding — so the rest of the cluster can verify what it mints. It publishes
 once its schema is up, and stays not ready (refusing everything, so minting
 nothing) until the key is published. A token's `kid`
-names the key. Every gateway re-reads the published keys every 30 seconds, and
-at once — at most once a second — when a token names a key it does not have, so
+names the key. Every gateway re-reads the published keys every 30 seconds, in
+the background with one read at a time, verifying from the keys it holds
+meanwhile; only a set older than 60 seconds (or never loaded) makes a
+verification wait for the read, so a retired key stops working within a minute
+while the registry can be read. A failed read keeps the keys already known and
+does not count as a load; during a registry outage the revocation list, which
+refuses every token once it is ten seconds old, is what stops verification.
+It also re-reads them at once — at most once a second — when a token names a key it does not have, so
 a namespace gateway's tokens are accepted everywhere as soon as it has published
 its key, not after the next periodic read. A key file that holds the old cluster-derived key (what a
 0.122.x node wrote, carried into the index gateway's key by the

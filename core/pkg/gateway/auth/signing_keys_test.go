@@ -674,6 +674,7 @@ func TestSigningKeys_concurrentUnknownKidsReloadOnce(t *testing.T) {
 	}
 	keys.mu.Lock()
 	keys.loadedAt = start.Add(-2 * signingKeyMissReloadInterval)
+	keys.lastAttempt = keys.loadedAt
 	keys.mu.Unlock()
 
 	before := counting.queries.Load()
