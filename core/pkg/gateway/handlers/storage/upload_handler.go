@@ -146,8 +146,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add to IPFS
-	addResp, err := h.ipfsClient.Add(ctx, reader, name)
+	// Add to IPFS. Content that is to be pinned is imported here only and
+	// pinned once, with its replication factor, by pinAsync: Add would pin it
+	// everywhere first, and narrowing that made every other peer start
+	// fetching it and then cancel and unpin it.
+	add := h.ipfsClient.Add
+	if shouldPin {
+		add = h.ipfsClient.AddLocal
+	}
+	addResp, err := add(ctx, reader, name)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to add content to IPFS", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add content: %v", err))
@@ -225,6 +232,13 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin retry failed, giving up",
 			zap.Error(err), zap.String("cid", cid))
 		h.dropRef(ctx, cid, namespace)
+		// Content to be pinned was imported on this node only (AddLocal), so
+		// its local pin is all that keeps it, and nothing tracks it once the
+		// reference is gone: give it back too.
+		if unpinErr := h.ipfsClient.Unpin(ctx, cid); unpinErr != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "an upload whose pin failed could not be unpinned on this node; it stays until removed",
+				zap.Error(unpinErr), zap.String("cid", cid))
+		}
 	} else {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
 		// Update pin status in database

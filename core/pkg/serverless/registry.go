@@ -918,8 +918,11 @@ const wasmReplicationEverywhere = -1
 // failure is fatal here — we must not leave a "deployed but unfetchable" row
 // that intermittently 15s-times-out on whichever node happens to be cold.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
+	// Imported locally and pinned once: Add would pin everywhere too, and a
+	// second pin of a CID the cluster is still pinning cancels and restarts it
+	// on every peer.
 	reader := bytes.NewReader(wasmBytes)
-	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
+	resp, err := r.ipfs.AddLocal(ctx, reader, name+".wasm")
 	if err != nil {
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}

@@ -358,6 +358,10 @@ func (m *MockHostServices) LogError(ctx context.Context, message string) {
 // MockIPFSClient is a mock for ipfs.IPFSClient
 type MockIPFSClient struct {
 	data map[string][]byte
+	// adds and localAdds count Add and AddLocal calls; pins records the
+	// replication factor of every Pin.
+	adds, localAdds int
+	pins            []int
 }
 
 func NewMockIPFSClient() *MockIPFSClient {
@@ -365,6 +369,16 @@ func NewMockIPFSClient() *MockIPFSClient {
 }
 
 func (m *MockIPFSClient) Add(ctx context.Context, reader io.Reader, filename string) (*ipfs.AddResponse, error) {
+	m.adds++
+	return m.store(reader, filename)
+}
+
+func (m *MockIPFSClient) AddLocal(ctx context.Context, reader io.Reader, filename string) (*ipfs.AddResponse, error) {
+	m.localAdds++
+	return m.store(reader, filename)
+}
+
+func (m *MockIPFSClient) store(reader io.Reader, filename string) (*ipfs.AddResponse, error) {
 	data, _ := io.ReadAll(reader)
 	cid := "cid-" + filename
 	m.data[cid] = data
@@ -377,6 +391,7 @@ func (m *MockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipf
 }
 
 func (m *MockIPFSClient) Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error) {
+	m.pins = append(m.pins, replicationFactor)
 	return &ipfs.PinResponse{Cid: cid, Name: name}, nil
 }
 

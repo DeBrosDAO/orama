@@ -16,6 +16,7 @@ import (
 // This interface matches the ipfs.IPFSClient implementation.
 type IPFSClient interface {
 	Add(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
+	AddLocal(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)

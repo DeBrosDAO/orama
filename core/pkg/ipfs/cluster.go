@@ -34,8 +34,7 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
-	nodeNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
-	for _, nodeName := range nodeNames {
+	for _, nodeName := range localDevNodeNames {
 		if strings.Contains(dataDir, nodeName) {
 			if filepath.Base(filepath.Dir(dataDir)) == nodeName || filepath.Base(dataDir) == nodeName {
 				clusterPath = filepath.Join(dataDir, "ipfs-cluster")
@@ -95,13 +94,9 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
 
-	nodeName := "node-1"
-	possibleNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
-	for _, name := range possibleNames {
-		if strings.Contains(cm.cfg.Node.DataDir, name) || strings.Contains(cm.cfg.Node.ID, name) {
-			nodeName = name
-			break
-		}
+	nodeName, err := clusterPeername(cm.cfg.Node.DataDir, cm.cfg.Node.ID)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := cm.loadConfig(serviceJSONPath)
@@ -222,4 +217,25 @@ func (cm *ClusterConfigManager) recordOwnClusterPeerID() {
 	if err := cm.addTrustedPeer(ownID); err != nil {
 		cm.logger.Warn("Failed to persist own peer ID to the cluster peers file", zap.Error(err))
 	}
+}
+
+// localDevNodeNames are the node names a local multi-node setup puts in its
+// data directories.
+var localDevNodeNames = []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+
+// clusterPeername is the name this cluster peer reports. A local multi-node
+// setup is named after its data directory; any other node after its host. Every
+// production node used to fall through to "node-1", so every peer in a pin's
+// status read "node-1" and a stuck peer could only be told apart by its id.
+func clusterPeername(dataDir, nodeID string) (string, error) {
+	for _, name := range localDevNodeNames {
+		if strings.Contains(dataDir, name) || strings.Contains(nodeID, name) {
+			return name, nil
+		}
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("failed to name the IPFS Cluster peer after this host: %w", err)
+	}
+	return host, nil
 }

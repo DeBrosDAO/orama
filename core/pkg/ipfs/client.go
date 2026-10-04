@@ -22,6 +22,7 @@ import (
 // IPFSClient defines the interface for IPFS operations
 type IPFSClient interface {
 	Add(ctx context.Context, reader io.Reader, name string) (*AddResponse, error)
+	AddLocal(ctx context.Context, reader io.Reader, name string) (*AddResponse, error)
 	AddDirectory(ctx context.Context, dirPath string) (*AddResponse, error)
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*PinStatus, error)
@@ -227,8 +228,27 @@ func (c *Client) GetPeerCount(ctx context.Context) (int, error) {
 	return peerCount, nil
 }
 
-// Add adds content to IPFS and returns the CID
+// Add imports content into this node's Kubo and pins it on every cluster peer.
+// A caller that pins with a replication factor of its own uses AddLocal and
+// then Pin: pinning everywhere first and then narrowing it made every peer
+// start fetching the content and most of them cancel and unpin it again, and
+// that churn held the cluster's pin slots while a function deploy waited for
+// its WASM to be pinned (stagenet e2e, 2026-10-03).
 func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddResponse, error) {
+	added, err := c.AddLocal(ctx, reader, name)
+	if err != nil {
+		return nil, err
+	}
+	// -1 is every cluster peer, which is what Cluster /add pinned.
+	if _, err := c.Pin(ctx, added.Cid, name, -1); err != nil {
+		return nil, fmt.Errorf("pin %s after import: %w", added.Cid, err)
+	}
+	return added, nil
+}
+
+// AddLocal imports content into this node's Kubo, pinned there, without
+// pinning it on the cluster: the caller pins it with the replication it wants.
+func (c *Client) AddLocal(ctx context.Context, reader io.Reader, name string) (*AddResponse, error) {
 	// Track original size by reading into memory first
 	// This allows us to return the actual byte count, not the DAG size
 	data, err := io.ReadAll(reader)
@@ -250,11 +270,6 @@ func (c *Client) Add(ctx context.Context, reader io.Reader, name string) (*AddRe
 	added, err := c.addViaKubo(ctx, data, name)
 	if err != nil {
 		return nil, err
-	}
-
-	// -1 is every cluster peer, which is what Cluster /add pinned.
-	if _, err := c.Pin(ctx, added.Cid, name, -1); err != nil {
-		return nil, fmt.Errorf("pin %s after import: %w", added.Cid, err)
 	}
 
 	added.Name = name

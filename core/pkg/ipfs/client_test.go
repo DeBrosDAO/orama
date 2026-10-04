@@ -1011,3 +1011,25 @@ func TestIsPinnedLocally_readsKuboResponses(t *testing.T) {
 		})
 	}
 }
+
+// AddLocal imports into Kubo and never pins on the cluster: the caller pins
+// once, with the replication it wants.
+func TestClient_AddLocal_doesNotPinOnTheCluster(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v0/add" {
+			t.Errorf("AddLocal reached %s; it must only import into Kubo", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		fmtJSON(w, ipfsDaemonAddResponse{Name: "f.txt", Hash: "QmLocal", Size: "9"})
+	}))
+	defer server.Close()
+	client := newTestClient(t, zap.NewNop(), server.URL)
+	resp, err := client.AddLocal(context.Background(), strings.NewReader("content"), "f.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Cid != "QmLocal" || resp.Size != int64(len("content")) {
+		t.Fatalf("AddLocal = %+v", resp)
+	}
+}

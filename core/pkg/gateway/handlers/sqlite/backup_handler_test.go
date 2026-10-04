@@ -108,6 +108,9 @@ func (stubIPFS) Add(_ context.Context, r io.Reader, name string) (*ipfs.AddRespo
 	_, _ = io.Copy(io.Discard, r)
 	return &ipfs.AddResponse{Cid: "bafyproof", Name: name, Size: 6}, nil
 }
+func (s stubIPFS) AddLocal(ctx context.Context, r io.Reader, name string) (*ipfs.AddResponse, error) {
+	return s.Add(ctx, r, name)
+}
 func (stubIPFS) AddDirectory(context.Context, string) (*ipfs.AddResponse, error) { return nil, nil }
 func (stubIPFS) Pin(context.Context, string, string, int) (*ipfs.PinResponse, error) {
 	return nil, nil

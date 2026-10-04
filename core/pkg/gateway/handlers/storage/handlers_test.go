@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,14 +54,16 @@ func (m *quotaMockDB) Exec(_ context.Context, _ string, _ ...any) (sql.Result, e
 
 // mockIPFSClient implements the IPFSClient interface for testing.
 type mockIPFSClient struct {
-	addResp    *ipfs.AddResponse
-	addErr     error
-	pinResp    *ipfs.PinResponse
-	pinErr     error
-	pinStatus  *ipfs.PinStatus
-	pinStatErr error
-	getReader  io.ReadCloser
-	getErr     error
+	// adds and localAdds count Add and AddLocal calls.
+	adds, localAdds atomic.Int32
+	addResp         *ipfs.AddResponse
+	addErr          error
+	pinResp         *ipfs.PinResponse
+	pinErr          error
+	pinStatus       *ipfs.PinStatus
+	pinStatErr      error
+	getReader       io.ReadCloser
+	getErr          error
 	// GetStored (bugboard #414): heldLocally serves without the pinset;
 	// otherwise notInPinset / pinsetErr decide, and pinsetCalls counts.
 	heldLocally bool
@@ -85,6 +88,12 @@ type mockIPFSClient struct {
 }
 
 func (m *mockIPFSClient) Add(_ context.Context, _ io.Reader, _ string) (*ipfs.AddResponse, error) {
+	m.adds.Add(1)
+	return m.addResp, m.addErr
+}
+
+func (m *mockIPFSClient) AddLocal(_ context.Context, _ io.Reader, _ string) (*ipfs.AddResponse, error) {
+	m.localAdds.Add(1)
 	return m.addResp, m.addErr
 }
 

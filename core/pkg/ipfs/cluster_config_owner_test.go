@@ -159,3 +159,25 @@ func TestClusterSwarmAddrs(t *testing.T) {
 		t.Errorf("clusterSwarmAddrs = %v, want only the 10114 swarm address", got)
 	}
 }
+
+// A production node is named after its host, not "node-1" like every other
+// production node.
+func TestClusterPeername_productionNodeIsNamedAfterItsHost(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Skip("no hostname on this machine")
+	}
+	got, err := clusterPeername("/opt/orama/.orama/data", "12D3KooWabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != host {
+		t.Fatalf("peername %q, want the host name %q", got, host)
+	}
+}
+
+func TestClusterPeername_localDevNodeKeepsItsName(t *testing.T) {
+	if got, err := clusterPeername("/home/dev/.orama/node-3/data", ""); err != nil || got != "node-3" {
+		t.Fatalf("peername %q, %v; want node-3", got, err)
+	}
+}

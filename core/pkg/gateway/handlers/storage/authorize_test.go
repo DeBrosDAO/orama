@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,4 +147,59 @@ func TestAuthorizeCID_refusesAnUnnamedObjectForANarrowedGrant(t *testing.T) {
 			t.Errorf("an unnarrowed grant was refused: %s", rec.Body.String())
 		}
 	})
+}
+
+// Content to be pinned is imported locally and pinned once by pinAsync with
+// its replication factor: Add pinned it everywhere first, and narrowing that
+// made every other peer start fetching it and then cancel and unpin it, churn
+// that held the cluster's pin slots (stagenet e2e, 2026-10-03).
+func TestUploadHandler_contentToBePinnedIsImportedLocally(t *testing.T) {
+	h := storageHandlers(t)
+	m := h.ipfsClient.(*mockIPFSClient)
+	h.UploadHandler(httptest.NewRecorder(), uploadWithGrant(t, "doc.txt", ""))
+	if m.localAdds.Load() != 1 || m.adds.Load() != 0 {
+		t.Fatalf("AddLocal %d, Add %d: content to be pinned must be imported without the pin-everywhere", m.localAdds.Load(), m.adds.Load())
+	}
+}
+
+// An upload that asks for no pin keeps Add.
+func TestUploadHandler_unpinnedUploadKeepsAdd(t *testing.T) {
+	h := storageHandlers(t)
+	m := h.ipfsClient.(*mockIPFSClient)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", "doc.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.WriteField("pin", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/v1/storage/upload", &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	r = r.WithContext(context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "anchat"))
+	h.UploadHandler(httptest.NewRecorder(), r)
+	if m.adds.Load() != 1 || m.localAdds.Load() != 0 {
+		t.Fatalf("Add %d, AddLocal %d for an unpinned upload, want Add 1", m.adds.Load(), m.localAdds.Load())
+	}
+}
+
+// An upload whose pin never succeeds was imported on this node only, so its
+// local pin is given back with its reference rather than left untracked.
+func TestPinAsync_aPinThatNeverSucceedsGivesBackTheLocalCopy(t *testing.T) {
+	h := storageHandlers(t)
+	m := h.ipfsClient.(*mockIPFSClient)
+	m.pinErr = errors.New("cluster refused the pin")
+	h.pinAsync("bafyupload", "doc.txt", 3, "anchat")
+	m.unpinMu.Lock()
+	defer m.unpinMu.Unlock()
+	if m.unpinCalls != 1 {
+		t.Fatalf("unpinned %d times after the pin failed for good, want 1", m.unpinCalls)
+	}
 }

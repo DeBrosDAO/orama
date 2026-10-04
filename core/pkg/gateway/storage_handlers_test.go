@@ -36,6 +36,10 @@ func (m *mockIPFSClient) Add(ctx context.Context, reader io.Reader, name string)
 	return &ipfs.AddResponse{Cid: "QmTest123", Name: name, Size: 100}, nil
 }
 
+func (m *mockIPFSClient) AddLocal(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error) {
+	return m.Add(ctx, reader, name)
+}
+
 func (m *mockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
 	if m.addDirectoryFunc != nil {
 		return m.addDirectoryFunc(ctx, dirPath)
