@@ -96,14 +96,14 @@ func TestCache_roundTripsEveryJSONType(t *testing.T) {
 // They are still read, as what they look like: the type was never recorded.
 func TestCache_readsValuesWrittenBeforeTyping(t *testing.T) {
 	h, c := handlersWithOlric(t)
-	dm, err := c.GetClient().NewDMap("anchat:legacy")
+	dm, err := c.GetClient().NewDMap(namespaceDMapName("anchat"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for key, raw := range map[string]any{
 		"text": "hello", "number": 42.5, "object": []byte(`{"a":1}`), "array": []byte(`[1,"b"]`),
 	} {
-		if err := dm.Put(context.Background(), key, raw); err != nil {
+		if err := dm.Put(context.Background(), dmapKeyPrefix("legacy")+key, raw); err != nil {
 			t.Fatal(err)
 		}
 	}

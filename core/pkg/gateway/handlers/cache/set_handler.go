@@ -82,8 +82,9 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Key) > MaxKeyBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("key too large: a key is at most %d bytes", MaxKeyBytes))
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusRequestEntityTooLarge, keyTooLargeMessage(req.DMap))
 		return
 	}
 
@@ -96,18 +97,9 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
@@ -118,13 +110,13 @@ func (h *CacheHandlers) SetHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !entryFitsTable(req.Key, valueToStore) {
+	if !entryFitsTable(foldedKey, valueToStore) {
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
 			"value too large: an entry must fit in one cache table (%d bytes), key and encoding included; store less under one key", OlricTableSizeBytes))
 		return
 	}
 
-	if err := dm.Put(ctx, req.Key, valueToStore, putOpts...); err != nil {
+	if err := dm.Put(ctx, foldedKey, valueToStore, putOpts...); err != nil {
 		status, message := putFailure(err)
 		if status == http.StatusServiceUnavailable {
 			h.logger.ComponentError(logging.ComponentGeneral, "cache unreachable on put",

@@ -37,7 +37,8 @@ type reading struct {
 }
 
 // cacheCeilingMB is what the namespace's Olric may grow to as the soak fills
-// its one DMap ("soak", traffic_test.go): that DMap's LRU bound (core pkg/olric
+// its cache. A namespace's whole /v1/cache/* cache is one Olric DMap whatever
+// dmap names are used, so the ceiling is that DMap's LRU bound (core pkg/olric
 // DMapMaxInuseBytes, 256 MiB of in-use bytes) plus 256 MiB for what in-use
 // leaves out (Olric's runtime, memberlist, and deleted entries waiting for
 // compaction). A cache past it is not being held by its eviction.

@@ -89,7 +89,9 @@ On a namespace gateway, SQL sent to `/v1/rqlite/*` (exec, query, each transactio
 | `/v1/cache/health` | SDK | `cache.health()` |
 | `/v1/cache/mget` | SDK | `cache.multiGet()` |
 | `/v1/cache/put` | SDK | `cache.put()` |
-| `/v1/cache/scan` | SDK | `cache.scan()` |
+| `/v1/cache/scan` | SDK | `cache.scan()`. `match` is a regular expression on the key; invalid is a 400. |
+
+A namespace's cache is one Olric DMap with the `dmap` name folded into each key, so every `dmap` shares one memory bound; `dmap` and `key` together are at most 255 bytes (the 413 names the limit for that `dmap`). See ARCHITECTURE.md, "Olric bounds its own memory".
 
 ### Pub/sub
 

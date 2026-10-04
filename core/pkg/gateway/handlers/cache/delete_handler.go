@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -64,18 +63,15 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
 
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusNotFound, "key not found")
 		return
 	}
 
@@ -85,7 +81,7 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 	// as 0; one this member owns is reported as deleted whether or not it was
 	// there. Reading the count turned every delete of a key held on another
 	// member into "key not found".
-	if _, err := dm.Get(ctx, req.Key); err != nil {
+	if _, err := dm.Get(ctx, foldedKey); err != nil {
 		if olric.IsKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
@@ -93,7 +89,7 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to look the key up", err)
 		return
 	}
-	if _, err := dm.Delete(ctx, req.Key); err != nil && !olric.IsKeyNotFound(err) {
+	if _, err := dm.Delete(ctx, foldedKey); err != nil && !olric.IsKeyNotFound(err) {
 		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to delete key", err)
 		return
 	}

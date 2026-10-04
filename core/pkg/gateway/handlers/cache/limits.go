@@ -24,6 +24,12 @@ const (
 	// a key of 256 bytes or more is refused. internal/kvstore/table MaxKeyLength
 	// is 256.
 	MaxKeyBytes = 255
+
+	// MaxMatchBytes bounds a scan's match pattern. The gateway compiles it per
+	// request now (it is applied to the tenant's keys, not Olric's), and a key
+	// it filters is at most MaxKeyBytes, so a longer pattern buys nothing but
+	// the compile.
+	MaxMatchBytes = 1 << 10
 )
 
 // entryFitsTable reports whether a table can hold key and the stored value.

@@ -23,6 +23,7 @@ const (
 	roleRuntime = "runtime"
 	roleAdmin   = "admin"
 	blobSize    = 16 << 10
+	soakDMaps   = 64
 	siteMarker  = "soak-site"
 	// pinVisible: a fresh pin may be invisible on a node for two minutes
 	// (storage download_handler.go pinPropagationWindow).
@@ -106,17 +107,20 @@ func (w *workload) ops() []op {
 
 func (w *workload) user(worker int) *realistic.User { return w.users[worker%len(w.users)] }
 
-// cacheRoundTrip writes a value and reads it back.
+// cacheRoundTrip writes a value and reads it back. It rotates over soakDMaps
+// dmaps: a namespace's cache is one Olric DMap whatever the dmap names, so the
+// memory ceiling (cacheCeilingMB) must hold with many dmaps in use.
 func (w *workload) cacheRoundTrip(ctx context.Context, wk, i int) error {
 	key, want := fmt.Sprintf("w%d-%d", wk, i%50), fmt.Sprintf("v%d", i)
+	dmap := fmt.Sprintf("soak-%d", i%soakDMaps)
 	tok := w.user(wk).Token()
-	if _, err := w.ns.JSON(ctx, http.MethodPost, "/v1/cache/put", tok, map[string]any{"dmap": "soak", "key": key, "value": want}, nil); err != nil {
+	if _, err := w.ns.JSON(ctx, http.MethodPost, "/v1/cache/put", tok, map[string]any{"dmap": dmap, "key": key, "value": want}, nil); err != nil {
 		return err
 	}
 	var got struct {
 		Value any `json:"value"`
 	}
-	if _, err := w.ns.JSON(ctx, http.MethodPost, "/v1/cache/get", tok, map[string]any{"dmap": "soak", "key": key}, &got); err != nil {
+	if _, err := w.ns.JSON(ctx, http.MethodPost, "/v1/cache/get", tok, map[string]any{"dmap": dmap, "key": key}, &got); err != nil {
 		return err
 	}
 	if got.Value != want {

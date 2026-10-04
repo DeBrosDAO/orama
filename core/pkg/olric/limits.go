@@ -11,6 +11,9 @@ const (
 	// DMapMaxInuseBytes is the memory one DMap may hold on one node before
 	// eviction starts (Olric splits it across the partitions the node owns).
 	// Well under the unit's 2G MemoryMax, so a namespace using a few DMaps is
-	// bounded by eviction rather than by the kernel.
+	// bounded by eviction rather than by the kernel. The bound is per DMap, so
+	// the namespace's tenant-facing cache is ONE DMap (pkg/gateway/handlers/cache
+	// namespace_dmap.go): tenant-chosen dmap names must never become Olric DMaps,
+	// or a tenant could multiply this bound past the MemoryMax.
 	DMapMaxInuseBytes = 256 << 20
 )

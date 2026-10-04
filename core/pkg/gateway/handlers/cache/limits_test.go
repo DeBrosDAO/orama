@@ -19,8 +19,9 @@ func TestSetHandler_limitsAreEnforcedBeforeOlric(t *testing.T) {
 	}{
 		{"value over a table", PutRequest{DMap: "lim", Key: "k", Value: strings.Repeat("x", 2<<20)}, http.StatusRequestEntityTooLarge},
 		{"key of 4096 bytes", PutRequest{DMap: "lim", Key: strings.Repeat("k", 4096), Value: 1}, http.StatusRequestEntityTooLarge},
-		{"key one byte over", PutRequest{DMap: "lim", Key: strings.Repeat("k", MaxKeyBytes+1), Value: 1}, http.StatusRequestEntityTooLarge},
-		{"longest key", PutRequest{DMap: "lim", Key: strings.Repeat("k", MaxKeyBytes), Value: 1}, http.StatusOK},
+		{"key one byte over", PutRequest{DMap: "lim", Key: strings.Repeat("k", maxKeyBytesIn("lim")+1), Value: 1}, http.StatusRequestEntityTooLarge},
+		{"longest key", PutRequest{DMap: "lim", Key: strings.Repeat("k", maxKeyBytesIn("lim")), Value: 1}, http.StatusOK},
+		{"a dmap name that leaves no room for a key", PutRequest{DMap: strings.Repeat("d", MaxKeyBytes), Key: "k", Value: 1}, http.StatusRequestEntityTooLarge},
 		{"multi-byte key over in bytes, under in characters", PutRequest{DMap: "lim", Key: strings.Repeat("é", 128), Value: 1}, http.StatusRequestEntityTooLarge},
 	}
 	for _, c := range cases {
@@ -42,7 +43,7 @@ func TestSetHandler_theLargestEntryATableHoldsIsStored(t *testing.T) {
 	h, _ := handlersWithOlric(t)
 	const key = "edge"
 	// The stored value is the JSON string: the text and two quotes.
-	text := OlricTableSizeBytes - olricEntryOverheadBytes - len(key) - 1 - 2
+	text := OlricTableSizeBytes - olricEntryOverheadBytes - len(dmapKeyPrefix("edge")+key) - 1 - 2
 	value := strings.Repeat("v", text)
 	if rec := put(t, h, PutRequest{DMap: "edge", Key: key, Value: value}); rec.Code != http.StatusOK {
 		t.Fatalf("the largest entry that fits: status %d: %.200s", rec.Code, rec.Body.String())

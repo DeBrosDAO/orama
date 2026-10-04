@@ -3,7 +3,6 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -66,22 +65,19 @@ func (h *CacheHandlers) GetHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
-	gr, err := dm.Get(ctx, req.Key)
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusNotFound, "key not found")
+		return
+	}
+
+	gr, err := dm.Get(ctx, foldedKey)
 	if err != nil {
 		// Check for key not found error - handle both wrapped and direct errors
 		if olric.IsKeyNotFound(err) {
@@ -175,18 +171,9 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to create DMap", err)
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
@@ -197,7 +184,11 @@ func (h *CacheHandlers) MultiGetHandler(w http.ResponseWriter, r *http.Request) 
 			continue // Skip empty keys
 		}
 
-		gr, err := dm.Get(ctx, key)
+		foldedKey, ok := foldKey(req.DMap, key)
+		if !ok {
+			continue // too long to have been stored
+		}
+		gr, err := dm.Get(ctx, foldedKey)
 		if err != nil {
 			// Skip keys that are not found - don't include them in results
 			// This matches the SDK's expectation that only found keys are returned

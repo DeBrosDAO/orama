@@ -343,7 +343,15 @@ if (hit) console.log(hit.value);
 await client.cache.delete("sessions", userId);
 ```
 
-The distributed map name is the first argument; keys are scoped to it. The TTL
+The distributed map name is the first argument; keys are scoped to it. All of a
+namespace's maps share one memory bound (least recently used entries are evicted
+once the namespace's cache holds 256 MiB on a node), however many maps you make.
+A map name and its key together are at most 255 bytes: the name counts its length
+in bytes plus 2 (its byte length as digits, and a colon), so a key in a map named
+`sessions` is at most 245 bytes; a longer one is refused with a 413 that names the
+limit, and a get or delete of one answers 404. A scan's `match` is a regular
+expression applied to the key as you wrote it; an invalid one is refused with a
+400. The TTL
 is a duration string such as `"30m"` or `"1h"`, and is optional: the entry
 expires after that long, and without a TTL (or with `"0s"`) it lives until
 deleted. A TTL that does not parse, is negative, or exceeds 10 years is refused

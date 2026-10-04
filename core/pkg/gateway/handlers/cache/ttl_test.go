@@ -43,11 +43,11 @@ func put(t *testing.T, h *CacheHandlers, body PutRequest) *httptest.ResponseReco
 
 func storedTTLMillis(t *testing.T, c *olric.Client, dmap, key string) int64 {
 	t.Helper()
-	dm, err := c.GetClient().NewDMap("anchat:" + dmap)
+	dm, err := c.GetClient().NewDMap(namespaceDMapName("anchat"))
 	if err != nil {
 		t.Fatalf("NewDMap: %v", err)
 	}
-	res, err := dm.Get(context.Background(), key)
+	res, err := dm.Get(context.Background(), dmapKeyPrefix(dmap)+key)
 	if err != nil {
 		t.Fatalf("reading %q back: %v", key, err)
 	}
@@ -90,11 +90,11 @@ func TestSetHandler_badTTLRefusedAndNotStored(t *testing.T) {
 			t.Errorf("ttl=%q: status = %d, want 400", ttl, rec.Code)
 		}
 	}
-	dm, err := c.GetClient().NewDMap("anchat:prices")
+	dm, err := c.GetClient().NewDMap(namespaceDMapName("anchat"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := dm.Get(context.Background(), "bad"); err == nil {
+	if _, err := dm.Get(context.Background(), dmapKeyPrefix("prices")+"bad"); err == nil {
 		t.Fatal("a refused write left an entry behind")
 	}
 }

@@ -349,9 +349,21 @@ deleted entries waiting for compaction). Olric reads its config only at start,
 and the reconcile rewrites a namespace's config without restarting it (Olric is
 never restarted as a side effect), so a running Olric takes the limit at its
 next restart: the rolling upgrade that ships it. The limit is per DMap, and a
-tenant names its own DMaps, so a namespace using very many can still reach its
-`MemoryMax`; each namespace runs its own Olric, so that stays the tenant's own
-cache.
+tenant names its own dmaps, so the namespace gateway does not give each its own
+Olric DMap: a namespace's whole `/v1/cache/*` cache is ONE DMap
+(`gateway_cache:<namespace>`) and the tenant's dmap name is folded into the key
+as `<length of the name in bytes>:<name><key>` (an unambiguous encoding; a scan
+lists the keys that start with the dmap's prefix). However many dmaps a tenant
+makes, they share the one 256 MiB LRU bound, so a tenant's cache cannot grow the
+namespace's Olric to its `MemoryMax`. (Per-dmap DMaps did: eight reached the
+2G.) The namespace's other DMaps are a fixed few of the platform's own (the
+serverless cache, the trigger dedup and publish-depth maps). The key shares
+Olric's 255-byte key limit with the prefix, so a key in a dmap named `sessions`
+is at most 255 - len("8:sessions") = 245 bytes; the 413 says the limit that
+applies. Entries written before this change sit in per-dmap DMaps the gateway no
+longer reads: after the upgrade the cache starts empty (and, while a namespace's
+gateways are on mixed versions, old and new nodes see different entries), which a
+cache tolerates; the old DMaps leave memory with the next Olric restart.
 
 **Olric is supervised, not connected once.** The gateway keeps a background
 supervisor that probes its Olric client every 10s and, after three consecutive

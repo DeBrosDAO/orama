@@ -61,7 +61,18 @@ func (s *Server) Stop(t *testing.T) {
 // Start runs Olric on a free loopback port and stops it when the test ends.
 func Start(t *testing.T) *Server {
 	t.Helper()
-	return startMember(t, 0, nil)
+	return startMember(t, 0, nil, nil)
+}
+
+// StartBounded is Start with Olric's memory bound set to maxInuse bytes per
+// DMap and LRU eviction, the way the instances' configs set it (pkg/olric
+// DMapMaxInuseBytes), but small enough for a test to reach.
+func StartBounded(t *testing.T, maxInuse int) *Server {
+	t.Helper()
+	return startMember(t, 0, nil, func(c *config.Config) {
+		c.DMaps.MaxInuse = maxInuse
+		c.DMaps.EvictionPolicy = config.LRUEviction
+	})
 }
 
 // StartCluster runs n members that form one cluster, so a key's partition can
@@ -74,9 +85,9 @@ func StartCluster(t *testing.T, n int) []*Server {
 		t.Fatalf("olrictest: %v", err)
 	}
 	seed := fmt.Sprintf("127.0.0.1:%d", first)
-	members := []*Server{startMember(t, first, nil)}
+	members := []*Server{startMember(t, first, nil, nil)}
 	for i := 1; i < n; i++ {
-		members = append(members, startMember(t, 0, []string{seed}))
+		members = append(members, startMember(t, 0, []string{seed}, nil))
 	}
 	waitForCluster(t, members)
 	return members
@@ -160,8 +171,8 @@ func clusterGap(clients []*olriclib.ClusterClient, members []*Server) string {
 }
 
 // startMember runs one member. memberlistPort 0 picks a free one; peers are
-// the memberlist addresses it joins.
-func startMember(t *testing.T, memberlistPort int, peers []string) *Server {
+// the memberlist addresses it joins; tune, when set, adjusts the config.
+func startMember(t *testing.T, memberlistPort int, peers []string, tune func(*config.Config)) *Server {
 	t.Helper()
 
 	port, err := freePort()
@@ -176,6 +187,9 @@ func startMember(t *testing.T, memberlistPort int, peers []string) *Server {
 	c.MemberlistConfig.BindPort = memberlistPort
 	c.Peers = peers
 	c.Logger = log.New(io.Discard, "", 0)
+	if tune != nil {
+		tune(c)
+	}
 
 	started := make(chan struct{})
 	c.Started = func() { close(started) }
