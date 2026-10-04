@@ -4,12 +4,17 @@ package rolloutupgrade
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 	"github.com/DeBrosOfficial/network/e2e/harness/provision"
 )
 
@@ -125,7 +130,38 @@ func TestRollout_haltsOnABrokenNodeThenResumes(t *testing.T) {
 	done := infra.RunFor(t, harness.CLI(t), infra.UpgradeBudget, "node", "upgrade", "--env", f.State.Env, "--yes")
 	infra.ExpectExit(t, done, infra.ExitOK, completeText)
 	resumed = true
+	gatewaysServeNow(t, f)
 	infra.WaitConverged(t, len(f.State.Nodes), infra.ConvergeBudget, "the cluster after the resumed rollout")
+}
+
+// edgeBudget is how long a node's public edge (Caddy, which the supervisor
+// starts after the gateway) has, once the rollout reports the node done, to
+// answer through the public name. The upgrade's gate waits for the node's
+// database and gateway, not the edge; a node whose gateway the upgrade
+// restarted after that gate answered nothing for its whole restart.
+const (
+	edgeBudget = 30 * time.Second
+	edgeEvery  = time.Second
+)
+
+// gatewaysServeNow requires each node to answer its health check through its
+// public edge within edgeBudget of the rollout completing (docs/ARCHITECTURE.md
+// "A removed namespace is removed, not stopped").
+func gatewaysServeNow(t testing.TB, f *fleet.Fleet) {
+	t.Helper()
+	for _, n := range f.State.Nodes {
+		c := harness.GW(t).PinTo(n.PublicIP)
+		eventually.Require(t, edgeEvery, edgeBudget, n.Name+" to serve right after the rollout", func() (bool, error) {
+			resp, err := c.Send(t.Context(), gw.Req{Path: "/v1/health"})
+			if err != nil {
+				return false, err
+			}
+			if resp.Status != http.StatusOK {
+				return false, fmt.Errorf("health answered %d", resp.Status)
+			}
+			return true, nil
+		})
+	}
 }
 
 func firstStepNode(t testing.TB, f *fleet.Fleet, step string) fleet.Node {

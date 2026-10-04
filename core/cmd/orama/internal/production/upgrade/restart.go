@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
@@ -11,6 +12,7 @@ import (
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/nodehealth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
 )
 
 // clusterHealthBudget is how long this node has to rejoin after its own
@@ -19,6 +21,36 @@ const clusterHealthBudget = 5 * time.Minute
 
 // supervisorService is orama-node as utils.GetProductionServices names it.
 const supervisorService = "orama-node"
+
+// tenantServices is services without orama-node and the units it starts
+// itself: the reserved index and nameserver namespaces' stack.
+//
+// Restarting those a second time, after the health gate had passed, took the
+// node's gateway down again a few seconds before the upgrade reported the node
+// done, so the rollout moved on — or, on the last node, the caller started —
+// while that gateway was still starting (stagenet 2026-10-04: requests to it
+// were refused for seconds after "Rolling upgrade complete").
+func tenantServices(services []string) []string {
+	var out []string
+	for _, svc := range services {
+		if svc == supervisorService || supervisorOwned(svc) {
+			continue
+		}
+		out = append(out, svc)
+	}
+	return out
+}
+
+// supervisorOwned reports whether svc is an instance of the index or
+// nameserver namespace: orama-node starts those itself.
+func supervisorOwned(svc string) bool {
+	at := strings.LastIndex(svc, "@")
+	if at < 0 {
+		return false
+	}
+	instance := strings.TrimSuffix(strings.TrimSuffix(svc[at+1:], ".service"), ".timer")
+	return instance == systemd.IndexNamespace || instance == systemd.NameserverNamespace
+}
 
 // restartServices brings the node back after the swap.
 //
@@ -78,17 +110,13 @@ func (o *Orchestrator) restartServices() error {
 	}
 	fmt.Printf("   ✓ Node is carrying its share again\n")
 
-	// Restart remaining services (namespace + any others) in dependency order.
-	// Namespace services are restarted: rqlite → olric (+ wait) → gateway.
-	var remaining []string
-	for _, svc := range services {
-		if svc != supervisorService {
-			remaining = append(remaining, svc)
-		}
-	}
-	utils.StartServicesOrdered(remaining, "restart")
+	// Restart the tenant namespaces' services in dependency order: rqlite →
+	// olric (+ wait) → gateway. The supervisor's own units are not restarted
+	// again: it has just started them on the new binaries, and the health gate
+	// above has seen them serving.
+	utils.StartServicesOrdered(tenantServices(services), "restart")
 
-	fmt.Printf("   ✓ All services restarted\n")
+	fmt.Printf("   ✓ Tenant namespaces restarted\n")
 	return nil
 }
 

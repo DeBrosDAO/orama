@@ -23,4 +23,5 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-node-upgrade: without --yes the plan is printed and nothing is restarted"
     - "docs/DEV_DEPLOY.md: a rolling upgrade restarts followers first and the raft leader last"
     - "docs/DEV_DEPLOY.md: a node that fails its upgrade stops the rollout; the remaining nodes are untouched"
+    - "docs/ARCHITECTURE.md: orama node upgrade does not restart the index stack again once its health gate has seen the node serving"
     - "docs/SECURITY.md#rollout-strategy: followers first, leader last; a mixed-release cluster keeps working"

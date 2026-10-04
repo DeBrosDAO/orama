@@ -668,9 +668,12 @@ address is not inside the WireGuard overlay (`constants.WireGuardOverlay()`); fo
 teardown the refusal is a failed send, so the row is kept.
 
 **A removed namespace is removed, not stopped.** `orama node upgrade` enables
-and restarts every namespace unit it finds on disk (a namespace directory with a
-unit env file in `/var/lib/orama-unit-env/<ns>/`), and a reboot starts the same
-set. A namespace that was only *stopped* therefore came back: a provisioning
+every namespace unit it finds on disk (a namespace directory with a unit env
+file in `/var/lib/orama-unit-env/<ns>/`) and restarts the tenant namespaces'
+units, and a reboot starts the same set. (The `index` and `nameserver` units
+are started by `orama-node` itself on the new binaries; the upgrade does not
+restart them again once its health gate has seen the node's database and
+gateway serving.) A namespace that was only *stopped* therefore came back: a provisioning
 that failed, was rolled back and was then deleted by its owner left enabled
 `orama-namespace-{rqlite,olric,gateway}@<ns>` units and their data on every
 node, because the rollback withdrew the membership rows a later delete uses to
