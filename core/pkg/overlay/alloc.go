@@ -96,7 +96,7 @@ func Register(ctx context.Context, db Querier, p Peer) (string, error) {
 
 		id := p.NodeID
 		if id == "" {
-			id = fmt.Sprintf("node-%s", wgIP)
+			id = PlaceholderNodeID(wgIP)
 		}
 
 		_, err = db.Exec(ctx,
@@ -246,3 +246,8 @@ func conflictsOn(err error, column string) bool {
 	}
 	return strings.Contains(msg, "."+strings.ToLower(column))
 }
+
+// PlaceholderNodeID is the node id a peer row is recorded under when the node
+// has no libp2p identity yet — an OramaOS node at its enrolment: "node-" and
+// its overlay address.
+func PlaceholderNodeID(wgIP string) string { return "node-" + wgIP }

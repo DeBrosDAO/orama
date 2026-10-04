@@ -17,6 +17,7 @@ package nodeapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -65,6 +66,9 @@ type Handler struct {
 	// read what would have been recorded without standing up a database — the
 	// question "is the heartbeat audited" has no other observable answer.
 	recorder func(*http.Request, gwauth.AuditEvent)
+	// localOverlayIP reads this host's WireGuard address, which a request
+	// arriving on loopback is attributable to. Nil until SetLocalOverlayIP.
+	localOverlayIP func() (string, error)
 }
 
 // NewHandler builds the handler.
@@ -78,6 +82,37 @@ func NewHandler(logger *zap.Logger, db rqlite.Client, creds *Credentials, audit 
 	h := &Handler{logger: logger, db: db, creds: creds, audit: audit, now: time.Now}
 	h.recorder = h.write
 	return h
+}
+
+// SetLocalOverlayIP gives the handler how to read this host's WireGuard
+// address. It is read per request rather than once: the gateway can start
+// before wg0 has its address.
+func (h *Handler) SetLocalOverlayIP(read func() (string, error)) { h.localOverlayIP = read }
+
+// sourceOverlayIP is the overlay address a request is attributable to: the
+// sender's, when it came across the mesh, or this host's, when it came from a
+// process on this host. "" when neither can be said.
+func (h *Handler) sourceOverlayIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return ""
+	}
+	if !ip.IsLoopback() {
+		return ip.String()
+	}
+	if h.localOverlayIP == nil {
+		return ""
+	}
+	local, err := h.localOverlayIP()
+	if err != nil {
+		h.logger.Warn("could not read this host's overlay address to attribute a local registration", zap.Error(err))
+		return ""
+	}
+	return local
 }
 
 // HandleRegister serves POST /v1/internal/node/register.
@@ -98,6 +133,10 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.overlayAddressAgrees(r.Context(), nodeID, req.InternalIP); err != nil {
 		h.refuse(w, nodeID, err.Error(), err)
+		return
+	}
+	if err := admitted(r.Context(), h.db, registration{nodeID: nodeID, claimedIP: req.InternalIP, sourceIP: h.sourceOverlayIP(r)}); err != nil {
+		h.refuseAdmission(w, r, nodeID, gwauth.AuditNodeRegistered, err)
 		return
 	}
 
@@ -416,6 +455,26 @@ func (h *Handler) refuse(w http.ResponseWriter, nodeID, message string, err erro
 		zap.String("reason", message),
 		zap.Error(err))
 	http.Error(w, message, http.StatusBadRequest)
+}
+
+// refuseAdmission answers a node the admission check turned away: 403 and an
+// audit line when no join admitted it, 503 when whether one did could not be
+// read (refusing is right, and the node retries).
+func (h *Handler) refuseAdmission(w http.ResponseWriter, r *http.Request, nodeID, action string, err error) {
+	if !errors.Is(err, errNotAdmitted) {
+		h.logger.Error("could not check a node's admission", zap.String("node_id", nodeID), zap.Error(err))
+		http.Error(w, "could not check whether this node was admitted; retry", http.StatusServiceUnavailable)
+		return
+	}
+	h.logger.Warn("refused a node that was never admitted", zap.String("node_id", nodeID))
+	h.record(r, gwauth.AuditEvent{
+		Actor:    nodeID,
+		Action:   action,
+		Resource: nodeID,
+		Result:   gwauth.AuditFailure,
+		Metadata: map[string]string{"reason": "not admitted"},
+	})
+	http.Error(w, errNotAdmitted.Error(), http.StatusForbidden)
 }
 
 // record writes one line of the audit trail.

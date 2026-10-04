@@ -659,6 +659,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// key carried inside its own peer id.
 		gw.nodeAPIHandler = nodeapihandlers.NewHandler(logger.Logger, deps.ORMClient,
 			nodeapihandlers.NewCredentials(deps.ORMClient), deps.AuthService.Audit())
+		gw.nodeAPIHandler.SetLocalOverlayIP(GetWireGuardIP)
 		gw.joinHandler = joinhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)
 		gw.joinHandler.SetAuditLog(deps.AuthService.Audit())
 		gw.enrollHandler = enrollhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.DataDir)

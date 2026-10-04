@@ -44,11 +44,12 @@ func TestRetirementPlan_covers_every_store_that_keeps_the_node(t *testing.T) {
 // not active. Deleting the row makes those records unreachable forever.
 func TestRetirementPlan_marks_dns_nodes_rather_than_deleting_it(t *testing.T) {
 	for _, step := range RetirementPlan(NodeRecord{PeerID: "peerA"}) {
-		if !strings.Contains(step.SQL, "dns_nodes") {
-			continue
-		}
-		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(step.SQL)), "DELETE") {
+		upper := strings.ToUpper(strings.TrimSpace(step.SQL))
+		if strings.HasPrefix(upper, "DELETE FROM DNS_NODES") {
 			t.Fatal("dns_nodes must be UPDATEd to inactive, never deleted")
+		}
+		if !strings.HasPrefix(upper, "UPDATE DNS_NODES") {
+			continue
 		}
 		if !strings.Contains(step.SQL, "'inactive'") {
 			t.Error("the node must be marked inactive so the cluster's purge picks it up")

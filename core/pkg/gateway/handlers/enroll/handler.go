@@ -157,7 +157,7 @@ func (h *Handler) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to register peer", http.StatusInternalServerError)
 		return
 	}
-	nodeID := fmt.Sprintf("node-%s", wgIP)
+	nodeID := overlay.PlaceholderNodeID(wgIP)
 
 	// 6. Add peer to local WireGuard interface
 	if err := h.addWGPeerLocally(wgPubKey, req.NodeIP, wgIP); err != nil {

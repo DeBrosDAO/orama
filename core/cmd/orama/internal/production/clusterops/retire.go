@@ -35,6 +35,20 @@ func RetirementPlan(rec NodeRecord) []RetireStep {
 	peer := SQLLiteral(rec.PeerID)
 	return []RetireStep{
 		{
+			// First, while the node is not yet marked retired. By address as
+			// well as by id: an OramaOS node's row carries the placeholder id
+			// its enrolment gave it (node-<overlay address>), not its peer id,
+			// so deleting by id alone left the retired machine on the mesh —
+			// and its row would admit a fresh identity registering from that
+			// address. Only a placeholder row, and only while the node is still
+			// live: a second removal of a node already retired must not reach
+			// a newer node that has since been given the same address.
+			What: "release the mesh address",
+			SQL: fmt.Sprintf(
+				`DELETE FROM wireguard_peers WHERE node_id = '%s' OR (node_id = 'node-' || wg_ip AND wg_ip = (SELECT internal_ip FROM dns_nodes WHERE id = '%s' AND last_seen != '%s'))`,
+				peer, peer, retiredLastSeen),
+		},
+		{
 			What: "mark the node retired so the cluster purges its DNS records",
 			SQL: fmt.Sprintf(
 				`UPDATE dns_nodes SET status = 'inactive', last_seen = '%s', updated_at = datetime('now') WHERE id = '%s'`,
@@ -50,10 +64,6 @@ func RetirementPlan(rec NodeRecord) []RetireStep {
 			SQL: fmt.Sprintf(
 				`DELETE FROM dns_records WHERE record_type = 'A' AND namespace = 'system' AND value = (SELECT ip_address FROM dns_nodes WHERE id = '%s')`,
 				peer),
-		},
-		{
-			What: "release the mesh address",
-			SQL:  fmt.Sprintf(`DELETE FROM wireguard_peers WHERE node_id = '%s'`, peer),
 		},
 		{
 			What: "release the nameserver slot",

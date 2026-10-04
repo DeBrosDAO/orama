@@ -9,6 +9,7 @@ require (
 	github.com/cosmos/go-bip39 v1.0.0
 	github.com/ethereum/go-ethereum v1.17.6
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+	github.com/libp2p/go-libp2p v0.50.0
 	github.com/mr-tron/base58 v1.3.0
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.22
@@ -42,7 +43,6 @@ require (
 	github.com/koron/go-ssdp v0.9.1 // indirect
 	github.com/libp2p/go-buffer-pool v0.1.0 // indirect
 	github.com/libp2p/go-flow-metrics v0.3.0 // indirect
-	github.com/libp2p/go-libp2p v0.50.0 // indirect
 	github.com/libp2p/go-libp2p-asn-util v0.4.1 // indirect
 	github.com/libp2p/go-libp2p-pubsub v0.18.0 // indirect
 	github.com/libp2p/go-msgio v0.3.0 // indirect

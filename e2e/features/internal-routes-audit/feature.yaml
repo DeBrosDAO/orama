@@ -45,4 +45,5 @@ covers:
     - "docs/SECURITY.md#authentication: being on the host or on the mesh is not a credential; a forged coordination MAC, node stamp or cluster secret is refused"
     - "docs/SECURITY.md#authentication: the node's own routes refuse (404) any caller that is not a process on the host or a node on the overlay"
     - "docs/SECURITY.md#authentication: the three /v1/internal/namespace/webrtc/* endpoints were removed"
+    - "docs/SECURITY.md#authentication: a node no join admitted cannot register itself, whatever key it enrolled and signs with"
     - "docs/AUTH.md#operating-the-cluster: /v1/operator/node/register refuses a namespace admin who is not on the operator list"

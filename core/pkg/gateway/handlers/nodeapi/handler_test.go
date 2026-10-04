@@ -70,6 +70,10 @@ type recordingDB struct {
 	// neverEnrolled makes the store answer "no key for that node", which is how
 	// a node looks before its first enrolment.
 	neverEnrolled bool
+	// admission is what the admission check reads, or nil for a node already
+	// registered; admissionErr fails that read.
+	admission    *admissionRow
+	admissionErr error
 }
 
 // Query answers the two lookups the handler makes: which key is recorded for a
@@ -78,6 +82,16 @@ type recordingDB struct {
 // would keep passing after the query changed.
 func (d *recordingDB) Query(_ context.Context, dest any, _ string, _ ...any) error {
 	switch rows := dest.(type) {
+	case *[]admissionRow:
+		if d.admissionErr != nil {
+			return d.admissionErr
+		}
+		if d.admission != nil {
+			*rows = append(*rows, *d.admission)
+			return nil
+		}
+		*rows = append(*rows, admissionRow{Known: 1, Registry: 1})
+		return nil
 	case *[]credentialRow:
 		if d.credentialErr != nil {
 			return d.credentialErr

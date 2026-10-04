@@ -632,7 +632,11 @@ minutes, and take the node out of every membership store:
 INSERT INTO raft_evicted_nodes (node_id, raft_addr, peer_id, reason, evicted_by)
   VALUES ('10.0.0.6:10101','10.0.0.6:10101','<OLD_LIBP2P_ID>','operator','<THIS_NODE>');
 
-DELETE FROM wireguard_peers          WHERE node_id = '<OLD_LIBP2P_ID>';
+-- By address too: an OramaOS node's row carries its enrolment placeholder id
+-- (node-<overlay address>), not its peer id. Run this before the UPDATE below.
+DELETE FROM wireguard_peers          WHERE node_id = '<OLD_LIBP2P_ID>'
+  OR (node_id = 'node-' || wg_ip AND wg_ip = (SELECT internal_ip FROM dns_nodes
+      WHERE id = '<OLD_LIBP2P_ID>' AND last_seen != '1970-01-01 00:00:00'));
 DELETE FROM dns_nameservers          WHERE node_id = '<OLD_LIBP2P_ID>';
 DELETE FROM namespace_cluster_nodes  WHERE node_id = '<OLD_LIBP2P_ID>';
 DELETE FROM namespace_port_allocations WHERE node_id = '<OLD_LIBP2P_ID>';

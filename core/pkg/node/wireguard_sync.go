@@ -14,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/overlay"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
@@ -410,7 +411,7 @@ func (n *Node) ensureWireGuardSelfRegistered(ctx context.Context) {
 
 	nodeID := n.GetPeerID()
 	if nodeID == "" {
-		nodeID = fmt.Sprintf("node-%s", wgIP)
+		nodeID = overlay.PlaceholderNodeID(wgIP)
 	}
 
 	// Query local IPFS peer ID

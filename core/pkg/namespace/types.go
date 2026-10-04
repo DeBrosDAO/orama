@@ -360,8 +360,6 @@ type WebRTCPortBlock struct {
 	AllocatedAt time.Time `json:"allocated_at" db:"allocated_at"`
 }
 
-// RetiredNodeLastSeen is the last_seen `orama node remove` gives a node it
-// retires (cmd/orama/internal/production/clusterops). A retired node keeps its
-// dns_nodes row, so the cluster can still find and purge its DNS records; this
-// date is what says it is no longer a member.
-const RetiredNodeLastSeen = "1970-01-01 00:00:00"
+// RetiredNodeLastSeen is constants.RetiredNodeLastSeen, the last_seen a
+// retired node's dns_nodes row is given.
+const RetiredNodeLastSeen = constants.RetiredNodeLastSeen
