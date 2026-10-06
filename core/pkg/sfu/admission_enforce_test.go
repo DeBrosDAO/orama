@@ -69,7 +69,7 @@ func TestKickLog_usesTheSFUsClockAndTheGatewaySkewMargin(t *testing.T) {
 	k := newKickLog()
 	k.now = func() time.Time { return now }
 	at := now.UnixMilli() // the kicking gateway's clock
-	k.record("r", "alice", at)
+	k.record("r", "alice", at, 0)
 
 	cases := []struct {
 		name     string
@@ -89,7 +89,7 @@ func TestKickLog_usesTheSFUsClockAndTheGatewaySkewMargin(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			now = time.Unix(1_800_000_000, 0).Add(c.later)
-			if got := k.refuses(c.room, c.user, c.issuedMs); got != c.want {
+			if got := k.refuses(c.room, c.user, c.issuedMs, 0); got != c.want {
 				t.Fatalf("refuses = %v, want %v", got, c.want)
 			}
 		})
@@ -100,10 +100,10 @@ func TestKickLog_dropsKicksOlderThanTheWindowAndKeepsTheLatest(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	k := newKickLog()
 	k.now = func() time.Time { return now }
-	k.record("r", "old", now.UnixMilli())
+	k.record("r", "old", now.UnixMilli(), 0)
 	now = now.Add(kickWindow + time.Second)
-	k.record("r", "alice", 2000)
-	k.record("r", "alice", 1000) // an older kick does not move the time back
+	k.record("r", "alice", 2000, 0)
+	k.record("r", "alice", 1000, 0) // an older kick does not move the time back
 	if _, ok := k.kicks[kickKey("r", "old")]; ok {
 		t.Error("a kick past the window was kept")
 	}
@@ -226,5 +226,107 @@ func TestHTTPServer_timeoutsAreSetAndDoNotKillAnUpgradedSocket(t *testing.T) {
 	sendJoin(t, conn, "r1")
 	if m := readFrame(t, conn); m.Type != MessageTypeWelcome {
 		t.Fatalf("first frame = %s, want welcome: the upgraded socket outlived the read timeout", m.Type)
+	}
+}
+
+func TestKickLog_generationsDecideWhereBothExistAndNoClockIsConsulted(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	k := newKickLog()
+	k.now = func() time.Time { return now }
+	at := now.UnixMilli()
+	k.record("r", "alice", at, 4)
+
+	cases := []struct {
+		name     string
+		issuedMs int64
+		gen      int64
+		want     bool
+	}{
+		{"a re-admission's ticket, issued a second after the kick", at + 1000, 5, false},
+		{"a re-admission's ticket, even if its gateway's clock is behind the kicker's", at - 5000, 5, false},
+		{"the revoked admission's ticket, issued by a gateway whose clock runs far ahead", at + 60_000, 4, true},
+		{"an older admission's ticket", at + 60_000, 2, true},
+		{"a ticket with no generation keeps the clock rule: issued before", at - 1000, 0, true},
+		{"a ticket with no generation keeps the clock rule: issued after the margin", at + kickSkewMargin.Milliseconds() + 1, 0, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := k.refuses("r", "alice", c.issuedMs, c.gen); got != c.want {
+				t.Fatalf("refuses = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestKickLog_aKickWithoutAGenerationKeepsTheClockRuleForTicketsWithOne(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	k := newKickLog()
+	k.now = func() time.Time { return now }
+	at := now.UnixMilli()
+	k.record("r", "alice", at, 0) // a gateway that predates generations, or a namespace with none
+	if !k.refuses("r", "alice", at-1000, 7) {
+		t.Error("a ticket issued before the kick was let in")
+	}
+	if k.refuses("r", "alice", at+kickSkewMargin.Milliseconds()+1, 7) {
+		t.Error("a ticket issued after the kick was refused")
+	}
+}
+
+func TestKickLog_keepsTheNewestGenerationAndExpiresWithTheWindow(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	k := newKickLog()
+	k.now = func() time.Time { return now }
+	k.record("r", "alice", 2000, 6)
+	k.record("r", "alice", 1000, 3) // a late, older kick does not lower it
+	if got := k.kicks[kickKey("r", "alice")].gen; got != 6 {
+		t.Fatalf("generation = %d, want 6", got)
+	}
+	now = now.Add(kickWindow + time.Second)
+	if k.refuses("r", "alice", 1, 5) {
+		t.Error("a kick past the window still refuses")
+	}
+}
+
+// A user admitted again right after a kick holds a ticket issued within the
+// clock margin of the kick. The generation, not the margin, lets it in.
+func TestKick_aReadmittedUserJoinsAtOnceAndTheKickedGenerationStaysOut(t *testing.T) {
+	s := newAuthServer(t)
+	kick := ctrlauth.KickRequest{Room: "r1", UserID: "alice", AtMs: time.Now().UnixMilli(), AdmitGen: 3}
+	if n := affected(t, control(t, s, ctrlauth.KickPath, kick)); n != 0 {
+		t.Fatalf("affected = %d, want 0", n)
+	}
+
+	stale := testTicket(t, s, "r1", "alice")
+	stale.AdmitGen = 3
+	_, resp, err := tryDial(t, s, "room=r1", http.Header{ctrlauth.TicketHeader: {sealTicket(t, s, stale)}})
+	if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a ticket of the kicked generation: err=%v resp=%v, want 403", err, resp)
+	}
+
+	fresh := testTicket(t, s, "r1", "alice")
+	fresh.AdmitGen = 4
+	joinAs(t, s, fresh, "")
+}
+
+// A kick that carries no generation (an old gateway during a rolling upgrade)
+// puts the entry back on the clock rule. It used to inherit the previous
+// kick's generation, so a ticket of an admission made between the two kicks
+// passed the second one: kick gen 5, re-admit gen 6, kick without a
+// generation, join with the gen-6 ticket issued before it — let in.
+func TestKickLog_aKickWithoutAGenerationAfterOneWithStillRefusesTheTicketsBeforeIt(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	k := newKickLog()
+	k.now = func() time.Time { return now }
+	first := now.UnixMilli()
+	k.record("r", "alice", first, 5)
+	readmittedTicket := first + 2000 // issued on the gen-6 re-admission
+	second := first + 5000
+	k.record("r", "alice", second, 0)
+
+	if !k.refuses("r", "alice", readmittedTicket, 6) {
+		t.Error("a ticket issued before the second kick passed it")
+	}
+	if k.refuses("r", "alice", second+kickSkewMargin.Milliseconds()+1, 7) {
+		t.Error("a ticket issued well after the second kick was refused")
 	}
 }

@@ -22,11 +22,15 @@ const (
 // ships, preceded by the tracker table the migration records itself in.
 func admissionDDL(t *testing.T) []string {
 	t.Helper()
-	ddl, err := migrations.FS.ReadFile("073_webrtc_admissions.sql")
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
+	stmts := []string{`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)`}
+	for _, name := range []string{"073_webrtc_admissions.sql", "075_webrtc_admission_generation.sql"} {
+		ddl, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read migration: %v", err)
+		}
+		stmts = append(stmts, string(ddl))
 	}
-	return []string{`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)`, string(ddl)}
+	return stmts
 }
 
 // newSQLiteStore is a store over in-memory SQLite and a clock the test moves.

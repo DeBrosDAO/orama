@@ -28,7 +28,7 @@ func (s *Server) openTicket(r *http.Request) (ctrlauth.Ticket, int, error) {
 		return t, http.StatusUnauthorized, err
 	case t.Namespace != s.config.Namespace:
 		return t, http.StatusForbidden, errors.New("join ticket is for another namespace")
-	case s.kicks.refuses(t.Room, t.UserID, t.IssuedAtMs):
+	case s.kicks.refuses(t.Room, t.UserID, t.IssuedAtMs, t.AdmitGen):
 		return t, http.StatusForbidden, errUserKicked
 	}
 	return t, 0, nil
@@ -129,7 +129,7 @@ func (s *Server) joinRoom(conn *websocket.Conn, roomID string, ticket ctrlauth.T
 	// find no peer to remove. Checked again now that the peer is in the room, a
 	// kick is either in the log here or finds the peer there: it records before
 	// it looks.
-	if s.kicks.refuses(ticket.Room, ticket.UserID, ticket.IssuedAtMs) {
+	if s.kicks.refuses(ticket.Room, ticket.UserID, ticket.IssuedAtMs, ticket.AdmitGen) {
 		s.logger.Info("Joined peer removed: the user was kicked while its join was in flight",
 			zap.String("room", ticket.Room), zap.String("user_id", ticket.UserID))
 		room.KickPeer(peer)

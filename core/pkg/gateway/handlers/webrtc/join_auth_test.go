@@ -231,6 +231,41 @@ func TestSignalHandler_notRequiredKeepsOldBehaviourButMuteHolds(t *testing.T) {
 	}
 }
 
+func TestSignalHandler_ticketCarriesTheAdmissionGenerationAndAReadmissionOutranksTheKick(t *testing.T) {
+	_, dir := threeSFUs(t)
+	var target string
+	h := gatewayFor(t, dir, &target)
+	ctx := httptest.NewRequest("GET", "/", nil).Context()
+	h.admissions.SetRequireAdmission(ctx, "ns", true)
+	h.admissions.Admit(ctx, "ns", "r1", testUser, "", time.Hour)
+
+	req, w := signalAs(h, "r1", testUser, "")
+	if w.Code != http.StatusOK || openTicketOf(t, req).AdmitGen != 1 {
+		t.Fatalf("first admission: status %d ticket %+v, want generation 1", w.Code, openTicketOf(t, req))
+	}
+	kicked, err := h.admissions.Revoke(ctx, "ns", "r1", testUser)
+	if err != nil || kicked != 1 {
+		t.Fatalf("Revoke = %d, %v, want 1", kicked, err)
+	}
+	h.admissions.Admit(ctx, "ns", "r1", testUser, "", time.Hour)
+	req, w = signalAs(h, "r1", testUser, "")
+	if w.Code != http.StatusOK || openTicketOf(t, req).AdmitGen <= kicked {
+		t.Fatalf("after re-admission: status %d ticket %+v, want a generation above %d", w.Code, openTicketOf(t, req), kicked)
+	}
+}
+
+func TestSignalHandler_aNamespaceWithoutAdmissionIssuesGenerationZero(t *testing.T) {
+	_, dir := threeSFUs(t)
+	var target string
+	h := gatewayFor(t, dir, &target)
+	ctx := httptest.NewRequest("GET", "/", nil).Context()
+	h.admissions.Admit(ctx, "ns", "r1", testUser, "", time.Hour)
+	req, w := signalAs(h, "r1", testUser, "")
+	if tk := openTicketOf(t, req); w.Code != http.StatusOK || tk.AdmitGen != 0 || tk.AdmitExp != 0 {
+		t.Fatalf("status %d ticket %+v, want no admission bound", w.Code, tk)
+	}
+}
+
 func TestSignalHandler_unreadableAdmissionRecordsAreRetryable(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string

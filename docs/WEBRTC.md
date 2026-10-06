@@ -383,7 +383,7 @@ A join that is not admitted is refused before it reaches an SFU, with a typed er
 | The admission has expired | `WEBRTC_ADMISSION_EXPIRED` | `admission_expired` |
 | A function revoked it (`webrtc_kick`) | `WEBRTC_ADMISSION_REVOKED` | `admission_revoked` |
 | The admission records cannot be read | `SERVICE_UNAVAILABLE` (503, retryable) | `admission_unavailable` |
-| The admission tables are not the ones migration 073 makes | `INTERNAL` (500, not retryable) | `admission_unavailable` |
+| The admission tables are not the ones migrations 073 and 075 make | `INTERNAL` (500, not retryable) | `admission_unavailable` |
 
 A gateway that cannot read the records refuses the join; it never admits on a guess.
 
@@ -395,10 +395,12 @@ table that does not match is refused with an error naming the table, the missing
 fix (rename or drop the tenant's table and re-apply the migration), on the join path, in `webrtc_admit`,
 `webrtc_kick`, `webrtc_mute` and the settings route alike. Nothing reads or writes a table that is not the
 admission table. A table that does not exist at all (the migration has not reached the database yet) is the
-retryable `admission_unavailable`.
+retryable `admission_unavailable`. The platform's own `webrtc_admissions` that lacks only `generation` is
+reported as migration 075 not applied yet, not as a foreign table: the namespace gateway applies 075 when it
+starts, and the next join checks again.
 
 Where it lives: the policy (`webrtc_settings`) and the admissions (`webrtc_admissions`) are tables of the
-**namespace's own database** (migration 073), checked by whichever namespace gateway takes the join. They
+**namespace's own database** (migrations 073 and 075), checked by whichever namespace gateway takes the join. They
 are the tenant's own policy and grants, so no cluster-wide write sits on the join path; no SFU holds any of
 it, so it survives an SFU restart and is the same whichever node owns the room. A namespace that never turns
 the policy on keeps today's behaviour; the identity rule above applies either way.
@@ -459,10 +461,17 @@ Two host functions act on a participant ([SERVERLESS.md](SERVERLESS.md#host-func
   (`WEBRTC_ADMISSION_REVOKED`) until a function admits them again. A join whose ticket was issued before the
   kick but arrives after it is refused too, including one whose join frame the client had not yet sent when
   the kick landed (the SFU checks the kick log again once the peer is in the room, and removes it if it is
-  refused). The SFU remembers a kick for a ticket's life plus a 10 second margin and judges it with **its
-  own clock**: any ticket for that user and room that reaches this SFU inside that window is refused, unless
-  its issue time is more than the margin later than the kick's (only a ticket issued after the revocation can
-  be). So a user re-admitted within about 10 seconds of a kick may be refused once and rejoins. Without
+  refused). Every admission takes the next **generation** of its user in its room (1 for the first, one more on every admit, across devices: it only
+  grows), the join ticket carries the generation of the admission it was issued on, and the kick carries the
+  newest generation it revoked. The SFU refuses a ticket whose generation is **not newer than the kick's**, and
+  no clock is involved: a user re-admitted right after a kick holds a ticket of a newer generation and joins at
+  once, and a ticket of the revoked admission stays out whatever its gateway's clock says. The SFU remembers a
+  kick for a ticket's life plus a 10 second margin. Where either side has no generation (a namespace that does
+  not require admission, an admission made before generations existed, a kick or ticket from a gateway that has
+  not been upgraded) it falls back to the clocks: any ticket for that user and room that reaches this SFU inside
+  that window is refused, unless its issue time is more than the margin later than the kick's, so there a user
+  re-admitted within about 10 seconds of a kick may be refused once and rejoins. An ended admission is kept
+  for a minute so the count survives it. Without
   `require_admission` there is no admission to revoke: the kick closes the live connection and the user may
   rejoin.
 - `webrtc_mute(room, user, muted)` makes the SFU stop forwarding `user`'s **audio** (every audio track they
@@ -479,7 +488,9 @@ join whose ticket was issued at or before that change (plus the margin) takes th
 the ticket's: a user holding an unmuted ticket minted before the mute is muted when they reconnect, a join in
 flight when the mute lands ends muted (the SFU applies the log once the peer is in the room), and a user
 unmuted after a muted ticket was minted is unmuted. A ticket issued after the change is authoritative. A late
-request older than the one on record is ignored. The peer is told with the same forced `participant-state`
+request older than the one on record is ignored. Unlike a kick this is judged by the gateways' clocks alone,
+with no generation: a mute is a state, not a revocation, and a re-admission keeps it, so a ticket issued just
+after a mute and corrected to the logged state still ends in the state the namespace last set. The peer is told with the same forced `participant-state`
 frame, after its `welcome`.
 
 Both are sent to **every SFU of the namespace**, not only the room's owner: placement is decided by health
@@ -492,7 +503,7 @@ served for the length of their validity and refuses a second use, `401`). The ta
 signalling address (`host:port`, the SFU's `listen_addr`) for a control request and the gateway's event address
 (the one its tickets carry) for a membership event; each receiver verifies against its own, so a stamp made for
 another is refused. The MAC changed in this release (`orama-sfu-control-v2`): an SFU and a gateway on
-different releases refuse each other's kicks, mutes and events, so upgrade the namespace's nodes together. The database change comes first: if
+different releases refuse each other's kicks, mutes and events, so upgrade the namespace's nodes together. The generation (migration 075, a column the namespace's gateways add on start) crosses releases safely: an older SFU ignores the extra field of a ticket or kick and judges by the clocks, and an upgraded SFU takes a ticket or kick without one the same way. The database change comes first: if
 any SFU cannot be reached or refuses, the host function fails, names each such SFU, and says the revocation
 (or mute) is recorded but not every connection was closed; the SFUs that could be reached did act, and
 repeating it is safe. Both act on the gateway's own namespace and on no other: a call naming another

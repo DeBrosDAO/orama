@@ -62,7 +62,7 @@ func (h *WebRTCHandlers) authorizeJoin(ctx context.Context, r *http.Request, ns,
 	// stamps its time after it commits the revocation, so a ticket stamped
 	// later than the read could carry a time after a kick it did not see.
 	now := h.now()
-	muted, admitExp, ref := h.checkAdmission(ctx, ns, room, who)
+	muted, admitExp, admitGen, ref := h.checkAdmission(ctx, ns, room, who)
 	if ref != nil {
 		return "", ref
 	}
@@ -70,7 +70,7 @@ func (h *WebRTCHandlers) authorizeJoin(ctx context.Context, r *http.Request, ns,
 	ticket, err := ctrlauth.Ticket{
 		Namespace: ns, Room: room, UserID: who.UserID, DeviceID: who.DeviceID, Muted: muted,
 		EventSink: h.eventSink, IssuedAtMs: now.UnixMilli(), Expires: now.Add(ctrlauth.TicketTTL).Unix(),
-		AdmitExp: admitExp,
+		AdmitExp: admitExp, AdmitGen: admitGen,
 	}.Seal(h.controlKey)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "Failed to sign a WebRTC join ticket", zap.String("namespace", ns), zap.Error(err))
@@ -82,28 +82,29 @@ func (h *WebRTCHandlers) authorizeJoin(ctx context.Context, r *http.Request, ns,
 // checkAdmission applies the namespace's policy. muted is whether the namespace
 // has muted the caller in this room, which the SFU enforces from the start.
 // admitExp is the unix second the admission ends when the namespace requires
-// one (0 otherwise): the SFU ends the session then.
-func (h *WebRTCHandlers) checkAdmission(ctx context.Context, ns, room string, who caller) (muted bool, admitExp int64, ref *joinRefusal) {
+// one (0 otherwise): the SFU ends the session then. admitGen is the generation
+// of that admission, which the SFU weighs against a kick's.
+func (h *WebRTCHandlers) checkAdmission(ctx context.Context, ns, room string, who caller) (muted bool, admitExp, admitGen int64, ref *joinRefusal) {
 	require, err := h.admissions.RequireAdmission(ctx, ns)
 	if err != nil {
-		return false, 0, h.storeFailure(ns, err)
+		return false, 0, 0, h.storeFailure(ns, err)
 	}
 	adm, err := h.admissions.Lookup(ctx, ns, room, who.UserID, who.DeviceID)
 	if err != nil {
-		return false, 0, h.storeFailure(ns, err)
+		return false, 0, 0, h.storeFailure(ns, err)
 	}
 	if !require {
-		return adm.Muted, 0, nil
+		return adm.Muted, 0, 0, nil
 	}
 	switch {
 	case adm.Valid:
-		return adm.Muted, adm.ValidUntil, nil
+		return adm.Muted, adm.ValidUntil, adm.Generation, nil
 	case adm.Revoked:
-		return false, 0, refusedAdmission(codeAdmissionRevoked, "admission_revoked", "the namespace revoked your admission to this room")
+		return false, 0, 0, refusedAdmission(codeAdmissionRevoked, "admission_revoked", "the namespace revoked your admission to this room")
 	case adm.Expired:
-		return false, 0, refusedAdmission(codeAdmissionExpired, "admission_expired", "your admission to this room has expired; ask the application for a new one")
+		return false, 0, 0, refusedAdmission(codeAdmissionExpired, "admission_expired", "your admission to this room has expired; ask the application for a new one")
 	}
-	return false, 0, refusedAdmission(codeAdmissionRequired, "admission_required",
+	return false, 0, 0, refusedAdmission(codeAdmissionRequired, "admission_required",
 		fmt.Sprintf("room %q admits only users the application admitted to it", room))
 }
 

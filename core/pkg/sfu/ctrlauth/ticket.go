@@ -94,6 +94,13 @@ type Ticket struct {
 	// bounded by one). The SFU closes the peer then, so an admission's TTL holds
 	// for a live session and not only at the next join.
 	AdmitExp int64 `json:"aexp,omitempty"`
+	// AdmitGen is the generation of the admission this ticket was issued on, set
+	// only when the namespace requires admission (0: none, or the admission
+	// predates generations). A kick carries the generation it revoked, and the
+	// SFU refuses a ticket whose generation is not newer than it: a number
+	// compared with a number, so a user admitted again right after a kick is not
+	// taken for the kicked one by two gateways' clocks.
+	AdmitGen int64 `json:"agen,omitempty"`
 	// Expires is the unix second the ticket stops being valid.
 	Expires int64 `json:"exp"`
 }

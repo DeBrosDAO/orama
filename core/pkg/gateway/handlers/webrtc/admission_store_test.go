@@ -95,7 +95,7 @@ func TestAdmissionStore_expiryRevocationAndReadmission(t *testing.T) {
 	}
 
 	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
-	if err := s.Revoke(ctx, "ns", "r1", "alice"); err != nil {
+	if _, err := s.Revoke(ctx, "ns", "r1", "alice"); err != nil {
 		t.Fatal(err)
 	}
 	if a, _ := s.Lookup(ctx, "ns", "r1", "alice", ""); a.Valid || !a.Revoked {
@@ -110,7 +110,7 @@ func TestAdmissionStore_expiryRevocationAndReadmission(t *testing.T) {
 
 func TestAdmissionStore_revokeOfAnUnadmittedUserIsNotAnError(t *testing.T) {
 	s, _, _ := newSQLiteStore(t)
-	if err := s.Revoke(context.Background(), "ns", "r1", "nobody"); err != nil {
+	if gen, err := s.Revoke(context.Background(), "ns", "r1", "nobody"); err != nil || gen != 0 {
 		t.Fatalf("revoke with nothing on record: %v", err)
 	}
 }
@@ -254,5 +254,69 @@ func TestAdmissionStore_purgeLeavesLiveAndOtherNamespacesAlone(t *testing.T) {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM webrtc_admissions WHERE user_id IN ('alice','live')`).Scan(&n); err != nil || n != 2 {
 		t.Fatalf("rows = %d err=%v, want the live muted one and the other namespace's", n, err)
+	}
+}
+
+func TestAdmissionStore_generationCountsEveryAdmitOfAUserInARoom(t *testing.T) {
+	s, _, _ := newSQLiteStore(t)
+	ctx := context.Background()
+	gen := func(room, user, device string) int64 {
+		a, err := s.Lookup(ctx, "ns", room, user, device)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Generation
+	}
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	if g := gen("r1", "alice", ""); g != 1 {
+		t.Fatalf("first admission generation = %d, want 1", g)
+	}
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	if g := gen("r1", "alice", ""); g != 2 {
+		t.Fatalf("re-admission generation = %d, want 2", g)
+	}
+	// Another device is another row but the same count: a kick revokes both, so
+	// a later admission must outrank both.
+	s.Admit(ctx, "ns", "r1", "alice", "phone", time.Hour)
+	if g := gen("r1", "alice", "phone"); g != 3 {
+		t.Fatalf("second device generation = %d, want 3", g)
+	}
+	s.Admit(ctx, "ns", "r2", "alice", "", time.Hour)
+	s.Admit(ctx, "ns", "r1", "bob", "", time.Hour)
+	if g := gen("r2", "alice", ""); g != 1 || gen("r1", "bob", "") != 1 {
+		t.Errorf("another room or user shares the count: r2/alice=%d", g)
+	}
+}
+
+func TestAdmissionStore_revokeReturnsTheRevokedGenerationAndReadmissionOutranksIt(t *testing.T) {
+	s, _, _ := newSQLiteStore(t)
+	ctx := context.Background()
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	s.Admit(ctx, "ns", "r1", "alice", "phone", time.Hour) // generation 3
+
+	revoked, err := s.Revoke(ctx, "ns", "r1", "alice")
+	if err != nil || revoked != 3 {
+		t.Fatalf("Revoke = %d, %v, want 3", revoked, err)
+	}
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	a, _ := s.Lookup(ctx, "ns", "r1", "alice", "")
+	if !a.Valid || a.Generation <= revoked {
+		t.Fatalf("after re-admission: %+v, want valid with a generation above %d", a, revoked)
+	}
+}
+
+func TestAdmissionStore_aRevokedAdmissionKeepsItsGenerationThroughThePurge(t *testing.T) {
+	s, _, now := newSQLiteStore(t)
+	ctx := context.Background()
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Second)
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Second) // generation 2
+	*now = now.Add(5 * time.Second)
+	revoked, _ := s.Revoke(ctx, "ns", "r1", "alice") // expired, then kicked
+	*now = now.Add(generationRetention - time.Second)
+	s.Admit(ctx, "ns", "other", "bob", "", time.Hour) // purges what it may
+	s.Admit(ctx, "ns", "r1", "alice", "", time.Hour)
+	if a, _ := s.Lookup(ctx, "ns", "r1", "alice", ""); a.Generation <= revoked {
+		t.Fatalf("generation %d after a purge, want above the kicked %d", a.Generation, revoked)
 	}
 }

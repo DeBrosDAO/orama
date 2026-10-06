@@ -59,10 +59,11 @@ func (h *WebRTCHandlers) Kick(ctx context.Context, ns, room, user string) error 
 	if err := h.checkControl(ns, room, user); err != nil {
 		return err
 	}
-	if err := h.admissions.Revoke(ctx, ns, room, user); err != nil {
+	gen, err := h.admissions.Revoke(ctx, ns, room, user)
+	if err != nil {
 		return err
 	}
-	req := ctrlauth.KickRequest{Room: room, UserID: user, AtMs: h.now().UnixMilli()}
+	req := ctrlauth.KickRequest{Room: room, UserID: user, AtMs: h.now().UnixMilli(), AdmitGen: gen}
 	if err := h.callAll(ctx, ns, ctrlauth.KickPath, req); err != nil {
 		return fmt.Errorf("admissions of %q to room %q are revoked, but their connection could not be closed: %w", user, room, err)
 	}

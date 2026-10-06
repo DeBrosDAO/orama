@@ -264,3 +264,19 @@ func TestEventsHandler_aReplayedReportIsRefused(t *testing.T) {
 		t.Fatalf("published %d times, want once", len(rec.got))
 	}
 }
+
+// The platform's own table as migration 073 made it, before 075 added the
+// generation: the refusal says the migration has not run yet. It used to tell
+// the operator to rename or drop the platform's own table.
+func TestAdmissionStore_aTableBefore075IsReportedAsUnmigrated(t *testing.T) {
+	client, _ := rqlitetest.SQLite(t,
+		`CREATE TABLE webrtc_settings (namespace TEXT NOT NULL PRIMARY KEY, require_admission INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL)`,
+		`CREATE TABLE webrtc_admissions (namespace TEXT NOT NULL, room TEXT NOT NULL, user_id TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT '',
+			expires_at INTEGER NOT NULL, revoked_at INTEGER, muted INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+			PRIMARY KEY (namespace, room, user_id, device_id))`)
+	s := NewAdmissionStore(client)
+	_, err := s.Lookup(context.Background(), "ns", "r1", "alice", "")
+	if err == nil || !strings.Contains(err.Error(), "migration 075 has not been applied") || strings.Contains(err.Error(), "drop it") {
+		t.Fatalf("Lookup err = %v, want one saying 075 is not applied yet, not to drop the table", err)
+	}
+}

@@ -37,10 +37,14 @@ type MembershipEvent struct {
 
 // KickRequest asks an SFU to remove a user from a room. AtMs is the gateway's
 // clock when the admission was revoked: joins ticketed before it are refused.
+// AdmitGen is the newest admission generation the kick revoked (0: none, or an
+// older gateway): where it and a ticket's AdmitGen both exist, the two numbers
+// decide and no clock does.
 type KickRequest struct {
-	Room   string `json:"room"`
-	UserID string `json:"user_id"`
-	AtMs   int64  `json:"at_ms"`
+	Room     string `json:"room"`
+	UserID   string `json:"user_id"`
+	AtMs     int64  `json:"at_ms"`
+	AdmitGen int64  `json:"admit_gen,omitempty"`
 }
 
 // MuteRequest asks an SFU to stop (or resume) forwarding a user's audio in a

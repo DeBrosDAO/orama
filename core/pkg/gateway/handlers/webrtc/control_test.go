@@ -153,6 +153,26 @@ func TestKick_revokesTheAdmissionAndClosesThePeerOnTheOwnerSFU(t *testing.T) {
 	}
 }
 
+func TestKick_carriesTheRevokedGenerationAndAReadmissionOutranksIt(t *testing.T) {
+	sfu := newControlSFU(t, "a")
+	h := controllerFor(t, sfu)
+	h.Admit(bg, "ns", "r1", "alice", "", time.Hour)
+	h.Admit(bg, "ns", "r1", "alice", "", time.Hour) // generation 2
+
+	if err := h.Kick(bg, "ns", "r1", "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if len(sfu.kicks) != 1 || sfu.kicks[0].AdmitGen != 2 {
+		t.Fatalf("SFU kicks = %+v, want one carrying admit_gen 2", sfu.kicks)
+	}
+	if err := h.Kick(bg, "ns", "r1", "nobody"); err != nil {
+		t.Fatal(err)
+	}
+	if sfu.kicks[1].AdmitGen != 0 {
+		t.Errorf("a kick of a user with no admission carried generation %d, want 0", sfu.kicks[1].AdmitGen)
+	}
+}
+
 func TestKick_aRevokedUserIsRefusedAtTheNextJoin(t *testing.T) {
 	sfu := newControlSFU(t, "a")
 	h := controllerFor(t, sfu)

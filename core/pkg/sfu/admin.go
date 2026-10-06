@@ -62,7 +62,7 @@ func (s *Server) handleKick(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `kick needs {"room","user_id","at_ms"}`, http.StatusBadRequest)
 		return
 	}
-	s.kicks.record(req.Room, req.UserID, req.AtMs)
+	s.kicks.record(req.Room, req.UserID, req.AtMs, req.AdmitGen)
 	affected := 0
 	if room := s.roomManager.GetRoom(req.Room); room != nil {
 		affected = room.KickUser(req.UserID)

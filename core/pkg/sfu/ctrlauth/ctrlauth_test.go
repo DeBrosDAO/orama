@@ -227,3 +227,28 @@ func TestReplayGuard_isBounded(t *testing.T) {
 		t.Fatalf("the guard holds %d stamps, want its capacity of 4", len(g.seen))
 	}
 }
+
+func TestTicket_admissionGenerationRoundTripsAndAnOldTicketReadsAsZero(t *testing.T) {
+	key, err := Key("test-secret-key-32bytes-long!!!!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	base := Ticket{Namespace: "ns", Room: "r", UserID: "u", IssuedAtMs: now.UnixMilli(), Expires: now.Add(TicketTTL).Unix()}
+
+	withGen := base
+	withGen.AdmitGen = 7
+	token, err := withGen.Seal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := OpenTicket(key, token, now); err != nil || got.AdmitGen != 7 {
+		t.Fatalf("OpenTicket = %+v, %v, want generation 7", got, err)
+	}
+
+	// A ticket from a gateway that predates generations has no such field.
+	token, _ = base.Seal(key)
+	if got, err := OpenTicket(key, token, now); err != nil || got.AdmitGen != 0 {
+		t.Fatalf("OpenTicket = %+v, %v, want generation 0", got, err)
+	}
+}
