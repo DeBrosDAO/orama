@@ -170,6 +170,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama namespace rqlite`](#orama-namespace-rqlite) — Manage the namespace's internal RQLite database
     - [`orama namespace rqlite export`](#orama-namespace-rqlite-export) — Export the namespace's RQLite database to a local SQLite file
     - [`orama namespace rqlite import`](#orama-namespace-rqlite-import) — Import a SQLite dump into the namespace's RQLite (DESTRUCTIVE)
+  - [`orama namespace session-policy`](#orama-namespace-session-policy) — Show or set who may sign in to a namespace and what its sessions bind
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) — Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) — Node operator commands
   - [`orama node autoupdate`](#orama-node-autoupdate) — Decide whether a newer release should be installed
@@ -426,7 +427,7 @@ grants given and taken away, deployments, functions, secrets and namespace chang
 Events are shown oldest first. --follow keeps the command running and prints new
 ones as they are recorded.
 
-Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, namespace.operator_remove, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, namespace.backup, namespace.restore, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, node.register, node.key.enrol
+Actions: auth.challenge, auth.verify, auth.refresh, auth.refresh.replay, auth.logout, key.issue, key.revoke, key.rotate, key.revoke_all, namespace.create, namespace.delete, namespace.operator_remove, secret.set, secret.delete, function.deploy, function.delete, deployment.deploy, deployment.delete, operator.action, auth.legacy_credential, grant.add, grant.revoke, namespace.transfer, namespace.backup, namespace.restore, auth.device.start, auth.device.approve, auth.device.deny, auth.device.claim, auth.device.revoke, namespace.session_policy, namespace.sign_in_policy, node.register, node.key.enrol
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -2405,7 +2406,7 @@ Aliases: `ns`
 
 List, delete, and repair namespaces on the Orama network.
 
-Subcommands: `backup-open`, `backup-seal`, `backup`, `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `restore-key`, `restore`, `rqlite`, `webrtc-status`
+Subcommands: `backup-open`, `backup-seal`, `backup`, `create`, `delete`, `disable`, `enable`, `keys`, `list`, `repair`, `restore-key`, `restore`, `rqlite`, `session-policy`, `webrtc-status`
 
 ### orama namespace backup
 
@@ -2742,6 +2743,38 @@ import runs at a time on a gateway.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-i`, `--input` | — | Input SQLite file path |
+
+### orama namespace session-policy
+
+Show or set who may sign in to a namespace and what its sessions bind
+
+```
+orama namespace session-policy [flags]
+```
+
+With no flags, show the namespace's session policy. With flags, set them; a flag
+left out keeps its value.
+
+  --sign-in members   only wallets holding a grant sign in (the default)
+  --sign-in open      a wallet holding none may sign in too, as an end user of
+                      the application. It gets a session and no API key, is
+                      never granted anything, and reaches only what a grantless
+                      wallet reaches. Closing it again ends those sessions at
+                      their next refresh. A namespace nobody owns stays closed.
+
+  --device-policy     optional | required | approval: what an end user's
+                      sign-in must bind. Requiring devices revokes the sign-in
+                      keys end users already hold.
+
+Changing either needs write access to the namespace.
+
+  orama namespace session-policy --namespace myapp --sign-in open
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--device-policy` | — | What an end user's sign-in must bind: optional \| required \| approval |
+| `--namespace` | — | Namespace name |
+| `--sign-in` | — | Who may sign in: members \| open |
 
 ### orama namespace webrtc-status
 

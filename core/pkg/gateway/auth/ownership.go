@@ -49,9 +49,11 @@ func IsLobbyNamespace(namespace string) bool {
 var ErrNoKeysInLobby = errors.New("the lobby namespace has no keys")
 
 // ErrNoKeyForRole is returned for a key asked for by a member whose role holds
-// no grant (a reader). There is nothing to put in the key; the member's
+// no grant (a reader), or by a wallet that is no member at all: an end user of
+// a namespace with open sign-in. There is nothing to put in the key; the
 // session is its whole credential and reaches only the routes that ask for no
-// permission.
+// permission, and what a grantless end user has beyond those is
+// NoGrantPermissions.
 var ErrNoKeyForRole = errors.New("this role holds no grant, so there is no key to mint")
 
 // ErrNamespaceUnowned is returned for a namespace nobody holds. Signing in used
@@ -59,21 +61,36 @@ var ErrNoKeyForRole = errors.New("this role holds no grant, so there is no key t
 // and creating a namespace is what makes it yours.
 var ErrNamespaceUnowned = errors.New("this namespace has no owner, so nobody may sign in to it")
 
-// RequireNamespaceMember refuses unless the wallet holds a live grant in the
-// namespace.
+// RequireSignInAllowed is the gate every sign-in passes: it refuses a wallet
+// that may not hold a session in the namespace.
+//
+// A login handler calls it as soon as the signature and the nonce are settled,
+// before it issues a JWT, mints a key or triggers provisioning. Doing it there
+// rather than only inside GetOrCreateAPIKey means a refused wallet causes no
+// writes at all: no refresh token row, no cluster provisioning for someone
+// else's namespace.
+//
+// A wallet holding a live grant is let in. A wallet holding none is let in only
+// to a namespace that has an owner and has opened sign-in (SignInOpen): it is
+// then an end user of the application, grantless. Letting it in writes nothing
+// - no grant, no principal, no claim on the namespace - and what it can do is
+// what NoGrantPermissions says. Every other grantless wallet is refused: the
+// namespace belongs to another wallet (ErrNamespaceOwnedByAnother), or to
+// nobody (ErrNamespaceUnowned), which stays refused whatever it says about
+// sign-in, since a namespace with no owner has nobody who could have opened it.
 //
 // It used to claim: the first wallet to sign in to a namespace with no owner
 // became its owner. That is how `default` ended up belonging to whichever
 // wallet happened to sign in first on each cluster, and every wallet after it
 // got a 403 on the namespace the docs called "where a wallet signs in before it
-// owns anything" — true for exactly one wallet per cluster.
+// owns anything" - true for exactly one wallet per cluster.
 //
 // The lobby needs no grant and is given none. What a wallet gets there is a
 // session and nothing else: no key, no role, and the one thing it reaches is
 // POST /v1/namespaces, which creates a namespace and makes the caller its
 // owner. That is now the only path that writes an owner grant, which is the
 // invariant the epic asks for.
-func (s *Service) RequireNamespaceMember(ctx context.Context, wallet, namespace string) error {
+func (s *Service) RequireSignInAllowed(ctx context.Context, wallet, namespace string) error {
 	if s.keyORM() == nil {
 		return fmt.Errorf("client not initialized")
 	}
@@ -106,6 +123,15 @@ func (s *Service) RequireNamespaceMember(ctx context.Context, wallet, namespace 
 	if owner == "" {
 		return fmt.Errorf("%w: %q", ErrNamespaceUnowned, namespace)
 	}
+	// Read now, not from the refresh cache: this is the path that issues a
+	// session, and one issued in the stale window would outlive the closing.
+	policy, err := s.SignInPolicyOf(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("failed to read the sign-in policy of namespace %q: %w", namespace, err)
+	}
+	if policy == SignInOpen {
+		return nil
+	}
 	return &ErrNamespaceOwnedByAnother{Namespace: namespace}
 }
 
@@ -136,17 +162,6 @@ func (s *Service) OwnerOf(ctx context.Context, namespace string) (string, error)
 		return "", fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
 	}
 	return s.ownerOf(ctx, s.keyORM().Database(), nsID)
-}
-
-// RequireNamespaceOwner is the name the login handlers call this by.
-//
-// A login handler calls it as soon as the signature and the nonce are settled,
-// before it issues a JWT, mints a key or triggers provisioning. Doing it there
-// rather than only inside GetOrCreateAPIKey means a wallet with no grant causes
-// no writes at all: no refresh token row, no cluster provisioning for someone
-// else's namespace.
-func (s *Service) RequireNamespaceOwner(ctx context.Context, wallet, namespace string) error {
-	return s.RequireNamespaceMember(ctx, wallet, namespace)
 }
 
 // TransferOwnership moves the owner grant from one wallet to another.

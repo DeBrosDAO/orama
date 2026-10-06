@@ -101,6 +101,10 @@ func TestPlatformState_landsInTheRegistryAndNotTheTenantsDatabase(t *testing.T) 
 	ctx := context.Background()
 
 	t.Run("a session", func(t *testing.T) {
+		if err := svc.Grant(ctx, GrantRequest{Namespace: "acme", PrincipalType: PrincipalWallet,
+			Identifier: "0xowner", Role: RoleRuntime, CreatedBy: "0xowner"}); err != nil {
+			t.Fatalf("grant: %v", err)
+		}
 		if _, _, _, err := svc.IssueTokens(ctx, "0xowner", "acme"); err != nil {
 			t.Fatalf("IssueTokens: %v", err)
 		}
@@ -146,8 +150,10 @@ func TestPlatformState_landsInTheRegistryAndNotTheTenantsDatabase(t *testing.T) 
 	})
 
 	t.Run("an audit event", func(t *testing.T) {
+		// The session subtest granted its wallet, which is itself an audit event.
+		before := rowsIn(t, registry, "audit_events")
 		svc.Audit().Record(ctx, AuditEvent{Namespace: "acme", Actor: "0xowner", Action: AuditKeyIssued, Result: AuditSuccess})
-		if rowsIn(t, registry, "audit_events") != 1 {
+		if rowsIn(t, registry, "audit_events") != before+1 {
 			t.Error("the event was not recorded in the registry, so `orama audit` will not show it")
 		}
 		if rowsIn(t, tenant, "audit_events") != 0 {

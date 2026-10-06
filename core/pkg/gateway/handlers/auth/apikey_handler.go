@@ -45,7 +45,7 @@ func (h *Handlers) IssueAPIKeyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse before anything is issued or provisioned: a namespace that belongs
 	// to another wallet is not this caller's to sign in to.
-	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
+	if err := h.authService.RequireSignInAllowed(ctx, wallet, namespace); err != nil {
 		writeCredentialError(w, namespace, err)
 		return
 	}

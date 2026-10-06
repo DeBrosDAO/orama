@@ -39,6 +39,9 @@ const (
 	// ErrCodePolicySweepIncomplete: the session policy is set, but revoking
 	// the end users' existing sign-in keys stopped partway. Repeat the request.
 	ErrCodePolicySweepIncomplete = "POLICY_SWEEP_INCOMPLETE"
+	// ErrCodeSignInClosed: a session of a wallet holding no grant was refused
+	// its refresh because the namespace closed sign-in again.
+	ErrCodeSignInClosed = "SIGN_IN_CLOSED"
 )
 
 type deviceRefusal struct {
@@ -68,6 +71,8 @@ var deviceRefusals = []struct {
 		"approve this device from one of the account's signed-in devices"}},
 	{authsvc.ErrDeviceNotFound, deviceRefusal{http.StatusNotFound, ErrCodeDeviceNotFound,
 		"list this account's devices with GET /v1/auth/devices"}},
+	{authsvc.ErrSignInClosed, deviceRefusal{http.StatusForbidden, ErrCodeSignInClosed,
+		"this wallet holds no grant here (never invited, or its grant was revoked, expired or disabled) and the namespace is not open to other wallets; sign in again once it is, or ask its owner for an invitation"}},
 	{authsvc.ErrDeviceBelongsToAnother, deviceRefusal{http.StatusForbidden, ErrCodeDeviceKeyTaken,
 		"a device key belongs to one account; generate a new key for this one"}},
 }

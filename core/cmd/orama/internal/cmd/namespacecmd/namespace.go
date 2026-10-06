@@ -116,6 +116,35 @@ var keysRevokeCmd = &cobra.Command{
 	},
 }
 
+var sessionPolicyCmd = &cobra.Command{
+	Use:   "session-policy",
+	Short: "Show or set who may sign in to a namespace and what its sessions bind",
+	Long: `With no flags, show the namespace's session policy. With flags, set them; a flag
+left out keeps its value.
+
+  --sign-in members   only wallets holding a grant sign in (the default)
+  --sign-in open      a wallet holding none may sign in too, as an end user of
+                      the application. It gets a session and no API key, is
+                      never granted anything, and reaches only what a grantless
+                      wallet reaches. Closing it again ends those sessions at
+                      their next refresh. A namespace nobody owns stays closed.
+
+  --device-policy     optional | required | approval: what an end user's
+                      sign-in must bind. Requiring devices revokes the sign-in
+                      keys end users already hold.
+
+Changing either needs write access to the namespace.
+
+  orama namespace session-policy --namespace myapp --sign-in open`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ns, _ := cmd.Flags().GetString("namespace")
+		signIn, _ := cmd.Flags().GetString("sign-in")
+		device, _ := cmd.Flags().GetString("device-policy")
+		return cli.NamespaceSessionPolicy(printer.For(cmd), ns, signIn, device)
+	},
+}
+
 var createCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a namespace and start its cluster",
@@ -167,6 +196,9 @@ func init() {
 	enableCmd.Flags().String("namespace", "", "Namespace name")
 	disableCmd.Flags().String("namespace", "", "Namespace name")
 	webrtcStatusCmd.Flags().String("namespace", "", "Namespace name")
+	sessionPolicyCmd.Flags().String("namespace", "", "Namespace name")
+	sessionPolicyCmd.Flags().String("sign-in", "", "Who may sign in: members | open")
+	sessionPolicyCmd.Flags().String("device-policy", "", "What an end user's sign-in must bind: optional | required | approval")
 
 	// The grant list comes from the gateway rather than a hand-written string,
 	// which is how the help came to advertise grants the validator refused.
@@ -201,6 +233,7 @@ func init() {
 	Cmd.AddCommand(enableCmd)
 	Cmd.AddCommand(disableCmd)
 	Cmd.AddCommand(webrtcStatusCmd)
+	Cmd.AddCommand(sessionPolicyCmd)
 	Cmd.AddCommand(keysCmd)
 	Cmd.AddCommand(backupSealCmd)
 	Cmd.AddCommand(backupOpenCmd)

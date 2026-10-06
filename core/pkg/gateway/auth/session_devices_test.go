@@ -103,6 +103,7 @@ func TestEnrolDevice_aKeyBelongsToOneAccount(t *testing.T) {
 func TestRefreshToken_needsTheDeviceAndRevocationEndsIt(t *testing.T) {
 	s, _, _ := realRegistry(t)
 	ctx := context.Background()
+	grantEndUser(t, s)
 	d := ed25519Device(t)
 	mustEnrol(t, s, deviceOwner, d, DeviceStateActive)
 
@@ -158,6 +159,7 @@ func TestRefreshToken_needsTheDeviceAndRevocationEndsIt(t *testing.T) {
 func TestRevokeDevice_leavesTheAccountsOtherDevices(t *testing.T) {
 	s, _, _ := realRegistry(t)
 	ctx := context.Background()
+	grantEndUser(t, s)
 	lost, kept := p256Device(t), p256Device(t)
 	mustEnrol(t, s, deviceOwner, lost, DeviceStateActive)
 	mustEnrol(t, s, deviceOwner, kept, DeviceStateActive)
@@ -191,6 +193,7 @@ func TestRevokeDevice_leavesTheAccountsOtherDevices(t *testing.T) {
 
 func TestEndSession_refusesItsAccessTokensAtOnce(t *testing.T) {
 	s, db, nsID := realRegistry(t)
+	grantEndUser(t, s)
 	ctx := context.Background()
 	access, _, _, err := s.IssueTokens(ctx, deviceOwner, "anchat")
 	if err != nil {
@@ -262,6 +265,7 @@ func TestDevicePolicyFor_readsThePolicyThatIsRecordedNow(t *testing.T) {
 // refresh; it does not leave it refreshing for ever beside the requirement.
 func TestRefreshToken_anAccountSessionEndsWhenThePolicyRequiresDevices(t *testing.T) {
 	s, _, _ := realRegistry(t)
+	grantEndUser(t, s)
 	ctx := context.Background()
 	_, refresh, _, err := s.IssueTokens(ctx, deviceOwner, "anchat")
 	if err != nil {
@@ -344,5 +348,16 @@ func TestEnrolDevice_aRevokedDeviceIsStillRefusedOnApproval(t *testing.T) {
 	key, _ := ParseDeviceKey([]byte(d.jwk))
 	if _, err := s.EnrolDevice(context.Background(), "anchat", deviceOwner, key, "phone", DeviceStateActive, ""); !errors.Is(err, ErrDeviceRevoked) {
 		t.Fatalf("err = %v, want ErrDeviceRevoked", err)
+	}
+}
+
+// grantEndUser makes deviceOwner a runtime member of anchat: a refresh of a
+// wallet holding no grant ends when the namespace is not open to such wallets,
+// and these tests are about the device, not about that.
+func grantEndUser(t *testing.T, s *Service) {
+	t.Helper()
+	if err := s.Grant(context.Background(), GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet,
+		Identifier: deviceOwner, Role: RoleRuntime, CreatedBy: "0xowner"}); err != nil {
+		t.Fatalf("grant runtime: %v", err)
 	}
 }

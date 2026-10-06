@@ -258,12 +258,12 @@ func TestOwnerGrant_isSingleAgainstTheRealSchema(t *testing.T) {
 
 	giveOwner(t, s, db, nsID, "0xCreator")
 
-	if err := s.RequireNamespaceMember(ctx, "0xcreator", "anchat"); err != nil {
+	if err := s.RequireSignInAllowed(ctx, "0xcreator", "anchat"); err != nil {
 		t.Errorf("the owner was refused on their own namespace: %v", err)
 	}
 
 	var owned *ErrNamespaceOwnedByAnother
-	if err := s.RequireNamespaceMember(ctx, "0xsquatter", "anchat"); !errors.As(err, &owned) {
+	if err := s.RequireSignInAllowed(ctx, "0xsquatter", "anchat"); !errors.As(err, &owned) {
 		t.Fatalf("a second wallet was let in: %v", err)
 	}
 
@@ -278,11 +278,11 @@ func TestOwnerGrant_isSingleAgainstTheRealSchema(t *testing.T) {
 
 // Signing in used to claim an unowned namespace, which is how `default` ended
 // up belonging to whichever wallet reached it first on each cluster.
-func TestRequireNamespaceMember_doesNotClaimAnUnownedNamespace(t *testing.T) {
+func TestRequireSignInAllowed_doesNotClaimAnUnownedNamespace(t *testing.T) {
 	s, db, nsID := realRegistry(t)
 	ctx := context.Background()
 
-	err := s.RequireNamespaceMember(ctx, "0xpasserby", "anchat")
+	err := s.RequireSignInAllowed(ctx, "0xpasserby", "anchat")
 	if !errors.Is(err, ErrNamespaceUnowned) {
 		t.Fatalf("an unowned namespace answered %v, want ErrNamespaceUnowned", err)
 	}
@@ -295,7 +295,7 @@ func TestRequireNamespaceMember_doesNotClaimAnUnownedNamespace(t *testing.T) {
 // The lobby needs no grant and is given none: it is where a wallet stands
 // before it owns anything, and the one thing it reaches is creating a
 // namespace.
-func TestRequireNamespaceMember_theLobbyNeedsNoGrant(t *testing.T) {
+func TestRequireSignInAllowed_theLobbyNeedsNoGrant(t *testing.T) {
 	s, db, _ := realRegistry(t)
 	ctx := context.Background()
 	// Migration 001 creates it, with no owner.
@@ -305,7 +305,7 @@ func TestRequireNamespaceMember_theLobbyNeedsNoGrant(t *testing.T) {
 	}
 
 	for _, wallet := range []string{"0xfirst", "0xsecond", "0xthird"} {
-		if err := s.RequireNamespaceMember(ctx, wallet, LobbyNamespace); err != nil {
+		if err := s.RequireSignInAllowed(ctx, wallet, LobbyNamespace); err != nil {
 			t.Fatalf("%s was refused the lobby: %v", wallet, err)
 		}
 	}

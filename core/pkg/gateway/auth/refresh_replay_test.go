@@ -14,6 +14,7 @@ import (
 func TestRefreshToken_aSpentTokenIsAReplay(t *testing.T) {
 	s, _, _ := realRegistry(t)
 	ctx := context.Background()
+	grantEndUser(t, s)
 	_, first, _, err := s.IssueTokens(ctx, deviceOwner, "anchat")
 	if err != nil {
 		t.Fatalf("issue: %v", err)
@@ -34,6 +35,7 @@ func TestRefreshToken_aSpentTokenIsAReplay(t *testing.T) {
 
 func TestRefreshToken_aLoggedOutTokenIsAReplayAndNeverRecovers(t *testing.T) {
 	s, _, _ := realRegistry(t)
+	grantEndUser(t, s)
 	ctx := context.Background()
 	_, first, _, err := s.IssueTokens(ctx, deviceOwner, "anchat")
 	if err != nil {

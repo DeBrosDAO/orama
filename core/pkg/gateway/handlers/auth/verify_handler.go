@@ -53,7 +53,7 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse before anything is issued or provisioned: a namespace that belongs
 	// to another wallet is not this caller's to sign in to.
-	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
+	if err := h.authService.RequireSignInAllowed(ctx, wallet, namespace); err != nil {
 		writeCredentialError(w, namespace, err)
 		return
 	}
@@ -85,7 +85,12 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, wallet, namespace, binding.deviceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		// The early gate let the wallet in; the namespace closed in between.
+		if isSignInRefusal(err) {
+			writeCredentialError(w, namespace, err)
+			return
+		}
+		h.writeUnavailable(w, "issue the session", err)
 		return
 	}
 
@@ -132,8 +137,10 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 // a key for the whole account handed out beside it would outlive revoking the
 // device, which is the point of binding one.
 //
-// Nor does a member whose role holds no grant (a reader): there is nothing to
-// put in a key, and the session alone reaches what the role may reach.
+// Nor does a member whose role holds no grant (a reader), or a wallet that is
+// no member at all (an end user of a namespace with open sign-in): there is
+// nothing to put in a key, and the session alone reaches what the role, or
+// having none, may reach.
 func signInKey(ctx context.Context, mint func(context.Context, string, string) (string, error),
 	wallet, namespace, deviceID string) (string, error) {
 	if authsvc.IsLobbyNamespace(namespace) || deviceID != "" {

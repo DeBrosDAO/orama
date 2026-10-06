@@ -107,6 +107,59 @@ owner grant.
 A namespace with no owner is one nobody may sign in to (`NAMESPACE_UNOWNED`),
 not one the next caller takes.
 
+### Sign-in policy
+
+By default a namespace lets in only wallets that hold a grant: sign-in is by
+invitation, and a wallet with none is refused `NAMESPACE_NOT_OWNED`. An
+application whose public end users each sign in with their own wallet cannot
+invite them one by one, so the owner may open the namespace:
+
+```bash
+orama namespace session-policy --sign-in open      # or members; no flags shows the policy
+```
+
+or `PUT /v1/namespace/session-policy {"sign_in": "open"}` (the namespace-write
+permission). `GET` answers `{"namespace", "device_policy", "sign_in"}`. A `PUT`
+carries `sign_in`, `device_policy` or both; both are validated before either is
+written, and a field left out keeps its value. Opening and closing are recorded
+as `namespace.sign_in_policy`.
+
+| `sign_in` | A wallet with no grant |
+|-----------|------------------------|
+| `members` (default) | refused, `NAMESPACE_NOT_OWNED` |
+| `open` | signs in as an **end user** |
+
+An end user is a wallet the namespace never invited, and it stays one:
+
+- Signing in writes nothing. It gets no grant, no membership and no claim on the
+  namespace; the owner is still the only owner.
+- It gets a session and **no API key**. `verify` hands back no `api_key`, and
+  `POST /v1/auth/api-key` answers `ROLE_HAS_NO_KEY`: a key is a member's
+  credential.
+- Its permissions are the ones a wallet with no grant holds: storage, cache,
+  push, webrtc, proxy, invoking functions, and reading pub/sub but not
+  publishing to it (a topic an end user writes to is the application's decision,
+  made from a function or by a grant). Nothing on the control plane.
+- The device policy applies to it as to any end user: under `required` or
+  `approval` it must bind a device.
+- The device-code flow (`POST /v1/auth/device/approve`) admits it the same way.
+
+The lobby has no policy and refuses to be given one, and a namespace with no
+owner stays closed (`NAMESPACE_UNOWNED`) whatever it says. Members are unaffected
+either way.
+
+Closing sign-in again refuses new sign-ins at once, including the sessions a
+device link or the device-code flow would hand out: every path that issues a
+session checks the policy as recorded now. A session already issued ends at its
+next refresh, which answers 403 `SIGN_IN_CLOSED`, within 10 seconds of the
+closing, and an access token already issued lives out its 15 minutes. A refresh
+is refused only after the gateway has read the policy afresh, so a session is
+never ended by a `members` cached just before the owner opened sign-in. A
+refresh of a wallet that holds no grant is refused in a namespace that is not
+open whether it was an end user or a member whose grant was since revoked,
+expired or disabled; a member's refresh is untouched, and only a namespace that
+is not open reads the wallet's grant to decide.
+
 ### Signing in from a machine with no wallet on it
 
 The handshake above needs a wallet on the same machine. On a server reached over
@@ -308,7 +361,8 @@ account's first again.
 ### Adding a device: approval and linking
 
 `PUT /v1/namespace/session-policy {"device_policy": ...}` (the namespace-write
-permission) sets what a sign-in must prove:
+permission; the same route sets `sign_in`, see "Sign-in policy") sets what a
+sign-in must prove:
 
 | Policy | A sign-in that binds no device | A new device's first sign-in |
 |--------|-------------------------------|------------------------------|
@@ -474,6 +528,8 @@ role, and a role is a set of permissions.
 | `developer` | the data plane, plus `db`, `deploy`, `secrets` and `fn:manage` — and **not** `members`, `namespace` or `operator` |
 | `runtime` | the data plane: storage, pubsub, cache, push, webrtc, proxy, and invoking functions |
 | `reader` | nothing beyond the routes that ask for no permission |
+
+A wallet with no grant at all, signed in to a namespace that opened sign-in (see "Sign-in policy"), is not a member and holds no role: it has a session and the permissions a grantless wallet has.
 
 A `reader` or a `developer` signing in gets a session and no API key. A key
 stores legacy scope words, and neither role can be written in them: a reader
@@ -643,6 +699,7 @@ every request that run makes.
 | Revoking a device | its sessions, access tokens and sockets end within 10 seconds; the account's other devices are untouched |
 | The token an open WebSocket was opened with expiring | the socket is closed within 10 seconds of two minutes past its `exp` (`4401`), unless it was refreshed on the socket |
 | Revoking a capability, or the device that issued it | the upgrades it would open are refused, and the sockets it opened closed, within 10 seconds (`4403`); a device's revocation is kept seven days, as long as a capability can live |
+| Closing sign-in (`sign_in` back to `members`) | new sign-ins are refused at once; a grantless wallet's refresh is refused within 10 seconds (`SIGN_IN_CLOSED`), and an access token already issued lives out its 15 minutes |
 | Setting a session policy | at once for everything that issues a credential (sign-in, API keys, approvals, device-link claims), which reads the policy itself; a refresh may be judged by a policy its gateway read up to 10 seconds earlier |
 
 That minute is `CredentialStaleness`, and it is a promise rather than a tuning
@@ -859,10 +916,11 @@ the wrong message" are different problems:
 | `AUTH_SIGNATURE_INVALID` | the signature does not recover the address in the message |
 | `AUTH_CHALLENGE_INVALID` | the nonce is unknown, already used, or expired |
 | `NAMESPACE_UNKNOWN` | no such namespace — `orama namespace create` makes one |
-| `NAMESPACE_NOT_OWNED` | the namespace belongs to another wallet |
+| `NAMESPACE_NOT_OWNED` | the namespace belongs to another wallet, and the wallet holds no grant in it while the namespace's `sign_in` is `members` |
 | `NAMESPACE_UNOWNED` | the namespace has no owner, so nobody may sign in to it |
 | `NAMESPACE_HAS_NO_KEYS` | the lobby namespace has no keys; create a namespace first |
-| `ROLE_HAS_NO_KEY` | a key was asked for (`POST /v1/auth/api-key`) by a member whose role a key cannot carry (`reader`, `developer`) (403) |
+| `ROLE_HAS_NO_KEY` | a key was asked for (`POST /v1/auth/api-key`) by a member whose role a key cannot carry (`reader`, `developer`), or by an end user of an open namespace, who holds no grant at all (403) |
+| `SIGN_IN_CLOSED` | the wallet holds no grant in the namespace (never invited, or its grant was revoked, expired or disabled) and the namespace is not open: its session was refused a refresh (403). Issuing a new session to it — sign-in, a device-link claim, the device-code flow — is refused `NAMESPACE_NOT_OWNED` |
 | `TOO_MANY_CHALLENGES` | too many challenges asked for; slow down |
 
 A device-bound session has its own, because the next move differs — sign a

@@ -136,7 +136,7 @@ func (h *Handlers) DeviceApprovalHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	ctx := r.Context()
-	if err := h.authService.RequireNamespaceOwner(ctx, in.Wallet, in.Namespace); err != nil {
+	if err := h.authService.RequireSignInAllowed(ctx, in.Wallet, in.Namespace); err != nil {
 		writeCredentialError(w, in.Namespace, err)
 		return
 	}
@@ -206,10 +206,14 @@ func (h *Handlers) DeviceTokenHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	// A device link binds the session to the waiting device, which becomes one
 	// of the account's active devices as the login is collected.
-	var deviceID string
+	var deviceID, namespace string
 	claimed, err := h.authService.ClaimDeviceAuthorization(ctx, req.DeviceCode,
-		h.claimCheck(ctx, req.DeviceCode, req.DeviceProof, &deviceID))
+		h.claimCheck(ctx, req.DeviceCode, req.DeviceProof, &deviceID, &namespace))
 	if err != nil {
+		if isSignInRefusal(err) {
+			writeCredentialError(w, namespace, err)
+			return
+		}
 		if !writeDeviceRefusal(w, err) {
 			writeDeviceError(w, err)
 		}
@@ -221,7 +225,11 @@ func (h *Handlers) DeviceTokenHandler(w http.ResponseWriter, r *http.Request) {
 	// variable; handing one back here would rebuild that by another route.
 	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, claimed.Subject, claimed.Namespace, deviceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		if isSignInRefusal(err) {
+			writeCredentialError(w, claimed.Namespace, err)
+			return
+		}
+		h.writeUnavailable(w, "issue the session", err)
 		return
 	}
 
@@ -295,4 +303,11 @@ var deviceErrorDescriptions = map[string]string{
 	"expired_token":         "this login was not approved in time; ask for a new code",
 	"access_denied":         "the approver refused this login",
 	"invalid_grant":         "this code names no pending login, or its session was already collected",
+}
+
+// isSignInRefusal reports whether err is the namespace refusing the wallet a
+// session, as opposed to a failure to decide.
+func isSignInRefusal(err error) bool {
+	var owned *authsvc.ErrNamespaceOwnedByAnother
+	return errors.As(err, &owned) || errors.Is(err, authsvc.ErrNamespaceUnowned)
 }

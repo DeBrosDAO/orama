@@ -55,6 +55,9 @@ type Service struct {
 	// devicePolicies remembers each namespace's session policy for
 	// devicePolicyStaleness, because every account-level refresh asks.
 	devicePolicies devicePolicyCache
+	// signInPolicies is the same for the sign-in policy, which shares the
+	// row and the staleness bound.
+	signInPolicies signInPolicyCache
 }
 
 // minRSAKeyBits is the smallest RSA signing key this gateway will use. 2048 is
@@ -426,6 +429,14 @@ func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (st
 func (s *Service) IssueDeviceTokens(ctx context.Context, wallet, namespace, deviceID string) (string, string, int64, error) {
 	if s.signingKey == nil {
 		return "", "", 0, fmt.Errorf("signing key unavailable")
+	}
+	// Every path that hands out a session passes here, so this is where the
+	// namespace's sign-in rule is held. A device-link claim reached it with
+	// no check: a wallet the namespace no longer admits — sign-in closed
+	// again, or its grant revoked — kept minting sessions by approving its
+	// own next link from a device it still held.
+	if err := s.RequireSignInAllowed(ctx, wallet, namespace); err != nil {
+		return "", "", 0, err
 	}
 
 	// Resolve namespace-defined additive claims (bugboard #548) ONCE at mint
@@ -941,6 +952,12 @@ func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace strin
 	// a reader or a runtime member signing in was handed the full control
 	// plane by the login itself.
 	grant, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, NormalizeWallet(wallet))
+	if errors.Is(err, ErrNotAMember) {
+		// A wallet signed in to a namespace with open sign-in holds no grant,
+		// and a key is a member's credential: it has a session and nothing
+		// to mint a key from.
+		return "", fmt.Errorf("%w: this wallet holds no grant in %q: %w", ErrNoKeyForRole, namespace, ErrNotAMember)
+	}
 	if err != nil {
 		return "", err
 	}

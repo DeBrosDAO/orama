@@ -182,8 +182,8 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/namespace/restore-key` | CLI | This gateway's X25519 restore public key for the namespace, derived from the cluster's current encryption root and the namespace name. `orama namespace restore-key`. |
 | `/v1/namespace/devices` | direct | An operator's list of one account's devices (`?subject=<wallet>`), for recovering an account under the `approval` policy. The members-write permission. No CLI command. See AUTH.md. |
 | `/v1/namespace/devices/` | direct | `DELETE /v1/namespace/devices/{id}` — an operator revokes a device of any account in the namespace. The members-write permission. No CLI command. |
-| `/v1/namespace/session-policy` | direct | Whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval (`optional`, `required`, `approval`). An owner's setting, made once per namespace over HTTP; the CLI has no command for it. See AUTH.md. |
-| `/v1/namespace/status` | CLI | Provisioning progress, polled by `orama namespace create`. |
+| `/v1/namespace/session-policy` | CLI | `orama namespace session-policy`. `GET` reads, `PUT` sets `device_policy` (`optional`, `required`, `approval`: whether end-user sessions must be bound to a device, and whether a new device needs an existing one's approval) and `sign_in` (`members`, the default, or `open`: whether a wallet holding no grant may sign in as an end user with no key); either or both, the one left out keeps its value. The namespace-write permission. See AUTH.md. |
+| `/v1/namespace/status` | CLI | Provisioning progress for a cluster id: the `poll_url` that `POST /v1/namespaces` returns. `orama namespace create` does not wait on it; `orama namespace list` shows each cluster's status. |
 | `/v1/namespace/webrtc/disable` | CLI | `orama namespace disable webrtc`. |
 | `/v1/namespace/webrtc/enable` | CLI | `orama namespace enable webrtc`. |
 | `/v1/namespace/webrtc/status` | CLI | `orama namespace webrtc-status`. |

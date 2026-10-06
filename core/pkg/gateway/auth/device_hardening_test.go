@@ -29,6 +29,7 @@ func TestParseDeviceKey_refusesSmallOrderEd25519(t *testing.T) {
 // rotate the session without the device and strip its binding.
 func TestIssueDeviceTokens_aDeviceBoundRefreshTokenIsInvisibleToTheBareHash(t *testing.T) {
 	s, db, nsID := realRegistry(t)
+	grantEndUser(t, s)
 	ctx := context.Background()
 	d := p256Device(t)
 	mustEnrol(t, s, deviceOwner, d, DeviceStateActive)
@@ -55,6 +56,7 @@ func TestIssueDeviceTokens_aDeviceBoundRefreshTokenIsInvisibleToTheBareHash(t *t
 func TestRefreshToken_withoutTheDeviceDoesNotSpendTheGrace(t *testing.T) {
 	s, _, _ := realRegistry(t)
 	ctx := context.Background()
+	grantEndUser(t, s)
 	d := ed25519Device(t)
 	mustEnrol(t, s, deviceOwner, d, DeviceStateActive)
 	_, first, _, err := s.IssueDeviceTokens(ctx, deviceOwner, "anchat", d.id)
@@ -80,6 +82,7 @@ func TestRefreshToken_withoutTheDeviceDoesNotSpendTheGrace(t *testing.T) {
 func TestEndSession_endsTheRowsStillInTheirGrace(t *testing.T) {
 	s, _, _ := realRegistry(t)
 	ctx := context.Background()
+	grantEndUser(t, s)
 	_, first, _, err := s.IssueTokens(ctx, deviceOwner, "anchat")
 	if err != nil {
 		t.Fatalf("issue: %v", err)

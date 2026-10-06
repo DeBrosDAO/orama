@@ -95,8 +95,8 @@ func TestEveryCredentialCallSiteReportsRefusalProperly(t *testing.T) {
 	}
 
 	credentialCalls := map[string]bool{
-		"GetOrCreateAPIKey":     true,
-		"RequireNamespaceOwner": true,
+		"GetOrCreateAPIKey":    true,
+		"RequireSignInAllowed": true,
 	}
 
 	var offenders []string
@@ -235,7 +235,7 @@ func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if sel.Sel.Name == "RequireNamespaceOwner" && gate == token.NoPos {
+				if sel.Sel.Name == "RequireSignInAllowed" && gate == token.NoPos {
 					gate = call.Pos()
 				}
 				if costly[sel.Sel.Name] && firstCostly == token.NoPos {
@@ -245,7 +245,7 @@ func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 			})
 
 			if gate == token.NoPos {
-				t.Errorf("%s never calls RequireNamespaceOwner, so any wallet may sign in "+
+				t.Errorf("%s never calls RequireSignInAllowed, so any wallet may sign in "+
 					"to any namespace", fn.Name.Name)
 				continue
 			}

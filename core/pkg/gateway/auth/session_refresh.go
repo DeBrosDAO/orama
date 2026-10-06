@@ -89,8 +89,17 @@ func readRefreshRow(row []interface{}) refreshRow {
 // A session bound to a device needs the device (checkDeviceRefresh). A session
 // bound to none is refused in a namespace whose policy now requires devices, so
 // turning the policy on ends the account-level sessions of its end users at
-// their next refresh rather than leaving them refreshing for ever.
+// their next refresh rather than leaving them refreshing for ever. Either kind
+// of session of a wallet holding no grant also ends when the namespace closes
+// sign-in (checkSignInStillOpen).
 func (s *Service) checkSessionRefresh(ctx context.Context, namespace string, session refreshRow, refreshToken string, proof *DeviceProof) error {
+	if err := s.checkSessionBinding(ctx, namespace, session, refreshToken, proof); err != nil {
+		return err
+	}
+	return s.checkSignInStillOpen(ctx, namespace, session.subject)
+}
+
+func (s *Service) checkSessionBinding(ctx context.Context, namespace string, session refreshRow, refreshToken string, proof *DeviceProof) error {
 	if session.deviceID != "" {
 		return s.checkDeviceRefresh(ctx, namespace, session, refreshToken, proof)
 	}

@@ -154,6 +154,12 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 		}
 		return &client.QueryResult{Count: 1}, nil
 	}
+	// The member check a refresh makes (checkSignInStillOpen): every session
+	// in these tests belongs to a runtime member, which a refresh leaves be
+	// whatever the namespace's sign-in policy says.
+	if containsCI(sql, "FROM grants AS g") {
+		return &client.QueryResult{Count: 1, Rows: [][]interface{}{{"runtime", nil, nil, "", "test", ""}}}, nil
+	}
 	return &client.QueryResult{Count: 0}, nil
 }
 

@@ -24,6 +24,7 @@ covers:
     - orama auth status
     - orama auth switch
     - orama auth whoami
+    - orama namespace session-policy
   routes:
     - /.well-known/jwks.json
     - /v1/auth/api-key
@@ -33,6 +34,7 @@ covers:
     - /v1/auth/refresh
     - /v1/auth/verify
     - /v1/auth/whoami
+    - /v1/namespace/session-policy
     - /v1/namespaces
   claims:
     - "docs/AUTH.md#signing-in: the message goes back verbatim; a message naming another domain is refused (AUTH_DOMAIN_MISMATCH)"
@@ -47,5 +49,8 @@ covers:
     - "docs/AUTH.md#revoking: logging out revokes the refresh token and the access token"
     - "docs/AUTH.md#revoking: a revocation takes effect on every gateway within the 10-second reload"
     - "docs/AUTH.md#which-key-signed-a-token: JWKS serves every live key with the namespace it is bound to; a namespace gateway's key is bound to its namespace"
+    - "docs/AUTH.md#sign-in-policy: a wallet with no grant is refused a members namespace (NAMESPACE_NOT_OWNED); open sign-in admits it as a grantless end user with no API key (ROLE_HAS_NO_KEY on /v1/auth/api-key)"
+    - "docs/AUTH.md#sign-in-policy: closing sign-in refuses a grantless wallet's refresh (SIGN_IN_CLOSED) and any new sign-in"
+    - "docs/AUTH.md#sign-in-policy: orama namespace session-policy shows and sets the policy, a field left out keeps its value"
     - "docs/API_SURFACE.md#namespace-management: namespace names are validated and the platform's names are reserved"
     - "docs/SECURITY.md: removed auth endpoints (simple-key, register, phantom) are gone"

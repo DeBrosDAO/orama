@@ -73,6 +73,9 @@ const (
 	// the two acts that decide which devices may hold a session.
 	AuditDeviceRevoked    = "auth.device.revoke"
 	AuditSessionPolicySet = "namespace.session_policy"
+	// Who a namespace lets sign in: the owner opening it to wallets it has not
+	// invited, or closing it again.
+	AuditSignInPolicySet = "namespace.sign_in_policy"
 
 	// A node recording itself, and a node's own key being recorded. The
 	// heartbeat is deliberately not here: it fires every 30 seconds from every
@@ -93,7 +96,7 @@ var AuditActions = []string{
 	AuditGrantAdded, AuditGrantRevoked, AuditOwnerTransferred,
 	AuditNamespaceBackedUp, AuditNamespaceRestored,
 	AuditDeviceLoginStarted, AuditDeviceLoginApproved, AuditDeviceLoginDenied, AuditDeviceLoginClaimed,
-	AuditDeviceRevoked, AuditSessionPolicySet,
+	AuditDeviceRevoked, AuditSessionPolicySet, AuditSignInPolicySet,
 	AuditNodeRegistered, AuditNodeKeyEnrolled,
 }
 
