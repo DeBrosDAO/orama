@@ -3,8 +3,10 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -224,6 +226,45 @@ func TestIsRootWalletInstalled_e2eGuardRefusalIsNotNoWallet(t *testing.T) {
 	}
 	if _, err := getRootWalletAddress(); !errors.Is(err, rwagent.ErrE2EDefaultSocket) {
 		t.Fatalf("the RootWallet path did not surface the guard's refusal: %v", err)
+	}
+}
+
+// An agent that is listening but does not answer within the status timeout —
+// busy with another command — is still a wallet on this machine; the login
+// must not move to the device flow and wait for an approval nobody was asked
+// for.
+func TestIsRootWalletInstalled_slowAgentIsNotNoWallet(t *testing.T) {
+	t.Setenv(rwagent.E2EEnvVar, "")
+	// t.TempDir's path is past the 104-byte Unix socket limit on macOS.
+	dir, err := os.MkdirTemp("", "rwa")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "a.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				<-release
+				_ = conn.Close()
+			}()
+		}
+	}()
+	t.Setenv("RW_AGENT_SOCK", sock)
+
+	if !IsRootWalletInstalled() {
+		t.Fatal("an agent that did not answer in time read as 'no wallet here': login would fall into the device flow")
 	}
 }
 

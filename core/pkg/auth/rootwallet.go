@@ -29,19 +29,26 @@ const archiveSigningPrefix = "Orama build archive v1"
 // be before a challenge is refused as not yet valid.
 const loginFreshnessSkew = 2 * time.Minute
 
-// IsRootWalletInstalled checks if the rootwallet agent is reachable.
+// rootWalletStatusTimeout bounds the presence check. A socket with nothing on
+// it fails at once, so this only bounds an agent that is there.
+const rootWalletStatusTimeout = 3 * time.Second
+
+// IsRootWalletInstalled reports whether a rootwallet agent is on this machine:
+// false only when nothing listens on its socket (rwagent.ErrAgentNotRunning).
 //
-// An agent the e2e guard refuses (ORAMA_E2E=1 with RW_AGENT_SOCK empty or
-// pointing at the real wallet) is reported as present: the caller then takes
-// the RootWallet path, whose first agent call returns the guard's error
-// (rwagent.ErrE2EGuard), instead of reading the refusal as "no wallet here"
-// and falling into an interactive device login.
+// Any other failure is an agent that is there and did not answer this time —
+// one that refused under the e2e guard (rwagent.ErrE2EGuard), or one busy
+// past the status timeout with another command's request. It is reported as
+// present: the caller then takes the RootWallet path, whose first agent call
+// returns the real error. Reading it as "no wallet here" sent the login into
+// an interactive device login that waited ten minutes for an approval nobody
+// was asked for (stagenet e2e, two logins while a second CLI used the agent).
 func IsRootWalletInstalled() bool {
 	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), rootWalletStatusTimeout)
 	defer cancel()
 	_, err := client.Status(ctx)
-	return err == nil || errors.Is(err, rwagent.ErrE2EGuard)
+	return !errors.Is(err, rwagent.ErrAgentNotRunning)
 }
 
 // getRootWalletAddress gets the EVM address from the rootwallet agent.
