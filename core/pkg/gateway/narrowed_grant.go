@@ -187,12 +187,15 @@ func (g *Gateway) narrowOpenRoute(w http.ResponseWriter, r *http.Request) (*http
 		g.refuseUnreadableGrant(w, err)
 		return nil, false
 	}
-	// A workload's grant is carried whatever it says: the invoker reads the
-	// invoke grant off it, because the scopes the token was minted with are the
-	// grant of the moment the unit started (see getCallerHasInvokeFromRequest).
-	if grant == nil || (strings.TrimSpace(grant.Resource) == "" && !auth.IsWorkloadSubject(claims.Sub)) {
+	if grant == nil {
 		return r, true
 	}
+	// The grant is carried whatever it says, because the invoker reads it: an
+	// `internal: true` function runs only for an admin, and a wallet's admin
+	// is its grant (getCallerIsAdminFromRequest), so the namespace's own owner
+	// was refused every internal function. A workload's invoke grant is read
+	// off it too, because the scopes its token was minted with are the grant
+	// of the moment the unit started (see getCallerHasInvokeFromRequest).
 	r = markGrant(r, grant)
 	// Without a selector the grant narrows nothing. Permissions are set from a
 	// grant only when it narrows, or a reader app would be refused a public

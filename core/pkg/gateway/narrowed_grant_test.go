@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 )
 
 // serveHopAuthorizing runs the namespace gateway's real chain and, where a
@@ -394,11 +395,44 @@ func TestForwardedWorkload_theInvokeCarriesItsGrantEvenWithoutASelector(t *testi
 	}
 }
 
-// The same wallet with no selector is left as it was: its invoke is the
-// invoker's decision and nothing was resolved for it.
-func TestForwardedInvoke_aWalletWithoutASelectorCarriesNoGrant(t *testing.T) {
-	g, _ := namespaceGatewayForHops(t, "runtime")
-	r := hop(t, g, http.MethodPost, "/v1/functions/store/invoke", hopNamespace, hopWallet)
+// A wallet's grant reaches the invoker even when it names no function: an
+// `internal: true` function runs only for an admin, and a wallet's admin is
+// its grant, so the namespace's owner was refused its own migrate function
+// (AnChat `orama function invoke migrate`, stagenet 2026-10-06). The grant
+// narrows nothing, so no permissions are set from it.
+func TestForwardedInvoke_aWalletWithoutASelectorCarriesItsGrant(t *testing.T) {
+	for role, wantAdmin := range map[string]bool{"owner": true, "admin": true, "runtime": false, "reader": false} {
+		t.Run(role, func(t *testing.T) {
+			g, _ := namespaceGatewayForHops(t, role)
+			r := hop(t, g, http.MethodPost, "/v1/functions/migrate/invoke", hopNamespace, hopWallet)
+
+			var carried *auth.Grant
+			var perms any
+			g.internalAuthMiddleware(g.routePolicyMiddleware(g.authMiddleware(g.authorizationMiddleware(
+				http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+					carried, _ = r.Context().Value(ctxKeyGrant).(*auth.Grant)
+					perms = r.Context().Value(ctxkeys.Permissions)
+				}))))).ServeHTTP(httptest.NewRecorder(), r)
+
+			if carried == nil {
+				t.Fatalf("the invoke did not carry the wallet's %s grant", role)
+			}
+			if got := carried.Scopes().IsAdmin(); got != wantAdmin {
+				t.Errorf("carried grant is admin = %v, want %v", got, wantAdmin)
+			}
+			if perms != nil {
+				t.Errorf("a grant with no selector set permissions on the open route: %v", perms)
+			}
+		})
+	}
+}
+
+// A wallet with no grant in the namespace reaches the invoker with none: it
+// is not an admin, and whether it may run a private function stays the
+// invoker's decision.
+func TestForwardedInvoke_aWalletWithNoGrantCarriesNone(t *testing.T) {
+	g, _ := namespaceGatewayForHops(t, "")
+	r := hop(t, g, http.MethodPost, "/v1/functions/migrate/invoke", hopNamespace, hopWallet)
 
 	var carried *auth.Grant
 	g.internalAuthMiddleware(g.routePolicyMiddleware(g.authMiddleware(g.authorizationMiddleware(
@@ -407,6 +441,6 @@ func TestForwardedInvoke_aWalletWithoutASelectorCarriesNoGrant(t *testing.T) {
 		}))))).ServeHTTP(httptest.NewRecorder(), r)
 
 	if carried != nil {
-		t.Errorf("a wallet with no selector carried a grant: %+v", carried)
+		t.Errorf("a wallet with no grant carried one: %+v", carried)
 	}
 }
