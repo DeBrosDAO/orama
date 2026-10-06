@@ -347,7 +347,7 @@ func walletFromContext(r *http.Request) string {
 		return ""
 	}
 	sub := strings.TrimSpace(claims.Sub)
-	if !auth.IsWalletSubject(sub) {
+	if !strings.HasPrefix(strings.ToLower(sub), "0x") {
 		return ""
 	}
 	return sub
