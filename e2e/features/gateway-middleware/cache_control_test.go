@@ -28,7 +28,9 @@ func TestCacheControl_apiResponsesAreNoStore(t *testing.T) {
 		{"health", "/v1/health", http.StatusOK},
 		{"version", "/v1/version", http.StatusOK},
 		{"refusal", "/v1/auth/whoami", http.StatusUnauthorized},
-		{"unknown route", "/v1/e2e-no-such-route", http.StatusNotFound},
+		// Anonymous, an unknown route is refused before routing says it does
+		// not exist (auth-keys-roles pins the 401).
+		{"unknown route", "/v1/e2e-no-such-route", http.StatusUnauthorized},
 	} {
 		resp := c.MustSend(t, gw.Req{Path: tc.path})
 		if resp.Status != tc.status {
