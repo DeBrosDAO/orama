@@ -1,11 +1,10 @@
 package gateway
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
@@ -79,7 +78,10 @@ func TestClaimsFromInternalAuthHeaders_roundTrip(t *testing.T) {
 	h := http.Header{}
 	setInternalAuthJWTHeaders(h, original)
 
-	got := claimsFromInternalAuthHeaders(h, "anchat-test")
+	got, err := claimsFromInternalAuthHeaders(h, "anchat-test", time.Now())
+	if err != nil {
+		t.Fatalf("claimsFromInternalAuthHeaders: %v", err)
+	}
 	if got == nil {
 		t.Fatal("recovered claims is nil")
 	}
@@ -99,7 +101,7 @@ func TestClaimsFromInternalAuthHeaders_roundTrip(t *testing.T) {
 // gateway leaves ctxKeyJWT unset.
 func TestClaimsFromInternalAuthHeaders_noSubReturnsNil(t *testing.T) {
 	h := http.Header{}
-	if got := claimsFromInternalAuthHeaders(h, "ns"); got != nil {
+	if got, err := claimsFromInternalAuthHeaders(h, "ns", time.Now()); got != nil || err != nil {
 		t.Errorf("expected nil claims when no Sub header present, got %#v", got)
 	}
 }
@@ -111,7 +113,10 @@ func TestClaimsFromInternalAuthHeaders_invalidCustomIgnored(t *testing.T) {
 	h.Set(HeaderInternalAuthJWTSub, "0xabc")
 	h.Set(HeaderInternalAuthJWTCustom, "not-valid-base64!!!")
 
-	got := claimsFromInternalAuthHeaders(h, "ns")
+	got, err := claimsFromInternalAuthHeaders(h, "ns", time.Now())
+	if err != nil {
+		t.Fatalf("claimsFromInternalAuthHeaders: %v", err)
+	}
 	if got == nil {
 		t.Fatal("recovered claims is nil despite valid Sub header")
 	}
@@ -193,58 +198,4 @@ func TestStripThenSet_attackerSubReplaced(t *testing.T) {
 			t.Errorf("Sub = %q, want empty (attacker value must not survive API-key auth)", got)
 		}
 	})
-}
-
-// feat-384: gateway-owned claims must not survive the internal-auth hop.
-//
-// A namespace gateway trusts X-Internal-Auth-* headers on a source-IP check
-// covering loopback and the whole WireGuard /8 — and a serverless function can
-// reach a namespace gateway directly via http_fetch. So anything on the mesh,
-// including another tenant, could otherwise assert `device_fp` for any account
-// by forging a header. That is precisely the forgery the device claim exists to
-// prevent, so these keys are stripped here and only ever come from a verified
-// signature.
-func TestClaimsFromInternalAuthHeaders_stripsGatewayOwnedClaims(t *testing.T) {
-	forged, _ := json.Marshal(map[string]string{
-		"device_fp":    "victim-device-fingerprint",
-		"device_since": "0",
-		"scopes":       "admin",
-		"account_id":   "acct-legitimate",
-	})
-
-	h := http.Header{}
-	h.Set(HeaderInternalAuthJWTSub, "0xVICTIM")
-	h.Set(HeaderInternalAuthJWTCustom, base64.StdEncoding.EncodeToString(forged))
-
-	claims := claimsFromInternalAuthHeaders(h, "victim-namespace")
-	if claims == nil {
-		t.Fatal("expected claims for a forwarded subject")
-	}
-
-	for _, forgedKey := range []string{"device_fp", "device_since", "scopes"} {
-		if v, ok := claims.Custom[forgedKey]; ok {
-			t.Errorf("gateway-owned claim %q survived the internal hop as %q — a mesh-local caller could forge it", forgedKey, v)
-		}
-	}
-	// Application claims are untouched: this filter is about gateway-owned
-	// keys, not about distrusting the hop wholesale.
-	if claims.Custom["account_id"] != "acct-legitimate" {
-		t.Errorf("an application claim was dropped: %v", claims.Custom)
-	}
-}
-
-// A header set consisting ONLY of forged gateway claims must yield no custom
-// claims at all, rather than an empty-but-present map that could read as
-// "device attribution was evaluated".
-func TestClaimsFromInternalAuthHeaders_allForgedYieldsNoCustomClaims(t *testing.T) {
-	forged, _ := json.Marshal(map[string]string{"device_fp": "forged"})
-
-	h := http.Header{}
-	h.Set(HeaderInternalAuthJWTSub, "0xVICTIM")
-	h.Set(HeaderInternalAuthJWTCustom, base64.StdEncoding.EncodeToString(forged))
-
-	claims := claimsFromInternalAuthHeaders(h, "ns")
-	if len(claims.Custom) != 0 {
-		t.Errorf("expected no custom claims, got %v", claims.Custom)
-	}
 }

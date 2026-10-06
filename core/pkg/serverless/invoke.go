@@ -28,17 +28,40 @@ type Invoker struct {
 	engine       *Engine
 	registry     FunctionRegistry
 	hostServices HostServices
-	logger       *zap.Logger
+	// servedNamespace is the one namespace whose functions this gateway runs:
+	// its own client_namespace. See checkServed.
+	servedNamespace string
+	logger          *zap.Logger
 }
 
 // NewInvoker creates a new function invoker.
-func NewInvoker(engine *Engine, registry FunctionRegistry, hostServices HostServices, logger *zap.Logger) *Invoker {
+//
+// servedNamespace is the namespace whose functions it runs — the gateway's own
+// client_namespace. An invocation for any other namespace is refused.
+func NewInvoker(engine *Engine, registry FunctionRegistry, hostServices HostServices, servedNamespace string, logger *zap.Logger) *Invoker {
 	return &Invoker{
-		engine:       engine,
-		registry:     registry,
-		hostServices: hostServices,
-		logger:       logger,
+		engine:          engine,
+		registry:        registry,
+		hostServices:    hostServices,
+		servedNamespace: strings.TrimSpace(servedNamespace),
+		logger:          logger,
 	}
+}
+
+// checkServed refuses an invocation of another namespace's function.
+//
+// Bugboard #427: the cluster gateway ran every namespace's functions, from
+// function rows in the cluster registry. HTTP traffic for a tenant is now
+// proxied to the tenant's gateway, but the cron scheduler, the pubsub
+// dispatcher, the JWT claims provider and nested function_invoke all reach the
+// invoker directly, and would have kept running tenant rows left in the
+// registry. One gateway runs one namespace's functions, whichever path asks.
+func (i *Invoker) checkServed(namespace string) error {
+	if namespace == i.servedNamespace {
+		return nil
+	}
+	return fmt.Errorf("%w: %w: this gateway runs the %q namespace's functions, and namespace %q's run on its own gateway",
+		ErrFunctionNotFound, ErrNamespaceNotServed, i.servedNamespace, namespace)
 }
 
 // InvokeRequest contains the parameters for invoking a function.
@@ -54,6 +77,9 @@ type InvokeRequest struct {
 	// is_internal (bugboard #152). Set by the HTTP/WS handlers from the
 	// request's resolved scope set.
 	CallerIsAdmin bool `json:"caller_is_admin,omitempty"`
+	// CallerHasInvoke is true when the caller holds the invoke grant (or admin).
+	// API keys without invoke must not run private functions (bugboard #259).
+	CallerHasInvoke bool `json:"caller_has_invoke,omitempty"`
 	// CallerIP is the source IP of the request, used by the multi-tier
 	// rate limiter as a fallback bucket for anonymous (no-wallet) callers.
 	CallerIP   string `json:"caller_ip,omitempty"`
@@ -64,12 +90,33 @@ type InvokeRequest struct {
 	// engine can populate InvocationContext.CallerJWTSubject — fixes the
 	// bug-#215 case where API-key precedence buries the JWT identity.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+	// CallerDeviceID is the device the caller's session is bound to — the
+	// `did` of a token the gateway verified — or "" for a session bound to the
+	// account alone, an API key, or no credential.
+	CallerDeviceID string `json:"caller_device_id,omitempty"`
+	// CallerCapability is what the capability the caller's socket was opened
+	// with grants (feat-264), or nil. Only the gateway's WebSocket handler
+	// sets it, after checking the token before the upgrade.
+	CallerCapability *CapabilityGrant `json:"caller_capability,omitempty"`
 	// TriggerDepth is the recursion-depth bucket at which this invocation
 	// runs. 0 means top-level (HTTP/WS/cron source); each trigger-driven
 	// invocation increments it. The dispatcher's host-fn wildcard path
 	// (bugboard #93) uses this to bound local recursion that otherwise
 	// would not round-trip through libp2p network latency.
 	TriggerDepth int `json:"trigger_depth,omitempty"`
+
+	// SystemOriginated marks an invocation the gateway itself started: a cron
+	// row firing, a pubsub trigger matching, the JWT claims provider. Such an
+	// invocation has no per-request caller to authorize — the authorization
+	// happened when the trigger was registered — so it skips the caller check.
+	//
+	// This used to be inferred from TriggerType: a set of type values counted
+	// as "system", and a nested call from a system-triggered parent was given
+	// one of them, so the type carried the authority. A value that means
+	// "skip authorization" should not be a label that travels with the work
+	// and can be copied onto it; it is set here, by the gateway-internal
+	// dispatcher that has the authority, and by nothing that reads a request.
+	SystemOriginated bool `json:"-"`
 }
 
 // InvokeResponse contains the result of a function invocation.
@@ -104,6 +151,10 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	requestID := uuid.New().String()
 	startTime := time.Now()
 
+	if err := i.checkServed(req.Namespace); err != nil {
+		return &InvokeResponse{RequestID: requestID, Status: InvocationStatusError, Error: err.Error()}, err
+	}
+
 	// Get function from registry
 	fn, err := i.registry.Get(ctx, req.Namespace, req.FunctionName, req.Version)
 	if err != nil {
@@ -115,15 +166,19 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		}, err
 	}
 
-	// Check authorization — ONLY for user-driven trigger types. System
-	// triggers (cron, pubsub, database, timer, job) fire from rows the
-	// gateway itself persisted on behalf of an already-authenticated
-	// operator; there is no per-invocation caller identity to check, and
-	// requiring one is a 100% blocking no-op safety check (see bugboard
-	// #264). The auth boundary for system triggers is at REGISTRATION
-	// time (HTTP `POST /v1/functions/{name}/triggers`, or deploy-time
-	// auto-register from function.yaml), not at firing time.
-	if !isSystemTrigger(req.TriggerType) && !canInvokeFn(fn, req.CallerWallet, req.CallerIsAdmin) {
+	// Check authorization — for everything except an invocation the gateway
+	// itself started. A cron row firing, a pubsub trigger matching or the
+	// claims provider running has no per-invocation caller identity to check:
+	// the authorization happened when the trigger was registered (bugboard
+	// #264 — gating those on CallerWallet blocked every fire for 19 hours).
+	//
+	// What says so is req.SystemOriginated, which only a gateway-internal
+	// dispatcher sets. It used to be read off TriggerType, and a nested call
+	// from a system-triggered parent was given a trigger type that counted as
+	// system — so the authority to skip the check travelled with the work as
+	// an ordinary field.
+	if !req.SystemOriginated && !capabilityOpens(fn, req) &&
+		!canInvokeFn(fn, req.CallerWallet, req.CallerIsAdmin, req.CallerHasInvoke) {
 		// Authorization uses the function we already fetched above —
 		// CanInvoke would re-`registry.Get` it, a redundant leader-routed
 		// read on every op (bugboard #708).
@@ -142,22 +197,7 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 		envVars = make(map[string]string)
 	}
 
-	// Build invocation context
-	invCtx := &InvocationContext{
-		RequestID:        requestID,
-		FunctionID:       fn.ID,
-		FunctionName:     fn.Name,
-		Namespace:        fn.Namespace,
-		CallerWallet:     req.CallerWallet,
-		CallerIP:         req.CallerIP,
-		CallerIsAdmin:    req.CallerIsAdmin,
-		TriggerType:      req.TriggerType,
-		WSClientID:       req.WSClientID,
-		EnvVars:          envVars,
-		CallerClaims:     req.CallerClaims,
-		CallerJWTSubject: req.CallerJWTSubject,
-		TriggerDepth:     req.TriggerDepth,
-	}
+	invCtx := newInvocationContext(req, fn, requestID, envVars)
 
 	// Execute with retry logic
 	output, retries, err := i.executeWithRetry(ctx, fn, req.Input, invCtx)
@@ -187,42 +227,33 @@ func (i *Invoker) Invoke(ctx context.Context, req *InvokeRequest) (*InvokeRespon
 	return response, nil
 }
 
-// InvokeByID invokes a function by its ID.
-func (i *Invoker) InvokeByID(ctx context.Context, functionID string, input []byte, invCtx *InvocationContext) (*InvokeResponse, error) {
-	// Get function from registry by ID
-	fn, err := i.getByID(ctx, functionID)
-	if err != nil {
-		return nil, err
+// newInvocationContext is what the running function, and anything it invokes in
+// turn, sees of the request that started it.
+//
+// It is a function of its own because what it carries is the authorization: the
+// caller's identity and grants, and whether the gateway started this. A field
+// dropped here is a grant lost at the first nested call, or an authority
+// silently granted.
+func newInvocationContext(req *InvokeRequest, fn *Function, requestID string, envVars map[string]string) *InvocationContext {
+	return &InvocationContext{
+		RequestID:        requestID,
+		FunctionID:       fn.ID,
+		FunctionName:     fn.Name,
+		Namespace:        fn.Namespace,
+		CallerWallet:     req.CallerWallet,
+		CallerIP:         req.CallerIP,
+		CallerIsAdmin:    req.CallerIsAdmin,
+		CallerHasInvoke:  req.CallerHasInvoke,
+		SystemOriginated: req.SystemOriginated,
+		TriggerType:      req.TriggerType,
+		WSClientID:       req.WSClientID,
+		EnvVars:          envVars,
+		CallerClaims:     req.CallerClaims,
+		CallerJWTSubject: req.CallerJWTSubject,
+		CallerDeviceID:   req.CallerDeviceID,
+		CallerCapability: req.CallerCapability,
+		TriggerDepth:     req.TriggerDepth,
 	}
-
-	if invCtx == nil {
-		invCtx = &InvocationContext{
-			RequestID:    uuid.New().String(),
-			FunctionID:   fn.ID,
-			FunctionName: fn.Name,
-			Namespace:    fn.Namespace,
-			TriggerType:  TriggerTypeHTTP,
-		}
-	}
-
-	startTime := time.Now()
-	output, retries, err := i.executeWithRetry(ctx, fn, input, invCtx)
-
-	response := &InvokeResponse{
-		RequestID:  invCtx.RequestID,
-		Output:     output,
-		DurationMS: time.Since(startTime).Milliseconds(),
-		Retries:    retries,
-	}
-
-	if err != nil {
-		response.Status = InvocationStatusError
-		response.Error = err.Error()
-		return response, err
-	}
-
-	response.Status = InvocationStatusSuccess
-	return response, nil
 }
 
 // InvalidateCache removes a compiled module from the engine's cache.
@@ -389,15 +420,6 @@ func (i *Invoker) getEnvVars(ctx context.Context, functionID string) (map[string
 	return nil, nil
 }
 
-// getByID retrieves a function by ID.
-func (i *Invoker) getByID(ctx context.Context, functionID string) (*Function, error) {
-	// Type assert to get extended registry methods
-	if reg, ok := i.registry.(*Registry); ok {
-		return reg.GetByID(ctx, functionID)
-	}
-	return nil, ErrFunctionNotFound
-}
-
 // DLQMessage represents a message sent to the dead letter queue.
 type DLQMessage struct {
 	FunctionID   string      `json:"function_id"`
@@ -456,103 +478,62 @@ func (i *Invoker) BatchInvoke(ctx context.Context, req *BatchInvokeRequest) (*Ba
 	}, nil
 }
 
-// -----------------------------------------------------------------------------
-// Public Invocation Helpers
-// -----------------------------------------------------------------------------
+// CanInvokeFunction is the authorization decision for one function and one
+// caller, for callers outside this package that have already fetched the
+// function — the persistent-WebSocket upgrade, which builds its own invocation
+// context and never reaches Invoke.
+//
+// It replaces an exported CanInvoke that re-read the function from the registry
+// and passed the invoke grant as a hardcoded true, so a caller holding no
+// invoke grant was reported as able to invoke a private function.
+func CanInvokeFunction(fn *Function, callerWallet string, callerIsAdmin, callerHasInvoke bool) bool {
+	return canInvokeFn(fn, callerWallet, callerIsAdmin, callerHasInvoke)
+}
 
-// CanInvoke checks if a caller is authorized to invoke a function.
+// canInvokeFn is the authorization decision for an already-fetched function.
 //
-// Authorization model:
-//   - Public functions (`is_public: true`): anyone can invoke, no auth needed.
-//     The auth middleware lets unauthenticated requests through to public
-//     paths.
-//   - Private functions: any caller that the auth middleware has already
-//     authenticated for THIS namespace can invoke. By the time we reach
-//     this function, the request has passed authMiddleware which validates
-//     EITHER a JWT-bearing token whose `namespace` claim matches the target
-//     namespace OR an API key resolved to the target namespace. So the
-//     non-empty `callerWallet` here is sufficient evidence of a verified
-//     in-namespace caller.
-//   - Internal functions (`internal: true`, bugboard #152): invokable ONLY
-//     by a system trigger or an admin caller (callerIsAdmin). A normal
-//     app-runtime key is rejected even though it has a valid identity.
+//   - Public functions (`is_public: true`): anyone may invoke. The auth
+//     middleware lets unauthenticated requests reach public paths.
+//   - Private functions: an identified caller holding the invoke grant — an
+//     API key with the `invoke` scope, an admin, or a SIWE wallet. A
+//     storage-only key is refused (bugboard #259). HTTP `/invoke` is a public
+//     path, so this is the choke point; scopeMiddleware never runs.
+//   - Internal functions (`internal: true`, bugboard #152): an admin caller or
+//     a gateway-started invocation, and nothing else. An ordinary app-runtime
+//     key is refused even though its identity is valid.
 //
-// History (bug #215 follow-up): the previous logic was a stub —
+// The HTTP handler reports SIWE wallets as hasInvoke; do not treat callerWallet
+// as an API-key detector — getWalletFromRequest returns the namespace string
+// for API keys, not an ak_ prefix.
+//
+// History (bug #215 follow-up): this was once
 //
 //	return callerWallet == namespace || fn.CreatedBy == callerWallet, nil
 //
-// — which only allowed namespace-name-as-wallet (the API-key fallback) or
-// the deploying wallet. Onboarding-style functions like `user-create`,
-// where a brand-new wallet calls in to register, were rejected with 401
-// because the new wallet was neither the namespace string nor the
-// deployer. They worked only as a side-effect of JWT verification
-// silently failing pre-#215, falling through to API-key auth, and
-// callerWallet collapsing to the namespace string. Once JWT verify was
-// fixed, the underlying flaw surfaced.
+// which allowed only the namespace-name-as-wallet API-key fallback or the
+// deploying wallet. Onboarding functions like `user-create`, where a brand-new
+// wallet calls in to register, were refused with 401. They worked only as a
+// side effect of JWT verification silently failing before #215 and callerWallet
+// collapsing to the namespace string; fixing JWT verification surfaced the
+// underlying flaw.
 //
-// Fine-grained per-function ACLs (group membership, roles) are deferred
-// until there's a concrete tenant requirement. Today, "private" means
-// "authenticated in-namespace caller required" and that's enforced
-// here + at authMiddleware.
-// isSystemTrigger reports whether a trigger type fires from gateway-internal
-// state (a cron row, a pubsub dispatcher, a DB-change watcher, an in-process
-// scheduler) rather than from an external caller request.
-//
-// The distinction matters for authorization:
-//
-//   - User-driven triggers (HTTP, WebSocket) carry a real caller identity
-//     populated by auth middleware. CanInvoke gates them on that identity.
-//   - System triggers carry no caller identity by design — they were
-//     registered by an already-authenticated operator, stored in the
-//     namespace's own rqlite, and are now firing from the gateway process
-//     itself. Gating them on CallerWallet returns false unconditionally and
-//     silently blocks every fire (bugboard #264 — discovered via a cron
-//     trigger that fired every minute with "unauthorized" for 19+ hours).
-func isSystemTrigger(t TriggerType) bool {
-	switch t {
-	case TriggerTypeCron, TriggerTypePubSub, TriggerTypeDatabase,
-		TriggerTypeTimer, TriggerTypeJob, TriggerTypeInternal:
-		return true
-	}
-	return false
-}
-
-// IsSystemTrigger is the exported form of isSystemTrigger, for callers outside
-// this package that must know whether an invocation is system-originated.
-//
-// pkg/serverless/hostfunctions uses it so a nested function_invoke made by a
-// system-triggered parent stays system-originated instead of being re-checked as
-// an anonymous external call (bugboard #159).
-func IsSystemTrigger(t TriggerType) bool { return isSystemTrigger(t) }
-
-func (i *Invoker) CanInvoke(ctx context.Context, namespace, functionName string, callerWallet string, callerIsAdmin bool) (bool, error) {
-	fn, err := i.registry.Get(ctx, namespace, functionName, 0)
-	if err != nil {
-		return false, err
-	}
-	return canInvokeFn(fn, callerWallet, callerIsAdmin), nil
-}
-
-// canInvokeFn is the pure authorization decision for an already-fetched
-// function, so the hot Invoke path doesn't re-read the registry (bugboard
-// #708). Public functions are open; a private function only requires that the
-// caller has SOME identity — the auth middleware already verified namespace
-// membership before the function ran.
-//
-// An internal function (bugboard #152) may be invoked ONLY by a system
-// trigger or an admin caller. System triggers bypass this function entirely
-// (isSystemTrigger short-circuits the gate in Invoke), so reaching here with
-// an internal function means an external caller — require admin. This closes
-// the hole where a scoped app-runtime key could invoke internal/admin/cron
-// functions (e.g. `migrate`) by name.
-func canInvokeFn(fn *Function, callerWallet string, callerIsAdmin bool) bool {
+// Per-function ACLs (group membership, roles) are deferred until there is a
+// concrete tenant requirement. Today "private" means "an authenticated
+// in-namespace caller with the invoke grant".
+func canInvokeFn(fn *Function, callerWallet string, callerIsAdmin, callerHasInvoke bool) bool {
 	if fn.IsInternal && !callerIsAdmin {
 		return false
 	}
 	if fn.IsPublic {
 		return true
 	}
-	return strings.TrimSpace(callerWallet) != ""
+	if callerIsAdmin {
+		return true
+	}
+	if strings.TrimSpace(callerWallet) == "" {
+		return false
+	}
+	return callerHasInvoke
 }
 
 // GetFunctionInfo returns basic info about a function for invocation.

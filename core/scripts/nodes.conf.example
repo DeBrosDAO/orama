@@ -1,0 +1,27 @@
+# Orama Network node topology
+# Format: environment|user@host|role
+# Auth: wallet-derived SSH keys (rw vault ssh)
+#
+# environment: devnet, testnet
+# role: node, nameserver-ns1, nameserver-ns2, nameserver-ns3
+#
+# Copy this file to nodes.conf and fill in your own nodes:
+#
+#     cp core/scripts/nodes.conf.example core/scripts/nodes.conf
+#
+# nodes.conf is gitignored. It is a local inventory of the hosts you operate,
+# and committing it publishes your fleet's addresses and login names.
+#
+# This file is only a fallback. `orama nodes`, `orama push` and `orama rollout`
+# resolve nodes from the network API first and read it only when that returns
+# nothing; chg-333 removes the need for it entirely.
+
+# --- Devnet nameservers ---
+devnet|root@203.0.113.11|nameserver-ns1
+devnet|root@203.0.113.12|nameserver-ns2
+devnet|root@203.0.113.13|nameserver-ns3
+
+# --- Testnet nameservers ---
+testnet|root@198.51.100.21|nameserver-ns1
+testnet|root@198.51.100.22|nameserver-ns2
+testnet|root@198.51.100.23|nameserver-ns3

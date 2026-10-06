@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/sfu/roomid"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -23,6 +24,10 @@ type Server struct {
 	upgrader    websocket.Upgrader
 	draining    bool
 	drainingMu  sync.RWMutex
+
+	// refreshAfter waits out the interval before a TURN credential refresh.
+	// A field so a test can drive the refresh without racing the package timer.
+	refreshAfter func(time.Duration) <-chan time.Time
 }
 
 // NewServer creates a new SFU server.
@@ -32,9 +37,10 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		config:      cfg,
-		roomManager: NewRoomManager(cfg, logger),
-		logger:      logger.With(zap.String("component", "sfu"), zap.String("namespace", cfg.Namespace)),
+		config:       cfg,
+		roomManager:  NewRoomManager(cfg, logger),
+		logger:       logger.With(zap.String("component", "sfu"), zap.String("namespace", cfg.Namespace)),
+		refreshAfter: time.After,
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  4096,
 			WriteBufferSize: 4096,
@@ -95,20 +101,25 @@ func (s *Server) Close() error {
 	return s.httpServer.Shutdown(ctx)
 }
 
-// handleHealth is a simple health check endpoint.
+// handleHealth reports readiness (503 while draining) and the room count.
+// With ?room=<id> it also reports whether that room has participants here: the
+// namespace gateway asks this to find the SFU that already hosts a room
+// (docs/WEBRTC.md#room-placement). A room that is empty, or absent, is false.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.drainingMu.RLock()
 	draining := s.draining
 	s.drainingMu.RUnlock()
 
+	hasRoom := s.roomManager.HasParticipants(r.URL.Query().Get("room"))
+
 	if draining {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		fmt.Fprintf(w, `{"status":"draining","rooms":%d}`, s.roomManager.RoomCount())
+		fmt.Fprintf(w, `{"status":"draining","rooms":%d,"hasRoom":%t}`, s.roomManager.RoomCount(), hasRoom)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `{"status":"ok","rooms":%d}`, s.roomManager.RoomCount())
+	fmt.Fprintf(w, `{"status":"ok","rooms":%d,"hasRoom":%t}`, s.roomManager.RoomCount(), hasRoom)
 }
 
 // handleSignal upgrades to WebSocket and runs the signaling loop for one peer.
@@ -158,6 +169,21 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := roomid.Validate(joinData.RoomID); err != nil {
+		conn.WriteMessage(websocket.TextMessage, mustMarshal(NewErrorMessage("invalid_join", err.Error())))
+		conn.Close()
+		return
+	}
+
+	// The gateway routed this socket to the room's owner by the ?room= query;
+	// a join for another room would land the peer on an SFU that does not own
+	// that room and split the call.
+	if q := r.URL.Query().Get("room"); q != "" && q != joinData.RoomID {
+		conn.WriteMessage(websocket.TextMessage, mustMarshal(NewErrorMessage("room_mismatch", "join roomId must equal the room query parameter")))
+		conn.Close()
+		return
+	}
+
 	room := s.roomManager.GetOrCreateRoom(joinData.RoomID)
 	peer := NewPeer(joinData.UserID, conn, room, s.logger)
 
@@ -176,7 +202,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 
 	// Send TURN credentials
 	if s.config.TURNSecret != "" && len(s.config.TURNServers) > 0 {
-		s.sendTURNCredentials(peer)
+		s.sendTURNCredentials(peer, MessageTypeTURNCredentials)
 	}
 
 	// Send existing tracks from other peers
@@ -250,8 +276,9 @@ func (s *Server) signalingLoop(peer *Peer, room *Room) {
 	}
 }
 
-// sendTURNCredentials sends TURN server credentials to a peer.
-func (s *Server) sendTURNCredentials(peer *Peer) {
+// sendTURNCredentials sends TURN server credentials to a peer as msgType:
+// turn-credentials on join, refresh-credentials on the 80%-of-TTL refresh.
+func (s *Server) sendTURNCredentials(peer *Peer, msgType MessageType) {
 	ttl := time.Duration(s.config.TURNCredentialTTL) * time.Second
 	username, password := turn.GenerateCredentials(s.config.TURNSecret, s.config.Namespace, ttl)
 
@@ -265,7 +292,7 @@ func (s *Server) sendTURNCredentials(peer *Peer) {
 		}
 	}
 
-	peer.SendMessage(NewServerMessage(MessageTypeTURNCredentials, &TURNCredentialsData{
+	peer.SendMessage(NewServerMessage(msgType, &TURNCredentialsData{
 		Username: username,
 		Password: password,
 		TTL:      s.config.TURNCredentialTTL,
@@ -278,7 +305,7 @@ func (s *Server) credentialRefreshLoop(peer *Peer) {
 	refreshInterval := time.Duration(float64(s.config.TURNCredentialTTL)*0.8) * time.Second
 
 	for {
-		<-timeAfter(refreshInterval)
+		<-s.refreshAfter(refreshInterval)
 
 		peer.closedMu.RLock()
 		closed := peer.closed
@@ -287,7 +314,7 @@ func (s *Server) credentialRefreshLoop(peer *Peer) {
 			return
 		}
 
-		s.sendTURNCredentials(peer)
+		s.sendTURNCredentials(peer, MessageTypeRefreshCredentials)
 		s.logger.Debug("Refreshed TURN credentials", zap.String("peer_id", peer.ID))
 	}
 }

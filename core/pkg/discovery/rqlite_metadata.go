@@ -26,9 +26,14 @@ type NamespaceStatus struct {
 type RQLiteNodeMetadata struct {
 	// --- Existing fields (unchanged) ---
 
-	NodeID         string    `json:"node_id"`         // RQLite node ID (raft address)
-	RaftAddress    string    `json:"raft_address"`    // Raft port address (e.g., "10.0.0.1:7001")
-	HTTPAddress    string    `json:"http_address"`    // HTTP API address (e.g., "10.0.0.1:5001")
+	// NodeID is the node's RQLite raft id. On a node that predates the stable
+	// identity scheme this is its raft address; on one that has it, it is the
+	// libp2p peer id. Consumers must treat it as an opaque identifier and must
+	// NOT assume it can be dialled — RaftAddress is the routing data.
+	NodeID string `json:"node_id"`
+
+	RaftAddress    string    `json:"raft_address"`    // Raft port address (e.g., "10.0.0.1:10101")
+	HTTPAddress    string    `json:"http_address"`    // HTTP API address (e.g., "10.0.0.1:10100")
 	NodeType       string    `json:"node_type"`       // Node type identifier
 	RaftLogIndex   uint64    `json:"raft_log_index"`  // Current Raft log index (for data comparison)
 	LastSeen       time.Time `json:"last_seen"`       // Updated on every announcement
@@ -46,7 +51,7 @@ type RQLiteNodeMetadata struct {
 	// --- New: Lifecycle ---
 
 	// LifecycleState is the node's current lifecycle state:
-	// "joining", "active", "draining", or "maintenance".
+	// "joining", "active", "degraded", "draining", or "maintenance".
 	// Zero value (empty string) from old nodes is treated as "active".
 	LifecycleState string `json:"lifecycle_state,omitempty"`
 
@@ -83,8 +88,20 @@ func (m *RQLiteNodeMetadata) IsInMaintenance() bool {
 }
 
 // IsAvailable returns true if the node is in a state that can serve requests.
+// "degraded" counts: such a node is up and answering from its local replicas,
+// it has simply not finished converging on the cluster. See
+// lifecycle.StateDegraded.
+//
+// It is a claim by the node about itself, so callers must verify it rather than
+// route traffic on it alone — see health.Monitor.probeNode, which deliberately
+// does not short-circuit "degraded" and confirms with an HTTP probe.
 func (m *RQLiteNodeMetadata) IsAvailable() bool {
-	return m.EffectiveLifecycleState() == "active"
+	switch m.EffectiveLifecycleState() {
+	case "active", "degraded":
+		return true
+	default:
+		return false
+	}
 }
 
 // IsMaintenanceExpired returns true if the node is in maintenance and the

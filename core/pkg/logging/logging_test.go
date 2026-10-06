@@ -33,7 +33,6 @@ func TestNewColoredLoggerAllComponents(t *testing.T) {
 		ComponentDatabase,
 		ComponentClient,
 		ComponentGeneral,
-		ComponentAnyone,
 		ComponentGateway,
 	}
 
@@ -114,7 +113,7 @@ func TestComponentErrorDoesNotPanic(t *testing.T) {
 	}
 
 	logger.ComponentError(ComponentDatabase, "database error")
-	logger.ComponentError(ComponentAnyone, "anyone error")
+	logger.ComponentError(ComponentGateway, "gateway error")
 }
 
 func TestComponentDebugDoesNotPanic(t *testing.T) {
@@ -179,7 +178,7 @@ func TestStandardLoggerErrorfDoesNotPanic(t *testing.T) {
 }
 
 func TestStandardLoggerReturnsNonNil(t *testing.T) {
-	sl, err := NewStandardLogger(ComponentAnyone)
+	sl, err := NewStandardLogger(ComponentGateway)
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
@@ -198,7 +197,6 @@ func TestGetComponentColorReturnsValue(t *testing.T) {
 		ComponentDatabase,
 		ComponentClient,
 		ComponentGeneral,
-		ComponentAnyone,
 		ComponentGateway,
 	}
 

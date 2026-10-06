@@ -1,0 +1,61 @@
+# What a credential may do: API keys (format, checksum, 90/365-day life,
+# shown once, rotation overlap, revocation reaching exchanged tokens, legacy
+# spellings and their Deprecation headers), the owner/admin/developer/
+# runtime/reader matrix over representative routes of every policy class,
+# key scopes, resource selectors on pubsub, cache and storage (including `..`
+# refusal and write-time refusals), odd paths, members add/remove/transfer
+# over HTTP and the CLI, app grants and the workload renew route's refusals
+# (a workload renewing itself needs a deployed app: reference-apps), and the
+# audit trail with its filters, bounds, redaction and --follow.
+id: auth-keys-roles
+title: API keys, roles, grants, members and the audit trail
+area: auth
+subtasks: [2828]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama app
+    - orama app grants
+    - orama app grants list
+    - orama app grants set
+    - orama audit
+    - orama members
+    - orama members add
+    - orama members list
+    - orama members remove
+    - orama members transfer
+    - orama namespace keys
+    - orama namespace keys create
+    - orama namespace keys list
+    - orama namespace keys revoke
+    - orama namespace keys revoke-legacy
+    - orama namespace keys rotate
+  routes:
+    - /v1/audit
+    - /v1/auth/renew
+    - /v1/auth/token
+    - /v1/deployments/grants
+    - /v1/namespace/keys
+    - /v1/namespace/keys/
+    - /v1/namespace/members
+    - /v1/namespace/members/
+  claims:
+    - "docs/AUTH.md#keys: orama_<sk|rk>_<payload>_<checksum>; the key names no namespace; 90 days by default, a year at most; shown once"
+    - "docs/AUTH.md#keys: rotating keeps the original working for the overlap (7 days by default, 30 at most)"
+    - "docs/AUTH.md#revoking: revoking a key stops the key and the tokens exchanged from it"
+    - "docs/AUTH.md#sending-a-credential: X-API-Key, Authorization: ApiKey and a bare Authorization answer Deprecation: true with what to send instead"
+    - "docs/AUTH.md#sending-a-credential: a token exchanged from a key never carries the key"
+    - "docs/AUTH.md#roles: owner/admin everything, developer the data plane plus db/deploy/secrets/fn:manage, runtime the data plane, reader nothing"
+    - "docs/AUTH.md#when-a-request-is-refused: INSUFFICIENT_SCOPE names required_scope"
+    - "docs/AUTH.md#narrowing-a-grant: pubsub topic, cache key and storage name selectors narrow; '..' in a storage name is refused; a cache key is not a path"
+    - "docs/AUTH.md#narrowing-a-grant: a selector no data path applies (db, push) or that would widen (reader) is refused at write"
+    - "docs/AUTH.md#how-long-a-change-takes-to-land: narrowing a wallet's grant lands on its next request"
+    - "docs/AUTH.md#roles: ownership is transferred in one step and the outgoing owner keeps admin"
+    - "docs/AUTH.md#a-workloads-identity: a deployment cannot be granted the control plane; /v1/auth/renew refuses a user session, an exchanged key token, a bare key and no credential (a workload renewing itself is asserted by reference-apps)"
+    - "docs/AUTH.md#the-record: keys, grants and policies are recorded; a key actor is a fingerprint, never the key"
+    - "docs/API_SURFACE.md#authentication: /v1/audit takes action, principal, since and limit (200 max); the namespace comes from the credential"

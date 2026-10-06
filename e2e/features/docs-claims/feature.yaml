@@ -1,0 +1,34 @@
+# Documentation claims checked against the code and the fleet (bugboard 2855,
+# E2E-36). Pure-file checks read the checkout: TURN credential lifetimes (24h
+# REST/host-fn, 600s SFU) and TURN TLS ports (5349/tcp, 443/tcp stealth,
+# never 443/udp) against core; API_SURFACE.md's stated route counts against
+# its rows; every `orama ...` command named in docs/ against the reference
+# and the binary; the whitepaper's per-wallet cap and emission wording
+# against SECURITY.md, CHAIN.md and the chain code; the join TLS not called
+# TOFU; the supply invariant stated in CHAIN.md; plans/open-network.md a
+# plan. Live checks: TURN credentials really last 24h and offer TURNS on
+# 5349, the fresh cluster's cap is 10, and the emission invariants hold on
+# every validator. A failing check names the doc file:line to fix.
+id: docs-claims
+title: Documentation claims against code and fleet
+area: docs
+subtasks: [2855]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/webrtc/turn/credentials
+  claims:
+    - "docs/WEBRTC.md: REST and host-fn TURN credentials last 24h; SFU-signalled ones use the per-namespace TTL, 600s by default"
+    - "docs/ARCHITECTURE.md: TURN credential TTL and TURN TLS port agree with docs/WEBRTC.md and the code"
+    - "docs/API_SURFACE.md: the stated route counts are the number of route rows, per owner"
+    - "docs/API_SURFACE.md: every CLI command named is a command the binary has"
+    - "docs/whitepaper/WHITEPAPER.md: a wallet's namespace cap is a default of 10 an operator sets from 1 to 10000"
+    - "docs/whitepaper/WHITEPAPER.md: the emission split matches chain/x/emission and docs/CHAIN.md"
+    - "docs/SECURITY.md: joining TLS pins the invite's certificate fingerprint and is not trust on first use"
+    - "docs/CHAIN.md: supply == emitted - burned, and the emission invariants hold on every validator"
+    - "plans/open-network.md: a design plan outside docs/, not a description of running code"

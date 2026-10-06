@@ -12,27 +12,29 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gatewaykeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/hkdf"
 )
 
-const jwtKeyFileName = "jwt-signing-key.pem"
-const eddsaKeyFileName = "jwt-eddsa-key.pem"
+// jwtKeyFileName is this gateway's RSA signing key, inside its state directory.
+const jwtKeyFileName = constants.GatewayRSAKeyFileName
 
-// jwtEdDSADerivePurpose is the HKDF info string used to derive the cluster-wide
-// Ed25519 JWT signing seed from the cluster secret. Bumping the version label
-// (e.g. "...-v2") on disk = full re-derive + invalidates old tokens.
-const jwtEdDSADerivePurpose = "orama-jwt-eddsa-v1"
+// eddsaKeyFileName is where this gateway's own signing key lives. The auth
+// package names the same file, because a rotation overwrites exactly what the
+// next boot reads; a test holds the two together.
+const eddsaKeyFileName = auth.EdDSAKeyFileName
 
-// loadOrCreateSigningKey loads the JWT signing key from disk, or generates a new one
-// if none exists. This ensures JWTs survive gateway restarts.
-func loadOrCreateSigningKey(dataDir string, logger *logging.ColoredLogger) ([]byte, error) {
-	keyPath := filepath.Join(dataDir, "secrets", jwtKeyFileName)
+// loadOrCreateSigningKey loads the JWT signing key from this gateway's state
+// directory, or generates a new one if none exists. This ensures JWTs survive
+// gateway restarts.
+func loadOrCreateSigningKey(stateDir string, logger *logging.ColoredLogger) ([]byte, error) {
+	keyPath := filepath.Join(stateDir, jwtKeyFileName)
 
-	// Try to load existing key
 	if keyPEM, err := os.ReadFile(keyPath); err == nil && len(keyPEM) > 0 {
-		// Verify the key is valid
 		block, _ := pem.Decode(keyPEM)
 		if block != nil {
 			if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
@@ -41,8 +43,13 @@ func loadOrCreateSigningKey(dataDir string, logger *logging.ColoredLogger) ([]by
 				return keyPEM, nil
 			}
 		}
-		logger.ComponentWarn(logging.ComponentGeneral, "Existing JWT signing key is invalid, generating new one",
-			zap.String("path", keyPath))
+		// Refusing, as for the EdDSA key: a replacement would silently
+		// invalidate every token this gateway issued and overwrite the only
+		// copy of a key that might be recoverable.
+		return nil, fmt.Errorf("the JWT signing key at %s cannot be read; move it aside to have a new one generated, "+
+			"which invalidates every token this gateway has issued", keyPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read the JWT signing key %s: %w", keyPath, err)
 	}
 
 	// Generate new key
@@ -56,15 +63,10 @@ func loadOrCreateSigningKey(dataDir string, logger *logging.ColoredLogger) ([]by
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 
-	// Ensure secrets directory exists
-	secretsDir := filepath.Dir(keyPath)
-	if err := os.MkdirAll(secretsDir, 0700); err != nil {
-		return nil, fmt.Errorf("create secrets directory: %w", err)
-	}
-
-	// Write key with restrictive permissions
+	// Write key with restrictive permissions. The state directory already
+	// exists: ensureStateDir created it, 0700, before anything reads it.
 	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		return nil, fmt.Errorf("write signing key: %w", err)
+		return nil, fmt.Errorf("write the JWT signing key %s: %w", keyPath, err)
 	}
 
 	logger.ComponentInfo(logging.ComponentGeneral, "Generated and saved new JWT signing key",
@@ -72,107 +74,242 @@ func loadOrCreateSigningKey(dataDir string, logger *logging.ColoredLogger) ([]by
 	return keyPEM, nil
 }
 
-// loadOrCreateEdSigningKey loads or generates an Ed25519 private key for EdDSA JWT signing.
+// jwtEdDSADerivePurpose is the HKDF label the Ed25519 signing seed used to be
+// derived from the cluster secret with.
 //
-// Bug #215 fix: when a non-empty clusterSecret is provided, the key is derived
-// DETERMINISTICALLY from the cluster secret using HKDF-SHA256. This means every
-// gateway in the cluster ends up with the same Ed25519 keypair, so a JWT signed
-// by one gateway can be verified by any other gateway. Without this, each
-// gateway minted its own random key on first boot, JWTs were unverifiable
-// cross-gateway, and host functions saw empty `caller_jwt_subject` whenever
-// invoke landed on a different node than `/v1/auth/login`.
-//
-// When clusterSecret is empty (single-node test rigs, no shared secret),
-// falls back to the legacy random-per-node behaviour.
-//
-// On-disk PEM is the source of truth at runtime; if it doesn't match the
-// derivation (e.g. left over from before this fix, or cluster secret rotated
-// the label), the file is rewritten with the canonical key. Old tokens become
-// unverifiable but JWT lifetime is short (15 min) so the disruption is bounded.
-func loadOrCreateEdSigningKey(dataDir, clusterSecret string, logger *logging.ColoredLogger) (ed25519.PrivateKey, error) {
-	keyPath := filepath.Join(dataDir, "secrets", eddsaKeyFileName)
+// Nothing signs with it any more. Every node holds the cluster secret, so a key
+// derived from it is a key every node can mint any namespace's tokens with —
+// which is the hole this replaces. It is kept only so that tokens minted before
+// the upgrade keep verifying for the length of one access token; see
+// LegacyClusterSigningKey.
+const jwtEdDSADerivePurpose = "orama-jwt-eddsa-v1"
 
-	// Compute the canonical key for this cluster (if a secret is available).
-	// Empty clusterSecret = legacy mode, no canonical key, just use whatever
-	// is on disk or freshly generated.
-	var canonical ed25519.PrivateKey
-	if clusterSecret != "" {
-		seed, err := deriveEd25519Seed(clusterSecret)
-		if err != nil {
-			return nil, fmt.Errorf("derive Ed25519 seed from cluster secret: %w", err)
-		}
-		canonical = ed25519.NewKeyFromSeed(seed)
-	}
+// loadOrCreateEdSigningKey returns the Ed25519 key this gateway signs with,
+// generating and persisting one in its state directory the first time.
+//
+// It used to derive the key from the cluster secret so that every gateway in
+// the cluster held the same one. That is exactly what made a compromised
+// namespace gateway able to mint a token for any tenant. Each gateway has its
+// own key now, and the public halves are published so the others can verify.
+//
+// A key on disk that IS the cluster-derived one — what every 0.122.x node
+// wrote, and what the upgrade carries into the index gateway's state
+// directory — is replaced rather than loaded: every node can compute it, so
+// signing with it would reopen the hole. Nothing it signed is lost; the
+// legacy key stays verify-only for one token lifetime (LegacyClusterSigningKey).
+func loadOrCreateEdSigningKey(stateDir, clusterSecret string, logger *logging.ColoredLogger) (ed25519.PrivateKey, bool, error) {
+	keyPath := auth.SigningKeyPath(stateDir)
 
-	// Try to load existing key
-	if keyPEM, err := os.ReadFile(keyPath); err == nil && len(keyPEM) > 0 {
-		block, _ := pem.Decode(keyPEM)
-		if block != nil {
-			parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-			if err == nil {
-				if edKey, ok := parsed.(ed25519.PrivateKey); ok {
-					// If we have a canonical cluster-derived key, the on-disk
-					// key MUST match it. Otherwise we'd silently keep using a
-					// per-node random key and JWTs wouldn't verify cross-node.
-					if canonical != nil && !ed25519.PrivateKey(edKey).Equal(canonical) {
-						logger.ComponentWarn(logging.ComponentGeneral,
-							"On-disk EdDSA key does not match cluster-derived key; rewriting from cluster secret",
-							zap.String("path", keyPath))
-						// Fall through to write canonical below.
-					} else {
-						logger.ComponentInfo(logging.ComponentGeneral, "Loaded existing EdDSA signing key",
-							zap.String("path", keyPath))
-						return edKey, nil
-					}
-				}
-			}
+	// migrated is true only when the key on disk was the cluster-derived one
+	// and this call replaced it. Callers arm that key for one token lifetime
+	// in that case and in no other.
+	migrated := false
+	keyPEM, err := os.ReadFile(keyPath)
+	switch {
+	case err == nil && len(keyPEM) > 0:
+		edKey, perr := parseEdSigningKey(keyPEM)
+		if perr != nil {
+			// Refusing is the only safe answer. Generating a replacement would
+			// silently invalidate every token this gateway has issued, and
+			// overwrite the only copy of a key that might be recoverable.
+			return nil, false, fmt.Errorf("the EdDSA signing key at %s cannot be read (%v); move it aside to have a new one generated, "+
+				"which invalidates every token this gateway has issued", keyPath, perr)
 		}
-		if canonical == nil {
-			logger.ComponentWarn(logging.ComponentGeneral, "Existing EdDSA signing key is invalid, generating new one",
+		shared, derr := isClusterDerivedKey(edKey, clusterSecret)
+		if derr != nil {
+			return nil, false, derr
+		}
+		if !shared {
+			logger.ComponentInfo(logging.ComponentGeneral, "Loaded existing EdDSA signing key",
 				zap.String("path", keyPath))
+			return edKey, false, nil
 		}
+		migrated = true
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"The EdDSA signing key on disk is the cluster-derived key every node can compute; replacing it with this gateway's own",
+			zap.String("path", keyPath))
+	case err != nil && !os.IsNotExist(err):
+		return nil, false, fmt.Errorf("read the EdDSA signing key %s: %w", keyPath, err)
 	}
 
-	// Either nothing on disk, key was unparseable, or it didn't match the
-	// canonical cluster-derived key. Use canonical when available; otherwise
-	// generate a random one (legacy single-node fallback).
-	priv := canonical
-	if priv == nil {
-		_, generated, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("generate Ed25519 key: %w", err)
-		}
-		priv = generated
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, false, fmt.Errorf("generate Ed25519 key: %w", err)
+	}
+	if err := auth.PersistSigningKey(stateDir, priv); err != nil {
+		return nil, false, err
 	}
 
-	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	logger.ComponentInfo(logging.ComponentGeneral, "Generated an EdDSA signing key for this gateway",
+		zap.String("path", keyPath))
+	return priv, migrated, nil
+}
+
+// parseEdSigningKey reads a PKCS#8 Ed25519 private key.
+func parseEdSigningKey(keyPEM []byte) (ed25519.PrivateKey, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, fmt.Errorf("not PEM")
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("not PKCS#8: %w", err)
+	}
+	edKey, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("a %T, not an Ed25519 key", parsed)
+	}
+	return edKey, nil
+}
+
+// isClusterDerivedKey reports whether key is the one every node derives from
+// the cluster secret. With no cluster secret there is nothing to derive, so no
+// key can be it.
+func isClusterDerivedKey(key ed25519.PrivateKey, clusterSecret string) (bool, error) {
+	if clusterSecret == "" {
+		return false, nil
+	}
+	legacy, err := LegacyClusterSigningKey(clusterSecret)
+	if err != nil {
+		return false, fmt.Errorf("derive the legacy cluster signing key to compare against: %w", err)
+	}
+	return legacy.Equal(key.Public()), nil
+}
+
+// LegacyClusterSigningKey returns the key every gateway derived from the
+// cluster secret before each got its own.
+//
+// It is added as verify-only, and only for one access-token lifetime after
+// boot. Tokens minted before the upgrade have to keep working across it; after
+// that window a key every node can derive must not verify anything, or the
+// separation this change exists for would hold for the new keys and not at all
+// for the old one.
+func LegacyClusterSigningKey(clusterSecret string) (ed25519.PublicKey, error) {
+	seed, err := deriveEd25519Seed(clusterSecret)
+	if err != nil {
+		return nil, err
+	}
+	return ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), nil
+}
+
+// loadIndexSigningKey returns the index gateway's RSA key from the credential
+// systemd handed this unit. The installer creates the file before the unit
+// starts (pkg/gatewaykeys Ensure) and the unit's LoadCredential= refuses to
+// start without it, so a missing credential is a broken install, not a first
+// boot: generating a key here would rotate it on every restart.
+func loadIndexSigningKey(credDir, stateDir string) ([]byte, error) {
+	return sealedKey(credDir, stateDir, jwtKeyFileName)
+}
+
+// loadIndexEdSigningKey is the Ed25519 half of loadIndexSigningKey. A key that
+// is the cluster-derived one is replaced, as for a tenant gateway; the
+// replacement is stored through sink and signs from this boot on, and the unit
+// loads it as its credential from the next.
+func loadIndexEdSigningKey(credDir, stateDir, clusterSecret string, sink func(string, []byte) error, logger *logging.ColoredLogger) (ed25519.PrivateKey, bool, error) {
+	pem, err := sealedKey(credDir, stateDir, eddsaKeyFileName)
+	if err != nil {
+		return nil, false, err
+	}
+	edKey, perr := parseEdSigningKey(pem)
+	if perr != nil {
+		return nil, false, fmt.Errorf("the index EdDSA signing key cannot be read (%v); move %s/%s aside and re-run `orama node upgrade` to have a new one generated, "+
+			"which invalidates every token this gateway has issued", perr, gatewaykeys.Dir, constants.IndexNamespace+"/"+eddsaKeyFileName)
+	}
+	shared, derr := isClusterDerivedKey(edKey, clusterSecret)
+	if derr != nil {
+		return nil, false, derr
+	}
+	if !shared {
+		return edKey, false, nil
+	}
+	logger.ComponentWarn(logging.ComponentGeneral, "The index EdDSA signing key is the cluster-derived key every node can compute; replacing it")
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, false, fmt.Errorf("generate Ed25519 key: %w", err)
+	}
+	encoded, err := marshalEdPrivateKey(priv)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := sink(eddsaKeyFileName, encoded); err != nil {
+		return nil, false, err
+	}
+	return priv, true, nil
+}
+
+// indexKeyStore is where a rotation puts the index gateway's replacement key:
+// the root-only tree the unit's credential is loaded from, through sink
+// (privhelper.PutGatewayKey), replacing the file. The state directory is never
+// written: a tenant gateway reads it, and the next boot would load the old
+// credential and undo the rotation.
+func indexKeyStore(sink func(string, []byte) error) auth.KeyStore {
+	return auth.KeyStore{
+		Store: func(priv ed25519.PrivateKey) error {
+			encoded, err := marshalEdPrivateKey(priv)
+			if err != nil {
+				return err
+			}
+			if err := sink(eddsaKeyFileName, encoded); err != nil {
+				return fmt.Errorf("store the index gateway's replacement signing key: %w", err)
+			}
+			return nil
+		},
+		Where: filepath.Join(gatewaykeys.Dir, constants.IndexNamespace, eddsaKeyFileName),
+	}
+}
+
+// sealedKey returns the key PEM systemd passed in as the credential name and
+// removes the copy an earlier release left in stateDir, which a tenant gateway
+// (the same uid) can read. A credential that is not there is an error that
+// says how to repair it.
+func sealedKey(credDir, stateDir, name string) ([]byte, error) {
+	if credDir == "" {
+		return nil, fmt.Errorf("CREDENTIALS_DIRECTORY is not set, so systemd gave this unit no signing keys; " +
+			"the index gateway must run as orama-namespace-gateway@index with the LoadCredential= lines of its drop-in " +
+			"(orama-namespace-gateway@index.service.d/10-cluster-gateway.conf); run `orama node upgrade` to install them")
+	}
+	pem, err := readKeyIfPresent(filepath.Join(credDir, name))
+	if err != nil {
+		return nil, err
+	}
+	if pem == nil {
+		return nil, fmt.Errorf("the credential %s is missing from %s; the index gateway's signing key lives in %s/%s/%s "+
+			"and `orama node upgrade` creates it", name, credDir, gatewaykeys.Dir, constants.IndexNamespace, name)
+	}
+	if err := removeStateKey(stateDir, name); err != nil {
+		return nil, err
+	}
+	return pem, nil
+}
+
+func readKeyIfPresent(path string) ([]byte, error) {
+	pem, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	if len(pem) == 0 {
+		return nil, nil
+	}
+	return pem, nil
+}
+
+func removeStateKey(stateDir, name string) error {
+	err := os.Remove(filepath.Join(stateDir, name))
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove %s from the state directory a tenant gateway can read: %w", name, err)
+	}
+	return nil
+}
+
+func marshalEdPrivateKey(priv ed25519.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return nil, fmt.Errorf("marshal Ed25519 key: %w", err)
 	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkcs8Bytes,
-	})
-
-	// Ensure secrets directory exists
-	secretsDir := filepath.Dir(keyPath)
-	if err := os.MkdirAll(secretsDir, 0700); err != nil {
-		return nil, fmt.Errorf("create secrets directory: %w", err)
-	}
-
-	if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-		return nil, fmt.Errorf("write EdDSA signing key: %w", err)
-	}
-
-	source := "random per-node"
-	if canonical != nil {
-		source = "cluster-derived (HKDF)"
-	}
-	logger.ComponentInfo(logging.ComponentGeneral, "Saved EdDSA signing key",
-		zap.String("path", keyPath),
-		zap.String("source", source))
-	return priv, nil
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
 // deriveEd25519Seed derives a deterministic 32-byte seed for Ed25519 from the

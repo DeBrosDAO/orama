@@ -1,0 +1,256 @@
+package remotessh
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/inspector"
+	"github.com/DeBrosOfficial/network/pkg/rwagent"
+)
+
+// vaultClient is the interface used by wallet functions to talk to the agent.
+// Defaults to the real rwagent.Client; tests replace it with a mock.
+type vaultClient interface {
+	GetSSHKey(ctx context.Context, host, username, format string) (*rwagent.VaultSSHData, error)
+	CreateSSHEntry(ctx context.Context, host, username string) (*rwagent.VaultSSHData, error)
+	DeleteSSHEntry(ctx context.Context, host, username string) error
+	KeepUnlocked(interval time.Duration) (stop func())
+}
+
+// newClient creates the default vaultClient. Package-level var for test injection.
+var newClient func() vaultClient = func() vaultClient {
+	return rwagent.New(os.Getenv("RW_AGENT_SOCK"))
+}
+
+// wrapAgentError names the operation that failed and leaves the reason to the
+// agent error, which now carries its own hint.
+//
+// This used to hand-write a message per outcome and knew three of the agent's
+// nine codes, so an unanswered approval prompt, a request over the size limit
+// and a peer the agent stopped trusting all arrived as a bare code with no
+// suggestion. It also told anyone hitting a locked wallet that the unlock had
+// "timed out after waiting", which is true of the vault routes and false of the
+// wallet routes — the error distinguishes them by status now.
+func wrapAgentError(err error, action string) error {
+	if rwagent.IsNotRunning(err) {
+		return fmt.Errorf("%s: rootwallet agent is not reachable — open the RootWallet desktop app and unlock it", action)
+	}
+	if rwagent.IsRetryable(err) {
+		return fmt.Errorf("%s: %w (running this again may succeed)", action, err)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+// forgetKeyTimeout bounds one vault delete; the agent answers locally.
+const forgetKeyTimeout = 30 * time.Second
+
+// ForgetNodeKey deletes the node's SSH key from the RootWallet vault. Every
+// `orama node setup` stores one; a node that has been erased or retired no
+// longer needs it, and redeploys and fleet churn otherwise pile orphan keys
+// into the operator's wallet.
+func ForgetNodeKey(node inspector.Node) error {
+	ctx, cancel := context.WithTimeout(context.Background(), forgetKeyTimeout)
+	defer cancel()
+	if err := newClient().DeleteSSHEntry(ctx, node.Host, node.User); err != nil {
+		return wrapAgentError(err, fmt.Sprintf("delete the SSH key for %s@%s from the vault", node.User, node.Host))
+	}
+	return nil
+}
+
+// PrepareNodeKeys resolves wallet-derived SSH keys for all nodes.
+// Retrieves private keys from the rootwallet agent daemon, writes PEMs to
+// temp files, and sets node.SSHKey for each node.
+//
+// The nodes slice is modified in place — each node.SSHKey is set to
+// the path of the temporary key file.
+//
+// It also holds the agent's auto-lock window open until cleanup runs. Every
+// long command in this CLI takes its keys here and defers cleanup for the whole
+// operation, so that window is exactly the operation. Without it a rolling
+// upgrade — twenty-five minutes of SSH the agent never sees — locked the wallet
+// partway through and stopped at the next health gate waiting for someone to
+// answer an unlock prompt.
+//
+// Returns a cleanup function that zero-overwrites and removes all temp files,
+// and stops the keepalive. Caller must defer cleanup().
+func PrepareNodeKeys(nodes []inspector.Node) (cleanup func(), err error) {
+	client := newClient()
+	ctx := context.Background()
+	stopKeepalive := client.KeepUnlocked(rwagent.DefaultKeepaliveInterval)
+
+	// Create temp dir for all keys
+	tmpDir, err := os.MkdirTemp("", "orama-ssh-")
+	if err != nil {
+		stopKeepalive()
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+
+	// Track resolved keys by host/user to avoid duplicate agent calls
+	keyPaths := make(map[string]string) // "host/user" → temp file path
+	var allKeyPaths []string
+
+	// Ctrl-C and SIGTERM exit without running defers, which used to leave the
+	// private keys in the temp dir. The watch removes them and then re-raises
+	// so the process still dies.
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			stopKeepalive()
+			cleanupKeys(tmpDir, allKeyPaths)
+		})
+	}
+	stop := watchInterrupts(release, defaultReraise)
+
+	for i := range nodes {
+		var key string
+		if nodes[i].VaultTarget != "" {
+			key = nodes[i].VaultTarget
+		} else {
+			key = nodes[i].Host + "/" + nodes[i].User
+		}
+		if existing, ok := keyPaths[key]; ok {
+			nodes[i].SSHKey = existing
+			continue
+		}
+
+		host, user := parseVaultTarget(key)
+		data, err := client.GetSSHKey(ctx, host, user, "priv")
+		if err != nil {
+			stop()
+			return nil, wrapAgentError(err, fmt.Sprintf("resolve key for %s", nodes[i].Name()))
+		}
+
+		if !strings.Contains(data.PrivateKey, "BEGIN OPENSSH PRIVATE KEY") {
+			stop()
+			return nil, fmt.Errorf("agent returned invalid key for %s", nodes[i].Name())
+		}
+
+		// Write PEM to temp file with restrictive perms
+		keyFile := filepath.Join(tmpDir, fmt.Sprintf("id_%d", i))
+		if err := os.WriteFile(keyFile, []byte(data.PrivateKey), 0600); err != nil {
+			stop()
+			return nil, fmt.Errorf("write key for %s: %w", nodes[i].Name(), err)
+		}
+
+		keyPaths[key] = keyFile
+		allKeyPaths = append(allKeyPaths, keyFile)
+		nodes[i].SSHKey = keyFile
+	}
+
+	return stop, nil
+}
+
+// interruptSignals exit without running defers. The key files have to be gone
+// before that happens.
+var interruptSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+
+// watchInterrupts runs cleanup once when a signal arrives, then re-raises it
+// so the process still exits. stop ends the watch and runs cleanup; a second
+// stop does neither again.
+func watchInterrupts(cleanup func(), reraise func(os.Signal)) (stop func()) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, interruptSignals...)
+	stopped := make(chan struct{})
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			signal.Stop(sigs)
+			close(stopped)
+			cleanup()
+		})
+	}
+	go runInterruptWatch(sigs, stopped, stop, reraise)
+	return stop
+}
+
+// runInterruptWatch is the select watchInterrupts runs. Tests drive it with
+// their own channel so a signal does not kill the test process.
+func runInterruptWatch(sigs <-chan os.Signal, stopped <-chan struct{}, cleanup func(), reraise func(os.Signal)) {
+	select {
+	case sig := <-sigs:
+		cleanup()
+		reraise(sig)
+	case <-stopped:
+	}
+}
+
+// defaultReraise restores the signal's default action and sends it to this
+// process, so a Ctrl-C still ends the command after the keys are gone.
+func defaultReraise(sig os.Signal) {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		os.Exit(1)
+	}
+	signal.Reset(s)
+	_ = syscall.Kill(os.Getpid(), s)
+}
+
+// EnsureVaultEntry creates a wallet SSH entry if it doesn't already exist.
+// Checks the rootwallet agent for an existing entry, creates one if not found.
+func EnsureVaultEntry(vaultTarget string) error {
+	client := newClient()
+	ctx := context.Background()
+
+	host, user := parseVaultTarget(vaultTarget)
+
+	// Check if entry already exists
+	_, err := client.GetSSHKey(ctx, host, user, "pub")
+	if err == nil {
+		return nil // entry exists
+	}
+
+	// If not found, create it
+	if rwagent.IsNotFound(err) {
+		_, createErr := client.CreateSSHEntry(ctx, host, user)
+		if createErr != nil {
+			return wrapAgentError(createErr, fmt.Sprintf("create vault entry %s", vaultTarget))
+		}
+		return nil
+	}
+
+	return wrapAgentError(err, fmt.Sprintf("check vault entry %s", vaultTarget))
+}
+
+// ResolveVaultPublicKey returns the OpenSSH public key string for a vault entry.
+func ResolveVaultPublicKey(vaultTarget string) (string, error) {
+	client := newClient()
+	ctx := context.Background()
+
+	host, user := parseVaultTarget(vaultTarget)
+	data, err := client.GetSSHKey(ctx, host, user, "pub")
+	if err != nil {
+		return "", wrapAgentError(err, fmt.Sprintf("get public key for %s", vaultTarget))
+	}
+
+	pubKey := strings.TrimSpace(data.PublicKey)
+	if !strings.HasPrefix(pubKey, "ssh-") {
+		return "", fmt.Errorf("agent returned invalid public key for %s", vaultTarget)
+	}
+	return pubKey, nil
+}
+
+// parseVaultTarget splits a "host/user" vault target string into host and user.
+func parseVaultTarget(target string) (host, user string) {
+	idx := strings.Index(target, "/")
+	if idx < 0 {
+		return target, ""
+	}
+	return target[:idx], target[idx+1:]
+}
+
+// cleanupKeys zero-overwrites and removes all key files, then removes the temp dir.
+func cleanupKeys(tmpDir string, keyPaths []string) {
+	zeros := make([]byte, 512)
+	for _, p := range keyPaths {
+		_ = os.WriteFile(p, zeros, 0600) // zero-overwrite
+		_ = os.Remove(p)
+	}
+	_ = os.Remove(tmpDir)
+}

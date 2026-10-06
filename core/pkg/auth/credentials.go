@@ -2,24 +2,33 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // Credentials represents authentication credentials for a specific gateway
 type Credentials struct {
-	APIKey       string    `json:"api_key"`
-	RefreshToken string    `json:"refresh_token,omitempty"`
-	Namespace    string    `json:"namespace"`
-	UserID       string    `json:"user_id,omitempty"`
-	Wallet       string    `json:"wallet,omitempty"`
-	ExpiresAt    time.Time `json:"expires_at,omitempty"`
-	IssuedAt     time.Time `json:"issued_at"`
-	LastUsedAt   time.Time `json:"last_used_at,omitempty"`
-	Plan         string    `json:"plan,omitempty"`
-	NamespaceURL string    `json:"namespace_url,omitempty"`
+	APIKey       string `json:"api_key"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	// AccessToken is the short-lived credential every request carries. Login
+	// has always returned one; it used to be read out of the response and
+	// dropped, and the API key was sent instead.
+	AccessToken string `json:"access_token,omitempty"`
+	// AccessTokenExpiresAt is when it stops being worth sending. It is not
+	// ExpiresAt below, which is the credential's own life.
+	AccessTokenExpiresAt time.Time `json:"access_token_expires_at,omitempty"`
+	Namespace            string    `json:"namespace"`
+	UserID               string    `json:"user_id,omitempty"`
+	Wallet               string    `json:"wallet,omitempty"`
+	ExpiresAt            time.Time `json:"expires_at,omitempty"`
+	IssuedAt             time.Time `json:"issued_at"`
+	LastUsedAt           time.Time `json:"last_used_at,omitempty"`
+	Plan                 string    `json:"plan,omitempty"`
+	NamespaceURL         string    `json:"namespace_url,omitempty"`
 
 	// ProvisioningPollURL is set when namespace cluster is being provisioned.
 	// Used only during the login flow, not persisted.
@@ -85,6 +94,26 @@ func LoadCredentials() (*CredentialStore, error) {
 	return &store, nil
 }
 
+// UpdateCredentials is UpdateEnhancedCredentials for the legacy store: load,
+// apply and save under the credential file's lock. update must not take the
+// lock itself.
+func UpdateCredentials(update func(*CredentialStore) error) error {
+	unlock, err := lockCredentialFile()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	store, err := LoadCredentials()
+	if err != nil {
+		return err
+	}
+	if err := update(store); err != nil {
+		return err
+	}
+	return store.SaveCredentials()
+}
+
 // SaveCredentials saves credentials to ~/.orama/credentials.json
 func (store *CredentialStore) SaveCredentials() error {
 	credPath, err := GetCredentialsPath()
@@ -102,11 +131,9 @@ func (store *CredentialStore) SaveCredentials() error {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
-	// Write with restricted permissions (readable only by owner)
-	if err := os.WriteFile(credPath, data, 0600); err != nil {
+	if err := writeCredentialFile(credPath, data); err != nil {
 		return fmt.Errorf("failed to write credentials file: %w", err)
 	}
-
 	return nil
 }
 
@@ -152,17 +179,18 @@ func (creds *Credentials) IsExpired() bool {
 	return time.Now().After(creds.ExpiresAt)
 }
 
-// IsValid checks if credentials are valid (not empty and not expired)
+// IsValid reports whether this credential can still authenticate. A session
+// from `orama auth login` has an access token and a refresh token and no API
+// key; requiring the key made every command that checked IsValid tell a
+// signed-in wallet to log in again.
 func (creds *Credentials) IsValid() bool {
-	if creds == nil {
+	if creds == nil || creds.IsExpired() {
 		return false
 	}
-
-	if creds.APIKey == "" {
-		return false
+	if strings.TrimSpace(creds.APIKey) != "" {
+		return true
 	}
-
-	return !creds.IsExpired()
+	return strings.TrimSpace(creds.AccessToken) != "" || strings.TrimSpace(creds.RefreshToken) != ""
 }
 
 // UpdateLastUsed updates the last used timestamp
@@ -170,22 +198,37 @@ func (creds *Credentials) UpdateLastUsed() {
 	creds.LastUsedAt = time.Now()
 }
 
-// GetDefaultGatewayURL returns the default gateway URL from environment config, env vars, or fallback
-func GetDefaultGatewayURL() string {
-	// Check environment variables first (for backwards compatibility)
-	if envURL := os.Getenv("ORAMA_GATEWAY_URL"); envURL != "" {
-		return envURL
-	}
-	if envURL := os.Getenv("ORAMA_GATEWAY"); envURL != "" {
-		return envURL
+// ErrNoGateway means no gateway is configured for this shell.
+var ErrNoGateway = errors.New("no gateway configured: set ORAMA_API_URL, or run 'orama env add <name> <url>' and 'orama env use <name>'")
+
+// gatewayEnvVars are the environment variables that name a gateway, in the
+// order they are consulted. All three exist for historical reasons; keeping
+// them in one list is what stops different commands from honouring different
+// subsets, which is how a request could be sent to one gateway with the
+// credential stored for another.
+var gatewayEnvVars = []string{"ORAMA_API_URL", "ORAMA_GATEWAY_URL", "ORAMA_GATEWAY"}
+
+// ResolveGatewayURL returns the gateway this shell talks to.
+//
+// Precedence: environment variable, then the active environment in
+// ~/.orama/environments.json. There is deliberately no built-in default —
+// silently falling back to a hardcoded network meant a misconfigured shell
+// quietly talked to devnet, and credentials were then looked up for a gateway
+// the caller never asked for.
+//
+// Every caller that needs a credential must key it on the URL this returns.
+func ResolveGatewayURL() (string, error) {
+	for _, name := range gatewayEnvVars {
+		if url := strings.TrimSpace(os.Getenv(name)); url != "" {
+			return url, nil
+		}
 	}
 
-	// Try to read from environment config file
 	if gwURL := getGatewayFromEnvConfig(); gwURL != "" {
-		return gwURL
+		return gwURL, nil
 	}
 
-	return "https://orama-devnet.network"
+	return "", ErrNoGateway
 }
 
 // getGatewayFromEnvConfig reads the active environment's gateway URL from the config file
@@ -230,7 +273,10 @@ func HasValidCredentials() (bool, error) {
 		return false, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return false, err
+	}
 	creds, exists := store.GetCredentialsForGateway(gatewayURL)
 
 	return exists && creds.IsValid(), nil
@@ -238,19 +284,24 @@ func HasValidCredentials() (bool, error) {
 
 // SaveCredentialsForDefaultGateway saves credentials for the default gateway
 func SaveCredentialsForDefaultGateway(creds *Credentials) error {
-	store, err := LoadCredentials()
+	gatewayURL, err := ResolveGatewayURL()
 	if err != nil {
 		return err
 	}
-
-	gatewayURL := GetDefaultGatewayURL()
-	store.SetCredentialsForGateway(gatewayURL, creds)
-
-	return store.SaveCredentials()
+	return UpdateCredentials(func(store *CredentialStore) error {
+		store.SetCredentialsForGateway(gatewayURL, creds)
+		return nil
+	})
 }
 
 // ClearAllCredentials removes all stored credentials
 func ClearAllCredentials() error {
+	unlock, err := lockCredentialFile()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	store := &CredentialStore{
 		Gateways: make(map[string]*Credentials),
 		Version:  "1.0",

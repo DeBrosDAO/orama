@@ -1,0 +1,286 @@
+syntax = "proto3";
+package orama.storage.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/storage/types";
+
+import "gogoproto/gogo.proto";
+
+// DealClass is one of the three deal classes that share the x/storage engine
+// (plans/open-network/track-c-chain.md C7).
+enum DealClass {
+  DEAL_CLASS_UNSPECIFIED = 0;
+  DEAL_CLASS_PRIVATE = 1;
+  DEAL_CLASS_PUBLIC_PIN = 2;
+  DEAL_CLASS_ARCHIVE = 3;
+}
+
+// DealStatus is a deal's lifecycle state. There is no cancelled status:
+// cancellation does not exist.
+enum DealStatus {
+  DEAL_STATUS_UNSPECIFIED = 0;
+  DEAL_STATUS_OPEN = 1;
+  DEAL_STATUS_ACTIVE = 2;
+  DEAL_STATUS_EXPIRED = 3;
+  DEAL_STATUS_REFUNDED = 4;
+}
+
+// SlotStatus is one replica slot's lifecycle state.
+enum SlotStatus {
+  SLOT_STATUS_UNSPECIFIED = 0;
+  SLOT_STATUS_UNASSIGNED = 1;
+  SLOT_STATUS_ASSIGNED = 2;
+  SLOT_STATUS_ACTIVE = 3;
+  SLOT_STATUS_EVICTED = 4;
+  SLOT_STATUS_RELEASED = 5;
+}
+
+// ReleaseReason is why a provider drops a replica. Only LEGAL is accepted,
+// and it carries no slash.
+enum ReleaseReason {
+  RELEASE_REASON_UNSPECIFIED = 0;
+  RELEASE_REASON_LEGAL = 1;
+}
+
+// Params are x/storage's genesis parameters. s_max is not here: it is the
+// hard-coded constant 1.0 (C7). min_replicas is not here either: it is the
+// hard-coded constant 3.
+message Params {
+  // min_deal_bytes is the smallest piece a user deal may commit.
+  uint64 min_deal_bytes = 1;
+  // deal_fee is the per-deal fee burned at creation, in norama.
+  string deal_fee = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // max_deals_per_block caps user deal creations in one block.
+  uint64 max_deals_per_block = 3;
+  // k_c is how many of a provider's replicas are sampled each epoch.
+  // Every ReChallenge entry is challenged on top of this sample.
+  uint64 k_c = 4;
+  // miss_threshold is the consecutive-miss count that evicts a slot.
+  // Two consecutive misses slash; eviction is this threshold (C7).
+  uint32 miss_threshold = 5;
+  // max_settlements_per_block is the settlement queue's per-block limit.
+  uint64 max_settlements_per_block = 6;
+  // s_min_providers is the distinct-operator count below which the subsidy
+  // rate s is zero.
+  uint64 s_min_providers = 7;
+  // s_full_providers is the distinct-operator count at which s reaches the
+  // hard-coded s_max of 1. Between s_min_providers and here, s ramps linearly.
+  uint64 s_full_providers = 8;
+  // accept_window_blocks is how long a hot key has to accept or decline.
+  uint64 accept_window_blocks = 9;
+  // probation_slots caps protocol-deal slots on one probation node.
+  uint32 probation_slots = 10;
+  uint32 probation_operator_cap = 11;
+  uint32 probation_network16_cap = 12;
+  uint32 probation_asn_cap = 13;
+  // probation_expiry_epochs is how long a probation node may go without a
+  // proved slot before it is jailed.
+  uint64 probation_expiry_epochs = 14;
+  // probation_deposit is the record deposit locked from a probation node's
+  // first earnings, in norama.
+  string probation_deposit = 15 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // max_releases_per_epoch rate-limits MsgReleaseReplica.
+  uint64 max_releases_per_epoch = 16;
+  // protocol_every_epochs creates one ARCHIVE and one protocol PUBLIC_PIN
+  // deal each time this many epochs pass. Zero disables the schedule.
+  uint64 protocol_every_epochs = 17;
+  // slash_fraction is the fraction of a slot's epoch price slashed on each
+  // miss once two consecutive misses have accrued. In (0, 1].
+  string slash_fraction = 18 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // protocol_piece_bytes is the size of a scheduled protocol deal's payload.
+  uint64 protocol_piece_bytes = 19;
+  string protocol_price_per_epoch = 20 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 protocol_duration_epochs = 21;
+}
+
+// PieceCommitment is the on-chain description of one piece. The bytes stay
+// off chain; the root is what proofs open.
+message PieceCommitment {
+  bytes root = 1;
+  uint64 real_leaf_count = 2;
+  uint64 padded_leaf_count = 3;
+  uint64 piece_bytes = 4;
+}
+
+// Deal is one storage deal. Protocol deals are written by the module, never
+// by a user message.
+message Deal {
+  uint64 id = 1;
+  DealClass class = 2;
+  bool protocol = 3;
+  string client = 4;
+  string granter = 5;
+  // repair_delegate is an operator id. That operator is never assigned a
+  // slot of this deal.
+  string repair_delegate = 6;
+  bytes deal_nonce = 7;
+  uint32 replicas = 8;
+  string price_per_epoch = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 duration_epochs = 10;
+  uint64 start_epoch = 11;
+  // end_epoch is exclusive: the deal expires once the current epoch reaches it,
+  // after that epoch's predecessor has been settled.
+  uint64 end_epoch = 12;
+  string escrow = 13 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  DealStatus status = 14;
+  int64 assign_at_height = 15;
+  int64 created_height = 16;
+}
+
+// Slot is one replica of a deal.
+message Slot {
+  uint64 deal_id = 1;
+  uint32 index = 2;
+  string node_id = 3;
+  string operator = 4;
+  string network16 = 5;
+  uint32 asn = 6;
+  bytes piece_root = 7;
+  uint64 real_leaf_count = 8;
+  uint64 padded_leaf_count = 9;
+  uint64 piece_bytes = 10;
+  SlotStatus status = 11;
+  uint32 consecutive_misses = 12;
+  bool accepted = 13;
+  // excluded_operator is skipped on the next assignment of this slot (the
+  // operator just evicted or declined).
+  string excluded_operator = 14;
+  bool replica_indexed = 15;
+  uint64 replica_seq = 16;
+  int64 assign_height = 17;
+}
+
+// SlotRef points at one slot from a provider's dense replica index.
+message SlotRef {
+  uint64 deal_id = 1;
+  uint32 slot = 2;
+}
+
+// DealAuthorization is the grant A9 backups spend through. It is not an
+// x/authz grant: a plain authz on deal creation could escrow unlimited funds.
+message DealAuthorization {
+  string granter = 1;
+  string grantee = 2;
+  string spend_limit = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string spent = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 period_epochs = 5;
+  uint64 period_start_epoch = 6;
+  uint64 max_piece_bytes = 7;
+  uint64 max_duration_epochs = 8;
+  // replicas is the fixed replica count. A deal spending the grant must match
+  // it exactly.
+  uint32 replicas = 9;
+  uint64 expiry_epoch = 10;
+}
+
+// NodeState is x/storage's view of a tracked storage node. Attributes such as
+// the hot key and declared capacity are read from NodeView, not stored here.
+message NodeState {
+  string node_id = 1;
+  bool probation = 2;
+  uint64 registered_epoch = 3;
+  bool deposit_locked = 4;
+  bool ever_proved = 5;
+  bool graduated = 6;
+}
+
+// FailureCount is how many blocks in a row one node's per-node work has failed and been rolled
+// back instead of applied. kind is "sync" (x/nodes reconciliation) or "settlement" (a payout
+// row). A success clears the count, so a non-zero row is a node stuck right now.
+message FailureCount {
+  string node_id = 1;
+  string kind = 2;
+  uint64 consecutive = 3;
+}
+
+// Settlement is one queued pay or miss. The per-block limit drains this queue;
+// amounts are fixed when the epoch closes so a later block cannot change them.
+message Settlement {
+  uint64 seq = 1;
+  uint64 epoch = 2;
+  uint64 deal_id = 3;
+  uint32 slot = 4;
+  string node_id = 5;
+  string operator = 6;
+  bool proved = 7;
+  string escrow_pay = 8 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string mint_pay = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string archive_top_up = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // subsidy is true when mint_pay is a PRIVATE subsidy (capped per operator)
+  // rather than a protocol-deal payment.
+  bool subsidy = 11;
+  // attempts counts how many times this row has already failed to apply. A failed row is queued
+  // again until it reaches MaxSettlementAttempts, then dropped. Only a payout or a penalty is ever
+  // dropped: the miss counter and the eviction of a missed slot are applied when the row is first
+  // processed, in a step that reads and writes only x/storage's own state, and never retried.
+  uint32 attempts = 12;
+  // not_before_epoch is the first epoch the row may be applied in. A row that failed is queued
+  // again with the next epoch here, so its retries are spaced by epochs and a failure that lasts
+  // a few blocks does not use up every attempt at once. Zero (a row that never failed) is due
+  // immediately.
+  uint64 not_before_epoch = 13;
+  // penalty_only is true for the row that carries the penalty of a miss whose miss counter and
+  // eviction were already applied: it changes no counter and pays nothing, and applying it is one
+  // attempt to slash the node.
+  bool penalty_only = 14;
+}
+
+// ChallengeRecord is one epoch's leaf challenge for a slot, and whether a
+// proof has been accepted.
+message ChallengeRecord {
+  uint64 leaf_index = 1;
+  bool proved = 2;
+}
+
+// EpochMint is how much of one epoch's storage ceiling x/storage has minted
+// (subsidies plus protocol-deal payments).
+message EpochMint {
+  uint64 epoch = 1;
+  string minted = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// OperatorMint is one operator's subsidy minted in one epoch, measured
+// against the per-operator cap.
+message OperatorMint {
+  uint64 epoch = 1;
+  string operator = 2;
+  string minted = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

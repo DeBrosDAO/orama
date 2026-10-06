@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -20,13 +22,10 @@ const (
 	// internalGatewayPort is the per-node internal gateway HTTP port on the
 	// WireGuard mesh, where /v1/internal/* endpoints (including storage evict)
 	// are served. Matches the port used by deployment replica coordination.
-	internalGatewayPort = 6001
+	internalGatewayPort = constants.GatewayAPIPort
 
-	// storageInternalAuthMarker is the X-Orama-Internal-Auth value for
-	// storage-coordination internal calls. The real security is the WireGuard
-	// source-IP check (auth.IsWireGuardPeer); the marker is a defence-in-depth
-	// discriminator, matching the deployment/namespace coordination pattern.
-	storageInternalAuthMarker = "storage-coordination"
+	// evictPath is the per-node evict route.
+	evictPath = "/v1/internal/storage/evict"
 
 	// evictFanoutTimeout bounds a single node's evict call during fan-out.
 	evictFanoutTimeout = 30 * time.Second
@@ -42,49 +41,15 @@ const (
 	maxEvictResponseBytes = 64 << 10
 )
 
-// remainingPinsForCID returns how many namespaces still hold a live pin on this
-// CID (bugboard #153). A CID uploaded by multiple namespaces shares ONE cluster
-// pin, so immediate eviction must only proceed when no namespace still
+// remainingPinsForCID returns how many references to the CID remain across all
+// namespaces (bugboard #153). A CID uploaded by multiple namespaces shares ONE
+// cluster pin, so immediate eviction must only proceed when no namespace still
 // references it — otherwise a shared blob would be destroyed for the others.
 func (h *Handlers) remainingPinsForCID(ctx context.Context, cid string) (int, error) {
 	if h.db == nil {
 		return 0, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	var result []map[string]interface{}
-	query := `SELECT COUNT(*) as count FROM ipfs_content_ownership WHERE cid = ? AND is_pinned = 1`
-	if err := h.db.Query(ctx, &result, query, cid); err != nil {
-		return 0, err
-	}
-	if len(result) == 0 {
-		return 0, nil
-	}
-	return countFromRow(result[0]["count"]), nil
-}
-
-// cidPinnedByOtherNamespace reports whether any namespace OTHER than the given
-// one still holds a live pin on this CID (bugboard #156). IPFS-Cluster dedups to
-// one pin per CID, so the caller's unpin must NOT remove the shared cluster pin
-// while another namespace still references the content — doing so orphans that
-// namespace's data at the next GC. Used to gate the cluster-pin removal.
-func (h *Handlers) cidPinnedByOtherNamespace(ctx context.Context, cid, namespace string) (bool, error) {
-	if h.db == nil {
-		return false, nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	var result []map[string]interface{}
-	query := `SELECT COUNT(*) as count FROM ipfs_content_ownership WHERE cid = ? AND namespace != ? AND is_pinned = 1`
-	if err := h.db.Query(ctx, &result, query, cid, namespace); err != nil {
-		return false, err
-	}
-	if len(result) == 0 {
-		return false, nil
-	}
-	return countFromRow(result[0]["count"]) > 0, nil
+	return h.refs.Count(ctx, cid)
 }
 
 // countFromRow coerces a COUNT(*) cell (rqlite returns float64 or int64) to int.
@@ -101,7 +66,14 @@ func countFromRow(v interface{}) int {
 	}
 }
 
-// activeNodeInternalIPs returns the internal (WireGuard) IPs of all active
+// evictTarget is a node an eviction is fanned out to: its WireGuard address and
+// the peer id the call is signed for.
+type evictTarget struct {
+	ID string
+	IP string
+}
+
+// activeNodes returns the id and internal (WireGuard) IP of all active
 // cluster nodes — the fan-out target set for immediate eviction. A node that
 // does not hold the block simply no-ops its local block rm, so targeting all
 // active nodes is safe (and the cluster's RF replicas are a subset).
@@ -112,7 +84,7 @@ func countFromRow(v interface{}) int {
 // rows forever. Reading it there returned an empty target set on every call, so
 // the fan-out ran against nobody, `evicted` was permanently "partial", and no
 // block was ever reclaimed — the exact ~6h window this feature removes.
-func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) {
+func (h *Handlers) activeNodes(ctx context.Context) ([]evictTarget, error) {
 	if h.globalDB == nil {
 		return nil, fmt.Errorf("no global database handle (cluster topology unavailable)")
 	}
@@ -120,17 +92,19 @@ func (h *Handlers) activeNodeInternalIPs(ctx context.Context) ([]string, error) 
 	// internal-auth call that must travel the WG mesh (the receiver rejects any
 	// non-10.0.0.x source), so never fall back to a public ip_address.
 	var result []map[string]interface{}
-	query := `SELECT internal_ip as ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
+	query := `SELECT id, internal_ip as ip FROM dns_nodes WHERE status = 'active' AND internal_ip IS NOT NULL AND internal_ip != ''`
 	if err := h.globalDB.Query(ctx, &result, query); err != nil {
 		return nil, err
 	}
-	ips := make([]string, 0, len(result))
+	nodes := make([]evictTarget, 0, len(result))
 	for _, row := range result {
-		if ip, ok := row["ip"].(string); ok && ip != "" {
-			ips = append(ips, ip)
+		ip, _ := row["ip"].(string)
+		id, _ := row["id"].(string)
+		if ip != "" && id != "" {
+			nodes = append(nodes, evictTarget{ID: id, IP: ip})
 		}
 	}
-	return ips, nil
+	return nodes, nil
 }
 
 // evictNodePort is the internal gateway port the fan-out dials on each peer.
@@ -147,13 +121,13 @@ func (h *Handlers) evictNodePort() int {
 // so eviction is disk-reclaim + privacy hardening layered on top. Returns true
 // only when every targeted node reported success.
 func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
-	ips, err := h.activeNodeInternalIPs(ctx)
+	nodes, err := h.activeNodes(ctx)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "immediate evict: failed to list cluster nodes; no blocks reclaimed",
 			zap.String("cid", cid), zap.Error(err))
 		return false
 	}
-	if len(ips) == 0 {
+	if len(nodes) == 0 {
 		// Not a normal state: a running cluster always has at least this node
 		// registered active in the main RQLite. An empty set means the topology
 		// read reached the wrong database or the node registry is broken, and
@@ -164,9 +138,18 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 		return false
 	}
 
+	// The body only serves nodes that predate the MAC (they read the CID from
+	// it). The CID that is authenticated travels in the query string, which the
+	// coordination MAC covers.
 	payload, err := json.Marshal(map[string]string{"cid": cid})
 	if err != nil {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "immediate evict: failed to marshal payload",
+			zap.String("cid", cid), zap.Error(err))
+		return false
+	}
+	key, err := auth.CoordinationKey(h.config.ClusterSecret)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "immediate evict: this gateway has no cluster secret, so it cannot sign an evict call; no blocks reclaimed",
 			zap.String("cid", cid), zap.Error(err))
 		return false
 	}
@@ -182,20 +165,24 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 		allOK = false
 		mu.Unlock()
 	}
-	for _, ip := range ips {
+	for _, node := range nodes {
 		wg.Add(1)
-		go func(ip string) {
+		go func(node evictTarget) {
+			ip := node.IP
 			defer wg.Done()
-			url := fmt.Sprintf("http://%s:%d/v1/internal/storage/evict", ip, h.evictNodePort())
+			endpoint := fmt.Sprintf("http://%s:%d%s?%s", ip, h.evictNodePort(), evictPath, url.Values{"cid": {cid}}.Encode())
 			reqCtx, cancel := context.WithTimeout(ctx, evictFanoutTimeout)
 			defer cancel()
-			req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(payload))
+			req, err := http.NewRequestWithContext(reqCtx, "POST", endpoint, bytes.NewReader(payload))
 			if err != nil {
 				markFailed()
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
+			if err := auth.SignCoordination(key, req, time.Now(), node.ID); err != nil {
+				markFailed()
+				return
+			}
 
 			resp, err := (&http.Client{Timeout: evictFanoutTimeout}).Do(req)
 			if err != nil {
@@ -231,7 +218,7 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 					zap.String("cid", cid), zap.String("node_ip", ip), zap.String("node_status", nodeResp.Status))
 				markFailed()
 			}
-		}(ip)
+		}(node)
 	}
 	wg.Wait()
 	return allOK
@@ -239,7 +226,9 @@ func (h *Handlers) evictBlobEverywhere(ctx context.Context, cid string) bool {
 
 // EvictHandler serves POST /v1/internal/storage/evict — the per-node side of
 // immediate eviction (bugboard #153). It removes the CID's blocks from THIS
-// node's local kubo blockstore. Internal-only: WireGuard source + marker header.
+// node's local kubo blockstore. Internal-only: a coordination MAC over the
+// request, and a WireGuard source. The CID is read from the query string, the
+// part of the request the MAC covers; the body is never trusted.
 func (h *Handlers) EvictHandler(w http.ResponseWriter, r *http.Request) {
 	if !httputil.CheckMethod(w, r, http.MethodPost) {
 		return
@@ -253,33 +242,43 @@ func (h *Handlers) EvictHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB
-	var req struct {
-		CID string `json:"cid"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.CID == "" {
+	cid := r.URL.Query().Get("cid")
+	if cid == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "cid required")
 		return
 	}
 
-	removed, err := h.ipfsClient.EvictLocal(r.Context(), req.CID)
+	removed, err := h.ipfsClient.EvictLocal(r.Context(), cid)
 	if err != nil {
 		// Partial/failed eviction is reported but is not a hard failure — the
 		// caller treats eviction as best-effort disk reclaim on top of the
 		// already-completed cluster unpin.
 		h.logger.ComponentWarn(logging.ComponentGeneral, "local evict incomplete",
-			zap.String("cid", req.CID), zap.Int("removed", removed), zap.Error(err))
-		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "partial", "cid": req.CID, "removed": removed})
+			zap.String("cid", cid), zap.Int("removed", removed), zap.Error(err))
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "partial", "cid": cid, "removed": removed})
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": req.CID, "removed": removed})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": cid, "removed": removed})
 }
 
-// isInternalStorageRequest authorizes an internal storage call: the caller must
-// present the storage-coordination marker AND originate from the WireGuard mesh.
+// isInternalStorageRequest authorizes an internal storage call: it must carry a
+// coordination MAC made with the cluster secret (pkg/auth/coordination.go) AND
+// originate from the WireGuard mesh. The overlay alone is no credential — every
+// tenant's services are on it, so any local process on a node could otherwise
+// evict any namespace's blobs from a peer. Both stamps are accepted: the only
+// parameter that is acted on, the CID, is in the query, which the v1 MAC covers
+// with the method, path and a timestamp, so it cannot be replayed onto another
+// CID or, past the skew window, at all. (The body repeats the CID and is not
+// read.) A route that acts on its body must use the v2-only check instead.
 func (h *Handlers) isInternalStorageRequest(r *http.Request) bool {
-	if r.Header.Get("X-Orama-Internal-Auth") != storageInternalAuthMarker {
+	if !auth.IsWireGuardPeer(r.RemoteAddr) {
 		return false
 	}
-	return auth.IsWireGuardPeer(r.RemoteAddr)
+	key, err := auth.CoordinationKey(h.config.ClusterSecret)
+	if err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "this gateway has no cluster secret, so no evict call can be authenticated",
+			zap.Error(err))
+		return false
+	}
+	return auth.VerifyCoordination(key, r, time.Now(), h.config.NodePeerID)
 }

@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/registry"
 	"go.uber.org/zap"
@@ -69,13 +68,11 @@ var reservedClaimKeys = map[string]struct{}{
 	// tenant could mint admin for every end-user's JWT. Only the API-key→JWT
 	// exchange path sets it, and callerScopes only trusts it on an ak_ subject.
 	"scopes": {},
-	// Device attribution (feat-384). These are stamped by the gateway from a
-	// signature it verified itself. A provider that could set them could mint
-	// any device identity for any caller — which is the exact forgery the
-	// feature exists to prevent, handed to the app layer that is supposed to be
-	// the one CHECKING it.
-	auth.DeviceClaimFingerprint: {},
-	auth.DeviceClaimSince:       {},
+	// The token's own id, and the device and session a session is bound to.
+	// A function reads the device through get_caller_device_id; a provider
+	// able to put "did" in the custom claims could make get_caller_claim
+	// name a device the caller never proved it holds.
+	"jti": {}, "did": {}, "sid": {},
 }
 
 // claimsInvoker is the narrow invoke seam the claims provider depends on —
@@ -136,6 +133,12 @@ func (p *jwtClaimsProvider) ResolveClaims(ctx context.Context, wallet, namespace
 			// No provider deployed — the normal no-claims case. Stay silent, no retry.
 			return nil
 		}
+		if errors.Is(err, serverless.ErrNamespaceNotServed) {
+			// This gateway does not run the namespace's functions (bugboard
+			// #427): a token it mints carries no custom claims, on every such
+			// sign-in, so it is the normal case here and not a failure.
+			return nil
+		}
 		if !p.retryable(err) {
 			// A clean non-success result is the app's own logic, and a non-
 			// transient invoke error is not going to recover on retry — fail
@@ -170,9 +173,11 @@ func (p *jwtClaimsProvider) invokeOnce(ctx context.Context, namespace string, in
 		Namespace:    namespace,
 		FunctionName: claimsProviderFnName,
 		Input:        input,
-		// Gateway-initiated, no end-user caller → system trigger skips the
-		// per-caller authorization check.
-		TriggerType: serverless.TriggerTypeInternal,
+		// Gateway-initiated, no end-user caller. The gateway is minting a
+		// token and asking a fixed, operator-registered function for extra
+		// claims; there is no caller to authorize.
+		TriggerType:      serverless.TriggerTypeInternal,
+		SystemOriginated: true,
 	})
 }
 

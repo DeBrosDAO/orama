@@ -136,7 +136,7 @@ func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 
 // ProvisionRequest represents a request to provision a new namespace cluster
 type ProvisionRequest struct {
-	Namespace    string `json:"namespace"`
+	Namespace     string `json:"namespace"`
 	ProvisionedBy string `json:"provisioned_by"` // Wallet address
 }
 

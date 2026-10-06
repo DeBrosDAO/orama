@@ -10,7 +10,9 @@ import (
 // RQLiteStatus represents the response from RQLite's /status endpoint
 type RQLiteStatus struct {
 	Store struct {
-		Raft struct {
+		// NodeID is the raft id this rqlited runs under.
+		NodeID string `json:"node_id"`
+		Raft   struct {
 			AppliedIndex      uint64 `json:"applied_index"`
 			CommitIndex       uint64 `json:"commit_index"`
 			LastLogIndex      uint64 `json:"last_log_index"`
@@ -32,6 +34,20 @@ type RQLiteStatus struct {
 			DSN    string `json:"dsn"`
 			Memory bool   `json:"memory"`
 		} `json:"db_conf"`
+		// Leader is who rqlite 8 names in /status. The id used to be
+		// raft.leader_id; this release leaves that field unset and reports
+		// {"node_id","addr"} here instead.
+		Leader struct {
+			NodeID string `json:"node_id"`
+			Addr   string `json:"addr"`
+		} `json:"leader"`
+		// Nodes is the raft configuration as this node holds it. Unlike
+		// /nodes it is read locally, without probing each member.
+		Nodes []struct {
+			ID       string `json:"id"`
+			Addr     string `json:"addr"`
+			Suffrage string `json:"suffrage"`
+		} `json:"nodes"`
 	} `json:"store"`
 	Runtime struct {
 		GOARCH       string `json:"GOARCH"`
@@ -51,13 +67,28 @@ type RQLiteStatus struct {
 	} `json:"node"`
 }
 
+// RaftLeaderID is the raft id of the current leader. rqlite 8 puts it on
+// store.leader; older payloads put it on store.raft.leader_id.
+func (s RQLiteStatus) RaftLeaderID() string {
+	if id := s.Store.Raft.LeaderID; id != "" {
+		return id
+	}
+	return s.Store.Leader.NodeID
+}
+
 // RQLiteNode represents a node in the RQLite cluster
 type RQLiteNode struct {
-	ID        string `json:"id"`
-	Address   string `json:"address"`
-	Leader    bool   `json:"leader"`
-	Voter     bool   `json:"voter"`
-	Reachable bool   `json:"reachable"`
+	ID string `json:"id"`
+
+	// Addr is the member's raft address. rqlite's /nodes calls this field
+	// "addr"; it was decoded as "address", so it was silently always empty and
+	// every consumer that wanted a member's address had to reach for its id
+	// instead — which is exactly the conflation stable raft ids exist to end.
+	Addr string `json:"addr"`
+
+	Leader    bool `json:"leader"`
+	Voter     bool `json:"voter"`
+	Reachable bool `json:"reachable"`
 }
 
 // RQLiteNodes represents the response from RQLite's /nodes endpoint

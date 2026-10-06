@@ -455,6 +455,8 @@ func setupNamespaceClusterTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db, `CREATE TABLE namespace_clusters (id TEXT PRIMARY KEY, namespace_name TEXT, status TEXT)`)
 	mustExec(t, db, `CREATE TABLE namespace_cluster_nodes (id TEXT PRIMARY KEY, namespace_cluster_id TEXT, node_id TEXT, role TEXT, status TEXT)`)
+	mustExec(t, db, `CREATE TABLE namespaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)`)
+	mustExec(t, db, `INSERT INTO namespaces (name) VALUES ('anchat-test')`)
 	mustExec(t, db, `INSERT INTO namespace_clusters VALUES ('c1','anchat-test','ready')`)
 	mustExec(t, db, `INSERT INTO namespace_cluster_nodes VALUES ('n1','c1','peerA','gateway','running')`)
 	mustExec(t, db, `INSERT INTO namespace_cluster_nodes VALUES ('n2','c1','peerB','gateway','running')`)
@@ -547,6 +549,7 @@ func TestEnsureNamespaceHostRecords_tagCollisionDoesNotBlockOtherNamespaces(t *t
 	db := setupDNSTestDB(t)
 	setupNamespaceClusterTables(t, db)
 	// peerA also gateways a SECOND namespace.
+	mustExec(t, db, `INSERT INTO namespaces (name) VALUES ('other-ns')`)
 	mustExec(t, db, `INSERT INTO namespace_clusters VALUES ('c2','other-ns','ready')`)
 	mustExec(t, db, `INSERT INTO namespace_cluster_nodes VALUES ('n5','c2','peerA','gateway','running')`)
 	// A colliding row for anchat-test only, under a foreign tag.
@@ -568,6 +571,7 @@ func TestEnsureNamespaceHostRecords_tagCollisionDoesNotBlockOtherNamespaces(t *t
 func TestEnsureNamespaceHostRecords_coversAllHostedNamespaces(t *testing.T) {
 	db := setupDNSTestDB(t)
 	setupNamespaceClusterTables(t, db)
+	mustExec(t, db, `INSERT INTO namespaces (name) VALUES ('other-ns')`)
 	mustExec(t, db, `INSERT INTO namespace_clusters VALUES ('c2','other-ns','ready')`)
 	mustExec(t, db, `INSERT INTO namespace_cluster_nodes VALUES ('n5','c2','peerA','gateway','running')`)
 

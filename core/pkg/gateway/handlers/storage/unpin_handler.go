@@ -2,9 +2,11 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -49,7 +51,7 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
 			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		writeStoreError(w, "failed to verify access", err)
 		return
 	}
 	if !hasAccess {
@@ -59,68 +61,91 @@ func (h *Handlers) UnpinHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.authorizeCID(w, r, path, namespace, gwauth.ActionWrite) {
+		return
+	}
+
 	// bugboard #156: the same CID can be pinned by multiple namespaces and
 	// IPFS-Cluster dedups to ONE pin per CID. Removing the cluster pin while
 	// another namespace still references the content would orphan that
-	// namespace's data at the next GC. So gate the cluster-pin removal on a
-	// cross-namespace reference check: only the LAST pinner actually removes the
-	// cluster pin; a non-last unpin just marks this namespace's row unpinned.
-	sharedByOthers, refErr := h.cidPinnedByOtherNamespace(ctx, path, namespace)
+	// namespace's data at the next GC. So the caller's reference is released in
+	// the CLUSTER-WIDE index and only the release that leaves zero references
+	// removes the cluster pin. A namespace's own RQLite cannot answer this: it
+	// holds no rows for other namespaces (see cidrefs.go).
+	if h.db != nil {
+		if err := h.refs.CheckReady(ctx, ""); err != nil {
+			h.writeRefIndexNotReady(w, err, path)
+			return
+		}
+	}
+	// The row is marked unpinned before the reference is released, so nothing
+	// that reads the row while the release is in flight sees a pin whose
+	// reference is already gone.
+	if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
+		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
+			zap.Error(uerr), zap.String("cid", path))
+	}
+	remaining, refErr := h.releaseRef(ctx, path, namespace)
 	if refErr != nil {
 		// Can't confirm we're the last pinner — fail safe: do NOT remove the
 		// shared cluster pin (a leaked pin is recoverable via a later unpin/GC;
-		// deleting another namespace's live data is not). Still mark this
-		// namespace logically unpinned.
+		// deleting another namespace's live data is not). This namespace is
+		// already logically unpinned.
 		h.logger.ComponentWarn(logging.ComponentGeneral, "unpin: cross-namespace reference check failed; leaving cluster pin intact (fail-safe)",
 			zap.Error(refErr), zap.String("cid", path), zap.String("namespace", namespace))
-		if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-			h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-				zap.Error(uerr), zap.String("cid", path))
-		}
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "evicted": "skipped"})
 		return
 	}
-	if sharedByOthers {
-		// Another namespace still pins this CID — leave the cluster pin and the
-		// blocks intact; this namespace is only logically unpinned.
-		if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-			h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-				zap.Error(uerr), zap.String("cid", path))
-		}
+	if remaining > 0 {
+		// Another reference still exists — leave the cluster pin and the
+		// blocks intact.
 		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "shared": true, "evicted": "shared"})
 		return
 	}
 
 	// Last pinner — safe to remove the cluster pin.
-	if err := h.ipfsClient.Unpin(ctx, path); err != nil {
-		// Idempotent reclaim (bugboard #140/#151): a CID that is already absent
-		// from the cluster pinset (never pinned, or already GC'd) is the desired
-		// end state, so treat "not pinned / not found" as success rather than a
-		// 500. A retention cron re-unpinning already-gone CIDs must not error.
-		if isAlreadyUnpinned(err) {
-			if uerr := h.updatePinStatus(ctx, path, namespace, false); uerr != nil {
-				h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-					zap.Error(uerr), zap.String("cid", path))
-			}
-			evicted := h.maybeImmediateEvict(ctx, path, immediate)
-			httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true, "evicted": evicted})
-			return
-		}
+	out, err := h.unpinUnreferenced(ctx, path)
+	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to unpin CID",
 			zap.Error(err), zap.String("cid", path))
 		// Don't leak internal cluster/kubo error text to the tenant.
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to unpin")
 		return
 	}
-
-	// Update pin status in database
-	if err := h.updatePinStatus(ctx, path, namespace, false); err != nil {
-		h.logger.ComponentWarn(logging.ComponentGeneral, "failed to update pin status in database (non-fatal)",
-			zap.Error(err), zap.String("cid", path))
+	if out.Restored {
+		// A namespace registered the CID while its pin was being removed; the pin
+		// is back, and the content is shared after all.
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "shared": true, "evicted": "shared"})
+		return
+	}
+	if out.AlreadyUnpinned {
+		// Idempotent reclaim (bugboard #140/#151): a CID that is already absent
+		// from the cluster pinset (never pinned, or already GC'd) is the desired
+		// end state, so it is success rather than a 500. A retention cron
+		// re-unpinning already-gone CIDs must not error.
+		evicted := h.maybeImmediateEvict(ctx, path, immediate)
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "already_unpinned": true, "evicted": evicted})
+		return
 	}
 
 	evicted := h.maybeImmediateEvict(ctx, path, immediate)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok", "cid": path, "evicted": evicted})
+}
+
+// unpinUnreferenced removes the cluster pin through the reference index's
+// verified path. A handler set with no database at all is the unit-test
+// configuration and has no index: it unpins directly.
+func (h *Handlers) unpinUnreferenced(ctx context.Context, cid string) (UnpinOutcome, error) {
+	if h.db != nil {
+		return h.refs.UnpinUnreferenced(ctx, h.ipfsClient, cid)
+	}
+	if err := h.ipfsClient.Unpin(ctx, cid); err != nil {
+		if isAlreadyUnpinned(err) {
+			return UnpinOutcome{AlreadyUnpinned: true}, nil
+		}
+		return UnpinOutcome{}, err
+	}
+	return UnpinOutcome{}, nil
 }
 
 // maybeImmediateEvict performs privacy-grade immediate reclaim when the caller
@@ -167,4 +192,27 @@ func isAlreadyUnpinned(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not part of the pinset") ||
 		strings.Contains(msg, "not pinned")
+}
+
+// writeRefIndexNotReady answers an unpin the index cannot yet decide. A namespace
+// that has not loaded its references is named in the log, for the operator, and
+// never in the answer, which reaches a tenant.
+func (h *Handlers) writeRefIndexNotReady(w http.ResponseWriter, err error, cid string) {
+	var missing *NotBackfilledError
+	if errors.As(err, &missing) {
+		h.logger.ComponentError(logging.ComponentGeneral, "unpin refused: namespaces have not loaded their existing references into the cluster reference index",
+			zap.Strings("namespaces", missing.Namespaces), zap.String("cid", cid))
+	} else {
+		h.logger.ComponentError(logging.ComponentGeneral, "unpin refused: the cluster reference index cannot be trusted yet",
+			zap.Error(err), zap.String("cid", cid))
+	}
+	if errors.Is(err, ErrRefIndexNotReady) {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+			err.Error()+", so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+			httputil.WithRetryable())
+		return
+	}
+	httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+		"the cluster reference index could not be read, so an unpin cannot tell whether other namespaces hold this content; retry shortly",
+		httputil.WithRetryable())
 }

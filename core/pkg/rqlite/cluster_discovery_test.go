@@ -2,6 +2,7 @@ package rqlite
 
 import (
 	"testing"
+
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 )
 
@@ -94,4 +95,3 @@ func TestRewriteAdvertisedAddresses(t *testing.T) {
 		t.Errorf("expected NodeID 1.1.1.1:4001, got %s", meta.NodeID)
 	}
 }
-

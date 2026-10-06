@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	"github.com/DeBrosOfficial/network/pkg/shamir"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +27,7 @@ type PushRequest struct {
 
 // PushResponse is returned to the client.
 type PushResponse struct {
-	Status    string `json:"status"`    // "ok" or "partial"
+	Status    string `json:"status"` // "ok" or "partial"
 	AckCount  int    `json:"ack_count"`
 	Total     int    `json:"total"`
 	Quorum    int    `json:"quorum"`
@@ -38,7 +37,7 @@ type PushResponse struct {
 // guardianPushRequest is sent to each vault guardian.
 type guardianPushRequest struct {
 	Identity  string `json:"identity"`
-	Share     string `json:"share"`     // base64([x:1byte][y:rest])
+	Share     string `json:"share"` // base64([x:1byte][y:rest])
 	Version   uint64 `json:"version"`
 	Threshold int    `json:"threshold"` // K the envelope was split with (persisted for reads)
 	PubKey    string `json:"pubkey"`    // forwarded for guardian-side ownership check
@@ -110,14 +109,15 @@ func (h *Handlers) HandlePush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n := len(guardians)
-	k := shamir.AdaptiveThreshold(n)
-	quorum := shamir.WriteQuorum(n)
-
-	shares, err := shamir.Split(envelopeBytes, n, k)
+	shares, k, quorum, err := splitEnvelope(envelopeBytes, n)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "Vault push: Shamir split failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to split envelope")
 		return
+	}
+	if n == 1 {
+		h.logger.ComponentWarn(logging.ComponentGeneral,
+			"vault: single-node cluster; storing envelope as local key (K=1,W=1); not Shamir")
 	}
 
 	// Fan out to guardians in parallel.

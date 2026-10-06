@@ -37,11 +37,11 @@ orama inspect [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--config` | *(resolver)* | Read nodes from this file instead of resolving them |
 | `--env` | *(required)* | Environment to inspect (`devnet`, `testnet`) |
 | `--subsystem` | `all` | Comma-separated subsystems to inspect |
 | `--format` | `table` | Output format: `table` or `json` |
-| `--timeout` | `30s` | SSH command timeout per node |
+| `--timeout` | `30s` | Time allowed for collecting one node (plus 10s for the whole run) |
 | `--verbose` | `false` | Print collection progress |
 | `--output` | *(none)* | Save results to a directory as markdown (e.g., `./results`) |
 | `--ai` | `false` | Enable AI analysis of failures |
@@ -50,7 +50,7 @@ orama inspect [flags]
 
 ### Subsystem Names
 
-`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`, `anyone`, `webrtc`
+`rqlite`, `olric`, `ipfs`, `dns`, `wireguard` (alias: `wg`), `system`, `network`, `namespace`, `tor`, `webrtc`, `global`
 
 Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 
@@ -59,15 +59,28 @@ Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
 | Subsystem | What It Checks |
 |-----------|---------------|
 | **rqlite** | Raft state, leader election, readyz, commit/applied gap, FSM pending, strong reads, debug vars (query errors, leader_not_found, snapshots), cross-node leader agreement, term consistency, applied index convergence, quorum, version match |
-| **olric** | Service active, memberlist up, restart count, memory usage, log analysis (suspects, flapping, errors), cross-node memberlist consistency |
+| **olric** | Service active, memberlist up, restart count, memory usage, log analysis (members marked failed: critical; suspicions: warning; flapping; errors), cross-node memberlist consistency |
 | **ipfs** | Daemon active, cluster active, swarm peer count, cluster peer count, cluster errors, repo usage %, swarm key present, bootstrap list empty, cross-node version consistency |
-| **dns** | CoreDNS active, Caddy active, ports (53/80/443), memory, restart count, log errors, Corefile exists, SOA/NS/wildcard/base-A resolution, TLS cert expiry, cross-node nameserver availability |
+| **dns** | CoreDNS (`orama-namespace-coredns@nameserver`) active, ports 53/80/443, memory, restart count, log errors, Corefile exists, SOA/NS/wildcard/base-A resolution, TLS cert expiry. Caddy is `orama-namespace-caddy@index` on every node, not nameserver-only. The zone is read from the Corefile through `sudo` (the file is `root:orama-coredns 0640`), and the SOA/NS/wildcard/base-A resolution checks use `dig`: on a node without `dig` (`apt install bind9-dnsutils`) they are reported as skipped, not failed. |
 | **wireguard** | Interface up, service active, correct 10.0.0.x IP, listen port 51820, peer count vs expected, MTU 1420, config exists + permissions 600, peer handshakes (fresh/stale/never), peer traffic, catch-all route detection, cross-node peer count + MTU consistency |
-| **system** | Core services (orama-node, rqlite, olric, ipfs, ipfs-cluster, wg-quick), nameserver services (coredns, caddy), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
+| **system** | Core services (`orama-node`, `orama-namespace-{olric,ipfs,ipfs-cluster,caddy,wireguard}@index`; leftover unit names still accepted during rolling upgrade), nameserver `orama-namespace-coredns@nameserver` (leftover `coredns` accepted), failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user (orama), panic count, expected ports |
 | **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, TCP retransmission rate, WireGuard mesh ping (all peers) |
-| **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace |
-| **anyone** | Anyone relay/client services: relay active, SOCKS5 port 9050 + control port 9051 listening, client bootstrap %, ORPort 9001 listening. Skipped on nameservers and nodes without the services |
+| **namespace** | Per-namespace: RQLite up + raft state + readyz, Olric memberlist, Gateway HTTP health. Cross-namespace: all-healthy check, RQLite quorum per namespace. A namespace whose registry status (`namespace_clusters.status`, with its age from the registry's own clock, read in the same session) is `provisioning` or `deprovisioning` for less than 15 minutes is not judged (the registry takes over an abandoned provisioning after 11 minutes and a teardown after 12): its checks are skipped (`ns.<name>.settled`, `ns.<name>.all_healthy`), because its services come up and go away node by node. One in transition for 15 minutes or more is judged like any other, and `ns.<name>.transition_stuck` (high) fails. `ready`, `degraded`, `failed`, a transitional namespace whose stamp cannot be read, a namespace the registry does not list, and an unreadable registry are all judged |
+| **tor** | Tor client on every node: `orama-namespace-tor@index` active (fail if not), SOCKS5 `:9050` bound, bootstrap % of the running process from its own journal invocation (unknown when vacuumed — low-severity warning), and a warning if Anyone network leftovers remain (an active `orama-namespace-anyone-client@index`, `/etc/anon`, `/var/lib/anon` or its apt source) |
 | **webrtc** | Per-namespace SFU/TURN services active, cross-node SFU coverage (3 nodes) and TURN redundancy (2 nodes). Only applies to namespaces with WebRTC provisioned |
+| **global** | (every chain and global-node check, ids `chain.*` and `global.*`, is in this subsystem) Chain unit and RPC on a node that has `orama-global-chain.service`: height lag against the median responsive height (more than 20 blocks, and not while catching up), no peers while the validator set has more than one member, a block older than 60 seconds, jailed, tombstoned, and missed-block ratio against the chain's own `min_signed_per_window` (warning at half the downtime miss fraction, failure at the fraction). Slashing and staking are one page of 200 from `127.0.0.1:31003`. Public Kubo, provider, and relay units when they are installed: unit down, Kubo repo over StorageMax, provider hot-key balance 0, provider proof misses, provider disk over the declared maximum, relay reporting it is not in the relay set. The hot-key, proof, disk, and relay-set fields come from `monitor.json` in the unit home; nothing in this release writes that file, so those checks stay quiet until a process does. This SSH path does not verify the CometBFT node key; `orama node report` does. |
+
+## Collection Failures
+
+**How a node is collected.** The sessions of one node share one SSH connection (`ControlMaster`, sockets in a private `/tmp/orama-inspect-*` directory removed at the end), and its collectors run side by side, at most four at a time (WireGuard first, because the network probe pings its peers). Setting up an SSH session is most of what a collector costs: on a CPU-starved VPS it took 1-4s against 0.4s over an open connection, so the 14 sessions of one node ran for 49s one after another, longer than `--timeout`, and every subsystem of the node was reported not collected. Measured on that node, the same collection takes 9s. A collector that panics is recorded as that subsystem's failure, and Ctrl-C or SIGTERM cancels the run and closes the connections before the command exits with an error. Service states are read with one `systemctl is-active` call, and the Olric journal once.
+
+**Olric log checks.** `olric.log_failed_members` (critical) fails when memberlist marked a member failed (`Marking <member> as failed`) in the last hour: that is its verdict that the member is gone. `olric.log_suspicions` (warning) counts suspicions (`Suspect <member> has failed, no acks received`, `Refuting a suspect message`): the first step of the protocol, refuted when the member answers; a member that keeps being suspected answers late (a starved or partitioned node), which is worth a look and not a failed cluster.
+
+The inspector never reads a failed collection as zero values. Before collecting, it opens one SSH session (`true`) to each node. If that session fails (a connection reset from an overloaded node, a timeout, a refused key), the node is **unreachable**: nothing is collected from it and it produces one critical result, `node.reachable` (subsystem `node`), `could not collect from <node>: <error>; every check on this node was skipped`. No `wireguard`, `network`, `system` or `dns` check runs against it, so there is no "wg0 down", "no default route" or "2/3 nameservers active" from a node the inspector simply could not read.
+
+Each subsystem is collected over its own SSH session. When one of them returns no output, or output cut short of the fields the collector reads, only that subsystem is affected: its data is left unset, its checks on that node are skipped, and one critical `<subsystem>.collected` result (for example `dns.collected`) reports why. A namespace collection failure is reported as both `namespace.collected` and `webrtc.collected`. The other subsystems on the node are checked normally, and cross-node checks count only the nodes whose data was collected. A command that ran and reported a service `inactive` is still a normal failure of that service's check.
+
+Every collection failure is also listed under "Collection Errors" in the results summary and handed to the AI analysis.
 
 ## Severity Levels
 
@@ -165,7 +178,15 @@ The AI receives the full check results plus cluster metadata and returns a struc
 
 ## Configuration
 
-The inspector reads node definitions from a pipe-delimited config file (default: `scripts/nodes.conf`).
+By default the inspector resolves nodes the same way every other command does:
+it asks the network API for the nodes your wallet owns, falling back to
+`nodes.conf` when the API is unreachable. It used to read `scripts/nodes.conf`
+relative to the working directory, so an installed binary only worked from
+inside the source tree.
+
+`--config` overrides that with a pipe-delimited file. `nodes.conf` is gitignored
+— copy `core/scripts/nodes.conf.example` to `core/scripts/nodes.conf`, or put it
+at `~/.orama/nodes.conf` where it does not depend on the working directory.
 
 ### Format
 
@@ -181,7 +202,8 @@ devnet|ubuntu@5.6.7.8|nameserver-ns1
 | `user@host` | SSH credentials |
 | `role` | `node` or `nameserver-ns1`, `nameserver-ns2`, etc. |
 
-SSH keys are resolved from rootwallet (`rw vault ssh get <host>/<user> --priv`).
+SSH keys are resolved from the RootWallet agent over its Unix socket, not by
+shelling out to `rw`. See [Troubleshooting](COMMON_PROBLEMS.md#13-rootwallet-agent-locked-waiting-or-unreachable).
 
 Blank lines and lines starting with `#` are ignored.
 

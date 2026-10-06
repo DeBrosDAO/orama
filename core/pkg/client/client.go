@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -17,9 +18,8 @@ import (
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 
-	libp2ppubsub "github.com/libp2p/go-libp2p-pubsub"
-
 	"github.com/DeBrosOfficial/network/pkg/encryption"
+	orerrors "github.com/DeBrosOfficial/network/pkg/errors"
 	"github.com/DeBrosOfficial/network/pkg/pubsub"
 )
 
@@ -28,15 +28,15 @@ type Client struct {
 	config *ClientConfig
 
 	// Network components
-	host     host.Host
-	libp2pPS *libp2ppubsub.PubSub
-	logger   *zap.Logger
+	host   host.Host
+	logger *zap.Logger
 
 	// Components
-	database *DatabaseClientImpl
-	network  *NetworkInfoImpl
-	pubsub   *pubSubBridge
-	storage  *StorageClientImpl
+	database        *DatabaseClientImpl
+	gatewayDatabase *gatewayDatabaseClient
+	network         *NetworkInfoImpl
+	pubsub          *pubSubBridge
+	storage         *StorageClientImpl
 
 	// State
 	connected bool
@@ -71,15 +71,27 @@ func NewClient(config *ClientConfig) (NetworkClient, error) {
 
 	// Initialize components (will be configured when connected)
 	client.database = &DatabaseClientImpl{client: client}
+	client.gatewayDatabase = newGatewayDatabaseClient(client)
 	client.network = &NetworkInfoImpl{client: client}
 	client.storage = &StorageClientImpl{client: client}
 
 	return client, nil
 }
 
+// usesRQLiteEndpoints reports whether the database client dials RQLite itself:
+// it does when the config names DatabaseEndpoints, which is how a gateway
+// reaches its own database. Without them the database is reached through the
+// gateway (see gatewayDatabaseClient).
+func (c *Client) usesRQLiteEndpoints() bool {
+	return len(c.config.DatabaseEndpoints) > 0
+}
+
 // Database returns the database client
 func (c *Client) Database() DatabaseClient {
-	return c.database
+	if c.usesRQLiteEndpoints() {
+		return c.database
+	}
+	return c.gatewayDatabase
 }
 
 // PubSub returns the pub/sub client
@@ -107,6 +119,9 @@ func (c *Client) Config() *ClientConfig {
 	cp := *c.config
 	if c.config.BootstrapPeers != nil {
 		cp.BootstrapPeers = append([]string(nil), c.config.BootstrapPeers...)
+	}
+	if c.config.ListenAddrs != nil {
+		cp.ListenAddrs = append([]string(nil), c.config.ListenAddrs...)
 	}
 	if c.config.DatabaseEndpoints != nil {
 		cp.DatabaseEndpoints = append([]string(nil), c.config.DatabaseEndpoints...)
@@ -137,10 +152,14 @@ func (c *Client) Connect() error {
 	}
 	c.resolvedNamespace = ns
 
-	// Create LibP2P host with optional Anyone proxy for TCP and optional QUIC disable
+	// Create LibP2P host (TCP transport)
+	listen, err := listenOption(c.config.ListenAddrs)
+	if err != nil {
+		return err
+	}
 	var opts []libp2p.Option
 	opts = append(opts,
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/tcp/0"), // Random port
+		listen,
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.DefaultMuxers,
 	)
@@ -169,7 +188,6 @@ func (c *Client) Connect() error {
 		opts = append(opts, libp2p.Identity(identity.PrivateKey))
 	}
 
-	// Enable QUIC only when not proxying. When proxy is enabled, prefer TCP via SOCKS5.
 	h, err := libp2p.New(opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create libp2p host: %w", err)
@@ -189,43 +207,17 @@ func (c *Client) Connect() error {
 		zap.Strings("listen_addrs", addrStrs),
 	)
 
-	c.logger.Info("Creating GossipSub...")
-
-	// Create LibP2P GossipSub with PeerExchange enabled (gossip-based peer exchange).
-	// Peer exchange helps propagate peer addresses via pubsub gossip and is enabled
-	// globally so discovery works without Anchat-specific branches.
-	var ps *libp2ppubsub.PubSub
-	ps, err = libp2ppubsub.NewGossipSub(context.Background(), h,
-		libp2ppubsub.WithPeerExchange(true),
-		libp2ppubsub.WithFloodPublish(true), // Ensure messages reach all peers, not just mesh
-		libp2ppubsub.WithDirectPeers(nil),   // Enable direct peer connections
-	)
-	if err != nil {
-		h.Close()
-		return fmt.Errorf("failed to create pubsub: %w", err)
-	}
-	c.libp2pPS = ps
-	c.logger.Info("GossipSub created successfully")
-
-	c.logger.Info("Creating pubsub bridge...")
-
-	c.logger.Info("Getting app namespace for pubsub...")
-	// Access namespace directly to avoid deadlock (we already hold c.mu.Lock())
 	var namespace string
 	if c.resolvedNamespace != "" {
 		namespace = c.resolvedNamespace
 	} else {
 		namespace = c.config.AppName
 	}
-	c.logger.Info("App namespace retrieved", zap.String("namespace", namespace))
-
-	c.logger.Info("Calling pubsub.NewClientAdapter...")
-	adapter := pubsub.NewClientAdapter(c.libp2pPS, namespace, c.logger)
-	c.logger.Info("pubsub.NewClientAdapter completed successfully")
-
-	c.logger.Info("Creating pubSubBridge...")
+	adapter := pubsub.NewHTTPClient(c.config.PubSubSocket, namespace, c.logger)
 	c.pubsub = &pubSubBridge{client: c, adapter: adapter}
-	c.logger.Info("Pubsub bridge created successfully")
+	c.logger.Info("Pubsub HTTP client attached",
+		zap.String("socket", c.config.PubSubSocket),
+		zap.String("namespace", namespace))
 
 	c.logger.Info("Starting peer connections...")
 
@@ -283,6 +275,37 @@ func (c *Client) Connect() error {
 	c.logger.Info("Client connected", zap.String("namespace", namespace))
 
 	return nil
+}
+
+// listenOption is the libp2p listen configuration for addrs (ClientConfig.
+// ListenAddrs).
+//
+// The host used to listen on /ip4/0.0.0.0/tcp/0: a random port on every
+// interface, the public one included, although nothing connects to a client
+// — it dials its bootstrap peers and they answer on that connection. With no
+// address the host has no listener at all. A caller that does want inbound
+// connections names the interface, and the unspecified address, which is
+// every interface, is refused.
+func listenOption(addrs []string) (libp2p.Option, error) {
+	if len(addrs) == 0 {
+		return libp2p.NoListenAddrs, nil
+	}
+	for _, a := range addrs {
+		ma, err := multiaddr.NewMultiaddr(a)
+		if err != nil {
+			return nil, fmt.Errorf("client listen address %q is not a multiaddr: %w", a, err)
+		}
+		for _, code := range []int{multiaddr.P_IP4, multiaddr.P_IP6} {
+			ip, err := ma.ValueForProtocol(code)
+			if err != nil {
+				continue
+			}
+			if parsed := net.ParseIP(ip); parsed == nil || parsed.IsUnspecified() {
+				return nil, fmt.Errorf("client listen address %q binds every interface; name the interface to listen on (e.g. the WireGuard address)", a)
+			}
+		}
+	}
+	return libp2p.ListenAddrStrings(addrs...), nil
 }
 
 // Disconnect closes the connection to the network
@@ -375,10 +398,8 @@ func (c *Client) getAppNamespace() string {
 	return c.config.AppName
 }
 
-// PubSubAdapter returns the underlying pubsub.ClientAdapter for direct use by serverless functions.
-// This bypasses the authentication checks used by PubSub() since serverless functions
-// are already authenticated via the gateway.
-func (c *Client) PubSubAdapter() *pubsub.ClientAdapter {
+// PubSubAdapter returns the underlying pubsub Bus for serverless functions.
+func (c *Client) PubSubAdapter() pubsub.Bus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.pubsub == nil {
@@ -396,12 +417,12 @@ func (c *Client) requireAccess(ctx context.Context) error {
 
 	cfg := c.Config()
 	if cfg == nil || (strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.JWT) == "") {
-		return fmt.Errorf("access denied: API key or JWT required")
+		return orerrors.NewUnauthorizedError("access denied: API key or JWT required")
 	}
 	ns := c.getAppNamespace()
 	if v := ctx.Value(pubsub.CtxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok && s != "" && s != ns {
-			return fmt.Errorf("access denied: namespace mismatch")
+			return orerrors.NewForbiddenError("namespace "+s, "access")
 		}
 	}
 	return nil
@@ -419,17 +440,20 @@ func (c *Client) deriveNamespace() (string, error) {
 			return ns, nil
 		}
 	}
-	// Fallback to API key format ak_<random>:<namespace>
+	// A legacy key carried its namespace in the string. A current one does
+	// not, deliberately — a key pasted into an issue or a log line published
+	// which tenant it belonged to — so this yields nothing for those and the
+	// configured application name is what names the namespace.
 	if strings.TrimSpace(c.config.APIKey) != "" {
-		ns, err := parseAPIKeyNamespace(c.config.APIKey)
-		if err != nil {
-			return "", err
-		}
-		if ns != "" {
+		if ns := parseAPIKeyNamespace(c.config.APIKey); ns != "" {
 			return ns, nil
 		}
 	}
-	return c.config.AppName, nil
+	if ns := strings.TrimSpace(c.config.AppName); ns != "" {
+		return ns, nil
+	}
+	return "", fmt.Errorf("no namespace: set AppName, or supply a JWT that carries one — " +
+		"an API key does not name its namespace")
 }
 
 // parseJWTNamespace decodes base64url payload to extract Namespace claim (no signature verification)
@@ -454,20 +478,16 @@ func parseJWTNamespace(token string) (string, error) {
 	return strings.TrimSpace(claims.Namespace), nil
 }
 
-// parseAPIKeyNamespace extracts the namespace from ak_<random>:<namespace>
-func parseAPIKeyNamespace(key string) (string, error) {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return "", fmt.Errorf("invalid API key: empty")
-	}
-	// Allow but ignore prefix ak_
-	parts := strings.Split(key, ":")
+// parseAPIKeyNamespace extracts the namespace from a legacy `ak_<random>:<ns>`
+// key, or returns "" for a key that does not carry one.
+//
+// It is not an error for a key to name no namespace: that is what every key
+// minted from here on looks like. The caller falls back to the configured
+// application name.
+func parseAPIKeyNamespace(key string) string {
+	parts := strings.Split(strings.TrimSpace(key), ":")
 	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid API key format: expected ak_<random>:<namespace>")
+		return ""
 	}
-	ns := strings.TrimSpace(parts[1])
-	if ns == "" {
-		return "", fmt.Errorf("invalid API key: empty namespace")
-	}
-	return ns, nil
+	return strings.TrimSpace(parts[1])
 }

@@ -228,10 +228,10 @@ func (b *Bridge) removeLocked(ctx context.Context, tbl *nsTable, clientID, topic
 
 // Stats holds gauges for metrics export.
 type Stats struct {
-	Namespaces       int
-	ActiveTopics     int
-	ActiveClients    int
-	TotalBridges     int
+	Namespaces    int
+	ActiveTopics  int
+	ActiveClients int
+	TotalBridges  int
 }
 
 // Stats returns a snapshot of bridge counts.

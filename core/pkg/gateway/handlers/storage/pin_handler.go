@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -49,13 +50,18 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
 			zap.Error(err), zap.String("cid", req.Cid), zap.String("namespace", namespace))
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to verify access")
+		writeStoreError(w, "failed to verify access", err)
 		return
 	}
 	if !hasAccess {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "namespace attempted to pin CID they don't own",
 			zap.String("cid", req.Cid), zap.String("namespace", namespace))
 		httputil.WriteError(w, http.StatusForbidden, "access denied: CID not owned by namespace")
+		return
+	}
+
+	// Pinning is what makes the platform keep an object, so it is a write.
+	if !h.authorizeCID(w, r, req.Cid, namespace, gwauth.ActionWrite) {
 		return
 	}
 
@@ -82,8 +88,18 @@ func (h *Handlers) PinHandler(w http.ResponseWriter, r *http.Request) {
 		replicationFactor = 3
 	}
 
+	// Recorded before the pin is requested: an unpin by another namespace that
+	// races this call must already count this reference.
+	if err := h.registerRef(ctx, req.Cid, namespace); err != nil {
+		h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference",
+			zap.Error(err), zap.String("cid", req.Cid))
+		httputil.WriteError(w, http.StatusServiceUnavailable, "the pin could not be registered in the cluster reference index; retry")
+		return
+	}
+
 	pinResp, err := h.ipfsClient.Pin(ctx, req.Cid, req.Name, replicationFactor)
 	if err != nil {
+		h.dropRef(ctx, req.Cid, namespace)
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to pin CID",
 			zap.Error(err), zap.String("cid", req.Cid))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to pin: %v", err))

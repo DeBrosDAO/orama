@@ -1,6 +1,7 @@
 import type { Persona } from "../types/persona";
 import type { LucideIcon } from "lucide-react";
 import {
+  Blocks,
   BookOpen,
   Rocket,
   Database,
@@ -178,11 +179,38 @@ export const OPERATOR_DOCS: DocLink[] = [
     icon: Globe,
     description: "DNS and nameserver config",
   },
+];
+
+export const BLOCKCHAIN_DOCS: DocLink[] = [
   {
-    title: "Video Tutorials",
-    slug: "operator/video-tutorials",
-    icon: MonitorPlay,
-    description: "Step-by-step video guides",
+    title: "What the chain is",
+    slug: "blockchain/what-it-is",
+    icon: Blocks,
+    description: "The Orama ledger, and what it is not",
+  },
+  {
+    title: "Supply",
+    slug: "blockchain/supply",
+    icon: Blocks,
+    description: "ORAMA, norama, and the epoch schedule",
+  },
+  {
+    title: "Fees",
+    slug: "blockchain/fees",
+    icon: Blocks,
+    description: "Base fee, tips, burns, and earnings",
+  },
+  {
+    title: "Validators",
+    slug: "blockchain/validators",
+    icon: Blocks,
+    description: "Voting power, rewards, and slashing",
+  },
+  {
+    title: "Running a chain node",
+    slug: "blockchain/running",
+    icon: Server,
+    description: "Ports, chain id, and how it is installed today",
   },
 ];
 
@@ -217,12 +245,6 @@ export const CONTRIBUTOR_DOCS: DocLink[] = [
     icon: Upload,
     description: "CI/CD and release process",
   },
-  {
-    title: "Video Tutorials",
-    slug: "contributor/video-tutorials",
-    icon: MonitorPlay,
-    description: "Step-by-step video guides",
-  },
 ];
 
 /** Lookup table: persona → flat doc list */
@@ -230,6 +252,7 @@ export const PERSONA_DOCS: Record<Persona, DocLink[]> = {
   developer: DEVELOPER_DOCS,
   operator: OPERATOR_DOCS,
   contributor: CONTRIBUTOR_DOCS,
+  blockchain: BLOCKCHAIN_DOCS,
 };
 
 /** All docs across all personas (for search) */
@@ -240,6 +263,10 @@ export const ALL_DOCS: { link: DocLink; persona: Persona }[] = [
     link,
     persona: "contributor" as Persona,
   })),
+  ...BLOCKCHAIN_DOCS.map((link) => ({
+    link,
+    persona: "blockchain" as Persona,
+  })),
 ];
 
 /** First slug for each persona — used for persona switching navigation */
@@ -247,6 +274,7 @@ export const PERSONA_FIRST_SLUG: Record<Persona, string> = {
   developer: "developer/getting-started",
   operator: "operator/getting-started",
   contributor: "contributor/architecture",
+  blockchain: "blockchain/what-it-is",
 };
 
 /* Compat: DOCS_SECTIONS still used by docs.tsx for SLUG_TITLE_MAP */
@@ -260,4 +288,5 @@ export const DOCS_SECTIONS: DocSection[] = [
   { title: "Developer", persona: "developer", links: DEVELOPER_DOCS },
   { title: "Operator", persona: "operator", links: OPERATOR_DOCS },
   { title: "Contributor", persona: "contributor", links: CONTRIBUTOR_DOCS },
+  { title: "Blockchain", persona: "blockchain", links: BLOCKCHAIN_DOCS },
 ];

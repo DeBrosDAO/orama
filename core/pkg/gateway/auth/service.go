@@ -3,14 +3,13 @@ package auth
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -33,11 +32,43 @@ type Service struct {
 	keyID            string
 	edSigningKey     ed25519.PrivateKey
 	edKeyID          string
+	edKeyNamespace   string
+	keyStore         *KeyStore // where a rotation writes the replacement; nil until SetKeyStore
+	signingKeys      *SigningKeys
 	preferEdDSA      bool
 	defaultNS        string
 	apiKeyHMACSecret string         // HMAC secret for hashing API keys before storage
 	claimsResolver   ClaimsResolver // namespace claims-provider hook (bugboard #548); nil = none
+	// apiKeyORM is the core/index RQLite client used for api_keys writes
+	// on a namespace gateway (bugboard #162). Nil means use s.orm (the
+	// main/index gateway, where orm already is the registry).
+	apiKeyORM client.NetworkClient
+
+	// revocations is the list of tokens this gateway refuses. Built in
+	// NewService whenever there is a database to read it from.
+	revocations *RevocationList
+
+	// audit records the auth events worth keeping. Built alongside the
+	// revocations, for the same reason: a Service with a database has one.
+	audit *AuditLog
+
+	// devicePolicies remembers each namespace's session policy for
+	// devicePolicyStaleness, because every account-level refresh asks.
+	devicePolicies devicePolicyCache
 }
+
+// minRSAKeyBits is the smallest RSA signing key this gateway will use. 2048 is
+// the floor everyone agrees on; below it the signature on an access token is
+// not worth checking.
+const minRSAKeyBits = 2048
+
+// ErrTokenRevoked is returned for a token whose signature verifies but which
+// has been revoked — a key that was revoked, or a session that was ended.
+var ErrTokenRevoked = errors.New("token revoked")
+
+// ErrTokenExpired is returned for a token whose signature verifies but whose
+// lifetime has run out. Its text is what callers have always seen.
+var ErrTokenExpired = errors.New("token expired")
 
 func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signingKeyPEM string, defaultNS string) (*Service, error) {
 	s := &Service{
@@ -45,6 +76,19 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		orm:       orm,
 		defaultNS: defaultNS,
 	}
+
+	// Every Service with a database consults the revocations. There is no way
+	// to build one that verifies tokens against a database and does not.
+	if orm != nil {
+		s.revocations = NewRevocationList(s.registryDatabase, logger)
+		s.audit = NewAuditLog(s.registryDatabase, logger)
+	}
+	// Always present, database or not: a gateway with no database still has to
+	// verify what it minted itself.
+	// The registry is resolved per call, so a namespace gateway that learns
+	// where its core registry is after construction publishes its key there
+	// rather than into the tenant's own database.
+	s.signingKeys = NewSigningKeys(s.registryDatabase, logger)
 
 	if signingKeyPEM != "" {
 		block, _ := pem.Decode([]byte(signingKeyPEM))
@@ -54,6 +98,12 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse RSA private key: %w", err)
+		}
+		// A short RSA key signs tokens anybody can forge. The size was never
+		// checked, so whatever PEM the operator supplied was used.
+		if bits := key.N.BitLen(); bits < minRSAKeyBits {
+			return nil, fmt.Errorf("the configured RSA signing key is %d bits; %d is the minimum, "+
+				"below which the signature on an access token is not worth checking", bits, minRSAKeyBits)
 		}
 		s.signingKey = key
 
@@ -70,6 +120,35 @@ func NewService(logger *logging.ColoredLogger, orm client.NetworkClient, signing
 // When set, API keys are stored as HMAC-SHA256(key, secret) in the database.
 func (s *Service) SetAPIKeyHMACSecret(secret string) {
 	s.apiKeyHMACSecret = secret
+}
+
+// SetAPIKeyRegistry points API-key reads/writes at the core/index RQLite
+// client. Required on namespace gateways after rqlite_dsn wins for
+// deps.Client (bugboard #162): keys must not be stored in the tenant DB.
+func (s *Service) SetAPIKeyRegistry(orm client.NetworkClient) {
+	s.apiKeyORM = orm
+}
+
+func (s *Service) keyORM() client.NetworkClient {
+	if s.apiKeyORM != nil {
+		return s.apiKeyORM
+	}
+	return s.orm
+}
+
+// registryDatabase is the cluster registry's database, or nil when this gateway
+// has none.
+//
+// Platform state — who may authenticate, and which keys may sign — belongs
+// here and not in a tenant's own database. It is a method rather than a
+// captured handle because a namespace gateway is told where its registry is
+// after the auth service is built.
+func (s *Service) registryDatabase() client.DatabaseClient {
+	orm := s.keyORM()
+	if orm == nil {
+		return nil
+	}
+	return orm.Database()
 }
 
 // SetRqliteClient injects the lower-level rqlite client. Required for code
@@ -116,7 +195,10 @@ func (s *Service) resolveCustomClaims(ctx context.Context, wallet, namespace str
 // missing history simply mints without custom claims (the pre-existing behaviour).
 func (s *Service) lastKnownCustomClaims(ctx context.Context, nsID interface{}, subject string) map[string]string {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return nil
+	}
 	// bugboard #154: exclude revoked rows. Without this a logged-out / rotated
 	// row (or a stale row for a deleted-then-recreated identity) whose
 	// expires_at is still in the future could resurrect stale claims (e.g. a
@@ -167,6 +249,17 @@ func (s *Service) reuseLastKnownClaims(ctx context.Context, nsID interface{}, wa
 // guarantees is safer than rotating non-atomically.
 var ErrRotationNotConfigured = fmt.Errorf("auth service not configured for atomic refresh-token rotation (missing rqlite client)")
 
+// NormalizeWallet canonicalises a wallet address for storage and lookup.
+//
+// The same wallet reaches the gateway in different cases: EIP-55 checksummed
+// from one client, lowercase from another. Every row keyed by a wallet is
+// matched by exact string equality, so unless both the write and the read
+// normalise the same way one login records ownership that a later login cannot
+// find, and the wallet ends up owning the namespace twice under two spellings.
+func NormalizeWallet(wallet string) string {
+	return strings.ToLower(strings.TrimSpace(wallet))
+}
+
 // HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,
 // or returns the raw key for backward compatibility during rolling upgrade.
 func (s *Service) HashAPIKey(key string) string {
@@ -176,77 +269,96 @@ func (s *Service) HashAPIKey(key string) string {
 	return HmacSHA256Hex(key, s.apiKeyHMACSecret)
 }
 
-// SetEdDSAKey configures an Ed25519 signing key for EdDSA JWT support.
-// When set, new tokens are signed with EdDSA; RS256 is still accepted for verification.
-func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey) {
+// SetEdDSAKey configures the Ed25519 key this gateway signs with.
+//
+// namespace is what the key is bound to: a namespace gateway signs only for its
+// own tenant, and a token signed with its key is refused if it claims another.
+// An empty namespace is the index gateway's key, which is the control plane and
+// is bound to nothing.
+func (s *Service) SetEdDSAKey(privKey ed25519.PrivateKey, namespace string) {
+	if s.signingKeys == nil {
+		// A Service built as a struct literal rather than by NewService — the
+		// shape several tests use — has no key set yet, and a gateway that
+		// signs a token has to be able to verify it.
+		s.signingKeys = NewSigningKeys(s.registryDatabase, s.logger)
+	}
 	s.edSigningKey = privKey
-	pubBytes := []byte(privKey.Public().(ed25519.PublicKey))
-	sum := sha256.Sum256(pubBytes)
-	s.edKeyID = "ed_" + hex.EncodeToString(sum[:8])
+	pub := privKey.Public().(ed25519.PublicKey)
+	s.edKeyID = KeyIDFor(pub)
+	s.edKeyNamespace = namespace
 	s.preferEdDSA = true
+	s.signingKeys.Add(SigningKey{KID: s.edKeyID, Namespace: namespace, Public: pub})
 }
 
-// CreateNonce generates a new nonce and stores it in the database
-func (s *Service) CreateNonce(ctx context.Context, wallet, purpose, namespace string) (string, error) {
-	// Generate a URL-safe random nonce (32 bytes)
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate nonce: %w", err)
-	}
-	nonce := base64.RawURLEncoding.EncodeToString(buf)
+// SetKeyStore sets where Rotate stores the replacement key.
+func (s *Service) SetKeyStore(store KeyStore) { s.keyStore = &store }
 
-	// Use internal context to bypass authentication for system operations
+// SigningKeys is every key this gateway will accept a token from.
+func (s *Service) SigningKeys() *SigningKeys { return s.signingKeys }
+
+// SigningKID is the key this gateway signs with.
+func (s *Service) SigningKID() string { return s.edKeyID }
+
+// PublishSigningKey records this gateway's key so the rest of the cluster will
+// accept what it mints.
+func (s *Service) PublishSigningKey(ctx context.Context) error {
+	if s.edSigningKey == nil {
+		return nil
+	}
+	return s.signingKeys.Publish(ctx, SigningKey{
+		KID:       s.edKeyID,
+		Namespace: s.edKeyNamespace,
+		Public:    s.edSigningKey.Public().(ed25519.PublicKey),
+	})
+}
+
+// insertNonce records a challenge this gateway has just issued, so that
+// ConsumeNonce can claim it exactly once later.
+//
+// The namespace must already exist. This used to be an INSERT OR IGNORE, so an
+// unauthenticated POST to /v1/auth/challenge created a namespace for any name
+// at all — squatting a name was free, and signing in to a name nobody had taken
+// silently created it. Creating one is its own authenticated call now.
+func (s *Service) insertNonce(ctx context.Context, wallet, nonce, purpose, namespace string) error {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
-
-	if namespace == "" {
-		namespace = s.defaultNS
-		if namespace == "" {
-			namespace = "default"
-		}
+	db := s.registryDatabase()
+	if db == nil {
+		return fmt.Errorf("client not initialized")
 	}
 
-	// Ensure namespace exists
-	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", namespace); err != nil {
-		return "", fmt.Errorf("failed to ensure namespace: %w", err)
-	}
-
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.lookupNamespaceID(ctx, namespace)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve namespace ID: %w", err)
+		return fmt.Errorf("failed to resolve namespace %q: %w", namespace, err)
+	}
+	if nsID == nil {
+		return &ErrNamespaceUnknown{Namespace: namespace}
 	}
 
-	// Store nonce with 5 minute expiry
-	walletLower := strings.ToLower(strings.TrimSpace(wallet))
+	// A challenge writes a Raft-replicated row, and nothing proves the caller
+	// owns the wallet it names. Without a ceiling on how many can be
+	// outstanding at once, a grind fills the table for that wallet.
+	walletKey := normalizeNonceWallet(wallet)
+	if err := s.checkOutstandingNonces(internalCtx, db, nsID, walletKey, namespace); err != nil {
+		return err
+	}
+
+	// ConsumeNonce matches this row by exact string equality, so both sides
+	// normalise the wallet the same way. The expiry here and the Expiration
+	// Time in the signed message are the same ChallengeTTL, checked
+	// independently: the message is what the wallet showed the user, this row
+	// is what the gateway will honour.
 	if _, err := db.Query(internalCtx,
-		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+5 minutes'))",
-		nsID, walletLower, nonce, purpose,
+		"INSERT INTO nonces(namespace_id, wallet, nonce, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', ?))",
+		nsID, walletKey, nonce, purpose, fmt.Sprintf("+%d seconds", int64(ChallengeTTL.Seconds())),
 	); err != nil {
-		return "", fmt.Errorf("failed to store nonce: %w", err)
+		return fmt.Errorf("failed to store nonce: %w", err)
 	}
-
-	return nonce, nil
+	return nil
 }
 
-// VerifySignature verifies a wallet signature for a given nonce
-func (s *Service) VerifySignature(ctx context.Context, wallet, nonce, signature, chainType string) (bool, error) {
-	chainType = strings.ToUpper(strings.TrimSpace(chainType))
-	if chainType == "" {
-		chainType = "ETH"
-	}
-
-	switch chainType {
-	case "ETH":
-		return s.verifyEthSignature(wallet, nonce, signature)
-	case "SOL":
-		return s.verifySolSignature(wallet, nonce, signature)
-	default:
-		return false, fmt.Errorf("unsupported chain type: %s", chainType)
-	}
-}
-
-func (s *Service) verifyEthSignature(wallet, nonce, signature string) (bool, error) {
-	msg := []byte(nonce)
+// verifyEthSignature checks an EIP-191 personal_sign signature over message.
+func (s *Service) verifyEthSignature(wallet, message, signature string) (bool, error) {
+	msg := []byte(message)
 	prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msg)))
 	hash := ethcrypto.Keccak256(prefix, msg)
 
@@ -275,7 +387,9 @@ func (s *Service) verifyEthSignature(wallet, nonce, signature string) (bool, err
 	return got == want, nil
 }
 
-func (s *Service) verifySolSignature(wallet, nonce, signature string) (bool, error) {
+// verifySolSignature checks a raw ed25519 signature over message. Solana signs
+// the message bytes with no prefix, which is what SIWS specifies.
+func (s *Service) verifySolSignature(wallet, message, signature string) (bool, error) {
 	sig, err := base64.StdEncoding.DecodeString(signature)
 	if err != nil {
 		return false, fmt.Errorf("invalid base64 signature: %w", err)
@@ -292,24 +406,24 @@ func (s *Service) verifySolSignature(wallet, nonce, signature string) (bool, err
 		return false, fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(pubKeyBytes))
 	}
 
-	message := []byte(nonce)
-	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), message, sig), nil
+	return ed25519.Verify(ed25519.PublicKey(pubKeyBytes), []byte(message), sig), nil
 }
 
-// IssueTokens generates access and refresh tokens for a verified wallet.
+// IssueTokens generates access and refresh tokens for a verified wallet, bound
+// to the account alone.
 func (s *Service) IssueTokens(ctx context.Context, wallet, namespace string) (string, string, int64, error) {
-	return s.IssueTokensForDevice(ctx, wallet, namespace, nil)
+	return s.IssueDeviceTokens(ctx, wallet, namespace, "")
 }
 
-// IssueTokensForDevice is IssueTokens with an optional verified device binding
-// (bugboard feat-384).
+// IssueDeviceTokens issues a session bound to a device, or to the account alone
+// when deviceID is empty. The caller has established that the device is the
+// account's and active; a session bound to it is refreshed only with the
+// device's proof (see RefreshToken).
 //
-// A nil device is the ordinary account-only login — the CLI, the SDK and any
-// client that presents no device assertion. Those tokens carry no device claim,
-// and a function that requires one must treat its absence as DENY rather than
-// as "legacy client, allow": the whole point is that the claim cannot be
-// omitted by a caller trying to escape the check.
-func (s *Service) IssueTokensForDevice(ctx context.Context, wallet, namespace string, device *DeviceBinding) (string, string, int64, error) {
+// Every session gets an id of its own, carried in its access tokens as `sid`
+// and kept across refresh-token rotations, so ending the session refuses every
+// access token it minted.
+func (s *Service) IssueDeviceTokens(ctx context.Context, wallet, namespace, deviceID string) (string, string, int64, error) {
 	if s.signingKey == nil {
 		return "", "", 0, fmt.Errorf("signing key unavailable")
 	}
@@ -326,46 +440,30 @@ func (s *Service) IssueTokensForDevice(ctx context.Context, wallet, namespace st
 
 	custom = s.reuseLastKnownClaims(ctx, nsID, wallet, namespace, custom)
 
-	// Stamp the device claims LAST, after the namespace provider and after the
-	// last-known-claims fallback (bugboard feat-384).
-	//
-	// The ordering is a security property, not tidiness. reuseLastKnownClaims
-	// replays the most recent stored claims for this WALLET, with no device
-	// dimension — so if device claims were part of that set, a provider hiccup
-	// during device B's login would replay device A's fingerprint into a
-	// correctly-signed token. That is worse than having no claim: a forged
-	// attribution the function has every reason to trust. Stamping afterwards,
-	// from the binding just verified in THIS request, makes that impossible.
-	custom = withDeviceClaims(custom, device)
-
-	// Issue access token (15m)
-	token, expUnix, err := s.GenerateJWT(namespace, wallet, 15*time.Minute, custom)
+	sessionID, err := newTokenID()
+	if err != nil {
+		return "", "", 0, err
+	}
+	binding := SessionBinding{DeviceID: deviceID, SessionID: sessionID}
+	token, expUnix, err := s.GenerateBoundJWT(namespace, wallet, AccessTokenLifetime, custom, binding)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to generate JWT: %w", err)
 	}
 
 	// Create refresh token (30d)
-	rbuf := make([]byte, 32)
-	if _, err := rand.Read(rbuf); err != nil {
-		return "", "", 0, fmt.Errorf("failed to generate refresh token: %w", err)
+	refresh, err := mintRefreshToken(deviceID != "")
+	if err != nil {
+		return "", "", 0, err
 	}
-	refresh := base64.RawURLEncoding.EncodeToString(rbuf)
 
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
-	hashedRefresh := sha256Hex(refresh)
-	// Store the refresh token WITHOUT the device claims, and record the device
-	// in its own column instead.
-	//
-	// Two reasons. The stored claims are the input to reuseLastKnownClaims, so
-	// leaving device claims in them would reintroduce the cross-device replay
-	// described above through the back door. And the refresh path must re-derive
-	// the device claim from a LIVE binding each time — a claim frozen into this
-	// row would keep minting for a device the namespace has since revoked, for
-	// the refresh token's full 30-day life.
-	if _, err := db.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims, device_fp) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?, ?)",
-		nsID, wallet, hashedRefresh, "gateway", marshalClaims(stripDeviceClaims(custom)), deviceFingerprintOf(device),
+	db := s.registryDatabase()
+	if db == nil {
+		return "", "", 0, fmt.Errorf("client not initialized")
+	}
+	hashedRefresh := refreshTokenHash(refresh)
+	if _, err := db.Query(internalCtx, insertRefreshTokenSQL,
+		nsID, wallet, hashedRefresh, "gateway", marshalClaims(custom), nullable(deviceID), sessionID,
 	); err != nil {
 		return "", "", 0, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -442,7 +540,7 @@ const (
 //	subject         — wallet/subject claim of the refreshed session
 //	expUnix         — access token expiry (unix seconds)
 //	err             — non-nil on any failure; ErrRefreshTokenReplay for CAS loss
-func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string) (accessToken, newRefreshToken, subject string, expUnix int64, err error) {
+func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace string, proof *DeviceProof) (accessToken, newRefreshToken, subject string, expUnix int64, err error) {
 	// Atomic rotation requires the lower-level rqlite client (RowsAffected
 	// feedback isn't exposed by the higher-level client.NetworkClient).
 	// Refuse to rotate non-atomically — see ErrRotationNotConfigured.
@@ -451,7 +549,20 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	}
 
 	internalCtx := client.WithInternalAuth(ctx)
-	ormDB := s.orm.Database()
+	ormDB := s.registryDatabase()
+	if ormDB == nil {
+		// The gateway's own fault, not the token's: surfacing it as a
+		// rejection (401) would end a CLI session that is still valid.
+		return "", "", "", 0, fmt.Errorf("%w: registry client not initialized", ErrRefreshTransient)
+	}
+
+	// The same name the lookup below resolves: an empty namespace is the
+	// lobby. Passed on as given, it minted a token naming no namespace,
+	// which the permission check did not recognise as the lobby.
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		namespace = LobbyNamespace
+	}
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
@@ -468,7 +579,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 		return "", "", "", 0, ErrRefreshTransient
 	}
 
-	hashedRefresh := sha256Hex(refreshToken)
+	hashedRefresh := refreshTokenHash(refreshToken)
 
 	// Step 1: read the subject. Tells us who the token belongs to AND
 	// validates that it's currently usable (not revoked, not expired).
@@ -480,14 +591,11 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// retries). An actual empty result (Count == 0) is a real bad/expired
 	// token → "invalid or expired" (→ 401). Collapsing the two used to 401 a
 	// valid session during every restart, defeating the VoIP-wake refresh.
-	selectQ := `SELECT subject, custom_claims, device_fp FROM refresh_tokens
+	selectQ := `SELECT subject, custom_claims, COALESCE(device_id, ''), COALESCE(session_id, '') FROM refresh_tokens
 	            WHERE namespace_id = ? AND token = ?
 	              AND revoked_at IS NULL
 	              AND (expires_at IS NULL OR expires_at > datetime('now'))
 	            LIMIT 1`
-	// deviceFP is the device that obtained this refresh chain, "" for an
-	// account-only login (feat-384).
-	var deviceFP string
 	var res *client.QueryResult
 	var selErr error
 	for attempt := 0; attempt < refreshSelectRetries; attempt++ {
@@ -515,9 +623,9 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// inside tryRefreshReuseGrace is our single-use lock — and go straight to
 	// minting a fresh session.
 	graceRecovery := false
-	var custom map[string]string
+	var session refreshRow
 	if res.Count == 0 {
-		gSubject, gCustom, gDeviceFP, gOK, gErr := s.tryRefreshReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
+		gSession, gOK, gErr := s.lookupReuseGrace(internalCtx, ormDB, nsID, hashedRefresh)
 		if gErr != nil {
 			// Transient rqlite error during the grace lookup/claim — retryable,
 			// not a verdict on the token (bugboard #125).
@@ -527,41 +635,64 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			return "", "", "", 0, ErrRefreshTransient
 		}
 		if !gOK {
-			// Genuinely not found / revoked outside grace / grace already
-			// consumed / expired — a real bad token.
+			// Not found, expired, revoked outside the grace, or its grace
+			// already consumed — a real bad token. One that was issued and
+			// has since been spent is a replay, and is told apart so the
+			// handler records it: only a concurrent race used to be.
+			spent, serr := s.refreshTokenSpent(internalCtx, ormDB, nsID, hashedRefresh)
+			if serr != nil {
+				s.logger.ComponentWarn(logging.ComponentGeneral,
+					"refresh replay check failed (transient rqlite error, surfacing retryable)",
+					zap.String("namespace", namespace), zap.Error(serr))
+				return "", "", "", 0, ErrRefreshTransient
+			}
+			if spent {
+				s.logger.ComponentWarn(logging.ComponentGeneral,
+					"refresh token replay: a revoked token was presented outside its reuse grace",
+					zap.String("namespace", namespace))
+				return "", "", "", 0, ErrRefreshTokenReplay
+			}
 			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
 		}
-		subject = gSubject
-		custom = gCustom
-		deviceFP = gDeviceFP
+		session = gSession
 		graceRecovery = true
 		s.logger.ComponentInfo(logging.ComponentGeneral,
 			"refresh token reuse-grace recovery (lost-response retry, single-use)",
-			zap.String("namespace", namespace), zap.String("subject", subject))
-	} else {
-		var customClaimsJSON string
-		if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-			if val, ok := res.Rows[0][0].(string); ok {
-				subject = val
-			} else {
-				b, _ := json.Marshal(res.Rows[0][0])
-				_ = json.Unmarshal(b, &subject)
-			}
-			// custom_claims (bugboard #548) — resolved once at login, replayed on
-			// every rotation so the refresh path never re-invokes the provider.
-			if len(res.Rows[0]) > 1 {
-				if cc, ok := res.Rows[0][1].(string); ok {
-					customClaimsJSON = cc
-				}
-			}
-			// device_fp (feat-384) — which device obtained this refresh chain.
-			if len(res.Rows[0]) > 2 && res.Rows[0][2] != nil {
-				if fp, ok := res.Rows[0][2].(string); ok {
-					deviceFP = fp
-				}
-			}
+			zap.String("namespace", namespace), zap.String("subject", RedactSubject(session.subject)))
+	} else if len(res.Rows) > 0 {
+		// custom_claims (bugboard #548) — resolved once at login, replayed on
+		// every rotation so the refresh path never re-invokes the provider.
+		session = readRefreshRow(res.Rows[0])
+	}
+	subject = session.subject
+	custom := session.custom
+
+	// A session bound to a device is refreshed by the device, not by whoever
+	// holds its refresh token. Checked before the rotation below, so a thief
+	// holding only the token cannot burn the device's session by trying.
+	if err := s.checkSessionRefresh(ctx, namespace, session, refreshToken, proof); err != nil {
+		return "", "", "", 0, err
+	}
+	// Only now is the reuse grace spent: a caller who could not show the device
+	// must not use up the lost-response recovery of the client that can.
+	if graceRecovery {
+		claimed, err := s.claimReuseGrace(internalCtx, nsID, hashedRefresh)
+		if err != nil {
+			s.logger.ComponentWarn(logging.ComponentGeneral,
+				"refresh reuse-grace claim failed (transient rqlite error, surfacing retryable)",
+				zap.String("namespace", namespace), zap.Error(err))
+			return "", "", "", 0, ErrRefreshTransient
 		}
-		custom = unmarshalClaims(customClaimsJSON)
+		if !claimed {
+			return "", "", "", 0, fmt.Errorf("invalid or expired refresh token")
+		}
+	}
+	// A session issued before sessions carried an id gets one now, and keeps
+	// it from here on.
+	if session.sessionID == "" {
+		if session.sessionID, err = newTokenID(); err != nil {
+			return "", "", "", 0, fmt.Errorf("%w: generate session id: %v", ErrRefreshTransient, err)
+		}
 	}
 
 	// bugboard #154: an empty-claims session must be able to self-heal on
@@ -593,7 +724,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// Skipped on a grace recovery (bugboard #125): the token is ALREADY
 	// revoked, so this CAS would always see RowsAffected == 0 and mis-fire the
 	// replay tripwire. The single-use grace CAS (grace_used_at) inside
-	// tryRefreshReuseGrace already served as the lock for this path.
+	// claimReuseGrace already served as the lock for this path.
 	if !graceRecovery {
 		updRes, err := s.db.Exec(internalCtx,
 			`UPDATE refresh_tokens SET revoked_at = datetime('now')
@@ -618,49 +749,17 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 			s.logger.ComponentWarn(logging.ComponentGeneral,
 				"refresh token rotation: concurrent use detected (possible replay)",
 				zap.String("namespace", namespace),
-				zap.String("subject", subject))
+				zap.String("subject", RedactSubject(subject)))
 			return "", "", "", 0, ErrRefreshTokenReplay
 		}
 	}
 
 	// Step 3: mint the new access JWT, carrying forward the stored custom
 	// claims so a rotated token keeps the same account_id etc. (bugboard #548).
-	//
-	// The device claim is deliberately NOT carried forward from storage — it is
-	// re-derived here from the LIVE binding (feat-384). That re-check is what
-	// makes revocation mean anything: a claim frozen into the refresh row would
-	// keep minting valid device-stamped tokens for the chain's full 30-day life
-	// after the namespace revoked the device. Re-deriving bounds a revoked
-	// device to one access-token TTL.
-	//
-	// A revoked (or vanished) binding drops the claim rather than failing the
-	// refresh: the account is still legitimately authenticated, it simply stops
-	// being able to prove it is that device, and the function's deny-on-absent
-	// rule takes it from there.
-	custom = stripDeviceClaims(custom)
-	if deviceFP != "" {
-		binding, bErr := s.liveDeviceBinding(ctx, nsID, subject, deviceFP)
-		switch {
-		case bErr != nil:
-			// Unknown state, not positive evidence of revocation. Minting the
-			// claim on an unreadable control plane would be the fail-open we
-			// are trying to avoid, so drop it and let the caller re-login.
-			s.logger.ComponentWarn(logging.ComponentGeneral,
-				"device binding lookup failed on refresh; minting without the device claim",
-				zap.String("namespace", namespace), zap.Error(bErr))
-		case binding == nil:
-			s.logger.ComponentInfo(logging.ComponentGeneral,
-				"refresh for a revoked or unknown device; minting without the device claim",
-				zap.String("namespace", namespace), zap.String("device_fp", deviceFP))
-			deviceFP = ""
-		default:
-			custom = withDeviceClaims(custom, binding)
-		}
-	}
-
-	accessToken, expUnix, err = s.GenerateJWT(namespace, subject, 15*time.Minute, custom)
+	accessToken, expUnix, err = s.GenerateBoundJWT(namespace, subject, AccessTokenLifetime, custom,
+		SessionBinding{DeviceID: session.deviceID, SessionID: session.sessionID})
 	if err != nil {
-		return "", "", "", 0, fmt.Errorf("generate access token: %w", err)
+		return "", "", "", 0, fmt.Errorf("%w: generate access token: %v", ErrRefreshTransient, err)
 	}
 
 	// Step 4: mint and persist a new refresh token (32-byte random,
@@ -668,20 +767,18 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	// INSERT fails after the UPDATE succeeded (step 2), the user is left
 	// with revoked old + no new and must re-authenticate. Acceptable —
 	// degrades to re-auth, never to double-use of a single refresh token.
-	rbuf := make([]byte, 32)
-	if _, err := rand.Read(rbuf); err != nil {
-		return "", "", "", 0, fmt.Errorf("generate refresh token: %w", err)
+	newRefreshToken, err = mintRefreshToken(session.deviceID != "")
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("%w: mint refresh token: %v", ErrRefreshTransient, err)
 	}
-	newRefreshToken = base64.RawURLEncoding.EncodeToString(rbuf)
-	hashedNew := sha256Hex(newRefreshToken)
+	hashedNew := refreshTokenHash(newRefreshToken)
 	// Re-marshal from the parsed map (not the raw stored string) so the new
 	// row and the freshly-minted access token are provably consistent and
 	// self-healing — a malformed stored blob converges to "" on both sides
 	// rather than being propagated forward verbatim. custom_claims is written
 	// ONLY here and in IssueTokens, both from a sanitized map (bugboard #548).
-	if _, err := ormDB.Query(internalCtx,
-		"INSERT INTO refresh_tokens(namespace_id, subject, token, audience, expires_at, custom_claims, device_fp) VALUES (?, ?, ?, ?, datetime('now', '+30 days'), ?, ?)",
-		nsID, subject, hashedNew, "gateway", marshalClaims(stripDeviceClaims(custom)), nullableFingerprint(deviceFP)); err != nil {
+	if _, err := ormDB.Query(internalCtx, insertRefreshTokenSQL,
+		nsID, subject, hashedNew, "gateway", marshalClaims(custom), nullable(session.deviceID), session.sessionID); err != nil {
 		// The old token is already revoked (step 2). A retryable error here
 		// leaves the client to re-attempt — which will re-auth since the old
 		// token is gone — but that's strictly better than masking a transient
@@ -696,29 +793,22 @@ func (s *Service) RefreshToken(ctx context.Context, refreshToken, namespace stri
 	return accessToken, newRefreshToken, subject, expUnix, nil
 }
 
-// tryRefreshReuseGrace implements the bounded, single-use reuse grace for a
-// rotated refresh token (bugboard #125, RFC 9700 §4.13.2). A token revoked
-// within refreshReuseGrace whose grace_used_at is still NULL is accepted ONCE
-// more — recovering a client that lost its rotation response in transit (a
+// lookupReuseGrace finds a rotated refresh token still inside the bounded,
+// single-use reuse grace (bugboard #125, RFC 9700 §4.13.2). A token revoked
+// within refreshReuseGrace whose grace_used_at is still NULL may be accepted
+// ONCE more — recovering a client that lost its rotation response in transit (a
 // reconnect storm during a gateway roll) before it dead-ends in a 401 → SIWE.
 //
-// Returns (subject, custom, true, nil) on a successful single-use grace claim;
-// (—, —, false, nil) when there is no eligible row, the token was revoked
-// outside the grace window, it has expired, or the grace was already consumed
-// (caller → 401). A non-nil error is a transient rqlite failure (caller → 503).
+// It only reads. claimReuseGrace spends the grace, after the caller has shown
+// what the session requires — a device-bound one, the device's proof.
 //
-// Security: the grace is both short-windowed AND single-use (a CAS on
-// grace_used_at), so a stolen token cannot be replayed repeatedly; and it never
-// touches the concurrent-rotation replay tripwire, which fires on the active
-// path only.
-func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (subject string, custom map[string]string, deviceFP string, ok bool, err error) {
+// Returns (session, true, nil) for an eligible row; (—, false, nil) when there
+// is none: the token was revoked outside the grace window, it has expired, or
+// the grace was already consumed (caller → 401). A non-nil error is a
+// transient rqlite failure (caller → 503).
+func (s *Service) lookupReuseGrace(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (session refreshRow, ok bool, err error) {
 	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
-	// device_fp is selected here too (feat-384). Omitting it would silently
-	// strip device attribution from the recovering client and leave its whole
-	// future chain unattributed — and this path exists precisely for a
-	// legitimate device whose rotation response was lost, so dropping its
-	// device identity breaks the case the grace window was built to rescue.
-	sel := `SELECT subject, custom_claims, device_fp FROM refresh_tokens
+	sel := `SELECT subject, custom_claims, COALESCE(device_id, ''), COALESCE(session_id, '') FROM refresh_tokens
 	        WHERE namespace_id = ? AND token = ?
 	          AND revoked_at IS NOT NULL
 	          AND revoked_at > datetime('now', ?)
@@ -727,57 +817,60 @@ func (s *Service) tryRefreshReuseGrace(ctx context.Context, ormDB client.Databas
 	        LIMIT 1`
 	res, qerr := ormDB.Query(ctx, sel, nsID, hashedRefresh, graceArg)
 	if qerr != nil {
-		return "", nil, "", false, qerr // transient rqlite error → caller 503
+		return refreshRow{}, false, qerr // transient rqlite error → caller 503
 	}
-	if res == nil || res.Count == 0 {
-		return "", nil, "", false, nil // no eligible grace row → caller 401
+	if res == nil || res.Count == 0 || len(res.Rows) == 0 {
+		return refreshRow{}, false, nil // no eligible grace row → caller 401
 	}
+	session = readRefreshRow(res.Rows[0])
+	if session.subject == "" {
+		return refreshRow{}, false, nil // defensive: never grace-mint an anonymous session
+	}
+	return session, true, nil
+}
 
-	var customClaimsJSON string
-	if len(res.Rows) > 0 && len(res.Rows[0]) > 0 {
-		if v, vok := res.Rows[0][0].(string); vok {
-			subject = v
-		} else {
-			b, _ := json.Marshal(res.Rows[0][0])
-			_ = json.Unmarshal(b, &subject)
-		}
-		if len(res.Rows[0]) > 1 {
-			if cc, cok := res.Rows[0][1].(string); cok {
-				customClaimsJSON = cc
-			}
-		}
-		if len(res.Rows[0]) > 2 && res.Rows[0][2] != nil {
-			if fp, fok := res.Rows[0][2].(string); fok {
-				deviceFP = fp
-			}
-		}
+// refreshTokenSpent reports whether a refresh token was issued in this
+// namespace and has since been revoked — rotated away, or ended by a logout. A
+// token nobody ever issued, or one that merely expired, is not: presenting it is
+// a mistake, and presenting a spent one is what a stolen token looks like.
+func (s *Service) refreshTokenSpent(ctx context.Context, ormDB client.DatabaseClient, nsID interface{}, hashedRefresh string) (bool, error) {
+	res, err := ormDB.Query(ctx,
+		`SELECT 1 FROM refresh_tokens WHERE namespace_id = ? AND token = ? AND revoked_at IS NOT NULL LIMIT 1`,
+		nsID, hashedRefresh)
+	if err != nil {
+		return false, err
 	}
-	if subject == "" {
-		return "", nil, "", false, nil // defensive: never grace-mint an anonymous session
-	}
+	return res != nil && res.Count > 0 && len(res.Rows) > 0, nil
+}
 
-	// Single-use CAS: claim the grace. Exactly one caller wins; a concurrent
-	// replay of the same just-revoked token sees RowsAffected == 0 → no grace.
-	// The same time-window predicate is repeated so the claim can't succeed on a
-	// row that aged out of the window between the SELECT and here.
-	updRes, uerr := s.db.Exec(ctx,
+// claimReuseGrace spends a rotated token's reuse grace: a single-use CAS.
+// Exactly one caller wins; a concurrent replay of the same just-revoked token
+// sees RowsAffected == 0 → no grace. The time-window predicate is repeated so
+// the claim cannot succeed on a row that aged out of the window since it was
+// read. Security: the grace is both short-windowed AND single-use, so a stolen
+// token cannot be replayed repeatedly; and it never touches the
+// concurrent-rotation replay tripwire, which fires on the active path only.
+func (s *Service) claimReuseGrace(ctx context.Context, nsID interface{}, hashedRefresh string) (bool, error) {
+	graceArg := fmt.Sprintf("-%d seconds", int(refreshReuseGrace.Seconds()))
+	updRes, err := s.db.Exec(ctx,
 		`UPDATE refresh_tokens SET grace_used_at = datetime('now')
 		 WHERE namespace_id = ? AND token = ? AND grace_used_at IS NULL
 		   AND revoked_at IS NOT NULL AND revoked_at > datetime('now', ?)`,
 		nsID, hashedRefresh, graceArg)
-	if uerr != nil {
-		return "", nil, "", false, uerr // transient
+	if err != nil {
+		return false, err
 	}
-	if affected, _ := updRes.RowsAffected(); affected == 0 {
-		return "", nil, "", false, nil // grace already consumed (concurrent) → caller 401
-	}
-	return subject, unmarshalClaims(customClaimsJSON), deviceFP, true, nil
+	affected, _ := updRes.RowsAffected()
+	return affected > 0, nil
 }
 
 // RevokeToken revokes a specific refresh token or all tokens for a subject
 func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all bool, subject string) error {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.registryDatabase()
+	if db == nil {
+		return fmt.Errorf("client not initialized")
+	}
 
 	nsID, err := s.ResolveNamespaceID(ctx, namespace)
 	if err != nil {
@@ -790,125 +883,189 @@ func (s *Service) RevokeToken(ctx context.Context, namespace, token string, all 
 	// so the legitimate lost-response grace path is unaffected; this only closes
 	// the logout-bypass where a just-logged-out token would otherwise be
 	// grace-eligible for the 60s window.
+	//
+	// all goes first: a logout of every session that also names the caller's
+	// own refresh token used to revoke only that token, and every other
+	// session of the wallet kept refreshing.
+	//
+	// Every session means every namespace: the access tokens are revoked for
+	// the subject everywhere (RevokeAllSessions), and a refresh token left in
+	// another namespace would mint new ones (docs/AUTH.md: "ends every
+	// session of the wallet at once").
+	if all && subject != "" {
+		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE subject = ? AND revoked_at IS NULL", subject)
+		return err
+	}
+
 	if token != "" {
-		hashedToken := sha256Hex(token)
+		hashedToken := refreshTokenHash(token)
 		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND token = ? AND revoked_at IS NULL", nsID, hashedToken)
 		return err
 	}
 
-	if all && subject != "" {
-		_, err := db.Query(internalCtx, "UPDATE refresh_tokens SET revoked_at = datetime('now'), grace_used_at = datetime('now') WHERE namespace_id = ? AND subject = ? AND revoked_at IS NULL", nsID, subject)
-		return err
-	}
-
-	return fmt.Errorf("nothing to revoke")
+	return ErrNothingToRevoke
 }
 
-// RegisterApp registers a new client application
-func (s *Service) RegisterApp(ctx context.Context, wallet, namespace, name, publicKey string) (string, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+// ErrNothingToRevoke is a logout that named no refresh token and did not ask
+// for every session: the caller's mistake, not the gateway's.
+var ErrNothingToRevoke = errors.New("nothing to revoke: send the refresh_token to end, or all=true with a signed-in session")
 
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
-	if err != nil {
-		return "", err
-	}
-
-	// Generate client app_id
-	buf := make([]byte, 12)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate app id: %w", err)
-	}
-	appID := "app_" + base64.RawURLEncoding.EncodeToString(buf)
-
-	// Persist app
-	if _, err := db.Query(internalCtx, "INSERT INTO apps(namespace_id, app_id, name, public_key) VALUES (?, ?, ?, ?)", nsID, appID, name, publicKey); err != nil {
-		return "", err
-	}
-
-	// Record ownership
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, ?, ?)", nsID, "wallet", wallet)
-
-	return appID, nil
-}
-
-// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace
+// GetOrCreateAPIKey returns an existing API key or creates a new one for a wallet in a namespace.
+//
+// It refuses when the namespace belongs to another wallet. This used to be the
+// takeover: the ownership row it wrote unconditionally made any wallet that
+// named an existing namespace an admin co-owner of it, and the key it returned
+// carried no scopes, which the read path treated as admin. Both halves are
+// closed here — ownership is claimed before anything is minted, and the key is
+// minted with the grant written down.
 func (s *Service) GetOrCreateAPIKey(ctx context.Context, wallet, namespace string) (string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
+	db := s.keyORM().Database()
 
-	nsID, err := s.ResolveNamespaceID(ctx, namespace)
+	nsID, err := s.resolveKeyNamespaceID(ctx, namespace)
 	if err != nil {
 		return "", err
 	}
 
-	// Try existing linkage
-	var apiKey string
-	r1, err := db.Query(internalCtx,
-		"SELECT api_keys.key FROM wallet_api_keys JOIN api_keys ON wallet_api_keys.api_key_id = api_keys.id WHERE wallet_api_keys.namespace_id = ? AND LOWER(wallet_api_keys.wallet) = LOWER(?) LIMIT 1",
-		nsID, wallet,
-	)
-	if err == nil && r1 != nil && r1.Count > 0 && len(r1.Rows) > 0 && len(r1.Rows[0]) > 0 {
-		if val, ok := r1.Rows[0][0].(string); ok {
-			apiKey = val
-		}
+	// The lobby has no keys. A wallet there holds no role and owns nothing;
+	// what it gets from signing in is a session, and the one thing that session
+	// reaches is POST /v1/namespaces. Minting a key here would hand every
+	// wallet on the internet a credential in the index gateway's own namespace.
+	if IsLobbyNamespace(namespace) {
+		return "", fmt.Errorf("%w: %q is where a wallet stands before it owns anything; "+
+			"create a namespace with 'orama namespace create <name>'", ErrNoKeysInLobby, LobbyNamespace)
 	}
 
-	if apiKey != "" {
-		return apiKey, nil
+	// Membership first, and the role it carries decides what the key holds.
+	// The key used to be minted with admin whatever the caller's role was, so
+	// a reader or a runtime member signing in was handed the full control
+	// plane by the login itself.
+	grant, err := s.GrantIn(ctx, db, nsID, PrincipalWallet, NormalizeWallet(wallet))
+	if err != nil {
+		return "", err
+	}
+	ownerScopes := grant.Scopes().Canonical()
+	if ownerScopes == "" {
+		return "", fmt.Errorf("%w: this wallet's role in %q is %s", ErrNoKeyForRole, namespace, grant.Role)
 	}
 
-	// Create new API key
-	buf := make([]byte, 18)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("failed to generate api key: %w", err)
-	}
-	apiKey = "ak_" + base64.RawURLEncoding.EncodeToString(buf) + ":" + namespace
+	// The wallet's previous key, if it has one. Its id, not its value: what is
+	// stored is an HMAC of the key, and this used to SELECT that column and
+	// hand it back as the caller's API key.
+	//
+	// That worked only while no HMAC secret was configured. Production always
+	// configures one, so a returning owner's second login answered with the
+	// hash — a string that hashes to something else again and is refused
+	// everywhere. The raw key is shown once and is not recoverable, which is
+	// the point of storing a hash; there is nothing to return but a new one.
+	previousID := s.previousWalletKeyID(internalCtx, db, nsID, wallet)
 
-	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured
+	// Store the HMAC hash of the key (not the raw key) if HMAC secret is configured.
+	//
+	// The scope set is written, never left NULL: a key minted with no scopes
+	// denies, where an empty column used to be read as admin.
+	apiKey, err := NewKey(KeyTypeFor(ownerScopes))
+	if err != nil {
+		return "", err
+	}
 	hashedKey := s.HashAPIKey(apiKey)
-	if _, err := db.Query(internalCtx, "INSERT INTO api_keys(key, name, namespace_id) VALUES (?, ?, ?)", hashedKey, "", nsID); err != nil {
+
+	// Every key has an expiry now. A key minted by a login is the owner's own
+	// key and lives no longer than any other: the point of the column is that
+	// no path produces a credential that works forever.
+	expiresAt := time.Now().Add(KeyLifetime).UTC().Format(sqliteTime)
+
+	// rotated_from records that this key replaces the wallet's previous one, so
+	// `keys list` shows the succession rather than two unrelated keys.
+	//
+	// The previous key is deliberately NOT revoked. It is very likely deployed
+	// somewhere — that is what an owner's key is for — and revoking it because
+	// somebody signed in on a laptop would take an application down with no
+	// warning. It expires on its own, and `orama namespace keys revoke` ends it
+	// sooner when the owner decides to.
+	var rotatedFrom interface{}
+	if previousID != 0 {
+		rotatedFrom = previousID
+	}
+	inserted, err := db.Query(internalCtx,
+		"INSERT INTO api_keys(key, name, namespace_id, scopes, expires_at, rotated_from) VALUES (?, ?, ?, ?, ?, ?)",
+		hashedKey, "", nsID, ownerScopes, expiresAt, rotatedFrom,
+	)
+	if err != nil {
 		return "", fmt.Errorf("failed to store api key: %w", err)
 	}
-
-	// Link wallet -> api_key
-	rid, err := db.Query(internalCtx, "SELECT id FROM api_keys WHERE key = ? LIMIT 1", hashedKey)
-	if err == nil && rid != nil && rid.Count > 0 && len(rid.Rows) > 0 && len(rid.Rows[0]) > 0 {
-		apiKeyID := rid.Rows[0][0]
-		_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)", nsID, strings.ToLower(wallet), apiKeyID)
+	// The id is in the write. Selecting it back reads this node's local
+	// SQLite, and a follower has not applied the log yet, so the row is
+	// missing and the login that stored the key fails.
+	keyID, ok := insertedID(inserted)
+	if !ok {
+		return "", fmt.Errorf("api key stored for namespace %q but the write returned no id", namespace)
 	}
 
-	// Record ownerships — store the hash in ownership too
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'api_key', ?)", nsID, hashedKey)
-	_, _ = db.Query(internalCtx, "INSERT OR IGNORE INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (?, 'wallet', ?)", nsID, wallet)
+	// Point the wallet at its newest key. REPLACE rather than IGNORE: the row
+	// says which key is the wallet's current one, and leaving it pointing at
+	// the previous one would make `rotated_from` describe a succession the
+	// linkage disagrees with.
+	if _, err := db.Query(internalCtx,
+		"INSERT OR REPLACE INTO wallet_api_keys(namespace_id, wallet, api_key_id) VALUES (?, ?, ?)",
+		nsID, NormalizeWallet(wallet), keyID,
+	); err != nil {
+		return "", fmt.Errorf("failed to link the api key to wallet in namespace %q: %w", namespace, err)
+	}
+
+	// The key belongs to the namespace as well: that grant is how the
+	// authorization gate recognizes a request authenticated by the key rather
+	// than by the wallet. Without it the caller holds a key that is refused
+	// everywhere.
+	if err := s.grantServiceAccount(ctx, db, nsID, namespace, hashedKey, RoleForScopes(ownerScopes)); err != nil {
+		return "", err
+	}
 
 	return apiKey, nil
 }
 
-// ResolveNamespaceID ensures the given namespace exists and returns its primary key ID.
+// ResolveNamespaceID returns a namespace's primary key in the cluster registry.
+//
+// It used to `INSERT OR IGNORE INTO namespaces` first, so resolving a name
+// created it — the same create-by-lookup that made `/v1/auth/challenge` a
+// namespace-creation endpoint (bug-357). Creating a namespace is
+// `POST /v1/namespaces` and nothing else; a name nobody has created does not
+// resolve.
+//
+// It resolves against the registry, not against whatever database this gateway
+// happens to hold. Every row it is used to key — a refresh token, a nonce, a
+// grant — lives there, so an id from anywhere else would point at a different
+// namespace or at nothing.
 func (s *Service) ResolveNamespaceID(ctx context.Context, ns string) (interface{}, error) {
-	if s.orm == nil {
+	db := s.registryDatabase()
+	if db == nil {
 		return nil, fmt.Errorf("client not initialized")
 	}
 	ns = strings.TrimSpace(ns)
 	if ns == "" {
-		ns = "default"
+		ns = LobbyNamespace
 	}
 
-	internalCtx := client.WithInternalAuth(ctx)
-	db := s.orm.Database()
-
-	if _, err := db.Query(internalCtx, "INSERT OR IGNORE INTO namespaces(name) VALUES (?)", ns); err != nil {
-		return nil, err
-	}
-	res, err := db.Query(internalCtx, "SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
+	res, err := db.Query(client.WithInternalAuth(ctx),
+		"SELECT id FROM namespaces WHERE name = ? LIMIT 1", ns)
 	if err != nil {
 		return nil, err
 	}
 	if res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
-		return nil, fmt.Errorf("failed to resolve namespace")
+		return nil, &ErrNoSuchNamespace{Namespace: ns}
 	}
 	return res.Rows[0][0], nil
+}
+
+// ErrNoSuchNamespace names a namespace nobody has created.
+type ErrNoSuchNamespace struct{ Namespace string }
+
+func (e *ErrNoSuchNamespace) Error() string {
+	return fmt.Sprintf("no such namespace: %q — create it with 'orama namespace create %s'", e.Namespace, e.Namespace)
+}
+
+func (s *Service) resolveKeyNamespaceID(ctx context.Context, ns string) (interface{}, error) {
+	return s.ResolveNamespaceID(ctx, ns)
 }
 
 // Base58Decode decodes a base58-encoded string
@@ -933,4 +1090,17 @@ func (s *Service) Base58Decode(input string) ([]byte, error) {
 		res = append([]byte{0}, res...)
 	}
 	return res, nil
+}
+
+// previousWalletKeyID returns the id of the key this wallet was last given in a
+// namespace, or 0. It is the `rotated_from` of the key about to be minted.
+func (s *Service) previousWalletKeyID(internalCtx context.Context, db client.DatabaseClient, nsID interface{}, wallet string) int64 {
+	res, err := db.Query(internalCtx,
+		`SELECT api_key_id FROM wallet_api_keys
+		  WHERE namespace_id = ? AND wallet = ? LIMIT 1`,
+		nsID, NormalizeWallet(wallet))
+	if err != nil || res == nil || res.Count == 0 || len(res.Rows) == 0 || len(res.Rows[0]) == 0 {
+		return 0
+	}
+	return toInt64(res.Rows[0][0])
 }

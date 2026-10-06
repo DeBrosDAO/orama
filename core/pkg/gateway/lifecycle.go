@@ -12,6 +12,11 @@ import (
 // It closes the serverless engine, network client, database connections,
 // Olric cache client, and IPFS client in sequence.
 func (g *Gateway) Close() {
+	// Stop the gateway's own background work before tearing down what it uses.
+	if g.shutdown != nil {
+		g.shutdown()
+	}
+
 	// Flush PubSub aggregator buffers before tearing down the engine.
 	// Pending events are dispatched via the invoker which still needs the
 	// engine to be alive, so this MUST happen before the engine close.
@@ -93,5 +98,11 @@ func (g *Gateway) Close() {
 	}
 	if g.rateLimiter != nil {
 		g.rateLimiter.Stop()
+	}
+	if g.chainQueryRateLimiter != nil {
+		g.chainQueryRateLimiter.Stop()
+	}
+	if g.webrtcJoinRateLimiter != nil {
+		g.webrtcJoinRateLimiter.Stop()
 	}
 }

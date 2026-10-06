@@ -23,19 +23,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// configManager is the subset of *push.Manager the config handlers need —
-// kept narrow for testability.
-type configManager interface {
-	IsConfigured(ctx contextLike, namespace string) bool
-	Invalidate(namespace string)
-}
-
-// contextLike avoids importing context everywhere — the handler is
-// already in package serverless which has request contexts.
-type contextLike = interface {
-	Done() <-chan struct{}
-}
-
 // PutConfigRequest is the body of PUT /v1/push/config.
 //
 // Field semantics:
@@ -51,13 +38,6 @@ type PutConfigRequest struct {
 // MaxConfigBodyBytes caps the PUT body size. Push tokens are typically
 // well under 1 KB but we leave headroom.
 const MaxConfigBodyBytes = 16 * 1024
-
-// pushConfigManager is the concrete dependency the Handlers struct holds
-// — a *push.Manager. We extract it via a small interface for tests.
-type pushConfigManager interface {
-	IsConfigured(ctx interface{ Done() <-chan struct{} }, namespace string) bool
-	Invalidate(namespace string)
-}
 
 // GetConfigHandler — GET /v1/push/config. Returns the namespace's current
 // push provider config with sensitive fields REDACTED to boolean flags.

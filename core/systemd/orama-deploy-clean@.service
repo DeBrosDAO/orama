@@ -1,0 +1,41 @@
+[Unit]
+# Removes what orama-deploy-build@%i installed. The gateway starts it through
+# orama-privhelper when a deployment is removed, and when one is created
+# without a server-side install (it ships node_modules, or skips the install):
+# the node and npm runtime units bind the build output under the app, so an
+# instance name reused by another deployment must not inherit it.
+Description=Orama Deployment dependency removal - %i
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+ProtectProc=invisible
+TemporaryFileSystem=/opt/orama:ro
+
+# The build unit's directory: systemd hands it to this unit's dynamic user for
+# the removal. The directory itself stays, empty.
+CacheDirectory=orama-build/%i
+CacheDirectoryMode=0700
+ExecStart=/bin/rm -rf -- %C/orama-build/%i/deps %C/orama-build/%i/npm-cache
+
+TimeoutStartSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-build-%i

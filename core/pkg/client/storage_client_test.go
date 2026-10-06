@@ -294,8 +294,8 @@ func TestStorageClientImpl_getGatewayURL(t *testing.T) {
 		storage.client = client
 
 		url := storage.getGatewayURL()
-		if url != "http://localhost:6001" {
-			t.Errorf("Expected 'http://localhost:6001', got %s", url)
+		if url != "http://localhost:10104" {
+			t.Errorf("Expected 'http://localhost:10104', got %s", url)
 		}
 	})
 
@@ -304,8 +304,8 @@ func TestStorageClientImpl_getGatewayURL(t *testing.T) {
 		storage.client = client
 
 		url := storage.getGatewayURL()
-		if url != "http://localhost:6001" {
-			t.Errorf("Expected 'http://localhost:6001', got %s", url)
+		if url != "http://localhost:10104" {
+			t.Errorf("Expected 'http://localhost:10104', got %s", url)
 		}
 	})
 }

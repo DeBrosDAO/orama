@@ -24,6 +24,13 @@ import (
 func TestPruneStaleClusterNodes_alsoDropsPortAllocation(t *testing.T) {
 	db := &recoveryMockDB{}
 	db.queryFunc = func(dest any, query string, _ ...any) error {
+		if strings.Contains(query, "FROM namespace_clusters") {
+			appendToSlice(dest, map[string]any{"ID": "cluster-1", "RQLiteNodeCount": 3})
+			return nil
+		}
+		if strings.Contains(query, "FROM dns_nodes") {
+			return nil // the node is gone from the registry: nothing to confirm
+		}
 		if query != staleClusterNodeSQL {
 			t.Fatalf("unexpected query: %s", query)
 		}
@@ -63,7 +70,12 @@ func TestPruneStaleClusterNodes_alsoDropsPortAllocation(t *testing.T) {
 // A cluster with no stale members must not delete anything.
 func TestPruneStaleClusterNodes_noStaleMembersDeletesNoAllocations(t *testing.T) {
 	db := &recoveryMockDB{}
-	db.queryFunc = func(dest any, query string, _ ...any) error { return nil }
+	db.queryFunc = func(dest any, query string, _ ...any) error {
+		if strings.Contains(query, "FROM namespace_clusters") {
+			appendToSlice(dest, map[string]any{"ID": "cluster-1", "RQLiteNodeCount": 3})
+		}
+		return nil
+	}
 	cm := &ClusterManager{db: db, logger: zap.NewNop()}
 
 	if _, err := cm.pruneStaleClusterNodes(context.Background(), "cluster-1"); err != nil {

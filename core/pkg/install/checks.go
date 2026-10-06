@@ -1,0 +1,306 @@
+package install
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+)
+
+// OSInfo contains detected operating system information
+type OSInfo struct {
+	ID      string // ubuntu, debian, etc.
+	Version string // 22.04, 24.04, 12, etc.
+	Name    string // Full name: "ubuntu 24.04"
+}
+
+// PrivilegeChecker validates root access and user context
+type PrivilegeChecker struct{}
+
+// CheckRoot verifies the process is running as root
+func (pc *PrivilegeChecker) CheckRoot() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("this command must be run as root (use sudo)")
+	}
+	return nil
+}
+
+// CheckLinuxOS verifies the process is running on Linux
+func (pc *PrivilegeChecker) CheckLinuxOS() error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("production setup is only supported on Linux (detected: %s)", runtime.GOOS)
+	}
+	return nil
+}
+
+// OSDetector detects the Linux distribution
+type OSDetector struct{}
+
+// Detect returns information about the detected OS
+func (od *OSDetector) Detect() (*OSInfo, error) {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return nil, fmt.Errorf("cannot detect operating system: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	var id, version string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID=") {
+			id = strings.Trim(strings.TrimPrefix(line, "ID="), "\"")
+		}
+		if strings.HasPrefix(line, "VERSION_ID=") {
+			version = strings.Trim(strings.TrimPrefix(line, "VERSION_ID="), "\"")
+		}
+	}
+
+	if id == "" {
+		return nil, fmt.Errorf("could not detect OS ID from /etc/os-release")
+	}
+
+	name := id
+	if version != "" {
+		name = fmt.Sprintf("%s %s", id, version)
+	}
+
+	return &OSInfo{
+		ID:      id,
+		Version: version,
+		Name:    name,
+	}, nil
+}
+
+// supportedReleases maps each supported OS ID and version to its codename.
+//
+// Every release here must be one the Tor Project publishes packages for
+// (installers.TorSuiteFor): the Tor client is installed on every node, and
+// Phase 2d fails on any other release. Interim Ubuntu releases (24.10, 25.04,
+// 25.10) are absent for that reason — they are past end of life and
+// deb.torproject.org has no suite for them.
+var supportedReleases = map[string]map[string]string{
+	"ubuntu": {"22.04": "jammy", "24.04": "noble", "26.04": "resolute"},
+	"debian": {"12": "bookworm", "13": "trixie"},
+}
+
+// IsSupportedOS checks if the OS is supported for production deployment.
+func (od *OSDetector) IsSupportedOS(info *OSInfo) bool {
+	_, ok := supportedReleases[info.ID][info.Version]
+	return ok
+}
+
+// SupportedReleasesText lists the supported releases for an error message,
+// e.g. "debian 12, 13; ubuntu 22.04, 24.04, 26.04". It is built from
+// supportedReleases so the message cannot drift from the check.
+func SupportedReleasesText() string {
+	ids := make([]string, 0, len(supportedReleases))
+	for id := range supportedReleases {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		versions := make([]string, 0, len(supportedReleases[id]))
+		for v := range supportedReleases[id] {
+			versions = append(versions, v)
+		}
+		sort.Strings(versions)
+		parts = append(parts, id+" "+strings.Join(versions, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// ArchitectureDetector detects the system architecture
+type ArchitectureDetector struct{}
+
+// Detect returns the detected architecture as a string usable for downloads
+func (ad *ArchitectureDetector) Detect() (string, error) {
+	arch := runtime.GOARCH
+	switch arch {
+	case "amd64":
+		return "amd64", nil
+	case "arm64":
+		return "arm64", nil
+	case "arm":
+		return "arm", nil
+	default:
+		return "", fmt.Errorf("unsupported architecture: %s", arch)
+	}
+}
+
+// DependencyChecker validates external tool availability and auto-installs missing ones
+type DependencyChecker struct{}
+
+// NewDependencyChecker creates a new checker
+func NewDependencyChecker(_ bool) *DependencyChecker {
+	return &DependencyChecker{}
+}
+
+// Dependency represents an external binary dependency
+type Dependency struct {
+	Name    string
+	Command string
+	AptPkg  string // apt package name to install
+}
+
+// CheckAll validates all required dependencies, auto-installing any that are missing.
+func (dc *DependencyChecker) CheckAll() ([]Dependency, error) {
+	dependencies := []Dependency{
+		{Name: "curl", Command: "curl", AptPkg: "curl"},
+		{Name: "git", Command: "git", AptPkg: "git"},
+		{Name: "make", Command: "make", AptPkg: "make"},
+		{Name: "jq", Command: "jq", AptPkg: "jq"},
+		{Name: "speedtest", Command: "speedtest-cli", AptPkg: "speedtest-cli"},
+	}
+
+	var missing []Dependency
+	for _, dep := range dependencies {
+		if _, err := exec.LookPath(dep.Command); err != nil {
+			missing = append(missing, dep)
+		}
+	}
+
+	if len(missing) == 0 {
+		return nil, nil
+	}
+
+	// Auto-install missing dependencies
+	var pkgs []string
+	var names []string
+	for _, dep := range missing {
+		pkgs = append(pkgs, dep.AptPkg)
+		names = append(names, dep.Name)
+	}
+
+	fmt.Fprintf(os.Stderr, "  Installing missing dependencies: %s\n", strings.Join(names, ", "))
+
+	update := aptCommand("update", "-qq")
+	update.Stdout = os.Stdout
+	update.Stderr = os.Stderr
+	if err := update.Run(); err != nil {
+		return missing, fmt.Errorf("apt-get update before installing %s failed: %w", strings.Join(names, ", "), err)
+	}
+
+	install := aptCommand(append([]string{"install", "-y", "-qq"}, pkgs...)...)
+	install.Stdout = os.Stdout
+	install.Stderr = os.Stderr
+	if err := install.Run(); err != nil {
+		return missing, fmt.Errorf("failed to install dependencies (%s): %w", strings.Join(names, ", "), err)
+	}
+
+	// Verify after install
+	var stillMissing []Dependency
+	for _, dep := range missing {
+		if _, err := exec.LookPath(dep.Command); err != nil {
+			stillMissing = append(stillMissing, dep)
+		}
+	}
+
+	if len(stillMissing) > 0 {
+		errMsg := "dependencies still missing after install attempt:\n"
+		for _, dep := range stillMissing {
+			errMsg += fmt.Sprintf("  - %s\n", dep.Name)
+		}
+		return stillMissing, fmt.Errorf("%s", errMsg)
+	}
+
+	fmt.Fprintf(os.Stderr, "  ✓ Dependencies installed successfully\n")
+	return nil, nil
+}
+
+// Installer resource floors. CheckDiskSpace, CheckRAM and CheckCPU use these
+// values, and docs/RUN_YOUR_OWN_CLUSTER.md quotes them. The disk and RAM
+// units are 1024³ bytes; the error text calls that GB.
+const (
+	MinFreeDiskBytes = 10 * 1024 * 1024 * 1024
+	MinRAMBytes      = 2 * 1024 * 1024 * 1024
+	MinCPUCores      = 2
+)
+
+// ResourceChecker validates system resources for production deployment
+type ResourceChecker struct{}
+
+// NewResourceChecker creates a new resource checker
+func NewResourceChecker() *ResourceChecker {
+	return &ResourceChecker{}
+}
+
+// CheckDiskSpace validates sufficient disk space (minimum 10GB free)
+func (rc *ResourceChecker) CheckDiskSpace(path string) error {
+	checkPath := path
+
+	// If the path doesn't exist, check the parent directory instead
+	for checkPath != "/" {
+		if _, err := os.Stat(checkPath); err == nil {
+			break
+		}
+		checkPath = filepath.Dir(checkPath)
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(checkPath, &stat); err != nil {
+		return fmt.Errorf("failed to check disk space: %w", err)
+	}
+
+	// Available space in bytes
+	availableBytes := stat.Bavail * uint64(stat.Bsize)
+	minRequiredBytes := uint64(MinFreeDiskBytes)
+
+	if availableBytes < minRequiredBytes {
+		availableGB := float64(availableBytes) / (1024 * 1024 * 1024)
+		return fmt.Errorf("insufficient disk space: %.1fGB available, minimum %dGB required", availableGB, MinFreeDiskBytes/(1024*1024*1024))
+	}
+
+	return nil
+}
+
+// CheckRAM validates sufficient RAM (minimum 2GB total)
+func (rc *ResourceChecker) CheckRAM() error {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return fmt.Errorf("failed to read memory info: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	totalKB := uint64(0)
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "MemTotal:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				if kb, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+					totalKB = kb
+					break
+				}
+			}
+		}
+	}
+
+	if totalKB == 0 {
+		return fmt.Errorf("could not determine total RAM")
+	}
+
+	minRequiredKB := uint64(MinRAMBytes / 1024)
+	if totalKB < minRequiredKB {
+		totalGB := float64(totalKB) / (1024 * 1024)
+		return fmt.Errorf("insufficient RAM: %.1fGB total, minimum %dGB required", totalGB, MinRAMBytes/(1024*1024*1024))
+	}
+
+	return nil
+}
+
+// CheckCPU validates sufficient CPU cores (minimum 2 cores)
+func (rc *ResourceChecker) CheckCPU() error {
+	cores := runtime.NumCPU()
+	if cores < MinCPUCores {
+		return fmt.Errorf("insufficient CPU cores: %d available, minimum %d required", cores, MinCPUCores)
+	}
+	return nil
+}

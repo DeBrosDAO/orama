@@ -24,11 +24,11 @@ import (
 // AggregationWindowMs > 0 indicates the dispatcher should buffer events
 // instead of invoking the function per event.
 type TriggerMatch struct {
-	TriggerID               string
-	FunctionID              string
-	FunctionName            string
-	Namespace               string
-	Topic                   string
+	TriggerID    string
+	FunctionID   string
+	FunctionName string
+	Namespace    string
+	Topic        string
 	// TopicPattern is the trigger's stored pattern (may be a glob).
 	// Carried alongside the resolved Topic so callers like
 	// PubSubDispatcher.DispatchLocalPublish can distinguish wildcard

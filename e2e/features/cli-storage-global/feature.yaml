@@ -1,0 +1,52 @@
+# CLI conformance for the chain-facing commands, without submitting anything:
+# every `orama storage`, `orama global` and on-chain `orama cluster` command's
+# help and usage errors; every transaction command printing its sign document
+# (Msg type, chain id, signer, public key; deterministic) on a machine with no
+# wallet; every stateless rule refused on the command line as a usage error;
+# an unreachable chain REST API; storage seal/open/rewrap round trips and
+# refusals (wrong seed, slot, nonce, tampered slot, loose seed file mode);
+# global bind signatures verified independently and fed to global register;
+# with the co-hosted chain: an account without history stopping before
+# signing, get/put of an absent deal, stage-oramad refusing an unverified
+# binary in a scratch home.
+id: cli-storage-global
+title: CLI conformance - storage, global and on-chain cluster commands
+area: cli
+subtasks: [2845]
+stage: 3
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama storage
+    - orama storage accept
+    - orama storage create
+    - orama storage decline
+    - orama storage extend
+    - orama storage get
+    - orama storage grant
+    - orama storage open
+    - orama storage prove
+    - orama storage put
+    - orama storage revoke
+    - orama storage rewrap
+    - orama storage seal
+    - orama global
+    - orama global bind
+    - orama global bond
+    - orama global capacity
+    - orama global register
+    - orama global retire
+    - orama global stage-oramad
+    - orama global unbond
+    - orama cluster register-onchain
+    - orama cluster retire-onchain
+  claims:
+    - "docs/CLI_REFERENCE.md#orama-cluster-register-onchain: without --node the command prints the sign document and does not submit anything"
+    - "docs/CLI_REFERENCE.md#orama-storage-open: a wrong seed, repair seed, or slot fails and writes nothing"
+    - "docs/CLI_REFERENCE.md#orama-global-register: each binding's signature must verify for this chain id and operator"
+    - "docs/CLI_REFERENCE.md#orama-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
+    - "docs/CLI_REFERENCE.md#orama-storage-put: a wrong file or a wrong deal uploads nothing"

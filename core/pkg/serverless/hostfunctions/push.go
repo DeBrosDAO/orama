@@ -3,6 +3,7 @@ package hostfunctions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/DeBrosOfficial/network/pkg/push"
@@ -45,6 +46,59 @@ type PushSendArgs struct {
 // are small by construction (APNs caps at 4KB, ntfy/Expo similar).
 const MaxPushSendArgsBytes = 16 * 1024
 
+// pushNotConfiguredEnvelope is what the rich-result push calls return when
+// this gateway or namespace has no push provider: ok, nothing attempted. Same
+// portability contract as PushSend's silent no-op.
+const pushNotConfiguredEnvelope = `{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`
+
+// decodePushMessage validates and decodes a push host call's JSON argument.
+// fn names the host function in the returned error.
+func decodePushMessage(fn string, msgJSON []byte) (push.PushMessage, error) {
+	if len(msgJSON) > MaxPushSendArgsBytes {
+		return push.PushMessage{}, &serverless.HostFunctionError{
+			Function: fn,
+			Cause:    fmt.Errorf("msg too large: max %d bytes", MaxPushSendArgsBytes),
+		}
+	}
+	var args PushSendArgs
+	if err := json.Unmarshal(msgJSON, &args); err != nil {
+		return push.PushMessage{}, &serverless.HostFunctionError{
+			Function: fn,
+			Cause:    fmt.Errorf("invalid json: %w", err),
+		}
+	}
+	priority := push.PriorityNormal
+	if args.Priority == "high" {
+		priority = push.PriorityHigh
+	}
+	return push.PushMessage{
+		Title:           args.Title,
+		Body:            args.Body,
+		Channel:         args.Channel,
+		Priority:        priority,
+		Badge:           args.Badge,
+		Sound:           args.Sound,
+		Data:            args.Data,
+		TargetProvider:  args.TargetProvider,
+		ExcludeProvider: args.ExcludeProvider,
+		MessageID:       args.MessageID,
+	}, nil
+}
+
+// pushNamespace resolves the namespace a push host call acts in. It comes from
+// the server-trusted invocation context, never from the WASM caller, so a
+// function can never push into another namespace. ctx-attached invCtx wins
+// over the singleton; see invocation_context.go.
+func (h *HostFunctions) pushNamespace(ctx context.Context, fn string) (string, error) {
+	if cur := h.currentInvocationContext(ctx); cur != nil && cur.Namespace != "" {
+		return cur.Namespace, nil
+	}
+	return "", &serverless.HostFunctionError{
+		Function: fn,
+		Cause:    fmt.Errorf("no namespace in invocation context"),
+	}
+}
+
 // PushSend implements serverless.HostServices.PushSend.
 //
 // Sends a push notification to all devices the user has registered in the
@@ -61,66 +115,21 @@ const MaxPushSendArgsBytes = 16 * 1024
 // PUT /v1/push/config get their providers; namespaces with no config
 // fall back to the gateway YAML defaults via the manager's resolution.
 func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []byte) error {
+	const fn = "push_send"
 	if h.pushManager == nil && h.pushDispatcher == nil {
 		// Silent no-op — push isn't configured on this gateway.
 		return nil
 	}
 	if userID == "" {
-		return &serverless.HostFunctionError{
-			Function: "push_send",
-			Cause:    fmt.Errorf("user_id required"),
-		}
+		return &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("user_id required")}
 	}
-	if len(msgJSON) > MaxPushSendArgsBytes {
-		return &serverless.HostFunctionError{
-			Function: "push_send",
-			Cause:    fmt.Errorf("msg too large: max %d bytes", MaxPushSendArgsBytes),
-		}
+	msg, err := decodePushMessage(fn, msgJSON)
+	if err != nil {
+		return err
 	}
-
-	var args PushSendArgs
-	if err := json.Unmarshal(msgJSON, &args); err != nil {
-		return &serverless.HostFunctionError{
-			Function: "push_send",
-			Cause:    fmt.Errorf("invalid json: %w", err),
-		}
-	}
-
-	// Resolve namespace from the current invocation context. A function
-	// can NEVER push to another namespace's users — the namespace is
-	// trusted server-side, not from the WASM input.
-	// ctx-attached invCtx wins over singleton; see invocation_context.go.
-	var namespace string
-	if cur := h.currentInvocationContext(ctx); cur != nil {
-		namespace = cur.Namespace
-	}
-
-	if namespace == "" {
-		return &serverless.HostFunctionError{
-			Function: "push_send",
-			Cause:    fmt.Errorf("no namespace in invocation context"),
-		}
-	}
-
-	priority := push.PriorityNormal
-	switch args.Priority {
-	case "high":
-		priority = push.PriorityHigh
-	case "normal", "":
-		priority = push.PriorityNormal
-	}
-
-	msg := push.PushMessage{
-		Title:           args.Title,
-		Body:            args.Body,
-		Channel:         args.Channel,
-		Priority:        priority,
-		Badge:           args.Badge,
-		Sound:           args.Sound,
-		Data:            args.Data,
-		TargetProvider:  args.TargetProvider,
-		ExcludeProvider: args.ExcludeProvider,
-		MessageID:       args.MessageID,
+	namespace, err := h.pushNamespace(ctx, fn)
+	if err != nil {
+		return err
 	}
 
 	// Route through Manager when present so per-namespace push config
@@ -133,14 +142,14 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 		// AND no YAML defaults. Treat as silent no-op for portability —
 		// same contract as "no dispatcher at all". Functions can't depend
 		// on push being available.
-		if sendErr != nil && sendErr.Error() == push.ErrPushNotConfigured.Error() {
+		if errors.Is(sendErr, push.ErrPushNotConfigured) {
 			return nil
 		}
 	} else {
 		sendErr = h.pushDispatcher.SendToUser(ctx, namespace, userID, msg)
 	}
 	if sendErr != nil {
-		return &serverless.HostFunctionError{Function: "push_send", Cause: sendErr}
+		return &serverless.HostFunctionError{Function: fn, Cause: sendErr}
 	}
 	return nil
 }
@@ -160,93 +169,47 @@ func (h *HostFunctions) PushSend(ctx context.Context, userID string, msgJSON []b
 // manager wired, no namespace in context, invalid JSON). Per-device
 // failures go into the JSON `results[]` array.
 func (h *HostFunctions) PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error) {
+	const fn = "push_send_v2"
 	if h.pushManager == nil && h.pushDispatcher == nil {
-		// Silent no-op shape: empty result envelope. WASM caller sees
-		// ok=true, attempted=0, succeeded=0. Same semantic as legacy
-		// PushSend's silent no-op for portability across environments.
-		return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+		return []byte(pushNotConfiguredEnvelope), nil
 	}
 	if userID == "" {
-		return nil, &serverless.HostFunctionError{
-			Function: "push_send_v2",
-			Cause:    fmt.Errorf("user_id required"),
-		}
+		return nil, &serverless.HostFunctionError{Function: fn, Cause: fmt.Errorf("user_id required")}
 	}
-	if len(msgJSON) > MaxPushSendArgsBytes {
-		return nil, &serverless.HostFunctionError{
-			Function: "push_send_v2",
-			Cause:    fmt.Errorf("msg too large: max %d bytes", MaxPushSendArgsBytes),
-		}
+	msg, err := decodePushMessage(fn, msgJSON)
+	if err != nil {
+		return nil, err
 	}
-
-	var args PushSendArgs
-	if err := json.Unmarshal(msgJSON, &args); err != nil {
-		return nil, &serverless.HostFunctionError{
-			Function: "push_send_v2",
-			Cause:    fmt.Errorf("invalid json: %w", err),
-		}
-	}
-
-	// Same namespace resolution as PushSend — invCtx-trusted, never the
-	// WASM caller's claim.
-	var namespace string
-	if cur := h.currentInvocationContext(ctx); cur != nil {
-		namespace = cur.Namespace
-	}
-	if namespace == "" {
-		return nil, &serverless.HostFunctionError{
-			Function: "push_send_v2",
-			Cause:    fmt.Errorf("no namespace in invocation context"),
-		}
-	}
-
-	priority := push.PriorityNormal
-	switch args.Priority {
-	case "high":
-		priority = push.PriorityHigh
-	case "normal", "":
-		priority = push.PriorityNormal
-	}
-
-	msg := push.PushMessage{
-		Title:           args.Title,
-		Body:            args.Body,
-		Channel:         args.Channel,
-		Priority:        priority,
-		Badge:           args.Badge,
-		Sound:           args.Sound,
-		Data:            args.Data,
-		TargetProvider:  args.TargetProvider,
-		ExcludeProvider: args.ExcludeProvider,
-		MessageID:       args.MessageID,
+	namespace, err := h.pushNamespace(ctx, fn)
+	if err != nil {
+		return nil, err
 	}
 
 	// Prefer the Manager (per-namespace config); fall back to the legacy
 	// dispatcher. Same precedence as PushSend so v1 and v2 stay
 	// behaviorally equivalent at the dispatch level.
-	var (
-		result *push.SendDetailedResult
-		err    error
-	)
+	var result *push.SendDetailedResult
 	if h.pushManager != nil {
 		result, err = h.pushManager.SendToUserDetailed(ctx, namespace, userID, msg)
-		// ErrPushNotConfigured = no per-namespace config AND no YAML
-		// defaults. Treat as silent no-op (same shape as legacy PushSend).
-		if err != nil && err.Error() == push.ErrPushNotConfigured.Error() {
-			return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+		if errors.Is(err, push.ErrPushNotConfigured) {
+			return []byte(pushNotConfiguredEnvelope), nil
 		}
 	} else {
 		result, err = h.pushDispatcher.SendToUserDetailed(ctx, namespace, userID, msg)
 	}
 	if err != nil {
-		return nil, &serverless.HostFunctionError{Function: "push_send_v2", Cause: err}
+		return nil, &serverless.HostFunctionError{Function: fn, Cause: err}
 	}
+	return marshalPushResult(fn, result)
+}
 
-	out, mErr := json.Marshal(result)
-	if mErr != nil {
+// marshalPushResult encodes a rich-result push outcome for the guest.
+func marshalPushResult(fn string, result *push.SendDetailedResult) ([]byte, error) {
+	out, err := json.Marshal(result)
+	if err != nil {
 		return nil, &serverless.HostFunctionError{
-			Function: "push_send_v2",
-			Cause:    fmt.Errorf("marshal result: %w", mErr),
+			Function: fn,
+			Cause:    fmt.Errorf("marshal result: %w", err),
 		}
 	}
 	return out, nil

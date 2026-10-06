@@ -114,6 +114,10 @@ func (m *mockHostServices) PushSendV2(ctx context.Context, userID string, msgJSO
 	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
 }
 
+func (m *mockHostServices) PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *mockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
 	return []byte(`{"configured":false}`), nil
 }
@@ -170,7 +174,7 @@ func (m *mockHostServices) HTTPFetch(ctx context.Context, method, url string, he
 	return nil, nil
 }
 
-func (m *mockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+func (m *mockHostServices) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
@@ -200,6 +204,22 @@ func (m *mockHostServices) GetCallerClaim(ctx context.Context, name string) stri
 
 func (m *mockHostServices) GetCallerJWTSubject(ctx context.Context) string {
 	return ""
+}
+
+func (m *mockHostServices) GetCallerDeviceID(ctx context.Context) string {
+	return ""
+}
+
+func (m *mockHostServices) GetCallerCapability(ctx context.Context) string {
+	return ""
+}
+
+func (m *mockHostServices) MintCapability(ctx context.Context, resource string, ttl time.Duration) (string, error) {
+	return "", nil
+}
+
+func (m *mockHostServices) RevokeCapability(ctx context.Context, token string) error {
+	return nil
 }
 
 func (m *mockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {

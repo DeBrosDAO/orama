@@ -36,6 +36,10 @@ func (m *mockIPFSClient) Add(ctx context.Context, reader io.Reader, name string)
 	return &ipfs.AddResponse{Cid: "QmTest123", Name: name, Size: 100}, nil
 }
 
+func (m *mockIPFSClient) AddLocal(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error) {
+	return m.Add(ctx, reader, name)
+}
+
 func (m *mockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipfs.AddResponse, error) {
 	if m.addDirectoryFunc != nil {
 		return m.addDirectoryFunc(ctx, dirPath)
@@ -79,6 +83,10 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 	return nil
 }
 
+func (m *mockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
+	return m.Get(ctx, cid, ipfsAPIURL)
+}
+
 func (m *mockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) {
 	return 0, nil
 }
@@ -108,7 +116,6 @@ func newTestGatewayWithIPFS(t *testing.T, ipfsClient ipfs.IPFSClient) *Gateway {
 		ListenAddr:            ":6001",
 		ClientNamespace:       "test",
 		IPFSReplicationFactor: 3,
-		IPFSEnableEncryption:  true,
 		IPFSAPIURL:            "http://localhost:5001",
 	}
 
@@ -420,6 +427,7 @@ func TestStorageStatusHandler_Success(t *testing.T) {
 	gw := newTestGatewayWithIPFS(t, mockClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/storage/status/"+expectedCID, nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "test-ns"))
 	w := httptest.NewRecorder()
 
 	gw.storageHandlers.StatusHandler(w, req)
@@ -458,7 +466,7 @@ func TestStorageStatusHandler_MissingCID(t *testing.T) {
 }
 
 func TestStorageGetHandler_Success(t *testing.T) {
-	expectedCID := "QmGet123"
+	expectedCID := "QmfYzxZHqYpmy29rVWqs6f4igzYngACaxSxPWdf7FspuDV"
 	expectedContent := "test content from IPFS"
 
 	mockClient := &mockIPFSClient{

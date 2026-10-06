@@ -1,0 +1,54 @@
+# Vulnerabilities govulncheck reports as reachable and that the project accepts
+# for now. TestGovulncheck_modulesUnaffected fails on a finding not listed here,
+# on an entry that no longer appears (remove it), and on an entry past its
+# review_by. review_by is at most 90 days away. See e2e/README.md, "Scanners".
+accepted:
+  - module: chain
+    id: GO-2026-6443
+    reason: >-
+      grpc 1.84.0; the Go vulnerability database lists the fix only as the
+      pre-release v1.85.0-dev.0.20260825072537-93e31b48545e, so its version
+      range ("introduced 1.84.0-dev, fixed 1.85.0-dev...") also covers the
+      v1.84.0 tag, which post-dates that fix. Two independent reasons the
+      chain is not exposed. (1) The advisory's own precondition: servers
+      configured with xDS routing can panic, because the xDS routing
+      interceptor (internal/xds/server RouteAndProcess) indexed an empty
+      :authority. The reported symbols http2Server.HandleStreams and
+      http2Server.operateHeaders are where the transport accepted a request with
+      neither :authority nor Host; without the xDS interceptor nothing indexes
+      the empty value, so the generic transport path alone does not panic. The
+      chain's only gRPC server is cosmos-sdk's server/grpc, a plain
+      grpc.NewServer, and nothing in the chain, cosmos-sdk or their
+      dependencies calls xds.NewGRPCServer; the xDS packages are linked only
+      through the client-side xds/googledirectpath that
+      cloud.google.com/go/storage imports. (2) The v1.84.0 source already
+      carries the fix: http2Server.operateHeaders answers a request with no host
+      or :authority header with an early abort (HTTP 400), and RouteAndProcess
+      returns an Internal status for a missing :authority instead of indexing
+      it. Take the tagged release that the database lists as fixed when it does,
+      and drop this entry.
+    review_by: 2026-12-29
+  - module: chain
+    id: GO-2026-5932
+    reason: >-
+      golang.org/x/crypto/openpgp is unmaintained and has no fixed version. The
+      chain never calls it: the reported traces are package init (cosmos-sdk
+      crypto/armor imports openpgp/armor for key export and import) and
+      interface dispatch (io.ReadAll and io.ReadFull in provider.Cat and
+      storagekey.Apply treat armor.Read as a possible io.Reader; no code in the
+      chain builds an armor reader). Real armor use is the operator key
+      import/export commands of the cosmos keyring, reading a file the operator
+      names on their own machine; no network peer or transaction supplies input
+      to it.
+    review_by: 2026-12-29
+  - module: chain
+    id: GO-2026-4740
+    reason: >-
+      shamaton/msgpack v2.2.3 (GHSA-h9q6-hc68-35rp, out-of-range read on a
+      truncated fixext) has no fixed version. govulncheck reports only package
+      init (x/wasmpolicy imports wasmvm/v3/types, which imports msgpack); the
+      decoder is never called. wasmvm uses it in one place, to decode the
+      pinned-module metrics libwasmvm returns in-process, and the chain does not
+      call that. No transaction, contract or peer message reaches a msgpack
+      decoder.
+    review_by: 2026-12-29

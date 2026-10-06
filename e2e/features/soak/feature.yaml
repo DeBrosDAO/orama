@@ -1,0 +1,46 @@
+# A long soak: signed-in users (wallets with device keys) generate sustained
+# mixed traffic for E2E_SOAK_MINUTES (default 30) - health, a static site by
+# name, cache, database, pubsub with subscription sockets held open, storage
+# uploads and downloads, and session refreshes - while chaos events fire on
+# a schedule, one at a time, each followed by full recovery (monitor
+# converged): kill -9 of the cluster gateway, a brief partition, clock skew,
+# a namespace gateway restart, kill -9 of rqlite and of olric. Between events
+# the cluster must stay converged. At the end the SLOs are asserted and
+# recorded in the artifact dir (soak/slo.json): error rate under 1% and p95
+# bounds outside the injected windows, no socket lost outside them, memory
+# and file descriptors of every daemon not grown beyond their bounds, no
+# unexpected restarts, rqlite applied-index lag bounded, and a converged
+# cluster.
+id: soak
+title: Soak - sustained mixed traffic under scheduled chaos, with SLOs
+area: quality
+subtasks: [2862]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama monitor report
+    - orama deploy static
+  routes:
+    - /v1/health
+    - /v1/cache/put
+    - /v1/cache/get
+    - /v1/rqlite/create-table
+    - /v1/rqlite/exec
+    - /v1/rqlite/query
+    - /v1/pubsub/publish
+    - /v1/pubsub/ws
+    - /v1/storage/upload
+    - /v1/storage/get/
+    - /v1/auth/refresh
+  units:
+    - orama-namespace-gateway@.service
+    - orama-namespace-rqlite@.service
+    - orama-namespace-olric@.service
+  claims:
+    - "plans/e2e-fleet.md: simulated users hold sockets open for hours through chaos, and nothing is lost"
+    - "docs/MONITORING.md: a node whose commit index is over 100 ahead of its applied index is a warning"

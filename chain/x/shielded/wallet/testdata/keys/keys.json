@@ -1,0 +1,131 @@
+{
+  "hkdf_branch": "orama-shielded-v1",
+  "master_personalization": "OramaIP32Orchard",
+  "coin_type": 1330790733,
+  "purpose": 32,
+  "seeds": [
+    {
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "bip39_seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "shielded_seed": "10f25b603d0e3fe9682bf16a17871c8bffbfa99f9212d8b9f5cd6609f4f9f43a",
+      "master_spending_key": "701088c29ce99b8cdc040b64250fb991e734ae73fae24e2799c93cf8184d55be",
+      "master_chain_code": "a0b5866440d58ebc89feef4ecc92ff21a5441c74785a7006b429fd7a1ed32262",
+      "accounts": [
+        {
+          "account": 0,
+          "path": "m/32'/1330790733'/0'",
+          "chain_code": "f6297e46b2d175d43d19187e0273940d8cd41ab07cd45fc9e96d8f844741bd7f",
+          "spending_key": "848273f977b77735b22de8df74e76b2b15b399d2d0306322ed4bb0942165102a",
+          "full_viewing_key": "d19ed4fb1636ad3a22f39564b77b60b5e051bbab09ea0f0f3785cfaadfca2d2300f6bfcd33bc7d7499a0b9b0ce5f1ea1bbdff3f9912d043952f65042732c3505a3f0afea90e61bd1a5a341e13a5d02438e52fbbccd048ae0954a5563f852b828",
+          "external_ivk": "3bfdfaec01abf0e3501a251b00961e3b23ec31fa3f9ff73401fa974992b1fa42c250c1832d92f9bb9cdffb320114f3e7f789687e4089bc425ca28765d11fb229",
+          "internal_ivk": "bd50207af7df835440bf66960b46b914a8079247dae35ff41d6b8136735b739669c3d79518a3c2dad86a012e6696e246a0d891c7ae81f0ebd9a2b1b2fcd53128",
+          "external_ovk": "0d8f4e066e3ffea7d24814783d4c619c1a01e1034caeeba4c9a633484779cd2d",
+          "internal_ovk": "c9be90e5a7b6e65d900a8dabaaa90aafefb3c50d0368f24172c5e46cf24bb5e3",
+          "addresses": [
+            "e3c70b2a3907f408fe802771fb07824ec6e826bf3d7c7586fe62f2e04cdbad32678fb37171a2fd1cbfb02e",
+            "e41c7421c043f46a1085f2db758482ca3e2ce6f92203c38c975c0e0b7a46bd41d53039e8cd08aa52556fba",
+            "d8ec0785593fc8a0ba249590ee4f7fa75f0df50f530c432cf2ac5d8247689e9a24f6b1d5591e4f81df4136"
+          ]
+        },
+        {
+          "account": 1,
+          "path": "m/32'/1330790733'/1'",
+          "chain_code": "9c873d0a38749e48920ab69663c737a4f2151e175c47aba7c735e8b9dbf4dfce",
+          "spending_key": "4d9c595ec84a9c35b998a51fc0281635d0a69a40072a796e5a0d9577aba96024",
+          "full_viewing_key": "07ecce27512d706c76b019c8cf1a6c732e5f178d144a744ef159ea388907af0b726913954c4cdd520e38748b63f6eddcd3e6c8aea10916f7e75a810a9698580dde9a51416d188f0dd3d45cb7ef66fa9c7c243e025b2c20968ab7afab3502650f",
+          "external_ivk": "f64f3c6dcc5437131bd1331d4be43116ab6e9ec4bf18c790a6ec7e09306591e1f90bd789dfac487af9b4b7d71a45e4f6bc4d605955cc3dfa7c92ca2ddd7b613b",
+          "internal_ivk": "1902c444f86296db0c91e6abe70d7457c851487eee045a474f22e77a35a0ce29f5c01af77158d550e3dafe6f396ae8069ca38010b2b05398a996dbb953735b2d",
+          "external_ovk": "ea5aadb65ee76d68a3f4ac48e7ddeb7a2df57ce416d49b2d85166633d1024104",
+          "internal_ovk": "b04ac96d3529c66a03b0316ed39e81a0176eed98c18d0adbefc776ca6e9f258e",
+          "addresses": [
+            "1cba3fd0a5e227fd187a827dd57463c5553ff9fb8df3ad87a05708c77ad5cf9c150c9ee0967d7ab4939133",
+            "b0f49f7f276246d8d22a600e9b36a6ea3e0b7467ada49bce0c201cdaff7e358d58a70d16efe67b7876eaa7",
+            "4d880fa8de89a29d4db12a8c79e57a9bb9c40b824ae2689955a25922f74b80fddb054c88087757b358518b"
+          ]
+        }
+      ]
+    },
+    {
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "bip39_seed": "878386efb78845b3355bd15ea4d39ef97d179cb712b77d5c12b6be415fffeffe5f377ba02bf3f8544ab800b955e51fbff09828f682052a20faa6addbbddfb096",
+      "shielded_seed": "9bfa6efcbdcb6cd9230acf062b3d7ed5d4f5d11a1d436d0c5c075ae13a2479ca",
+      "master_spending_key": "6cc248145c2e26b902c73176400711c87b0969bb9735d72b54782c8b76e04656",
+      "master_chain_code": "c4fe16c1594a8040c35c7e64c6be84b5ceb242b0f66f9061fe08fba6449ee799",
+      "accounts": [
+        {
+          "account": 0,
+          "path": "m/32'/1330790733'/0'",
+          "chain_code": "2ff9f2621d6107d1ba249adc07d220dd7317ea93208b40a5ce4ab7a8faab49a4",
+          "spending_key": "b324225094e2908990c85e8a2ee874ea5e23f9225f6deb5d25ea52b410c03395",
+          "full_viewing_key": "67590f25345f87a6f08949c85c6fb6fd86b5f99517c1cda543c4fdbc4ad8e22750e5646a856e38038a05c9295af49039d88c56b715b729cccff213497abfd3387faa4be1a6ebbd2eb711c82d681f83733dc921e60fed88fa73cd09a43555d421",
+          "external_ivk": "ca1a1c3f18b4a515e4dffb615b536fe1a3df4ea9e31f52d7c4f5ebe101d3986e9950f1892b3d82f72efe84302eac99bdb37d6a209c9b35bd49a156b7be31eb2d",
+          "internal_ivk": "4bdae65046f0daf3ad468ae444a33409b50e05256c903ecd79a8baca4fee2501efb6fdc9dca47986a3b1e69f9e86b91b73dce58bac4e89178aa6a95e88a9e023",
+          "external_ovk": "6362eb442a410776ef14b4f9996e5467631c4c8eecea4e0b0af9e9a3e36024c9",
+          "internal_ovk": "8e6808d82c595990cd48d8627c35f575d147a46432e0c60f1f10bb12da3cf48b",
+          "addresses": [
+            "f5b33274449414421aaa09f92ab5cc6bf40ad6bcd44692d104fea1c2cae28049168b25e16a68fb814eb6a0",
+            "969f9138468673b04b97a3762c4459ee2b9defbb272a79341311ac06b7d69e9c9375ebf6cffa58ea4d8622",
+            "a9cb0f40326bf7e3b68820576caf0df43a4fec8be09c9a86257bd14c48efe5b4ff9a01f848b3ce55822737"
+          ]
+        },
+        {
+          "account": 1,
+          "path": "m/32'/1330790733'/1'",
+          "chain_code": "843ba6bd07f1136e23eac682645800e78f88bb395b776ffa5b32f91491401bd8",
+          "spending_key": "450b2cbb7ae972316d81975d16d8ffa0d7381b67ac886fa39a4b35b40d930740",
+          "full_viewing_key": "8e3247351ce0242a9959fd020ee8fb75ae9f72315cbe02cb617225f43d5557021eef3c6da023b66ac5ce902c6f91fffe4bc2b6707412aad2e9761ac604c7a23fefee39eb783e9903f2fbc45a2225d9ea69dbb7a4f120c98d683ebb6f3b54de18",
+          "external_ivk": "5f074f38f2c93e36dc36424b2417dd229135cda00ce8906d7cce8d2f0c322b8fd55adbee30fe1685ac75a10ed1d0846414e788ab4a79d5ecf54f6f1e9e00172a",
+          "internal_ivk": "f0ee95efb347f7312f96a4f22ef579c8d1899288dc71fa09f2dc2c1993a3bcb3062b93d1c076f056588f52d7d4d1ef784f6ee059c6cf98fb307baee1b4f0d30a",
+          "external_ovk": "4dc13d138a7836e2595c3501d57d8c499c29097cc59a91d4f613b58980f5407b",
+          "internal_ovk": "fcb274d1fc5b1f4413e5291996bbbdb4b0ad9a0e4135715b092d7ccb54fab29f",
+          "addresses": [
+            "52558f899d14e9a5614221d4a48f2da11bc15109627f9359e81315676d7b699afccea56422382fa2fe3922",
+            "f4134e45eb0893a26dc765fb5a3ebcde30692ed3d7dd653feb9db80cc61da8851e269b6d7ff80bb6722915",
+            "0eedeb0e1cd51247dfa610b945f8c23b1a3e6abad7e3dd1e77d63f9d346f2feded623037dcc47d6e38828c"
+          ]
+        }
+      ]
+    },
+    {
+      "mnemonic": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+      "bip39_seed": "b6a6d8921942dd9806607ebc2750416b289adea669198769f2e15ed926c3aa92bf88ece232317b4ea463e84b0fcd3b53577812ee449ccc448eb45e6f544e25b6",
+      "shielded_seed": "5b0d1e012aa31898ca9025089a9b42f0439bacc535fbbbc9e6e5b095b1f8d4d4",
+      "master_spending_key": "4d0e73fb1b7d3b50988ec5c551b31470bb7e8c21e3866dccb85c996a371fbeee",
+      "master_chain_code": "43096ac742e0c3f7996b635abec330d3f42c6e845ce31597fae940a2f21e784e",
+      "accounts": [
+        {
+          "account": 0,
+          "path": "m/32'/1330790733'/0'",
+          "chain_code": "54412bc723886c594591afb13b8aa3d0259053ccfe0cd5a676e2768966ccf3d1",
+          "spending_key": "45dbdbff6c5029c4a0544b09c5e87805683c810f55182b2e6859d505fe84af86",
+          "full_viewing_key": "0481c8ed2926609889d80f64efd7447860edee6e7af341bd11fd4333e828bb2f2590e5be8f207b87271f7eef757eb462c336df7e52105c6432110378c1a9f21860174970641117f8ed4f107ce71de9937084a6df86c3a05d35c1cb5084bc8016",
+          "external_ivk": "5c6f56913c8d1eaa0a9f1f02399b315703a55c0edef6f3c3f8d11be4df45960ffb56f6a1e251462e8e692572f459441de7474b78afb1837398eab5d22257bc2b",
+          "internal_ivk": "c34178d4b2c6d3e016b5c6d8430cdc7ad047f8ae7b7ec7a3c3b625473c0cafdca8810f65c7b135d92b82f1a430fef164a2ba92704a7a890cf7df4578c6cb4120",
+          "external_ovk": "271e8260673218f74dba894f57a9af8911b4f674bb6a5b08d5a8cb32f2c7757f",
+          "internal_ovk": "79537075aa14dfd7f46ae3a0a2982d21b862a03a32e92fa2e5861fb817cd2793",
+          "addresses": [
+            "4a230a2fb202d4a176237f6c6f64a4058d23318bdd9ccf9a3f15c6b9e103e285cbd8a827035d4a3c8fefa3",
+            "388ac129a66b400fb774a4d22f7bd87b6c1e0b739fb77270937cbd524b5f71a95d8f3db7bf20f70d72980b",
+            "223b27e04ec1a3b1260a01baacf8b8b1f810ae14748228ec70491584f02d8268b8980edf79dd41314203a8"
+          ]
+        },
+        {
+          "account": 1,
+          "path": "m/32'/1330790733'/1'",
+          "chain_code": "6bea82f72656bc975a840e174b46b17dc4e4cdbf89daf2e5c9820dd6bd7d9e4b",
+          "spending_key": "1dc4c9444899644ab4f57330e3781c5139dc37616958af6ce5a62e8bdb3245da",
+          "full_viewing_key": "7c18abebf632196d074b958174f93c1ec6319f69e8e41519c1c751417f97543d63cd65387d2fa8ea7cff56971577244fd6b19910ac8b5c2335c3a7766036fb1ad2a888a3187ffcd35ddc7299c40cf2d9f1ecdd01edc765276fd138df43601a06",
+          "external_ivk": "403551655ebbdf6dccf0ffaa7df05afe018c7facdb3d881f0c371274a64d3471034367a99fccb8f936871ccc135374223ecb0f3aa23ea1ecf1529a37802c111c",
+          "internal_ivk": "6fc7d2bcbbcd37b7a4f72adb18a680e77a10235ef08fad827cf78513ec6f307597ebf16afeeded47676d4b894d7035b9bd49ecc3b22cc542425c7148e0125f31",
+          "external_ovk": "e7c718199be0f53ceebd19ddd79bcdfcf076916a1b5c4103069c805918050abd",
+          "internal_ovk": "66fb4af8501e3b6936e244050bd548ee8cbf49aca51c9608de389919d9c9a1ea",
+          "addresses": [
+            "7a1776561ac7e515885a10bfaf1fed31d648faf4be5f63f17bc77a9a42159da3ffa7f779c955960beea897",
+            "c7d90d73d930282b33e120f11e35bbc4d4879dcb1b982b1bdccf44728d5990ddd90699cae03dee8d17edb4",
+            "8b13b980f7cb6c0deb9ab87d5bf4da28bba6de6c806ea7d791af49a2fea55645117ad52be6a0283c8161ad"
+          ]
+        }
+      ]
+    }
+  ]
+}

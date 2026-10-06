@@ -1,15 +1,17 @@
 package namespace
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
-	"github.com/DeBrosOfficial/network/pkg/gateway"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
@@ -161,13 +163,14 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 
 	// Find which namespaces were moved away by querying recovery events
 	type eventInfo struct {
+		ClusterID     string `db:"cluster_id"`
 		NamespaceName string `db:"namespace_name"`
 	}
 	var events []eventInfo
 	// Bugboard #282: compare in UTC — event timestamps are stored UTC.
 	cutoff := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
 	eventsQuery := `
-		SELECT DISTINCT c.namespace_name
+		SELECT DISTINCT c.id AS cluster_id, c.namespace_name
 		FROM namespace_cluster_events e
 		JOIN namespace_clusters c ON e.namespace_cluster_id = c.id
 		WHERE e.node_id = ? AND e.event_type = ? AND e.created_at > ?
@@ -176,18 +179,19 @@ func (cm *ClusterManager) HandleRecoveredNode(ctx context.Context, nodeID string
 		cm.logger.Warn("Failed to query recovery events for cleanup", zap.Error(err))
 	}
 
-	// Send stop requests for each orphaned namespace
+	// Tear down each orphaned namespace
+	clusterMember := staleClusterNode{NodeID: nodeID, InternalIP: ips.InternalIP}
 	for _, evt := range events {
 		cm.logger.Info("Stopping orphaned namespace services on recovered node",
 			zap.String("node_id", nodeID),
 			zap.String("namespace", evt.NamespaceName))
-		cm.sendStopRequest(ctx, ips.InternalIP, "stop-all", evt.NamespaceName, nodeID)
-		// Also delete the stale cluster-state.json
-		cm.sendSpawnRequest(ctx, ips.InternalIP, map[string]interface{}{
-			"action":    "delete-cluster-state",
-			"namespace": evt.NamespaceName,
-			"node_id":   nodeID,
-		})
+		// Teardown, not stop: the node was replaced in this namespace, so its
+		// units and data must not come back with the next upgrade. (This used to
+		// send "stop-all", which the spawn handler has no case for.)
+		if err := cm.teardownNamespaceOnNode(ctx, clusterMember, evt.NamespaceName, cleanupScope{ClusterID: evt.ClusterID}); err != nil {
+			cm.logger.Warn("Could not tear down orphaned namespace on recovered node",
+				zap.String("node_id", nodeID), zap.String("namespace", evt.NamespaceName), zap.Error(err))
+		}
 	}
 
 	// Mark node as active again — it's available for future use
@@ -252,24 +256,22 @@ func (cm *ClusterManager) HandleSuspectNode(ctx context.Context, suspectNodeID s
 	disabledCount := 0
 
 	for _, cluster := range clusters {
-		// Safety check: never disable the last active record
-		activeCount, err := dnsManager.CountActiveNamespaceRecords(ctx, cluster.NamespaceName)
+		// The "never disable the last active record" guard now lives inside the
+		// UPDATE. It was a separate COUNT followed by an unconditional write,
+		// and every node observing a suspect node runs this — so two observers
+		// could both read a count of 2, both conclude they were not the last,
+		// and both disable, leaving the namespace resolving nowhere.
+		//
+		// A statement that changes nothing means the guard held, which is a
+		// normal outcome rather than a failure.
+		disabled, err := dnsManager.DisableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress)
+		if disabled == 0 && err == nil {
+			cm.logger.Warn("Not disabling DNS — it would leave the namespace with no active records",
+				zap.String("namespace", cluster.NamespaceName),
+				zap.String("suspect_node", suspectNodeID))
+			continue
+		}
 		if err != nil {
-			cm.logger.Warn("Failed to count active DNS records, skipping namespace",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err))
-			continue
-		}
-
-		if activeCount <= 1 {
-			cm.logger.Warn("Not disabling DNS — would leave namespace with no active records",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.String("suspect_node", suspectNodeID),
-				zap.Int("active_records", activeCount))
-			continue
-		}
-
-		if err := dnsManager.DisableNamespaceRecord(ctx, cluster.NamespaceName, ips.IPAddress); err != nil {
 			cm.logger.Warn("Failed to disable DNS record for suspect node",
 				zap.String("namespace", cluster.NamespaceName),
 				zap.String("ip", ips.IPAddress),
@@ -423,6 +425,19 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		return cm.settleClusterStatus(ctx, cluster)
 	}
 
+	if cluster.RQLiteNodeCount == 1 {
+		cm.logger.Warn("eval cluster of size 1 cannot be replaced onto another machine; waiting for this node to return",
+			zap.String("namespace", cluster.NamespaceName),
+			zap.String("dead_node", deadNodeID),
+		)
+		if err := cm.updateClusterNodeStatus(ctx, cluster.ID, deadNodeID, NodeStatusFailed); err != nil {
+			cm.logger.Warn("Failed to mark node as failed in cluster", zap.Error(err))
+		}
+		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDegraded,
+			fmt.Sprintf("Node %s is dead; eval cluster of size 1 has no spare machine", deadNodeID))
+		return ErrEvalClusterNoReplacement
+	}
+
 	// 1. Mark dead node's assignments as failed
 	if err := cm.updateClusterNodeStatus(ctx, cluster.ID, deadNodeID, NodeStatusFailed); err != nil {
 		cm.logger.Warn("Failed to mark node as failed in cluster", zap.Error(err))
@@ -436,7 +451,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 3. Get all current cluster nodes and their info
 	clusterNodes, err := cm.getClusterNodes(ctx, cluster.ID)
 	if err != nil {
-		return fmt.Errorf("failed to get cluster nodes: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to get cluster nodes: %w", err))
 	}
 
 	// Build exclude list (all current cluster members)
@@ -448,7 +463,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 4. Select replacement node
 	replacement, err := cm.nodeSelector.SelectReplacementNode(ctx, excludeIDs)
 	if err != nil {
-		return fmt.Errorf("failed to select replacement node: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to select replacement node: %w", err))
 	}
 
 	cm.logger.Info("Selected replacement node",
@@ -458,9 +473,9 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	)
 
 	// 5. Allocate ports on replacement node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID)
+	portBlock, blockOwed, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
-		return fmt.Errorf("failed to allocate ports on replacement node: %w", err)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to allocate ports on replacement node: %w", err))
 	}
 
 	// 6. Get surviving nodes' port info
@@ -471,12 +486,16 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ?
+		WHERE pa.namespace_cluster_id = ? AND pa.node_id != ? AND pa.node_id != ? AND dn.status = 'active' ` + notOwedTeardownSQL + `
 	`
-	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID); err != nil {
+	// The replacement already holds its port block but is not in raft yet: it
+	// is neither a survivor to ask nor a voter to count towards quorum. A member
+	// whose node is no longer active is no voter either, so a second dead member
+	// cannot make guardRaftRemoval think a lost quorum still stands.
+	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID, deadNodeID, replacement.NodeID); err != nil {
 		// Rollback port allocation
-		cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID)
-		return fmt.Errorf("failed to query surviving node ports: %w", err)
+		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
+		return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to query surviving node ports: %w", err))
 	}
 
 	// 7. Determine dead node's roles
@@ -494,9 +513,16 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	// 8. Remove dead node from RQLite Raft cluster (before joining replacement)
 	if deadNodeRoles[NodeRoleRQLiteLeader] || deadNodeRoles[NodeRoleRQLiteFollower] {
 		deadIPs, err := cm.getNodeIPs(ctx, deadNodeID)
-		if err == nil && deadNodeRaftPort > 0 {
-			deadRaftAddr := fmt.Sprintf("%s:%d", deadIPs.InternalIP, deadNodeRaftPort)
-			cm.removeDeadNodeFromRaft(ctx, deadRaftAddr, surviving)
+		if err != nil {
+			cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
+			return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to address dead node %s in raft: %w", deadNodeID, err))
+		}
+		if deadNodeRaftPort > 0 {
+			deadRaftAddr := net.JoinHostPort(deadIPs.InternalIP, strconv.Itoa(deadNodeRaftPort))
+			if err := cm.removeDeadNodeFromRaft(ctx, deadRaftAddr, surviving); err != nil {
+				cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
+				return cm.abortReplacement(ctx, cluster, deadNodeID, fmt.Errorf("failed to remove dead node %s from raft: %w", deadNodeID, err))
+			}
 		}
 	}
 
@@ -587,12 +613,12 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		}
 		olricServers = append(olricServers, fmt.Sprintf("%s:%d", replacement.InternalIP, portBlock.OlricHTTPPort))
 
-		gwCfg := gateway.InstanceConfig{
+		gwCfg := gatewayspec.InstanceConfig{
 			Namespace:             cluster.NamespaceName,
 			NodeID:                replacement.NodeID,
 			HTTPPort:              portBlock.GatewayHTTPPort,
 			BaseDomain:            cm.baseDomain,
-			RQLiteDSN:             fmt.Sprintf("http://localhost:%d", portBlock.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(replacement.InternalIP, portBlock.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -660,8 +686,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 	}
 
 	// 13. Clean up dead node's port allocations and cluster assignments
-	cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, deadNodeID)
-	cm.removeClusterNodeAssignment(ctx, cluster.ID, deadNodeID)
+	cm.removeAndEvictMember(ctx, cluster.ID, cluster.NamespaceName, deadNodeID)
 
 	// 14. Update cluster-state.json on all nodes
 	cm.updateClusterStateAfterRecovery(ctx, cluster)
@@ -730,6 +755,41 @@ func (cm *ClusterManager) updateClusterNodeStatus(ctx context.Context, clusterID
 	return err
 }
 
+// rollbackPortBlock undoes the port allocation of a replacement the cluster did
+// not get. A block that was newly allocated is freed. One that was owed a
+// teardown (the node had been evicted from this cluster with its stop
+// unconfirmed, and AllocatePortBlock withdrew that) may still have units on it:
+// it is not freed, and the teardown is owed again (#275).
+func (cm *ClusterManager) rollbackPortBlock(ctx context.Context, cluster *NamespaceCluster, replacement *NodeCapacity, owed bool) {
+	if !owed {
+		if err := cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID); err != nil {
+			cm.logger.Warn("Failed to free the port block of a replacement that was rolled back",
+				zap.String("cluster_id", cluster.ID), zap.String("node_id", replacement.NodeID), zap.Error(err))
+		}
+		return
+	}
+	cause := fmt.Errorf("node %s was given cluster %s again and the add was rolled back, so its earlier teardown is owed again", replacement.NodeID, cluster.ID)
+	if err := cm.recordPendingCleanup(ctx, cluster.NamespaceName, replacement.NodeID, replacement.InternalIP, teardownAction,
+		cleanupScope{ClusterID: cluster.ID}, cause); err != nil {
+		cm.logger.Error("Rolled-back replacement keeps its port block but its teardown could not be recorded",
+			zap.String("cluster_id", cluster.ID), zap.String("node_id", replacement.NodeID), zap.Error(err))
+	}
+}
+
+// abortReplacement records why the replacement of a dead member stopped, in
+// place of the "recovery in progress" the cluster was marked with when it began:
+// nothing is recovering, and an operator reading the status must be told what
+// to fix. It returns cause, the error ReplaceClusterNode answers with.
+func (cm *ClusterManager) abortReplacement(ctx context.Context, cluster *NamespaceCluster, deadNodeID string, cause error) error {
+	msg := fmt.Sprintf("Replacement of dead node %s was aborted, the cluster stays degraded until it is retried: %v", deadNodeID, cause)
+	if err := cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDegraded, msg); err != nil {
+		cm.logger.Warn("Failed to record the aborted replacement on the cluster",
+			zap.String("cluster_id", cluster.ID), zap.Error(err))
+	}
+	cm.logEvent(ctx, cluster.ID, EventClusterDegraded, deadNodeID, msg, nil)
+	return cause
+}
+
 // removeClusterNodeAssignment deletes all node assignments for a node in a cluster.
 func (cm *ClusterManager) removeClusterNodeAssignment(ctx context.Context, clusterID, nodeID string) {
 	query := `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`
@@ -785,7 +845,7 @@ func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *Names
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 		ORDER BY pa.node_id
 	`
 	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, query, cluster.ID); err != nil {
@@ -817,18 +877,57 @@ func (cm *ClusterManager) clusterStateInputs(ctx context.Context, cluster *Names
 	return nodes, blocks, nil
 }
 
-// removeStalePortAllocation drops a departed node's namespace_port_allocations
-// row (bugboard #280). The counterpart to removeClusterNodeAssignment: both rows
-// describe the same membership, and leaving one behind is what let stale nodes
-// survive in generated namespace gateway config.
-func (cm *ClusterManager) removeStalePortAllocation(ctx context.Context, clusterID, nodeID string) {
-	query := `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
-	if _, err := cm.db.Exec(ctx, query, clusterID, nodeID); err != nil {
-		cm.logger.Warn("Failed to remove stale port allocation",
+// evictMember frees a departed node's port reservations (bugboard #280), once
+// its teardown is confirmed: the counterpart to removeClusterNodeAssignment, as
+// both rows describe the same membership, and leaving the allocation behind is
+// what let stale nodes survive in generated namespace gateway config. A node that
+// does not confirm keeps its reservations, owed to it in namespace_pending_cleanup
+// (evictMemberAllocations), and is left out of every read of the cluster's
+// members (notOwedTeardownSQL).
+func (cm *ClusterManager) evictMember(ctx context.Context, clusterID, namespace, nodeID string) error {
+	err := cm.evictMemberAllocations(ctx, clusterID, namespace, nodeID)
+	if err != nil {
+		cm.logger.Warn("Evicted cluster member keeps its port reservations",
 			zap.String("cluster_id", clusterID),
+			zap.String("namespace", namespace),
 			zap.String("node_id", nodeID),
 			zap.Error(err))
 	}
+	return err
+}
+
+// removeAndEvictMember takes a node out of a cluster in the order that never
+// leaves its block ownerless: the teardown it is owed is recorded first, claimed
+// by this caller, then the membership row goes, then the teardown is attempted.
+// A crash after the membership row went still has the owed row to free the block
+// from; recording after it would leave a block no membership names and no row
+// owes (staleClusterNodeSQL joins membership).
+//
+// The row is claimed so that a replay does not read the node as a member while
+// the membership row is still there and drop the row it was just given
+// (replayRow's isClusterMember check): a claimed row is skipped. The claim is
+// released when the teardown stays owed, and the row deleted when the eviction
+// freed everything (a node gone from the registry sends no teardown, so nothing
+// else clears its row). It reports false when the owed row could not be
+// recorded: the membership is then kept, for the next sweep to prune.
+func (cm *ClusterManager) removeAndEvictMember(ctx context.Context, clusterID, namespace, nodeID string) bool {
+	token, err := cm.recordClaimedTeardown(ctx, clusterID, namespace, nodeID)
+	if err != nil {
+		cm.logger.Warn("Not removing a cluster member: its teardown could not be recorded as owed first",
+			zap.String("cluster_id", clusterID), zap.String("node_id", nodeID), zap.Error(err))
+		return false
+	}
+	cm.removeClusterNodeAssignment(ctx, clusterID, nodeID)
+	evictErr := cm.evictMember(ctx, clusterID, namespace, nodeID)
+	query := `DELETE FROM namespace_pending_cleanup WHERE claimed_by = ?`
+	if evictErr != nil {
+		query = `UPDATE namespace_pending_cleanup SET claimed_until = NULL, claimed_by = NULL WHERE claimed_by = ?`
+	}
+	if _, err := cm.db.Exec(client.WithInternalAuth(context.WithoutCancel(ctx)), query, token); err != nil {
+		cm.logger.Warn("Could not settle the claim on an evicted member's owed teardown; it lapses by itself",
+			zap.String("cluster_id", clusterID), zap.String("node_id", nodeID), zap.Error(err))
+	}
+	return true
 }
 
 // clusterNodePurgeStaleAfter mirrors purgeStaleAfter in
@@ -872,7 +971,7 @@ const staleClusterNodeSQL = `
 // heartbeat loop (startDNSHeartbeat, 30s tick) flips a silent node's
 // dns_nodes.status to 'inactive' after just 120s
 // (cleanupStaleNodeRecords, pkg/node/dns_registration.go), and the ring-based
-// health monitor's getRingNeighbors (pkg/node/health/monitor.go) only
+// health monitor's getRingNeighbors (pkg/peerhealth/monitor.go) only
 // considers status='active' nodes as probe targets. Once a node flips
 // inactive it drops out of every node's neighbor set, pruneStaleState wipes
 // its accumulated miss count, and it can never again reach the monitor's own
@@ -889,6 +988,26 @@ const staleClusterNodeSQL = `
 // twice — no lock or election is needed the way role reallocation needs one.
 func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID string) ([]string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
+
+	// An N=1 eval tenant has one member. Pruning it deletes the only
+	// membership and port allocation, after which local restore has nothing
+	// to join and RepairCluster cannot bootstrap a leader. Leave the row;
+	// bounce is restore, not replace.
+	cluster, err := cm.GetCluster(internalCtx, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("load cluster %s before pruning its stale members: %w", clusterID, err)
+	}
+	if cluster == nil {
+		return nil, fmt.Errorf("cluster %s not found, so its stale members cannot be pruned", clusterID)
+	}
+	if cluster.RQLiteNodeCount == 1 {
+		cm.logger.Warn("not pruning members of a 1-node eval cluster; local restore needs the membership",
+			zap.String("cluster_id", clusterID),
+			zap.String("namespace", cluster.NamespaceName),
+		)
+		return nil, nil
+	}
+
 	type row struct {
 		NodeID string `db:"node_id"`
 	}
@@ -900,8 +1019,8 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 
 	removed := make([]string, 0, len(rows))
 	for _, r := range rows {
-		cm.removeClusterNodeAssignment(ctx, clusterID, r.NodeID)
-		// Bugboard #280: the port allocation must go too. Pruning only
+		// Bugboard #280: the port allocation must go too, once the node's
+		// teardown is confirmed (evictMember). Pruning only
 		// namespace_cluster_nodes left the allocation row behind, and that row is
 		// what cluster-state.json (and therefore the namespace gateway's
 		// olric_servers / rqlite join list) is built from — so a namespace kept
@@ -909,9 +1028,19 @@ func (cm *ClusterManager) pruneStaleClusterNodes(ctx context.Context, clusterID 
 		// with Olric discovery aimed at two removed nodes: its cache was down on
 		// every gateway, and each gateway restart stalled for MINUTES timing out
 		// against them before it would bind.
-		cm.removeStalePortAllocation(ctx, clusterID, r.NodeID)
+		// The raft removal comes first, while the allocation still names the
+		// member's address. When it fails the member stays registered, and the
+		// next sweep tries again.
+		if err := cm.removeMemberFromRaft(ctx, clusterID, cluster.NamespaceName, r.NodeID); err != nil {
+			cm.logger.Error("Not pruning a departed member: it could not be removed from the namespace raft configuration; the next sweep retries",
+				zap.String("cluster_id", clusterID), zap.String("node_id", r.NodeID), zap.Error(err))
+			continue
+		}
+		if !cm.removeAndEvictMember(ctx, clusterID, cluster.NamespaceName, r.NodeID) {
+			continue
+		}
 		removed = append(removed, r.NodeID)
-		cm.logger.Warn("Removed permanently-gone cluster node assignment and its port allocation (bugboard #173, #280)",
+		cm.logger.Warn("Removed permanently-gone cluster node assignment; its port allocation is freed or owed its teardown (bugboard #173, #280)",
 			zap.String("cluster_id", clusterID),
 			zap.String("node_id", r.NodeID))
 	}
@@ -974,47 +1103,155 @@ func (cm *ClusterManager) repairDegradedClusters(ctx context.Context, nodeID str
 	}
 }
 
-// removeDeadNodeFromRaft sends a DELETE request to a surviving RQLite node
-// to remove the dead node from the Raft voter set.
-func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAddr string, survivingNodes []survivingNodePorts) {
+// removeDeadNodeFromRaft removes a departed member from the namespace's raft
+// configuration, asking each surviving member in turn until one accepts. The
+// raft id of a namespace rqlite is its raft address.
+//
+// The address comes from a registry row, so it is checked before anything is
+// sent: it must be an address inside the WireGuard overlay (a public-IP fallback
+// from a node without an internal_ip would name a machine that is not the
+// member), it must not be any surviving member's own raft address (raft ids are
+// addresses, so removing a live member's address removes the live member), and
+// removing the member must leave the cluster a quorum.
+//
+// Removing an id that is not in the configuration succeeds in rqlite (the raft
+// library leaves the configuration unchanged), so concurrent prunes of the same
+// member on several nodes do not fail each other. Without a leader the removal
+// cannot commit: that is quorum loss, reported with the recovery procedure.
+//
+// It returns an error when no survivor accepted: the caller must not forget the
+// member then, because once the registry has dropped it nothing names the
+// address any more and the departed voter stays configured for ever.
+func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAddr string, survivingNodes []survivingNodePorts) error {
 	if deadRaftAddr == "" {
-		return
+		return nil
+	}
+	if err := guardRaftRemoval(deadRaftAddr, survivingNodes); err != nil {
+		return err
 	}
 
-	payload, _ := json.Marshal(map[string]string{"id": deadRaftAddr})
-
+	var errs []string
 	for _, s := range survivingNodes {
 		if s.RQLiteHTTPPort == 0 {
 			continue
 		}
-		url := fmt.Sprintf("http://%s:%d/remove", s.InternalIP, s.RQLiteHTTPPort)
-		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, bytes.NewReader(payload))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		httpClient := &http.Client{Timeout: 10 * time.Second}
-		resp, err := httpClient.Do(req)
-		if err != nil {
+		if err := cm.removeRaftMember(ctx, s, deadRaftAddr); err != nil {
 			cm.logger.Warn("Failed to remove dead node from Raft via this node",
 				zap.String("target", s.NodeID), zap.Error(err))
+			errs = append(errs, fmt.Sprintf("%s: %v", s.NodeID, err))
 			continue
 		}
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-			cm.logger.Info("Removed dead node from Raft cluster",
-				zap.String("dead_raft_addr", deadRaftAddr),
-				zap.String("via_node", s.NodeID))
-			return
-		}
-		cm.logger.Warn("Raft removal returned unexpected status",
-			zap.String("via_node", s.NodeID),
-			zap.Int("status", resp.StatusCode))
+		cm.logger.Info("Removed dead node from Raft cluster",
+			zap.String("dead_raft_addr", deadRaftAddr),
+			zap.String("via_node", s.NodeID))
+		return nil
 	}
-	cm.logger.Warn("Could not remove dead node from Raft cluster (best-effort)",
-		zap.String("dead_raft_addr", deadRaftAddr))
+	if len(errs) == 0 {
+		return fmt.Errorf("remove %s from raft: no surviving member exposes an rqlite to remove it through", deadRaftAddr)
+	}
+	return fmt.Errorf("remove %s from raft: no surviving member accepted the removal (a namespace whose members cannot elect a leader has lost quorum: %s): %s",
+		deadRaftAddr, quorumRecoveryHint, strings.Join(errs, "; "))
+}
+
+// quorumRecoveryHint names how a namespace raft that lost quorum is recovered.
+// `orama node recover-raft` recovers the platform cluster, not a namespace's.
+const quorumRecoveryHint = "recover it with the procedure \"Emergency: namespace RQLite lost quorum\" in docs/NODE_REPLACEMENT.md"
+
+// guardRaftRemoval refuses a removal that would remove the wrong member or
+// leave the namespace's raft without a quorum.
+func guardRaftRemoval(raftAddr string, survivors []survivingNodePorts) error {
+	host, _, err := net.SplitHostPort(raftAddr)
+	if err != nil {
+		return fmt.Errorf("refusing to remove raft member %q: it is not a host:port address: %w", raftAddr, err)
+	}
+	if ip, perr := netip.ParseAddr(host); perr != nil || !constants.WireGuardOverlay().Contains(ip) {
+		return fmt.Errorf("refusing to remove raft member %q: its host is not an address inside the WireGuard overlay %s (a node without an internal_ip must not be addressed by its public IP)",
+			raftAddr, constants.WireGuardOverlay())
+	}
+	voters := 0
+	for _, s := range survivors {
+		if s.RQLiteRaftPort == 0 {
+			continue
+		}
+		voters++
+		if net.JoinHostPort(s.InternalIP, strconv.Itoa(s.RQLiteRaftPort)) == raftAddr {
+			return fmt.Errorf("refusing to remove raft member %s: it is the address of surviving member %s", raftAddr, s.NodeID)
+		}
+	}
+	// The configuration holds the survivors and the member being removed.
+	if quorum := (voters+1)/2 + 1; voters < quorum {
+		return fmt.Errorf("refusing to remove raft member %s: %d of %d voters would remain and a quorum is %d, so the removal could not commit; the namespace has lost quorum: %s",
+			raftAddr, voters, voters+1, quorum, quorumRecoveryHint)
+	}
+	return nil
+}
+
+// removeRaftMember issues the raft removal through one surviving member.
+func (cm *ClusterManager) removeRaftMember(ctx context.Context, via survivingNodePorts, raftID string) error {
+	if cm.raftRemoveFn != nil {
+		return cm.raftRemoveFn(ctx, via, raftID)
+	}
+	ep, err := cm.tenantRQLiteEndpoint(via.InternalIP, via.RQLiteHTTPPort)
+	if err != nil {
+		return fmt.Errorf("address the rqlite on %s: %w", via.NodeID, err)
+	}
+	return ep.Admin().Remove(ctx, raftID)
+}
+
+// removeMemberFromRaft takes a member that is about to leave the registry out
+// of its namespace's raft configuration.
+//
+// It has to run BEFORE the registry forgets the member: the address comes from
+// the member's port allocation, which the eviction frees. Forgetting first and
+// removing after (or never) is how a replaced node stayed a configured voter —
+// and made every restart of the namespace rewrite a recovery peers.json, because
+// the registry's members never matched the raft configuration again.
+//
+// A member that never had a raft port is not in raft. With no surviving member
+// there is nothing a removal could reach and no quorum: that is an error, as in
+// ReplaceClusterNode, so the member stays registered until the namespace is
+// recovered rather than being forgotten while raft still holds it.
+func (cm *ClusterManager) removeMemberFromRaft(ctx context.Context, clusterID, namespace, nodeID string) error {
+	raftAddr, err := cm.memberRaftAddr(ctx, clusterID, nodeID)
+	if err != nil {
+		return err
+	}
+	if raftAddr == "" {
+		return nil
+	}
+	survivors, err := cm.survivingNodes(ctx, clusterID)
+	if err != nil {
+		return err
+	}
+	if err := cm.removeDeadNodeFromRaft(ctx, raftAddr, survivors); err != nil {
+		return fmt.Errorf("namespace %s: %w", namespace, err)
+	}
+	return nil
+}
+
+// memberRaftAddr returns the raft address a member's namespace rqlite
+// advertises, built from its WireGuard address and its allocated raft port ("" when
+// it has no allocation). A member with a raft port but no internal_ip is an
+// error: its public address is not where its raft listens.
+func (cm *ClusterManager) memberRaftAddr(ctx context.Context, clusterID, nodeID string) (string, error) {
+	var rows []struct {
+		InternalIP string `db:"internal_ip"`
+		RaftPort   int    `db:"rqlite_raft_port"`
+	}
+	if err := cm.db.Query(client.WithInternalAuth(ctx), &rows, `
+		SELECT COALESCE(dn.internal_ip, '') AS internal_ip, pa.rqlite_raft_port
+		  FROM dns_nodes dn
+		  JOIN namespace_port_allocations pa ON pa.node_id = dn.id
+		 WHERE pa.namespace_cluster_id = ? AND pa.node_id = ?`, clusterID, nodeID); err != nil {
+		return "", fmt.Errorf("read the raft address of member %s: %w", nodeID, err)
+	}
+	if len(rows) == 0 || rows[0].RaftPort == 0 {
+		return "", nil
+	}
+	if rows[0].InternalIP == "" {
+		return "", fmt.Errorf("member %s has raft port %d but no internal_ip in dns_nodes: its raft address cannot be built from the WireGuard overlay", nodeID, rows[0].RaftPort)
+	}
+	return net.JoinHostPort(rows[0].InternalIP, strconv.Itoa(rows[0].RaftPort)), nil
 }
 
 // updateClusterStateAfterRecovery rebuilds and distributes cluster-state.json
@@ -1028,7 +1265,7 @@ func (cm *ClusterManager) updateClusterStateAfterRecovery(ctx context.Context, c
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &allPorts, query, cluster.ID); err != nil {
 		cm.logger.Warn("Failed to query ports for state update", zap.Error(err))
@@ -1173,6 +1410,14 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 		return cm.settleClusterStatus(ctx, cluster)
 	}
 
+	if cluster.RQLiteNodeCount == 1 {
+		cm.logger.Warn("eval cluster of size 1 cannot add a replacement node; waiting for this node to return",
+			zap.String("namespace", namespaceName),
+			zap.Int("active_nodes", activeCount),
+		)
+		return ErrEvalClusterNoReplacement
+	}
+
 	cm.logger.Info("Cluster needs repair — adding missing nodes",
 		zap.String("namespace", namespaceName),
 		zap.Int("active_nodes", activeCount),
@@ -1201,7 +1446,7 @@ func (cm *ClusterManager) RepairCluster(ctx context.Context, namespaceName strin
 			pa.olric_memberlist_port, pa.gateway_http_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &surviving, portsQuery, cluster.ID); err != nil {
 		return fmt.Errorf("failed to query surviving node ports: %w", err)
@@ -1288,7 +1533,7 @@ func (cm *ClusterManager) addNodeToCluster(
 	)
 
 	// 2. Allocate ports on the new node
-	portBlock, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID)
+	portBlock, blockOwed, err := cm.portAllocator.AllocatePortBlock(ctx, replacement.NodeID, cluster.ID, BlueprintTenant())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to allocate ports on new node: %w", err)
 	}
@@ -1320,7 +1565,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		_, spawnErr = cm.spawnRQLiteRemote(ctx, replacement.InternalIP, rqliteCfg)
 	}
 	if spawnErr != nil {
-		cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, replacement.NodeID)
+		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return nil, nil, fmt.Errorf("failed to spawn RQLite follower: %w", spawnErr)
 	}
 	cm.insertClusterNode(ctx, cluster.ID, replacement.NodeID, NodeRoleRQLiteFollower, portBlock)
@@ -1368,12 +1613,12 @@ func (cm *ClusterManager) addNodeToCluster(
 	}
 	olricServers = append(olricServers, fmt.Sprintf("%s:%d", replacement.InternalIP, portBlock.OlricHTTPPort))
 
-	gwCfg := gateway.InstanceConfig{
+	gwCfg := gatewayspec.InstanceConfig{
 		Namespace:             cluster.NamespaceName,
 		NodeID:                replacement.NodeID,
 		HTTPPort:              portBlock.GatewayHTTPPort,
 		BaseDomain:            cm.baseDomain,
-		RQLiteDSN:             fmt.Sprintf("http://localhost:%d", portBlock.RQLiteHTTPPort),
+		RQLiteDSN:             tenantRQLiteURL(replacement.InternalIP, portBlock.RQLiteHTTPPort),
 		GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 		OlricServers:          olricServers,
 		OlricTimeout:          30 * time.Second,

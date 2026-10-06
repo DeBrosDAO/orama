@@ -1,0 +1,65 @@
+[Unit]
+Description=Orama Namespace Caddy (%i)
+Documentation=https://caddyserver.com/docs/
+After=network-online.target orama-namespace-gateway@%i.service orama-namespace-coredns@nameserver.service
+Wants=network-online.target
+PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=orama
+Group=orama
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictNamespaces=yes
+ProtectProc=invisible
+ReadWritePaths=/opt/orama/.orama/logs /var/lib/caddy /etc/caddy
+InaccessiblePaths=/opt/orama/.orama/secrets
+Environment=XDG_DATA_HOME=/var/lib/caddy
+# Caddy autosaves its running config under XDG_CONFIG_HOME, which defaults to
+# $HOME/.config — /opt/orama/.config, read-only under ProtectSystem=strict.
+Environment=XDG_CONFIG_HOME=/var/lib/caddy/config
+EnvironmentFile=-/var/lib/orama-unit-env/%i/caddy.env
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# No start gates. Caddy used to wait for the gateway's /health and exit when it
+# did not answer, so a gateway that was down took HTTPS down with it: clients
+# got a reset connection instead of a 502 naming the problem. A second gate
+# waited on `dig`, which is not installed, adding a minute to every start and
+# failing nothing. Caddy retries its upstreams and ACME itself.
+# The admin API is a unix socket in this runtime directory, not the default
+# localhost:2019, where every process on the host could load a config or read
+# the certificates' keys (pkg/install/installers CaddyAdminSocket). The
+# directory is 0700 and the socket 0600, both the orama user's. `caddy reload`
+# runs as that user and reaches it at the address the Caddyfile names.
+RuntimeDirectory=orama-caddy
+RuntimeDirectoryMode=0700
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --address unix//run/orama-caddy/admin.sock
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+# Caddy's threads are bounded by its own cgroup. LimitNPROC=512 was here, and
+# that limit counts every thread the orama user owns on the host: with the
+# fleet full of namespaces their rqlite, Olric and gateway threads passed 512,
+# Caddy could not start a thread, the Go runtime aborted, and every HTTPS
+# request on the node failed with it (stagenet e2e, 2026-10-03).
+TasksMax=512
+PrivateTmp=true
+Restart=always
+RestartSec=5s
+SyslogIdentifier=orama-caddy-%i
+KillMode=mixed
+MemoryMax=2G
+MemorySwapMax=0
+
+[Install]
+WantedBy=multi-user.target

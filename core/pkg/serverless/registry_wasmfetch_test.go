@@ -300,3 +300,22 @@ func TestGetWASMBytes_recoversViaRepin(t *testing.T) {
 		t.Errorf("Get called %d times, want %d (local attempts + 1 recovery fetch)", ip.getCalls, wasmFetchMaxAttempts+1)
 	}
 }
+
+// A deploy imports its WASM locally and pins it once, everywhere: Add pinned it
+// everywhere too, and the second pin of a CID the cluster was still pinning
+// cancelled and restarted it on every peer, leaving one stuck past the deploy's
+// 30s check (stagenet e2e, 2026-10-03).
+func TestUploadWASM_importsLocallyAndPinsOnce(t *testing.T) {
+	ip := &wasmFakeIPFS{MockIPFSClient: NewMockIPFSClient()}
+	registry := newWASMTestRegistry(t, ip)
+	if _, err := registry.Register(context.Background(),
+		&FunctionDefinition{Name: "fn-once", Namespace: "ns", IsPublic: true}, []byte("wasm-bytes")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if ip.localAdds != 1 || ip.adds != 0 {
+		t.Fatalf("AddLocal %d, Add %d: the WASM must be imported without Add's own pin", ip.localAdds, ip.adds)
+	}
+	if ip.pinCalls != 1 {
+		t.Fatalf("pinned %d times, want once", ip.pinCalls)
+	}
+}

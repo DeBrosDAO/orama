@@ -1,0 +1,24 @@
+# What disturbs the overlay and the edge: a reconciling upgrade on a node
+# whose firewall was edited (owned rules converge, the operator's and the
+# global node's stay), a reboot (overlay, firewall and hardening persist and
+# the node rejoins), and `orama node restart` (wg0 is not torn down).
+id: wireguard-firewall-destructive
+title: Firewall reconcile, reboot and restart of the overlay
+area: infrastructure
+subtasks: [2822]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node upgrade
+    - orama node restart
+  units:
+    - orama-namespace-wireguard@.service
+  claims:
+    - "docs/SECURITY.md#network-isolation: Reconcile removes only tagged rules it no longer wants and exact legacy rules, never an operator's"
+    - "docs/SECURITY.md#network-isolation: orama-global rules are not the cluster reconcile's"
+    - "docs/ARCHITECTURE.md: the mesh comes up at boot on its own; orama node restart does not tear wg0 down"

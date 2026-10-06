@@ -2,6 +2,8 @@
 
 Welcome to the **Orama Network** developer documentation. Orama is a decentralized infrastructure platform that provides distributed databases, caching, file storage, real-time messaging, serverless functions, encrypted vault storage, and application deployments -- all accessible through a unified SDK and CLI.
 
+An agent should start at [https://orama.network/llms.txt](https://orama.network/llms.txt), then fetch the page that index names. That file is the index. It is not a second copy of these pages.
+
 ## Core Services
 
 | Service | Description |
@@ -14,7 +16,7 @@ Welcome to the **Orama Network** developer documentation. Orama is a decentraliz
 | **PubSub** | Real-time messaging over WebSockets with presence tracking |
 | **Functions** | Serverless WebAssembly function execution |
 | **Vault** | Encrypted secret storage distributed across guardian nodes via Shamir splitting |
-| **Proxy** | Anonymous HTTP proxying through the Anyone privacy relay network |
+| **Proxy** | Anonymous HTTP proxying through the Tor network |
 
 ## Architecture Overview
 
@@ -29,7 +31,7 @@ The Orama Network is a mesh of VPS nodes connected via WireGuard tunnels. Each n
 | CoreDNS | Authoritative DNS for deployment subdomains |
 | Caddy | TLS termination and reverse proxy |
 | WASM Runtime | Serverless function execution |
-| Anyone Relay | Privacy proxy network |
+| Tor | Anonymity network for the proxy (client only on every node) |
 
 ## Install the SDK
 
@@ -94,7 +96,7 @@ After verification, the SDK automatically stores the JWT and API key for subsequ
 
 ### CLI Authentication
 
-The Orama CLI (`orama`) supports interactive authentication with RootWallet (EVM) or Phantom (Solana):
+The Orama CLI (`orama`) signs in with RootWallet. The signature is an EVM wallet signature over a gateway challenge:
 
 ```bash
 # Set your target environment
@@ -124,8 +126,7 @@ orama auth logout
 | Flag | Description |
 |------|-------------|
 | `--namespace <name>` | Target namespace |
-| `--simple` | Use simple auth without signature (dev only) |
-| `--wallet <0x...>` | Wallet address (implies `--simple`) |
+| `--device-key <file>` | Ed25519 private JWK to enroll with this sign-in. The file stays on this machine. |
 
 ## Environment Management
 
@@ -149,15 +150,14 @@ orama env add my-env https://my-gateway.example.com "My custom environment"
 orama env remove my-env
 ```
 
-Default environments:
+A fresh install has no environments. Add the cluster you use:
 
-| Environment | Gateway URL |
-|-------------|-------------|
-| `sandbox` | `https://dbrs.space` |
-| `devnet` | `https://orama-devnet.network` |
-| `testnet` | `https://orama-testnet.network` |
+```bash
+orama env add devnet https://orama-devnet.network "Development network"
+orama env use devnet
+```
 
-The default active environment is `sandbox`. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
+`orama sandbox create` adds a sandbox. `orama node setup --genesis` adds a cluster of your own. You can override the gateway URL for any command by setting the `ORAMA_GATEWAY_URL` environment variable.
 
 ## Quick Example: Deploy a Static Site
 

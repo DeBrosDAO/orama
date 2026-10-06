@@ -148,7 +148,7 @@ func (b *Backend) parseValue(recordType, value string) (interface{}, error) {
 
 	case "SOA":
 		// SOA format: "mname rname serial refresh retry expire minimum"
-		// Example: "ns1.dbrs.space. admin.dbrs.space. 2026012401 3600 1800 604800 300"
+		// Example: "ns1.example.com. admin.example.com. 2026012401 3600 1800 604800 300"
 		return b.parseSOA(value)
 
 	default:

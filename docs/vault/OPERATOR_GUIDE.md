@@ -7,7 +7,7 @@
 The simplest way to check if a guardian is running:
 
 ```bash
-curl -s http://127.0.0.1:7500/v1/vault/health | jq .
+curl -s http://127.0.0.1:10106/v1/vault/health | jq .
 ```
 
 Expected response:
@@ -33,7 +33,7 @@ If this endpoint does not respond, the guardian process is not running or the po
 Provides runtime configuration:
 
 ```bash
-curl -s http://127.0.0.1:7500/v1/vault/status | jq .
+curl -s http://127.0.0.1:10106/v1/vault/status | jq .
 ```
 
 Expected response:
@@ -52,7 +52,7 @@ Expected response:
 Lists known guardian nodes in the cluster:
 
 ```bash
-curl -s http://127.0.0.1:7500/v1/vault/guardians | jq .
+curl -s http://127.0.0.1:10106/v1/vault/guardians | jq .
 ```
 
 The handler lists all alive nodes from the guardian's node list. In v0.1.0 the RQLite discovery stub returns an empty node list, so the response is:
@@ -265,7 +265,7 @@ Push and pull are authenticated: both handlers require an `X-Session-Token` head
 
 ```bash
 # Verify auth is enforced (expected: 401 with "session token required")
-curl -s -X POST http://127.0.0.1:7500/v1/vault/push \
+curl -s -X POST http://127.0.0.1:10106/v1/vault/push \
   -H "Content-Type: application/json" \
   -d '{
     "identity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -405,7 +405,7 @@ When a new node joins the Orama network:
    - **Client push:** When clients push new versions, they include the new node.
    - **Repair protocol:** The re-sharing protocol redistributes shares to include the new node (Phase 2).
 
-The threshold K is recomputed based on the alive count: `K = max(3, floor(N/3))`.
+The threshold K is recomputed based on the alive count: `K = max(2, floor(N/3))`.
 
 ### Removing Nodes
 
@@ -421,12 +421,16 @@ When a node leaves (graceful shutdown or failure):
 The threshold is dynamic and automatic:
 
 ```
-K = max(3, floor(alive_count / 3))
+K = max(2, floor(alive_count / 3))
 ```
 
 - Adding nodes generally does not change K until the cluster grows significantly.
 - Removing nodes may reduce K if the alive count drops enough.
-- K never drops below 3, ensuring a minimum collusion resistance.
+- K never drops below 2 **except on a one-node eval cluster**, where Shamir
+  cannot run and the gateway stores the envelope as a local key (`K=1`, `W=1`)
+  on that disk. That is eval-only; see [EVAL.md](../EVAL.md).
+- For N≥3 the write quorum W = min(N, max(K+1, ceil(2N/3))) is greater than K,
+  so a write reported successful stores more shares than a read needs.
 
 ### Write Quorum
 
@@ -466,8 +470,8 @@ A push succeeds only if W guardians acknowledge storage. This ensures consistenc
 
 ### Post-Deploy
 
-- [ ] Health endpoint responds: `curl http://127.0.0.1:7500/v1/vault/health` (expect `"status":"degraded"` in v0.1.0 -- see Health Endpoint above)
-- [ ] Status endpoint shows correct config: `curl http://127.0.0.1:7500/v1/vault/status`
+- [ ] Health endpoint responds: `curl http://127.0.0.1:10106/v1/vault/health` (expect `"status":"degraded"` in v0.1.0 -- see Health Endpoint above)
+- [ ] Status endpoint shows correct config: `curl http://127.0.0.1:10106/v1/vault/status`
 - [ ] No error-level log messages: `sudo journalctl -u orama-vault -p err -n 10`
 - [ ] Test push/pull cycle works (see "Test Push/Pull" section above).
 

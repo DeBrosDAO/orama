@@ -7,181 +7,91 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"go.uber.org/zap"
 )
 
-// isKeyMgmtPath reports whether a path is a scoped-key management endpoint
-// (bugboard #148). These are served by the main gateway (authoritative api_keys
-// live in the main cluster RQLite), never proxied to a namespace gateway.
-func isKeyMgmtPath(p string) bool {
-	return p == "/v1/namespace/keys" || strings.HasPrefix(p, "/v1/namespace/keys/")
-}
-
-// requiredScope returns the API-key grant required to reach (method, path), or
-// "" when a valid credential of any scope suffices. It is the single source of
-// truth for the data-plane vs control-plane split (bugboard #148).
+// callerPermissions is what this request's credential may do.
 //
-// Order matters: several prefixes are MIXED (part data-plane, part admin), so
-// the more specific data-plane paths (e.g. /v1/push/devices) must be matched
-// before the coarse admin bucket for the same prefix (/v1/push/config).
+// One path, deliberately. There were three, and they could disagree: an
+// API-key-exchanged JWT carried an authoritative `scopes` claim, a wallet JWT
+// ignored any claim and used the grant the authorization middleware resolved,
+// and a bare API key used the scope set the auth middleware put on the context.
+// Three answers to one question is three places for them to drift, and it
+// produced an asymmetry nobody chose — narrowing a grant took effect at once
+// for a wallet and only at the next token for a key.
 //
-// Public paths (health, auth handshake, function invoke) are exempted by the
-// gate before this is called; the isPublicPath short-circuit here is a belt-
-// and-braces guard so a stray classification can never over-restrict them.
-func requiredScope(method, path string) string {
-	if isPublicPath(path) {
-		return ""
-	}
-
-	// --- Functions: /invoke is public (handled above); /ws is an invoke
-	// transport (data-plane); everything else is control-plane. ---
-	if path == "/v1/functions" || strings.HasPrefix(path, "/v1/functions/") {
-		if strings.HasSuffix(path, "/ws") {
-			return auth.ScopeInvoke
-		}
-		return auth.ScopeAdmin
-	}
-
-	// --- Storage (data-plane) ---
-	if strings.HasPrefix(path, "/v1/storage/") {
-		return auth.ScopeStorage
-	}
-
-	// --- Push: devices are data-plane; config/send are admin ---
-	if path == "/v1/push/devices" || strings.HasPrefix(path, "/v1/push/devices/") {
-		return auth.ScopePush
-	}
-	if strings.HasPrefix(path, "/v1/push/") {
-		return auth.ScopeAdmin
-	}
-	if path == "/v1/namespace/push-credentials" || strings.HasPrefix(path, "/v1/namespace/push-credentials/") {
-		return auth.ScopeAdmin
-	}
-
-	// --- WebRTC data-plane (signal/rooms/turn credentials) ---
-	if strings.HasPrefix(path, "/v1/webrtc/") {
-		return auth.ScopeWebRTC
-	}
-	// Namespace WebRTC management: enable/disable/stealth are admin; status is a
-	// read that any valid credential may poll.
-	if strings.HasPrefix(path, "/v1/namespace/webrtc/") {
-		if strings.HasSuffix(path, "/status") {
-			return ""
-		}
-		return auth.ScopeAdmin
-	}
-
-	// --- Anon proxy (data-plane) ---
-	if strings.HasPrefix(path, "/v1/proxy/") {
-		return auth.ScopeProxy
-	}
-
-	// --- Pub/sub REST (data-plane grant; not in anchat profiles) ---
-	if strings.HasPrefix(path, "/v1/pubsub/") {
-		return auth.ScopePubsub
-	}
-
-	// --- Olric cache REST (data-plane grant; dead in client) ---
-	if strings.HasPrefix(path, "/v1/cache/") {
-		return auth.ScopeCache
-	}
-
-	// --- Control-plane (admin only) ---
-	// Device revocation (feat-384) is namespace administration, NOT a user
-	// action. An end-user JWT sets CtxKeyNamespaceOverride from its own
-	// `namespace` claim, so without this classification any authenticated user
-	// of the namespace could revoke devices — including other accounts' — and a
-	// compromised device could revoke the legitimate ones.
-	if path == "/v1/auth/device/revoke" {
-		return auth.ScopeAdmin
-	}
-	if path == "/rqlite" || path == "/v1/rqlite" || strings.HasPrefix(path, "/v1/rqlite/") {
-		return auth.ScopeAdmin
-	}
-	if strings.HasPrefix(path, "/v1/deployments/") {
-		return auth.ScopeAdmin
-	}
-	if strings.HasPrefix(path, "/v1/db/sqlite/") {
-		return auth.ScopeAdmin
-	}
-	if strings.HasPrefix(path, "/v1/serverless/") {
-		return auth.ScopeAdmin
-	}
-	if path == "/v1/namespace/rate-limit" {
-		return auth.ScopeAdmin
-	}
-	if path == "/v1/namespace/keys" || strings.HasPrefix(path, "/v1/namespace/keys/") {
-		return auth.ScopeAdmin
-	}
-	if path == "/v1/namespace/delete" || path == "/v1/namespace/list" {
-		return auth.ScopeAdmin
-	}
-
-	// Default: a valid credential is enough; no elevated grant required.
-	return ""
-}
-
-// callerScopes resolves the effective grant set for the authenticated request.
-//
-//   - API-key-exchanged JWT (from /v1/auth/token): carries the key's exact
-//     scopes in a custom claim — this is what closes the exchange-then-escalate
-//     hole (a runtime key exchanged for a JWT keeps its narrow scope).
-//   - SIWE wallet JWT: a confirmed namespace owner gets admin; any other
-//     authenticated user gets the data-plane set (never admin).
-//   - Raw API key: the scopes stashed at lookup time.
-func (g *Gateway) callerScopes(r *http.Request) auth.ScopeSet {
+// A token says who you are. What you may do is read from the grant, here.
+func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	ctx := r.Context()
 
-	if v := ctx.Value(ctxKeyJWT); v != nil {
-		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			// Only an API-key-exchanged JWT (ak_ subject) may carry an
-			// authoritative scopes claim. A SIWE wallet JWT must NOT be trusted
-			// here even if a custom["scopes"] is present, because a tenant
-			// claims-provider could otherwise inject "admin" for every end-user
-			// (defense-in-depth alongside reserving "scopes" in the provider).
-			if isAPIKeySubject(claims.Sub) && claims.Custom != nil {
-				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" {
-					return auth.ParseScopes(raw)
-				}
-			}
-			if confirmed, _ := ctx.Value(ctxKeyOwnerConfirmed).(bool); confirmed {
-				return auth.ScopeSet{auth.ScopeAdmin: {}}
-			}
-			return auth.DataPlaneScopes()
+	// The lobby belongs to nobody and holds nothing (docs/AUTH.md, "The
+	// lobby"): its session reaches only the routes that ask for no
+	// permission. That holds for a grant too — a cluster from before
+	// ownership was fixed may still record one for whichever wallet signed in
+	// to it first. A wallet session naming no namespace is read the same way.
+	ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string)
+	inLobby := auth.IsLobbyNamespace(ns) || strings.TrimSpace(ns) == ""
+
+	// The grant the authorization middleware resolved for this namespace, for
+	// whichever principal the credential named. It is the answer whenever the
+	// route resolves one.
+	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+		if auth.IsLobbyNamespace(ns) {
+			return auth.PermissionSet{}
 		}
+		if grant.PrincipalType == auth.PrincipalServiceAccount {
+			// A key's role is runtime or admin and nothing between, so its
+			// own scopes say what it holds.
+			scopes, _ := ctx.Value(ctxKeyScopes).(auth.ScopeSet)
+			return auth.KeyPermissions(scopes.Canonical(), grant.Role, grant.Resource)
+		}
+		return auth.PermissionsFor(grant.Role, grant.Resource)
 	}
 
-	if v := ctx.Value(ctxKeyScopes); v != nil {
-		if s, ok := v.(auth.ScopeSet); ok {
-			return s
+	// No grant was resolved: every route the ownership gate does not cover.
+	// What the credential is decides what it gets there.
+	if claims, ok := ctx.Value(ctxKeyJWT).(*auth.JWTClaims); ok && claims != nil {
+		if isAPIKeySubject(claims.Sub) {
+			// A key's own permissions, from the row rather than from the claim
+			// the token carries. The claim is what made a narrowed grant take
+			// a token lifetime to bite.
+			if scopes, ok := ctx.Value(ctxKeyScopes).(auth.ScopeSet); ok {
+				return auth.PermissionsFromScopes(scopes.Canonical())
+			}
+			return auth.PermissionSet{}
 		}
+		// A lobby session used to get the data plane like any other, so every
+		// signed-in wallet shared the index namespace's cache, pub/sub and
+		// storage.
+		if inLobby {
+			return auth.PermissionSet{}
+		}
+		// A logged-in user with no grant in this namespace gets the data
+		// plane, as they always have.
+		return auth.DataPlanePermissions()
 	}
 
-	// No identity resolved (should not happen for a non-public path, which the
-	// auth middleware already gated) — deny by returning an empty set.
-	return auth.ScopeSet{}
+	if scopes, ok := ctx.Value(ctxKeyScopes).(auth.ScopeSet); ok {
+		return auth.PermissionsFromScopes(scopes.Canonical())
+	}
+
+	// No identity resolved. The auth middleware has already gated every
+	// non-public route, so this is a route that needs none — and it holds
+	// nothing either way.
+	return auth.PermissionSet{}
 }
 
-// requiresUserJWT reports whether a data-plane grant additionally requires a
-// genuine per-user (wallet) JWT — the layer-1 hardening that makes an extracted
-// runtime key worthless without a logged-in user. Admin callers are exempt (see
-// scopeMiddleware); push already enforces this in its own handler.
-func requiresUserJWT(grant string) bool {
-	switch grant {
-	case auth.ScopeStorage, auth.ScopeWebRTC, auth.ScopeProxy:
-		return true
-	}
-	return false
-}
-
-// isAPIKeySubject reports whether a JWT subject is an API key (ak_<rand>:<ns>),
-// as minted by the API-key→JWT exchange, rather than a SIWE wallet address.
-// This is the single signal used to (a) decide a JWT is not a genuine user
-// (hasWalletJWT) and (b) decide whether to trust an embedded scopes claim
-// (callerScopes). Wallet subjects are plain addresses; only exchanged keys
-// carry the ak_ prefix.
+// isAPIKeySubject reports whether a JWT subject is an API key, as minted by the
+// API-key→JWT exchange, rather than a SIWE wallet address. This is the single
+// signal used to (a) decide a JWT is not a genuine user (hasWalletJWT) and (b)
+// decide whether to trust an embedded scopes claim (callerScopes).
+//
+// It asks whether the subject IS a wallet rather than whether it looks like a
+// key: a subject nothing recognises is then a key, which holds only what its
+// row says, rather than a logged-in user. See auth.IsWalletSubject.
 func isAPIKeySubject(sub string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(sub)), "ak_")
+	return auth.IsAPIKeySubject(sub)
 }
 
 // hasWalletJWT reports whether the request carries a genuine end-user (SIWE
@@ -202,11 +112,10 @@ func hasWalletJWT(r *http.Request) bool {
 }
 
 // hasAnyJWT reports whether the request carries ANY verified JWT — a genuine
-// wallet JWT OR an API-key-exchanged one (ak_ subject). Used ONLY by the
-// storage-unpin exception below (bugboard #151): a serverless cron/job has no
-// logged-in user, so it proves key-possession by exchanging its storage-scoped
-// runtime key for a JWT. A bare API key (no JWT) yields false here, so the
-// "an extracted key is inert without a JWT" property of layer-1 still holds.
+// wallet JWT OR an API-key-exchanged one. It is what a route asking for
+// routepolicy.AnyToken accepts: a serverless cron or job has no logged-in user,
+// so it proves possession of its key by exchanging it. A bare API key (no JWT)
+// yields false, so "an extracted key is inert on its own" still holds.
 func hasAnyJWT(r *http.Request) bool {
 	if v := r.Context().Value(ctxKeyJWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
@@ -216,72 +125,107 @@ func hasAnyJWT(r *http.Request) bool {
 	return false
 }
 
-// isStorageUnpinPath reports whether (method, path) is the storage RECLAIM
-// endpoint — DELETE /v1/storage/unpin/:cid. This is the ONLY storage op whose
-// layer-1 user-JWT requirement is relaxed (bugboard #151): unpin is
-// namespace-ownership-checked in its handler and can only DROP the namespace's
-// own pins — it never reads or uploads. So a storage-scoped exchanged JWT is
-// sufficient for the userless server-side reclaim (cron / avatar-GC /
-// free-up-space). upload / get / pin keep the strict wallet-JWT requirement.
-func isStorageUnpinPath(method, path string) bool {
-	return method == http.MethodDelete && strings.HasPrefix(path, "/v1/storage/unpin/")
-}
-
 // scopeMiddleware enforces the API-key scope model. It runs after the
 // authorization (ownership) middleware, so ownership has already been verified;
 // this layer additionally (a) rejects a credential whose grant set does not
 // cover the operation (403 INSUFFICIENT_SCOPE, bugboard #148), and (b) requires
-// a genuine user JWT for the storage/webrtc/proxy data-plane grants unless the
-// caller is admin (the layer-1 hardening — an extracted runtime key is useless
-// without a logged-in user).
+// the kind of token the route asks for unless the caller is admin — the layer-1
+// hardening that makes an extracted runtime key useless without a logged-in
+// user.
+//
+// What a route requires comes from its declared policy, never from its path.
 func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions || isPublicPath(r.URL.Path) {
+		policy := g.policyFor(r)
+		if r.Method == http.MethodOptions || policy.Access.Anonymous() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		required := requiredScope(r.Method, r.URL.Path)
-		if required == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		scopes := g.callerScopes(r)
-		if !scopes.Has(required) {
-			g.logger.ComponentWarn("gateway", "request rejected: insufficient scope",
-				zap.String("path", r.URL.Path),
-				zap.String("required_scope", required),
-			)
-			writeError(w, http.StatusForbidden,
-				"insufficient scope: this credential lacks the '"+required+"' grant required for "+r.URL.Path)
-			return
-		}
-		if requiresUserJWT(required) && !scopes.IsAdmin() && !hasWalletJWT(r) {
-			// Exception (bugboard #151): server-side storage RECLAIM. A
-			// serverless cron/job (prune-attachments, avatar-GC, free-up-space)
-			// has no logged-in user and authenticates by exchanging its
-			// storage-scoped runtime key for a JWT. Unpin is namespace-isolated
-			// (handler verifies CID ownership) and reclaim-only, so a scoped
-			// exchanged JWT suffices — but a bare API key (no JWT) still fails,
-			// and the scope check above already proved the caller holds storage.
-			if isStorageUnpinPath(r.Method, r.URL.Path) && hasAnyJWT(r) {
-				next.ServeHTTP(w, r)
+		perms := g.callerPermissions(r)
+		// Carried on the request so the handler narrows the same answer the
+		// gate widened. Two computations of one thing is two things to keep
+		// in step.
+		r = r.WithContext(context.WithValue(r.Context(), ctxkeys.Permissions, perms))
+
+		if policy.Domain != "" {
+			required := auth.Resource{
+				Domain: auth.Domain(policy.Domain),
+				Action: auth.Action(policy.Action),
+			}
+			// The gate's question, not the handler's: does this credential
+			// reach the domain at all, before anything knows which object.
+			if !perms.PermitsDomain(required.Domain, required.Action) {
+				g.logger.ComponentWarn("gateway", "request rejected: insufficient permission",
+					zap.String("path", r.URL.Path),
+					zap.String("required", required.String()),
+				)
+				// What is missing goes in a field, not only in the prose. A
+				// client that has to regex the message to find out what it
+				// lacks cannot act on it.
+				forbidden(w, CodeScopeMissing,
+					"insufficient permission: this credential does not hold "+required.String()+
+						", required for "+r.URL.Path,
+					map[string]any{"required_scope": policy.Domain, "required_permission": required.String()})
 				return
 			}
+		}
+
+		// The token requirement is checked whether or not a permission was,
+		// because the two are independent: creating a namespace needs a
+		// logged-in wallet and no permission at all, and a wallet with no
+		// namespace holds none anywhere. Returning early when a route required
+		// nothing made a declared token requirement do nothing, silently.
+		if !g.hasRequiredToken(r, policy, perms) {
 			g.logger.ComponentWarn("gateway", "request rejected: user JWT required",
 				zap.String("path", r.URL.Path),
-				zap.String("required_scope", required),
+				zap.String("required", policy.Domain),
 			)
-			writeError(w, http.StatusUnauthorized,
-				"user authentication required (JWT): the '"+required+"' operation requires a logged-in user; an API key alone is not sufficient")
+			unauthorized(w, CodeAuthUserJWTRequired,
+				"user authentication required (JWT): "+r.URL.Path+" requires a logged-in user; an API key alone is not sufficient",
+				map[string]any{"required_scope": policy.Domain})
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// markOwnerConfirmed returns a shallow copy of the request whose context records
-// that a SIWE wallet owner was verified for the namespace (used by callerScopes
-// to grant the owner admin via a wallet JWT).
-func markOwnerConfirmed(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), ctxkeys.OwnerConfirmed, true))
+// hasRequiredToken reports whether the caller presented the kind of token the
+// route asks for.
+//
+// An admin caller is exempt: the requirement exists to make a leaked data-plane
+// key inert, and an admin credential is not one.
+func (g *Gateway) hasRequiredToken(r *http.Request, policy routepolicy.Policy, perms auth.PermissionSet) bool {
+	if policy.Token == routepolicy.AnyCredential || perms.IsAdmin() {
+		return true
+	}
+	switch policy.Token {
+	case routepolicy.AnyToken:
+		return hasAnyJWT(r)
+	case routepolicy.PrincipalToken:
+		return hasWalletJWT(r) || hasWorkloadJWT(r)
+	default:
+		return hasWalletJWT(r)
+	}
+}
+
+// hasWorkloadJWT reports whether the request carries a deployed app's own
+// workload token (subject app:<namespace>/<name>). It is minted by the gateway
+// for the app at start and renewed only by its holder; a key's exchange never
+// carries that subject.
+func hasWorkloadJWT(r *http.Request) bool {
+	if claims, ok := r.Context().Value(ctxKeyJWT).(*auth.JWTClaims); ok && claims != nil {
+		return auth.IsWorkloadSubject(claims.Sub)
+	}
+	return false
+}
+
+// markGrant returns a shallow copy of the request whose context carries the
+// grant the caller holds in the namespace, as resolved by the authorization
+// middleware. callerScopes turns it into the scope set a wallet JWT gets.
+//
+// This used to be a bare `true`: "a SIWE wallet owner was verified". A boolean
+// has one thing to say, so everybody it was set for became an admin. That is
+// what the roles exist to end.
+func markGrant(r *http.Request, grant *auth.Grant) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), ctxkeys.Grant, grant))
 }

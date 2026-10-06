@@ -16,16 +16,17 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 // HTTPGateway is the main reverse proxy router
 type HTTPGateway struct {
-	logger         *logging.ColoredLogger
-	config         *config.HTTPGatewayConfig
+	logger *logging.ColoredLogger
+	config *config.HTTPGatewayConfig
 	router chi.Router
 	mu     sync.RWMutex
-	server         *http.Server
+	server *http.Server
 }
 
 // NewHTTPGateway creates a new HTTP reverse proxy gateway
@@ -43,8 +44,8 @@ func NewHTTPGateway(logger *logging.ColoredLogger, cfg *config.HTTPGatewayConfig
 	}
 
 	gateway := &HTTPGateway{
-		logger:         logger,
-		config:         cfg,
+		logger: logger,
+		config: cfg,
 		router: chi.NewRouter(),
 	}
 
@@ -101,9 +102,9 @@ func (hg *HTTPGateway) initializeRoutes() error {
 		// Set timeout on transport
 		if routeConfig.Timeout > 0 {
 			proxy.Transport = &http.Transport{
-				Dial: (&net.Dialer{
+				DialContext: (&net.Dialer{
 					Timeout: routeConfig.Timeout,
-				}).Dial,
+				}).DialContext,
 				ResponseHeaderTimeout: routeConfig.Timeout,
 			}
 		}
@@ -198,7 +199,7 @@ func (hg *HTTPGateway) Start(ctx context.Context) error {
 		Handler:           hg.router,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
+		WriteTimeout:      constants.GatewayServerWriteTimeout,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}

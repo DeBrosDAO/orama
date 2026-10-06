@@ -3,6 +3,7 @@ package rwagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -10,16 +11,28 @@ import (
 	"testing"
 )
 
+// shortSocketBase holds test socket directories: short enough for sun_path.
+const shortSocketBase = "/tmp"
+
 // startMockAgent creates a mock agent server on a Unix socket for testing.
 func startMockAgent(t *testing.T, handler http.Handler) (socketPath string, cleanup func()) {
 	t.Helper()
 
-	tmpDir := t.TempDir()
+	// t.TempDir() is too long for a Unix socket on macOS (sun_path holds
+	// 104 bytes), so the socket lives in a short directory under /tmp.
+	tmpDir, err := os.MkdirTemp(shortSocketBase, "rwt")
+	if err != nil {
+		t.Fatalf("create a socket directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 	socketPath = filepath.Join(tmpDir, "test-agent.sock")
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("listen on unix socket: %v", err)
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		t.Fatalf("chmod socket: %v", err)
 	}
 
 	server := &http.Server{Handler: handler}
@@ -253,5 +266,154 @@ func TestUnlockAndLock(t *testing.T) {
 
 	if err := client.Lock(context.Background()); err != nil {
 		t.Fatalf("Lock() error: %v", err)
+	}
+}
+
+func TestDeleteSSHEntry(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status  int
+		resp    apiResponse[struct{}]
+		wantErr bool
+	}{
+		"deleted":          {200, apiResponse[struct{}]{OK: true}, false},
+		"already gone":     {404, apiResponse[struct{}]{Code: CodeNotFound, Error: "no SSH key for h/u in the vault"}, false},
+		"wallet is locked": {423, apiResponse[struct{}]{Code: "AGENT_LOCKED", Error: "locked"}, true},
+	} {
+		// No subtests: their names lengthen the temp dir, and a Unix socket
+		// path over 104 bytes cannot be bound on macOS.
+		func() {
+			mux := http.NewServeMux()
+			var method string
+			mux.HandleFunc("/v1/vault/ssh/203.0.113.7/ubuntu", func(w http.ResponseWriter, r *http.Request) {
+				method = r.Method
+				jsonHandler(tc.status, tc.resp)(w, r)
+			})
+			sock, cleanup := startMockAgent(t, mux)
+			defer cleanup()
+
+			err := New(sock).DeleteSSHEntry(context.Background(), "203.0.113.7", "ubuntu")
+			if (err != nil) != tc.wantErr {
+				t.Errorf("%s: err = %v, wantErr %v", name, err, tc.wantErr)
+			}
+			if method != http.MethodDelete {
+				t.Errorf("%s: method = %s, want DELETE", name, method)
+			}
+		}()
+	}
+}
+
+func TestAgentSocketAllowed(t *testing.T) {
+	if err := agentSocketAllowed(os.ModeSocket|0o600, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o600, 2, 1); err == nil {
+		t.Fatal("a socket owned by another uid was accepted")
+	}
+	if err := agentSocketAllowed(0o600, 1, 1); err == nil {
+		t.Fatal("a regular file was accepted as the agent socket")
+	}
+	if err := agentSocketAllowed(os.ModeSymlink|0o777, 1, 1); err == nil {
+		t.Fatal("a symlink was accepted as the agent socket")
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o660, 1, 1); err == nil {
+		t.Fatal("a group-writable socket was accepted")
+	}
+	if err := agentSocketAllowed(os.ModeSocket|0o755, 1, 1); err != nil {
+		t.Fatalf("0755 is what the agent creates, and other users cannot connect to it: %v", err)
+	}
+}
+
+func TestCheckAgentSocket_refusesWhatAnotherUserCouldPlant(t *testing.T) {
+	dir, err := os.MkdirTemp(shortSocketBase, "rwa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	sock := filepath.Join(dir, "a.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	if err := os.Chmod(sock, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(sock); err == nil {
+		t.Fatal("dialled a world-accessible agent socket")
+	}
+	if err := os.Chmod(sock, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(sock); err != nil {
+		t.Fatalf("the caller's socket: %v", err)
+	}
+
+	link := filepath.Join(dir, "b.sock")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkAgentSocket(link); err == nil {
+		t.Fatal("followed a symlink to the agent socket")
+	}
+	if err := checkAgentSocket(filepath.Join(dir, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("missing socket = %v, want not exist", err)
+	}
+}
+
+const archiveMessageForPurposeTests = ArchiveMessageHeader + "\nversion: 1.0.0\ncommit: abcdef0\narch: amd64\ndate: 2026-01-01T00:00:00Z\nsigners: none\nmanifest sha256: " +
+	"0000000000000000000000000000000000000000000000000000000000000000"
+
+const releasePayloadForPurposeTests = `{"_type":"targets","expires":"2027-01-01T00:00:00Z","spec_version":"1.0.31","targets":{},"version":1}`
+
+func TestSignForPurpose_refusesAMessageInTheOtherPurposesFormat(t *testing.T) {
+	// No socket exists, so a refusal that is not ErrPurposeMismatch would be a
+	// dial error: the check must run before the agent is contacted.
+	c := New(t.TempDir() + "/none.sock")
+	cases := map[string]struct{ message, purpose string }{
+		"release payload as archive": {releasePayloadForPurposeTests, PurposeOramaArchive},
+		"archive message as release": {archiveMessageForPurposeTests, PurposeOramaRelease},
+		"plain text as release":      {"hello", PurposeOramaRelease},
+		"plain text as archive":      {"hello", PurposeOramaArchive},
+		"empty message as release":   {"", PurposeOramaRelease},
+		"unknown purpose":            {releasePayloadForPurposeTests, "orama-other"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.SignForPurpose(context.Background(), tc.message, "evm", tc.purpose)
+			if !errors.Is(err, ErrPurposeMismatch) {
+				t.Fatalf("err = %v, want ErrPurposeMismatch", err)
+			}
+		})
+	}
+}
+
+func TestSign_refusesEveryRegisteredFormat(t *testing.T) {
+	c := New(t.TempDir() + "/none.sock")
+	for name, message := range map[string]string{
+		"archive": archiveMessageForPurposeTests,
+		"release": releasePayloadForPurposeTests,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := c.Sign(context.Background(), message, "evm")
+			if !errors.Is(err, ErrPurposeMismatch) {
+				t.Fatalf("err = %v, want ErrPurposeMismatch", err)
+			}
+		})
+	}
+}
+
+func TestReservedPurpose(t *testing.T) {
+	cases := map[string]string{
+		archiveMessageForPurposeTests: PurposeOramaArchive,
+		releasePayloadForPurposeTests: PurposeOramaRelease,
+		"Sign in to gateway":          "",
+		"":                            "",
+	}
+	for message, want := range cases {
+		if got := ReservedPurpose(message); got != want {
+			t.Errorf("ReservedPurpose(%.30q) = %q, want %q", message, got, want)
+		}
 	}
 }

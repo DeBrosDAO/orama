@@ -8,9 +8,9 @@ import (
 // fakeValidator is a no-op Validator for registry tests.
 type fakeValidator struct{ name string }
 
-func (v fakeValidator) Provider() string                       { return v.name }
-func (v fakeValidator) Validate(_ []byte) error                 { return nil }
-func (v fakeValidator) Redact(b []byte) (interface{}, error)    { return string(b), nil }
+func (v fakeValidator) Provider() string                     { return v.name }
+func (v fakeValidator) Validate(_ []byte) error              { return nil }
+func (v fakeValidator) Redact(b []byte) (interface{}, error) { return string(b), nil }
 
 func TestRegistry_RegisterLookup(t *testing.T) {
 	defer resetRegistry()

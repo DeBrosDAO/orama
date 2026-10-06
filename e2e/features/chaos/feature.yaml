@@ -1,0 +1,40 @@
+# Failure injected into the running cluster, one fault at a time, each
+# restored and the cluster proved converged again before the next: a node
+# partitioned from the others symmetrically and asymmetrically, a lossy and
+# slow overlay (tc netem, else an iptables random drop), disk pressure on the
+# filesystem the node reports (a removable preallocated file, never below
+# 1 GiB free) with its alert, memory pressure from a cgroup-limited hog, and
+# SIGKILL of every service class a node runs (rqlite, olric, gateway, ipfs,
+# coredns, caddy, orama-node) with recovery by the product itself. Throughout,
+# the rest of the cluster keeps serving. Lifecycle faults (mid-deploy,
+# mid-provision, mid-upgrade, concurrent joins, an auth thundering herd) are
+# in chaos-lifecycle.
+id: chaos
+title: Chaos - partitions, degraded network, resource pressure, kill -9
+area: infrastructure
+subtasks: [2853]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama monitor report
+  routes:
+    - /v1/health
+    - /v1/rqlite/create-table
+    - /v1/rqlite/exec
+    - /v1/rqlite/query
+  units:
+    - orama-namespace-rqlite@.service
+    - orama-namespace-olric@.service
+    - orama-namespace-gateway@.service
+    - orama-namespace-ipfs@.service
+    - orama-namespace-coredns@.service
+    - orama-namespace-caddy@.service
+  claims:
+    - "docs/ARCHITECTURE.md: the cluster tolerates the loss of one node of three and heals when it returns"
+    - "docs/MONITORING.md: a disk above 85% is a warning for its node"
+    - "docs/DEV_DEPLOY.md: a crashed service is restarted and rejoins without an operator"

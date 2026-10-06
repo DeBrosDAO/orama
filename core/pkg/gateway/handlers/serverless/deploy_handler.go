@@ -3,13 +3,16 @@ package serverless
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -22,6 +25,7 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 
 	var def serverless.FunctionDefinition
 	var wasmBytes []byte
+	var formNamespace string
 
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		// Parse multipart form
@@ -44,10 +48,9 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			def.Name = r.FormValue("name")
 		}
 
-		// Get namespace from form if not in metadata
-		if def.Namespace == "" {
-			def.Namespace = r.FormValue("namespace")
-		}
+		// A namespace named in the form is checked against the credential's
+		// below, never used in its place.
+		formNamespace = r.FormValue("namespace")
 
 		// Get other configuration fields from form
 		if v := r.FormValue("is_public"); v != "" {
@@ -56,17 +59,22 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		if v := r.FormValue("is_internal"); v != "" {
 			def.IsInternal, _ = strconv.ParseBool(v)
 		}
-		if v := r.FormValue("memory_limit_mb"); v != "" {
-			def.MemoryLimitMB, _ = strconv.Atoi(v)
+		var limitErr error
+		if v := r.FormValue(fieldMemoryLimitMB); v != "" {
+			def.MemoryLimitMB, limitErr = parseDeployInt(fieldMemoryLimitMB, v, minLimitValue, h.maxMemoryLimitMB)
 		}
-		if v := r.FormValue("timeout_seconds"); v != "" {
-			def.TimeoutSeconds, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldTimeoutSeconds); v != "" && limitErr == nil {
+			def.TimeoutSeconds, limitErr = parseDeployInt(fieldTimeoutSeconds, v, minLimitValue, h.maxTimeoutSeconds)
 		}
-		if v := r.FormValue("retry_count"); v != "" {
-			def.RetryCount, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldRetryCount); v != "" && limitErr == nil {
+			def.RetryCount, limitErr = parseDeployInt(fieldRetryCount, v, minRetryValue, h.maxRetryCount)
 		}
-		if v := r.FormValue("retry_delay_seconds"); v != "" {
-			def.RetryDelaySeconds, _ = strconv.Atoi(v)
+		if v := r.FormValue(fieldRetryDelaySeconds); v != "" && limitErr == nil {
+			def.RetryDelaySeconds, limitErr = parseDeployInt(fieldRetryDelaySeconds, v, minRetryValue, noMaximum)
+		}
+		if limitErr != nil {
+			writeError(w, http.StatusBadRequest, limitErr.Error())
+			return
 		}
 
 		// Get WASM file
@@ -103,17 +111,23 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// Get namespace from JWT if not provided
-	if def.Namespace == "" {
-		def.Namespace = h.getNamespaceFromRequest(r)
+	// The function is deployed into the credential's namespace. One named in
+	// the metadata or the form is only allowed to agree with it (bugboard #423).
+	namespace, ok := managedNamespace(w, r, def.Namespace, formNamespace)
+	if !ok {
+		return
+	}
+	def.Namespace = namespace
+
+	// Limits from the metadata JSON are checked here too: the form fields above
+	// are only one of the two places a limit can arrive.
+	if err := h.validateDefinitionLimits(&def); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	if def.Name == "" {
 		writeError(w, http.StatusBadRequest, "Function name required")
-		return
-	}
-	if def.Namespace == "" {
-		writeError(w, http.StatusBadRequest, "Namespace required")
 		return
 	}
 	if len(wasmBytes) == 0 {
@@ -130,6 +144,10 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 			zap.String("name", def.Name),
 			zap.Error(err),
 		)
+		if storeUnavailable(err) {
+			writeStoreError(w, "Failed to deploy function", err)
+			return
+		}
 		// Use the typed function-deploy code so clients can distinguish
 		// "registry rejected this binary" from generic 500s.
 		writeRPCError(w, http.StatusInternalServerError,
@@ -151,6 +169,11 @@ func (h *ServerlessHandlers) DeployFunction(w http.ResponseWriter, r *http.Reque
 		zap.String("name", def.Name),
 		zap.String("namespace", def.Namespace),
 	)
+
+	// Recorded here rather than beside either writeJSON below: the function is
+	// already in the registry at this point, and both of those returns are the
+	// same deploy.
+	h.recordAudit(r, def.Namespace, auth.AuditFunctionDeployed, def.Name)
 
 	// Fetch the deployed function to return
 	fn, err := h.registry.Get(ctx, def.Namespace, def.Name, def.Version)
@@ -283,4 +306,37 @@ func codeForStatus(status int) httputil.RPCErrorCode {
 	default:
 		return httputil.ErrCodeInternal
 	}
+}
+
+// writeStoreError answers a failed read or write of the namespace's own
+// database. One that is not answering right now (no leader, a timeout) is a
+// retryable 503: the functions are there, and the next request can reach them.
+// It used to be a 500 like any other fault, which a client cannot tell from a
+// broken gateway. The cause is the operator's, in the log; the caller is told
+// what failed, never the driver's text.
+func writeStoreError(w http.ResponseWriter, what string, err error) {
+	switch rqlite.ClassifyBatchError(err) {
+	case rqlite.BatchCodeUnavailable, rqlite.BatchCodeDeadlineExceeded:
+		writeRPCError(w, http.StatusServiceUnavailable, codeForStatus(http.StatusServiceUnavailable),
+			what+": the namespace's database is not answering right now; retry shortly", httputil.WithRetryable())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, what)
+}
+
+// storeUnavailable reports whether a failed deploy was the namespace database
+// not answering (no leader during an election, a timeout) rather than a
+// rejected function. Only the cause is classified: the DeployError text leads
+// with the function's name, and a function called "timeout-probe" must not read
+// as a deadline.
+func storeUnavailable(err error) bool {
+	var de *serverless.DeployError
+	if errors.As(err, &de) {
+		err = de.Cause
+	}
+	switch rqlite.ClassifyBatchError(err) {
+	case rqlite.BatchCodeUnavailable, rqlite.BatchCodeDeadlineExceeded:
+		return true
+	}
+	return false
 }

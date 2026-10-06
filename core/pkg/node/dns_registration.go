@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -10,69 +11,67 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
 )
 
-// registerDNSNode registers this node in the dns_nodes table for deployment routing
+// registerDNSNode records this node in the dns_nodes table for deployment
+// routing.
+//
+// The row is written by the index gateway on this host rather than by this
+// process: it is a promise every consumer trusts — `status = 'active' AND
+// last_seen > ?` is what routes real traffic — and a request can be
+// authenticated where a direct INSERT could not be. Which node the row is about
+// comes from the stamp on that request, so this node can only ever register
+// itself.
 func (n *Node) registerDNSNode(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
-		return fmt.Errorf("rqlite adapter not initialized")
+	client, err := n.coreAPIClient(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot record this node: %w", err)
 	}
 
-	// Get node ID (use peer ID)
-	nodeID := n.GetPeerID()
-	if nodeID == "" {
-		return fmt.Errorf("node peer ID not available")
-	}
-
-	// Get external IP address
+	// A node that cannot work out its own address does not register. This used
+	// to fall back to 127.0.0.1, which every consumer of `status = 'active'`
+	// then handed out as the address to reach this node on — a node that could
+	// not answer the question published a wrong answer instead of none.
 	ipAddress, err := n.getNodeIPAddress()
 	if err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to determine node IP, using localhost", zap.Error(err))
-		ipAddress = "127.0.0.1"
+		return fmt.Errorf("cannot determine this node's address, so it must not advertise itself: %w", err)
 	}
 
-	// Get internal IP from WireGuard interface (for cross-node communication over VPN)
-	internalIP := ipAddress
-	if wgIP, err := n.getWireGuardIP(); err == nil && wgIP != "" {
-		internalIP = wgIP
+	// The overlay address is what other nodes dial for raft, namespace cluster
+	// membership and eviction. The gateway checks it against the address the
+	// cluster allocated, so a node that is not on the mesh yet says so rather
+	// than offering its public address in that column.
+	internalIP, err := n.getWireGuardIP()
+	if err != nil {
+		return fmt.Errorf("cannot determine this node's overlay address: %w", err)
+	}
+	if internalIP == "" {
+		return fmt.Errorf("this node has no overlay address yet, so it cannot be reached by other nodes")
 	}
 
 	// Determine region (defaulting to "local" for now, could be from cloud metadata in future)
 	region := "local"
 
-	// Read optional metadata from node config
-	sshUser := n.config.Node.SSHUser
-	environment := n.config.Node.Environment
-	operatorWallet := n.config.Node.OperatorWallet
-
-	// Insert or update node record
-	query := `
-		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, last_seen, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
-		ON CONFLICT(id) DO UPDATE SET
-			ip_address = excluded.ip_address,
-			internal_ip = excluded.internal_ip,
-			region = excluded.region,
-			status = 'active',
-			ssh_user = COALESCE(NULLIF(excluded.ssh_user, ''), dns_nodes.ssh_user),
-			environment = COALESCE(NULLIF(excluded.environment, ''), dns_nodes.environment),
-			operator_wallet = COALESCE(NULLIF(excluded.operator_wallet, ''), dns_nodes.operator_wallet),
-			last_seen = datetime('now'),
-			updated_at = datetime('now')
-	`
-
-	db := n.rqliteAdapter.GetSQLDB()
-	_, err = rqlite.SafeExecContext(db, ctx, query, nodeID, ipAddress, internalIP, region, sshUser, environment, operatorWallet)
-	if err != nil {
+	if err := client.Register(ctx, nodeapi.RegisterRequest{
+		IPAddress:      ipAddress,
+		InternalIP:     internalIP,
+		Region:         region,
+		SSHUser:        n.config.Node.SSHUser,
+		Environment:    n.config.Node.Environment,
+		OperatorWallet: n.config.Node.OperatorWallet,
+		Role:           n.installedRole(),
+	}); err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}
 
 	n.logger.ComponentInfo(logging.ComponentNode, "Registered DNS node",
-		zap.String("node_id", nodeID),
+		zap.String("node_id", n.GetPeerID()),
 		zap.String("ip_address", ipAddress),
 		zap.String("region", region),
 	)
@@ -82,6 +81,17 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 
 // startDNSHeartbeat starts a goroutine that periodically updates the node's last_seen timestamp
 func (n *Node) startDNSHeartbeat(ctx context.Context) {
+	tick := &heartbeatTick{
+		heartbeat: func(ctx context.Context) {
+			if err := n.updateDNSHeartbeat(ctx); err != nil {
+				n.logger.ComponentWarn(logging.ComponentNode, "Failed to update DNS heartbeat", zap.Error(err))
+			}
+		},
+		edgeServing: n.edgeServing,
+		advertise:   n.advertiseInDNS,
+		withdraw:    n.withdrawFromDNS,
+		maintain:    n.maintainClusterDNS,
+	}
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -92,28 +102,7 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 				n.logger.ComponentInfo(logging.ComponentNode, "DNS heartbeat stopped")
 				return
 			case <-ticker.C:
-				if err := n.updateDNSHeartbeat(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to update DNS heartbeat", zap.Error(err))
-				}
-				// Self-healing: ensure this node's DNS records exist on every heartbeat
-				if err := n.ensureBaseDNSRecords(ctx); err != nil {
-					n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure DNS records on heartbeat", zap.Error(err))
-				}
-				// Re-advertise this node in the namespace gateway round-robin.
-				// MUST run after the heartbeat above (which re-asserts 'active')
-				// and before the purge below, so a just-recovered node is no
-				// longer purge-eligible by the time it re-adds itself.
-				n.ensureNamespaceHostRecords(ctx)
-				// Retract this node's own TURN records for namespaces it is no
-				// longer a TURN node for. The inactive-node purge cannot catch
-				// these: the node is alive, it just does not serve that namespace.
-				n.retractForeignTURNRecords(ctx)
-				// Remove DNS records for nodes that stopped heartbeating
-				n.cleanupStaleNodeRecords(ctx)
-				// Purge per-namespace records (gateway host, TURN, stealth) that
-				// still point at inactive nodes (bugboard #158) — neither an RPC/
-				// WebSocket client nor a relay-only call must resolve a removed node.
-				n.purgeInactiveNodeRecords(ctx)
+				tick.run(ctx)
 			}
 		}
 	}()
@@ -121,34 +110,105 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 	n.logger.ComponentInfo(logging.ComponentNode, "Started DNS heartbeat (30s interval)")
 }
 
-// updateDNSHeartbeat updates the node's last_seen timestamp in dns_nodes
+// heartbeatTick is one DNS heartbeat. The heartbeat itself always runs: an
+// active, fresh dns_nodes row is what namespace recovery, vault guardian
+// discovery and the overlay fan-outs read as "this node is alive", and a
+// stopped Caddy does not make it dead. This node's A records are a different
+// promise, that it terminates TLS, so they are advertised only while its edge
+// serves and withdrawn while it does not. The edge used to be checked only at
+// start-up, so a Caddy that stopped later kept its node in the round-robin and
+// clients were sent to a closed port.
+type heartbeatTick struct {
+	heartbeat   func(context.Context)
+	edgeServing func() error
+	// advertise keeps this node's own base and namespace records in place.
+	advertise func(context.Context)
+	// withdraw removes them, naming why.
+	withdraw func(context.Context, error)
+	// maintain keeps the cluster's records right whatever this node's state.
+	maintain func(context.Context)
+	// edgeDown counts consecutive ticks the edge was not serving.
+	edgeDown int
+}
+
+// edgeDownTicks is how many consecutive failed edge checks withdraw the node:
+// a Caddy restart reads as inactive for a moment, and withdrawing on it would
+// flap the node's records in and out of the round-robin.
+const edgeDownTicks = 2
+
+func (h *heartbeatTick) run(ctx context.Context) {
+	h.heartbeat(ctx)
+	if err := h.edgeServing(); err != nil {
+		h.edgeDown++
+		if h.edgeDown >= edgeDownTicks {
+			h.withdraw(ctx, err)
+		}
+	} else {
+		h.edgeDown = 0
+		h.advertise(ctx)
+	}
+	h.maintain(ctx)
+}
+
+// edgeServing reports whether this node terminates TLS now.
+func (n *Node) edgeServing() error {
+	sup, _, err := n.indexSupervisor()
+	if err != nil {
+		return err
+	}
+	return sup.EdgeServing(n.config.SNIRouter.Enabled)
+}
+
+// advertiseInDNS keeps this node's own records in place.
+func (n *Node) advertiseInDNS(ctx context.Context) {
+	// Self-healing: ensure this node's DNS records exist on every heartbeat
+	if err := n.ensureBaseDNSRecords(ctx); err != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure DNS records on heartbeat", zap.Error(err))
+	}
+	// Re-advertise this node in the namespace gateway round-robin. MUST run
+	// after the heartbeat (which re-asserts 'active') and before the purge in
+	// maintainClusterDNS, so a just-recovered node is no longer
+	// purge-eligible by the time it re-adds itself.
+	n.ensureNamespaceHostRecords(ctx)
+}
+
+// maintainClusterDNS removes records that no longer point at a serving node.
+func (n *Node) maintainClusterDNS(ctx context.Context) {
+	// Retract this node's own TURN records for namespaces it is no longer a
+	// TURN node for. The inactive-node purge cannot catch these: the node is
+	// alive, it just does not serve that namespace.
+	n.retractForeignTURNRecords(ctx)
+	// Remove DNS records for nodes that stopped heartbeating
+	n.cleanupStaleNodeRecords(ctx)
+	// Purge per-namespace records (gateway host, TURN, stealth) that still
+	// point at inactive nodes (bugboard #158) — neither an RPC/WebSocket client
+	// nor a relay-only call must resolve a removed node.
+	n.purgeInactiveNodeRecords(ctx)
+}
+
+// updateDNSHeartbeat refreshes this node's last_seen timestamp in dns_nodes.
+//
+// The gateway re-asserts 'active' as well as refreshing last_seen: a live,
+// heartbeating node must count as active, which heals a node that was reaped to
+// 'inactive' during a restart window without a fresh registration.
 func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
-	if n.rqliteAdapter == nil {
-		return fmt.Errorf("rqlite adapter not initialized")
+	client, err := n.coreAPIClient(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot record this heartbeat: %w", err)
 	}
 
-	nodeID := n.GetPeerID()
-	if nodeID == "" {
-		return fmt.Errorf("node peer ID not available")
-	}
-
-	// Re-assert 'active' as well as refreshing last_seen: a live, heartbeating
-	// node must count as active. This self-heals a node that was reaped to
-	// 'inactive' during a restart window without a fresh registration.
-	query := `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now') WHERE id = ?`
-	db := n.rqliteAdapter.GetSQLDB()
-	res, err := rqlite.SafeExecContext(db, ctx, query, nodeID)
+	registered, err := client.Heartbeat(ctx, nodeapi.HeartbeatRequest{
+		Role:        n.installedRole(),
+		Environment: n.config.Node.Environment,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)
 	}
-
-	// If the row is missing entirely (initial registration never landed), register now.
-	if res != nil {
-		if affected, aerr := res.RowsAffected(); aerr == nil && affected == 0 {
-			return n.registerDNSNode(ctx)
-		}
+	// The row is missing entirely — the initial registration never landed, or
+	// it was purged while this node was away. Register now.
+	if !registered {
+		return n.registerDNSNode(ctx)
 	}
-
 	return nil
 }
 
@@ -167,12 +227,21 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		return nil // No domain configured, skip
 	}
 
+	// The DNS record loop writes zone data directly, unlike the two writes
+	// above it that record this node's identity — see the note on
+	// registerDNSNode. It is the caller of this handle, so it is the one that
+	// has to have it: registerDNSNode used to hold the only guard, and it no
+	// longer touches the database at all.
+	if n.getRQLiteAdapter() == nil {
+		return fmt.Errorf("rqlite adapter not initialized")
+	}
+
 	ipAddress, err := n.getNodeIPAddress()
 	if err != nil {
 		return fmt.Errorf("failed to determine node IP: %w", err)
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	// Clean up any private IP A records left by old code versions.
 	// Old code could insert WireGuard IPs (10.0.0.x) into dns_records.
@@ -186,8 +255,8 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 	}
 
 	// Base domain records (e.g., dbrs.space, *.dbrs.space) — only for nameserver nodes.
-	// Only nameserver nodes run Caddy (HTTPS), so only they should appear in base domain
-	// round-robin. Non-nameserver nodes would cause TLS failures for clients.
+	// Apex/wildcard NS identity stays on nameserver nodes. Tenant TLS is
+	// orama-namespace-caddy@index on every node that hosts a gateway.
 	if baseDomain != "" && n.isNameserverNode(ctx) {
 		records = append(records,
 			struct{ fqdn, value string }{baseDomain + ".", ipAddress},
@@ -215,78 +284,42 @@ func (n *Node) ensureBaseDNSRecords(ctx context.Context) error {
 		}
 	}
 
-	// Ensure SOA and NS records exist for the base domain (self-healing)
-	if baseDomain != "" {
-		n.ensureSOAAndNSRecords(ctx, baseDomain)
+	if baseDomain == "" {
+		return nil
+	}
+
+	// Claim an NS slot (nsN) for the base domain — only if this node was
+	// installed with --nameserver (i.e. runs Caddy + CoreDNS). Claimed before
+	// the zone's NS set is derived below, so a new nameserver is published on
+	// the same sweep that glued it.
+	var errs []error
+	if n.isNameserverPreference() {
+		if _, err := claimNameserverSlot(ctx, db, n.GetPeerID(), baseDomain, ipAddress); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	// The zone's NS and SOA records follow the claimed slots.
+	if err := reconcileNameserverRecords(ctx, db, baseDomain, n.GetPeerID()); err != nil {
+		errs = append(errs, err)
 	}
 
 	// Pin push.<baseDomain> to a single healthy nameserver (bugboard #858) so the
-	// shared ntfy tier — which keeps no cross-node state — converges every
+	// shared ntfy tier — which keeps no cross-node shared state — converges every
 	// publisher AND subscriber onto one instance. Nameserver-only: they run Caddy
 	// and already serve push.<baseDomain> on :443.
-	if baseDomain != "" && n.isNameserverNode(ctx) {
+	if n.isNameserverNode(ctx) {
 		n.ensurePushDesignatedRecord(ctx, baseDomain)
 	}
 
-	// Claim an NS slot for the base domain (ns1/ns2/ns3) — only if this node
-	// was installed with --nameserver (i.e. runs Caddy + CoreDNS).
-	if baseDomain != "" && n.isNameserverPreference() {
-		n.claimNameserverSlot(ctx, baseDomain, ipAddress)
-	}
-
-	return nil
-}
-
-// ensureSOAAndNSRecords creates SOA and NS records for the base domain if they don't exist.
-// These are normally seeded during install Phase 7, but if that fails (e.g. migrations
-// not yet run), the heartbeat self-heals them here.
-func (n *Node) ensureSOAAndNSRecords(ctx context.Context, baseDomain string) {
-	db := n.rqliteAdapter.GetSQLDB()
-	fqdn := baseDomain + "."
-
-	// Check if SOA exists
-	var count int
-	err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM dns_records WHERE fqdn = ? AND record_type = 'SOA'`, fqdn,
-	).Scan(&count)
-	if err != nil || count > 0 {
-		return // SOA exists or query failed, skip
-	}
-
-	n.logger.ComponentInfo(logging.ComponentNode, "SOA/NS records missing, self-healing",
-		zap.String("domain", baseDomain))
-
-	// Create SOA record
-	soaValue := fmt.Sprintf("ns1.%s. admin.%s. %d 3600 1800 604800 300",
-		baseDomain, baseDomain, time.Now().Unix())
-	if _, err := rqlite.SafeExecContext(db, ctx,
-		`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-		VALUES (?, 'SOA', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-		ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-		fqdn, soaValue,
-	); err != nil {
-		n.logger.ComponentWarn(logging.ComponentNode, "Failed to create SOA record", zap.Error(err))
-	}
-
-	// Create NS records (ns1, ns2, ns3)
-	for i := 1; i <= 3; i++ {
-		nsValue := fmt.Sprintf("ns%d.%s.", i, baseDomain)
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-			VALUES (?, 'NS', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-			ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-			fqdn, nsValue,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS record", zap.Error(err))
-		}
-	}
+	return errors.Join(errs...)
 }
 
 // ensurePushDesignatedRecord pins push.<baseDomain> to a single healthy
 // nameserver node (bugboard #858), with failover. Thin wrapper over
 // pinPushDesignated that logs failures.
 func (n *Node) ensurePushDesignatedRecord(ctx context.Context, baseDomain string) {
-	if _, err := pinPushDesignated(ctx, n.rqliteAdapter.GetSQLDB(), baseDomain); err != nil {
+	if _, err := pinPushDesignated(ctx, n.getRQLiteAdapter().GetSQLDB(), baseDomain); err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to pin push DNS record (bugboard #858)", zap.Error(err))
 	}
 }
@@ -346,75 +379,10 @@ func pinPushDesignated(ctx context.Context, db *sql.DB, baseDomain string) (stri
 	return designated, nil
 }
 
-// claimNameserverSlot attempts to claim an available NS hostname (ns1/ns2/ns3) for this node.
-// If the node already has a slot, it updates the IP. If no slot is available, it does nothing.
-func (n *Node) claimNameserverSlot(ctx context.Context, domain, ipAddress string) {
-	nodeID := n.GetPeerID()
-	db := n.rqliteAdapter.GetSQLDB()
-
-	// Check if this node already has a slot
-	var existingHostname string
-	err := db.QueryRowContext(ctx,
-		`SELECT hostname FROM dns_nameservers WHERE node_id = ? AND domain = ?`,
-		nodeID, domain,
-	).Scan(&existingHostname)
-
-	if err == nil {
-		// Already claimed — update IP if changed
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`UPDATE dns_nameservers SET ip_address = ?, updated_at = datetime('now') WHERE hostname = ? AND domain = ?`,
-			ipAddress, existingHostname, domain,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to update NS slot IP", zap.Error(err))
-		}
-		// Ensure the glue A record matches
-		nsFQDN := existingHostname + "." + domain + "."
-		if _, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-			VALUES (?, 'A', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-			ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-			nsFQDN, ipAddress,
-		); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to ensure NS glue record", zap.Error(err))
-		}
-		return
-	}
-
-	// Try to claim an available slot
-	for _, hostname := range []string{"ns1", "ns2", "ns3"} {
-		result, err := rqlite.SafeExecContext(db, ctx,
-			`INSERT INTO dns_nameservers (hostname, node_id, ip_address, domain) VALUES (?, ?, ?, ?)
-			ON CONFLICT(hostname) DO NOTHING`,
-			hostname, nodeID, ipAddress, domain,
-		)
-		if err != nil {
-			continue
-		}
-		rows, _ := result.RowsAffected()
-		if rows > 0 {
-			// Successfully claimed this slot — create glue record
-			nsFQDN := hostname + "." + domain + "."
-			if _, err := rqlite.SafeExecContext(db, ctx,
-				`INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
-				VALUES (?, 'A', ?, 300, 'system', 'system', TRUE, datetime('now'), datetime('now'))
-				ON CONFLICT(fqdn, record_type, value) DO NOTHING`,
-				nsFQDN, ipAddress,
-			); err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "Failed to create NS glue record", zap.Error(err))
-			}
-			n.logger.ComponentInfo(logging.ComponentNode, "Claimed NS slot",
-				zap.String("hostname", hostname),
-				zap.String("ip", ipAddress),
-			)
-			return
-		}
-	}
-}
-
 // cleanupStaleNodeRecords removes A records for nodes that have stopped heartbeating.
 // This ensures DNS only returns IPs for healthy, active nodes.
 func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 
@@ -426,8 +394,17 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		return
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	n.reapInactiveNodeDNS(ctx, n.getRQLiteAdapter().GetSQLDB(), baseDomain)
+}
 
+// reapInactiveNodeDNS marks nodes that have not heartbeated in two minutes
+// inactive and drops their system A records from the round-robin.
+//
+// It does not release a nameserver slot. A missed heartbeat is what a rolling
+// restart and a leaderless minute look like, and freeing the slot drops the
+// zone's glue. The slot goes when the operator runs `orama node remove`
+// (clusterops.RetirementPlan deletes the dns_nameservers row).
+func (n *Node) reapInactiveNodeDNS(ctx context.Context, db *sql.DB, baseDomain string) {
 	// Find nodes that haven't sent a heartbeat in over 2 minutes
 	staleQuery := `SELECT id, ip_address FROM dns_nodes WHERE status = 'active' AND last_seen < datetime('now', '-120 seconds')`
 	rows, err := db.QueryContext(ctx, staleQuery)
@@ -435,20 +412,30 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 		n.logger.ComponentWarn(logging.ComponentNode, "Failed to query stale nodes", zap.Error(err))
 		return
 	}
-	defer rows.Close()
 
-	// Build all FQDNs to clean: base domain + node domain
-	var fqdnsToClean []string
-	fqdnsToClean = append(fqdnsToClean, baseDomain+".", "*."+baseDomain+".")
-	if n.config.Node.Domain != "" && n.config.Node.Domain != baseDomain {
-		fqdnsToClean = append(fqdnsToClean, n.config.Node.Domain+".", "*."+n.config.Node.Domain+".")
-	}
+	fqdnsToClean := n.baseRecordFQDNs(baseDomain)
 
+	// Read the whole set before writing. A write while this cursor is open
+	// locks the table on SQLite, and the writes below are what mark the node
+	// inactive.
+	type staleNode struct{ id, ip string }
+	var stale []staleNode
 	for rows.Next() {
 		var nodeID, ip string
 		if err := rows.Scan(&nodeID, &ip); err != nil {
 			continue
 		}
+		stale = append(stale, staleNode{id: nodeID, ip: ip})
+	}
+	scanErr := rows.Err()
+	rows.Close()
+	if scanErr != nil {
+		n.logger.ComponentWarn(logging.ComponentNode, "Failed to query stale nodes", zap.Error(scanErr))
+		return
+	}
+
+	for _, node := range stale {
+		nodeID, ip := node.id, node.ip
 
 		// Mark node as inactive
 		if _, err := rqlite.SafeExecContext(db, ctx, `UPDATE dns_nodes SET status = 'inactive', updated_at = datetime('now') WHERE id = ?`, nodeID); err != nil {
@@ -460,22 +447,6 @@ func (n *Node) cleanupStaleNodeRecords(ctx context.Context) {
 			if _, err := rqlite.SafeExecContext(db, ctx, `DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = 'system'`, f, ip); err != nil {
 				n.logger.ComponentWarn(logging.ComponentNode, "Failed to remove stale DNS record",
 					zap.String("fqdn", f), zap.String("ip", ip), zap.Error(err))
-			}
-		}
-
-		// Release any NS slot held by this dead node
-		if _, err := rqlite.SafeExecContext(db, ctx, `DELETE FROM dns_nameservers WHERE node_id = ?`, nodeID); err != nil {
-			n.logger.ComponentWarn(logging.ComponentNode, "Failed to release NS slot", zap.String("node_id", nodeID), zap.Error(err))
-		}
-
-		// Remove glue records for this node's IP (ns1.domain., ns2.domain., ns3.domain.)
-		for _, ns := range []string{"ns1", "ns2", "ns3"} {
-			nsFQDN := ns + "." + baseDomain + "."
-			if _, err := rqlite.SafeExecContext(db, ctx,
-				`DELETE FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = 'system'`,
-				nsFQDN, ip,
-			); err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "Failed to remove NS glue record", zap.Error(err))
 			}
 		}
 
@@ -535,7 +506,7 @@ func staleCutoff() string {
 // different rows on different nodes and diverge the cluster. A bound constant
 // travels identically to every replica.
 //
-// The IS NOT NULL / != '' filter is explicit rather than incidental: a single NULL
+// The IS NOT NULL / != ” filter is explicit rather than incidental: a single NULL
 // ip_address would make the outer `value NOT IN (…)` evaluate to NULL for every
 // row (SQL three-valued logic), silently turning the whole purge into a no-op.
 const inactiveNodeIPsSQL = `SELECT ip_address FROM dns_nodes WHERE status != 'active'
@@ -629,6 +600,12 @@ const purgeInactiveNamespaceHostRecordsSQL = `DELETE FROM dns_records
 //	6 nodeID,                                            -- which namespaces
 //	7 prefix, 8 baseDomain, 9 nodeIP                     -- NOT EXISTS guard
 //
+// A cluster that failed or is being torn down, and a cluster whose namespace is
+// gone from `namespaces`, are never advertised. Their membership rows can
+// outlive them (a rolled-back provision used to leave them 'running'), and this
+// statement is what kept re-writing the records of namespaces that no longer
+// existed.
+//
 // is_active is left to its TRUE default and never forced: a row recovery
 // deliberately disabled (DisableNamespaceRecord) blocks the insert via NOT EXISTS
 // and stays dark, so this can never resurrect traffic to a drained node.
@@ -647,6 +624,8 @@ const ensureNamespaceHostRecordsSQL = `INSERT INTO dns_records (fqdn, record_typ
 	  FROM namespace_cluster_nodes ncn
 	  JOIN namespace_clusters nc ON ncn.namespace_cluster_id = nc.id
 	 WHERE ncn.node_id = ? AND ncn.role = 'gateway' AND ncn.status = 'running'
+	   AND nc.status NOT IN ('failed', 'deprovisioning')
+	   AND EXISTS (SELECT 1 FROM namespaces ns WHERE ns.name = nc.namespace_name)
 	   AND NOT EXISTS (
 	       SELECT 1 FROM dns_records r
 	        WHERE r.fqdn = ?||'ns-'||nc.namespace_name||'.'||?||'.'
@@ -669,7 +648,7 @@ const ensureNamespaceHostRecordsSQL = `INSERT INTO dns_records (fqdn, record_typ
 //
 // Additive and per-node: inserts only THIS node's own value, only when absent.
 func (n *Node) ensureNamespaceHostRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 	nodeID := n.GetPeerID()
@@ -693,7 +672,7 @@ func (n *Node) ensureNamespaceHostRecords(ctx context.Context) {
 		return
 	}
 
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	// The apex host and the deployment wildcard are always advertised together.
 	for _, prefix := range []string{"", "*."} {
@@ -749,7 +728,7 @@ const retractForeignTURNRecordsSQL = `DELETE FROM dns_records
 // retractForeignTURNRecords drops this node's TURN/stealth A records for any
 // namespace it holds no TURN allocation for. See retractForeignTURNRecordsSQL.
 func (n *Node) retractForeignTURNRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
 	nodeID := n.GetPeerID()
@@ -760,7 +739,7 @@ func (n *Node) retractForeignTURNRecords(ctx context.Context) {
 	if err != nil {
 		return // already logged by the ensure on the same sweep
 	}
-	res, err := rqlite.SafeExecContext(n.rqliteAdapter.GetSQLDB(), ctx,
+	res, err := rqlite.SafeExecContext(n.getRQLiteAdapter().GetSQLDB(), ctx,
 		retractForeignTURNRecordsSQL, ip, nodeID)
 	if err != nil {
 		n.logger.ComponentWarn(logging.ComponentNode,
@@ -797,10 +776,10 @@ func (n *Node) retractForeignTURNRecords(ctx context.Context) {
 // Idempotent DELETE-by-value — safe to run from every node on every sweep (same
 // model as cleanupStaleNodeRecords, no leader gating needed).
 func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return
 	}
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 
 	cutoff := staleCutoff()
 
@@ -815,6 +794,7 @@ func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
 	}{
 		{"TURN/stealth", purgeInactiveTURNRecordsSQL, []interface{}{cutoff}},
 		{"namespace host", purgeInactiveNamespaceHostRecordsSQL, []interface{}{cutoff, cutoff}},
+		{"orphaned namespace", purgeOrphanedNamespaceRecordsSQL, nil},
 	} {
 		res, err := rqlite.SafeExecContext(db, ctx, p.sql, p.args...)
 		if err != nil {
@@ -831,6 +811,16 @@ func (n *Node) purgeInactiveNodeRecords(ctx context.Context) {
 	}
 }
 
+// installedRole is the role this node was installed as. A nameserver flag
+// records "nameserver"; everything else is a worker. The heartbeat repeats
+// it so the cluster's view does not depend on a nodes.conf file.
+func (n *Node) installedRole() string {
+	if n.isNameserverPreference() {
+		return "nameserver"
+	}
+	return "node"
+}
+
 // isNameserverPreference checks if this node was installed with --nameserver flag
 // by reading the preferences.yaml file. Only nameserver nodes should claim NS slots.
 func (n *Node) isNameserverPreference() bool {
@@ -845,16 +835,16 @@ func (n *Node) isNameserverPreference() bool {
 }
 
 // isNameserverNode checks if this node has claimed a nameserver slot (ns1/ns2/ns3).
-// Only nameserver nodes run Caddy for HTTPS, so only they should be in base domain DNS.
+// Only nameserver nodes claim NS slots, so only they should be in base domain DNS.
 func (n *Node) isNameserverNode(ctx context.Context) bool {
-	if n.rqliteAdapter == nil {
+	if n.getRQLiteAdapter() == nil {
 		return false
 	}
 	nodeID := n.GetPeerID()
 	if nodeID == "" {
 		return false
 	}
-	db := n.rqliteAdapter.GetSQLDB()
+	db := n.getRQLiteAdapter().GetSQLDB()
 	var count int
 	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM dns_nameservers WHERE node_id = ?`, nodeID,
@@ -867,54 +857,44 @@ func (n *Node) getWireGuardIP() (string, error) {
 	return wireguard.GetIP()
 }
 
-// getNodeIPAddress attempts to determine the node's external IP address
+// getNodeIPAddress returns this node's public IPv4 address: node.public_ip
+// from node.yaml, which install records from --vps-ip and every upgrade
+// re-records.
+//
+// It used to be guessed — the source address of a UDP "connection" to
+// 8.8.8.8, else the first public-looking interface address — and a guess is
+// what every DNS record, NS glue row and dns_nodes registration published.
+// On a host with several addresses, or behind a floating IP, it named the
+// wrong one.
 func (n *Node) getNodeIPAddress() (string, error) {
-	// Try to detect external IP by connecting to a public server
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		// If that fails, try to get first non-loopback interface IP
-		addrs, err := net.InterfaceAddrs()
-		if err != nil {
-			return "", err
-		}
+	return configuredPublicIP(n.config.Node.PublicIP)
+}
 
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
-				if ipnet.IP.To4() != nil {
-					return ipnet.IP.String(), nil
-				}
-			}
-		}
-
-		return "", fmt.Errorf("no suitable IP address found")
+// configuredPublicIP validates node.public_ip. node.yaml is a file this node
+// does not write, so the address it publishes to the world is checked, not
+// taken as-is.
+func configuredPublicIP(publicIP string) (string, error) {
+	if publicIP == "" {
+		return "", fmt.Errorf("node.public_ip is not set in node.yaml; run `orama node upgrade` on this node, " +
+			"which records it (add --public-ip <this node's public IPv4> if it cannot be detected)")
 	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	if localAddr.IP.IsPrivate() || localAddr.IP.IsLoopback() {
-		// UDP dial returned a private/loopback IP (e.g. WireGuard 10.0.0.x).
-		// Fall back to scanning interfaces for a public IPv4.
-		addrs, err := net.InterfaceAddrs()
-		if err != nil {
-			return "", fmt.Errorf("private IP detected (%s) and failed to list interfaces: %w", localAddr.IP, err)
-		}
-		for _, addr := range addrs {
-			if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && !ipnet.IP.IsPrivate() {
-				if ipnet.IP.To4() != nil {
-					return ipnet.IP.String(), nil
-				}
-			}
-		}
-		return "", fmt.Errorf("private IP detected (%s) and no public IPv4 found on interfaces", localAddr.IP)
+	if err := install.ValidatePublicIP(publicIP); err != nil {
+		return "", fmt.Errorf("node.public_ip in node.yaml is not usable (%w); fix it with `orama node upgrade --public-ip <this node's public IPv4>`", err)
 	}
-	return localAddr.IP.String(), nil
+	// Canonical dotted-quad: an IPv4-mapped IPv6 spelling (::ffff:a.b.c.d)
+	// validates, but published as-is it is not a valid A record value.
+	return net.ParseIP(publicIP).To4().String(), nil
 }
 
 // cleanupPrivateIPRecords deletes any A records with private/loopback IPs from dns_records.
 // Old code versions could insert WireGuard IPs (10.0.0.x) into the table. This runs on
 // every heartbeat to self-heal.
 func cleanupPrivateIPRecords(ctx context.Context, db *sql.DB, logger *logging.ColoredLogger) {
-	query := `DELETE FROM dns_records WHERE record_type = 'A' AND namespace = 'system'
+	// A deployment's records are public too: a replica's used to be written
+	// with the node's WireGuard address (SetupDynamicReplica), and nothing
+	// removed them once that stopped.
+	query := `DELETE FROM dns_records WHERE record_type = 'A'
+		AND (namespace = 'system' OR COALESCE(deployment_id, '') != '')
 		AND (value LIKE '10.%' OR value LIKE '172.16.%' OR value LIKE '172.17.%' OR value LIKE '172.18.%'
 		OR value LIKE '172.19.%' OR value LIKE '172.2_.%' OR value LIKE '172.30.%' OR value LIKE '172.31.%'
 		OR value LIKE '192.168.%' OR value = '127.0.0.1')`

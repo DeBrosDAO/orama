@@ -2,7 +2,9 @@
 
 ## What is Orama Vault?
 
-Orama Vault is a distributed secrets store. It runs as a guardian daemon (`vault-guardian`) on every node in the Orama Network, similar to how IPFS nodes run on every machine. Clients can store any sensitive data -- API keys, database passwords, SSH keys, crypto seeds, wallet recovery shares, or arbitrary encrypted blobs. The client splits each secret into Shamir shares and pushes one share to each guardian. To retrieve, the client pulls shares from K guardians and reconstructs the original secret via Lagrange interpolation.
+Orama Vault is a distributed secrets store. It runs as a guardian daemon (`vault-guardian`) on every node in the Orama Network. The guardian protocol is share-at-a-time: a direct client splits locally and pushes one share per guardian, then reconstructs locally on pull.
+
+Production HTTP clients go through the **Orama gateway**, which is not a reverse-proxy of those endpoints. The gateway splits on store and combines on retrieve, so that process holds the full secret in RAM for the request.
 
 The system provides information-theoretic security: compromising fewer than K guardians reveals zero information about the original secret. This is not computational security -- it is mathematically impossible to learn anything from K-1 shares, regardless of computing power.
 
@@ -13,7 +15,7 @@ The system provides information-theoretic security: compromising fewer than K gu
     +------------------------------------------------------------+
     |  orama-gateway (port 443)                                  |
     |    |                                                       |
-    |    +-- reverse-proxy --> vault-guardian (port 7500, client) |
+    |    +-- vault proxy (split/combine in-process) --> vault-guardian :7500 |
     |                          vault-guardian (port 7501, peer)   |
     |                                                            |
     |  RQLite (port 4001) -- cluster membership source of truth  |
@@ -213,8 +215,9 @@ Addition and subtraction in GF(2^8) are both XOR. Multiplication uses log/exp ta
 
 ### Why All-Node Replication
 
-Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(3, floor(N/3)). This means:
+Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(2, floor(N/3)). On a one-node eval cluster Shamir cannot run; the gateway stores the envelope as a local key on that disk (see [EVAL.md](../EVAL.md)). On a production fleet:
 
+- With 5 nodes: K=2, so any 2 guardians can reconstruct.
 - With 14 nodes: K=4, so any 4 guardians can reconstruct.
 - With 100 nodes: K=33, so any 33 guardians can reconstruct.
 - Up to N-K nodes can be completely destroyed before data is lost.
@@ -338,7 +341,7 @@ This path depends on the key wrapping scheme (DEK encrypted by KEK1 from mnemoni
 | Quorum logic | Complete | Write quorum W=min(N, max(K+1, ceil(2N/3))), read quorum K |
 | Challenge-response auth | Complete | HMAC-based, 60s expiry, wired to router |
 | Session tokens | Complete | HMAC-based, 1h expiry, wired to router |
-| Auth enforcement on V2 | Complete | Mandatory session auth on all V2 secrets endpoints |
+| Auth enforcement on V2 | Complete | Mandatory session token + Ed25519 ownership proof on all V2 secrets endpoints |
 | Auth enforcement on V1 push/pull | Complete | Mandatory session token + Ed25519 ownership proof |
 | Config file parsing | Complete | key=value format (not YAML); defaults when file absent |
 | Rate limiting | Complete | Per-IP, 120 requests per 60s window in the listener |

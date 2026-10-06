@@ -3,13 +3,12 @@ package cache
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
-	olriclib "github.com/olric-data/olric"
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/olric"
 )
 
 // DeleteHandler handles cache DELETE requests for removing a key from a distributed map.
@@ -31,11 +30,6 @@ import (
 //	  "dmap": "my-cache"
 //	}
 func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
-	if h.olricClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
-		return
-	}
-
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -53,36 +47,50 @@ func (h *CacheHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.authorizeKey(w, r, req.DMap, req.Key, gwauth.ActionWrite) {
+		return
+	}
+
+	// The availability check comes after the request has been read and
+	// authorized. A caller who may not touch this key is refused whether or not
+	// the cache happens to be up, and a 503 would otherwise tell them the cache
+	// exists and is down — an answer they are not entitled to.
+	if h.olricClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "Olric cache client not initialized")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Namespace isolation: prefix dmap with namespace
-	namespace := getNamespaceFromContext(ctx)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace not found in context")
-		return
-	}
-	namespacedDMap := fmt.Sprintf("%s:%s", namespace, req.DMap)
-
-	olricCluster := h.olricClient.GetClient()
-	dm, err := olricCluster.NewDMap(namespacedDMap)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create DMap: %v", err))
+	// Namespace isolation: the namespace's one cache DMap (namespace_dmap.go).
+	dm, ok := h.namespaceCache(ctx, w)
+	if !ok {
 		return
 	}
 
-	deletedCount, err := dm.Delete(ctx, req.Key)
-	if err != nil {
-		// Check for key not found error - handle both wrapped and direct errors
-		if errors.Is(err, olriclib.ErrKeyNotFound) || err.Error() == "key not found" || strings.Contains(err.Error(), "key not found") {
+	foldedKey, ok := foldKey(req.DMap, req.Key)
+	if !ok {
+		writeError(w, http.StatusNotFound, "key not found")
+		return
+	}
+
+	// Whether the key exists is asked of its owner first. Olric's Delete count
+	// cannot answer it (olric v0.7.4 internal/dmap/delete.go deleteKeys): a key
+	// whose partition another member owns is forwarded, deleted, and reported
+	// as 0; one this member owns is reported as deleted whether or not it was
+	// there. Reading the count turned every delete of a key held on another
+	// member into "key not found".
+	if _, err := dm.Get(ctx, foldedKey); err != nil {
+		if olric.IsKeyNotFound(err) {
 			writeError(w, http.StatusNotFound, "key not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete key: %v", err))
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to look the key up", err)
 		return
 	}
-	if deletedCount == 0 {
-		writeError(w, http.StatusNotFound, "key not found")
+	if _, err := dm.Delete(ctx, foldedKey); err != nil && !olric.IsKeyNotFound(err) {
+		h.writeCacheFailure(w, http.StatusInternalServerError, "failed to delete key", err)
 		return
 	}
 

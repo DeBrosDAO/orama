@@ -1,0 +1,24 @@
+syntax = "proto3";
+package orama.houses.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/houses/types";
+
+import "gogoproto/gogo.proto";
+import "orama/houses/v1/houses.proto";
+
+// GenesisState is x/houses' genesis state. A default genesis has both tiers
+// closed: no operator house, zero lambda from the power keeper, and the
+// bootstrap stake threshold unset in the power module's own state. Params
+// still carry the default bootstrap_exit_stake.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated Proposal proposals = 2 [(gogoproto.nullable) = false];
+  // token_votes and operator_votes are separate ballots. One address can
+  // vote in both houses without one ballot overwriting the other.
+  repeated Vote token_votes = 3 [(gogoproto.nullable) = false];
+  repeated Vote operator_votes = 4 [(gogoproto.nullable) = false];
+  repeated HouseBond bonds = 5 [(gogoproto.nullable) = false];
+  repeated Equivocation equivocations = 6 [(gogoproto.nullable) = false];
+  Enacted enacted = 7 [(gogoproto.nullable) = false];
+  uint64 next_proposal_id = 8;
+}

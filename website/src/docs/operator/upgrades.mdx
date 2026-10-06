@@ -29,14 +29,14 @@ sudo orama node upgrade --skip-checks
 Run from your local machine to upgrade all nodes in an environment sequentially:
 
 ```bash
-# Upgrade all nodes in an environment (rolling, one at a time)
-orama node upgrade --env testnet
+# Print the plan, then restart only when --yes is passed
+orama node upgrade --env testnet --yes
 
 # Upgrade a single node only
 orama node upgrade --env testnet --node 1.2.3.4
 
-# Custom delay between nodes (default: 30 seconds)
-orama node upgrade --env testnet --delay 60
+# How long a node has to rejoin before the upgrade stops (default: 300 seconds)
+orama node upgrade --env testnet --delay 60 --yes
 
 # Upgrade with automatic restart
 orama node upgrade --env testnet --restart
@@ -51,19 +51,8 @@ orama node upgrade --env testnet --restart
 | `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
 | `--env` | | Target environment for remote rolling upgrade (`devnet`, `testnet`, `mainnet`) |
 | `--node` | | Upgrade a single node IP only (requires `--env`) |
-| `--delay` | `30` | Seconds to wait between nodes during rolling upgrade |
+| `--delay` | `300` | Seconds a node has to rejoin before the rollout stops |
 | `--nameserver` | `false` | Make this node a nameserver |
-| `--anyone-relay` | `false` | Run as Anyone relay operator |
-| `--anyone-exit` | `false` | Run as exit relay (requires `--anyone-relay`) |
-| `--anyone-client` | `false` | Install Anyone as client-only (SOCKS5 proxy) |
-| `--anyone-migrate` | `false` | Migrate existing Anyone installation |
-| `--anyone-nickname` | | Relay nickname (1-19 alphanumeric chars) |
-| `--anyone-contact` | | Contact info (email or @telegram) |
-| `--anyone-wallet` | | Ethereum wallet address for rewards |
-| `--anyone-orport` | `9001` | ORPort for relay |
-| `--anyone-family` | | Comma-separated fingerprints of other relays you operate |
-| `--anyone-bandwidth` | `30` | Limit relay to N% of VPS bandwidth (0=unlimited) |
-| `--anyone-accounting` | `0` | Monthly data cap in GB (0=unlimited) |
 
 ---
 
@@ -116,34 +105,23 @@ Do not proceed to the next node until all checks pass. If a node shows issues af
 
 ## Rollout Command (Recommended)
 
-The `orama rollout` command pushes a pre-built archive to all your nodes and performs a rolling upgrade. This is the preferred method for deploying code changes.
+`orama rollout` builds an archive, pushes it, prints the restart plan, and stops unless `--yes` is passed. Followers restart before the leader. After each node it waits for that node to rejoin.
 
 ```bash
-# Build the archive first
-orama build
+orama rollout --env devnet --yes
 
-# Roll out to all your nodes (followers first, leader last)
-orama rollout --env devnet
-
-# Custom delay between nodes
-orama rollout --env devnet --delay 60
+orama rollout --env devnet --no-build --archive /tmp/orama-<version>-linux-amd64.tar.gz --yes
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--env` | active env | Target environment |
-| `--delay` | `30` | Seconds between nodes during rolling upgrade |
+| `--env` | | Target environment |
+| `--yes` | `false` | Execute the plan. Without it, nothing restarts. |
+| `--no-build` | `false` | Skip the build. Requires `--archive`. |
+| `--archive` | | The archive to roll out. Only with `--no-build`. |
+| `--delay` | `300` | Seconds a node has to rejoin before the rollout stops |
 
-The rollout command discovers your nodes via wallet-based ownership (same nodes shown by `orama nodes`). It falls back to `nodes.conf` if the network API is unavailable.
-
-### Legacy Rollout
-
-The `orama node rollout` command is still available and uses `nodes.conf` directly:
-
-```bash
-orama node rollout --env testnet
-orama node rollout --env testnet --no-build --yes --delay 60
-```
+`orama node rollout` is the same command.
 
 ---
 
@@ -152,36 +130,12 @@ orama node rollout --env testnet --no-build --yes --delay 60
 The `orama push` command uploads the binary archive to nodes without restarting services. Useful for pre-staging a binary before a maintenance window. Uses RootWallet for SSH authentication.
 
 ```bash
-# Push to a single node
-orama push --ip 1.2.3.4
+orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
-# Push to all nodes in an environment
-orama push --env devnet
-
-# Fan out server-to-server (faster for many nodes)
-orama push --env devnet --fanout
-
-# Push with a specific SSH user
-orama push --ip 1.2.3.4 --user ubuntu
+orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 1.2.3.4
 ```
 
-Use `--fanout` to upload to the first node, then distribute server-to-server via SSH agent forwarding. Much faster when pushing to many nodes.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--ip` | | Push to a single node by IP |
-| `--env` | active env | Push to all nodes in environment |
-| `--user` | `root` | SSH user |
-| `--fanout` | `false` | Fan out from first node server-to-server (faster) |
-
-### Legacy Push
-
-The `orama node push` command is still available and uses `nodes.conf`:
-
-```bash
-orama node push --env devnet
-orama node push --env testnet --node 1.2.3.4
-```
+`--archive` is required. Each node is uploaded from this computer. `--fanout` and `--direct` are ignored. `orama node push` is the same command.
 
 | Flag | Default | Description |
 |------|---------|-------------|

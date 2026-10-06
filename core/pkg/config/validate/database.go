@@ -17,11 +17,24 @@ type DatabaseConfig struct {
 	ClusterSyncInterval time.Duration
 	PeerInactivityLimit time.Duration
 	MinClusterSize      int
+	RQLiteAuthFile      string
+	RQLiteEnforceAuth   bool
 }
 
 // ValidateDatabase performs validation of the database configuration.
 func ValidateDatabase(dc DatabaseConfig) []error {
 	var errs []error
+
+	// Enforcement with no auth file starts rqlited with `-auth ""`, which it
+	// rejects — so the node fails to start with an rqlited usage error rather
+	// than a config error naming the setting that is wrong.
+	if dc.RQLiteEnforceAuth && dc.RQLiteAuthFile == "" {
+		errs = append(errs, ValidationError{
+			Path:    "database.rqlite_enforce_auth",
+			Message: "is set but database.rqlite_auth_file is empty; rqlited has no credentials to enforce",
+			Hint:    "set database.rqlite_auth_file to the rqlite auth JSON (secrets/rqlite-auth.json), or unset rqlite_enforce_auth",
+		})
+	}
 
 	// Validate data_dir
 	if dc.DataDir == "" {

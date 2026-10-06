@@ -1,0 +1,77 @@
+# Stage 8, E2E-31: assets on the live run chain. x/cnft end to end with a
+# client-side tree (collection, tree deposit from earnings, mint, transfer
+# between validators, metadata update, decompress/compress round trip, burn,
+# snapshot) and every proof, ownership and shape refusal; x/market (list with
+# a proof and the collection royalty, relist refused, self-bid and self-buy
+# refused, cancel rules); x/token (create needs the fee + deposit as bank
+# balance: refused with the exact amount, every shape bound, every other
+# message on a token that does not exist, norama untouchable, bank MsgSend of
+# a factory denom not caught by the norama restriction); x/wasmpolicy against
+# the build (no-VM: no wasm types; VM: upload closed before the sunset).
+# Bank-paid paths (token create and everything after it, bids, direct buys,
+# royalty payout on a sale) are reported blocked (features/internal/chain funds.go).
+id: chain-assets
+title: Compressed NFTs, market, factory tokens, wasm policy
+area: chain
+subtasks: [2850]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  msgs:
+    - orama.cnft.v1.MsgCreateCollection
+    - orama.cnft.v1.MsgCreateTree
+    - orama.cnft.v1.MsgMint
+    - orama.cnft.v1.MsgTransfer
+    - orama.cnft.v1.MsgBurn
+    - orama.cnft.v1.MsgUpdateMetadata
+    - orama.cnft.v1.MsgDecompress
+    - orama.cnft.v1.MsgCompress
+    - orama.cnft.v1.MsgRecordSnapshot
+    - orama.market.v1.MsgList
+    - orama.market.v1.MsgCancelListing
+    - orama.market.v1.MsgBid
+    - orama.market.v1.MsgCancelBid
+    - orama.market.v1.MsgSettle
+    - orama.token.v1.MsgCreateToken
+    - orama.token.v1.MsgMint
+    - orama.token.v1.MsgBurn
+    - orama.token.v1.MsgTransfer
+    - orama.token.v1.MsgSetFrozen
+    - orama.token.v1.MsgSetPaused
+    - orama.token.v1.MsgRenounce
+    - orama.token.v1.MsgSetShieldable
+    - orama.token.v1.MsgDeleteToken
+  queries:
+    - orama.cnft.v1.Collection
+    - orama.cnft.v1.Tree
+    - orama.cnft.v1.Decompressed
+    - orama.cnft.v1.Snapshots
+    - orama.market.v1.Listing
+    - orama.market.v1.Bid
+    - orama.token.v1.Params
+    - orama.token.v1.Token
+    - orama.token.v1.Frozen
+    - orama.token.v1.Invariants
+    - orama.fees.v1.Deposit
+  claims:
+    - "docs/CHAIN.md#x-fees: x/cnft locks a tree deposit through x/fees"
+    - "docs/CHAIN.md#x-token: MsgCreateToken requires the 10 ORAMA creation fee plus 68359 norama per metadata byte as bank balance (the refusal names the exact amount)"
+    - "docs/CHAIN.md#x-token: x/bank MsgSend does not run x/token's checks"
+    - "docs/CHAIN.md#x-emission: only x/emission mints norama (x/token cannot touch it)"
+    - "docs/CHAIN.md#modules-wired: x/wasmpolicy is always wired; a no-VM build has no x/wasm"
+    - "docs/CHAIN.md#state-deposits: REFUSAL PATHS ONLY: orama.market.v1.MsgBid; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#state-deposits: REFUSAL PATHS ONLY: orama.market.v1.MsgCancelBid; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#state-deposits: REFUSAL PATHS ONLY: orama.market.v1.MsgSettle; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgCreateToken; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgMint; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgBurn; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgTransfer; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgSetFrozen; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgSetPaused; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgRenounce; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgSetShieldable; the success path needs a funded bank balance (trigger: a funding path exists)"
+    - "docs/CHAIN.md#x-token: REFUSAL PATHS ONLY: orama.token.v1.MsgDeleteToken; the success path needs a funded bank balance (trigger: a funding path exists)"

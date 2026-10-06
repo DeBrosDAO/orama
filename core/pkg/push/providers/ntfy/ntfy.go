@@ -24,7 +24,6 @@ package ntfy
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"go.uber.org/zap"
 )
@@ -49,6 +49,21 @@ func topicFingerprint(topic string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// FanoutPathPrefix is the route on a node's internal gateway that relays a
+// fanned-out publish to that node's loopback ntfy; the topic follows it. Served
+// over the WireGuard overlay, behind a coordination MAC.
+const FanoutPathPrefix = "/v1/internal/push/ntfy/"
+
+// FanoutTarget is one push node a publish is fanned out to.
+type FanoutTarget struct {
+	// NodeID is the node's libp2p peer id: the audience its coordination MAC is
+	// signed for.
+	NodeID string
+	// BaseURL is the node's internal gateway on the WireGuard overlay
+	// (e.g. "http://10.0.0.2:10104").
+	BaseURL string
+}
+
 // Config holds per-provider settings.
 type Config struct {
 	// BaseURL is the ntfy HTTP endpoint (e.g. "http://localhost:8080" or
@@ -60,33 +75,38 @@ type Config struct {
 	// Timeout bounds each Send call. 0 selects 5 seconds.
 	Timeout time.Duration
 
-	// FanoutResolver, when set, returns the set of ntfy publish base URLs to
-	// deliver EACH publish to — one per active push node. The cluster runs an
-	// independent ntfy per node with NO shared message store, while subscribers
-	// are scattered across nodes by round-robin DNS; a publish that lands on one
-	// node only reaches subscribers on that node, losing ~(N-1)/N (bugboard
-	// #858). Fanning a publish to EVERY node guarantees it reaches whichever
-	// instance the subscriber's connection landed on. When nil, or it returns no
-	// hosts (or errors), Send falls back to the single BaseURL — so push never
-	// breaks if node discovery is unavailable.
-	FanoutResolver func(ctx context.Context) ([]string, error)
-	// FanoutHostHeader, when set, overrides the HTTP Host header and TLS SNI on
-	// fan-out requests. Needed because FanoutResolver returns per-node addresses
-	// (IPs) but each node's reverse proxy (Caddy) routes by — and serves its TLS
-	// cert for — the public push hostname. Empty: no override (tests /
-	// homogeneous hosts).
-	FanoutHostHeader string
+	// FanoutResolver, when set, returns the set of push nodes to deliver EACH
+	// publish to. The cluster runs an independent ntfy per node with NO shared
+	// message store, while subscribers are scattered across nodes by
+	// round-robin DNS; a publish that lands on one node only reaches
+	// subscribers on that node, losing ~(N-1)/N (bugboard #858). Fanning a
+	// publish to EVERY node guarantees it reaches whichever instance the
+	// subscriber's connection landed on.
+	//
+	// Node-to-node traffic travels the WireGuard overlay: each target is a
+	// node's internal gateway, which relays the publish to its own loopback
+	// ntfy (see FanoutPathPrefix). A resolver error, or an empty set, fails the
+	// Send: there is no fallback to the public push host.
+	FanoutResolver func(ctx context.Context) ([]FanoutTarget, error)
+	// FanoutSigner stamps a fan-out request as coming from inside the cluster,
+	// for the node named by nodeID. Required whenever FanoutResolver is set.
+	FanoutSigner func(req *http.Request, nodeID string) error
+
+	// GuardTarget is set when BaseURL was supplied by a tenant. Every connection is then checked
+	// against the reserved-range list after name resolution (so a name that resolves, or is rebound,
+	// to an internal address is refused) and redirects are not followed. The operator's own default
+	// is left unguarded: it is the loopback ntfy.
+	GuardTarget bool
 }
 
 // Provider is the ntfy push.PushProvider implementation.
 type Provider struct {
-	baseURL          string
-	authToken        string
-	httpClient       *http.Client
-	fanoutClient     *http.Client
-	fanoutResolver   func(ctx context.Context) ([]string, error)
-	fanoutHostHeader string
-	logger           *zap.Logger
+	baseURL        string
+	authToken      string
+	httpClient     *http.Client
+	fanoutResolver func(ctx context.Context) ([]FanoutTarget, error)
+	fanoutSigner   func(req *http.Request, nodeID string) error
+	logger         *zap.Logger
 }
 
 // New creates a Provider with the given config.
@@ -99,22 +119,19 @@ func New(cfg Config, logger *zap.Logger) *Provider {
 		timeout = 5 * time.Second
 	}
 	p := &Provider{
-		baseURL:          strings.TrimRight(cfg.BaseURL, "/"),
-		authToken:        cfg.AuthToken,
-		httpClient:       &http.Client{Timeout: timeout},
-		fanoutResolver:   cfg.FanoutResolver,
-		fanoutHostHeader: cfg.FanoutHostHeader,
-		logger:           logger.Named("ntfy"),
+		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),
+		authToken:      cfg.AuthToken,
+		httpClient:     &http.Client{Timeout: timeout},
+		fanoutResolver: cfg.FanoutResolver,
+		fanoutSigner:   cfg.FanoutSigner,
+		logger:         logger.Named("ntfy"),
 	}
-	if cfg.FanoutResolver != nil {
-		// Fan-out requests dial per-node addresses but must present the public
-		// push hostname for SNI so each node's Caddy serves the right cert and
-		// routes to its local ntfy. A dedicated client carries that fixed SNI.
-		tr := &http.Transport{}
-		if cfg.FanoutHostHeader != "" {
-			tr.TLSClientConfig = &tls.Config{ServerName: cfg.FanoutHostHeader}
+	if cfg.GuardTarget {
+		guarded := netguard.NewHTTPClient(timeout)
+		guarded.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return fmt.Errorf("ntfy: a tenant server may not redirect the gateway")
 		}
-		p.fanoutClient = &http.Client{Timeout: timeout, Transport: tr}
+		p.httpClient = guarded
 	}
 	return p
 }
@@ -155,39 +172,39 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 		body = string(b)
 	}
 
-	// Resolve the set of base URLs to publish to. Default: the single base URL.
-	// With a fan-out resolver, publish to every active push node so the
-	// subscriber's instance is always covered. Resolver failure is non-fatal —
-	// fall back to the base URL so push keeps working.
-	bases := []string{p.baseURL}
-	httpClient := p.httpClient
-	hostHeader := ""
 	if p.fanoutResolver != nil {
-		if hosts, rerr := p.fanoutResolver(ctx); rerr != nil {
-			p.logger.Warn("ntfy fan-out node resolution failed; publishing to base URL only", zap.Error(rerr))
-		} else if len(hosts) > 0 {
-			bases = hosts
-			httpClient = p.fanoutClient
-			hostHeader = p.fanoutHostHeader
-		}
+		return p.sendFanout(ctx, topic, body, msg)
+	}
+	return p.postOne(ctx, p.baseURL+"/"+topic, nil, "", body, msg)
+}
+
+// sendFanout publishes to every active push node over the overlay. Success
+// means at least one node accepted the publish (the message is in the cluster);
+// a node that is down is logged but does not fail the Send, since the message
+// still reaches every reachable instance, including, in the common case, the
+// subscriber's. A resolver failure, no nodes, or every node refusing is an
+// error: the push reached nobody.
+func (p *Provider) sendFanout(ctx context.Context, topic, body string, msg push.PushMessage) error {
+	if p.fanoutSigner == nil {
+		return fmt.Errorf("ntfy: fan-out is configured without a signer, so no node would accept the publish")
+	}
+	targets, err := p.fanoutResolver(ctx)
+	if err != nil {
+		return fmt.Errorf("ntfy: resolve push nodes for fan-out: %w", err)
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("ntfy: no active push nodes to fan the publish out to")
 	}
 
-	if len(bases) == 1 {
-		return p.postOne(ctx, httpClient, bases[0], topic, body, msg, hostHeader)
-	}
-
-	// Fan out concurrently. Success = at least one instance accepted the
-	// publish (the message is in the cluster). A node that's down is logged but
-	// does not fail the Send, since the message still reaches every reachable
-	// instance — including, in the common case, the subscriber's.
 	var wg sync.WaitGroup
-	errs := make([]error, len(bases))
-	for i, base := range bases {
+	errs := make([]error, len(targets))
+	for i, t := range targets {
 		wg.Add(1)
-		go func(i int, base string) {
+		go func(i int, t FanoutTarget) {
 			defer wg.Done()
-			errs[i] = p.postOne(ctx, httpClient, base, topic, body, msg, hostHeader)
-		}(i, base)
+			sign := func(req *http.Request) error { return p.fanoutSigner(req, t.NodeID) }
+			errs[i] = p.postOne(ctx, strings.TrimRight(t.BaseURL, "/")+FanoutPathPrefix+topic, sign, t.NodeID, body, msg)
+		}(i, t)
 	}
 	wg.Wait()
 
@@ -197,42 +214,37 @@ func (p *Provider) Send(ctx context.Context, msg push.PushMessage) error {
 	for i, e := range errs {
 		if e == nil {
 			okCount++
-		} else {
-			failedNodes = append(failedNodes, bases[i])
-			if firstErr == nil {
-				firstErr = e
-			}
+			continue
+		}
+		failedNodes = append(failedNodes, targets[i].NodeID)
+		if firstErr == nil {
+			firstErr = e
 		}
 	}
 	if okCount == 0 {
-		return fmt.Errorf("ntfy: fan-out to all %d push nodes failed: %w", len(bases), firstErr)
+		return fmt.Errorf("ntfy: fan-out to all %d push nodes failed: %w", len(targets), firstErr)
 	}
-	if okCount < len(bases) {
-		// bugboard #858: name the failed nodes + topic. The publish succeeds
-		// overall (some node accepted), but a subscriber whose round-robin
-		// stream is pinned to one of these failed nodes will silently miss this
-		// message — exactly the open-subscriber-receives-nothing signature. This
-		// makes such a loss diagnosable from the gateway log instead of invisible.
+	if okCount < len(targets) {
+		// bugboard #858: name the failed nodes + topic. A subscriber whose
+		// round-robin stream is pinned to one of these nodes will silently miss
+		// this message; this makes such a loss diagnosable from the gateway log.
 		p.logger.Warn("ntfy fan-out partial failure — a subscriber pinned to a failed node misses this message",
 			zap.String("topic_fp", topicFingerprint(topic)),
-			zap.Int("delivered", okCount), zap.Int("total", len(bases)),
+			zap.Int("delivered", okCount), zap.Int("total", len(targets)),
 			zap.Strings("failed_nodes", failedNodes),
 			zap.Error(firstErr))
 	}
 	return nil
 }
 
-// postOne publishes a single (already-resolved) topic+body to one ntfy base URL.
-// hostHeader, when non-empty, overrides the HTTP Host header so a request dialed
-// at a node IP is still routed by the node's proxy as the public push hostname.
-func (p *Provider) postOne(ctx context.Context, httpClient *http.Client, base, topic, body string, msg push.PushMessage, hostHeader string) error {
-	endpointURL := strings.TrimRight(base, "/") + "/" + topic
+// postOne publishes a single (already-resolved) topic+body to endpointURL. A
+// non-nil sign stamps the request as a cluster-internal one (fan-out); the ntfy
+// bearer token is sent only on a direct publish, since the node-local ntfy
+// behind the internal route is loopback-only and unauthenticated.
+func (p *Provider) postOne(ctx context.Context, endpointURL string, sign func(*http.Request) error, node, body string, msg push.PushMessage) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointURL, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("ntfy: build request: %w", err)
-	}
-	if hostHeader != "" {
-		req.Host = hostHeader
 	}
 
 	if msg.Title != "" {
@@ -251,13 +263,17 @@ func (p *Provider) postOne(ctx context.Context, httpClient *http.Client, base, t
 	// headers — ntfy does not relay `X-*` headers to subscribers (#126), so
 	// doing so silently drops them. Data rides the body (above); a badge
 	// count, if needed, must be encoded into the body by the caller.
-	if p.authToken != "" {
+	if sign != nil {
+		if err := sign(req); err != nil {
+			return fmt.Errorf("ntfy: sign fan-out request for node %s: %w", node, err)
+		}
+	} else if p.authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+p.authToken)
 	}
 
-	resp, err := httpClient.Do(req)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy: post: %w", err)
+		return fmt.Errorf("ntfy: post: %w", push.RedactRequestURL(err))
 	}
 	defer resp.Body.Close()
 

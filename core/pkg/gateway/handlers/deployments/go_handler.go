@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -68,8 +69,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	subdomain := r.FormValue("subdomain")
 	healthCheckPath := r.FormValue("health_check_path")
 
-	if name == "" {
-		http.Error(w, "Deployment name is required", http.StatusBadRequest)
+	if err := h.service.CheckNewDeploymentName(ctx, namespace, name); err != nil {
+		writeDeploymentNameError(w, h.logger, err)
 		return
 	}
 
@@ -77,13 +78,11 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		healthCheckPath = "/health"
 	}
 
-	// Parse environment variables (form fields starting with "env_")
-	envVars := make(map[string]string)
-	for key, values := range r.MultipartForm.Value {
-		if strings.HasPrefix(key, "env_") && len(values) > 0 {
-			envName := strings.TrimPrefix(key, "env_")
-			envVars[envName] = values[0]
-		}
+	// Environment variables arrive as env_<NAME> form fields.
+	envVars, err := parseFormEnv(r.MultipartForm.Value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	// Get tarball file
@@ -93,6 +92,19 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
+
+	// Claim the instance on this host before anything is uploaded or written.
+	claim, err := h.service.claimNewInstance(ctx, h.baseDeployPath, namespace, name)
+	if err != nil {
+		writeDeploymentNameError(w, h.logger, err)
+		return
+	}
+	registered := false
+	defer func() {
+		if !registered {
+			h.service.releaseClaim(claim)
+		}
+	}()
 
 	h.logger.Info("Deploying Go backend",
 		zap.String("namespace", namespace),
@@ -113,6 +125,9 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Deploy the Go backend
 	deployment, err := h.deploy(ctx, namespace, name, subdomain, cid, healthCheckPath, envVars)
+	// A deployment with a registry row keeps its directory even if it failed
+	// to start: it exists, and a delete removes both.
+	registered = deployment != nil
 	if err != nil {
 		h.logger.Error("Failed to deploy Go backend", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -120,6 +135,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build response
+	h.service.RecordAudit(r, deployment.Namespace, auth.AuditDeploymentCreated, deployment.Name)
+
 	urls := h.service.BuildDeploymentURLs(deployment)
 
 	resp := map[string]interface{}{
@@ -142,11 +159,8 @@ func (h *GoHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 // deploy deploys a Go backend
 func (h *GoHandler) deploy(ctx context.Context, namespace, name, subdomain, cid, healthCheckPath string, envVars map[string]string) (*deployments.Deployment, error) {
-	// Create deployment directory
-	deployPath := filepath.Join(h.baseDeployPath, namespace, name)
-	if err := os.MkdirAll(deployPath, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create deployment directory: %w", err)
-	}
+	// The directory exists: HandleUpload claimed it.
+	deployPath := process.DeployDir(h.baseDeployPath, namespace, name)
 
 	// Download and extract from IPFS
 	if err := h.extractFromIPFS(ctx, cid, deployPath); err != nil {
@@ -240,7 +254,7 @@ func (h *GoHandler) extractFromIPFS(ctx context.Context, cid, destPath string) e
 	tmpFile.Close()
 
 	// Extract tarball
-	cmd := exec.Command("tar", "-xzf", tmpFile.Name(), "-C", destPath)
+	cmd := exec.Command("tar", tarExtractArgs(tmpFile.Name(), destPath)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		h.logger.Error("Failed to extract tarball",

@@ -1,0 +1,30 @@
+{
+  "route": "/v1/rqlite/find-one",
+  "method": "POST",
+  "sdk": "db.findOne()",
+  "goStruct": "rqlite.findOneRequest",
+  "call": {
+    "module": "db",
+    "method": "findOne",
+    "args": [
+      "messages",
+      {
+        "id": 42
+      }
+    ]
+  },
+  "request": {
+    "table": "messages",
+    "criteria": {
+      "id": 42
+    }
+  },
+  "response": {
+    "id": 42,
+    "room": "general"
+  },
+  "returns": {
+    "id": 42,
+    "room": "general"
+  }
+}

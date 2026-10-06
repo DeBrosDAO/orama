@@ -133,17 +133,17 @@ func (r *Registry) invalidateFn(namespace, name string) {
 	r.cacheMu.Unlock()
 }
 
-// invalidateEnv drops the cached env vars for a function ID. A redeploy REUSES
-// the existing function ID (Register: id = oldFn.ID) and rewrites env vars
-// under it, so without this an env-var change would be masked by the cache for
-// up to the TTL.
+// invalidateEnv drops the cached env vars for a function ID, so an env-var
+// rewrite is never masked by the cache for up to the TTL.
 func (r *Registry) invalidateEnv(functionID string) {
 	r.cacheMu.Lock()
 	delete(r.envCache, functionID)
 	r.cacheMu.Unlock()
 }
 
-// Register deploys a new function or updates an existing one.
+// Register deploys a function as a new version: the first deploy is version 1,
+// every later one inserts the next version and keeps the rows before it (up to
+// MaxRetainedFunctionVersions). It returns the version it superseded, or nil.
 func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error) {
 	if fn == nil {
 		return nil, &ValidationError{Field: "definition", Message: "cannot be nil"}
@@ -159,6 +159,12 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	}
 	if len(wasmBytes) == 0 {
 		return nil, &ValidationError{Field: "wasmBytes", Message: "cannot be empty"}
+	}
+	if err := ValidateWSAuth(fn.WSAuth); err != nil {
+		return nil, err
+	}
+	if fn.WSAuth == WSAuthCapability && fn.IsInternal {
+		return nil, &ValidationError{Field: "ws_auth", Message: "an internal function is never opened on a capability"}
 	}
 
 	// Check if function already exists (regardless of status) to get old metadata for invalidation
@@ -188,26 +194,23 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 	}
 
 	now := time.Now()
+	// Every deploy is a new row with its own id: the previous versions stay
+	// (migration 068), so `name@N` keeps resolving after `name@N+1` ships.
 	id := uuid.New().String()
 	version := 1
-
 	if oldFn != nil {
-		// Use existing ID and increment version
-		id = oldFn.ID
 		version = oldFn.Version + 1
 	}
 
-	// Use INSERT OR REPLACE to ensure we never hit UNIQUE constraint failures on (namespace, name).
-	// This handles both new registrations and overwriting existing (even inactive) functions.
 	query := `
-		INSERT OR REPLACE INTO functions (
+		INSERT INTO functions (
 			id, name, namespace, version, wasm_cid,
 			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
 			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			raw_http_response, ws_auth
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err = r.db.Exec(ctx, query,
 		id, fn.Name, fn.Namespace, version, wasmCID,
@@ -215,7 +218,7 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 		fn.RetryCount, retryDelay, fn.DLQTopic,
 		string(FunctionStatusActive), now, now, fn.Namespace,
 		fn.WSPersistent, fn.WSIdleTimeoutSec, fn.WSMaxFrameBytes, fn.WSMaxInflightPerConn,
-		fn.RawHTTPResponse,
+		fn.RawHTTPResponse, fn.WSAuth,
 	)
 	if err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: fmt.Errorf("failed to register function: %w", err)}
@@ -223,6 +226,10 @@ func (r *Registry) Register(ctx context.Context, fn *FunctionDefinition, wasmByt
 
 	// Save environment variables
 	if err := r.saveEnvVars(ctx, id, fn.EnvVars); err != nil {
+		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
+	}
+
+	if err := r.adoptVersionState(ctx, fn.Namespace, fn.Name, id); err != nil {
 		return nil, &DeployError{FunctionName: fn.Name, Cause: err}
 	}
 
@@ -264,7 +271,7 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
+			raw_http_response, ws_auth
 			FROM functions
 			WHERE namespace = ? AND name = ? AND status = ?
 			ORDER BY version DESC
@@ -278,11 +285,11 @@ func (r *Registry) Get(ctx context.Context, namespace, name string, version int)
 				retry_count, retry_delay_seconds, dlq_topic,
 				status, created_at, updated_at, created_by,
 				ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
-			raw_http_response
+			raw_http_response, ws_auth
 			FROM functions
-			WHERE namespace = ? AND name = ? AND version = ?
+			WHERE namespace = ? AND name = ? AND version = ? AND status = ?
 		`
-		args = []interface{}{namespace, name, version}
+		args = []interface{}{namespace, name, version, string(FunctionStatusActive)}
 	}
 
 	var functions []functionRow
@@ -313,7 +320,7 @@ func (r *Registry) List(ctx context.Context, namespace string) ([]*Function, err
 			f.retry_count, f.retry_delay_seconds, f.dlq_topic,
 			f.status, f.created_at, f.updated_at, f.created_by,
 			f.ws_persistent, f.ws_idle_timeout_sec, f.ws_max_frame_bytes, f.ws_max_inflight_per_conn,
-			f.raw_http_response
+			f.raw_http_response, f.ws_auth
 		FROM functions f
 		INNER JOIN (
 			SELECT namespace, name, MAX(version) as max_version
@@ -354,8 +361,8 @@ func (r *Registry) SetEnabled(ctx context.Context, namespace, name string, enabl
 	if enabled {
 		status = FunctionStatusActive
 	}
-	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name)
+	query := `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND status != ?`
+	result, err := r.db.Exec(ctx, query, string(status), time.Now(), namespace, name, string(FunctionStatusDeleted))
 	if err != nil {
 		return fmt.Errorf("failed to set function enabled state: %w", err)
 	}
@@ -381,12 +388,12 @@ func (r *Registry) Delete(ctx context.Context, namespace, name string, version i
 	var args []interface{}
 
 	if version == 0 {
-		// Mark all versions as inactive (soft delete)
+		// Mark all versions as deleted (soft delete)
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name}
 	} else {
 		query = `UPDATE functions SET status = ?, updated_at = ? WHERE namespace = ? AND name = ? AND version = ?`
-		args = []interface{}{string(FunctionStatusInactive), time.Now(), namespace, name, version}
+		args = []interface{}{string(FunctionStatusDeleted), time.Now(), namespace, name, version}
 	}
 
 	result, err := r.db.Exec(ctx, query, args...)
@@ -635,7 +642,8 @@ func (r *Registry) GetByID(ctx context.Context, id string) (*Function, error) {
 			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE id = ?
 	`
@@ -659,7 +667,8 @@ func (r *Registry) ListVersions(ctx context.Context, namespace, name string) ([]
 			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -909,8 +918,11 @@ const wasmReplicationEverywhere = -1
 // failure is fatal here — we must not leave a "deployed but unfetchable" row
 // that intermittently 15s-times-out on whichever node happens to be cold.
 func (r *Registry) uploadWASM(ctx context.Context, wasmBytes []byte, name string) (string, error) {
+	// Imported locally and pinned once: Add would pin everywhere too, and a
+	// second pin of a CID the cluster is still pinning cancels and restarts it
+	// on every peer.
 	reader := bytes.NewReader(wasmBytes)
-	resp, err := r.ipfs.Add(ctx, reader, name+".wasm")
+	resp, err := r.ipfs.AddLocal(ctx, reader, name+".wasm")
 	if err != nil {
 		return "", fmt.Errorf("failed to upload WASM to IPFS: %w", err)
 	}
@@ -983,7 +995,8 @@ func (r *Registry) getByNameInternal(ctx context.Context, namespace, name string
 			memory_limit_mb, timeout_seconds, is_public, is_internal,
 			retry_count, retry_delay_seconds, dlq_topic,
 			status, created_at, updated_at, created_by,
-			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn
+			ws_persistent, ws_idle_timeout_sec, ws_max_frame_bytes, ws_max_inflight_per_conn,
+			raw_http_response, ws_auth
 		FROM functions
 		WHERE namespace = ? AND name = ?
 		ORDER BY version DESC
@@ -1059,6 +1072,11 @@ func (r *Registry) rowToFunction(row *functionRow) *Function {
 		// the invoke handler's `if fn.RawHTTPResponse` engine branch never
 		// fires and set_http_response is a no-op for every function.
 		RawHTTPResponse: row.RawHTTPResponse,
+
+		// How the function's WebSocket may be opened (feat-264). Without
+		// reading it back a function declaring `ws_auth: capability`
+		// would refuse every capability.
+		WSAuth: row.WSAuth,
 	}
 }
 
@@ -1113,6 +1131,10 @@ type functionRow struct {
 	// 029_raw_http_response.sql; defaults to false so existing functions
 	// keep the JSON/Ack-wrapped behavior.
 	RawHTTPResponse bool `db:"raw_http_response"`
+
+	// WSAuth is how the function's WebSocket may be opened (feat-264).
+	// Backed by migration 061; '' is a credential, as before.
+	WSAuth string `db:"ws_auth"`
 }
 
 type envVarRow struct {

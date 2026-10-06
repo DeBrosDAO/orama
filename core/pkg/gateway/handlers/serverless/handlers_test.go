@@ -10,6 +10,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -105,12 +106,14 @@ func newTestHandlers(reg serverless.FunctionRegistry) *ServerlessHandlers {
 		nil, // engine
 		reg,
 		wsManager,
+		wssession.NewRegistry(nil),
 		nil, // triggerStore
 		nil, // cronStore
 		nil, // dispatcher
 		nil, // persistentMgr
 		nil, // wsBridge
 		nil, // secretsManager
+		nil, // audit
 		logger,
 	)
 }
@@ -123,66 +126,6 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]interfa
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 	return body
-}
-
-// ---------------------------------------------------------------------------
-// Tests: getNamespaceFromRequest
-// ---------------------------------------------------------------------------
-
-func TestGetNamespaceFromRequest_ContextOverride(t *testing.T) {
-	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "ctx-ns")
-	req = req.WithContext(ctx)
-
-	got := h.getNamespaceFromRequest(req)
-	if got != "ctx-ns" {
-		t.Errorf("expected 'ctx-ns', got %q", got)
-	}
-}
-
-func TestGetNamespaceFromRequest_QueryParam(t *testing.T) {
-	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/?namespace=query-ns", nil)
-
-	got := h.getNamespaceFromRequest(req)
-	if got != "query-ns" {
-		t.Errorf("expected 'query-ns', got %q", got)
-	}
-}
-
-func TestGetNamespaceFromRequest_Header(t *testing.T) {
-	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("X-Namespace", "header-ns")
-
-	got := h.getNamespaceFromRequest(req)
-	if got != "header-ns" {
-		t.Errorf("expected 'header-ns', got %q", got)
-	}
-}
-
-func TestGetNamespaceFromRequest_Default(t *testing.T) {
-	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-
-	got := h.getNamespaceFromRequest(req)
-	if got != "default" {
-		t.Errorf("expected 'default', got %q", got)
-	}
-}
-
-func TestGetNamespaceFromRequest_Priority(t *testing.T) {
-	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/?namespace=query-ns", nil)
-	req.Header.Set("X-Namespace", "header-ns")
-	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, "ctx-ns")
-	req = req.WithContext(ctx)
-
-	got := h.getNamespaceFromRequest(req)
-	if got != "ctx-ns" {
-		t.Errorf("context value should win; expected 'ctx-ns', got %q", got)
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -208,12 +151,12 @@ func TestGetWalletFromRequest_XWalletHeaderIgnored(t *testing.T) {
 func TestGetWalletFromRequest_JWTClaims(t *testing.T) {
 	h := newTestHandlers(nil)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	claims := &auth.JWTClaims{Sub: "wallet-from-jwt"}
+	claims := &auth.JWTClaims{Sub: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"}
 	ctx := context.WithValue(req.Context(), ctxkeys.JWT, claims)
 	req = req.WithContext(ctx)
 
 	got := h.getWalletFromRequest(req)
-	if got != "wallet-from-jwt" {
+	if got != "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB" {
 		t.Errorf("expected 'wallet-from-jwt', got %q", got)
 	}
 }
@@ -352,7 +295,7 @@ func TestHandleInvoke_MissingNameInPath(t *testing.T) {
 
 func TestInvokeFunction_WrongMethod(t *testing.T) {
 	h := newTestHandlers(nil)
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myfunc/invoke?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/myfunc/invoke?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.InvokeFunction(rec, req, "myfunc", 0)
@@ -389,7 +332,7 @@ func TestListFunctions_MissingNamespace(t *testing.T) {
 	}
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=test-ns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=test-ns", nil), "test-ns")
 	rec := httptest.NewRecorder()
 
 	h.ListFunctions(rec, req)
@@ -410,7 +353,7 @@ func TestListFunctions_WithNamespaceQuery(t *testing.T) {
 	reg.functions["myns/fn2"] = &serverless.Function{Name: "fn2", Namespace: "myns"}
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=myns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=myns", nil), "myns")
 	rec := httptest.NewRecorder()
 
 	h.ListFunctions(rec, req)
@@ -433,7 +376,7 @@ func TestListFunctions_EmptyNamespace(t *testing.T) {
 	reg := newMockRegistry()
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=empty", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=empty", nil), "empty")
 	rec := httptest.NewRecorder()
 
 	h.ListFunctions(rec, req)
@@ -457,7 +400,7 @@ func TestListFunctions_RegistryError(t *testing.T) {
 	reg.listErr = serverless.ErrFunctionNotFound
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=fail", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions?namespace=fail", nil), "fail")
 	rec := httptest.NewRecorder()
 
 	h.ListFunctions(rec, req)
@@ -523,9 +466,7 @@ func TestHandleFunctionByName_InvokeRouteWrongMethod(t *testing.T) {
 
 func TestHandleFunctionByName_VersionParsing(t *testing.T) {
 	// Test that version parsing works: /v1/functions/myFunc@2 routes to GET
-	// with version=2. Since the registry mock has no entry, we expect a
-	// namespace-required error (because getNamespaceFromRequest returns "default"
-	// but the registry won't find the function).
+	// with version=2, in the credential's namespace.
 	reg := newMockRegistry()
 	reg.functions["default/myFunc"] = &serverless.Function{
 		Name:      "myFunc",
@@ -534,12 +475,11 @@ func TestHandleFunctionByName_VersionParsing(t *testing.T) {
 	}
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc@2", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc@2", nil), "default")
 	rec := httptest.NewRecorder()
 
 	h.handleFunctionByName(rec, req)
 
-	// getNamespaceFromRequest returns "default", registry has "default/myFunc"
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
 	}
@@ -565,7 +505,7 @@ func TestDeployFunction_InvalidJSON(t *testing.T) {
 func TestDeployFunction_MissingName_JSON(t *testing.T) {
 	h := newTestHandlers(nil)
 	body := `{"namespace":"test"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/functions", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPost, "/v1/functions", strings.NewReader(body)), "test")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -607,7 +547,7 @@ func TestDeployFunction_JSONMissingWASM(t *testing.T) {
 	h := newTestHandlers(nil)
 	// JSON without wasm_base64 and without name -> reaches "Function name required"
 	body := `{}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/functions", strings.NewReader(body))
+	req := asCredentialOf(httptest.NewRequest(http.MethodPost, "/v1/functions", strings.NewReader(body)), "test")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -651,7 +591,7 @@ func TestDeleteFunction_MissingNamespace(t *testing.T) {
 	reg := newMockRegistry()
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/myfunc?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/myfunc?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.DeleteFunction(rec, req, "myfunc", 0)
@@ -666,7 +606,7 @@ func TestDeleteFunction_NotFound(t *testing.T) {
 	reg.deleteErr = serverless.ErrFunctionNotFound
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodDelete, "/v1/functions/missing?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodDelete, "/v1/functions/missing?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.DeleteFunction(rec, req, "missing", 0)
@@ -691,7 +631,7 @@ func TestGetFunctionLogs_Success_DefaultInvocationsView(t *testing.T) {
 	}
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.GetFunctionLogs(rec, req, "myFunc")
@@ -724,7 +664,7 @@ func TestGetFunctionLogs_WASMOnly(t *testing.T) {
 	}
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test&wasm_only=1", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test&wasm_only=1", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.GetFunctionLogs(rec, req, "myFunc")
@@ -747,7 +687,7 @@ func TestGetFunctionLogs_Error(t *testing.T) {
 	reg.logsErr = serverless.ErrFunctionNotFound
 	h := newTestHandlers(reg)
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/v1/functions/myFunc/logs?namespace=test", nil), "test")
 	rec := httptest.NewRecorder()
 
 	h.GetFunctionLogs(rec, req, "myFunc")
@@ -844,7 +784,7 @@ func TestHandleWebSocket_internalPersistentRequiresAdmin(t *testing.T) {
 	h := newTestHandlers(reg)
 
 	// Non-admin → 403 before upgrade.
-	req := httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil)
+	req := asCredentialOf(httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil), "test-ns")
 	rec := httptest.NewRecorder()
 	h.HandleWebSocket(rec, req, "migrate", 0)
 	if rec.Code != http.StatusForbidden {
@@ -853,7 +793,7 @@ func TestHandleWebSocket_internalPersistentRequiresAdmin(t *testing.T) {
 
 	// Admin → passes the internal gate (the subsequent upgrade fails on the
 	// non-hijackable recorder, but crucially it is NOT a 403 from the gate).
-	adminReq := httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil)
+	adminReq := asCredentialOf(httptest.NewRequest(http.MethodGet, "/?namespace=test-ns", nil), "test-ns")
 	adminReq = adminReq.WithContext(context.WithValue(adminReq.Context(), ctxkeys.Scopes, auth.ScopeSet{auth.ScopeAdmin: {}}))
 	adminRec := httptest.NewRecorder()
 	h.HandleWebSocket(adminRec, adminReq, "migrate", 0)
@@ -889,12 +829,47 @@ func TestGetCallerIsAdminFromRequest(t *testing.T) {
 	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "0xWALLET", Custom: map[string]string{"scopes": "admin"}})) {
 		t.Error("wallet JWT must not self-assert admin via an injected scopes claim")
 	}
-	// Confirmed namespace owner → admin.
-	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.OwnerConfirmed, true)) {
-		t.Error("confirmed owner should resolve to admin")
+	// An owner's grant → admin.
+	if !h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Grant, &auth.Grant{Role: auth.RoleOwner})) {
+		t.Error("the namespace owner should resolve to admin")
+	}
+	// A member who is not an admin → NOT admin. This was a boolean meaning
+	// "owner confirmed", so every member of the namespace was an admin here.
+	if h.getCallerIsAdminFromRequest(withCtx(ctxkeys.Grant, &auth.Grant{Role: auth.RoleRuntime})) {
+		t.Error("a runtime member resolved to admin")
 	}
 	// Bare request (no identity) → NOT admin.
 	if h.getCallerIsAdminFromRequest(httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)) {
 		t.Error("no identity must not resolve to admin")
+	}
+}
+
+func TestGetCallerHasInvokeFromRequest(t *testing.T) {
+	h := newTestHandlers(nil)
+	withCtx := func(k, v any) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)
+		return r.WithContext(context.WithValue(r.Context(), k, v))
+	}
+
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeInvoke: {}})) {
+		t.Error("invoke scope must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeStorage: {}})) {
+		t.Error("storage-only key must not resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.Scopes, auth.ScopeSet{auth.ScopeAdmin: {}})) {
+		t.Error("admin must resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "0xWALLET"})) {
+		t.Error("SIWE wallet JWT must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "storage"}})) {
+		t.Error("exchanged storage-only key must not resolve to hasInvoke")
+	}
+	if !h.getCallerHasInvokeFromRequest(withCtx(ctxkeys.JWT, &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke"}})) {
+		t.Error("exchanged invoke key must resolve to hasInvoke")
+	}
+	if h.getCallerHasInvokeFromRequest(httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)) {
+		t.Error("anonymous must not resolve to hasInvoke")
 	}
 }

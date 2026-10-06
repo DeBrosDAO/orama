@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
-	"go.uber.org/zap"
 )
 
 // VerifyHandler verifies a wallet signature and issues JWT tokens and an API key.
@@ -20,7 +18,9 @@ import (
 //
 // POST /v1/auth/verify
 // Request body: VerifyRequest
-// Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "api_key", "nonce", "signature_verified" }
+// Response 200: { "access_token", "token_type", "expires_in", "refresh_token", "subject", "namespace", "nonce", "signature_verified" }
+// plus "api_key", except in the lobby namespace, on a device-bound sign-in, and for
+// a member whose role holds no grant (a reader), none of which gets one.
 // Response 202: { "status": "provisioning", "cluster_id", "poll_url", "access_token", "refresh_token", "api_key", ... }
 func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 	if h.authService == nil {
@@ -38,187 +38,110 @@ func (h *Handlers) VerifyHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
+	if strings.TrimSpace(req.Message) == "" || strings.TrimSpace(req.Signature) == "" {
+		writeError(w, http.StatusBadRequest, "message and signature are required: sign the message "+
+			"returned by /v1/auth/challenge and send it back verbatim")
 		return
 	}
 
 	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
+		return
+	}
+	wallet, namespace := in.Wallet, in.Namespace
+
+	// Refuse before anything is issued or provisioned: a namespace that belongs
+	// to another wallet is not this caller's to sign in to.
+	if err := h.authService.RequireNamespaceOwner(ctx, wallet, namespace); err != nil {
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
-
-	// Optional device assertion (bugboard feat-384). Verified against the SAME
-	// challenge the account just signed, so both signatures describe one login
-	// event rather than two independently replayable facts.
+	// Signing in does not provision anything. It used to: a challenge created
+	// the namespace and verifying the signature spun up its cluster, so an
+	// anonymous caller could create infrastructure by naming a name. Creating a
+	// namespace is POST /v1/namespaces, and that is what provisions it.
 	//
-	// A malformed or non-verifying assertion is a hard 401, never a silent
-	// downgrade to an account-only token: a client that meant to prove a device
-	// and failed must find out, not receive a token that quietly lacks the
-	// claim and get denied later by a function for reasons it cannot see.
-	device, devStatus, devErr := h.bindDeviceIfAsserted(ctx, &req)
-	if devErr != nil {
-		writeError(w, devStatus, devicePublicError(devStatus))
+	// A namespace whose cluster is still coming up is reported by
+	// /v1/namespace/status, which the create path hands back a poll URL for.
+
+	binding, ok := h.bindSignIn(w, r, in, req)
+	if !ok {
+		return
+	}
+	if binding.pending != nil {
+		named, _ := authsvc.DeviceOf(in.Message)
+		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+			Namespace: namespace,
+			Actor:     wallet,
+			Action:    authsvc.AuditDeviceLoginStarted,
+			Result:    authsvc.AuditSuccess,
+			Metadata:  map[string]string{"device": named, "reason": "device awaits approval"},
+		})
+		writePendingDevice(w, in, named, binding.pending)
 		return
 	}
 
-	// Check if namespace cluster provisioning is needed (for non-default namespaces)
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-
-	if h.clusterProvisioner != nil && namespace != "default" {
-		clusterID, status, needsProvisioning, checkErr := h.clusterProvisioner.CheckNamespaceCluster(ctx, namespace)
-		if checkErr != nil {
-			_ = checkErr // Log but don't fail
-		} else if needsProvisioning || status == "provisioning" {
-			// Issue tokens and API key before returning provisioning status
-			token, refresh, expUnix, tokenErr := h.authService.IssueTokensForDevice(ctx, req.Wallet, req.Namespace, device)
-			if tokenErr != nil {
-				writeError(w, http.StatusInternalServerError, tokenErr.Error())
-				return
-			}
-			apiKey, keyErr := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
-			if keyErr != nil {
-				writeError(w, http.StatusInternalServerError, keyErr.Error())
-				return
-			}
-
-			pollURL := ""
-			if needsProvisioning {
-				nsIDInt := 0
-				if id, ok := nsID.(int); ok {
-					nsIDInt = id
-				} else if id, ok := nsID.(int64); ok {
-					nsIDInt = int(id)
-				} else if id, ok := nsID.(float64); ok {
-					nsIDInt = int(id)
-				}
-
-				newClusterID, newPollURL, provErr := h.clusterProvisioner.ProvisionNamespaceCluster(ctx, nsIDInt, namespace, req.Wallet)
-				if provErr != nil {
-					writeError(w, http.StatusInternalServerError, "failed to start cluster provisioning")
-					return
-				}
-				clusterID = newClusterID
-				pollURL = newPollURL
-			} else {
-				pollURL = "/v1/namespace/status?id=" + clusterID
-			}
-
-			writeJSON(w, http.StatusAccepted, map[string]any{
-				"status":                 "provisioning",
-				"cluster_id":             clusterID,
-				"poll_url":               pollURL,
-				"estimated_time_seconds": 60,
-				"access_token":           token,
-				"token_type":             "Bearer",
-				"expires_in":             int(expUnix - time.Now().Unix()),
-				"refresh_token":          refresh,
-				"api_key":                apiKey,
-				"namespace":              req.Namespace,
-				"subject":                req.Wallet,
-				"nonce":                  req.Nonce,
-				"signature_verified":     true,
-			})
-			return
-		}
-	}
-
-	token, refresh, expUnix, err := h.authService.IssueTokensForDevice(ctx, req.Wallet, req.Namespace, device)
+	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, wallet, namespace, binding.deviceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	apiKey, err := h.authService.GetOrCreateAPIKey(ctx, req.Wallet, req.Namespace)
+	apiKey, err := signInKey(ctx, h.authService.GetOrCreateAPIKey, wallet, namespace, binding.deviceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialError(w, namespace, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: namespace,
+		Actor:     wallet,
+		Action:    authsvc.AuditVerifySucceeded,
+		Result:    authsvc.AuditSuccess,
+	})
+
+	body := map[string]any{
 		"access_token":       token,
 		"token_type":         "Bearer",
 		"expires_in":         int(expUnix - time.Now().Unix()),
 		"refresh_token":      refresh,
-		"subject":            req.Wallet,
-		"namespace":          req.Namespace,
-		"api_key":            apiKey,
-		"nonce":              req.Nonce,
+		"subject":            wallet,
+		"namespace":          namespace,
+		"nonce":              in.Message.Nonce,
 		"signature_verified": true,
-	})
+	}
+	if apiKey != "" {
+		body["api_key"] = apiKey
+	}
+	if binding.deviceID != "" {
+		body["device_id"] = binding.deviceID
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
-// bindDeviceIfAsserted verifies an optional device assertion and records the
-// binding, returning nil when the request carried no assertion.
+// signInKey is the API key a sign-in hands back beside its session, or "" when
+// it hands back none.
 //
-// Presenting only one of the two fields is rejected rather than ignored: it is
-// always a client bug, and silently treating it as "no device" would hand back
-// a token missing the claim the client believes it just obtained.
-func (h *Handlers) bindDeviceIfAsserted(ctx context.Context, req *VerifyRequest) (*authsvc.DeviceBinding, int, error) {
-	pub := strings.TrimSpace(req.DevicePublicKey)
-	sig := strings.TrimSpace(req.DeviceSignature)
-	if pub == "" && sig == "" {
-		return nil, http.StatusOK, nil
+// The lobby has no keys. A wallet signing in there gets a session and nothing
+// else; the one thing that session reaches is POST /v1/namespaces, which
+// creates a namespace and makes the caller its owner.
+//
+// Neither does a device-bound sign-in get one. The device is the credential;
+// a key for the whole account handed out beside it would outlive revoking the
+// device, which is the point of binding one.
+//
+// Nor does a member whose role holds no grant (a reader): there is nothing to
+// put in a key, and the session alone reaches what the role may reach.
+func signInKey(ctx context.Context, mint func(context.Context, string, string) (string, error),
+	wallet, namespace, deviceID string) (string, error) {
+	if authsvc.IsLobbyNamespace(namespace) || deviceID != "" {
+		return "", nil
 	}
-	if pub == "" || sig == "" {
-		// A client bug, not a failed authentication: 400 so it is not mistaken
-		// for rejected credentials and retried as a re-login.
-		return nil, http.StatusBadRequest, fmt.Errorf("device_public_key and device_signature must be provided together")
+	key, err := mint(ctx, wallet, namespace)
+	if errors.Is(err, authsvc.ErrNoKeyForRole) {
+		return "", nil
 	}
-
-	fingerprint, err := authsvc.VerifyDeviceAssertion(req.Nonce, pub, sig)
-	if err != nil {
-		return nil, http.StatusUnauthorized, err
-	}
-
-	namespace := strings.TrimSpace(req.Namespace)
-	if namespace == "" {
-		namespace = "default"
-	}
-	binding, err := h.authService.BindDevice(ctx, namespace, req.Wallet, pub, fingerprint)
-	if err != nil {
-		// Infrastructure failure is retryable, not a credential verdict — a
-		// 401 here would send every client into a re-SIWE loop during a leader
-		// re-election (bugboard #125).
-		if errors.Is(err, authsvc.ErrDeviceBindTransient) {
-			h.logDeviceBindFailure(namespace, err)
-			return nil, http.StatusServiceUnavailable, err
-		}
-		h.logDeviceBindFailure(namespace, err)
-		return nil, http.StatusUnauthorized, err
-	}
-	return binding, http.StatusOK, nil
-}
-
-// devicePublicError is the client-facing message for a device-assertion
-// failure. Deliberately fixed text: the wrapped errors carry SQL and
-// namespace-resolution detail, and this endpoint is reachable unauthenticated.
-func devicePublicError(status int) string {
-	switch status {
-	case http.StatusBadRequest:
-		return "device_public_key and device_signature must be provided together"
-	case http.StatusServiceUnavailable:
-		return "device binding temporarily unavailable, retry"
-	default:
-		return "device assertion verification failed"
-	}
-}
-
-// logDeviceBindFailure records the real cause server-side, since the client
-// only receives the generic message above.
-func (h *Handlers) logDeviceBindFailure(namespace string, err error) {
-	if h.logger == nil {
-		return
-	}
-	h.logger.Warn("device binding failed",
-		zap.String("namespace", namespace), zap.Error(err))
+	return key, err
 }

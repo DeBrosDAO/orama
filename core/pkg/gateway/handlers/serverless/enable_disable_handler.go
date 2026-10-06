@@ -28,12 +28,8 @@ func (h *ServerlessHandlers) SetEnabledFunction(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	namespace := r.URL.Query().Get("namespace")
-	if namespace == "" {
-		namespace = h.getNamespaceFromRequest(r)
-	}
-	if namespace == "" {
-		writeError(w, http.StatusBadRequest, "namespace required")
+	namespace, ok := managedNamespace(w, r)
+	if !ok {
 		return
 	}
 
@@ -44,7 +40,7 @@ func (h *ServerlessHandlers) SetEnabledFunction(w http.ResponseWriter, r *http.R
 		if serverless.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "function not found")
 		} else {
-			writeError(w, http.StatusInternalServerError, "failed to set function enabled state")
+			writeStoreError(w, "failed to set function enabled state", err)
 		}
 		return
 	}

@@ -52,8 +52,8 @@ func DefaultConfig() *E2EConfig {
 func LoadE2EConfig() (*E2EConfig, error) {
 	// Try multiple locations for the config file
 	configPaths := []string{
-		"config.yaml",       // Relative to e2e directory (when running from e2e/)
-		"e2e/config.yaml",   // Relative to project root
+		"config.yaml",        // Relative to e2e directory (when running from e2e/)
+		"e2e/config.yaml",    // Relative to project root
 		"../e2e/config.yaml", // From subdirectory within e2e/
 	}
 

@@ -1,0 +1,485 @@
+import { NetworkError, SDKError } from "../errors";
+import type { AnyMsg } from "./msg";
+import type { OramaSigner } from "./signer";
+import { signTx, type SignedTx } from "./tx";
+
+/** Where the chain is read from. Each read names the base it uses. */
+export interface ChainClientConfig {
+  /** The gateway root, for the read-only /v1/chain/ proxy: status, blocks, transactions, validators, the indexer, module queries. */
+  gatewayURL?: string;
+  /**
+   * A node's Cosmos REST API root, for example http://127.0.0.1:31003. Needed to
+   * read an account (number, sequence), bank balances, and to broadcast: the
+   * gateway proxy serves none of those.
+   */
+  restURL?: string;
+  /** Replaces the platform's fetch. */
+  fetch?: typeof fetch;
+  /** Milliseconds before a request is abandoned. Default 15000. */
+  timeoutMs?: number;
+}
+
+/** A chain account as the signature needs it. */
+export interface ChainAccount {
+  accountNumber: bigint;
+  sequence: bigint;
+  /** The 33-byte public key, once the chain has seen the account sign. */
+  publicKey?: Uint8Array;
+}
+
+/** What a broadcast returns. A non-zero code is thrown, never returned. */
+export interface BroadcastResult {
+  txHash: string;
+  code: 0;
+  rawLog: string;
+}
+
+export interface SignAndBroadcastOptions {
+  chainId: string;
+  gasLimit: bigint | number | string;
+  feeNorama: bigint | number | string;
+  memo?: string;
+}
+
+export interface PageOptions {
+  page?: number;
+  limit?: number;
+}
+
+/** What a module query answers: the decoded response, with the proto field names. uint64 fields are decimal strings. */
+export type ChainQueryResult = Record<string, unknown>;
+
+export interface QueryOptions {
+  /** Read at this height. Absent is the latest. */
+  height?: number;
+}
+
+/** An unsigned 64-bit id as a number, bigint or decimal string. */
+export type Uint64Like = number | bigint | string;
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+const HEX_HASH = /^(0x)?[0-9a-fA-F]{64}$/;
+const NODES = "orama.nodes.v1.Query";
+const STORAGE = "orama.storage.v1.Query";
+const FEES = "orama.fees.v1.Query";
+const ARCHIVE = "orama.archive.v1.Query";
+const RELAY = "orama.relay.v1.Query";
+const ORAMA_ADDRESS = /^orama1[02-9ac-hj-np-z]{6,90}$/;
+
+function requireBase(base: string | undefined, name: string, use: string): string {
+  if (!base) throw new Error(`${use} needs ${name} in the chain client config`);
+  return base.replace(/\/+$/, "");
+}
+
+function assertAddress(address: string): string {
+  if (!ORAMA_ADDRESS.test(address)) throw new Error(`"${address}" is not an orama address`);
+  return address;
+}
+
+function assertHash(hash: string): string {
+  if (!HEX_HASH.test(hash)) throw new Error("a transaction hash is 64 hex characters");
+  return hash.replace(/^0x/, "").toLowerCase();
+}
+
+function assertUint(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${name} must be a non-negative integer`);
+  return value;
+}
+
+function assertUint64(value: Uint64Like, name: string): string {
+  const text = typeof value === "number" ? (Number.isSafeInteger(value) && value >= 0 ? String(value) : "") : String(value);
+  if (!/^(0|[1-9][0-9]{0,19})$/.test(text) || BigInt(text) > 0xffff_ffff_ffff_ffffn) {
+    throw new Error(`${name} must be an unsigned 64-bit integer`);
+  }
+  return text;
+}
+
+function assertText(value: string, name: string, max = 128): string {
+  // Rejecting ASCII control characters is the point of this pattern.
+  // eslint-disable-next-line no-control-regex
+  if (!value || value.length > max || /[\u0000-\u001f]/.test(value)) throw new Error(`${name} must be 1 to ${max} printable characters`);
+  return value;
+}
+
+function query(params: Record<string, string | number | undefined>): string {
+  const pairs = Object.entries(params).filter(([, v]) => v !== undefined);
+  if (pairs.length === 0) return "";
+  return "?" + pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("&");
+}
+
+/**
+ * Reads the Orama chain and submits signed transactions.
+ *
+ * Reads through the gateway (`gatewayURL`) need no credential. The Orama
+ * modules' own state (x/nodes, x/storage, x/fees, x/archive, x/relay) speaks
+ * gRPC only and has no REST route; the gateway serves each module's Query
+ * service at /v1/chain/query/<package.Service>/<Method>, which `moduleQuery`
+ * and the typed reads below call.
+ */
+export class OramaChainClient {
+  private readonly config: ChainClientConfig;
+  private readonly fetchFn: typeof fetch;
+
+  constructor(config: ChainClientConfig) {
+    this.config = config;
+    this.fetchFn = config.fetch ?? ((...args) => fetch(...args));
+  }
+
+  // ---- the gateway's /v1/chain/ proxy ----
+
+  /** CometBFT status: network id, latest block, sync state. */
+  async status(): Promise<unknown> {
+    return this.gateway("status");
+  }
+
+  /** One block by height. */
+  async block(height: number): Promise<unknown> {
+    return this.gateway(`block${query({ height: assertUint(height, "height") })}`);
+  }
+
+  /** Block metas between two heights, at most 20. */
+  async blocks(minHeight: number, maxHeight: number): Promise<unknown> {
+    return this.gateway(
+      `blocks${query({ min_height: assertUint(minHeight, "minHeight"), max_height: assertUint(maxHeight, "maxHeight") })}`,
+    );
+  }
+
+  /** A transaction by its 32-byte hash, from CometBFT. */
+  async tx(hash: string): Promise<unknown> {
+    return this.gateway(`tx${query({ hash: assertHash(hash) })}`);
+  }
+
+  /** The validator set. */
+  async validators(options: { page?: number; perPage?: number } = {}): Promise<unknown> {
+    return this.gateway(`validators${query({ page: options.page, per_page: options.perPage })}`);
+  }
+
+  /** Total supply of norama. */
+  async supply(): Promise<unknown> {
+    return this.gateway("supply/norama");
+  }
+
+  /** The staking pool: bonded and not-bonded tokens. */
+  async stakingPool(): Promise<unknown> {
+    return this.gateway("staking/pool");
+  }
+
+  /** The indexer's status and the height it has reached. */
+  async indexStatus(): Promise<unknown> {
+    return this.gateway("index/status");
+  }
+
+  /** A block as the indexer holds it. */
+  async indexBlock(height: number): Promise<unknown> {
+    return this.gateway(`index/blocks/${assertUint(height, "height")}`);
+  }
+
+  /** A transaction as the indexer holds it. */
+  async indexTx(hash: string): Promise<unknown> {
+    return this.gateway(`index/txs/${assertHash(hash)}`);
+  }
+
+  /** An account's transactions, newest first. */
+  async indexAccountTxs(address: string, options: PageOptions = {}): Promise<unknown> {
+    return this.gateway(
+      `index/accounts/${assertAddress(address)}/txs${query({ page: options.page, limit: options.limit })}`,
+    );
+  }
+
+  /** A compressed NFT by its 32-byte asset id. */
+  async cnftAsset(assetId: string): Promise<unknown> {
+    return this.gateway(`index/cnft/assets/${assertHash(assetId)}`);
+  }
+
+  /** The compressed NFTs an address owns. */
+  async cnftOwnerAssets(owner: string, options: PageOptions = {}): Promise<unknown> {
+    return this.gateway(
+      `index/cnft/owners/${assertAddress(owner)}/assets${query({ page: options.page, limit: options.limit })}`,
+    );
+  }
+
+  // ---- Orama module queries, through /v1/chain/query/ ----
+
+  /**
+   * Runs one query of an Orama module's Query service, for example
+   * `moduleQuery("orama.nodes.v1.Query", "Node", { node_id: "n-1" })`. The
+   * request is JSON with the proto field names; the gateway refuses any service
+   * or method it does not embed. A key that is not on chain is an SDKError with
+   * httpStatus 404.
+   */
+  async moduleQuery(
+    service: string,
+    method: string,
+    request: Record<string, unknown> = {},
+    options: QueryOptions = {},
+  ): Promise<ChainQueryResult> {
+    if (!/^orama\.[a-z0-9_]+\.v[0-9]+\.Query$/.test(service)) throw new Error(`"${service}" is not an Orama Query service`);
+    if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method)) throw new Error(`"${method}" is not a query method`);
+    const json = Object.keys(request).length === 0 ? undefined : JSON.stringify(request);
+    const height = options.height === undefined ? undefined : assertUint(options.height, "height");
+    return (await this.gateway(`query/${service}/${method}${query({ json, height })}`)) as ChainQueryResult;
+  }
+
+  /** x/nodes parameters. */
+  async nodesParams(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "Params", {}, options);
+  }
+
+  /** An x/nodes operator by account address. */
+  async operator(address: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "Operator", { address: assertAddress(address) }, options);
+  }
+
+  /** A registered node: operator, roles, bonds, endpoints, capacity, status. */
+  async node(nodeId: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "Node", { node_id: assertText(nodeId, "nodeId") }, options);
+  }
+
+  /** An x/nodes cluster. */
+  async nodeCluster(clusterId: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "Cluster", { cluster_id: assertText(clusterId, "clusterId") }, options);
+  }
+
+  /** A node's bond unbondings still in progress. */
+  async nodeUnbondings(nodeId: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "NodeUnbondings", { node_id: assertText(nodeId, "nodeId") }, options);
+  }
+
+  /** x/storage parameters. */
+  async storageParams(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(STORAGE, "Params", {}, options);
+  }
+
+  /** A storage deal. */
+  async deal(dealId: Uint64Like, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(STORAGE, "Deal", { deal_id: assertUint64(dealId, "dealId") }, options);
+  }
+
+  /** One replica slot of a deal: its provider, piece root and status. */
+  async slot(dealId: Uint64Like, slot: number, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(
+      STORAGE,
+      "Slot",
+      { deal_id: assertUint64(dealId, "dealId"), slot: assertUint(slot, "slot") },
+      options,
+    );
+  }
+
+  /** The deal authorization a granter gave a grantee. */
+  async storageAuthorization(granter: string, grantee: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(
+      STORAGE,
+      "Authorization",
+      { granter: assertAddress(granter), grantee: assertAddress(grantee) },
+      options,
+    );
+  }
+
+  /** The storage challenges of an epoch, for a node. */
+  async storageChallenges(epoch: Uint64Like, nodeId: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(
+      STORAGE,
+      "Challenges",
+      { epoch: assertUint64(epoch, "epoch"), node_id: assertText(nodeId, "nodeId") },
+      options,
+    );
+  }
+
+  /** What x/storage minted for an epoch. */
+  async storageEpochMint(epoch: Uint64Like, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(STORAGE, "EpochMint", { epoch: assertUint64(epoch, "epoch") }, options);
+  }
+
+  /** The x/storage assignment queue: pending, head and tail. */
+  async storageQueue(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(STORAGE, "Queue", {}, options);
+  }
+
+  /** x/fees parameters. */
+  async feesParams(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(FEES, "Params", {}, options);
+  }
+
+  /** The current base fee. */
+  async baseFee(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(FEES, "BaseFee", {}, options);
+  }
+
+  /** The earnings balance x/fees holds for an address. It is not in the bank balance. */
+  async earnings(address: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(FEES, "Earnings", { address: assertAddress(address) }, options);
+  }
+
+  /** An x/fees deposit by id. */
+  async feesDeposit(id: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(FEES, "Deposit", { id: assertText(id, "id") }, options);
+  }
+
+  /** x/archive parameters. */
+  async archiveParams(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(ARCHIVE, "Params", {}, options);
+  }
+
+  /** The archived range record of a block range. */
+  async archiveRange(startHeight: number, endHeight: number, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(
+      ARCHIVE,
+      "Range",
+      { start_height: String(assertUint(startHeight, "startHeight")), end_height: String(assertUint(endHeight, "endHeight")) },
+      options,
+    );
+  }
+
+  /** The contiguous archived prefix: the height below which the chain lets nodes prune. */
+  async lastArchivedHeight(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(ARCHIVE, "LastArchivedHeight", {}, options);
+  }
+
+  /** The retain height the chain gives nodes, with the tip and the archived prefix. */
+  async retainHeight(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(ARCHIVE, "RetainHeight", {}, options);
+  }
+
+  /** x/relay parameters. */
+  async relayParams(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(RELAY, "Params", {}, options);
+  }
+
+  /** The accounts allowed to report relay measurements. */
+  async relayReporters(options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(RELAY, "Reporters", {}, options);
+  }
+
+  /** A relay by the hex SHA-1 fingerprint of its RSA identity key. */
+  async relay(rsaFingerprintHex: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(RELAY, "Relay", { rsa_fingerprint_hex: assertText(rsaFingerprintHex, "rsaFingerprintHex", 64) }, options);
+  }
+
+  /** The result x/relay computed for an epoch. */
+  async relayEpochResult(epoch: Uint64Like, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(RELAY, "EpochResult", { epoch: assertUint64(epoch, "epoch") }, options);
+  }
+
+  // ---- a node's REST API ----
+
+  /** Account number, sequence and public key: what a signature needs. */
+  async account(address: string): Promise<ChainAccount> {
+    const body = (await this.rest(`/cosmos/auth/v1beta1/accounts/${assertAddress(address)}`)) as {
+      account?: { account_number?: string; sequence?: string; pub_key?: { key?: string } | null };
+    };
+    const acct = body.account;
+    if (!acct) throw new SDKError("the chain returned no account", 502, "CHAIN_BAD_RESPONSE");
+    const key = acct.pub_key?.key;
+    return {
+      accountNumber: BigInt(acct.account_number ?? "0"),
+      sequence: BigInt(acct.sequence ?? "0"),
+      publicKey: key ? base64ToBytes(key) : undefined,
+    };
+  }
+
+  /** Bank balances of an address. Earnings are a separate account and are not here. */
+  async balances(address: string): Promise<Array<{ denom: string; amount: string }>> {
+    const body = (await this.rest(`/cosmos/bank/v1beta1/balances/${assertAddress(address)}`)) as {
+      balances?: Array<{ denom: string; amount: string }>;
+    };
+    return body.balances ?? [];
+  }
+
+  /** Broadcasts a signed transaction and waits for CheckTx. A non-zero code throws. */
+  async broadcast(txBytes: Uint8Array): Promise<BroadcastResult> {
+    const body = (await this.rest("/cosmos/tx/v1beta1/txs", {
+      method: "POST",
+      body: JSON.stringify({ tx_bytes: bytesToBase64(txBytes), mode: "BROADCAST_MODE_SYNC" }),
+    })) as { tx_response?: { code?: number; txhash?: string; raw_log?: string } };
+    const res = body.tx_response;
+    if (!res?.txhash) throw new SDKError("the chain returned no transaction response", 502, "CHAIN_BAD_RESPONSE");
+    if (res.code) {
+      throw new SDKError(`the chain rejected the transaction (code ${res.code}): ${(res.raw_log ?? "").slice(0, 200)}`, 400, "CHAIN_TX_REJECTED", {
+        code: res.code,
+        txHash: res.txhash,
+      });
+    }
+    return { txHash: res.txhash, code: 0, rawLog: res.raw_log ?? "" };
+  }
+
+  /**
+   * Reads the signer's account, builds the transaction, has the signer sign it
+   * and broadcasts it. The signer sees the decoded transaction before it signs.
+   */
+  async signAndBroadcast(
+    msgs: readonly AnyMsg[],
+    signer: OramaSigner,
+    options: SignAndBroadcastOptions,
+  ): Promise<{ signed: SignedTx; result: BroadcastResult }> {
+    const account = await this.account(signer.address);
+    if (account.publicKey && !bytesEqual(account.publicKey, signer.publicKey)) {
+      throw new Error(`the chain knows a different public key for ${signer.address} than the signer holds`);
+    }
+    const signed = await signTx(
+      {
+        chainId: options.chainId,
+        accountNumber: account.accountNumber,
+        sequence: account.sequence,
+        gasLimit: options.gasLimit,
+        feeNorama: options.feeNorama,
+        msgs,
+        memo: options.memo,
+      },
+      signer,
+    );
+    return { signed, result: await this.broadcast(signed.txBytes) };
+  }
+
+  // ---- transport ----
+
+  private async gateway(path: string): Promise<unknown> {
+    const base = requireBase(this.config.gatewayURL, "gatewayURL", "this read");
+    return this.request(`${base}/v1/chain/${path}`);
+  }
+
+  private async rest(path: string, init: RequestInit = {}): Promise<unknown> {
+    const base = requireBase(this.config.restURL, "restURL", "this call");
+    return this.request(`${base}${path}`, init);
+  }
+
+  private async request(url: string, init: RequestInit = {}): Promise<unknown> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await this.fetchFn(url, {
+        ...init,
+        headers: { Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      throw new NetworkError(`could not reach the chain at ${new URL(url).host}: ${(err as Error).message}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    const text = await response.text();
+    let body: unknown;
+    try {
+      body = text ? JSON.parse(text) : undefined;
+    } catch {
+      if (response.ok) throw new SDKError(`${new URL(url).host} did not answer JSON`, 502, "CHAIN_BAD_RESPONSE");
+    }
+    if (!response.ok) throw SDKError.fromResponse(response.status, body);
+    return body;
+  }
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}

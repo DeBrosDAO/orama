@@ -15,7 +15,7 @@ graph TD
     PubSub["PubSub<br/>(LibP2P)"]
     Vault["Vault<br/>(Zig)"]
     WebRTC["WebRTC<br/>(SFU + TURN)"]
-    Anyone["Anyone<br/>Relay"]
+    Tor["Tor<br/>Client"]
     WG["WireGuard Mesh (10.0.0.0/24)<br/>Encrypted node-to-node tunnels"]
 
     Clients -->|"HTTPS (port 443)"| Gateway
@@ -26,7 +26,7 @@ graph TD
     Gateway --> PubSub
     Gateway --> Vault
     Gateway --> WebRTC
-    Gateway --> Anyone
+    Gateway --> Tor
     RQLite --> WG
     Olric --> WG
     IPFS --> WG
@@ -111,13 +111,12 @@ Real-time video, voice, and data channels:
 - **Forced relay** — All client traffic goes through TURN (`iceTransportPolicy: "relay"`)
 - **Per-namespace** — Opt-in via `orama namespace enable webrtc`
 
-### Anyone Protocol
+### Tor
 
-Privacy relay integration on every node:
+Anonymity client on every node:
 
-- **Client mode** — SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`)
-- **Relay mode** — Participates in the Anyone relay network for rewards
-- **Dual rewards** — Node operators earn both $ORAMA and $ANYONE tokens
+- **Client only** — `orama-namespace-tor@index`, a SOCKS5 proxy for anonymized outbound requests (`/v1/proxy/anon`, `/v1/proxy/tunnel`, the `anon_fetch` host function), bound to `127.0.0.1:9050`
+- **No relay, no exit** — the torrc sets `ClientOnly 1`, `ORPort 0`, `DirPort 0`, `ExitRelay 0`; nothing is opened in the firewall for Tor
 
 ## Network Layer
 
@@ -141,7 +140,7 @@ All inter-node communication uses a full-mesh WireGuard topology:
 | SFU Signaling | 30000-30099 | WireGuard only |
 | SFU Media | 20000-29999 | WireGuard only |
 | TURN | 3478, 5349 | Public |
-| Anyone | 9050 | Public |
+| Tor (SOCKS5) | 9050 | Localhost only (`127.0.0.1`) |
 
 ### Service Dependency Chain
 
@@ -156,18 +155,18 @@ The Gateway depends on Olric being fully initialized. Olric depends on RQLite fo
 
 ## Binaries
 
-`core/cmd/` contains entry points for these binaries. `make build` and the `orama build` deployment archive compile all of them except `orama-inspector`, which currently has no build target in the Makefile or builder:
+`core/cmd/` contains entry points for these binaries. `make build` compiles:
 
 | Binary | Entry Point | Purpose |
 |--------|-------------|---------|
-| `orama` | `cmd/cli/` | CLI tool (deploy, manage, monitor) |
-| `gateway` | `cmd/gateway/` | API gateway / reverse proxy |
-| `orama-node` | `cmd/node/` | P2P node (RQLite + libp2p) |
+| `orama` | `cmd/orama/` | CLI tool (deploy, manage, monitor). Cluster health is `orama inspect`. |
+| `pubsub` | `cmd/pubsub/` | Namespace gossipsub HTTP API (`make build` writes `bin/pubsub`) |
+| `gateway` | `cmd/gateway/` | API gateway — one binary for `@index` and `@<tenant>` |
+| `orama-node` | `cmd/node/` | Supervisor: starts systemd units; does not embed the gateway or rqlited |
 | `sfu` | `cmd/sfu/` | WebRTC Selective Forwarding Unit |
 | `turn` | `cmd/turn/` | TURN relay server |
 | `identity` | `cmd/identity/` | P2P identity key generator |
 | `orama-sni-router` | `cmd/sni-router/` | SNI-based TLS router |
-| `orama-inspector` | `cmd/inspector/` | SSH-based health inspector (not built by `make build`; run via `go run ./cmd/inspector`) |
 
 ## Security Architecture
 
@@ -194,7 +193,7 @@ All services run as a dedicated `orama` user (not root) with systemd hardening (
 
 ## OramaOS
 
-For mainnet, devnet, and testnet, nodes run **OramaOS** — a custom minimal Linux image built with Buildroot:
+**OramaOS** is in development; today devnet and testnet nodes run Ubuntu with systemd hardening. OramaOS is a custom minimal Linux image built with Buildroot:
 
 - **No SSH, no shell** — operators cannot access the filesystem or read data
 - **LUKS full-disk encryption** — key split via Shamir's Secret Sharing across peers
@@ -203,7 +202,7 @@ For mainnet, devnet, and testnet, nodes run **OramaOS** — a custom minimal Lin
 - **Service sandboxing** — Linux namespaces + seccomp per service
 - **Single root process** — the orama-agent manages boot, WireGuard, services, and updates
 
-Nodes join via `orama node enroll` (not `orama node install`). The enrollment uses a registration code + invite token + wallet verification to push cluster config to the node.
+Nodes join via `orama node enroll` (not `orama node install`). The operator reads an 80-bit registration code off the node's console and gives it to the CLI with an invite token; the gateway pushes cluster config sealed under that code.
 
 Sandbox clusters remain on Ubuntu for development convenience.
 

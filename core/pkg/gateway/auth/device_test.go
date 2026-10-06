@@ -2,421 +2,426 @@ package auth
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
-// Device attribution (bugboard feat-384).
-//
-// The gateway's job here is narrow and absolute: assert that the holder of a
-// specific device key was present at a specific login, in a way the caller
-// cannot forge. Everything downstream — a function refusing history to a device
-// that joined yesterday, an app revoking a stolen phone — rests on that one
-// assertion being unfakeable. These tests exist to hold it.
+// These run the real SQL against the real schema. What is being tested is the
+// predicates — approved, denied, claimed, expired — which are the whole of what
+// makes a device login safe: a fake that models them is not a test of them.
 
-func newDeviceKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, string) {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(nil)
+func TestDeviceFlow_endToEnd(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
 	if err != nil {
-		t.Fatalf("generate device key: %v", err)
+		t.Fatalf("start: %v", err)
 	}
-	return pub, priv, base64.StdEncoding.EncodeToString(pub)
-}
+	if pending.DeviceCode == "" || pending.UserCode == "" {
+		t.Fatal("a login with no codes")
+	}
+	if pending.Interval != int(DevicePollInterval/time.Second) {
+		t.Errorf("interval = %d", pending.Interval)
+	}
 
-func signAssertion(t *testing.T, priv ed25519.PrivateKey, challenge string) string {
-	t.Helper()
-	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, DeviceAssertionMessage(challenge)))
-}
+	// Nobody has approved it, so the first poll says so.
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
+		t.Fatalf("first poll = %v, want authorization_pending", err)
+	}
 
-// The happy path: a device that signs the challenge is identified by a
-// fingerprint derived from its key.
-func TestVerifyDeviceAssertion_acceptsAGenuineAssertion(t *testing.T) {
-	pub, priv, pubB64 := newDeviceKey(t)
-	const challenge = "nonce-abc123"
+	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
 
-	fp, err := VerifyDeviceAssertion(challenge, pubB64, signAssertion(t, priv, challenge))
+	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil)
 	if err != nil {
-		t.Fatalf("genuine assertion rejected: %v", err)
+		t.Fatalf("claim: %v", err)
 	}
-	if fp != DeviceFingerprint(pub) {
-		t.Errorf("fingerprint = %q, want the derivation of the presented key", fp)
+	if claimed.Subject != "0xowner" || claimed.Namespace != "anchat" {
+		t.Errorf("claimed %+v", claimed)
 	}
-}
 
-// The core forgery case: a signature from a DIFFERENT key must not authenticate
-// as this device. Without this the claim is decorative.
-func TestVerifyDeviceAssertion_rejectsAnotherDevicesSignature(t *testing.T) {
-	_, _, victimPubB64 := newDeviceKey(t)
-	_, attackerPriv, _ := newDeviceKey(t)
-	const challenge = "nonce-abc123"
-
-	if _, err := VerifyDeviceAssertion(challenge, victimPubB64, signAssertion(t, attackerPriv, challenge)); err == nil {
-		t.Fatal("a signature made by another key verified as this device — the device claim would be forgeable")
+	// A device code collects a session once. A code left in a shell history or
+	// a log collects nothing.
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeUnknown) {
+		t.Errorf("second claim = %v, want invalid_grant", err)
 	}
 }
 
-// A signature over a DIFFERENT challenge must not be replayable into this
-// login. This is what binds the device assertion to one specific login event
-// rather than making it a reusable bearer artifact.
-func TestVerifyDeviceAssertion_rejectsAReplayedSignatureFromAnotherLogin(t *testing.T) {
-	_, priv, pubB64 := newDeviceKey(t)
-	stolen := signAssertion(t, priv, "nonce-from-an-earlier-login")
+// The waiting machine asked for one namespace; being handed a session in
+// another means it does whatever it was going to do in the wrong tenant.
+func TestApproveDeviceAuthorization_refusesADifferentNamespace(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
 
-	if _, err := VerifyDeviceAssertion("nonce-for-this-login", pubB64, stolen); err == nil {
-		t.Fatal("a device assertion from a previous login replayed into a new one")
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	err = s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "somebody-else")
+	if err == nil {
+		t.Fatal("a login for one namespace was approved into another")
+	}
+	if !strings.Contains(err.Error(), "anchat") {
+		t.Errorf("the refusal does not name the namespace that was asked for: %v", err)
+	}
+
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
+		t.Errorf("the refused approval changed the login's state: %v", err)
 	}
 }
 
-// The account signature and the device assertion cover different bytes, so
-// neither can be presented as the other. Domain separation, verified rather
-// than assumed.
-func TestDeviceAssertionMessage_isDomainSeparatedFromTheRawChallenge(t *testing.T) {
-	const challenge = "nonce-abc123"
-	msg := string(DeviceAssertionMessage(challenge))
+// A login that names no namespace takes whichever one the approver signs in to,
+// which is the case from a machine that has never been logged in.
+func TestApproveDeviceAuthorization_takesTheApproversNamespaceWhenNoneWasAsked(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
 
-	if msg == challenge {
-		t.Fatal("the device signs the bare challenge — an account signature could be replayed as a device assertion")
+	pending, err := s.StartDeviceAuthorization(ctx, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
-	if !strings.HasSuffix(msg, challenge) {
-		t.Errorf("assertion message %q does not bind the challenge", msg)
+	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err != nil {
+		t.Fatalf("approve: %v", err)
 	}
-}
 
-// A raw signature over the bare challenge (what a naive client, or an attacker
-// holding only an account signature, would present) must not verify.
-func TestVerifyDeviceAssertion_rejectsASignatureOverTheBareChallenge(t *testing.T) {
-	_, priv, pubB64 := newDeviceKey(t)
-	const challenge = "nonce-abc123"
-	bare := base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(challenge)))
-
-	if _, err := VerifyDeviceAssertion(challenge, pubB64, bare); err == nil {
-		t.Fatal("a signature over the undomain-separated challenge verified")
+	claimed, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed.Namespace != "anchat" {
+		t.Errorf("namespace = %q, want the approver's", claimed.Namespace)
 	}
 }
 
-// Malformed input is rejected with a clear error rather than panicking or
-// being coerced into a valid-looking result.
-func TestVerifyDeviceAssertion_rejectsMalformedInput(t *testing.T) {
-	_, priv, pubB64 := newDeviceKey(t)
-	const challenge = "nonce-abc123"
-	good := signAssertion(t, priv, challenge)
+func TestDeviceFlow_aDeniedLoginStopsRatherThanPolling(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
 
-	for name, tc := range map[string]struct{ pub, sig, challenge string }{
-		"public key not base64": {"not!base64!", good, challenge},
-		"public key wrong size": {base64.StdEncoding.EncodeToString([]byte("short")), good, challenge},
-		"signature not base64":  {pubB64, "not!base64!", challenge},
-		"signature wrong size":  {pubB64, base64.StdEncoding.EncodeToString([]byte("short")), challenge},
-		"empty challenge":       {pubB64, good, ""},
-		"empty public key":      {"", good, challenge},
-		"empty signature":       {pubB64, "", challenge},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := VerifyDeviceAssertion(tc.challenge, tc.pub, tc.sig); err == nil {
-				t.Error("malformed device assertion accepted")
-			}
-		})
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode, "0xowner"); err != nil {
+		t.Fatalf("deny: %v", err)
+	}
+
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAccessDenied) {
+		t.Errorf("poll after a refusal = %v, want access_denied", err)
+	}
+	// And it cannot be approved afterwards: a refusal is final, or refusing is
+	// only a suggestion.
+	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err == nil {
+		t.Error("a refused login was approved")
 	}
 }
 
-// Distinct keys must produce distinct fingerprints, and the same key the same
-// one — the fingerprint IS the identity a function authorizes against.
-func TestDeviceFingerprint_isStableAndDistinct(t *testing.T) {
-	pubA, _, _ := newDeviceKey(t)
-	pubB, _, _ := newDeviceKey(t)
+func TestDeviceFlow_anExpiredLoginIsNotApprovableOrClaimable(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
 
-	if DeviceFingerprint(pubA) != DeviceFingerprint(pubA) {
-		t.Error("fingerprint is not stable for one key")
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
-	if DeviceFingerprint(pubA) == DeviceFingerprint(pubB) {
-		t.Error("two different device keys share a fingerprint")
-	}
-	if got := len(DeviceFingerprint(pubA)); got != deviceFingerprintBytes*2 {
-		t.Errorf("fingerprint is %d hex chars, want %d", got, deviceFingerprintBytes*2)
-	}
-}
-
-// --- claim plumbing -------------------------------------------------------
-
-// The device claims must never be persisted onto the refresh token.
-//
-// This is the cross-device forgery guard. reuseLastKnownClaims replays the most
-// recent stored claims for a WALLET, with no device dimension — so a stored
-// device claim would be replayed into a different device's login during a
-// claims-provider hiccup, producing a correctly-signed token attributing device
-// B's request to device A.
-func TestStripDeviceClaims_removesOnlyTheDeviceClaims(t *testing.T) {
-	in := map[string]string{
-		"account_id":           "acct-1",
-		"tier":                 "pro",
-		DeviceClaimFingerprint: "fp-1",
-		DeviceClaimSince:       "1700000000",
+	past := time.Now().Add(-time.Minute).UTC().Format(sqliteTime)
+	if _, err := db.db.Exec(`UPDATE device_authorizations SET expires_at = ?`, past); err != nil {
+		t.Fatalf("expire: %v", err)
 	}
 
-	out := stripDeviceClaims(in)
-
-	if _, ok := out[DeviceClaimFingerprint]; ok {
-		t.Error("device fingerprint would be stored on the refresh token and replayed to another device")
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeExpired) {
+		t.Errorf("poll = %v, want expired_token", err)
 	}
-	if _, ok := out[DeviceClaimSince]; ok {
-		t.Error("device_since would be stored on the refresh token")
-	}
-	if out["account_id"] != "acct-1" || out["tier"] != "pro" {
-		t.Errorf("stripping device claims disturbed the namespace's own claims: %v", out)
-	}
-	if _, ok := in[DeviceClaimFingerprint]; !ok {
-		t.Error("stripDeviceClaims mutated its input")
+	if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); !errors.Is(err, ErrDeviceCodeExpired) {
+		t.Errorf("approve = %v, want expired_token", err)
 	}
 }
 
-// A claim set that was only device claims becomes nil, not an empty map that
-// would marshal to a misleading "{}" on the refresh row.
-func TestStripDeviceClaims_deviceOnlyBecomesNil(t *testing.T) {
-	if out := stripDeviceClaims(map[string]string{DeviceClaimFingerprint: "fp-1"}); out != nil {
-		t.Errorf("got %v, want nil", out)
+// A deadline the driver hands back as a zero time — which is what go-sqlite3
+// does with a value it cannot parse — is past, not absent.
+func TestDeviceFlow_aDeadlineTheDriverCannotParseIsPast(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
+
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := db.db.Exec(`UPDATE device_authorizations SET expires_at = 'whenever'`); err != nil {
+		t.Fatalf("corrupt: %v", err)
+	}
+
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeExpired) {
+		t.Errorf("poll = %v, want expired_token", err)
 	}
 }
 
-func TestWithDeviceClaims_stampsFingerprintAndFirstSeen(t *testing.T) {
-	first := time.Unix(1700000000, 0).UTC()
-	out := withDeviceClaims(map[string]string{"account_id": "acct-1"},
-		&DeviceBinding{Fingerprint: "fp-1", FirstSeen: first})
+// The interval is enforced rather than advised, or a client in a tight loop is
+// the login endpoint's load.
+func TestClaimDeviceAuthorization_refusesAPollInsideTheInterval(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
 
-	if out[DeviceClaimFingerprint] != "fp-1" {
-		t.Errorf("device_fp = %q", out[DeviceClaimFingerprint])
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
-	if out[DeviceClaimSince] != "1700000000" {
-		t.Errorf("device_since = %q, want the gateway's first-seen unix time", out[DeviceClaimSince])
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
+		t.Fatalf("first poll: %v", err)
 	}
-	if out["account_id"] != "acct-1" {
-		t.Error("namespace claims were lost")
-	}
-}
-
-// An account-only login (no assertion) must mint no device claim at all —
-// never an empty one, which a function might read as "device present".
-func TestWithDeviceClaims_nilDeviceAddsNothing(t *testing.T) {
-	in := map[string]string{"account_id": "acct-1"}
-	out := withDeviceClaims(in, nil)
-
-	if _, ok := out[DeviceClaimFingerprint]; ok {
-		t.Error("an account-only login carries a device claim")
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceSlowDown) {
+		t.Errorf("immediate second poll = %v, want slow_down", err)
 	}
 }
 
-// withDeviceClaims must not mutate the caller's map — that map is what gets
-// persisted to the refresh token, and mutating it would smuggle the device
-// claims into storage despite stripDeviceClaims.
-func TestWithDeviceClaims_doesNotMutateItsInput(t *testing.T) {
-	in := map[string]string{"account_id": "acct-1"}
-	_ = withDeviceClaims(in, &DeviceBinding{Fingerprint: "fp-1", FirstSeen: time.Now()})
+// Being told to slow down about a login that is already over would leave a
+// client polling out its ten minutes on a refusal — and being told to slow
+// down about one that has just been approved would delay the session by an
+// interval for no reason.
+func TestClaimDeviceAuthorization_terminalStatesBeatTheInterval(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
 
-	if _, ok := in[DeviceClaimFingerprint]; ok {
-		t.Error("the map destined for the refresh token was mutated to include device claims")
+	pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+	if err != nil {
+		t.Fatalf("start: %v", err)
 	}
-}
-
-// "" must become SQL NULL, not an empty string: the revocation UPDATE matches
-// on device_fp, and an empty string would collide with account-only rows.
-func TestNullableFingerprint_emptyIsNull(t *testing.T) {
-	if got := nullableFingerprint(""); got != nil {
-		t.Errorf("got %v, want nil so the column is NULL", got)
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
+		t.Fatalf("first poll: %v", err)
 	}
-	if got := nullableFingerprint("fp-1"); got != "fp-1" {
-		t.Errorf("got %v, want the fingerprint", got)
+	if err := s.DenyDeviceAuthorization(ctx, pending.UserCode, "0xowner"); err != nil {
+		t.Fatalf("deny: %v", err)
 	}
-}
 
-func TestDeviceFingerprintOf_nilBindingIsNull(t *testing.T) {
-	if got := deviceFingerprintOf(nil); got != nil {
-		t.Errorf("got %v, want nil for an account-only login", got)
+	if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAccessDenied) {
+		t.Errorf("poll = %v, want access_denied even inside the interval", err)
 	}
-}
 
-// --- subject normalisation ------------------------------------------------
-
-// The revocation bypass this closes: ETH signature verification is
-// case-insensitive, so a revoked device can present a different casing of the
-// same address. Without normalisation the UNIQUE(namespace_id, subject,
-// device_fp) constraint does not collide, a fresh UN-REVOKED row is created,
-// and the device is fully back — with a reset first_seen_at that also hands it
-// archive access it had lost.
-func TestNormalizeDeviceSubject_foldsEthAddressCasing(t *testing.T) {
-	const checksummed = "0xAbCdEf0123456789AbCdEf0123456789AbCdEf01"
-	lower := strings.ToLower(checksummed)
-
-	if normalizeDeviceSubject(checksummed) != normalizeDeviceSubject(lower) {
-		t.Error("two casings of one ETH address normalise differently — a revoked device could re-bind by changing case")
-	}
-	if got := normalizeDeviceSubject(checksummed); got != lower {
-		t.Errorf("got %q, want the lowercase form %q", got, lower)
-	}
-}
-
-// Solana addresses are base58 and case is significant: folding them would merge
-// genuinely distinct accounts into one device namespace.
-func TestNormalizeDeviceSubject_leavesBase58Untouched(t *testing.T) {
-	const sol = "7EqQdEULxWcraVx3mXKFjc84LhCkMGZCkRuDpvcMwJeK"
-
-	if got := normalizeDeviceSubject(sol); got != sol {
-		t.Errorf("a Solana address was case-folded: %q → %q; distinct accounts would collide", sol, got)
-	}
-}
-
-func TestNormalizeDeviceSubject_trimsWhitespace(t *testing.T) {
-	if got := normalizeDeviceSubject("  0xABCDEF0123456789abcdef0123456789ABCDEF01  "); got != "0xabcdef0123456789abcdef0123456789abcdef01" {
-		t.Errorf("got %q", got)
-	}
-}
-
-// --- stored timestamp parsing ---------------------------------------------
-
-// parseDeviceTime must REPORT failure rather than return a zero time.
-//
-// A zero time.Time has Unix() == -62135596800, so a silent fallback minted
-// device_since = year 1 — older than every message, which under "a new device
-// never receives the archive" grants the entire archive. That is the exact
-// inverse of the rule, reached by a driver returning an unexpected layout.
-func TestParseDeviceTime_reportsFailureInsteadOfYearOne(t *testing.T) {
-	for name, in := range map[string]any{
-		"unparseable string": "not-a-timestamp",
-		"nil":                nil,
-		"integer":            12345,
-		"empty string":       "",
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, ok := parseDeviceTime(in)
-			if ok {
-				t.Fatalf("claimed success for %v", in)
-			}
-			if got.Unix() > 0 {
-				t.Errorf("returned a usable-looking time %v for unparseable input", got)
-			}
-		})
-	}
-}
-
-func TestParseDeviceTime_acceptsTheDriverFormats(t *testing.T) {
-	want := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	for name, in := range map[string]any{
-		"time.Time": want,
-		"RFC3339":   want.Format(time.RFC3339),
-		"sqlite":    want.Format("2006-01-02 15:04:05"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, ok := parseDeviceTime(in)
-			if !ok {
-				t.Fatalf("failed to parse %v", in)
-			}
-			if !got.Equal(want) {
-				t.Errorf("got %v, want %v", got, want)
-			}
-		})
-	}
-}
-
-// --- read-after-write ------------------------------------------------------
-
-// bindDeviceDB models rqlite's actual consistency: a write goes through raft and
-// is NOT guaranteed visible to an immediately-following read.
-//
-// The first implementation did INSERT OR IGNORE then SELECT back, and failed on
-// devnet the first time it ran — the row committed correctly, the read
-// microseconds later returned nothing, and the code reported "binding vanished"
-// as a 401. Unit tests missed it because the fake was instantly consistent, so
-// this fake deliberately is not.
-type bindDeviceDB struct {
-	client.DatabaseClient
-	rowVisible bool // whether the SELECT finds an existing binding
-	selects    int
-	inserts    int
-}
-
-// bindDeviceOrm wraps the fake so it satisfies the service's client seam.
-type bindDeviceOrm struct {
-	client.NetworkClient
-	db *bindDeviceDB
-}
-
-func (o *bindDeviceOrm) Database() client.DatabaseClient { return o.db }
-
-// newDeviceTestService builds a Service backed by the supplied fake database.
-func newDeviceTestService(t *testing.T, db *bindDeviceDB) *Service {
-	t.Helper()
-	s := createDualKeyService(t)
-	s.orm = &bindDeviceOrm{db: db}
-	return s
-}
-
-func (d *bindDeviceDB) result(cols []string, rows [][]interface{}) *client.QueryResult {
-	return &client.QueryResult{Count: int64(len(rows)), Rows: rows, Columns: cols}
-}
-
-func (d *bindDeviceDB) Query(_ context.Context, sql string, _ ...interface{}) (*client.QueryResult, error) {
-	switch {
-	case strings.Contains(sql, "INSERT OR IGNORE INTO namespaces"):
-		return &client.QueryResult{Count: 0}, nil
-	case strings.Contains(sql, "FROM namespaces"):
-		return d.result([]string{"id"}, [][]interface{}{{int64(1)}}), nil
-	case strings.Contains(sql, "INSERT OR IGNORE INTO orama_device_bindings"):
-		d.inserts++
-		// The write "succeeds" but stays invisible to reads, as raft replication
-		// makes possible.
-		return &client.QueryResult{Count: 0}, nil
-	case strings.Contains(sql, "FROM orama_device_bindings"):
-		d.selects++
-		if !d.rowVisible {
-			return &client.QueryResult{Count: 0}, nil
+	t.Run("and an approval is handed over inside the interval too", func(t *testing.T) {
+		pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+		if err != nil {
+			t.Fatalf("start: %v", err)
 		}
-		return d.result(
-			[]string{"public_key", "first_seen_at", "revoked_at"},
-			[][]interface{}{{"stored-pubkey", time.Unix(1700000000, 0).UTC(), nil}},
-		), nil
-	}
-	return &client.QueryResult{Count: 0}, nil
+		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); !errors.Is(err, ErrDeviceAuthorizationPending) {
+			t.Fatalf("first poll: %v", err)
+		}
+		if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		if _, err := s.ClaimDeviceAuthorization(ctx, pending.DeviceCode, nil); err != nil {
+			t.Errorf("poll right after approval = %v, want the session", err)
+		}
+	})
 }
 
-// A first-time binding must succeed without ever reading back what it just
-// wrote. This is the devnet failure, reproduced.
-func TestBindDevice_firstBindDoesNotDependOnReadAfterWrite(t *testing.T) {
-	db := &bindDeviceDB{rowVisible: false}
-	s := newDeviceTestService(t, db)
+// The device code is the credential the waiting machine holds, so a table read
+// must not hand out something that collects a session.
+func TestStartDeviceAuthorization_storesNoDeviceCodeInTheClear(t *testing.T) {
+	s, db, _ := realRegistry(t)
 
-	binding, err := s.BindDevice(context.Background(), "anchat-v2", "0xWALLET", "pubkey-b64", "fp-1")
+	pending, err := s.StartDeviceAuthorization(context.Background(), "anchat")
 	if err != nil {
-		t.Fatalf("first bind failed on a database that does not serve reads-after-writes: %v", err)
+		t.Fatalf("start: %v", err)
 	}
-	if binding.Fingerprint != "fp-1" {
-		t.Errorf("fingerprint = %q", binding.Fingerprint)
+
+	var stored string
+	if err := db.db.QueryRow(`SELECT device_code FROM device_authorizations`).Scan(&stored); err != nil {
+		t.Fatalf("read back: %v", err)
 	}
-	if binding.FirstSeen.IsZero() {
-		t.Error("first_seen not set on a newly-created binding")
+	if stored == pending.DeviceCode {
+		t.Fatal("the device code is stored as it was handed out")
 	}
-	if db.inserts != 1 {
-		t.Errorf("inserts = %d, want 1", db.inserts)
+	if len(stored) != 64 {
+		t.Errorf("stored device code is %q, want a sha256 hex digest", stored)
 	}
 }
 
-// A returning device takes first_seen from STORAGE, never from the clock —
-// otherwise device_since would advance on every login and a device would keep
-// re-earning "joined just now", which is the whole property the archive rule
-// depends on.
-func TestBindDevice_returningDeviceKeepsStoredFirstSeen(t *testing.T) {
-	db := &bindDeviceDB{rowVisible: true}
-	s := newDeviceTestService(t, db)
+// Nothing accumulates: a login nobody came back for, or one already used, is
+// gone by the next login.
+func TestStartDeviceAuthorization_sweepsWhatNobodyCameBackFor(t *testing.T) {
+	s, db, _ := realRegistry(t)
+	ctx := context.Background()
 
-	binding, err := s.BindDevice(context.Background(), "anchat-v2", "0xWALLET", "pubkey-b64", "fp-1")
+	stale, err := s.StartDeviceAuthorization(ctx, "anchat")
 	if err != nil {
-		t.Fatalf("bind failed: %v", err)
+		t.Fatalf("start: %v", err)
 	}
-	if got := binding.FirstSeen.Unix(); got != 1700000000 {
-		t.Errorf("first_seen = %d, want the stored 1700000000 — device_since must not advance on re-login", got)
+	past := time.Now().Add(-time.Hour).UTC().Format(sqliteTime)
+	if _, err := db.db.Exec(`UPDATE device_authorizations SET expires_at = ?`, past); err != nil {
+		t.Fatalf("expire: %v", err)
 	}
-	if db.inserts != 0 {
-		t.Errorf("a returning device re-inserted (%d); first_seen_at must be set once", db.inserts)
+
+	if _, err := s.StartDeviceAuthorization(ctx, "anchat"); err != nil {
+		t.Fatalf("second start: %v", err)
 	}
+
+	var rows int
+	if err := db.db.QueryRow(`SELECT COUNT(*) FROM device_authorizations`).Scan(&rows); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("%d rows remain, want only the live one", rows)
+	}
+	if _, err := s.ClaimDeviceAuthorization(ctx, stale.DeviceCode, nil); !errors.Is(err, ErrDeviceCodeUnknown) {
+		t.Errorf("the swept login still answers: %v", err)
+	}
+}
+
+func TestNormalizeUserCode(t *testing.T) {
+	code, err := newUserCode()
+	if err != nil {
+		t.Fatalf("newUserCode: %v", err)
+	}
+	if len(code) != deviceUserCodeLength+1 || !strings.Contains(code, "-") {
+		t.Fatalf("user code %q is not grouped for reading aloud", code)
+	}
+
+	// However somebody types it back.
+	for _, typed := range []string{code, strings.ToLower(code), strings.ReplaceAll(code, "-", ""), " " + code + " "} {
+		got, err := NormalizeUserCode(typed)
+		if err != nil {
+			t.Fatalf("NormalizeUserCode(%q): %v", typed, err)
+		}
+		if got != code {
+			t.Errorf("NormalizeUserCode(%q) = %q, want %q", typed, got, code)
+		}
+	}
+
+	for _, bad := range []string{"", "ABC", "ABCD-EFGHI"} {
+		if _, err := NormalizeUserCode(bad); err == nil {
+			t.Errorf("NormalizeUserCode(%q) was accepted", bad)
+		}
+	}
+}
+
+// A user code an attacker can guess is one they can have approved by asking the
+// user to approve "their own" login.
+func TestNewUserCode_isDrawnFreshEveryTime(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 200; i++ {
+		code, err := newUserCode()
+		if err != nil {
+			t.Fatalf("newUserCode: %v", err)
+		}
+		if seen[code] {
+			t.Fatalf("%q came up twice in 200 draws", code)
+		}
+		seen[code] = true
+		for _, c := range strings.ReplaceAll(code, "-", "") {
+			if !strings.ContainsRune(deviceUserCodeAlphabet, c) {
+				t.Fatalf("%q contains %q, which is not in the alphabet", code, c)
+			}
+		}
+	}
+}
+
+// The string path, which is the one production takes: rqlite decodes JSON, so
+// every column arrives as text and an expires_at nobody can parse is a deadline
+// that never arrives. go-sqlite3 parses the column for us, so no test that goes
+// through SQLite reaches this.
+func TestDeviceExpired_readsWhatEitherClientReturns(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	past := time.Now().Add(-time.Hour)
+
+	for _, tc := range []struct {
+		name string
+		cell any
+		want bool
+	}{
+		{"a NULL deadline is past, because the column is NOT NULL", nil, true},
+		{"a time.Time in the future is not", future, false},
+		{"a time.Time in the past is", past, true},
+		{"a string in the future is not", future.UTC().Format(sqliteTime), false},
+		{"a string in the past is", past.UTC().Format(sqliteTime), true},
+		{"RFC3339 is read too", future.UTC().Format(time.RFC3339), false},
+		{"a string nobody can parse is past", "whenever", true},
+		{"an empty string is past", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deviceExpired(tc.cell); got != tc.want {
+				t.Errorf("deviceExpired(%v) = %v, want %v", tc.cell, got, tc.want)
+			}
+		})
+	}
+}
+
+// Two machines polling one device code, or two people approving one user code,
+// both pass the read that precedes the write: the read cannot see a write that
+// has not happened. The compare-and-swap is what makes exactly one of them win,
+// and it is the only thing that does.
+func TestDeviceFlow_theWritesAreCompareAndSwap(t *testing.T) {
+	s, _, _ := realRegistry(t)
+	ctx := context.Background()
+
+	t.Run("one approval wins", func(t *testing.T) {
+		pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		code, err := NormalizeUserCode(pending.UserCode)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		first, err := s.recordApproval(ctx, code, "0xowner", "anchat")
+		if err != nil || !first {
+			t.Fatalf("first approval: won=%v err=%v", first, err)
+		}
+		second, err := s.recordApproval(ctx, code, "0xsomebodyelse", "anchat")
+		if err != nil {
+			t.Fatalf("second approval: %v", err)
+		}
+		if second {
+			t.Error("a second approval of the same code also won, so who approved it is whoever wrote last")
+		}
+	})
+
+	t.Run("one collection wins", func(t *testing.T) {
+		pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		if err := s.ApproveDeviceAuthorization(ctx, pending.UserCode, "0xowner", "anchat"); err != nil {
+			t.Fatalf("approve: %v", err)
+		}
+		hashed := sha256Hex(pending.DeviceCode)
+
+		first, err := s.claimApproval(ctx, hashed)
+		if err != nil || !first {
+			t.Fatalf("first collection: won=%v err=%v", first, err)
+		}
+		second, err := s.claimApproval(ctx, hashed)
+		if err != nil {
+			t.Fatalf("second collection: %v", err)
+		}
+		if second {
+			t.Error("one approval was collected twice, so two machines hold a session from one login")
+		}
+	})
+
+	t.Run("a refused login cannot then be approved", func(t *testing.T) {
+		pending, err := s.StartDeviceAuthorization(ctx, "anchat")
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		code, err := NormalizeUserCode(pending.UserCode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.DenyDeviceAuthorization(ctx, code, "0xowner"); err != nil {
+			t.Fatalf("deny: %v", err)
+		}
+
+		won, err := s.recordApproval(ctx, code, "0xowner", "anchat")
+		if err != nil {
+			t.Fatalf("approval after refusal: %v", err)
+		}
+		if won {
+			t.Error("a refused login was approved anyway, so refusing is only a suggestion")
+		}
+	})
 }

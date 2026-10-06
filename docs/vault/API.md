@@ -9,7 +9,7 @@ http://<guardian-ip>:7500/v1/vault/...
 http://<guardian-ip>:7500/v2/vault/...
 ```
 
-In production, the Orama gateway reverse-proxies these endpoints over TLS (port 443). Direct access to port 7500 is only available within the WireGuard overlay network.
+In production, clients reach vault over TLS on port 443 **through the Orama gateway**. The gateway is not a reverse-proxy of `/v1/vault/*`: it splits secrets on push and combines shares on pull, then talks to guardians on the WireGuard overlay. Direct access to guardian port 7500 is overlay-only.
 
 > **Note:** TLS termination is not yet implemented in the guardian itself (Phase 3). Currently plain TCP.
 
@@ -352,7 +352,22 @@ Key properties:
 
 V2 introduces a generic secrets API. Instead of storing a single anonymous share per identity, V2 allows multiple named secrets per identity with full CRUD operations.
 
-All V2 secrets endpoints require mandatory session authentication via the `X-Session-Token` header. The identity is extracted from the session token -- it is never passed in the request body. Authenticate first using the V2 auth endpoints below.
+All V2 secrets endpoints require a session token (`X-Session-Token`) **and** an Ed25519 ownership proof:
+
+- `X-Vault-Pubkey` — 64 hex chars (32-byte Ed25519 public key). Identity must equal SHA-256 of this key.
+- `X-Vault-Signature` — 128 hex chars. Signature over the canonical message below.
+- `X-Vault-Timestamp` — unix seconds, required on GET/DELETE/LIST (max 120s skew).
+
+Canonical messages (ASCII, must match the Zig guardian and Go/TS clients):
+
+```
+vault-secret-put-v1:<identity>:<name>:<version>
+vault-secret-get-v1:<identity>:<name>:<timestamp>
+vault-secret-delete-v1:<identity>:<name>:<timestamp>
+vault-secret-list-v1:<identity>:<timestamp>
+```
+
+The HMAC session is not an ownership proof: anyone who knows the 64-hex identity can echo a challenge. The signature is what binds the caller to the identity. Authenticate first using the V2 auth endpoints below.
 
 ### POST /v2/vault/auth/challenge
 
@@ -420,6 +435,8 @@ Store a named secret. Requires session authentication. The identity is extracted
 PUT /v2/vault/secrets/my-api-key HTTP/1.1
 Content-Type: application/json
 X-Session-Token: <session_token>
+X-Vault-Pubkey: <64 hex>
+X-Vault-Signature: <128 hex>
 
 {
   "share": "<base64-encoded secret data>",
@@ -457,6 +474,7 @@ X-Session-Token: <session_token>
 | 400 | `{"error":"secret limit exceeded"}` | Identity has reached the 1000 secret limit |
 | 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
+| 401 | `{"error":"invalid ownership signature"}` | Missing or invalid `X-Vault-Pubkey` / `X-Vault-Signature` |
 | 500 | `{"error":"internal server error"}` | Disk write failure |
 
 **Storage Layout:**
@@ -487,6 +505,9 @@ Retrieve a named secret. Requires session authentication. The identity is extrac
 ```
 GET /v2/vault/secrets/my-api-key HTTP/1.1
 X-Session-Token: <session_token>
+X-Vault-Pubkey: <64 hex>
+X-Vault-Signature: <128 hex>
+X-Vault-Timestamp: <unix seconds>
 ```
 
 **Success Response (200 OK):**
@@ -514,6 +535,7 @@ X-Session-Token: <session_token>
 |--------|------|-----------|
 | 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
+| 401 | `{"error":"invalid ownership signature"}` | Missing or invalid ownership headers |
 | 404 | `{"error":"secret not found"}` | No secret with this name for this identity |
 | 500 | `{"error":"internal server error"}` | Disk read failure |
 
@@ -527,6 +549,9 @@ Delete a named secret. Requires session authentication. The identity is extracte
 ```
 DELETE /v2/vault/secrets/my-api-key HTTP/1.1
 X-Session-Token: <session_token>
+X-Vault-Pubkey: <64 hex>
+X-Vault-Signature: <128 hex>
+X-Vault-Timestamp: <unix seconds>
 ```
 
 **Success Response (200 OK):**
@@ -543,6 +568,7 @@ X-Session-Token: <session_token>
 |--------|------|-----------|
 | 401 | `{"error":"session token required"}` | `X-Session-Token` header not provided |
 | 401 | `{"error":"invalid session token"}` | Token is malformed or expired |
+| 401 | `{"error":"invalid ownership signature"}` | Missing or invalid ownership headers |
 | 404 | `{"error":"secret not found"}` | No secret with this name for this identity |
 | 500 | `{"error":"internal server error"}` | Disk delete failure |
 
@@ -556,6 +582,9 @@ List all secrets for the authenticated identity. Requires session authentication
 ```
 GET /v2/vault/secrets HTTP/1.1
 X-Session-Token: <session_token>
+X-Vault-Pubkey: <64 hex>
+X-Vault-Signature: <128 hex>
+X-Vault-Timestamp: <unix seconds>
 ```
 
 **Success Response (200 OK):**

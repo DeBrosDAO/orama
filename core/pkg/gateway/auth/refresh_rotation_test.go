@@ -6,7 +6,6 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -33,8 +32,6 @@ type rotationMockORMDB struct {
 	mu             sync.Mutex
 	subjectByToken map[string]string // hashedToken -> subject (nil/missing = "invalid")
 	claimsByToken  map[string]string // hashedToken -> custom_claims JSON (bugboard #548)
-	deviceByToken  map[string]string // hashedToken -> device_fp (feat-384)
-	liveBindings   map[string]bool   // device_fp -> binding exists and is NOT revoked (feat-384)
 	// claimsBySubject: subject -> last-known-good custom_claims JSON. Serves the
 	// lastKnownCustomClaims lookup (bugboard #143): the anti-fragmentation reuse
 	// reads the most recent stored account_id for a wallet at login.
@@ -76,20 +73,6 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
-	// device_bindings lookup (feat-384): the refresh path re-derives the device
-	// claim from a LIVE binding, so the fake must be able to say "revoked or
-	// unknown" as well as "live" — that distinction is what makes revocation
-	// testable at all.
-	if containsCI(sql, "orama_device_bindings") {
-		if len(args) < 3 {
-			return &client.QueryResult{Count: 0}, nil
-		}
-		fp, _ := args[2].(string)
-		if m.liveBindings != nil && m.liveBindings[fp] {
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{"pubkey-b64", time.Unix(1700000000, 0).UTC()}}}, nil
-		}
-		return &client.QueryResult{Count: 0}, nil
-	}
 	// Grace-path SELECT (bugboard #125): SELECT subject for a recently-revoked,
 	// grace-available token. Distinguished from the active-path SELECT by the
 	// grace_used_at predicate. Must be checked BEFORE the generic handler.
@@ -103,11 +86,11 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 			if m.claimsByToken != nil {
 				claims = m.claimsByToken[hashedTok]
 			}
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims, m.deviceFor(hashedTok)}}}, nil
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
-	// SELECT subject (+ custom_claims, bugboard #548, + device_fp, feat-384).
+	// SELECT subject (+ custom_claims, bugboard #548) for the lookup.
 	if containsCI(sql, "SELECT subject") && containsCI(sql, "FROM refresh_tokens") {
 		m.selectAttemptsTaken++
 		if m.selectErrRemaining > 0 {
@@ -123,7 +106,7 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 			if m.claimsByToken != nil {
 				claims = m.claimsByToken[hashedTok]
 			}
-			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims, m.deviceFor(hashedTok)}}}, nil
+			return &client.QueryResult{Count: 1, Rows: [][]interface{}{{subj, claims}}}, nil
 		}
 		return &client.QueryResult{Count: 0}, nil
 	}
@@ -157,50 +140,21 @@ func (m *rotationMockORMDB) Query(_ context.Context, sql string, args ...interfa
 				m.subjectByToken = map[string]string{}
 			}
 			m.subjectByToken[hashedTok] = subj
-			// custom_claims is arg index 4 — (namespace_id, subject, token,
-			// audience, custom_claims, device_fp), with expires_at inlined as
-			// datetime(). Captured by position, NOT as "the last arg": that
-			// assumption silently broke when device_fp was appended for
-			// feat-384, and a positional read fails loudly instead.
+			// custom_claims is the fifth arg (bugboard #548), before the
+			// device and session ids — capture it so rotation-propagation
+			// tests can assert it carries forward.
 			if m.claimsByToken == nil {
 				m.claimsByToken = map[string]string{}
 			}
-			if len(args) > refreshInsertCustomClaimsArg {
-				if cc, ok := args[refreshInsertCustomClaimsArg].(string); ok {
+			if len(args) > 4 {
+				if cc, ok := args[4].(string); ok {
 					m.claimsByToken[hashedTok] = cc
-				}
-			}
-			if m.deviceByToken == nil {
-				m.deviceByToken = map[string]string{}
-			}
-			if len(args) > refreshInsertDeviceFPArg {
-				if fp, ok := args[refreshInsertDeviceFPArg].(string); ok {
-					m.deviceByToken[hashedTok] = fp
 				}
 			}
 		}
 		return &client.QueryResult{Count: 1}, nil
 	}
 	return &client.QueryResult{Count: 0}, nil
-}
-
-// refreshInsertCustomClaimsArg / refreshInsertDeviceFPArg are the positions of
-// custom_claims and device_fp in the INSERT INTO refresh_tokens argument list.
-const (
-	refreshInsertCustomClaimsArg = 4
-	refreshInsertDeviceFPArg     = 5
-)
-
-// deviceFor returns the device_fp the fake holds for a token, as the driver
-// would: a real NULL column comes back as nil, not "".
-func (m *rotationMockORMDB) deviceFor(hashedTok string) interface{} {
-	if m.deviceByToken == nil {
-		return nil
-	}
-	if fp, ok := m.deviceByToken[hashedTok]; ok && fp != "" {
-		return fp
-	}
-	return nil
 }
 
 // rotationMockRqlite is the lower-level client used for the CAS UPDATE.
@@ -351,7 +305,7 @@ func TestRefreshToken_HappyPath_rotatesAndReturnsNewToken(t *testing.T) {
 	const oldRefresh = "old-refresh-token"
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -394,7 +348,7 @@ func TestRefreshToken_CASLost_returnsReplayError(t *testing.T) {
 	// Force the next UPDATE to claim "0 rows affected" — race lost.
 	rq.rowsAffectedNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), stolen, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTokenReplay) {
 		t.Fatalf("err = %v, want ErrRefreshTokenReplay", err)
 	}
@@ -409,7 +363,7 @@ func TestRefreshToken_InvalidToken_returnsAuthError(t *testing.T) {
 	// No row exists for this token — SELECT returns 0 rows.
 	s, _, _ := newRotationTestService(t)
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for invalid token, got nil")
 	}
@@ -426,7 +380,7 @@ func TestRefreshToken_NoRqliteClient_refusesToRotate(t *testing.T) {
 	// atomicity. It MUST refuse rather than rotate non-atomically.
 	s := createDualKeyService(t) // mockDatabaseClient via shared helper; no rqlite injected
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "anything", "anchat-test", nil)
 	if !errors.Is(err, ErrRotationNotConfigured) {
 		t.Fatalf("err = %v, want ErrRotationNotConfigured", err)
 	}
@@ -452,7 +406,7 @@ func TestRefreshToken_ConcurrentRotation_exactlyOneWins(t *testing.T) {
 		go func() {
 			defer endWg.Done()
 			startWg.Wait() // launch all goroutines simultaneously
-			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test")
+			_, _, _, _, err := s.RefreshToken(context.Background(), sharedToken, "anchat-test", nil)
 			wins <- err
 		}()
 	}
@@ -505,7 +459,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(oldRefresh)] = "0xWALLET"
 
 	// First call rotates successfully.
-	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("first RefreshToken: %v", err)
 	}
@@ -519,7 +473,7 @@ func TestRefreshToken_RotatedTokenReplayFails(t *testing.T) {
 	delete(ormDB.subjectByToken, sha256Hex(oldRefresh))
 
 	// Try to reuse the rotated-away token.
-	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test")
+	_, _, _, _, err = s.RefreshToken(context.Background(), oldRefresh, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error reusing rotated token, got nil")
 	}
@@ -537,7 +491,7 @@ func TestRefreshToken_transientSelectError_returnsTransient(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = 99
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient (a valid token must not 401 during a leader outage)", err)
 	}
@@ -552,7 +506,7 @@ func TestRefreshToken_selectRecoversAfterRetry(t *testing.T) {
 	ormDB.selectErr = errors.New("rqlite: leadership lost")
 	ormDB.selectErrRemaining = refreshSelectRetries - 1 // fail all but the last attempt
 
-	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, subj, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken should recover after transient blips: %v", err)
 	}
@@ -568,7 +522,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
 	rq.execErrNext = []error{errors.New("rqlite: write failed, no leader")}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if !errors.Is(err, ErrRefreshTransient) {
 		t.Fatalf("err = %v, want ErrRefreshTransient on a transient CAS write error", err)
 	}
@@ -578,7 +532,7 @@ func TestRefreshToken_transientUpdateError_returnsTransient(t *testing.T) {
 // transient — the distinction is the whole point of the #125 fix.
 func TestRefreshToken_unknownToken_isNotTransient(t *testing.T) {
 	s, _, _ := newRotationTestService(t)
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-existed", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown token")
 	}
@@ -712,7 +666,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Refresh — the rotated access token must carry account_id, and the NEW
 	// refresh row must propagate the stored claims.
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -729,7 +683,7 @@ func TestRefreshToken_propagatesCustomClaims(t *testing.T) {
 
 	// Second rotation hop (N+1 → N+2): the claim must survive repeated
 	// rotations, not just the first — the propagation is the whole point.
-	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test")
+	access2, _, _, _, err := s.RefreshToken(context.Background(), newRefresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("second RefreshToken: %v", err)
 	}
@@ -775,7 +729,7 @@ func TestRefreshToken_reResolvesEmptyClaims_onRefresh(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "uuid-healed"}}
 	s.SetClaimsResolver(resolver)
 
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -804,7 +758,7 @@ func TestRefreshToken_healthySession_doesNotReResolve(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: map[string]string{"account_id": "SHOULD-NOT-APPEAR"}}
 	s.SetClaimsResolver(resolver)
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -826,7 +780,7 @@ func TestRefreshToken_emptyClaims_providerStillEmpty_succeeds(t *testing.T) {
 	resolver := &countingClaimsResolver{claims: nil}
 	s.SetClaimsResolver(resolver)
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken must succeed even when re-resolve yields empty: %v", err)
 	}
@@ -847,7 +801,7 @@ func TestRefreshToken_emptyClaims_noResolver_untouched(t *testing.T) {
 	ormDB.subjectByToken[sha256Hex(refresh)] = "0xWALLET"
 	// No SetClaimsResolver → claimsResolver nil; the guard skips re-resolution.
 
-	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), refresh, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("RefreshToken: %v", err)
 	}
@@ -874,7 +828,7 @@ func TestRefreshToken_reuseGrace_recoversLostResponse(t *testing.T) {
 	// ... but eligible for grace (revoked recently, grace unused).
 	ormDB.graceableTokens = map[string]string{sha256Hex(lostTok): "0xWALLET"}
 
-	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
+	access, newRefresh, subj, exp, err := s.RefreshToken(context.Background(), lostTok, "anchat-test", nil)
 	if err != nil {
 		t.Fatalf("grace recovery should succeed, got error: %v", err)
 	}
@@ -911,7 +865,7 @@ func TestRefreshToken_reuseGrace_singleUse_secondAttemptIs401(t *testing.T) {
 	// Force the grace CAS to report "already consumed".
 	rq.graceCASNext = []int64{0}
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a consumed grace must NOT recover — expected an invalid-token error")
 	}
@@ -929,7 +883,7 @@ func TestRefreshToken_noGrace_genuineBadToken_stays401(t *testing.T) {
 	s, ormDB, _ := newRotationTestService(t)
 	// graceableTokens left empty: nothing is grace-eligible.
 
-	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), "never-seen-this-token", "anchat-test", nil)
 	if err == nil {
 		t.Fatal("a never-seen token must be rejected")
 	}
@@ -958,7 +912,7 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 
 	// A refresh with the just-logged-out token must be rejected, not resurrected.
-	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	_, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test", nil)
 	if err == nil {
 		t.Fatal("LOGOUT-BYPASS: a logged-out token was resurrected via reuse grace")
 	}
@@ -970,117 +924,34 @@ func TestRevokeToken_burnsGrace_blocksLogoutBypass(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------------------
-// feat-384 — device attribution across the refresh paths.
-// ----------------------------------------------------------------------------
-
-// A device that recovers through the reuse grace must keep its device binding.
-//
-// The grace path exists for a legitimate client whose rotation response was lost
-// — a VoIP-woken locked device being the motivating case. Its first version
-// selected only (subject, custom_claims), so the recovered session came back
-// with device_fp NULL: the device silently lost its attribution, and every
-// function requiring it would deny the very client the grace window was built to
-// rescue. It failed closed rather than forging, but it broke the feature exactly
-// where it was needed.
-func TestRefreshToken_reuseGrace_preservesTheDeviceBinding(t *testing.T) {
-	s, ormDB, _ := newRotationTestService(t)
-
-	const lostTok = "rotated-but-response-lost"
-	hashed := sha256Hex(lostTok)
-	ormDB.graceableTokens = map[string]string{hashed: "0xWALLET"}
-	ormDB.deviceByToken = map[string]string{hashed: "device-fp-1"}
-	ormDB.liveBindings = map[string]bool{"device-fp-1": true}
-
-	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), lostTok, "anchat-test")
-	if err != nil {
-		t.Fatalf("grace recovery failed: %v", err)
-	}
-
-	if got := ormDB.deviceByToken[sha256Hex(newRefresh)]; got != "device-fp-1" {
-		t.Errorf("device binding lost through the reuse grace: got %q, want device-fp-1", got)
+// A gateway that cannot reach its own registry must say so as a retryable
+// failure (503), never as a rejected token (401): the CLI ends a session only
+// on a rejection.
+func TestRefreshToken_registryUnavailableIsTransient(t *testing.T) {
+	s, _, _ := newRotationTestService(t)
+	s.orm = nil
+	_, _, _, _, err := s.RefreshToken(context.Background(), "any", "anchat-test", nil)
+	if !errors.Is(err, ErrRefreshTransient) {
+		t.Fatalf("err = %v, want ErrRefreshTransient", err)
 	}
 }
 
-// An account-only session (no device assertion at login) must keep device_fp
-// NULL through rotation — never "", which would compare equal in the revocation
-// UPDATE and let a device revocation sweep up unrelated account-only chains.
-func TestRefreshToken_accountOnlySessionStaysUnbound(t *testing.T) {
+// A refresh naming no namespace minted a token naming none, which the
+// permission check did not read as the lobby (security review, 2026-09-30).
+func TestRefreshToken_noNamespaceIsTheLobby(t *testing.T) {
 	s, ormDB, _ := newRotationTestService(t)
+	const old = "lobby-refresh-token"
+	ormDB.subjectByToken[sha256Hex(old)] = "0xWALLET"
 
-	const tok = "account-only-token"
-	ormDB.subjectByToken = map[string]string{sha256Hex(tok): "0xWALLET"}
-
-	_, newRefresh, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
+	access, _, _, _, err := s.RefreshToken(context.Background(), old, "  ", nil)
 	if err != nil {
-		t.Fatalf("refresh failed: %v", err)
-	}
-
-	if got, ok := ormDB.deviceByToken[sha256Hex(newRefresh)]; ok && got != "" {
-		t.Errorf("an account-only session acquired a device binding: %q", got)
-	}
-}
-
-// The revocation requirement, on the path that actually decides it.
-//
-// A revoked device holds a live refresh chain. It must NOT be able to rotate
-// that chain into a new device-stamped access token — otherwise "a revoked
-// device stops being served" would take the chain's full 30-day life instead of
-// one 15-minute access token. The claim is re-derived from the live binding on
-// every refresh precisely so this fails.
-func TestRefreshToken_revokedDevice_mintsNoDeviceClaim(t *testing.T) {
-	s, ormDB, _ := newRotationTestService(t)
-
-	const tok = "chain-held-by-a-revoked-device"
-	hashed := sha256Hex(tok)
-	ormDB.subjectByToken = map[string]string{hashed: "0xWALLET"}
-	ormDB.deviceByToken = map[string]string{hashed: "device-fp-revoked"}
-	// The binding was revoked: the lookup finds nothing live.
-	ormDB.liveBindings = map[string]bool{}
-
-	access, newRefresh, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
-	if err != nil {
-		t.Fatalf("refresh failed: %v", err)
-	}
-
-	claims, err := s.ParseAndVerifyJWT(access)
-	if err != nil {
-		t.Fatalf("ParseAndVerifyJWT: %v", err)
-	}
-	if fp := claims.Custom[DeviceClaimFingerprint]; fp != "" {
-		t.Errorf("a revoked device still received a device claim (%q) — revocation would take 30 days, not 15 minutes", fp)
-	}
-	// And the rotated chain must not carry the binding forward either, or the
-	// next rotation would resurrect it.
-	if got, ok := ormDB.deviceByToken[sha256Hex(newRefresh)]; ok && got != "" {
-		t.Errorf("the revoked device's binding survived rotation: %q", got)
-	}
-}
-
-// The complement: a device that is still current keeps its claim across
-// rotation. Without this the revocation test above would pass trivially on a
-// refresh path that simply never stamps a device claim.
-func TestRefreshToken_liveDevice_keepsItsClaim(t *testing.T) {
-	s, ormDB, _ := newRotationTestService(t)
-
-	const tok = "chain-held-by-a-live-device"
-	hashed := sha256Hex(tok)
-	ormDB.subjectByToken = map[string]string{hashed: "0xWALLET"}
-	ormDB.deviceByToken = map[string]string{hashed: "device-fp-live"}
-	ormDB.liveBindings = map[string]bool{"device-fp-live": true}
-
-	access, _, _, _, err := s.RefreshToken(context.Background(), tok, "anchat-test")
-	if err != nil {
-		t.Fatalf("refresh failed: %v", err)
+		t.Fatalf("RefreshToken: %v", err)
 	}
 	claims, err := s.ParseAndVerifyJWT(access)
 	if err != nil {
-		t.Fatalf("ParseAndVerifyJWT: %v", err)
+		t.Fatalf("parse: %v", err)
 	}
-	if claims.Custom[DeviceClaimFingerprint] != "device-fp-live" {
-		t.Errorf("a live device lost its claim on refresh; custom=%v", claims.Custom)
-	}
-	if claims.Custom[DeviceClaimSince] != "1700000000" {
-		t.Errorf("device_since = %q, want the binding's first-seen time", claims.Custom[DeviceClaimSince])
+	if claims.Namespace != LobbyNamespace {
+		t.Fatalf("token names namespace %q, want %q", claims.Namespace, LobbyNamespace)
 	}
 }

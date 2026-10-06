@@ -26,12 +26,12 @@ type requestLogEntry struct {
 // requestLogBatcher aggregates request logs and flushes them to RQLite in bulk
 // instead of issuing 3 DB writes per request (INSERT log + SELECT api_key_id + UPDATE last_used).
 type requestLogBatcher struct {
-	gw        *Gateway
-	entries   []requestLogEntry
-	mu        sync.Mutex
-	interval  time.Duration
-	maxBatch  int
-	stopCh    chan struct{}
+	gw       *Gateway
+	entries  []requestLogEntry
+	mu       sync.Mutex
+	interval time.Duration
+	maxBatch int
+	stopCh   chan struct{}
 }
 
 func newRequestLogBatcher(gw *Gateway, interval time.Duration, maxBatch int) *requestLogBatcher {
@@ -160,6 +160,10 @@ func (b *requestLogBatcher) flush() {
 
 		if _, err := db.Query(client.WithInternalAuth(ctx), sb.String(), args...); err != nil && b.gw.logger != nil {
 			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to flush request logs", zap.Error(err))
+		}
+		if _, err := db.Query(client.WithInternalAuth(ctx),
+			"DELETE FROM request_logs WHERE created_at < datetime('now', '-7 days')"); err != nil && b.gw.logger != nil {
+			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to prune request_logs", zap.Error(err))
 		}
 	}
 

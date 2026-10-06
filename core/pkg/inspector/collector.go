@@ -4,10 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/systemd"
+	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
+	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // ClusterData holds all collected data from the cluster.
@@ -26,9 +34,17 @@ type NodeData struct {
 	WireGuard  *WireGuardData
 	System     *SystemData
 	Network    *NetworkData
-	Anyone     *AnyoneData
+	Tor        *TorData
+	Chain      *report.ChainReport
+	Global     *report.GlobalReport
 	Namespaces []NamespaceData // namespace instances on this node
-	Errors     []string        // collection errors for this node
+	Errors     []string        // collection errors for this node, one line each
+	// Unreachable is why no session to the node worked ("" when one did). When set
+	// nothing else was collected and every check on the node is replaced by one result.
+	Unreachable string
+	// Failed maps a subsystem to why its data could not be collected. A subsystem
+	// in here has nil data, never zero values that read as a dead service.
+	Failed map[string]string
 }
 
 // NamespaceData holds data for a single namespace on a node.
@@ -43,7 +59,52 @@ type NamespaceData struct {
 	GatewayStatus int    // HTTP status code from gateway health
 	SFUUp         bool   // SFU systemd service active (optional, WebRTC)
 	TURNUp        bool   // TURN systemd service active (optional, WebRTC)
+	// RegistryStatus is the status the cluster registry records for the
+	// namespace (namespace_clusters.status), "" when the registry could not be
+	// read or has no such namespace.
+	RegistryStatus string
+	// TransitionAge is how long the registry has had the namespace in
+	// provisioning or deprovisioning (its own clock): 0 when it is not, and
+	// UnknownTransitionAge when the registry's stamp could not be read.
+	TransitionAge time.Duration
 }
+
+// namespaceTransitionLimit is how long a namespace may be created or deleted
+// before it is judged like any other. The registry declares a provisioning
+// abandoned after 11 minutes (registry_retry.go: staleProvisioningAfter) and a
+// teardown after 12 (stale_deprovisioning.go: staleDeprovisioningAfter), and
+// takes either over; one still in transition after this is stuck, and a
+// namespace stuck for ever must not be skipped for ever.
+const namespaceTransitionLimit = 15 * time.Minute
+
+// UnknownTransitionAge marks a namespace in transition whose stamp could not be
+// read: it is judged, never excused on a guess.
+const UnknownTransitionAge time.Duration = -1
+
+// InTransition reports whether the registry says the namespace is being
+// created or deleted, and has said so for less than namespaceTransitionLimit:
+// its services come up and go away node by node, so a node where they are not
+// (yet, or any more) up is not unhealthy.
+func (n NamespaceData) InTransition() bool {
+	return n.transitional() && n.TransitionAge >= 0 && n.TransitionAge < namespaceTransitionLimit
+}
+
+// StuckInTransition reports a namespace the registry has had in provisioning or
+// deprovisioning for longer than namespaceTransitionLimit.
+func (n NamespaceData) StuckInTransition() bool {
+	return n.transitional() && n.TransitionAge >= namespaceTransitionLimit
+}
+
+func (n NamespaceData) transitional() bool {
+	return n.RegistryStatus == registryStatusProvisioning || n.RegistryStatus == registryStatusDeprovisioning
+}
+
+// The namespace_clusters.status values of a namespace in transition
+// (namespace.ClusterStatusProvisioning, ClusterStatusDeprovisioning).
+const (
+	registryStatusProvisioning   = "provisioning"
+	registryStatusDeprovisioning = "deprovisioning"
+)
 
 // RQLiteData holds parsed RQLite status from a single node.
 type RQLiteData struct {
@@ -76,7 +137,7 @@ type RQLiteStatus struct {
 	LeaderNodeID   string // store.leader.node_id
 	LeaderAddr     string // store.leader.addr
 	NodeID         string // store.node_id
-	Term           uint64 // store.raft.term (current_term)
+	Term           uint64 // store.raft.term
 	AppliedIndex   uint64 // store.raft.applied_index
 	CommitIndex    uint64 // store.raft.commit_index
 	FsmPending     uint64 // store.raft.fsm_pending
@@ -124,7 +185,8 @@ type OlricData struct {
 	Members       []string // memberlist member addresses
 	Coordinator   string   // current coordinator address
 	LogErrors     int      // error count in recent logs
-	LogSuspects   int      // "suspect" or "Marking as failed" count
+	LogDeadMarks  int      // "Marking <member> as failed": memberlist's verdict that a member is gone
+	LogSuspects   int      // memberlist suspicions (a failed probe, a refuted suspect message): the protocol's normal first step, refuted when the member answers
 	LogFlapping   int      // rapid join/leave count
 	ProcessMemMB  int      // RSS memory in MB
 	RestartCount  int      // NRestarts from systemd
@@ -149,6 +211,7 @@ type IPFSData struct {
 type DNSData struct {
 	CoreDNSActive   bool
 	CaddyActive     bool
+	DigMissing      bool // dig is not installed: the resolution checks cannot run
 	Port53Bound     bool
 	Port80Bound     bool
 	Port443Bound    bool
@@ -194,26 +257,31 @@ type WGPeer struct {
 
 // SystemData holds parsed system-level data from a node.
 type SystemData struct {
-	Services       map[string]string // service name → status
-	FailedUnits    []string          // systemd units in failed state
-	MemTotalMB     int
-	MemUsedMB      int
-	MemFreeMB      int
-	DiskTotalGB    string
-	DiskUsedGB     string
-	DiskAvailGB    string
-	DiskUsePct     int
-	UptimeRaw      string
-	LoadAvg        string
-	CPUCount       int
-	OOMKills       int
-	SwapUsedMB     int
-	SwapTotalMB    int
-	InodePct       int   // inode usage percentage
-	ListeningPorts []int // ports from ss -tlnp
-	UFWActive      bool
-	ProcessUser    string // user running orama-node (e.g. "orama")
-	PanicCount     int    // panic/fatal in recent logs
+	Services      map[string]string // service name → status
+	FailedUnits   []string          // systemd units in failed state
+	MemTotalMB    int
+	MemUsedMB     int
+	MemFreeMB     int
+	DiskTotalGB   string
+	DiskUsedGB    string
+	DiskAvailGB   string
+	DiskUsePct    int
+	UptimeRaw     string
+	LoadAvg       string
+	CPUCount      int
+	OOMKills      int    // node kills (global or platform cgroup) within report.OOMKillWindowArg
+	OOMKillsError string // non-empty when the count is unknown
+	// TenantOOMKills are kills inside tenant deployment cgroups (a tenant at
+	// its own MemoryMax), per deployment unit in TenantOOMKillsByUnit.
+	TenantOOMKills       int
+	TenantOOMKillsByUnit map[string]int
+	SwapUsedMB           int
+	SwapTotalMB          int
+	InodePct             int   // inode usage percentage
+	ListeningPorts       []int // ports from ss -tlnp
+	UFWActive            bool
+	ProcessUser          string // user running orama-node (e.g. "orama")
+	PanicCount           int    // panic/fatal in recent logs
 }
 
 // NetworkData holds parsed network-level data from a node.
@@ -227,22 +295,6 @@ type NetworkData struct {
 	PingResults       map[string]bool // WG peer IP → ping success
 }
 
-// AnyoneData holds parsed Anyone relay/client status from a node.
-type AnyoneData struct {
-	RelayActive      bool            // orama-anyone-relay systemd service active
-	ClientActive     bool            // orama-anyone-client systemd service active
-	Mode             string          // "relay" or "client" (from anonrc ORPort presence)
-	ORPortListening  bool            // port 9001 bound locally
-	SocksListening   bool            // port 9050 bound locally (client SOCKS5)
-	ControlListening bool            // port 9051 bound locally (control port)
-	Bootstrapped     bool            // relay has bootstrapped to 100%
-	BootstrapPct     int             // bootstrap percentage (0-100)
-	Fingerprint      string          // relay fingerprint
-	Nickname         string          // relay nickname
-	UptimeStr        string          // uptime from control port
-	ORPortReachable  map[string]bool // host IP → whether we can TCP connect to their 9001 from this node
-}
-
 // Collect gathers data from all nodes in parallel.
 func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose bool) *ClusterData {
 	start := time.Now()
@@ -253,10 +305,43 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
+	// A short path under /tmp: the sockets in it must fit a unix socket name,
+	// which the long per-user directory of macOS does not leave room for.
+	controlDir, controlErr := os.MkdirTemp("/tmp", "orama-inspect-")
+	if controlErr == nil {
+		defer os.RemoveAll(controlDir)
+		defer func() {
+			for _, n := range nodes {
+				n.ControlDir = controlDir
+				closeSharedConnection(n)
+			}
+		}()
+	}
+
 	for _, node := range nodes {
 		wg.Add(1)
 		go func(n Node) {
 			defer wg.Done()
+			// A panic outside the collectors (runCollectors recovers those) is
+			// one node's failure, not the end of the run and its cleanup.
+			defer func() {
+				if r := recover(); r != nil {
+					nd := &NodeData{Node: n}
+					nd.markUnreachable(fmt.Errorf("collecting the node panicked: %v", r))
+					mu.Lock()
+					data.Nodes[n.Host] = nd
+					mu.Unlock()
+				}
+			}()
+			if controlErr != nil {
+				nd := &NodeData{Node: n}
+				nd.markUnreachable(fmt.Errorf("create the directory for shared ssh connections: %w", controlErr))
+				mu.Lock()
+				data.Nodes[n.Host] = nd
+				mu.Unlock()
+				return
+			}
+			n.ControlDir = controlDir
 			nd := collectNode(ctx, n, subsystems, verbose)
 			mu.Lock()
 			data.Nodes[n.Host] = nd
@@ -265,9 +350,6 @@ func Collect(ctx context.Context, nodes []Node, subsystems []string, verbose boo
 	}
 
 	wg.Wait()
-
-	// Second pass: cross-node ORPort reachability (needs all nodes collected first)
-	collectAnyoneReachability(ctx, data)
 
 	data.Duration = time.Since(start)
 	return data
@@ -288,64 +370,99 @@ func collectNode(ctx context.Context, node Node, subsystems []string, verbose bo
 		return false
 	}
 
-	if shouldCollect("rqlite") {
-		nd.RQLite = collectRQLite(ctx, node, verbose)
+	// One cheap session first: a node that cannot be reached is one failure,
+	// not a dozen collectors each retrying and each reading nothing as zeros.
+	if err := probeNode(ctx, node); err != nil {
+		nd.markUnreachable(err)
+		return nd
 	}
-	if shouldCollect("olric") {
-		nd.Olric = collectOlric(ctx, node)
-	}
-	if shouldCollect("ipfs") {
-		nd.IPFS = collectIPFS(ctx, node)
-	}
-	if shouldCollect("dns") && node.IsNameserver() {
-		nd.DNS = collectDNS(ctx, node)
-	}
+
+	// WireGuard goes first because the network probe pings its peers.
 	if shouldCollect("wireguard") || shouldCollect("wg") {
-		nd.WireGuard = collectWireGuard(ctx, node)
+		var err error
+		nd.WireGuard, err = collectWireGuard(ctx, node)
+		nd.recordFailure(SubsystemWireGuard, err)
 	}
-	if shouldCollect("system") {
-		nd.System = collectSystem(ctx, node)
+
+	var jobs []collectorJob
+	add := func(subsystem string, selected bool, run func() error) {
+		if selected {
+			jobs = append(jobs, collectorJob{subsystem, run})
+		}
 	}
-	if shouldCollect("network") {
-		nd.Network = collectNetwork(ctx, node, nd.WireGuard)
-	}
-	if shouldCollect("anyone") && !node.IsNameserver() {
-		nd.Anyone = collectAnyone(ctx, node)
-	}
+	add(SubsystemRQLite, shouldCollect("rqlite"), func() (err error) {
+		nd.RQLite, err = collectRQLite(ctx, node, verbose)
+		return err
+	})
+	add(SubsystemOlric, shouldCollect("olric"), func() (err error) {
+		nd.Olric, err = collectOlric(ctx, node)
+		return err
+	})
+	add(SubsystemIPFS, shouldCollect("ipfs"), func() (err error) {
+		nd.IPFS, err = collectIPFS(ctx, node)
+		return err
+	})
+	add(SubsystemDNS, shouldCollect("dns") && node.IsNameserver(), func() (err error) {
+		nd.DNS, err = collectDNS(ctx, node)
+		return err
+	})
+	add(SubsystemSystem, shouldCollect("system"), func() (err error) {
+		nd.System, err = collectSystem(ctx, node)
+		return err
+	})
+	add(SubsystemNetwork, shouldCollect("network"), func() (err error) {
+		nd.Network, err = collectNetwork(ctx, node, nd.WireGuard)
+		return err
+	})
+	add(SubsystemTor, shouldCollect("tor"), func() (err error) {
+		nd.Tor, err = collectTor(ctx, node)
+		return err
+	})
+	add(SubsystemGlobal, shouldCollect("global"), func() (err error) {
+		nd.Chain, nd.Global, err = collectGlobalNode(ctx, node)
+		return err
+	})
 	// Namespace collection — always collect if any subsystem is collected
-	nd.Namespaces = collectNamespaces(ctx, node)
+	add(SubsystemNamespace, true, func() (err error) {
+		nd.Namespaces, err = collectNamespaces(ctx, node)
+		return err
+	})
+	runCollectors(nd, jobs)
 
 	return nd
 }
 
+// inspectorSudo is the privilege prefix for reading root-owned node files
+// (node.yaml, namespace env files) over SSH, as the other collectors do.
+const inspectorSudo = "sudo "
+
 // collectRQLite gathers RQLite data from a node via SSH.
-func collectRQLite(ctx context.Context, node Node, verbose bool) *RQLiteData {
+func collectRQLite(ctx context.Context, node Node, verbose bool) (*RQLiteData, error) {
 	data := &RQLiteData{}
 
 	// Collect all endpoints in a single SSH session for efficiency.
-	// We use a separator to split the outputs.
+	// We use a separator to split the outputs. rqlited binds the node's
+	// WireGuard IP and requires auth; rqlite.NodeShellCurl reads both from the
+	// node's own node.yaml.
+	rq := func(opts, path string) string { return rqlite.NodeShellCurl(inspectorSudo, opts, path) }
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-curl -sf http://localhost:5001/status 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/status") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf 'http://localhost:5001/nodes?nonvoters' 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/nodes?nonvoters") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf http://localhost:5001/readyz 2>/dev/null; echo "EXIT:$?"
+` + rq("-sf", "/readyz") + ` 2>/dev/null; echo "EXIT:$?"
 echo "$SEP"
-curl -sf http://localhost:5001/debug/vars 2>/dev/null || echo '{"error":"unreachable"}'
+` + rq("-sf", "/debug/vars") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
-curl -sf -H 'Content-Type: application/json' 'http://localhost:5001/db/query?level=strong' -d '["SELECT 1"]' 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
+` + rq(`-sf -H 'Content-Type: application/json' -d '["SELECT 1"]'`, "/db/query?level=strong") + ` 2>/dev/null && echo "STRONG_OK" || echo "STRONG_FAIL"
 `
 
 	result := RunSSH(ctx, node, cmd)
-	if !result.OK() && result.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(result.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 5 {
-		return data
+	parts, err := splitSections(result, 5)
+	if err != nil {
+		return nil, err
 	}
 
 	data.StatusRaw = strings.TrimSpace(parts[1])
@@ -377,7 +494,7 @@ curl -sf -H 'Content-Type: application/json' 'http://localhost:5001/db/query?lev
 		data.StrongRead = strings.Contains(parts[5], "STRONG_OK")
 	}
 
-	return data
+	return data, nil
 }
 
 func parseRQLiteStatus(raw string) *RQLiteStatus {
@@ -397,7 +514,7 @@ func parseRQLiteStatus(raw string) *RQLiteStatus {
 	raft, _ := store["raft"].(map[string]interface{})
 	if raft != nil {
 		s.RaftState, _ = raft["state"].(string)
-		s.Term = jsonUint64(raft, "current_term")
+		s.Term = jsonUint64(raft, "term")
 		s.AppliedIndex = jsonUint64(raft, "applied_index")
 		s.CommitIndex = jsonUint64(raft, "commit_index")
 		s.FsmPending = jsonUint64(raft, "fsm_pending")
@@ -563,82 +680,78 @@ func parseRQLiteDebugVars(raw string) *RQLiteDebugVars {
 
 // Placeholder collectors for Phase 2
 
-func collectOlric(ctx context.Context, node Node) *OlricData {
+func collectOlric(ctx context.Context, node Node) (*OlricData, error) {
 	data := &OlricData{}
 
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-olric 2>/dev/null
+(systemctl is-active --quiet orama-namespace-olric@index && echo active) || (systemctl is-active --quiet orama-olric && echo active) || echo inactive
 echo "$SEP"
-ss -tlnp 2>/dev/null | grep ':3322 ' | head -1
+ss -tlnp 2>/dev/null | grep ':10103 ' | head -1
+LOG=$(journalctl -u orama-namespace-olric@index -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null)
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(error|ERR)' || echo 0
+printf '%s\n' "$LOG" | grep -ciE '(error|ERR)' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(suspect|marking.*(failed|dead))' || echo 0
+printf '%s\n' "$LOG" | grep -ciE 'marking.*(failed|dead)' || echo 0
 echo "$SEP"
-journalctl -u orama-olric --no-pager -n 200 --since "1 hour ago" 2>/dev/null | grep -ciE '(memberlist.*(join|leave))' || echo 0
+printf '%s\n' "$LOG" | grep -iE 'suspect' | grep -civE 'marking.*(failed|dead)' || echo 0
 echo "$SEP"
-systemctl show orama-olric --property=NRestarts 2>/dev/null | cut -d= -f2
+printf '%s\n' "$LOG" | grep -ciE '(memberlist.*(join|leave))' || echo 0
+echo "$SEP"
+systemctl show orama-namespace-olric@index --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
 ps -C olric-server -o rss= 2>/dev/null | head -1 || echo 0
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 8 {
-		return data
+	parts, err := splitSections(res, 9)
+	if err != nil {
+		return nil, err
 	}
 
 	data.ServiceActive = strings.TrimSpace(parts[1]) == "active"
 	data.MemberlistUp = strings.TrimSpace(parts[2]) != ""
 
 	data.LogErrors = parseIntDefault(strings.TrimSpace(parts[3]), 0)
-	data.LogSuspects = parseIntDefault(strings.TrimSpace(parts[4]), 0)
-	data.LogFlapping = parseIntDefault(strings.TrimSpace(parts[5]), 0)
-	data.RestartCount = parseIntDefault(strings.TrimSpace(parts[6]), 0)
+	data.LogDeadMarks = parseIntDefault(strings.TrimSpace(parts[4]), 0)
+	data.LogSuspects = parseIntDefault(strings.TrimSpace(parts[5]), 0)
+	data.LogFlapping = parseIntDefault(strings.TrimSpace(parts[6]), 0)
+	data.RestartCount = parseIntDefault(strings.TrimSpace(parts[7]), 0)
 
-	rssKB := parseIntDefault(strings.TrimSpace(parts[7]), 0)
+	rssKB := parseIntDefault(strings.TrimSpace(parts[8]), 0)
 	data.ProcessMemMB = rssKB / 1024
 
-	return data
+	return data, nil
 }
 
-func collectIPFS(ctx context.Context, node Node) *IPFSData {
+func collectIPFS(ctx context.Context, node Node) (*IPFSData, error) {
 	data := &IPFSData{}
 
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active orama-ipfs 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs@index && echo active) || (systemctl is-active --quiet orama-ipfs && echo active) || echo inactive
 echo "$SEP"
-systemctl is-active orama-ipfs-cluster 2>/dev/null
+(systemctl is-active --quiet orama-namespace-ipfs-cluster@index && echo active) || (systemctl is-active --quiet orama-ipfs-cluster && echo active) || echo inactive
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/swarm/peers' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/swarm/peers") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Peers') or []))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf --max-time 10 'http://localhost:9094/peers' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
+` + ipfsClusterCurl("--max-time 10", "/peers") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin); print(len(peers)); errs=sum(1 for p in peers if p.get('error','')); print(errs)" 2>/dev/null || (` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); peers=d.get('cluster_peers',[]); print(len(peers)); print(0)" 2>/dev/null || echo -1)
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/repo/stat' 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/repo/stat") + ` 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('RepoSize',0)); print(d.get('StorageMax',0))" 2>/dev/null || echo -1
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/version' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
+` + ipfsKuboCurl("/api/v0/version") + ` 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('Version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
-curl -sf 'http://localhost:9094/id' 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
+` + ipfsClusterCurl("", "/id") + ` 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo unknown
 echo "$SEP"
 test -f /opt/orama/.orama/data/ipfs/repo/swarm.key && echo yes || echo no
 echo "$SEP"
-curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
+` + ipfsKuboCurl("/api/v0/bootstrap/list") + ` 2>/dev/null | python3 -c "import sys,json; peers=json.load(sys.stdin).get('Peers',[]); print(len(peers))" 2>/dev/null || echo -1
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 10 {
-		return data
+	parts, err := splitSections(res, 10)
+	if err != nil {
+		return nil, err
 	}
 
 	data.DaemonActive = strings.TrimSpace(parts[1]) == "active"
@@ -670,23 +783,26 @@ curl -sf -X POST 'http://localhost:4501/api/v0/bootstrap/list' 2>/dev/null | pyt
 	bootstrapCount := parseIntDefault(strings.TrimSpace(parts[9]), -1)
 	data.BootstrapEmpty = bootstrapCount == 0
 
-	return data
+	return data, nil
 }
 
-func collectDNS(ctx context.Context, node Node) *DNSData {
-	data := &DNSData{
-		BaseTLSDaysLeft: -1,
-		WildTLSDaysLeft: -1,
-	}
+// The units collectDNS asks about. The host units caddy.service and
+// coredns.service were replaced by the namespace-templated ones, so asking
+// systemd about the old names reports a live nameserver as down.
+var (
+	dnsCoreDNSUnit = systemd.NamespaceUnit(systemd.ServiceTypeCoreDNS, systemd.NameserverNamespace)
+	dnsCaddyUnit   = systemd.NamespaceUnit(systemd.ServiceTypeCaddy, systemd.IndexNamespace)
+)
 
-	// Get the domain from the node's role (e.g. "nameserver-ns1" -> we need the domain)
-	// We'll discover the domain from Corefile
-	cmd := `
-SEP="===INSPECTOR_SEP==="
+// dnsCollectScript prints the DNS facts collectDNS parses, one section per
+// separator. /etc/coredns/Corefile is root:orama-coredns 0640, so the zone
+// is read through sudo: read as the SSH user it comes back empty and dig
+// then asks for the root zone, which answers.
+var dnsCollectScript = `SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-systemctl is-active coredns 2>/dev/null
+(systemctl is-active --quiet ` + dnsCoreDNSUnit + ` && echo active) || (systemctl is-active --quiet coredns && echo active) || echo inactive
 echo "$SEP"
-systemctl is-active caddy 2>/dev/null
+systemctl is-active ` + dnsCaddyUnit + ` 2>/dev/null
 echo "$SEP"
 ss -ulnp 2>/dev/null | grep ':53 ' | head -1
 echo "$SEP"
@@ -696,34 +812,41 @@ ss -tlnp 2>/dev/null | grep ':443 ' | head -1
 echo "$SEP"
 ps -C coredns -o rss= 2>/dev/null | head -1 || echo 0
 echo "$SEP"
-systemctl show coredns --property=NRestarts 2>/dev/null | cut -d= -f2
+systemctl show ` + dnsCoreDNSUnit + ` --property=NRestarts 2>/dev/null | cut -d= -f2
 echo "$SEP"
-journalctl -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
+journalctl -u ` + dnsCoreDNSUnit + ` -u coredns --no-pager -n 100 --since "5 minutes ago" 2>/dev/null | grep -iE '(error|ERR)' | grep -cvF 'NOERROR' || echo 0
 echo "$SEP"
 test -f /etc/coredns/Corefile && echo yes || echo no
 echo "$SEP"
-DOMAIN=$(grep -oP '^\S+(?=\s*\{)' /etc/coredns/Corefile 2>/dev/null | grep -v '^\.' | head -1)
+DOMAIN=$(sudo -n grep -oP '^\S+(?=\s*\{)' /etc/coredns/Corefile 2>/dev/null | grep -v '^\.' | head -1)
 echo "DOMAIN:${DOMAIN}"
-dig @127.0.0.1 SOA ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 SOA "${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-dig @127.0.0.1 NS ${DOMAIN} +short 2>/dev/null
+[ -n "$DOMAIN" ] && dig @127.0.0.1 NS "${DOMAIN}" +short 2>/dev/null
 echo "$SEP"
-dig @127.0.0.1 A test-wildcard.${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A "test-wildcard.${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-dig @127.0.0.1 A ${DOMAIN} +short 2>/dev/null | head -1
+[ -n "$DOMAIN" ] && dig @127.0.0.1 A "${DOMAIN}" +short 2>/dev/null | head -1
 echo "$SEP"
-echo | openssl s_client -servername ${DOMAIN} -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
+echo | openssl s_client -servername "${DOMAIN}" -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
 echo "$SEP"
 echo | openssl s_client -servername "*.${DOMAIN}" -connect localhost:443 2>/dev/null | openssl x509 -noout -dates 2>/dev/null | grep notAfter | cut -d= -f2
+echo "$SEP"
+command -v dig >/dev/null && echo yes || echo no
 `
-	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
+
+func collectDNS(ctx context.Context, node Node) (*DNSData, error) {
+	data := &DNSData{
+		BaseTLSDaysLeft: -1,
+		WildTLSDaysLeft: -1,
 	}
 
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 9 {
-		return data
+	// Get the domain from the node's role (e.g. "nameserver-ns1" -> we need the domain)
+	// We'll discover the domain from Corefile
+	res := RunSSH(ctx, node, dnsCollectScript)
+	parts, err := splitSections(res, 9)
+	if err != nil {
+		return nil, err
 	}
 
 	data.CoreDNSActive = strings.TrimSpace(parts[1]) == "active"
@@ -790,7 +913,11 @@ echo | openssl s_client -servername "*.${DOMAIN}" -connect localhost:443 2>/dev/
 		data.WildTLSDaysLeft = parseTLSExpiry(strings.TrimSpace(parts[15]))
 	}
 
-	return data
+	if len(parts) > 16 {
+		data.DigMissing = strings.TrimSpace(parts[16]) == "no"
+	}
+
+	return data, nil
 }
 
 // parseTLSExpiry parses an openssl date string and returns days until expiry (-1 on error).
@@ -812,7 +939,7 @@ func parseTLSExpiry(dateStr string) int {
 	return -1
 }
 
-func collectWireGuard(ctx context.Context, node Node) *WireGuardData {
+func collectWireGuard(ctx context.Context, node Node) (*WireGuardData, error) {
 	data := &WireGuardData{}
 
 	cmd := `
@@ -820,7 +947,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 ip -4 addr show wg0 2>/dev/null | grep -oP 'inet \K[0-9.]+'
 echo "$SEP"
-systemctl is-active wg-quick@wg0 2>/dev/null
+(systemctl is-active --quiet orama-namespace-wireguard@index && echo active) || (systemctl is-active --quiet wg-quick@wg0 && echo active) || echo inactive
 echo "$SEP"
 cat /sys/class/net/wg0/mtu 2>/dev/null || echo 0
 echo "$SEP"
@@ -831,13 +958,9 @@ echo "$SEP"
 sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 7 {
-		return data
+	parts, err := splitSections(res, 7)
+	if err != nil {
+		return nil, err
 	}
 
 	wgIP := strings.TrimSpace(parts[1])
@@ -880,25 +1003,36 @@ sudo stat -c '%a' /etc/wireguard/wg0.conf 2>/dev/null || echo 000
 	}
 	data.PeerCount = len(data.Peers)
 
-	return data
+	return data, nil
 }
 
-func collectSystem(ctx context.Context, node Node) *SystemData {
+// failedUnitsCmd prints one failed unit name per line. --plain drops the status
+// bullet systemd otherwise prints as a field of its own, which made $1 the
+// bullet and every failed unit read as "●".
+const failedUnitsCmd = `systemctl --failed --no-legend --no-pager --plain 2>/dev/null | awk '{print $1}'`
+
+func collectSystem(ctx context.Context, node Node) (*SystemData, error) {
 	data := &SystemData{
 		Services: make(map[string]string),
 	}
 
 	services := []string{
-		"orama-node", "orama-ipfs", "orama-ipfs-cluster",
-		"orama-olric", "orama-anyone-relay", "orama-anyone-client",
-		"coredns", "caddy", "wg-quick@wg0",
+		"orama-node",
+		"orama-namespace-ipfs@index", "orama-ipfs",
+		"orama-namespace-ipfs-cluster@index", "orama-ipfs-cluster",
+		"orama-namespace-olric@index", "orama-olric",
+		"orama-namespace-tor@index",
+		"orama-namespace-caddy@index", "orama-namespace-coredns@nameserver", "coredns", "caddy",
+		"orama-namespace-wireguard@index", "wg-quick@wg0",
 	}
 
 	cmd := `SEP="===INSPECTOR_SEP==="`
-	// Service statuses
-	for _, svc := range services {
-		cmd += fmt.Sprintf(` && echo "%s:$(systemctl is-active %s 2>/dev/null || echo inactive)"`, svc, svc)
-	}
+	// Service statuses: one systemctl call for all of them (it prints one state
+	// per unit, in order, "inactive" for a unit it does not know). One call per
+	// unit was fourteen round trips to a systemd that a starved node answers
+	// slowly.
+	cmd += ` && systemctl is-active ` + strings.Join(services, " ") + ` 2>/dev/null | awk -v names="` +
+		strings.Join(services, " ") + `" 'BEGIN{split(names,n," ")} {print n[NR]":"$0}'`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && free -m | awk '/Mem:/{print $2","$3","$4} /Swap:/{print "SWAP:"$2","$3}'`
 	cmd += ` && echo "$SEP"`
@@ -910,9 +1044,11 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	cmd += ` && echo "$SEP"`
 	cmd += ` && uptime | grep -oP 'load average: \K.*'`
 	cmd += ` && echo "$SEP"`
-	cmd += ` && systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{print $1}'`
+	cmd += ` && ` + failedUnitsCmd
 	cmd += ` && echo "$SEP"`
-	cmd += ` && dmesg 2>/dev/null | grep -ci 'out of memory' || echo 0`
+	// A journal the SSH user cannot read still exits 0 with a "not seeing
+	// messages" hint; any such text means the count is unknown, never 0.
+	cmd += ` && { out=$(sudo -n journalctl -k --no-pager -o cat --since "-` + report.OOMKillWindowArg + `" 2>&1) && ! printf '%s\n' "$out" | grep -qiE 'not seeing messages|permission|no journal files|a password is required|hint:' && { echo ok; printf '%s\n' "$out" | grep -E 'oom-kill:|invoked oom-killer|Killed process' || true; } || echo unknown; }`
 	cmd += ` && echo "$SEP"`
 	cmd += ` && df -i / 2>/dev/null | awk 'NR==2{print $5}' | tr -d '%'`
 	cmd += ` && echo "$SEP"`
@@ -925,11 +1061,10 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 	cmd += ` && journalctl -u orama-node --no-pager -n 500 --since "1 hour ago" 2>/dev/null | grep -ciE '(panic|fatal)' || echo 0`
 
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
+	parts, err := splitSections(res, systemMinSections)
+	if err != nil {
+		return nil, err
 	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
 
 	// Part 0: service statuses (before first SEP)
 	if len(parts) > 0 {
@@ -1001,7 +1136,9 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 
 	// Part 7: OOM kills
 	if len(parts) > 7 {
-		data.OOMKills = parseIntDefault(strings.TrimSpace(parts[7]), 0)
+		var c report.OOMCounts
+		c, data.OOMKillsError = parseOOMKillsField(parts[7])
+		data.OOMKills, data.TenantOOMKills, data.TenantOOMKillsByUnit = c.System, c.Tenant, c.TenantUnits
 	}
 
 	// Part 8: inode usage
@@ -1034,10 +1171,18 @@ func collectSystem(ctx context.Context, node Node) *SystemData {
 		data.PanicCount = parseIntDefault(strings.TrimSpace(parts[12]), 0)
 	}
 
-	return data
+	return data, nil
 }
 
-func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) *NetworkData {
+// reachabilityProbe is how a host is pinged to call it reachable: three
+// packets 0.2 s apart, each answered within 2 s. ping exits 0 when any reply
+// comes back, so only a host that answers none is unreachable. One packet was
+// sent before, and a single loss over a WireGuard tunnel crossing the
+// internet reported a healthy peer as unreachable, a critical failure
+// (stagenet e2e, 2026-10-03).
+const reachabilityProbe = "ping -c 3 -i 0.2 -W 2"
+
+func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) (*NetworkData, error) {
 	data := &NetworkData{
 		PingResults: make(map[string]bool),
 	}
@@ -1046,19 +1191,23 @@ func collectNetwork(ctx context.Context, node Node, wg *WireGuardData) *NetworkD
 	var pingCmds string
 	if wg != nil {
 		for _, peer := range wg.Peers {
-			// Extract IP from AllowedIPs (e.g. "10.0.0.2/32")
-			ip := strings.Split(peer.AllowedIPs, "/")[0]
-			if ip != "" && strings.HasPrefix(ip, "10.0.0.") {
-				pingCmds += fmt.Sprintf(`echo "PING:%s:$(ping -c 1 -W 2 %s >/dev/null 2>&1 && echo ok || echo fail)"
-`, ip, ip)
+			// Extract IP from AllowedIPs (e.g. "10.0.0.2/32"). It goes into a
+			// remote shell command, so only a parsed IPv4 address in the mesh,
+			// re-serialised, is used.
+			parsed := net.ParseIP(strings.Split(peer.AllowedIPs, "/")[0]).To4()
+			if parsed == nil || !strings.HasPrefix(parsed.String(), "10.0.0.") {
+				continue
 			}
+			ip := parsed.String()
+			pingCmds += fmt.Sprintf(`echo "PING:%s:$(%s %s >/dev/null 2>&1 && echo ok || echo fail)"
+`, ip, reachabilityProbe, ip)
 		}
 	}
 
 	cmd := fmt.Sprintf(`
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
-ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no
+%s 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no
 echo "$SEP"
 ss -s 2>/dev/null | awk '/^TCP:/{print $0}'
 echo "$SEP"
@@ -1069,14 +1218,13 @@ echo "$SEP"
 awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null; sleep 1; awk '/^Tcp:/{getline; print $12" "$13}' /proc/net/snmp 2>/dev/null
 echo "$SEP"
 %s
-`, pingCmds)
+`, reachabilityProbe, pingCmds)
 
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
+	parts, err := splitSections(res, networkMinSections)
+	if err != nil {
+		return nil, err
 	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
 
 	if len(parts) > 1 {
 		data.InternetReachable = strings.TrimSpace(parts[1]) == "yes"
@@ -1143,169 +1291,25 @@ echo "$SEP"
 		}
 	}
 
-	return data
+	return data, nil
 }
 
-func collectAnyone(ctx context.Context, node Node) *AnyoneData {
-	data := &AnyoneData{
-		ORPortReachable: make(map[string]bool),
-	}
-
-	cmd := `
-SEP="===INSPECTOR_SEP==="
-echo "$SEP"
-systemctl is-active orama-anyone-relay 2>/dev/null || echo inactive
-echo "$SEP"
-systemctl is-active orama-anyone-client 2>/dev/null || echo inactive
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9001 ' && echo yes || echo no
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9050 ' && echo yes || echo no
-echo "$SEP"
-ss -tlnp 2>/dev/null | grep -q ':9051 ' && echo yes || echo no
-echo "$SEP"
-# Check bootstrap status from log. Fall back to notices.log.1 if current log
-# is empty (logrotate may have rotated the file without signaling the relay).
-BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log 2>/dev/null | tail -1)
-if [ -z "$BPCT" ]; then
-  BPCT=$(grep -oP 'Bootstrapped \K[0-9]+' /var/log/anon/notices.log.1 2>/dev/null | tail -1)
-fi
-echo "${BPCT:-0}"
-echo "$SEP"
-# Read fingerprint (sudo needed: file is owned by debian-anon with 0600 perms)
-sudo cat /var/lib/anon/fingerprint 2>/dev/null || echo ""
-echo "$SEP"
-# Read nickname from config
-grep -oP '^Nickname \K\S+' /etc/anon/anonrc 2>/dev/null || echo ""
-echo "$SEP"
-# Detect relay vs client mode: check if ORPort is configured in anonrc
-grep -qP '^\s*ORPort\s' /etc/anon/anonrc 2>/dev/null && echo relay || echo client
-`
-
-	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return data
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-
-	if len(parts) > 1 {
-		data.RelayActive = strings.TrimSpace(parts[1]) == "active"
-	}
-	if len(parts) > 2 {
-		data.ClientActive = strings.TrimSpace(parts[2]) == "active"
-	}
-	if len(parts) > 3 {
-		data.ORPortListening = strings.TrimSpace(parts[3]) == "yes"
-	}
-	if len(parts) > 4 {
-		data.SocksListening = strings.TrimSpace(parts[4]) == "yes"
-	}
-	if len(parts) > 5 {
-		data.ControlListening = strings.TrimSpace(parts[5]) == "yes"
-	}
-	if len(parts) > 6 {
-		pct := parseIntDefault(strings.TrimSpace(parts[6]), 0)
-		data.BootstrapPct = pct
-		data.Bootstrapped = pct >= 100
-	}
-	if len(parts) > 7 {
-		data.Fingerprint = strings.TrimSpace(parts[7])
-	}
-	if len(parts) > 8 {
-		data.Nickname = strings.TrimSpace(parts[8])
-	}
-	if len(parts) > 9 {
-		data.Mode = strings.TrimSpace(parts[9])
-	}
-
-	// If neither relay nor client is active, skip further checks
-	if !data.RelayActive && !data.ClientActive {
-		return data
-	}
-
-	return data
-}
-
-// collectAnyoneReachability runs a second pass to check ORPort reachability across nodes.
-// Called after all nodes are collected so we know which nodes run relays.
-func collectAnyoneReachability(ctx context.Context, data *ClusterData) {
-	// Find all nodes running the relay (have ORPort listening)
-	var relayHosts []string
-	for host, nd := range data.Nodes {
-		if nd.Anyone != nil && nd.Anyone.RelayActive && nd.Anyone.ORPortListening {
-			relayHosts = append(relayHosts, host)
-		}
-	}
-
-	if len(relayHosts) == 0 {
-		return
-	}
-
-	// From each node, try to TCP connect to each relay's ORPort 9001
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, nd := range data.Nodes {
-		if nd.Anyone == nil || nd.Anyone.Mode == "client" {
-			continue // skip nodes without Anyone data or in client mode
-		}
-		wg.Add(1)
-		go func(nd *NodeData) {
-			defer wg.Done()
-
-			// Build commands to test TCP connectivity to each relay
-			var tcpCmds string
-			for _, relayHost := range relayHosts {
-				if relayHost == nd.Node.Host {
-					continue // skip self
-				}
-				tcpCmds += fmt.Sprintf(
-					`echo "ORPORT:%s:$(timeout 3 bash -c 'echo >/dev/tcp/%s/9001' 2>/dev/null && echo ok || echo fail)"
-`, relayHost, relayHost)
-			}
-
-			if tcpCmds == "" {
-				return
-			}
-
-			res := RunSSH(ctx, nd.Node, tcpCmds)
-			if res.Stdout == "" {
-				return
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-			for _, line := range strings.Split(res.Stdout, "\n") {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "ORPORT:") {
-					p := strings.SplitN(line, ":", 3)
-					if len(p) == 3 {
-						nd.Anyone.ORPortReachable[p[1]] = p[2] == "ok"
-					}
-				}
-			}
-		}(nd)
-	}
-	wg.Wait()
-}
-
-func collectNamespaces(ctx context.Context, node Node) []NamespaceData {
+func collectNamespaces(ctx context.Context, node Node) ([]NamespaceData, error) {
 	// Detect namespace services: orama-namespace-gateway@<name>.service
+	// The registry's status of every namespace comes in the same session: a
+	// namespace being created or deleted is not judged like a settled one.
 	cmd := `
 SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/orama-namespace-gateway@//;s/\.service//'
 echo "$SEP"
+` + rqlite.NodeShellCurl(inspectorSudo, `-sf -H 'Content-Type: application/json' -d '[["SELECT namespace_name, status, CAST(strftime('%s','now') - strftime('%s', CASE status WHEN 'deprovisioning' THEN deprovisioning_at ELSE provisioned_at END) AS INTEGER) FROM namespace_clusters"]]'`, "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
+echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)
-	if !res.OK() && res.Stdout == "" {
-		return nil
-	}
-
-	parts := strings.Split(res.Stdout, "===INSPECTOR_SEP===")
-	if len(parts) < 2 {
-		return nil
+	parts, err := splitSections(res, 4)
+	if err != nil {
+		return nil, err
 	}
 
 	var names []string
@@ -1317,50 +1321,29 @@ echo "$SEP"
 	}
 
 	if len(names) == 0 {
-		return nil
+		return nil, nil
 	}
+	registry := parseNamespaceRegistry(parts[2])
 
-	// For each namespace, check its services
-	// Namespace ports: base = 10000 + (index * 5)
-	// offset 0=RQLite HTTP, 1=RQLite Raft, 2=Olric HTTP, 3=Olric Memberlist, 4=Gateway HTTP
-	// We discover actual ports by querying each namespace's services
 	var nsCmd string
+	// A unit name that is not a namespace name is never put into a root
+	// shell; it is reported with no services.
+	var unprobed []NamespaceData
 	for _, name := range names {
-		nsCmd += fmt.Sprintf(`
-echo "NS_START:%s"
-# Get gateway port from systemd or default discovery
-GWPORT=$(ss -tlnp 2>/dev/null | grep 'orama-namespace-gateway@%s' | grep -oP ':\K[0-9]+' | head -1)
-echo "GW_PORT:${GWPORT:-0}"
-# Try common namespace port ranges (10000-10099)
-for BASE in $(seq 10000 5 10099); do
-  RQLITE_PORT=$((BASE))
-  if curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/status" >/dev/null 2>&1; then
-    STATUS=$(curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/status" 2>/dev/null)
-    STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('store',{}).get('raft',{}).get('state',''))" 2>/dev/null || echo "")
-    READYZ=$(curl -sf --connect-timeout 1 "http://localhost:${RQLITE_PORT}/readyz" 2>/dev/null && echo "yes" || echo "no")
-    echo "RQLITE:${BASE}:up:${STATE}:${READYZ}"
-    break
-  fi
-done
-# Check Olric memberlist
-OLRIC_PORT=$((BASE + 2))
-ss -tlnp 2>/dev/null | grep -q ":${OLRIC_PORT} " && echo "OLRIC:up" || echo "OLRIC:down"
-# Check Gateway
-GW_PORT2=$((BASE + 4))
-GW_STATUS=$(curl -sf -o /dev/null -w '%%{http_code}' --connect-timeout 1 "http://localhost:${GW_PORT2}/health" 2>/dev/null || echo "0")
-echo "GATEWAY:${GW_STATUS}"
-echo "NS_END"
-`, name, name)
+		script, err := namespaceProbeScript(inspectorSudo, unitenv.Dir, name)
+		if err != nil {
+			unprobed = append(unprobed, NamespaceData{Name: name})
+			continue
+		}
+		nsCmd += script
 	}
 
+	if nsCmd == "" {
+		return unprobed, nil
+	}
 	nsRes := RunSSH(ctx, node, nsCmd)
-	if !nsRes.OK() && nsRes.Stdout == "" {
-		// Return namespace names at minimum
-		var result []NamespaceData
-		for _, name := range names {
-			result = append(result, NamespaceData{Name: name})
-		}
-		return result
+	if err := sshOutputError(nsRes); err != nil {
+		return nil, fmt.Errorf("probing namespaces: %w", err)
 	}
 
 	// Parse namespace results
@@ -1395,10 +1378,70 @@ echo "NS_END"
 		}
 	}
 
-	return result
+	result = append(result, unprobed...)
+	for i := range result {
+		entry := registry[result[i].Name]
+		result[i].RegistryStatus = entry.status
+		if result[i].transitional() {
+			result[i].TransitionAge = entry.age
+		}
+	}
+	return result, nil
+}
+
+// registryEntry is what the registry says of one namespace.
+type registryEntry struct {
+	status string
+	age    time.Duration // time in the status, UnknownTransitionAge when unknown
+}
+
+// parseNamespaceRegistry reads the answer of the registry query: namespace
+// name, status, seconds since the status was stamped. An answer that is not one
+// (the node's rqlite was unreachable, an error) is an empty map: the
+// namespaces are then judged as settled ones, never excused. A stamp that is
+// missing or unreadable leaves the age unknown.
+func parseNamespaceRegistry(raw string) map[string]registryEntry {
+	var resp struct {
+		Results []struct {
+			Values [][]interface{} `json:"values"`
+			Error  string          `json:"error"`
+		} `json:"results"`
+	}
+	registry := map[string]registryEntry{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &resp); err != nil || len(resp.Results) == 0 || resp.Results[0].Error != "" {
+		return registry
+	}
+	for _, row := range resp.Results[0].Values {
+		if len(row) != 3 {
+			continue
+		}
+		name, _ := row[0].(string)
+		status, _ := row[1].(string)
+		if name == "" {
+			continue
+		}
+		entry := registryEntry{status: status, age: UnknownTransitionAge}
+		if secs, ok := row[2].(float64); ok && secs >= 0 {
+			entry.age = time.Duration(secs) * time.Second
+		}
+		registry[name] = entry
+	}
+	return registry
 }
 
 // Parse helper functions
+
+// parseOOMKillsField reads the OOM section of the system probe: "ok"
+// followed by the kernel's OOM lines of the window (classified by
+// report.ClassifyOOMKills), or "unknown" when the kernel log could not be
+// read. Anything else is an error too, never a silent zero.
+func parseOOMKillsField(field string) (report.OOMCounts, string) {
+	head, rest, _ := strings.Cut(strings.TrimSpace(field), "\n")
+	if strings.TrimSpace(head) != "ok" {
+		return report.OOMCounts{}, fmt.Sprintf("kernel log unreadable for OOM kills (journalctl -k): %q", strings.TrimSpace(field))
+	}
+	return report.ClassifyOOMKills(rest), ""
+}
 
 func parseIntDefault(s string, def int) int {
 	n, err := strconv.Atoi(s)
@@ -1442,4 +1485,72 @@ func jsonBool(m map[string]interface{}, key string) bool {
 	default:
 		return false
 	}
+}
+
+// namespaceProbeScript is the shell run (as root, over SSH) to check one
+// namespace's services on a node.
+//
+// Port block: offset 0=RQLite HTTP, 1=RQLite Raft, 2=Olric HTTP, 3=Olric
+// Memberlist, 4=Gateway HTTP. The rqlite instance's address comes from its
+// rqlite.env by the same rule as rqlite.InstanceAddrFromEnv: HTTP_ADDR (what it
+// binds), or HTTP_ADV_ADDR when HTTP_ADDR is the wildcard an instance spawned
+// before the WireGuard bind still carries. Its port is the block base. It runs
+// with -auth, so the probe goes through rqlite.NodeShellCurlAt for the
+// credentials. The tenant gateway binds the node's WireGuard IP (the rqlite
+// host), so it is probed there, not on localhost.
+//
+// rqlite.env is writable by the orama user and this runs as root, so nothing
+// read from it reaches the shell unvalidated: the sed only extracts an
+// IPv4:port, the block base must be all digits before any arithmetic (shell
+// arithmetic evaluates array subscripts, command substitutions included), and
+// the namespace name must be a valid namespace name before it is embedded.
+func namespaceProbeScript(sudo, namespacesDir, name string) (string, error) {
+	if !validNamespaceName(name) {
+		return "", fmt.Errorf("%q is not a valid namespace name", name)
+	}
+	envFile := rqlite.InstanceEnvFile(namespacesDir, name)
+	return fmt.Sprintf(`
+echo "NS_START:%[1]s"
+# Get gateway port from systemd or default discovery
+GWPORT=$(ss -tlnp 2>/dev/null | grep 'orama-namespace-gateway@%[1]s' | grep -oP ':\K[0-9]+' | head -1)
+echo "GW_PORT:${GWPORT:-0}"
+ADDR=$(%[2]ssed -n 's/^HTTP_ADDR=\([0-9.]*:[0-9][0-9]*\)$/\1/p' '%[3]s' 2>/dev/null | head -n 1)
+case "${ADDR%%:*}" in
+  ""|0.0.0.0) ADDR=$(%[2]ssed -n 's/^HTTP_ADV_ADDR=\([0-9.]*:[0-9][0-9]*\)$/\1/p' '%[3]s' 2>/dev/null | head -n 1) ;;
+esac
+case "${ADDR%%:*}" in
+  ""|0.0.0.0) ADDR="" ;;
+esac
+BASE=${ADDR##*:}
+case "$BASE" in
+  ''|*[!0-9]*) ADDR=""; BASE="" ;;
+esac
+HOST=${ADDR%%:*}
+if [ -n "$ADDR" ] && STATUS=$(%[4]s 2>/dev/null); then
+    STATE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('store',{}).get('raft',{}).get('state',''))" 2>/dev/null || echo "")
+    READYZ=$(%[5]s >/dev/null 2>&1 && echo "yes" || echo "no")
+    echo "RQLITE:${BASE}:up:${STATE}:${READYZ}"
+fi
+if [ -n "$BASE" ]; then
+  # Check Olric memberlist
+  OLRIC_PORT=$((BASE + 2))
+  ss -tlnp 2>/dev/null | grep -q ":${OLRIC_PORT} " && echo "OLRIC:up" || echo "OLRIC:down"
+  # Check Gateway where it binds
+  GW_PORT2=$((BASE + 4))
+  GW_STATUS=$(curl -sf -o /dev/null -w '%%{http_code}' --connect-timeout 1 "http://${HOST}:${GW_PORT2}/health" 2>/dev/null || echo "0")
+  echo "GATEWAY:${GW_STATUS}"
+else
+  echo "OLRIC:down"
+  echo "GATEWAY:0"
+fi
+echo "NS_END"
+`, name, sudo, envFile,
+		rqlite.NodeShellCurlAt(sudo, "$ADDR", "-sf --connect-timeout 1", "/status"),
+		rqlite.NodeShellCurlAt(sudo, "$ADDR", "-sf --connect-timeout 1", "/readyz")), nil
+}
+
+// validNamespaceName reports whether name is a namespace name exactly as
+// written (httputil.ValidateNamespace, with no surrounding whitespace).
+func validNamespaceName(name string) bool {
+	return name == strings.TrimSpace(name) && httputil.ValidateNamespace(name)
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"github.com/DeBrosOfficial/network/pkg/serverless/registry"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Bugboard #548: the claims-provider sanitizer is the security boundary —
@@ -85,7 +87,8 @@ func TestSanitizeProviderClaims_countAndSizeCapped(t *testing.T) {
 
 func TestResolveClaims_nilInvokerOrEmptyArgs(t *testing.T) {
 	p := newJWTClaimsProvider(nil, nil) // nil invoker disables the hook
-	if got := p.ResolveClaims(nil, "0xW", "ns"); got != nil {
+	var noCtx context.Context
+	if got := p.ResolveClaims(noCtx, "0xW", "ns"); got != nil {
 		t.Errorf("nil invoker must yield nil claims, got %v", got)
 	}
 }
@@ -158,6 +161,28 @@ func TestResolveClaims_transientAllAttemptsFailsOpen(t *testing.T) {
 	}
 }
 
+// A gateway that does not run the namespace's functions (bugboard #427) mints
+// without custom claims, silently and without retrying: it is every main-domain
+// sign-in to a tenant namespace, not a provider failure.
+func TestResolveClaims_namespaceNotServedIsSilent(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	f := &fakeClaimsInvoker{results: []invokeResult{
+		{err: fmt.Errorf("%w: %w", serverless.ErrFunctionNotFound, serverless.ErrNamespaceNotServed)},
+	}}
+	p := newJWTClaimsProvider(nil, zap.New(core))
+	p.invoker = f
+
+	if out := p.ResolveClaims(context.Background(), "0xW", "tenant-a"); out != nil {
+		t.Fatalf("expected nil, got %v", out)
+	}
+	if f.calls != 1 {
+		t.Errorf("expected 1 attempt, got %d", f.calls)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a namespace this gateway does not serve was logged as a failure: %v", logs.All())
+	}
+}
+
 // (c) ErrFunctionNotFound (no provider deployed) must NOT retry — it's the
 // normal no-claims case for most namespaces. Exactly one attempt, nil result.
 func TestResolveClaims_functionNotFoundNoRetry(t *testing.T) {
@@ -202,23 +227,17 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// A namespace claims provider must not be able to mint device claims.
-//
-// The provider is tenant-deployed WASM. If it could set device_fp, the forgery
-// would be handed to the exact layer that is supposed to be CHECKING it — an
-// app compromise would silently become a device-attribution bypass.
-func TestSanitizeProviderClaims_dropsDeviceClaims(t *testing.T) {
-	raw := []byte(`{"device_fp":"forged","device_since":"0","account_id":"acct-1"}`)
-
-	out := sanitizeProviderClaims(raw)
-
-	if _, ok := out["device_fp"]; ok {
-		t.Error("a namespace provider injected device_fp — device attribution would be forgeable by the app itself")
+// feat-422: the device and session a token is bound to are the gateway's to
+// set. A provider that could put "did" in the custom claims could make
+// get_caller_claim("did") name a device the caller never proved it holds.
+func TestSanitizeProviderClaims_dropsTheSessionBinding(t *testing.T) {
+	out := sanitizeProviderClaims([]byte(`{"did":"forged","sid":"forged","jti":"forged","account_id":"u-1"}`))
+	for _, k := range []string{"did", "sid", "jti"} {
+		if _, present := out[k]; present {
+			t.Errorf("reserved key %q survived: %v", k, out)
+		}
 	}
-	if _, ok := out["device_since"]; ok {
-		t.Error("a namespace provider injected device_since")
-	}
-	if out["account_id"] != "acct-1" {
-		t.Errorf("the provider's own claims were dropped: %v", out)
+	if out["account_id"] != "u-1" {
+		t.Errorf("legitimate claim dropped: %v", out)
 	}
 }

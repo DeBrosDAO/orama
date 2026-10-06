@@ -13,6 +13,11 @@ After=network.target
 # stale relay binary is a worse failure than a bounded restart, and matches
 # orama-sni-router.service, the other host-level public listener.
 PartOf=orama-node.service
+# No start limit. orama-node reconciles these units and retries with backoff,
+# and `systemctl start` on a rate-limited unit fails with "Start request
+# repeated too quickly" until someone runs `reset-failed` — so the default
+# limit would turn a transient failure into one that needs a human.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -23,7 +28,11 @@ WorkingDirectory=/opt/orama
 # node and authenticates each against its own secret (bugboard #283). The tenant
 # list in this config is re-read at runtime, so namespaces are added and removed
 # WITHOUT restarting — a restart drops every tenant's active relays.
-Environment=TURN_CONFIG=/opt/orama/.orama/configs/turn.yaml
+#
+# Under data/, not configs/: the writer is the index gateway
+# (orama-namespace-gateway@index), to which configs/ is read-only
+# (pkg/constants.HostTURNConfigPath).
+Environment=TURN_CONFIG=/opt/orama/.orama/data/turn/turn.yaml
 
 ExecStart=/bin/sh -c 'exec /opt/orama/bin/turn --config ${TURN_CONFIG}'
 
@@ -35,8 +44,16 @@ ExecStart=/bin/sh -c 'exec /opt/orama/bin/turn --config ${TURN_CONFIG}'
 # path would otherwise hand an unauthenticated remote attacker root. Mirrors
 # orama-sni-router.service, the other host-level public listener.
 #
-# `orama` owns both the config (written by orama-node) and Caddy's cert storage,
-# so no additional ReadWritePaths are needed — TURN only ever reads.
+# `orama` owns both the config (written by the index gateway) and Caddy's cert storage,
+# so no additional ReadWritePaths are needed — TURN only ever reads its config.
+#
+# The one thing it publishes is served-tenants.json, in a RuntimeDirectory rather
+# than next to the config: systemd removes /run/orama-turn when the unit stops, so
+# a dead server leaves no claim of what it serves behind. Mode 0750 so the gateway
+# (a different process, same orama user and group) can read it and no other
+# local user can.
+RuntimeDirectory=orama-turn
+RuntimeDirectoryMode=0750
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 User=orama
@@ -44,13 +61,14 @@ Group=orama
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectProc=invisible
 PrivateDevices=yes
 
 TimeoutStopSec=30s
 KillMode=mixed
 KillSignal=SIGTERM
 
-Restart=on-failure
+Restart=always
 RestartSec=5s
 
 StandardOutput=journal

@@ -40,10 +40,10 @@ func TestExecAndPublish_budgetEnforced(t *testing.T) {
 	// be bounded. db is non-nil but BatchWithSeq is never reached once the
 	// budget check rejects (it runs before the write).
 	fake := &fakeBatchClient{}
-	h := &HostFunctions{pubsub: &pubsub.ClientAdapter{}, db: fake}
+	h := &HostFunctions{pubsub: &pubsub.ClientAdapter{}, db: fake, dbNamespace: testNamespace}
 	ctx := serverless.WithInvocationContext(
 		serverless.WithPublishCounter(context.Background()),
-		&serverless.InvocationContext{Namespace: "ns-test"},
+		&serverless.InvocationContext{Namespace: testNamespace},
 	)
 	serverless.AddPublishCount(ctx, maxPublishesPerInvocation)
 

@@ -8,7 +8,7 @@ A decentralized infrastructure platform combining distributed SQL, IPFS storage,
 |---------|----------|-------------|
 | [core/](core/) | Go | API gateway, distributed node, CLI, and client SDK |
 | [sdk/](sdk/) | TypeScript | `@debros/orama` — JavaScript/TypeScript SDK ([npm](https://www.npmjs.com/package/@debros/orama)) |
-| [website/](website/) | TypeScript | Marketing website and invest portal |
+| [website/](website/) | TypeScript | Public website (orama.network), whitepaper and docs |
 | [vault/](vault/) | Zig | Distributed secrets vault (Shamir's Secret Sharing) |
 | [os/](os/) | Go + Buildroot | OramaOS — hardened minimal Linux for network nodes |
 
@@ -32,13 +32,20 @@ make vault-build
 
 | Document | Description |
 |----------|-------------|
+| [Whitepaper](docs/whitepaper/WHITEPAPER.md) | What Orama is, how it works, what runs on it today |
 | [Architecture](docs/ARCHITECTURE.md) | System architecture and design patterns |
+| [Client surface](docs/CLIENT_SURFACE.md) | Humans use the CLI; programs use the SDK / HTTP. No dashboard, no Orama MCP |
+| [One-VPS eval](docs/EVAL.md) | Single machine: index + tenant, not HA |
 | [Deployment Guide](docs/DEPLOYMENT_GUIDE.md) | Deploy apps, databases, and domains |
 | [Dev & Deploy](docs/DEV_DEPLOY.md) | Building, deploying to VPS, rolling upgrades |
+| [Authentication](docs/AUTH.md) | Who someone is, what they may do, and how the gateway decides |
 | [Security](docs/SECURITY.md) | Security hardening and threat model |
 | [Monitoring](docs/MONITORING.md) | Cluster health monitoring |
-| [Client SDK](docs/CLIENT_SDK.md) | Go SDK documentation |
+| [TypeScript SDK](docs/TS_SDK.md) | `@debros/orama` — the client applications use |
+| [Go Client SDK](docs/GO_CLIENT_SDK.md) | The Go client for the same gateway |
 | [Serverless](docs/SERVERLESS.md) | WASM serverless functions |
+| [API Surface](docs/API_SURFACE.md) | Every gateway route and which client owns it |
+| [CLI Reference](docs/CLI_REFERENCE.md) | Every command and flag, generated from the code |
 | [Common Problems](docs/COMMON_PROBLEMS.md) | Troubleshooting known issues |
 
 ## Contributing

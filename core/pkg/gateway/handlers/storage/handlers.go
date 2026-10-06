@@ -16,9 +16,11 @@ import (
 // This interface matches the ipfs.IPFSClient implementation.
 type IPFSClient interface {
 	Add(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
+	AddLocal(ctx context.Context, reader io.Reader, name string) (*ipfs.AddResponse, error)
 	Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error)
 	PinStatus(ctx context.Context, cid string) (*ipfs.PinStatus, error)
 	Get(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
+	GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error)
 	Unpin(ctx context.Context, cid string) error
 	EvictLocal(ctx context.Context, cid string) (int, error)
 }
@@ -29,6 +31,13 @@ type Config struct {
 	IPFSReplicationFactor int
 	// IPFSAPIURL is the IPFS API endpoint URL
 	IPFSAPIURL string
+	// ClusterSecret keys the coordination MAC that authenticates node-to-node
+	// evict calls (pkg/auth/coordination.go). Every gateway of a cluster holds
+	// the same one.
+	ClusterSecret string
+	// NodePeerID is this node's libp2p peer id: the audience an evict call must
+	// have been signed for to be accepted here.
+	NodePeerID string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.
@@ -48,7 +57,18 @@ type Handlers struct {
 	// fan-out dials. Zero selects internalGatewayPort, which is what production
 	// always uses; tests set it to point the fan-out at a local stub node.
 	evictPort int
+	// refs is the cluster-wide reference index an unpin decides "last
+	// reference" from (cidrefs.go). It reads the registry, not this namespace's
+	// database.
+	refs *CIDRefs
 }
+
+// CIDRefs is the reference index this handler set decides unpins from.
+func (h *Handlers) CIDRefs() *CIDRefs { return h.refs }
+
+// SetCIDRefs makes this handler set share the gateway's reference index with
+// the deployment and namespace handlers, so one readiness state covers them.
+func (h *Handlers) SetCIDRefs(refs *CIDRefs) { h.refs = refs }
 
 // New creates a new storage handlers instance with the provided dependencies.
 // db is this gateway's own RQLite (content ownership); globalDB is the MAIN
@@ -63,6 +83,7 @@ func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db
 		config:     config,
 		db:         db,
 		globalDB:   globalDB,
+		refs:       NewCIDRefs(globalDB),
 	}
 }
 
@@ -84,9 +105,11 @@ func (h *Handlers) recordCIDOwnership(ctx context.Context, cid, namespace, name,
 		return nil
 	}
 
-	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by)
-		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)
-		ON CONFLICT(cid, namespace) DO NOTHING`
+	// A re-upload of content the namespace already owns keeps the row (and
+	// its first uploaded_at) but is a fresh pin request.
+	query := `INSERT INTO ipfs_content_ownership (id, cid, namespace, name, size_bytes, is_pinned, uploaded_at, uploaded_by, pin_requested_at)
+		VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?, datetime('now'))
+		ON CONFLICT(cid, namespace) DO UPDATE SET pin_requested_at = datetime('now')`
 
 	id := cid + ":" + namespace // Simple unique ID
 	_, err := h.db.Exec(ctx, query, id, cid, namespace, name, sizeBytes, false, uploadedBy)
@@ -221,6 +244,11 @@ func (h *Handlers) updatePinStatus(ctx context.Context, cid, namespace string, i
 	}
 
 	query := `UPDATE ipfs_content_ownership SET is_pinned = ? WHERE cid = ? AND namespace = ?`
+	if isPinned {
+		// A pin is a pin request: a download right after it may find the
+		// pin still propagating (see pinPropagationWindow).
+		query = `UPDATE ipfs_content_ownership SET is_pinned = ?, pin_requested_at = datetime('now') WHERE cid = ? AND namespace = ?`
+	}
 	_, err := h.db.Exec(ctx, query, isPinned, cid, namespace)
 	return err
 }

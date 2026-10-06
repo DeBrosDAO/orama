@@ -12,12 +12,14 @@ const PERSONA_LABELS: Record<Persona, string> = {
   developer: "Dev",
   operator: "Ops",
   contributor: "Contrib",
+  blockchain: "Chain",
 };
 
 const PERSONA_COLORS: Record<Persona, string> = {
   developer: "text-accent bg-accent/10",
   operator: "text-accent-2 bg-accent-2/10",
   contributor: "text-muted bg-surface-2",
+  blockchain: "text-accent bg-accent/10",
 };
 
 type SearchResult =

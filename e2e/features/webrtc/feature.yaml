@@ -1,0 +1,41 @@
+# WebRTC end to end in a three-member namespace enabled with the CLI: SFU on
+# every node bound to WireGuard only, the shared TURN on two nodes (0600
+# turn.yaml with a 32-byte secret, 3478 udp/tcp and 5349 open, DNS for both
+# TURN names), TURNS with the wildcard cert, REST credentials (24 h, the
+# ladder, access), TURN allocation only with the namespace's HMAC (unknown
+# namespace, tampered and re-dated credentials allocate nothing, relays come
+# from 49152-65535 on the TURN nodes), the signalling socket's access and
+# join rule, rooms, real RTP between headless pion peers relay-only through
+# TURN and the SFU (1:1 and a group call), the SFU's 600 s credential
+# refreshed at 80%, and stealth enable/disable or its rollback. Node death,
+# SFU draining and the role reconciler are webrtc-chaos.
+id: webrtc
+title: WebRTC (SFU and TURN)
+area: webrtc
+subtasks: [2838]
+stage: 6
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/webrtc/turn/credentials
+    - /v1/webrtc/signal
+    - /v1/webrtc/rooms
+    - /v1/namespace/webrtc/stealth/enable
+    - /v1/namespace/webrtc/stealth/disable
+  units:
+    - orama-namespace-sfu@.service
+    - orama-turn.service
+    - orama-namespace-turn@.service
+  claims:
+    - "docs/WEBRTC.md#architecture: SFU on all 3 nodes bound to WireGuard only; TURN on 2 of 3; relay-only ICE"
+    - "docs/WEBRTC.md#room-placement: every peer of a room reaches the room's one SFU whichever node's gateway it connects through (1:1 and group calls across three gateways)"
+    - "docs/WEBRTC.md#turn-topology: one shared TURN per host; turn.yaml is 0600; isolation is the per-tenant secret; relays from 49152-65535"
+    - "docs/WEBRTC.md#turn-credential-protocol: REST credentials last 24 h; SFU credentials 600 s refreshed at 80%"
+    - "docs/WEBRTC.md#turns-tls-certificate: TURNS on 5349 presents the wildcard for turn-<ns>.<base>"
+    - "docs/WEBRTC.md#security-model: every WebRTC endpoint needs a signed-in user; a key alone is refused"
+    - "docs/WEBRTC.md#what-happens-on-enable: a 32-byte TURN secret; DNS for turn.ns-<ns> and turn-<ns> names the TURN nodes"
+    - "docs/STEALTH_TURN.md#enabling-stealth-for-a-namespace: stealth adds turns:cdn-<hash>:443 or rolls back; disable keeps the baseline ladder; requires WebRTC"

@@ -6,12 +6,17 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
-	"github.com/DeBrosOfficial/network/pkg/gateway"
+	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
@@ -94,7 +99,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range clusterNodes {
 		block, err := cm.webrtcPortAllocator.AllocateSFUPorts(ctx, node.NodeID, cluster.ID)
 		if err != nil {
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 			return fmt.Errorf("failed to allocate SFU ports on node %s: %w", node.NodeID, err)
 		}
 		sfuBlocks[node.NodeID] = block
@@ -122,7 +127,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range turnNodes {
 		block, err := cm.webrtcPortAllocator.AllocateTURNPorts(ctx, node.NodeID, cluster.ID)
 		if err != nil {
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 			return fmt.Errorf("failed to allocate TURN ports on node %s: %w", node.NodeID, err)
 		}
 		turnBlocks[node.NodeID] = block
@@ -138,7 +143,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// 10. Get port blocks for RQLite DSN
 	portBlocks, err := cm.portAllocator.GetAllPortBlocks(ctx, cluster.ID)
 	if err != nil {
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, nil)
 		return fmt.Errorf("failed to get port blocks: %w", err)
 	}
 
@@ -161,7 +166,29 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	// rather than during it. That is safe because a TURN DNS record is published
 	// only once the shared server is actually serving, so clients are never
 	// pointed at a relay that is not yet up.
-	cm.ReconcileHostTURN(ctx)
+	//
+	// This host's part is not deferred: if it cannot apply the tenant set now,
+	// it will not on the next tick either, and enabling WebRTC is refused
+	// rather than reported done.
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
+		return fmt.Errorf("failed to reconcile this host's shared TURN server for namespace %s: %w", namespaceName, err)
+	}
+	// Every other TURN host is asked to apply its tenant set now and to answer
+	// only once its RUNNING server has loaded it (the server reloads on a
+	// ~2s tick, so a written config alone does not mean it serves), and only
+	// hosts that confirmed are advertised. Without the ask a host picks the
+	// namespace up on its next sweep, up to a minute later, while the DNS record
+	// and the credentials already point clients at it: its relay rejected them ("TURN credential for
+	// a namespace this server does not serve") and every relay-only call
+	// failed ICE. A host that did not confirm advertises itself once its own
+	// sweep has it serving.
+	confirmedTURNIPs := cm.confirmTURNHosts(ctx, namespaceName, turnNodes, served)
+	if len(confirmedTURNIPs) == 0 {
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
+		return fmt.Errorf("no TURN host confirmed it serves namespace %s; WebRTC is not enabled", namespaceName)
+	}
 	if len(turnNodes) > 0 {
 		cm.logger.Info("TURN allocated; hosts converge on their next reconcile",
 			zap.String("namespace", namespaceName),
@@ -179,7 +206,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	for _, node := range clusterNodes {
 		sfuBlock := sfuBlocks[node.NodeID]
 		pb := nodePortBlocks[node.NodeID]
-		rqliteDSN := fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort)
+		rqliteDSN := tenantRQLiteURL(node.InternalIP, pb.RQLiteHTTPPort)
 
 		sfuCfg := SFUInstanceConfig{
 			Namespace:      namespaceName,
@@ -198,7 +225,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 				zap.String("namespace", namespaceName),
 				zap.String("node_id", node.NodeID),
 				zap.Error(err))
-			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+			cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 			return fmt.Errorf("failed to spawn SFU on node %s: %w", node.NodeID, err)
 		}
 
@@ -207,15 +234,11 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	}
 
 	// 13. Create TURN DNS records
-	var turnIPs []string
-	for _, node := range turnNodes {
-		turnIPs = append(turnIPs, node.PublicIP)
-	}
-	if err := cm.dnsManager.CreateTURNRecords(ctx, namespaceName, turnIPs); err != nil {
+	if err := cm.dnsManager.CreateTURNRecords(ctx, namespaceName, confirmedTURNIPs); err != nil {
 		cm.logger.Error("Failed to create TURN DNS records, aborting WebRTC enablement",
 			zap.String("namespace", namespaceName),
 			zap.Error(err))
-		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes)
+		cm.cleanupWebRTCOnError(ctx, cluster.ID, namespaceName, clusterNodes, turnNodes)
 		return fmt.Errorf("failed to create TURN DNS records: %w", err)
 	}
 
@@ -238,6 +261,41 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 	return nil
 }
 
+// confirmTURNHosts returns the public IPs of the TURN nodes whose running server
+// serves the namespace: this node when its own reconcile listed it and its
+// server loaded it, each other node when it confirmed the same. A node that cannot be reached, or
+// runs a release that does not know the request, is left out and logged; its
+// own sweep advertises it once it serves.
+func (cm *ClusterManager) confirmTURNHosts(ctx context.Context, namespaceName string, turnNodes []clusterNodeInfo, served []string) []string {
+	var ips []string
+	for _, node := range turnNodes {
+		if node.NodeID == cm.localNodeID {
+			if !slices.Contains(served, namespaceName) {
+				continue
+			}
+			if err := cm.awaitHostTURNServing(ctx, namespaceName); err != nil {
+				cm.logger.Warn("This host's shared TURN server did not load the namespace; it is advertised once its own sweep has it serving",
+					zap.String("namespace", namespaceName), zap.String("node_id", node.NodeID), zap.Error(err))
+				continue
+			}
+			ips = append(ips, node.PublicIP)
+			continue
+		}
+		_, err := cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
+			"action":    spawnActionReconcileHostTURN,
+			"namespace": namespaceName,
+			"node_id":   node.NodeID,
+		})
+		if err != nil {
+			cm.logger.Warn("A TURN host did not confirm it serves the namespace; it is advertised once its own sweep has it serving",
+				zap.String("namespace", namespaceName), zap.String("node_id", node.NodeID), zap.Error(err))
+			continue
+		}
+		ips = append(ips, node.PublicIP)
+	}
+	return ips
+}
+
 // DisableWebRTC disables WebRTC for a namespace cluster.
 // Stops SFU/TURN services, deallocates ports, and cleans up DNS/DB.
 func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName string) error {
@@ -252,11 +310,23 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 		return ErrClusterNotFound
 	}
 
-	// 2. Verify WebRTC is enabled
+	// 2. Verify WebRTC is enabled — or that an earlier disable left allocations
+	// behind. That disable marked the namespace disabled before it stopped its
+	// units and kept the rows of any unit it could not stop, so running this
+	// again is how those are finished.
 	var configs []WebRTCConfig
 	if err := cm.db.Query(internalCtx, &configs,
-		`SELECT * FROM namespace_webrtc_config WHERE namespace_cluster_id = ? AND enabled = 1`, cluster.ID); err != nil || len(configs) == 0 {
-		return ErrWebRTCNotEnabled
+		`SELECT * FROM namespace_webrtc_config WHERE namespace_cluster_id = ? AND enabled = 1`, cluster.ID); err != nil {
+		return fmt.Errorf("failed to read the WebRTC config of namespace %s: %w", namespaceName, err)
+	}
+	if len(configs) == 0 {
+		leftover, err := cm.webrtcPortAllocator.GetAllPorts(ctx, cluster.ID)
+		if err != nil {
+			return fmt.Errorf("failed to read the WebRTC allocations of namespace %s: %w", namespaceName, err)
+		}
+		if len(leftover) == 0 {
+			return ErrWebRTCNotEnabled
+		}
 	}
 
 	cm.logger.Info("Disabling WebRTC for namespace",
@@ -270,39 +340,93 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 		return fmt.Errorf("failed to get cluster nodes: %w", err)
 	}
 
-	// 4. Stop SFU on all nodes
+	// 4. Read what the teardown will act on while a failure still leaves the
+	// namespace exactly as it was.
+	turnBlocks, err := cm.getWebRTCBlocksByType(ctx, cluster.ID, "turn")
+	if err != nil {
+		return fmt.Errorf("failed to read TURN allocations of namespace %s; WebRTC left enabled: %w", namespaceName, err)
+	}
+
+	// 5. Mark WebRTC disabled BEFORE any unit is stopped. The periodic reconciler
+	// of every node starts the units of a namespace whose WebRTC config says
+	// enabled, and a start issued while the SFU drains (30s, TimeoutStopSec 45s)
+	// cancels the stop job: the teardown failed with "Job canceled" and its unit
+	// went back up. With the config disabled the reconcilers skip the namespace;
+	// one already past that check is held off by the namespace's lock.
+	if _, err := cm.db.Exec(internalCtx,
+		`UPDATE namespace_webrtc_config SET enabled = 0, disabled_at = ? WHERE namespace_cluster_id = ?`,
+		time.Now(), cluster.ID); err != nil {
+		return fmt.Errorf("failed to mark WebRTC disabled for namespace %s before stopping its units; nothing was stopped: %w", namespaceName, err)
+	}
+
+	// 6. Tear down the SFU on every node (stopped AND disabled with its env/config
+	// removed — stopping alone left the unit enabled, and the next
+	// `orama node upgrade` restarts every unit it finds: a namespace that turned
+	// WebRTC off got its SFU back) and, since TURN is the shared host server
+	// (bugboard #283) that this namespace shares with every other one on the
+	// host, only the pre-#283 per-namespace TURN unit an upgraded node may still
+	// carry: the namespace leaves the shared server's tenant list in step 9b,
+	// once its allocation and WebRTC config are gone. All units are torn down
+	// concurrently so the request lasts as long as the slowest drain, not the
+	// sum of them (teardownWebRTCConcurrently). A node that cannot be reached is
+	// recorded for retry (sendStopRequest) and reported below.
+	tasks := make([]webrtcTeardownTask, 0, len(clusterNodes)+len(turnBlocks))
 	for _, node := range clusterNodes {
-		cm.stopSFUOnNode(ctx, node.NodeID, node.InternalIP, namespaceName)
-		cm.logEvent(ctx, cluster.ID, EventSFUStopped, node.NodeID, "SFU stopped", nil)
+		tasks = append(tasks, webrtcTeardownTask{NodeID: node.NodeID, NodeIP: node.InternalIP, ServiceType: "sfu", Action: teardownSFUAction})
 	}
-
-	// 5. Stop TURN on nodes that have TURN allocations
-	turnBlocks, _ := cm.getWebRTCBlocksByType(ctx, cluster.ID, "turn")
 	for _, block := range turnBlocks {
-		nodeIP := cm.getNodeIP(clusterNodes, block.NodeID)
-		cm.stopTURNOnNode(ctx, block.NodeID, nodeIP, namespaceName)
-		cm.logEvent(ctx, cluster.ID, EventTURNStopped, block.NodeID, "TURN stopped", nil)
+		tasks = append(tasks, webrtcTeardownTask{NodeID: block.NodeID, NodeIP: cm.getNodeIP(clusterNodes, block.NodeID), ServiceType: "turn", Action: teardownTURNAction})
+	}
+	var cleanupErrs []error
+	var retained []webrtcUnit
+	for _, res := range cm.teardownWebRTCConcurrently(ctx, namespaceName, cluster.ID, tasks) {
+		if res.Err != nil {
+			cleanupErrs = append(cleanupErrs, res.Err)
+			retained = append(retained, webrtcUnit{NodeID: res.Task.NodeID, ServiceType: res.Task.ServiceType})
+			continue
+		}
+		if res.Task.ServiceType == "turn" {
+			cm.logEvent(ctx, cluster.ID, EventTURNStopped, res.Task.NodeID, "TURN unit torn down", nil)
+		} else {
+			cm.logEvent(ctx, cluster.ID, EventSFUStopped, res.Task.NodeID, "SFU torn down", nil)
+		}
 	}
 
-	// 6. Deallocate all WebRTC ports
-	if err := cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID); err != nil {
-		cm.logger.Warn("Failed to deallocate WebRTC ports", zap.Error(err))
+	// 8. Release the WebRTC ports of every unit that is gone. A unit that could
+	// not be stopped still holds its ports, so its allocation stays: freeing it
+	// let the next namespace be given the same ports, and that namespace's SFU
+	// crash-looped on "address already in use" (found live on stagenet).
+	if err := cm.releaseWebRTCPorts(ctx, cluster.ID, retained); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("deallocate the WebRTC ports: %w", err))
 	}
 
-	// 7. Delete TURN DNS records (both the regular and the feat-124 stealth
+	// 9. Delete TURN DNS records (both the regular and the feat-124 stealth
 	// records — a full WebRTC teardown must not orphan stealth A records when
 	// the namespace had stealth enabled). Delete-by-tag is a no-op when the
 	// stealth records are absent, so this is safe unconditionally.
 	if err := cm.dnsManager.DeleteTURNRecords(ctx, namespaceName); err != nil {
-		cm.logger.Warn("Failed to delete TURN DNS records", zap.Error(err))
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete the TURN DNS records: %w", err))
 	}
 	if err := cm.dnsManager.DeleteStealthTURNRecords(ctx, namespaceName); err != nil {
-		cm.logger.Warn("Failed to delete stealth TURN DNS records", zap.Error(err))
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("delete the stealth TURN DNS records: %w", err))
 	}
 
-	// 8. Clean up DB tables
-	cm.db.Exec(internalCtx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(internalCtx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
+	// 9a. Clean up DB tables
+	for _, table := range []string{"webrtc_rooms", "namespace_webrtc_config"} {
+		if _, err := cm.db.Exec(internalCtx, "DELETE FROM "+table+" WHERE namespace_cluster_id = ?", cluster.ID); err != nil {
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("delete the %s rows of cluster %s: %w", table, cluster.ID, err))
+		}
+	}
+
+	// 9b. Drop this namespace from this host's shared TURN server. It is rebuilt
+	// from the allocations and configs just deleted and re-read by the running
+	// process without a restart, so the other namespaces' relays are untouched;
+	// the last tenant leaving stops the host TURN. The other nodes do the same
+	// on their next WebRTC reconcile sweep (webrtcReconcileInterval), which
+	// reads the same database.
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("drop the namespace from this host's shared TURN server: %w", err))
+	}
 
 	// 9. Update cluster-state.json to remove WebRTC info
 	cm.updateClusterStateWithWebRTC(ctx, cluster, clusterNodes, nil, nil, "", "", "")
@@ -320,6 +444,11 @@ func (cm *ClusterManager) DisableWebRTC(ctx context.Context, namespaceName strin
 	}
 
 	cm.logEvent(ctx, cluster.ID, EventWebRTCDisabled, "", "WebRTC disabled", nil)
+
+	if len(cleanupErrs) > 0 {
+		return fmt.Errorf("WebRTC disabled for namespace %s, but its cleanup is incomplete (remote teardowns are recorded and retried): %w",
+			namespaceName, errors.Join(cleanupErrs...))
+	}
 
 	cm.logger.Info("WebRTC disabled successfully",
 		zap.String("namespace", namespaceName),
@@ -402,11 +531,7 @@ func (cm *ClusterManager) getClusterNodesWithIPs(ctx context.Context, clusterID 
 
 	nodes := make([]clusterNodeInfo, len(rows))
 	for i, r := range rows {
-		nodes[i] = clusterNodeInfo{
-			NodeID:     r.NodeID,
-			InternalIP: r.InternalIP,
-			PublicIP:   r.PublicIP,
-		}
+		nodes[i] = clusterNodeInfo(r)
 	}
 	return nodes, nil
 }
@@ -467,25 +592,6 @@ func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, node clusterNodeIn
 	return cm.spawnSFURemote(ctx, node.InternalIP, cfg)
 }
 
-
-// stopSFUOnNode stops SFU on a node (local or remote)
-func (cm *ClusterManager) stopSFUOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
-	if nodeID == cm.localNodeID {
-		cm.systemdSpawner.StopSFU(ctx, namespace, nodeID)
-	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-sfu", namespace, nodeID)
-	}
-}
-
-// stopTURNOnNode stops TURN on a node (local or remote)
-func (cm *ClusterManager) stopTURNOnNode(ctx context.Context, nodeID, nodeIP, namespace string) {
-	if nodeID == cm.localNodeID {
-		cm.systemdSpawner.StopTURN(ctx, namespace, nodeID)
-	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-turn", namespace, nodeID)
-	}
-}
-
 // spawnSFURemote sends a spawn-sfu request to a remote node
 func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg SFUInstanceConfig) error {
 	// Serialize TURN servers for transport
@@ -512,7 +618,6 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 	})
 	return err
 }
-
 
 // getWebRTCBlocksByType returns all WebRTC port blocks of a given type for a cluster.
 func (cm *ClusterManager) getWebRTCBlocksByType(ctx context.Context, clusterID, serviceType string) ([]WebRTCPortBlock, error) {
@@ -541,24 +646,89 @@ func (cm *ClusterManager) getNodeIP(nodes []clusterNodeInfo, nodeID string) stri
 }
 
 // cleanupWebRTCOnError cleans up partial WebRTC allocations when EnableWebRTC fails mid-way.
-func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, namespaceName string, nodes []clusterNodeInfo) {
+// turnHosts are the TURN hosts that were asked to serve the namespace: each is
+// told to drop it once its allocation and config are gone, so no host keeps the
+// namespace's secret in its shared TURN config until the next sweep.
+func (cm *ClusterManager) cleanupWebRTCOnError(ctx context.Context, clusterID, namespaceName string, nodes, turnHosts []clusterNodeInfo) {
 	cm.logger.Warn("Cleaning up partial WebRTC enablement",
 		zap.String("namespace", namespaceName),
 		zap.String("cluster_id", clusterID))
 
 	internalCtx := client.WithInternalAuth(ctx)
 
-	// Stop any spawned SFU/TURN services
-	for _, node := range nodes {
-		cm.stopSFUOnNode(ctx, node.NodeID, node.InternalIP, namespaceName)
-		cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, namespaceName)
+	// Disable before stopping, as DisableWebRTC does: the reconcilers start the
+	// units of a namespace whose config says enabled, which would cancel the
+	// stops below.
+	if _, err := cm.db.Exec(internalCtx,
+		`UPDATE namespace_webrtc_config SET enabled = 0, disabled_at = ? WHERE namespace_cluster_id = ?`,
+		time.Now(), clusterID); err != nil {
+		cm.logger.Error("Failed to mark WebRTC disabled before rolling back its enablement; a reconciler may restart the units being stopped",
+			zap.String("namespace", namespaceName), zap.Error(err))
 	}
 
-	// Deallocate ports
-	cm.webrtcPortAllocator.DeallocateAll(ctx, clusterID)
+	// Tear down any spawned SFU (and legacy TURN unit): a rolled-back
+	// enablement must not come back on the next upgrade. Failures are logged;
+	// remote ones are also recorded for retry.
+	var retained []webrtcUnit
+	for _, node := range nodes {
+		for _, step := range []struct{ action, service string }{{teardownSFUAction, "sfu"}, {teardownTURNAction, "turn"}} {
+			if err := cm.teardownWebRTCOnNode(ctx, node.NodeID, node.InternalIP, namespaceName, clusterID, step.action); err != nil {
+				cm.logger.Error("Failed to tear down a WebRTC service while rolling back WebRTC enablement",
+					zap.String("namespace", namespaceName), zap.String("node_id", node.NodeID),
+					zap.String("action", step.action), zap.Error(err))
+				retained = append(retained, webrtcUnit{NodeID: node.NodeID, ServiceType: step.service})
+			}
+		}
+	}
+
+	// Deallocate the ports of the units that are gone; a unit that is not keeps
+	// its allocation, since it still holds the ports.
+	if err := cm.releaseWebRTCPorts(ctx, clusterID, retained); err != nil {
+		cm.logger.Error("Failed to release the WebRTC ports while rolling back WebRTC enablement",
+			zap.String("namespace", namespaceName), zap.Error(err))
+	}
 
 	// Remove config row
-	cm.db.Exec(internalCtx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, clusterID)
+	if _, err := cm.db.Exec(internalCtx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, clusterID); err != nil {
+		cm.logger.Error("Failed to delete the WebRTC config while rolling back WebRTC enablement",
+			zap.String("namespace", namespaceName), zap.Error(err))
+	}
+
+	// Last, so each host derives its tenant set from the rows as they now are.
+	// A fresh bounded context: this runs because the enable failed, often because
+	// ctx was cancelled or timed out, and the drop must still be sent.
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTURNHostsTimeout)
+	defer cancel()
+	if err := cm.releaseTURNHosts(releaseCtx, namespaceName, turnHosts); err != nil {
+		cm.logger.Error("A TURN host could not be told to drop the namespace while rolling back WebRTC enablement; it drops it on its next WebRTC reconcile sweep",
+			zap.String("namespace", namespaceName), zap.Error(err))
+	}
+}
+
+// releaseTURNHostsTimeout bounds the whole rollback release across hosts.
+const releaseTURNHostsTimeout = 30 * time.Second
+
+// releaseTURNHosts asks every host to drop the namespace from its shared TURN
+// server now. Every host is asked; the failures come back joined.
+func (cm *ClusterManager) releaseTURNHosts(ctx context.Context, namespaceName string, hosts []clusterNodeInfo) error {
+	var errs []error
+	for _, node := range hosts {
+		if node.NodeID == cm.localNodeID {
+			if err := cm.ReleaseHostTURN(ctx, namespaceName); err != nil {
+				errs = append(errs, fmt.Errorf("local host %s: %w", node.NodeID, err))
+			}
+			continue
+		}
+		if _, err := cm.sendSpawnRequest(ctx, node.InternalIP, map[string]interface{}{
+			"action":    spawnActionReconcileHostTURN,
+			"namespace": namespaceName,
+			"node_id":   node.NodeID,
+			"release":   true,
+		}); err != nil {
+			errs = append(errs, fmt.Errorf("host %s: %w", node.NodeID, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // updateClusterStateWithWebRTC updates the cluster-state.json on all nodes
@@ -657,16 +827,17 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 					zap.Error(err))
 			}
 		} else {
-			cm.saveRemoteState(ctx, node.InternalIP, cluster.NamespaceName, state)
+			cm.saveRemoteState(ctx, node.InternalIP, node.NodeID, cluster.NamespaceName, state)
 		}
 	}
 }
 
 // saveRemoteState sends cluster state to a remote node for persistence.
-func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, namespace string, state *ClusterLocalState) {
+func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, nodeID, namespace string, state *ClusterLocalState) {
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":        "save-cluster-state",
 		"namespace":     namespace,
+		"node_id":       nodeID,
 		"cluster_state": state,
 	})
 	if err != nil {
@@ -694,6 +865,9 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 		}
 	}
 
+	// The nodes' gateways are independent, and restarting them one after another
+	// added a restart per node to the disable/enable request.
+	var wg sync.WaitGroup
 	for _, node := range nodes {
 		pb, ok := portBlocks[node.NodeID]
 		if !ok {
@@ -712,12 +886,12 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			}
 		}
 
-		cfg := gateway.InstanceConfig{
+		cfg := gatewayspec.InstanceConfig{
 			Namespace:             cluster.NamespaceName,
 			NodeID:                node.NodeID,
 			HTTPPort:              pb.GatewayHTTPPort,
 			BaseDomain:            cm.baseDomain,
-			RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(node.InternalIP, pb.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -735,25 +909,30 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 			SecretsEncryptionKey: cm.secretsEncryptionKey,
 		}
 
-		if node.NodeID == cm.localNodeID {
-			if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
-				cm.logger.Error("Failed to restart local gateway with WebRTC config",
-					zap.String("namespace", cluster.NamespaceName),
-					zap.String("node_id", node.NodeID),
-					zap.Error(err))
-			} else {
-				cm.logger.Info("Restarted local gateway with WebRTC config",
-					zap.String("namespace", cluster.NamespaceName),
-					zap.Bool("webrtc_enabled", webrtcEnabled))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if node.NodeID == cm.localNodeID {
+				if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
+					cm.logger.Error("Failed to restart local gateway with WebRTC config",
+						zap.String("namespace", cluster.NamespaceName),
+						zap.String("node_id", node.NodeID),
+						zap.Error(err))
+				} else {
+					cm.logger.Info("Restarted local gateway with WebRTC config",
+						zap.String("namespace", cluster.NamespaceName),
+						zap.Bool("webrtc_enabled", webrtcEnabled))
+				}
+				return
 			}
-		} else {
 			cm.restartGatewayRemote(ctx, node.InternalIP, cfg)
-		}
+		}()
 	}
+	wg.Wait()
 }
 
 // restartGatewayRemote sends a restart-gateway request to a remote node.
-func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP string, cfg gateway.InstanceConfig) {
+func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP string, cfg gatewayspec.InstanceConfig) {
 	ipfsTimeout := ""
 	if cfg.IPFSTimeout > 0 {
 		ipfsTimeout = cfg.IPFSTimeout.String()
@@ -1123,7 +1302,7 @@ func webrtcReconcileMajorityHeld(viable, rawMembers int) bool {
 // webrtcReconcileStartupGrace bounds how soon after this node's own process
 // start it will act as WebRTC reconcile coordinator (bugboard #171). Mirrors
 // the reasoning behind health.DefaultStartupGracePeriod
-// (pkg/node/health/monitor.go, 5m — cannot import directly, pkg/node imports
+// (pkg/peerhealth/monitor.go, 5m — cannot import directly, pkg/node imports
 // pkg/namespace, see cluster_manager.go's startedAt field doc): a node that
 // has JUST come back up has not yet had time to observe its peers report back
 // in, so its very first read of cluster membership can look exactly like "I
@@ -1283,15 +1462,38 @@ const webrtcReconcileInterval = 60 * time.Second
 // record, but only while its namespace gateway is actually answering (bugboard
 // #286).
 //
-// Advertising is gated on real evidence rather than on the node merely believing
-// it holds the role: a record pointing at a gateway that is down is the #161
-// symptom in a different place — clients round-robin onto a dead endpoint.
-func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+// Advertising is gated on the same HTTP /v1/health probe the withdraw loop
+// uses. A record pointing at a gateway that is down — or that accepts TCP
+// but cannot serve — is the #161 symptom in a different place: clients
+// round-robin onto a dead endpoint.
+// namespaceGatewayProbe is the address of this node's tenant gateway health.
+//
+// The process binds its WireGuard address (LocalIP). Loopback is the index
+// gateway, and a tenant port there is closed, so a probe of 127.0.0.1 never
+// sees a healthy tenant and never puts the node back in DNS.
+func namespaceGatewayProbe(state *ClusterLocalState) (string, bool) {
 	port := state.LocalPorts.GatewayHTTPPort
 	if port <= 0 {
+		return "", false
+	}
+	host := strings.TrimSpace(state.LocalIP)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), true
+}
+
+func (cm *ClusterManager) ensureNamespaceHostRecordIfServing(ctx context.Context, state *ClusterLocalState) {
+	probe, ok := namespaceGatewayProbe(state)
+	if !ok {
 		return
 	}
-	if err := probeTCP(fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+	// HTTP /v1/health, not TCP-open. The withdraw loop in namespace_health.go
+	// keys on the same probe: a gateway that accepts TCP but is still starting
+	// (or 404s) must not be re-advertised here, or the two fight.
+	// Tenant gateways bind the WireGuard address only, so 127.0.0.1 never
+	// answers and a soft-disabled A record would stay disabled.
+	if err := gatewayReady(ctx, probe); err != nil {
 		// Not serving yet — say nothing and retry on the next tick. This is the
 		// normal state for the first minute after a restart.
 		return
@@ -1335,6 +1537,36 @@ func (cm *ClusterManager) StartWebRTCReconciler(ctx context.Context) {
 	}()
 }
 
+// webrtcSweep is what the periodic sweep does for one namespace on this node.
+type webrtcSweep int
+
+const (
+	// webrtcSweepSkip: the config could not be read; nothing is touched.
+	webrtcSweepSkip webrtcSweep = iota
+	// webrtcSweepStopOrphans: WebRTC is not enabled, so a unit still running
+	// here with no allocation row is an orphan of an earlier enablement whose
+	// teardown failed. Its ports are invisible to the allocator, which hands
+	// them to the next namespace, whose SFU then crash-loops on "address
+	// already in use"; it is stopped on the same positive evidence as any
+	// unallocated unit. Enabling writes the config row and the allocation before
+	// it spawns anything, so a unit mid-enablement is never mistaken for one.
+	webrtcSweepStopOrphans
+	// webrtcSweepReconcile: WebRTC is enabled; reconcile allocations and units.
+	webrtcSweepReconcile
+)
+
+// webrtcSweepFor decides the sweep of a namespace from its config read.
+func webrtcSweepFor(cfg *WebRTCConfig, err error) webrtcSweep {
+	switch {
+	case err != nil:
+		return webrtcSweepSkip
+	case cfg == nil:
+		return webrtcSweepStopOrphans
+	default:
+		return webrtcSweepReconcile
+	}
+}
+
 // reconcileWebRTCForLocalNamespaces reconciles every namespace this node holds
 // local state for: first the cluster-wide assignments (coordinator-gated), then
 // this node's own services against its own allocations.
@@ -1365,6 +1597,12 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		// the DB and skip on any mismatch.
 		cluster, cerr := cm.GetClusterByNamespace(ctx, state.NamespaceName)
 		if cerr != nil || cluster == nil || cluster.ID != state.ClusterID {
+			continue
+		}
+		// A cluster being deprovisioned (or failed) is not swept: pruning,
+		// re-allocating WebRTC ports and starting services for a namespace that
+		// is being deleted re-creates what its teardown is removing.
+		if cluster.Status != ClusterStatusReady && cluster.Status != ClusterStatusDegraded {
 			continue
 		}
 
@@ -1408,8 +1646,24 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		cm.ensureNamespaceHostRecordIfServing(ctx, state)
 
 		webrtcCfg, werr := cm.GetWebRTCConfig(ctx, state.NamespaceName)
-		if werr != nil || webrtcCfg == nil {
-			continue // WebRTC not enabled for this namespace
+		switch webrtcSweepFor(webrtcCfg, werr) {
+		case webrtcSweepSkip:
+			cm.logger.Warn("WebRTC sweep skipped a namespace: its config could not be read",
+				zap.String("namespace", state.NamespaceName), zap.Error(werr))
+			continue
+		case webrtcSweepStopOrphans:
+			cm.stopUnallocatedWebRTCServices(ctx, state.ClusterID, state.NamespaceName)
+			continue
+		}
+		// The registry must hold what this node's SFU binds before anything
+		// below reads it: the allocator hands out ports from those rows, and the
+		// stop sweep reads a missing row as "this node lost the role". On a
+		// disagreement the unit is left alone, since stopping it would stop the
+		// namespace that legitimately holds the ports.
+		if berr := cm.backfillSFUAllocation(ctx, state.NamespaceName, cluster.ID); berr != nil {
+			cm.logger.Error("This node's SFU does not match the registry's WebRTC allocations; leaving it alone until they are reconciled by hand",
+				zap.String("namespace", state.NamespaceName), zap.Error(berr))
+			continue
 		}
 		if aerr := cm.ReconcileWebRTCAllocations(ctx, cluster.ID, state.NamespaceName, webrtcCfg.TURNNodeCount); aerr != nil {
 			cm.logger.Warn("Periodic WebRTC allocation reconcile failed",
@@ -1418,7 +1672,7 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 		// Start what we hold, then stop what we don't — in that order, so a role
 		// that MOVED to this node is serving before the DNS ensure below can
 		// advertise it.
-		cm.spawnAllocatedWebRTCServices(ctx, state, webrtcCfg)
+		cm.spawnAllocatedWebRTCServices(ctx, state)
 		cm.stopUnallocatedWebRTCServices(ctx, state.ClusterID, state.NamespaceName)
 
 		// Collect this namespace for the TURN DNS pass that runs after the
@@ -1441,7 +1695,15 @@ func (cm *ClusterManager) reconcileWebRTCForLocalNamespaces(ctx context.Context)
 	// after every namespace's allocations have been reconciled above, then
 	// advertise — so a namespace that just gained TURN is serving before its DNS
 	// record appears, which is the ordering #161 requires.
-	served := cm.ReconcileHostTURN(ctx)
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		// Nothing is advertised on a failed reconcile: the relay set this host
+		// is serving is not the one it was asked to, and DNS must never point
+		// at a relay that is not up (#161). The next sweep retries.
+		cm.logger.Error("Shared TURN reconcile failed; no TURN DNS advertised from this host this sweep",
+			zap.Error(err))
+		return
+	}
 	cm.ensureTURNRecordsForServingNamespaces(ctx, turnNamespaces, served)
 }
 
@@ -1546,26 +1808,107 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 			return definitelyUnallocated(cm.webrtcPortAllocator.GetSFUPorts(ctx, clusterID, cm.localNodeID))
 		}},
 	} {
-		running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ)
-		if !running || !svc.gone() {
+		// A cheap read first: most units are inactive or allocated, and need
+		// no lock. The decision to stop is made again under it.
+		needs, nerr := cm.unitNeedsRetiring(namespaceName, svc.typ)
+		if nerr != nil {
+			cm.logger.Warn("Not retiring the WebRTC service: its state could not be read",
+				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(nerr))
 			continue
 		}
-		cm.logger.Info("Stopping WebRTC service: this node no longer holds the allocation (bugboard #161)",
-			zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
-		if serr := cm.systemdSpawner.systemdMgr.StopService(namespaceName, svc.typ); serr != nil {
-			cm.logger.Warn("Failed to stop unallocated WebRTC service — its ports stay bound while the allocator considers them free",
-				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)), zap.Error(serr))
+		if !needs || !svc.gone() {
 			continue
 		}
-		// Verify it actually stopped. The allocator has already freed these ports,
-		// so a process that is still bound can collide with the next allocation
-		// (an overlapping relay range, or 3478 taken from under another
-		// namespace). A failed stop must be loud, not assumed.
-		if stillUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, svc.typ); stillUp {
-			cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
-				zap.String("namespace", namespaceName), zap.String("service", string(svc.typ)))
-		}
+		cm.stopServiceIfStillUnallocated(namespaceName, svc.typ, svc.gone)
 	}
+}
+
+// unitNeedsRetiring reads the unit's state and env file. Either unreadable is
+// an error: a unit that cannot be read is left alone, never assumed gone.
+func (cm *ClusterManager) unitNeedsRetiring(namespaceName string, typ systemd.ServiceType) (bool, error) {
+	mgr := cm.systemdSpawner.systemdMgr
+	state, err := mgr.ServiceState(namespaceName, typ)
+	if err != nil {
+		return false, err
+	}
+	hasEnv, err := mgr.HasUnitEnv(namespaceName, typ)
+	if err != nil {
+		return false, err
+	}
+	return needsRetiring(state, hasEnv), nil
+}
+
+// stopServiceIfStillUnallocated retires one WebRTC unit of the namespace on
+// this node, under the namespace's lock and on what the allocator says under
+// it. The sweep's first read of the allocation was made before the lock: an
+// enable that allocated and spawned in between has put the allocation back, and
+// retiring on the earlier read would remove the unit it just started. The
+// spawn takes the same lock (SpawnSFU), so an enable is either wholly before
+// this check or wholly after the retirement.
+func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, typ systemd.ServiceType, gone func() bool) {
+	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+
+	retired, err := retireIfUnallocated(gone,
+		func() (bool, error) { return cm.unitNeedsRetiring(namespaceName, typ) },
+		func() error {
+			cm.logger.Info("Retiring WebRTC service: this node no longer holds the allocation (bugboard #161)",
+				zap.String("namespace", namespaceName), zap.String("service", string(typ)))
+			// Stop, disable and remove the env file. A unit left enabled with
+			// Restart=always crash-looped on another namespace's ports hundreds
+			// of times. An env file left behind is how `orama node upgrade`
+			// rediscovers the unit and enables and starts it again, and how
+			// `orama node status` lists it as an inactive service of this node.
+			return cm.systemdSpawner.retireSFU(namespaceName)
+		})
+	if err != nil {
+		cm.logger.Warn("Failed to retire unallocated WebRTC service — its ports stay bound while the allocator considers them free, and it starts again on the next boot or upgrade",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(err))
+		return
+	}
+	if !retired {
+		return
+	}
+	// Verify it actually stopped. The allocator has already freed these ports,
+	// so a process that is still bound can collide with the next allocation
+	// (an overlapping relay range, or 3478 taken from under another
+	// namespace). A failed stop must be loud, not assumed.
+	if stillUp, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, typ); stillUp {
+		cm.logger.Error("WebRTC service still active after stop — ports remain bound although the allocation was released; a later allocation on this host may collide",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)))
+	}
+}
+
+// retireIfUnallocated is the decision made under the namespace's lock: retire
+// only when the allocation is gone now and the unit still needs it. It reports
+// whether it retired.
+func retireIfUnallocated(gone func() bool, needs func() (bool, error), retire func() error) (bool, error) {
+	if !gone() {
+		return false, nil
+	}
+	n, err := needs()
+	if err != nil || !n {
+		return false, err
+	}
+	if err := retire(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// needsRetiring reports whether an unallocated WebRTC unit has to be retired:
+// it holds or may retake ports, or its env file is still there. A stopped,
+// disabled unit with an env file is still provisioned as far as the upgrade and
+// `orama node status` are concerned, so inactive alone is not "retired".
+func needsRetiring(state systemd.ActiveState, hasEnv bool) bool {
+	return hasEnv || holdsOrMayRetakePorts(state)
+}
+
+// holdsOrMayRetakePorts reports whether a unit in state must be stopped when
+// its allocation is gone: running, starting, restarting or failed (systemd
+// restarts a failed Restart=always unit). Reading only "active" missed a unit
+// crash-looping on ports another namespace now holds.
+func holdsOrMayRetakePorts(state systemd.ActiveState) bool {
+	return state != "" && state != systemd.ActiveStateInactive
 }
 
 // webrtcSpawnBackoff is how long a namespace is skipped after a failed spawn.
@@ -1609,7 +1952,7 @@ func (cm *ClusterManager) recordSpawnFailure(namespace string) {
 //
 // Only ever touches THIS node's own services, driven by THIS node's own
 // allocation, so it is safe to run unguarded on every node.
-func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, state *ClusterLocalState, webrtcCfg *WebRTCConfig) {
+func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, state *ClusterLocalState) {
 	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil || cm.localNodeID == "" {
 		return
 	}
@@ -1619,7 +1962,7 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 	// These come from cluster-state.json, which this package elsewhere treats as
 	// untrustworthy for exactly these fields. An empty LocalIP would bind the SFU
 	// signaling socket to ALL interfaces including the public one, not just the
-	// WireGuard address; a zero RQLite port yields http://localhost:0.
+	// WireGuard address; a zero RQLite port yields a DSN on port 0.
 	if state.LocalIP == "" || state.LocalPorts.RQLiteHTTPPort <= 0 {
 		return
 	}
@@ -1631,30 +1974,93 @@ func (cm *ClusterManager) spawnAllocatedWebRTCServices(ctx context.Context, stat
 	// ReconcileHostTURN — not once per namespace. Driving it from here would
 	// re-derive the whole host's tenant set once for every namespace on the node.
 
-	// SFU — same shape; sfuPortBlockSpawnable refuses a zero media range.
-	if blk, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID); err == nil && sfuPortBlockSpawnable(blk) {
-		if running, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU); !running {
-			if serr := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
-				Namespace:      state.NamespaceName,
-				NodeID:         cm.localNodeID,
-				ListenAddr:     fmt.Sprintf("%s:%d", state.LocalIP, blk.SFUSignalingPort),
-				MediaPortStart: blk.SFUMediaPortStart,
-				MediaPortEnd:   blk.SFUMediaPortEnd,
-				TURNServers: []sfu.TURNServerConfig{
-					{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
-					{Host: turnDomain, Port: TURNSPort, Secure: true},
-				},
-				TURNSecret:  webrtcCfg.TURNSharedSecret,
-				TURNCredTTL: webrtcCfg.TURNCredentialTTL,
-				RQLiteDSN:   fmt.Sprintf("http://localhost:%d", state.LocalPorts.RQLiteHTTPPort),
-			}); serr != nil {
-				cm.recordSpawnFailure(state.NamespaceName)
-				cm.logger.Warn("Failed to start newly-allocated SFU (backing off)",
-					zap.String("namespace", state.NamespaceName), zap.Error(serr))
-			} else {
-				cm.logger.Info("Started SFU for a newly-allocated role (bugboard #161)",
-					zap.String("namespace", state.NamespaceName))
-			}
-		}
+	cm.spawnSFUIfDown(ctx, state, turnDomain)
+}
+
+// clusterStillServes reports whether the registry holds the cluster as ready or
+// degraded: the only states in which a node starts its services. One that is
+// being deprovisioned, failed, or gone is not started for, and a registry that
+// cannot be read starts nothing.
+func (cm *ClusterManager) clusterStillServes(ctx context.Context, clusterID string) bool {
+	cluster, err := cm.GetCluster(ctx, clusterID)
+	if err != nil {
+		cm.logger.Warn("Not starting WebRTC services: the cluster's status could not be read",
+			zap.String("cluster_id", clusterID), zap.Error(err))
+		return false
 	}
+	return cluster != nil && (cluster.Status == ClusterStatusReady || cluster.Status == ClusterStatusDegraded)
+}
+
+// serviceActiveState is the systemd query spawnSFUIfDown decides on. A variable
+// so tests can present a unit in any state on a host without systemd.
+var serviceActiveState = func(m *systemd.Manager, namespace string, serviceType systemd.ServiceType) (systemd.ActiveState, error) {
+	return m.ServiceState(namespace, serviceType)
+}
+
+// spawnSFUIfDown starts this node's SFU of a namespace when it holds an
+// allocation and the unit is stopped. sfuPortBlockSpawnable refuses a zero
+// media range.
+//
+// It runs under the namespace's lock, and decides from state read under it. A
+// DisableWebRTC that began after the sweep read the WebRTC config has, by the
+// time the lock is free, either finished (the config is gone and nothing is
+// started) or not yet begun; without the lock the two interleaved and the start
+// cancelled the teardown's pending stop.
+//
+// A unit that is activating, deactivating or reloading is not "down": a stop
+// job in flight is a teardown being carried out, and `systemctl start` would
+// cancel it. An unreadable state starts nothing for the same reason.
+func (cm *ClusterManager) spawnSFUIfDown(ctx context.Context, state *ClusterLocalState, turnDomain string) {
+	defer cm.systemdSpawner.LockNamespace(state.NamespaceName)()
+
+	// The sweep chose this namespace before the lock was free, and a delete of
+	// the namespace holds the lock for the whole of its teardown on this node (an
+	// SFU drains for up to 45s). The registry keeps the namespace's WebRTC
+	// config and this node's SFU allocation until every node has confirmed, so
+	// they still read "start it" when the teardown lets go: the SFU was started
+	// into a namespace whose data was just deleted, and, depending on olric,
+	// pulled that unit up too, which then crash-looped on its missing env file.
+	// Only a cluster that is still serving is started for.
+	if !cm.clusterStillServes(ctx, state.ClusterID) {
+		return
+	}
+
+	webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
+	if err != nil || webrtcCfg == nil {
+		return // WebRTC was disabled, or cannot be read: nothing to start
+	}
+	blk, err := cm.webrtcPortAllocator.GetSFUPorts(ctx, state.ClusterID, cm.localNodeID)
+	if err != nil || !sfuPortBlockSpawnable(blk) {
+		return
+	}
+	unit, err := serviceActiveState(cm.systemdSpawner.systemdMgr, state.NamespaceName, systemd.ServiceTypeSFU)
+	if err != nil {
+		cm.logger.Warn("Not starting the SFU: its state could not be read",
+			zap.String("namespace", state.NamespaceName), zap.Error(err))
+		return
+	}
+	if unit.Running() || unit.Transitional() {
+		return
+	}
+	if serr := cm.systemdSpawner.spawnSFULocked(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
+		Namespace:      state.NamespaceName,
+		NodeID:         cm.localNodeID,
+		ListenAddr:     fmt.Sprintf("%s:%d", state.LocalIP, blk.SFUSignalingPort),
+		MediaPortStart: blk.SFUMediaPortStart,
+		MediaPortEnd:   blk.SFUMediaPortEnd,
+		TURNServers: []sfu.TURNServerConfig{
+			{Host: turnDomain, Port: TURNDefaultPort, Secure: false},
+			{Host: turnDomain, Port: TURNSPort, Secure: true},
+		},
+		TURNSecret:  webrtcCfg.TURNSharedSecret,
+		TURNCredTTL: webrtcCfg.TURNCredentialTTL,
+		RQLiteDSN:   tenantRQLiteURL(state.LocalIP, state.LocalPorts.RQLiteHTTPPort),
+	}); serr != nil {
+		cm.recordSpawnFailure(state.NamespaceName)
+		cm.logger.Warn("Failed to start newly-allocated SFU (backing off)",
+			zap.String("namespace", state.NamespaceName), zap.Error(serr))
+		return
+	}
+	cm.logger.Info("Started SFU for a newly-allocated role (bugboard #161)",
+		zap.String("namespace", state.NamespaceName))
 }

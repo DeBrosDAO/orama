@@ -1,9 +1,10 @@
 {
   "name": "@debros/orama",
-  "version": "0.122.103",
-  "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Vault, and more",
+  "version": "0.3.0",
+  "description": "TypeScript SDK for Orama Network - Database, PubSub, Cache, Storage, Functions, and more",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "license": "MIT",
   "author": "DeBrosOfficial",
@@ -23,27 +24,40 @@
     "wasm",
     "serverless",
     "distributed",
-    "gateway",
-    "vault",
-    "secrets",
-    "shamir",
-    "encryption",
-    "guardian"
+    "gateway"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/DeBrosOfficial/network",
+    "url": "git+https://github.com/DeBrosDAO/orama.git",
     "directory": "sdk"
   },
   "bugs": {
-    "url": "https://github.com/DeBrosOfficial/network/issues"
+    "url": "https://github.com/DeBrosDAO/orama/issues"
   },
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./chain": {
+      "import": {
+        "types": "./dist/chain.d.ts",
+        "default": "./dist/chain.js"
+      },
+      "require": {
+        "types": "./dist/chain.d.cts",
+        "default": "./dist/chain.cjs"
+      }
+    },
+    "./package.json": "./package.json"
   },
+  "sideEffects": false,
   "files": [
     "dist",
     "src"
@@ -52,31 +66,69 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "gen:chain": "bash scripts/gen-chain-proto.sh",
     "lint": "eslint src tests",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
+    "example": "tsx examples/basic-usage.ts",
     "release:npm": "npm publish --access public --registry=https://registry.npmjs.org/",
     "release:gh": "npm publish --registry=https://npm.pkg.github.com"
   },
   "dependencies": {
-    "@noble/ciphers": "^0.5.3",
-    "@noble/hashes": "^1.4.0",
     "isomorphic-ws": "^5.0.0"
   },
+  "peerDependencies": {
+    "@bufbuild/protobuf": "^2.6.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
+    "ws": "^8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    },
+    "@bufbuild/protobuf": {
+      "optional": true
+    },
+    "@noble/curves": {
+      "optional": true
+    },
+    "@noble/hashes": {
+      "optional": true
+    },
+    "@scure/base": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@typescript-eslint/eslint-plugin": "^6.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
-    "@vitest/coverage-v8": "^1.0.0",
-    "dotenv": "^17.2.3",
-    "eslint": "^8.0.0",
-    "tsup": "^8.0.0",
-    "typedoc": "^0.25.0",
-    "typescript": "^5.3.0",
-    "vitest": "^1.0.0"
+    "@bufbuild/protobuf": "^2.16.0",
+    "@eslint/js": "^10.0.1",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@scure/base": "^2.4.0",
+    "@types/node": "^24.19.0",
+    "@vitest/coverage-v8": "^5.0.2",
+    "dotenv": "^18.0.4",
+    "eslint": "^10.11.0",
+    "globals": "^17.12.0",
+    "ts-proto": "2.12.4",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.15",
+    "typedoc": "^0.28.20",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "8.71.0",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2",
+    "ws": "^8.22.0"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "access": "public"
+  },
+  "engines": {
+    "node": ">=20.19"
   }
 }

@@ -3,13 +3,14 @@ package webrtc
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 // WebRTCHandlers handles all WebRTC-related HTTP and WebSocket endpoints.
-// These run on the namespace gateway and proxy signaling to the local SFU.
+// These run on the namespace gateway and proxy signaling to the SFU that owns the room.
 type WebRTCHandlers struct {
 	logger     *logging.ColoredLogger
 	sfuHost    string // SFU host IP (WireGuard IP) to proxy connections to
@@ -28,8 +29,32 @@ type WebRTCHandlers struct {
 	// via the in-house SNI router. See pkg/sniproxy.
 	stealthCDNDomain string
 
+	// sfuDirectory lists the namespace's SFU nodes; probe asks one whether it is
+	// ready and hosts a room. Together they place a room on one SFU (placement.go).
+	sfuDirectory SFUDirectory
+	probe        sfuProber
+
+	// joinAllowed reports whether the caller of this request may open another
+	// signalling socket now (a per-identity limit owned by the gateway). nil = no limit.
+	joinAllowed func(r *http.Request) bool
+
+	// joinTimeout is how long a socket without ?room= has to send its join frame.
+	joinTimeout time.Duration
+
 	// proxyWebSocket is injected from the gateway to reuse its WebSocket proxy logic
 	proxyWebSocket func(w http.ResponseWriter, r *http.Request, targetHost string) bool
+}
+
+// SetJoinLimiter sets the per-identity limit on opening signalling sockets.
+// Safe to call before serving begins.
+func (h *WebRTCHandlers) SetJoinLimiter(allowed func(r *http.Request) bool) {
+	h.joinAllowed = allowed
+}
+
+// SetSFUDirectory sets where the namespace's SFU nodes are read from. Safe to
+// call before serving begins.
+func (h *WebRTCHandlers) SetSFUDirectory(d SFUDirectory) {
+	h.sfuDirectory = d
 }
 
 // SetStealthCDNDomain enables the stealth TURN URI in CredentialsHandler.
@@ -64,6 +89,8 @@ func NewWebRTCHandlers(
 		turnDomain:     turnDomain,
 		turnSecret:     turnSecret,
 		proxyWebSocket: proxyWS,
+		probe:          httpSFUProbe(newSFUProbeClient()),
+		joinTimeout:    joinFrameTimeout,
 	}
 }
 

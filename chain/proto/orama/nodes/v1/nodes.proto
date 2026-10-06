@@ -1,0 +1,210 @@
+syntax = "proto3";
+package orama.nodes.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
+
+import "gogoproto/gogo.proto";
+
+// Role is one service a global node can run. A node picks its set at
+// registration; nothing in this module adds or removes a role later.
+// plans/open-network/track-c-chain.md C6.
+enum Role {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  ROLE_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "RoleUnspecified"];
+  ROLE_VALIDATOR = 1 [(gogoproto.enumvalue_customname) = "RoleValidator"];
+  ROLE_STORAGE = 2 [(gogoproto.enumvalue_customname) = "RoleStorage"];
+  ROLE_RELAY = 3 [(gogoproto.enumvalue_customname) = "RoleRelay"];
+  ROLE_EXIT = 4 [(gogoproto.enumvalue_customname) = "RoleExit"];
+  ROLE_DIRAUTH = 5 [(gogoproto.enumvalue_customname) = "RoleDirauth"];
+  ROLE_ARCHIVER = 6 [(gogoproto.enumvalue_customname) = "RoleArchiver"];
+}
+
+// KeyType is the signature scheme of a service-key binding. Tor's expanded
+// ed25519 secret signs a normal ed25519 signature, so it uses KEY_TYPE_ED25519.
+enum KeyType {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  KEY_TYPE_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "KeyTypeUnspecified"];
+  KEY_TYPE_SECP256K1 = 1 [(gogoproto.enumvalue_customname) = "KeyTypeSecp256k1"];
+  KEY_TYPE_ED25519 = 2 [(gogoproto.enumvalue_customname) = "KeyTypeEd25519"];
+}
+
+// NodeStatus is the lifecycle of a global node. ACTIVE means at least one
+// role is bonded at or above its min_bond and the node is not jailed,
+// retired, or tombstoned.
+enum NodeStatus {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  NODE_STATUS_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "NodeStatusUnspecified"];
+  NODE_STATUS_REGISTERED = 1 [(gogoproto.enumvalue_customname) = "NodeStatusRegistered"];
+  NODE_STATUS_ACTIVE = 2 [(gogoproto.enumvalue_customname) = "NodeStatusActive"];
+  NODE_STATUS_JAILED = 3 [(gogoproto.enumvalue_customname) = "NodeStatusJailed"];
+  NODE_STATUS_RETIRED = 4 [(gogoproto.enumvalue_customname) = "NodeStatusRetired"];
+  NODE_STATUS_TOMBSTONED = 5 [(gogoproto.enumvalue_customname) = "NodeStatusTombstoned"];
+}
+
+// ClusterStatus is the lifecycle of an optional cluster registry row.
+// Registering a cluster does not admit any node to that cluster (D1).
+enum ClusterStatus {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  CLUSTER_STATUS_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "ClusterStatusUnspecified"];
+  CLUSTER_STATUS_ACTIVE = 1 [(gogoproto.enumvalue_customname) = "ClusterStatusActive"];
+  CLUSTER_STATUS_RETIRED = 2 [(gogoproto.enumvalue_customname) = "ClusterStatusRetired"];
+}
+
+// Revocation records why a service pubkey can never be bound again.
+enum Revocation {
+  option (gogoproto.goproto_enum_prefix) = false;
+
+  REVOCATION_UNSPECIFIED = 0 [(gogoproto.enumvalue_customname) = "RevocationUnspecified"];
+  REVOCATION_RETIRED = 1 [(gogoproto.enumvalue_customname) = "RevocationRetired"];
+  REVOCATION_TOMBSTONED = 2 [(gogoproto.enumvalue_customname) = "RevocationTombstoned"];
+}
+
+// Params are x/nodes genesis values. Nothing in this module changes them
+// after genesis (plans/open-network.md D18: no admin key).
+message Params {
+  // min_bond is the per-role floor. A role is active only while its bond
+  // is at least this amount (C6).
+  repeated RoleBond min_bond = 1 [(gogoproto.nullable) = false];
+  // bond_per_gib is norama that must be bonded on the STORAGE role per
+  // GiB of declared capacity (C6: capacity is capped by bond / bond_per_gib).
+  string bond_per_gib = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // unbonding_seconds is how long an unbonding entry stays escrowed.
+  int64 unbonding_seconds = 3;
+  // deposit_per_byte is the norama locked per byte of a node or cluster
+  // record (plans/open-network.md P3, C2 state deposits).
+  string deposit_per_byte = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // probation_capacity_bytes is the STORAGE capacity a node may declare
+  // while its STORAGE bond is still zero (C2 probation).
+  uint64 probation_capacity_bytes = 5;
+  // min_service_volume_bytes is the declared STORAGE capacity a day must
+  // reach to count as proven storage service (C5). An active RELAY role
+  // counts without this byte floor.
+  uint64 min_service_volume_bytes = 6;
+  uint32 max_endpoints = 7;
+  uint32 max_bindings = 8;
+  // network_identity_lock_seconds is how long a node's declared network
+  // identity (its ASN and the /16 derived from its endpoints) must have stood
+  // unchanged before protocol-deal slots and the operator house count it. A
+  // new node and any later change start the clock again. 0 turns the lock off.
+  int64 network_identity_lock_seconds = 9;
+}
+
+// RoleBond is one role's norama amount (a minimum, or a node's current bond).
+message RoleBond {
+  Role role = 1;
+  string amount = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// Operator is an account allowed to own nodes and optional cluster rows.
+message Operator {
+  string address = 1;
+  int64 registered_at_height = 2;
+  int64 registered_at_unix = 3;
+}
+
+// Binding is one service key's proof that it belongs to an operator.
+// The signature covers
+// orama-global-bind-v1|chain-id|operator|service|hex(pubkey)
+// (plans/open-network.md "Keys"). The binding whose service is "hot-key" is
+// the node's hot key: a secp256k1 key whose account address is the node's
+// hot_key, so the hot key has proved possession of itself.
+message Binding {
+  string service = 1;
+  KeyType key_type = 2;
+  bytes pubkey = 3;
+  bytes signature = 4;
+}
+
+// Node is one global node. It has no cluster membership: D1 keeps cluster
+// join off this registry.
+message Node {
+  string node_id = 1;
+  string operator = 2;
+  repeated Role roles = 3;
+  string hot_key = 4;
+  repeated Binding bindings = 5 [(gogoproto.nullable) = false];
+  repeated string endpoints = 6;
+  string region_hint = 7;
+  repeated RoleBond bonds = 8 [(gogoproto.nullable) = false];
+  uint64 declared_capacity_bytes = 9;
+  uint64 reserved_capacity_bytes = 10;
+  NodeStatus status = 11;
+  // deposit_bytes is the high-water byte count already locked with x/fees.
+  // deposit_parts is how many growth deposits were added after the initial one.
+  uint64 deposit_bytes = 12;
+  uint32 deposit_parts = 13;
+  // capacity_indexed / capacity_class remember the free-capacity bucket so
+  // a later update can remove the old index key.
+  bool capacity_indexed = 14;
+  uint32 capacity_class = 15;
+  int64 registered_at_height = 16;
+  // asn is the operator-declared autonomous system number; 0 is undeclared.
+  // It is not verifiable on chain (C5, C7). The /16 network is not stored: it
+  // is derived from endpoints.
+  uint32 asn = 17;
+  // identity_since_unix is when the node's (asn, derived /16) pair last
+  // changed, or the node registered. The identity counts for protocol deals
+  // and the operator house only once network_identity_lock_seconds have
+  // passed since. Genesis nodes carry whatever value the genesis gives them.
+  int64 identity_since_unix = 18;
+}
+
+// Cluster is one optional public registry row (plans/open-network/track-a
+// A8). It stores a domain and public endpoints only: no member list, no
+// tenant list, no secrets, and no effect on any cluster's Raft.
+message Cluster {
+  string cluster_id = 1;
+  string operator = 2;
+  string base_domain = 3;
+  repeated string public_endpoints = 4;
+  string metadata_uri = 5;
+  ClusterStatus status = 6;
+  uint64 deposit_bytes = 7;
+  uint32 deposit_parts = 8;
+}
+
+// UnbondingEntry is norama escrowed until completion_unix, still inside the
+// nodes module account (C6: escrow plus a queue).
+message UnbondingEntry {
+  uint64 id = 1;
+  string node_id = 2;
+  string operator = 3;
+  Role role = 4;
+  string amount = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  int64 completion_unix = 6;
+}
+
+// RevokedPubkey is a service pubkey that retired or was tombstoned.
+// It cannot be bound again (C6).
+message RevokedPubkey {
+  bytes pubkey = 1;
+  string node_id = 2;
+  string service = 3;
+  Revocation reason = 4;
+}
+
+// ServiceDay is one UTC day on which an operator had qualifying service.
+// volume_bytes is the best declared STORAGE capacity seen that day.
+// relay is true when an active RELAY role qualified the day on its own.
+message ServiceDay {
+  string operator = 1;
+  uint64 day_index = 2;
+  uint64 volume_bytes = 3;
+  bool relay = 4;
+}

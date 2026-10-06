@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orama e2e e2e-ab12</title>
+<style>
+:root{--bg:#fff;--fg:#1b1f24;--muted:#5b6470;--line:#d8dde3;--pass:#1a7f37;--fail:#cf222e;--warn:#9a6700;--card:#f6f8fa}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8d96a0;--line:#30363d;--pass:#3fb950;--fail:#f85149;--warn:#d29922;--card:#161b22}}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding:16px}
+h1,h2{margin:24px 0 8px}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
+pre{background:var(--card);padding:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-word;font-size:12px}
+.banner{padding:16px;border-radius:8px;font-size:20px;font-weight:600;color:#fff}
+.PASS{background:var(--pass)}.FAIL{background:var(--fail)}.INCOMPLETE{background:var(--warn)}
+.pass{color:var(--pass)}.fail{color:var(--fail)}.skip,.missing,.uncovered{color:var(--warn)}.muted{color:var(--muted)}
+details{margin:4px 0}summary{cursor:pointer}
+</style></head><body>
+<div class="banner FAIL">FAIL — run e2e-ab12 @ 0123456789abcdef</div>
+<p>Orama e2e e2e-ab12 @ 0123456789ab: FAIL — 1 passed, 2 failed (1 flaky), 2 not covered; 4 tests in 4 features; bugs: auth(3)</p>
+<ul><li>2 test(s) failed (1 flaky: a re-run pass does not clear a failure)</li><li>feature broken: the package itself failed (build error, TestMain exit or timeout)</li><li>package: feature auth-siwe (stage 3): go test exited 1</li><li>package: feature broken (stage 3): go test exited 1</li><li>run: teardown: 1 server left, swept by label</li><li>feature kill-voter produced no result</li><li>2 test(s) or feature(s) not covered (skipped or never ran)</li></ul>
+<table><tr><th>Features</th><th>Tests</th><th>Passed</th><th>Failed</th><th>Flaky</th><th>Not covered</th></tr>
+<tr><td>4</td><td>4</td><td class="pass">1</td><td class="fail">2</td><td>1</td><td class="skip">2</td></tr></table>
+<h2>Run errors</h2><ul><li class="fail">teardown: 1 server left, swept by label</li></ul>
+
+<h2>Stage timeline</h2>
+<table><tr><th>#</th><th>Stage</th><th>Start</th><th>End</th><th>Duration</th><th>Features</th><th></th></tr>
+<tr><td>1</td><td>bootstrap</td><td>2026-09-29 10:00:00Z</td><td>2026-09-29 10:01:30Z</td><td>90s</td><td>smoke</td><td><span class="pass">ok</span></td></tr>
+<tr><td>3</td><td>auth</td><td>2026-09-29 10:02:00Z</td><td>2026-09-29 10:05:00Z</td><td>180s</td><td>auth-siwe, broken</td><td><span class="fail">failed</span></td></tr>
+</table>
+
+<h2>Bugs found</h2>
+<h3>auth</h3>
+<details><summary><span class="fail">auth-siwe / TestVerify_devices/es256</span> <span class="muted">(deterministic; tasks #2830 )</span></summary>
+<pre>    device_test.go:9: DER refused
+</pre>
+<details><summary>cli orama auth login → 1 (0ms)</summary>
+<pre>&lt;refused&gt;</pre></details>
+</details><details><summary><span class="fail">auth-siwe / TestVerify_replay</span> <span class="muted">(flaky; tasks #2830 )</span></summary>
+<pre>    verify_test.go:40: want 401, got 200
+</pre>
+<details><summary>http POST https://e2e/v1/auth/verify → 200 (0ms)</summary>
+<pre>{&#34;message&#34;:&#34;m&#34;}</pre><pre>{&#34;access_token&#34;:&#34;[REDACTED]&#34;}</pre></details>
+</details><details><summary><span class="fail">broken / (package)</span> <span class="muted">(unknown)</span></summary>
+<pre>features/broken/x_test.go:3:1: syntax error
+</pre>
+
+</details>
+
+
+<h2>Features</h2>
+<table><tr><th>Stage</th><th>Feature</th><th>Area</th><th>Status</th><th>Tests</th></tr>
+<tr><td>1</td><td>smoke<br><span class="muted">Smoke</span></td><td>platform</td><td class="pass">pass</td>
+<td><div class="pass">pass TestHealth_ok <span class="muted">0.4s</span></div></td></tr>
+<tr><td>3</td><td>auth-siwe<br><span class="muted">SIWE sign-in</span></td><td>auth</td><td class="fail">fail</td>
+<td><div class="fail">fail TestVerify_replay <span class="muted">2.0s — flaky</span></div><div class="fail">fail TestVerify_devices <span class="muted">3.0s — unknown</span></div><div class="fail">fail TestVerify_devices/es256 <span class="muted">1.0s — deterministic</span></div><div class="skip">skip TestVerify_solana <span class="muted">0.0s — not applicable: SIWS disabled on this cluster</span></div></td></tr>
+<tr><td>3</td><td>broken<br><span class="muted">Broken package</span></td><td>auth</td><td class="fail">fail</td>
+<td><details><summary class="fail">package output</summary><pre>features/broken/x_test.go:3:1: syntax error
+</pre></details></td></tr>
+<tr><td>9 <span class="muted">destructive</span></td><td>kill-voter<br><span class="muted">Kill a voter</span></td><td>ops</td><td class="missing">missing</td>
+<td></td></tr>
+</table>
+
+<h2>What worked</h2>
+<ul><li class="pass">smoke: Smoke</li></ul>
+
+<h2>Coverage</h2>
+
+<table><tr><th>Kind</th><th>Covered</th><th>Waived</th><th>Uncovered</th></tr>
+<tr><td>cli</td><td>1</td><td>0</td><td class="uncovered">0</td></tr><tr><td>route</td><td>3</td><td>1</td><td class="uncovered">0</td></tr></table>
+
+
+
+
+
+<details><summary>Matrix (5 items)</summary><table><tr><th>Item</th><th>Status</th><th>By</th></tr>
+<tr><td>cli:orama node remove</td><td class="covered">covered</td><td>kill-voter</td></tr><tr><td>route:/health</td><td class="covered">covered</td><td>smoke</td></tr><tr><td>route:/v1/auth/logout</td><td class="covered">covered</td><td>broken</td></tr><tr><td>route:/v1/auth/verify</td><td class="covered">covered</td><td>auth-siwe</td></tr><tr><td>route:/v1/x</td><td class="waived">waived</td><td>needs RootWallet orama-tx <span class="muted">until task 2857</span></td></tr>
+</table></details>
+
+
+<h2>Artifacts that could not be collected</h2><ul><li>node-2: <code>wg show all</code> — ssh: handshake failed (<a href="collected/nodes/node-2/wireguard.txt">nodes/node-2/wireguard.txt</a>)</li></ul>
+<p class="muted">Collected artifacts: <a href="collected/index.json">collected/index.json</a> · evidence: <code>evidence/</code> · raw results: <code>gotest/</code></p>
+</body></html>

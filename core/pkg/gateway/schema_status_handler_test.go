@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/migrations"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -129,5 +132,58 @@ func TestSchemaStatus_method_not_allowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+func namespaceGatewayOn(t *testing.T, db *sql.DB) *Gateway {
+	t.Helper()
+	l, err := logging.NewColoredLogger(logging.ComponentGeneral, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Gateway{sqlDB: db, logger: l, cfg: &Config{
+		RQLiteDSN: "http://10.0.0.1:10001", GlobalRQLiteDSN: "http://10.0.0.1:5001",
+	}}
+}
+
+// A namespace gateway's database holds core's versions in the isolated tracker
+// and leaves schema_migrations to the tenant: the status must read the tracker
+// (stagenet: 500 "no such table: schema_migrations").
+func TestSchemaStatus_namespace_reads_isolated_tracker(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TABLE ` + rqlite.NamespaceMigrationsTracker() + ` (version INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	for v := 1; v <= migrations.RequiredVersion(); v++ {
+		if _, err := db.Exec(`INSERT INTO `+rqlite.NamespaceMigrationsTracker()+` (version) VALUES (?)`, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := httptest.NewRecorder()
+	namespaceGatewayOn(t, db).handleSchemaStatus(rec, httptest.NewRequest(http.MethodGet, "/v1/schema-status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", rec.Code, rec.Body)
+	}
+	var resp schemaStatusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.InSync || resp.AppliedVersion != migrations.RequiredVersion() || len(resp.Pending) != 0 {
+		t.Errorf("status = %+v, want in sync at %d", resp, migrations.RequiredVersion())
+	}
+}
+
+func TestSchemaStatus_missing_tracker_is_500_without_driver_text(t *testing.T) {
+	rec := httptest.NewRecorder()
+	namespaceGatewayOn(t, openTestSQLDB(t)).handleSchemaStatus(rec, httptest.NewRequest(http.MethodGet, "/v1/schema-status", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "no such table") {
+		t.Errorf("driver text leaked: %s", rec.Body)
 	}
 }

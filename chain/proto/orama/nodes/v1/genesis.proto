@@ -1,0 +1,23 @@
+syntax = "proto3";
+package orama.nodes.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
+
+import "gogoproto/gogo.proto";
+import "orama/nodes/v1/nodes.proto";
+
+// GenesisState is x/nodes' genesis state. The bank genesis must already
+// hold bonds + unbonding norama in the nodes module account; InitGenesis
+// checks that and does not mint.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated Operator operators = 2 [(gogoproto.nullable) = false];
+  repeated Node nodes = 3 [(gogoproto.nullable) = false];
+  repeated Cluster clusters = 4 [(gogoproto.nullable) = false];
+  repeated UnbondingEntry unbondings = 5 [(gogoproto.nullable) = false];
+  repeated RevokedPubkey revoked_pubkeys = 6 [(gogoproto.nullable) = false];
+  repeated ServiceDay service_days = 7 [(gogoproto.nullable) = false];
+  // next_unbonding_id is the next id the unbonding queue will assign.
+  // Zero means the queue has never issued an id.
+  uint64 next_unbonding_id = 8;
+}

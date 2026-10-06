@@ -1,9 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -23,6 +25,16 @@ type Config struct {
 	// orama-node at boot (same failure mode as the v0.122.42
 	// secrets_encryption_key incident).
 	SNIRouter SNIRouterConfig `yaml:"sni_router"`
+	// TLS is written only when the node was installed with --acme-ca, and must
+	// exist here for the same KnownFields reason.
+	TLS TLSConfig `yaml:"tls"`
+}
+
+// TLSConfig is the top-level tls block in node.yaml.
+type TLSConfig struct {
+	// ACMECA is the ACME directory Caddy issues certificates from; empty is
+	// Let's Encrypt production.
+	ACMECA string `yaml:"acme_ca"`
 }
 
 // SNIRouterConfig is the top-level stealth SNI router block in node.yaml
@@ -67,6 +79,8 @@ func (c *Config) Validate() []error {
 		ClusterSyncInterval: c.Database.ClusterSyncInterval,
 		PeerInactivityLimit: c.Database.PeerInactivityLimit,
 		MinClusterSize:      c.Database.MinClusterSize,
+		RQLiteAuthFile:      c.Database.RQLiteAuthFile,
+		RQLiteEnforceAuth:   c.Database.RQLiteEnforceAuth,
 	})...)
 
 	// Validate discovery config
@@ -113,7 +127,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		Node: NodeConfig{
 			ListenAddresses: []string{
-				"/ip4/0.0.0.0/tcp/4001", // TCP only - compatible with Anyone proxy/SOCKS5
+				fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", constants.NodeLibP2PPort), // TCP only
 			},
 			DataDir:        "./data",
 			MaxConnections: 50,
@@ -126,8 +140,8 @@ func DefaultConfig() *Config {
 			BackupInterval:    time.Hour * 24,     // Daily backups
 
 			// RQLite-specific configuration
-			RQLitePort:        5001,
-			RQLiteRaftPort:    7001,
+			RQLitePort:        constants.RQLiteHTTPPort,
+			RQLiteRaftPort:    constants.RQLiteRaftPort,
 			RQLiteJoinAddress: "", // Empty for first node (creates cluster)
 
 			// Dynamic discovery (always enabled)
@@ -136,21 +150,21 @@ func DefaultConfig() *Config {
 			MinClusterSize:      1,
 
 			// Olric cache configuration
-			OlricHTTPPort:       3320,
-			OlricMemberlistPort: 3322,
+			OlricHTTPPort:       constants.OlricHTTPPort,
+			OlricMemberlistPort: constants.OlricMemberlistPort,
 
 			// IPFS storage configuration
 			IPFS: IPFSConfig{
 				ClusterAPIURL:     "", // Empty = disabled
-				APIURL:            "http://localhost:4501",
+				APIURL:            fmt.Sprintf("http://localhost:%d", constants.IPFSAPIPort),
 				Timeout:           60 * time.Second,
 				ReplicationFactor: 3,
-				EnableEncryption:  true,
+				EnableEncryption:  false,
 			},
 		},
 		Discovery: DiscoveryConfig{
 			BootstrapPeers:    []string{},
-			BootstrapPort:     4001,             // Default LibP2P port
+			BootstrapPort:     constants.NodeLibP2PPort,
 			DiscoveryInterval: time.Second * 15, // Back to 15 seconds for testing
 			HttpAdvAddress:    "",
 			RaftAdvAddress:    "",
@@ -169,11 +183,10 @@ func DefaultConfig() *Config {
 			NodeName:          "default",
 			Routes:            make(map[string]RouteConfig),
 			ClientNamespace:   "default",
-			RQLiteDSN:         "http://localhost:5001",
-			OlricServers:      []string{"localhost:3320"},
+			OlricServers:      []string{fmt.Sprintf("localhost:%d", constants.OlricHTTPPort)},
 			OlricTimeout:      10 * time.Second,
-			IPFSClusterAPIURL: "http://localhost:9094",
-			IPFSAPIURL:        "http://localhost:4501",
+			IPFSClusterAPIURL: fmt.Sprintf("http://localhost:%d", constants.IPFSClusterAPIPort),
+			IPFSAPIURL:        fmt.Sprintf("http://localhost:%d", constants.IPFSAPIPort),
 			IPFSTimeout:       60 * time.Second,
 		},
 	}

@@ -3,12 +3,11 @@ package ipfs
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 
 	"github.com/DeBrosOfficial/network/pkg/config"
 	"go.uber.org/zap"
@@ -35,8 +34,7 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}
 
 	clusterPath := filepath.Join(dataDir, "ipfs-cluster")
-	nodeNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
-	for _, nodeName := range nodeNames {
+	for _, nodeName := range localDevNodeNames {
 		if strings.Contains(dataDir, nodeName) {
 			if filepath.Base(filepath.Dir(dataDir)) == nodeName || filepath.Base(dataDir) == nodeName {
 				clusterPath = filepath.Join(dataDir, "ipfs-cluster")
@@ -60,9 +58,11 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 		}
 	}
 
-	secret, err := loadOrGenerateClusterSecret(secretPath)
+	// clusterPath tells the loader whether this node has joined before, which
+	// decides whether generating a secret is safe or a way to partition it.
+	secret, err := loadOrGenerateClusterSecret(secretPath, clusterPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load/generate cluster secret: %w", err)
+		return nil, fmt.Errorf("ipfs-cluster secret: %w", err)
 	}
 
 	return &ClusterConfigManager{
@@ -74,50 +74,38 @@ func NewClusterConfigManager(cfg *config.Config, logger *zap.Logger) (*ClusterCo
 	}, nil
 }
 
-// EnsureConfig ensures the IPFS Cluster service.json exists and is properly configured
+// EnsureConfig sets what the node owns in the IPFS Cluster service.json: the
+// peer name, the shared secret and the CRDT membership (cluster name, trusted
+// peers). The peer addresses are the node's too (UpdatePeerAddresses).
+//
+// Every listener in the file — the peer-to-peer swarm on
+// constants.IPFSClusterSwarmPort and the loopback APIs — is written by
+// install and upgrade (pkg/install/installers.IPFSClusterInstaller), and only
+// there. This used to rewrite them on every start as well, deriving the swarm
+// port from the REST API URL (10114) while install wrote 9100: two writers
+// that disagreed, so the port peers were told to dial depended on which had
+// run last. It also ran `ipfs-cluster-service init` when the file was
+// missing, discarding its error; the file is install's to create, and its
+// absence is reported instead.
 func (cm *ClusterConfigManager) EnsureConfig() error {
 	if cm.cfg.Database.IPFS.ClusterAPIURL == "" {
 		return nil
 	}
 
 	serviceJSONPath := filepath.Join(cm.clusterPath, "service.json")
-	clusterPort, restAPIPort, err := parseClusterPorts(cm.cfg.Database.IPFS.ClusterAPIURL)
+
+	nodeName, err := clusterPeername(cm.cfg.Node.DataDir, cm.cfg.Node.ID)
 	if err != nil {
 		return err
 	}
 
-	ipfsPort, err := parseIPFSPort(cm.cfg.Database.IPFS.APIURL)
-	if err != nil {
-		return err
-	}
-
-	nodeName := "node-1"
-	possibleNames := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
-	for _, name := range possibleNames {
-		if strings.Contains(cm.cfg.Node.DataDir, name) || strings.Contains(cm.cfg.Node.ID, name) {
-			nodeName = name
-			break
-		}
-	}
-
-	proxyPort := clusterPort + 1
-	pinSvcPort := clusterPort + 3
-	clusterListenPort := clusterPort + 4
-
-	if _, err := os.Stat(serviceJSONPath); os.IsNotExist(err) {
-		initCmd := exec.Command("ipfs-cluster-service", "init", "--force")
-		initCmd.Env = append(os.Environ(), "IPFS_CLUSTER_PATH="+cm.clusterPath)
-		_ = initCmd.Run()
-	}
-
-	cfg, err := cm.loadOrCreateConfig(serviceJSONPath)
+	cfg, err := cm.loadConfig(serviceJSONPath)
 	if err != nil {
 		return err
 	}
 
 	cfg.Cluster.Peername = nodeName
 	cfg.Cluster.Secret = cm.secret
-	cfg.Cluster.ListenMultiaddress = []string{fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", clusterListenPort)}
 	cfg.Consensus.CRDT.ClusterName = "orama-cluster"
 
 	// Every authenticated cluster peer is a trusted CRDT writer.
@@ -154,88 +142,7 @@ func (cm *ClusterConfigManager) EnsureConfig() error {
 	// receives a complete peer list.
 	cm.recordOwnClusterPeerID()
 
-	cfg.API.RestAPI.HTTPListenMultiaddress = fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", restAPIPort)
-	cfg.API.IPFSProxy.ListenMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", proxyPort)
-	cfg.API.IPFSProxy.NodeMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", ipfsPort)
-	cfg.API.PinSvcAPI.HTTPListenMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", pinSvcPort)
-	cfg.IPFSConnector.IPFSHTTP.NodeMultiaddress = fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", ipfsPort)
-
 	return cm.saveConfig(serviceJSONPath, cfg)
-}
-
-// FixIPFSConfigAddresses fixes localhost addresses in IPFS config
-func (cm *ClusterConfigManager) FixIPFSConfigAddresses() error {
-	if cm.cfg.Database.IPFS.APIURL == "" {
-		return nil
-	}
-
-	dataDir := cm.cfg.Node.DataDir
-	if strings.HasPrefix(dataDir, "~") {
-		home, _ := os.UserHomeDir()
-		dataDir = filepath.Join(home, dataDir[1:])
-	}
-
-	possiblePaths := []string{
-		filepath.Join(dataDir, "ipfs", "repo"),
-		filepath.Join(dataDir, "node-1", "ipfs", "repo"),
-		filepath.Join(dataDir, "node-2", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node-1", "ipfs", "repo"),
-		filepath.Join(filepath.Dir(dataDir), "node-2", "ipfs", "repo"),
-	}
-
-	var ipfsRepoPath string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(filepath.Join(path, "config")); err == nil {
-			ipfsRepoPath = path
-			break
-		}
-	}
-
-	if ipfsRepoPath == "" {
-		return nil
-	}
-
-	ipfsPort, _ := parseIPFSPort(cm.cfg.Database.IPFS.APIURL)
-	gatewayPort := 8080
-	if strings.Contains(dataDir, "node2") || ipfsPort == 5002 {
-		gatewayPort = 8081
-	} else if strings.Contains(dataDir, "node3") || ipfsPort == 5003 {
-		gatewayPort = 8082
-	}
-
-	correctAPIAddr := fmt.Sprintf(`["/ip4/0.0.0.0/tcp/%d"]`, ipfsPort)
-	fixCmd := exec.Command("ipfs", "config", "--json", "Addresses.API", correctAPIAddr)
-	fixCmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
-	_ = fixCmd.Run()
-
-	correctGatewayAddr := fmt.Sprintf(`["/ip4/0.0.0.0/tcp/%d"]`, gatewayPort)
-	fixCmd = exec.Command("ipfs", "config", "--json", "Addresses.Gateway", correctGatewayAddr)
-	fixCmd.Env = append(os.Environ(), "IPFS_PATH="+ipfsRepoPath)
-	_ = fixCmd.Run()
-
-	return nil
-}
-
-func (cm *ClusterConfigManager) isIPFSRunning(port int) bool {
-	client := &http.Client{Timeout: 1 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v0/id", port))
-	if err != nil {
-		return false
-	}
-	resp.Body.Close()
-	return true
-}
-
-func (cm *ClusterConfigManager) createTemplateConfig() *ClusterServiceConfig {
-	cfg := &ClusterServiceConfig{}
-	cfg.Cluster.LeaveOnShutdown = false
-	cfg.Cluster.PeerAddresses = []string{}
-	cfg.Consensus.CRDT.TrustedPeers = []string{"*"}
-	cfg.Consensus.CRDT.Batching.MaxBatchSize = 0
-	cfg.Consensus.CRDT.Batching.MaxBatchAge = "0s"
-	cfg.Consensus.CRDT.RepairInterval = "1h0m0s"
-	cfg.Raw = make(map[string]interface{})
-	return cfg
 }
 
 // readClusterPeerID reads this node's IPFS Cluster peer ID from identity.json
@@ -289,7 +196,7 @@ func (cm *ClusterConfigManager) addTrustedPeer(peerID string) error {
 		}
 	}
 	existing = append(existing, peerID)
-	return os.WriteFile(cm.trustedPeersPath, []byte(strings.Join(existing, "\n")+"\n"), 0600)
+	return durablefile.Write(cm.trustedPeersPath, []byte(strings.Join(existing, "\n")+"\n"), 0600)
 }
 
 // loadTrustedPeersWithSelf loads trusted peers from file and ensures this node's
@@ -310,4 +217,25 @@ func (cm *ClusterConfigManager) recordOwnClusterPeerID() {
 	if err := cm.addTrustedPeer(ownID); err != nil {
 		cm.logger.Warn("Failed to persist own peer ID to the cluster peers file", zap.Error(err))
 	}
+}
+
+// localDevNodeNames are the node names a local multi-node setup puts in its
+// data directories.
+var localDevNodeNames = []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+
+// clusterPeername is the name this cluster peer reports. A local multi-node
+// setup is named after its data directory; any other node after its host. Every
+// production node used to fall through to "node-1", so every peer in a pin's
+// status read "node-1" and a stuck peer could only be told apart by its id.
+func clusterPeername(dataDir, nodeID string) (string, error) {
+	for _, name := range localDevNodeNames {
+		if strings.Contains(dataDir, name) || strings.Contains(nodeID, name) {
+			return name, nil
+		}
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("failed to name the IPFS Cluster peer after this host: %w", err)
+	}
+	return host, nil
 }

@@ -216,7 +216,7 @@ func isZeroValue(v reflect.Value) bool {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return v.Uint() == 0
 	case reflect.Bool:
-		return v.Bool() == false
+		return !v.Bool()
 	case reflect.Pointer, reflect.Interface:
 		return v.IsNil()
 	case reflect.Slice, reflect.Map:

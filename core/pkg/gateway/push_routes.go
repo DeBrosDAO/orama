@@ -63,6 +63,36 @@ func (g *Gateway) pushSendHandler(w http.ResponseWriter, r *http.Request) {
 	g.pushHandlers.SendHandler(w, r)
 }
 
+// pushTopicsHandler dispatches POST (register/refresh) and DELETE (remove) on
+// /v1/push/topics (FEAT-265). Returns 503 when push isn't configured.
+func (g *Gateway) pushTopicsHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	switch r.Method {
+	case http.MethodPost:
+		g.pushHandlers.RegisterTopicHandler(w, r)
+	case http.MethodDelete:
+		g.pushHandlers.UnregisterTopicHandler(w, r)
+	default:
+		httputil.WriteRPCError(w, http.StatusMethodNotAllowed,
+			httputil.ErrCodeValidationFailed, "method not allowed: use POST to register or DELETE to remove")
+	}
+}
+
+// pushTopicsSendHandler handles POST /v1/push/topics/send. Returns 503 when
+// push isn't configured.
+func (g *Gateway) pushTopicsSendHandler(w http.ResponseWriter, r *http.Request) {
+	if g.pushHandlers == nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
+			httputil.ErrCodeServiceUnavailable, pushNotConfiguredMessage)
+		return
+	}
+	g.pushHandlers.SendTopicHandler(w, r)
+}
+
 // pushConfigHandler dispatches GET / PUT / DELETE on /v1/push/config — the
 // tenant-self-service entrypoint for per-namespace push provider config
 // (bug #220 follow-up). When push is fully disabled returns 503 with the

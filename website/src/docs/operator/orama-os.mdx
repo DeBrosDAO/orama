@@ -1,6 +1,6 @@
 # OramaOS
 
-OramaOS is a custom minimal Linux image purpose-built for running Orama nodes. It replaces the standard Ubuntu deployment for mainnet, devnet, and testnet environments, providing a locked-down system where operators cannot access node data.
+OramaOS is a custom minimal Linux image purpose-built for running Orama nodes. It is in development and not yet running on any network: today devnet and testnet nodes run Ubuntu. When finished, it replaces the Ubuntu deployment with a locked-down system where operators cannot access node data.
 
 ## Why OramaOS?
 
@@ -44,9 +44,11 @@ Download the OramaOS image and flash it to your VPS via your hosting provider's 
 ### 2. First Boot
 
 On first boot, the agent enters enrollment mode:
-- Generates a random 8-character registration code
-- Opens a temporary HTTP server on port 9999
-- Waits for enrollment to complete
+- Generates an 80-bit registration code (20 hex characters)
+- Prints it on the console TTY (not the journal)
+- Opens a temporary HTTP server on port 9999 and waits for a payload sealed under that code
+
+The code is not served over the network.
 
 ### 3. Enroll from CLI
 
@@ -56,14 +58,15 @@ On your local machine with the `orama` CLI and rootwallet:
 # Generate an invite token on any existing cluster node
 orama node invite --expiry 24h
 
-# Enroll the new OramaOS node
+# Enroll the new OramaOS node — --code is printed on the node's console
 orama node enroll \
   --node-ip <vps-public-ip> \
+  --code <registration-code> \
   --token <invite-token> \
   --gateway <gateway-url>
 ```
 
-This fetches the registration code, validates it with the Gateway, assigns a WireGuard IP, pushes the cluster config to the node, and triggers LUKS encryption of the data partition. The LUKS key is split via Shamir's Secret Sharing and distributed to peer vault-guardians. Port 9999 closes permanently after enrollment.
+The CLI sends the console code, invite token and public node IP to the Gateway, which assigns a WireGuard IP and pushes cluster config sealed under the code. The node configures WireGuard, LUKS-encrypts the data partition, and splits the LUKS key via Shamir across peer vault-guardians. Port 9999 closes permanently after enrollment.
 
 ### 4. Verify
 
@@ -81,7 +84,7 @@ When an enrolled node reboots:
 
 1. Agent starts, brings up WireGuard
 2. Contacts peer vault-guardians over WireGuard
-3. Fetches K shares (threshold = max(3, N/3))
+3. Fetches K shares (threshold = max(2, floor(N/3)))
 4. Reconstructs the LUKS key via Lagrange interpolation
 5. Decrypts and mounts the data partition
 6. Zeros the key from memory
@@ -172,11 +175,11 @@ OramaOS nodes cannot be cleaned with `orama node clean` (no SSH). Options:
 
 ### Enrollment doesn't complete
 
-Check that port 9999 is open in your VPS provider's external firewall (Hetzner firewall, AWS security groups). OramaOS opens it internally, but provider-level firewalls need manual configuration.
+Read the registration code from the node's console (`--code` is required; it is not served on port 9999). Check that port 9999 is open in your VPS provider's external firewall (Hetzner firewall, AWS security groups). There is no WebSocket enrollment path.
 
 ### LUKS unlock fails after reboot
 
-Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(3, N/3)). Ensure cluster nodes are running. For the genesis node, which has no peers to reconstruct shares from, unlock it manually (see [Genesis Node](#genesis-node)).
+Not enough peer nodes are online. The node needs at least K peers reachable over WireGuard (K = max(2, floor(N/3))). Ensure cluster nodes are running. For the genesis node, which has no peers to reconstruct shares from, unlock it manually (see [Genesis Node](#genesis-node)).
 
 ### Update rolled back
 

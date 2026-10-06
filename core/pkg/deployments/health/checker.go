@@ -8,21 +8,34 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/database"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"go.uber.org/zap"
 )
+
+// Database is the query surface the health checker needs. RQLite's client
+// satisfies it; tests stub it.
+type Database interface {
+	Query(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	QueryOne(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	Exec(ctx context.Context, query string, args ...interface{}) (interface{}, error)
+}
 
 // Tuning constants.
 const (
 	consecutiveFailuresThreshold = 3
 	defaultDesiredReplicas       = deployments.DefaultReplicaCount
+	// unitStatusActive is what a running unit reports.
+	unitStatusActive = "active"
 )
 
 // ProcessManager is the subset of process.Manager needed by the health checker.
 type ProcessManager interface {
 	Restart(ctx context.Context, deployment *deployments.Deployment) error
 	Stop(ctx context.Context, deployment *deployments.Deployment) error
+	// RefreshToken stages a fresh workload credential without restarting.
+	RefreshToken(ctx context.Context, deployment *deployments.Deployment) error
+	// Status is the state of the deployment's own unit ("active" when it runs).
+	Status(ctx context.Context, deployment *deployments.Deployment) (string, error)
 }
 
 // ReplicaReconciler provides replica management for the reconciliation loop.
@@ -34,6 +47,9 @@ type ReplicaReconciler interface {
 // ReplicaProvisioner provisions new replicas on remote nodes.
 type ReplicaProvisioner interface {
 	SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string)
+	// DecodeEnvironment reads the environment column back: it is stored sealed
+	// with the cluster key, so it is not JSON.
+	DecodeEnvironment(namespace, name, stored string) (map[string]string, error)
 }
 
 // deploymentRow represents a deployment record for health checking.
@@ -58,7 +74,7 @@ type replicaState struct {
 
 // HealthChecker monitors deployment health on the local node.
 type HealthChecker struct {
-	db             database.Database
+	db             Database
 	logger         *zap.Logger
 	workers        int
 	nodeID         string
@@ -72,10 +88,19 @@ type HealthChecker struct {
 	rqliteDSN   string
 	reconciler  ReplicaReconciler
 	provisioner ReplicaProvisioner
+
+	// Orphan unit sweep (optional, set via SetOrphanReaper). orphanSeen holds
+	// each unit the previous sweep found, with when it was first found; only the sweep goroutine touches it.
+	orphanUnits      RuntimeUnitManager
+	orphanDeployPath string
+	orphanSeen       map[string]time.Time
+	orphanStateSeen  map[string]time.Time // leftover state directories, likewise
+	now              func() time.Time     // nil means time.Now; tests set it
+	refreshSpacing   time.Duration        // pause between two token refreshes of a sweep
 }
 
 // NewHealthChecker creates a new health checker.
-func NewHealthChecker(db database.Database, logger *zap.Logger, nodeID string, pm ProcessManager) *HealthChecker {
+func NewHealthChecker(db Database, logger *zap.Logger, nodeID string, pm ProcessManager) *HealthChecker {
 	return &HealthChecker{
 		db:             db,
 		logger:         logger,
@@ -83,6 +108,7 @@ func NewHealthChecker(db database.Database, logger *zap.Logger, nodeID string, p
 		nodeID:         nodeID,
 		processManager: pm,
 		states:         make(map[string]*replicaState),
+		refreshSpacing: tokenRefreshSpacing,
 	}
 }
 
@@ -97,6 +123,8 @@ func (hc *HealthChecker) SetReconciler(rqliteDSN string, rc ReplicaReconciler, r
 // Start begins health monitoring with two periodic tasks:
 //  1. Every 30s: probe local replicas
 //  2. Every 5m: (leader-only) reconcile under-replicated deployments
+//  3. Every 2m, if enabled: stop runtime units no deployment owns
+//  4. Every 20m: stage a fresh workload token for every local deployment
 func (hc *HealthChecker) Start(ctx context.Context) error {
 	hc.logger.Info("Starting health checker",
 		zap.Int("workers", hc.workers),
@@ -107,6 +135,10 @@ func (hc *HealthChecker) Start(ctx context.Context) error {
 	reconcileTicker := time.NewTicker(5 * time.Minute)
 	defer probeTicker.Stop()
 	defer reconcileTicker.Stop()
+	if hc.orphanUnits != nil {
+		go hc.runOrphanSweeps(ctx)
+	}
+	go hc.runTokenRefresh(ctx)
 
 	for {
 		select {
@@ -136,6 +168,7 @@ func (hc *HealthChecker) checkAllDeployments(ctx context.Context) error {
 		WHERE d.status IN ('active', 'degraded')
 		  AND dr.node_id = ?
 		  AND dr.status IN ('active', 'failed')
+		  AND dr.port > 0
 		  AND d.type IN ('nextjs', 'nodejs-backend', 'go-backend')
 	`
 
@@ -175,8 +208,15 @@ func (hc *HealthChecker) checkAllDeployments(ctx context.Context) error {
 // checkDeployment checks a single deployment's health via HTTP.
 func (hc *HealthChecker) checkDeployment(ctx context.Context, dep deploymentRow) bool {
 	if dep.Port == 0 {
-		// Static deployments are always healthy
-		return true
+		// Only dynamic deployments are checked, and they run on a port. A
+		// replica row without one never had a unit set up (a failed setup
+		// leaves port 0); reading that as healthy "recovered" replicas that
+		// did not exist.
+		hc.logger.Warn("Replica has no port, so no process to probe",
+			zap.String("deployment", dep.Name),
+			zap.String("namespace", dep.Namespace),
+		)
+		return false
 	}
 
 	// Check local port
@@ -260,17 +300,31 @@ func (hc *HealthChecker) handleHealthy(ctx context.Context, dep deploymentRow) {
 					Type:      deployments.DeploymentType(dep.Type),
 					Port:      dep.Port,
 				}
+				// The replica row is what holds the port; a unit that is still
+				// running keeps it until the stop succeeds on a later pass.
 				if err := hc.processManager.Stop(ctx, d); err != nil {
-					hc.logger.Error("Failed to stop zombie deployment process", zap.Error(err))
+					hc.logger.Error("Failed to stop zombie deployment process; its replica is kept until it stops", zap.Error(err))
+					return
 				}
 			}
 
 			deleteQuery := `DELETE FROM deployment_replicas WHERE deployment_id = ? AND node_id = ? AND status = 'failed'`
-			hc.db.Exec(ctx, deleteQuery, dep.ID, hc.nodeID)
+			if _, err := hc.db.Exec(ctx, deleteQuery, dep.ID, hc.nodeID); err != nil {
+				hc.logger.Error("Failed to remove the stopped zombie's replica row", zap.String("deployment", dep.ID), zap.Error(err))
+				return
+			}
 
 			eventQuery := `INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, 'zombie_replica_stopped', ?, ?)`
 			msg := fmt.Sprintf("Zombie replica on node %s stopped and removed (already at %d active replicas)", hc.nodeID, activeCount)
-			hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now())
+			if _, err := hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now()); err != nil {
+				hc.logger.Error("Failed to record the zombie replica's removal", zap.String("deployment", dep.ID), zap.Error(err))
+			}
+			return
+		}
+
+		// The probe answering is not enough: the port may be another
+		// process's. The replica is back only if its own unit is running.
+		if !hc.unitActive(ctx, dep) {
 			return
 		}
 
@@ -293,6 +347,34 @@ func (hc *HealthChecker) handleHealthy(ctx context.Context, dep deploymentRow) {
 		msg := fmt.Sprintf("Replica on node %s recovered and marked active", hc.nodeID)
 		hc.db.Exec(ctx, eventQuery, dep.ID, msg, time.Now())
 	}
+}
+
+// unitActive reports whether the deployment's own unit on this node runs. A
+// status that cannot be read counts as not running: a replica is not marked
+// active on a guess.
+func (hc *HealthChecker) unitActive(ctx context.Context, dep deploymentRow) bool {
+	if hc.processManager == nil {
+		hc.logger.Error("Cannot verify the replica's unit: no process manager", zap.String("deployment", dep.Name))
+		return false
+	}
+	d := &deployments.Deployment{
+		ID:        dep.ID,
+		Namespace: dep.Namespace,
+		Name:      dep.Name,
+		Type:      deployments.DeploymentType(dep.Type),
+		Port:      dep.Port,
+	}
+	status, err := hc.processManager.Status(ctx, d)
+	if err != nil || status != unitStatusActive {
+		hc.logger.Warn("Replica answers its probe but its unit is not active; it stays failed",
+			zap.String("deployment", dep.Name),
+			zap.String("node_id", hc.nodeID),
+			zap.String("unit_status", status),
+			zap.Error(err),
+		)
+		return false
+	}
+	return true
 }
 
 // handleUnhealthy processes an unhealthy check result.
@@ -528,9 +610,19 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 			RestartPolicy:   deployments.RestartPolicy(row.RestartPolicy),
 			MaxRestartCount: row.MaxRestartCount,
 		}
-		if row.Environment != "" {
-			json.Unmarshal([]byte(row.Environment), &dep.Environment)
+		// An environment that cannot be read is not an empty one: a replica
+		// started without the tenant's variables answers requests the home
+		// node's replica would not, so it is not provisioned at all.
+		env, err := hc.provisioner.DecodeEnvironment(row.Namespace, row.Name, row.Environment)
+		if err != nil {
+			hc.logger.Error("Cannot re-replicate a deployment whose environment cannot be read",
+				zap.String("deployment", row.Name),
+				zap.String("namespace", row.Namespace),
+				zap.Error(err),
+			)
+			continue
 		}
+		dep.Environment = env
 
 		for _, nodeID := range newNodes {
 			hc.logger.Info("Provisioning replacement replica",
@@ -544,10 +636,9 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 
 // isRQLiteLeader checks whether this node is the current Raft leader.
 func (hc *HealthChecker) isRQLiteLeader(ctx context.Context) bool {
+	// The gateway's rqlite_dsn (required by its config validation; carries
+	// the credentials).
 	dsn := hc.rqliteDSN
-	if dsn == "" {
-		dsn = "http://localhost:5001"
-	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dsn+"/status", nil)
@@ -599,11 +690,7 @@ func (hc *HealthChecker) GetHealthStatus(ctx context.Context, deploymentID strin
 
 	checks := make([]HealthCheck, len(rows))
 	for i, row := range rows {
-		checks[i] = HealthCheck{
-			Status:         row.Status,
-			CheckedAt:      row.CheckedAt,
-			ResponseTimeMs: row.ResponseTimeMs,
-		}
+		checks[i] = HealthCheck(row)
 	}
 
 	return checks, nil

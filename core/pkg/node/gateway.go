@@ -2,265 +2,199 @@ package node
 
 import (
 	"context"
+	"fmt"
+	"go.uber.org/zap"
 	"net"
-	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/gateway"
-	namespacehandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/namespace"
+	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/multiformats/go-multiaddr"
+
+	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/namespace"
-	"github.com/DeBrosOfficial/network/pkg/secrets"
-	"go.uber.org/zap"
+	database "github.com/DeBrosOfficial/network/pkg/rqlite"
 )
 
-// startHTTPGateway initializes and starts the full API gateway
-// The gateway always runs HTTP on the configured port (default :6001).
-// When running with Caddy (nameserver mode), Caddy handles external HTTPS
-// and proxies requests to this internal HTTP gateway.
-func (n *Node) startHTTPGateway(ctx context.Context) error {
+func (n *Node) startIndexPubsub(ctx context.Context) error {
+	sup, nodeID, err := n.indexSupervisor()
+	if err != nil {
+		return err
+	}
+	return sup.EnsurePubsub(ctx, nodeID, n.config.Discovery.BootstrapPeers)
+}
+
+// startIndexGateway starts orama-namespace-gateway@index.
+// orama-node does not bind the gateway port; Caddy reverse_proxies to it.
+func (n *Node) startIndexGateway(ctx context.Context) error {
 	if !n.config.HTTPGateway.Enabled {
 		n.logger.ComponentInfo(logging.ComponentNode, "HTTP Gateway disabled in config")
 		return nil
 	}
 
-	logFile := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "logs", "gateway.log")
-	logsDir := filepath.Dir(logFile)
-	_ = os.MkdirAll(logsDir, 0755)
-
-	gatewayLogger, err := logging.NewFileLogger(logging.ComponentGeneral, logFile, false)
+	sup, nodeID, err := n.indexSupervisor()
 	if err != nil {
 		return err
 	}
 
-	// DataDir in node config is ~/.orama/data; the orama dir is the parent
-	oramaDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..")
-
-	// Read cluster secret for WireGuard peer exchange auth
-	clusterSecret := ""
-	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "cluster-secret")); err == nil {
-		clusterSecret = string(secretBytes)
-	}
-
-	// Read API key HMAC secret for hashing API keys before storage
-	apiKeyHMACSecret := ""
-	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "api-key-hmac-secret")); err == nil {
-		apiKeyHMACSecret = strings.TrimSpace(string(secretBytes))
-	}
-
-	// Read RQLite credentials for authenticated DB connections
-	rqlitePassword := ""
-	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "rqlite-password")); err == nil {
-		rqlitePassword = strings.TrimSpace(string(secretBytes))
-	}
-
-	// Read the serverless secrets encryption key (bugboard #837). Must be the
-	// SAME value on every namespace-gateway node so a secret encrypted by one
-	// process decrypts on another; an empty value makes get_secret fail loudly
-	// (the manager refuses an ephemeral key in production).
-	secretsEncryptionKey := ""
-	if secretBytes, err := os.ReadFile(filepath.Join(oramaDir, "secrets", "secrets-encryption-key")); err == nil {
-		secretsEncryptionKey = strings.TrimSpace(string(secretBytes))
-	}
-
-	gwCfg := &gateway.Config{
-		ListenAddr:           n.config.HTTPGateway.ListenAddr,
-		ClientNamespace:      n.config.HTTPGateway.ClientNamespace,
-		BootstrapPeers:       n.config.Discovery.BootstrapPeers,
-		NodePeerID:           loadNodePeerIDFromIdentity(n.config.Node.DataDir),
-		RQLiteDSN:            n.config.HTTPGateway.RQLiteDSN,
-		OlricServers:         n.config.HTTPGateway.OlricServers,
-		OlricTimeout:         n.config.HTTPGateway.OlricTimeout,
-		IPFSClusterAPIURL:    n.config.HTTPGateway.IPFSClusterAPIURL,
-		IPFSAPIURL:           n.config.HTTPGateway.IPFSAPIURL,
-		IPFSTimeout:          n.config.HTTPGateway.IPFSTimeout,
-		BaseDomain:           n.config.HTTPGateway.BaseDomain,
-		DataDir:              oramaDir,
-		RQLiteUsername:       "orama",
-		RQLitePassword:       rqlitePassword,
-		ClusterSecret:        clusterSecret,
-		APIKeyHMACSecret:     apiKeyHMACSecret,
-		SecretsEncryptionKey: secretsEncryptionKey,
-		NtfyBaseURL:          n.config.HTTPGateway.NtfyBaseURL,
-		WebRTCEnabled:        n.config.HTTPGateway.WebRTC.Enabled,
-		SFUPort:              n.config.HTTPGateway.WebRTC.SFUPort,
-		TURNDomain:           n.config.HTTPGateway.WebRTC.TURNDomain,
-		TURNSecret:           n.config.HTTPGateway.WebRTC.TURNSecret,
-	}
-
-	apiGateway, err := gateway.New(gatewayLogger, gwCfg)
+	// The index gateway reaches rqlited where it binds; the spawner adds the
+	// credentials when it writes the gateway YAML.
+	rqliteEP, err := database.IndexEndpoint(&n.config.Database, &n.config.Discovery)
 	if err != nil {
-		return err
-	}
-	n.apiGateway = apiGateway
-
-	// Wire up ClusterManager for per-namespace cluster provisioning
-	if ormClient := apiGateway.GetORMClient(); ormClient != nil {
-		baseDataDir := filepath.Join(os.ExpandEnv(n.config.Node.DataDir), "..", "data", "namespaces")
-		// Derive TURN encryption key from cluster secret (nil if no secret available)
-		var turnEncKey []byte
-		if clusterSecret != "" {
-			if key, keyErr := secrets.DeriveKey(clusterSecret, "turn-encryption"); keyErr == nil {
-				turnEncKey = key
-			}
-		}
-
-		// Bug #215 fix: tell the namespace cluster manager where the
-		// host's cluster-secret file lives. Spawned namespace gateways
-		// read it on startup to derive the cluster-wide Ed25519 JWT
-		// signing key. The path resolves to the same file the host
-		// gateway reads above (line ~45) — keeps the secret on disk
-		// once, just referenced from the namespace gateway YAML.
-		clusterSecretPath := ""
-		if clusterSecret != "" {
-			clusterSecretPath = filepath.Join(oramaDir, "secrets", "cluster-secret")
-		}
-
-		clusterCfg := namespace.ClusterManagerConfig{
-			BaseDomain:            n.config.HTTPGateway.BaseDomain,
-			BaseDataDir:           baseDataDir,
-			GlobalRQLiteDSN:       gwCfg.RQLiteDSN, // Pass global RQLite DSN for namespace gateway auth
-			IPFSClusterAPIURL:     gwCfg.IPFSClusterAPIURL,
-			IPFSAPIURL:            gwCfg.IPFSAPIURL,
-			IPFSTimeout:           gwCfg.IPFSTimeout,
-			IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
-			TurnEncryptionKey:     turnEncKey,
-			ClusterSecretPath:     clusterSecretPath,
-			// Bugboard #837 follow-up: forward the host's serverless secrets
-			// encryption key (read once above) so spawned namespace gateways
-			// can manage function secrets. Reuses the same variable the host
-			// gateway uses — no second file read.
-			SecretsEncryptionKey: secretsEncryptionKey,
-			// Bugboard #274: forward the host's self-hosted ntfy base URL so
-			// spawned namespace gateways register an ntfy push provider by
-			// default, matching what docs/PUSH_NOTIFICATIONS.md promises.
-			NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
-		}
-		clusterManager := namespace.NewClusterManager(ormClient, clusterCfg, n.logger.Logger)
-		clusterManager.SetLocalNodeID(gwCfg.NodePeerID)
-		apiGateway.SetClusterProvisioner(clusterManager)
-		apiGateway.SetNodeRecoverer(clusterManager)
-		apiGateway.SetWebRTCManager(clusterManager)
-
-		// Wire spawn handler for distributed namespace instance spawning.
-		// Forwards the host's cluster_secret_path through to spawned
-		// namespace gateways (bug #215 fix; same rationale as the
-		// ClusterManager spawner above).
-		systemdSpawner := namespace.NewSystemdSpawner(baseDataDir, clusterSecretPath, n.logger.Logger)
-		spawnHandler := namespacehandlers.NewSpawnHandler(systemdSpawner, n.logger.Logger)
-		apiGateway.SetSpawnHandler(spawnHandler)
-
-		// Wire namespace delete handler (with IPFS client for content unpinning)
-		deleteHandler := namespacehandlers.NewDeleteHandler(clusterManager, ormClient, apiGateway.GetIPFSClient(), n.logger.Logger)
-		apiGateway.SetNamespaceDeleteHandler(deleteHandler)
-
-		// Wire namespace list handler
-		nsListHandler := namespacehandlers.NewListHandler(ormClient, n.logger.Logger)
-		apiGateway.SetNamespaceListHandler(nsListHandler)
-
-		n.logger.ComponentInfo(logging.ComponentNode, "Namespace cluster provisioning enabled",
-			zap.String("base_domain", clusterCfg.BaseDomain),
-			zap.String("base_data_dir", baseDataDir))
-
-		// Keep namespace raft leadership on co-located voters (bugboard #708):
-		// a geography-blind raft election can place leadership on a distant
-		// node, funneling every write across a ~256ms link into 5-10s RPCs.
-		// This reconciler hands leadership off an isolated leader to the nearest
-		// voter — never changing membership (all nodes stay voters).
-		clusterManager.StartLeaderLocalityReconciler(ctx)
-
-		// Keeps WebRTC role assignments (TURN/SFU) aligned with cluster
-		// membership after a node replacement (bugboard #161), retracts a role
-		// this node no longer holds, and keeps its TURN DNS record current.
-		// Spawning a NEWLY-gained role still happens on the next restore, not
-		// here — see StartWebRTCReconciler for why the stop side is deliberately
-		// more conservative than the start side.
-		clusterManager.StartWebRTCReconciler(ctx)
-
-		// Restore previously-running namespace cluster processes in background.
-		// First try local state files (no DB dependency), then fall back to DB query with retries.
-		go func() {
-			time.Sleep(5 * time.Second)
-
-			// Try disk-based restore first (instant, no DB needed).
-			restored, err := clusterManager.RestoreLocalClustersFromDisk(ctx)
-			if err != nil {
-				n.logger.ComponentWarn(logging.ComponentNode, "Disk-based namespace restore failed", zap.Error(err))
-			}
-			if restored > 0 {
-				n.logger.ComponentInfo(logging.ComponentNode, "Restored namespace clusters from local state",
-					zap.Int("count", restored))
-			}
-
-			// ALWAYS reconcile against the DB too — do NOT early-return on a
-			// non-zero disk-restore count. A cluster provisioned through the async
-			// path never wrote a cluster-state.json, so disk restore silently drops
-			// it; previously the DB fallback only ran when ZERO state files existed,
-			// so a node hosting one state-file namespace + one async namespace
-			// restored only the former, forever. RestoreLocalClusters is idempotent
-			// (the RQLite/Olric/Gateway spawn paths skip services already running),
-			// so re-running it over the disk-restored namespaces is a safe no-op and
-			// picks up any namespace that lacks a state file.
-			time.Sleep(5 * time.Second)
-			for attempt := 1; attempt <= 12; attempt++ {
-				if err := clusterManager.RestoreLocalClusters(ctx); err == nil {
-					return
-				} else {
-					n.logger.ComponentWarn(logging.ComponentNode, "Namespace cluster DB restore failed, retrying",
-						zap.Int("attempt", attempt), zap.Error(err))
-				}
-				time.Sleep(10 * time.Second)
-			}
-			n.logger.ComponentError(logging.ComponentNode, "Failed to restore namespace clusters from DB after all retries")
-		}()
+		return fmt.Errorf("index gateway: %w", err)
 	}
 
-	go func() {
-		server := &http.Server{
-			Addr:              gwCfg.ListenAddr,
-			Handler:           apiGateway.Routes(),
-			ReadHeaderTimeout: 10 * time.Second,
-			ReadTimeout:       60 * time.Second,
-			WriteTimeout:      120 * time.Second,
-			IdleTimeout:       120 * time.Second,
-			MaxHeaderBytes:    1 << 20, // 1MB
-		}
-		n.apiGatewayServer = server
+	// The index Olric binds the same advertise host as rqlited
+	// (startRQLiteLocal).
+	olricServers := n.config.HTTPGateway.OlricServers
+	if len(olricServers) == 0 {
+		olricServers = []string{net.JoinHostPort(rqliteEP.Host, fmt.Sprintf("%d", namespace.IndexOlricHTTPPort))}
+	}
 
-		ln, err := net.Listen("tcp", gwCfg.ListenAddr)
-		if err != nil {
-			n.logger.ComponentError(logging.ComponentNode, "Failed to bind HTTP gateway",
-				zap.String("addr", gwCfg.ListenAddr), zap.Error(err))
-			return
-		}
+	bootstrapPeers, err := gatewayBootstrapPeers(n.hostRef(), rqliteEP.Host, n.config.Discovery.BootstrapPeers)
+	if err != nil {
+		return fmt.Errorf("index gateway: %w", err)
+	}
 
-		n.logger.ComponentInfo(logging.ComponentNode, "HTTP gateway started",
-			zap.String("addr", gwCfg.ListenAddr))
-		server.Serve(ln)
-	}()
-
-	return nil
+	return sup.EnsureGateway(ctx, gatewayspec.InstanceConfig{
+		NodeID:                nodeID,
+		RQLiteDSN:             rqliteEP.BaseURL(),
+		BootstrapPeers:        bootstrapPeers,
+		BaseDomain:            n.config.HTTPGateway.BaseDomain,
+		OlricServers:          olricServers,
+		OlricTimeout:          n.config.HTTPGateway.OlricTimeout,
+		IPFSClusterAPIURL:     n.config.HTTPGateway.IPFSClusterAPIURL,
+		IPFSAPIURL:            n.config.HTTPGateway.IPFSAPIURL,
+		IPFSTimeout:           n.config.HTTPGateway.IPFSTimeout,
+		IPFSReplicationFactor: n.config.Database.IPFS.ReplicationFactor,
+		SecretsEncryptionKey:  n.config.HTTPGateway.SecretsEncryptionKey,
+		// Bugboard #274: carry the host's self-hosted ntfy base URL into the
+		// index gateway's YAML so the namespace cluster manager can forward it
+		// to spawned namespace gateways, which otherwise register no ntfy push
+		// provider at all.
+		NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
+		NodePeerID:  nodeID,
+	})
 }
 
-// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration
+// startIPFSClusterConfig initializes and ensures IPFS Cluster configuration.
+// A node with no cluster API configured has nothing to do here.
+//
+// The manager is built at most once and published under depsMu, because the
+// monitoring loop reads it on its own goroutine and this component can still be
+// retrying when that loop starts. The config writes take clusterCfgMu for the
+// same reason: the monitoring loop repairs the same service.json.
 func (n *Node) startIPFSClusterConfig() error {
-	n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
+	if n.config.Database.IPFS.ClusterAPIURL == "" {
+		return nil
+	}
 
-	cm, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
+	cm := n.getClusterConfigManager()
+	if cm == nil {
+		n.logger.ComponentInfo(logging.ComponentNode, "Initializing IPFS Cluster configuration")
+		built, err := ipfs.NewClusterConfigManager(n.config, n.logger.Logger)
+		if err != nil {
+			return err
+		}
+		n.depsMu.Lock()
+		n.clusterConfigManager = built
+		n.depsMu.Unlock()
+		cm = built
+	}
+
+	// The Kubo repo's API and gateway bindings, and every listener in the
+	// cluster's service.json, are install's and upgrade's to write
+	// (pkg/install/installers); this sets only what the node owns.
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
+	return cm.EnsureConfig()
+}
+
+// getClusterConfigManager returns the IPFS cluster config manager, or nil if
+// the config component has not built it yet.
+func (n *Node) getClusterConfigManager() *ipfs.ClusterConfigManager {
+	n.depsMu.RLock()
+	defer n.depsMu.RUnlock()
+	return n.clusterConfigManager
+}
+
+// getClusterDiscovery returns the cluster discovery service, or nil if the
+// cluster-discovery component has not started it yet.
+func (n *Node) getClusterDiscovery() *database.ClusterDiscoveryService {
+	n.depsMu.RLock()
+	defer n.depsMu.RUnlock()
+	return n.clusterDiscovery
+}
+
+// discoverClusterPeers rewrites service.json's peer addresses, so it takes
+// the lock the config component holds.
+func (n *Node) discoverClusterPeers(ctx context.Context, cm *ipfs.ClusterConfigManager) error {
+	adapter := n.getRQLiteAdapter()
+	if adapter == nil {
+		return fmt.Errorf("cannot discover IPFS cluster peers: the node registry (RQLite) is not connected yet")
+	}
+	h := n.hostRef()
+	if h == nil {
+		return fmt.Errorf("cannot discover IPFS cluster peers: the libp2p host is not started yet")
+	}
+	// The registry is read before the lock, under its own deadline: a registry
+	// without quorum must not hold up the other service.json writers.
+	readCtx, cancel := context.WithTimeout(ctx, clusterPeerRegistryTimeout)
+	targets, skipped, err := activeOverlayPeers(readCtx, adapter.GetSQLDB())
+	cancel()
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot discover IPFS cluster peers: %w", err)
 	}
-	n.clusterConfigManager = cm
-
-	_ = cm.FixIPFSConfigAddresses()
-	if err := cm.EnsureConfig(); err != nil {
-		return err
+	if skipped > 0 {
+		n.logger.ComponentWarn(logging.ComponentNode, "IPFS cluster peer discovery skipped registry rows whose address is not on the WireGuard overlay",
+			zap.Int("skipped", skipped))
 	}
+	n.clusterCfgMu.Lock()
+	defer n.clusterCfgMu.Unlock()
+	return cm.DiscoverClusterPeers(ctx, h.ID().String(), func(context.Context) ([]ipfs.PeerTarget, error) {
+		return targets, nil
+	})
+}
 
-	_ = cm.RepairPeerConfiguration()
-	return nil
+// clusterPeerRegistryTimeout bounds the registry read of one discovery pass.
+const clusterPeerRegistryTimeout = 10 * time.Second
+
+// gatewayBootstrapPeers is the peer list the index gateway's libp2p client
+// dials: this node first, over its overlay address, then the configured
+// bootstrap peers. The node is always there and does the mesh discovery; the
+// configured list is empty on the genesis node and names one other node on the
+// rest, so a gateway bootstrapped from it alone reported no peers on the first
+// and lost them all when that one node was down.
+func gatewayBootstrapPeers(h host.Host, overlayIP string, configured []string) ([]string, error) {
+	if h == nil {
+		return nil, fmt.Errorf("this node's libp2p host is not running, so the gateway has no peer to bootstrap from")
+	}
+	self, err := overlayMultiaddr(h, overlayIP)
+	if err != nil {
+		return nil, err
+	}
+	peers := []string{self}
+	for _, p := range configured {
+		if p = strings.TrimSpace(p); p != "" && p != self {
+			peers = append(peers, p)
+		}
+	}
+	return peers, nil
+}
+
+// overlayMultiaddr is h's TCP listen address on overlayIP, with its peer id.
+func overlayMultiaddr(h host.Host, overlayIP string) (string, error) {
+	for _, a := range h.Addrs() {
+		ip, err := a.ValueForProtocol(multiaddr.P_IP4)
+		if err != nil || ip != overlayIP {
+			continue
+		}
+		if _, err := a.ValueForProtocol(multiaddr.P_TCP); err != nil {
+			continue
+		}
+		return fmt.Sprintf("%s/p2p/%s", a.String(), h.ID()), nil
+	}
+	return "", fmt.Errorf("this node's libp2p host listens on no TCP address on the overlay IP %s (listening on %v); check the node's listen addresses", overlayIP, h.Addrs())
 }

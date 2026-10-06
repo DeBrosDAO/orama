@@ -17,10 +17,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/DeBrosOfficial/network/pkg/anyoneproxy"
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"go.uber.org/zap"
 )
 
@@ -211,23 +212,9 @@ func parseTunnelTarget(rawHost, rawPort string) (tunnelTarget, error) {
 	return tunnelTarget{host: host, port: port}, nil
 }
 
-// isPublicIP reports whether an IP is routable on the public internet. Anything
-// else — loopback, RFC1918, link-local, multicast, unspecified, and the IPv6
-// unique-local range that the WireGuard mesh and cloud metadata services live
-// in — is refused as a tunnel destination.
-func isPublicIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
-		ip.IsMulticast() {
-		return false
-	}
-	// 100.64.0.0/10 (carrier-grade NAT) is not covered by IsPrivate and is
-	// where several hosting providers put internal addressing.
-	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1]&0xc0 == 64 {
-		return false
-	}
-	return true
-}
+// isPublicIP reports whether an IP is routable on the public internet: not in any range of the
+// shared list in pkg/netguard.
+func isPublicIP(ip net.IP) bool { return !netguard.Reserved(ip) }
 
 // tunnelIsolationKey derives the SOCKS credential that pins a user to their own
 // circuit. It is an HMAC of the caller identity under the node's own key, so the
@@ -308,7 +295,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		// Defence in depth: /v1/proxy/ already requires a wallet JWT. Reaching
 		// here without one means the auth chain changed shape, and a tunnel is
 		// the last thing that should fail open.
-		writeError(w, http.StatusUnauthorized, "an authenticated user is required for the tunnel")
+		unauthorized(w, CodeAuthUserJWTRequired, "an authenticated user is required for the tunnel", nil)
 		return
 	}
 
@@ -318,11 +305,11 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !anyoneproxy.Running() {
+	if !anonproxy.Running() {
 		g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel refused: anonymity proxy not available",
-			zap.String("socks_addr", anyoneproxy.Address()))
+			zap.String("socks_addr", anonproxy.Address()))
 		writeError(w, http.StatusServiceUnavailable,
-			fmt.Sprintf("anonymity network not available at %s", anyoneproxy.Address()))
+			"anonymity network not available on this node")
 		return
 	}
 
@@ -337,7 +324,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	// can read, instead of a WebSocket that opens and immediately closes with a
 	// reason most clients surface poorly.
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), tunnelDialTimeout)
-	upstream, dialErr := anyoneproxy.DialThrough(dialCtx, target.addr(),
+	upstream, dialErr := anonproxy.DialThrough(dialCtx, target.addr(),
 		tunnelIsolationKey(g.tunnelIsolationSecret, identity))
 	cancelDial()
 	if dialErr != nil {

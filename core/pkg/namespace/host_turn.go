@@ -5,9 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/environments/production"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/turn"
 	"go.uber.org/zap"
@@ -15,12 +19,24 @@ import (
 )
 
 // hostTURNConfigPath is where the shared TURN server reads its config, matching
-// the path baked into orama-turn.service. Host-level (alongside node.yaml), not
-// under namespaces/ — the process belongs to the host, not to any one namespace.
+// the TURN_CONFIG baked into orama-turn.service. Host-level, not under
+// namespaces/ — the process belongs to the host, not to any one namespace — and
+// under data/, because the writer is the index gateway, to which configs/ is
+// read-only. It used to be configs/turn.yaml: every write failed, the failure
+// was logged and dropped, and host TURN was never configured.
 //
 // A var, not a const, only so tests can redirect it into a temp dir; nothing in
 // production reassigns it.
-var hostTURNConfigPath = "/opt/orama/.orama/configs/turn.yaml"
+var hostTURNConfigPath = constants.HostTURNConfigPath(install.OramaDir)
+
+// hostTURNServedPath is where the running shared TURN server publishes the
+// tenants it has loaded. A var, like hostTURNConfigPath, only so tests can
+// redirect it.
+var hostTURNServedPath = turn.DefaultServedTenantsPath
+
+// hostTURNConfigDirMode: the directory holds only the 0600 config, read by
+// orama-turn.service running as the same orama user that writes it.
+const hostTURNConfigDirMode = 0o700
 
 // hostTURNTenant is one namespace's contribution to the shared TURN config,
 // paired with the listener ports it was allocated. Those ports really are
@@ -60,9 +76,16 @@ type hostTURNTenant struct {
 // same thing: a namespace with no shared secret is dropped from the config, and
 // a failed config write leaves the server serving the previous set — advertising
 // on the allocation alone would point clients at a relay that rejects them.
-func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) []string {
+//
+// Every failure is returned. They used to be logged and swallowed, which is how
+// a config path the writer could not write left host TURN unconfigured on every
+// node while each reconcile reported nothing to its caller.
+func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) ([]string, error) {
+	if cm.reconcileHostTURNFn != nil {
+		return cm.reconcileHostTURNFn(ctx)
+	}
 	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil || cm.localNodeID == "" {
-		return nil
+		return nil, nil
 	}
 
 	tenants, err := cm.desiredHostTURNTenants(ctx)
@@ -71,27 +94,150 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) []string {
 		// as "this node serves nobody". Stopping TURN on a transient rqlite blip
 		// would drop every relay on the host, and nothing would restart them
 		// until the next sweep — the same failure shape as
-		// stopUnallocatedWebRTCServices guards against.
-		cm.logger.Warn("Host TURN reconcile skipped: could not determine allocations",
-			zap.Error(err))
-		return nil
+		// stopUnallocatedWebRTCServices guards against. So nothing is changed,
+		// and the caller hears why.
+		return nil, fmt.Errorf("host TURN not reconciled: could not determine this node's TURN allocations: %w", err)
 	}
 
 	if len(tenants) == 0 {
-		cm.stopHostTURNAndLegacyUnits(ctx)
-		return nil
+		return nil, cm.stopHostTURNAndLegacyUnits(ctx)
 	}
+	return cm.applyHostTURN(ctx, tenants)
+}
 
+// spawnActionReconcileHostTURN is the spawn request that asks a host to apply
+// its shared TURN tenant set now and confirm it serves one namespace.
+const spawnActionReconcileHostTURN = "reconcile-host-turn"
+
+// hostTURNServePollInterval is how often ConfirmHostTURN re-reads what the
+// running server says it serves.
+const hostTURNServePollInterval = 200 * time.Millisecond
+
+// hostTURNServeTimeout bounds the wait for the running server to load a config
+// this host just wrote: it re-reads on a TenantReloadInterval tick, and a newly
+// started process needs one more to come up and publish.
+var hostTURNServeTimeout = 3 * turn.TenantReloadInterval
+
+// ConfirmHostTURN reconciles this host's shared TURN server and returns nil only
+// when the RUNNING server serves the namespace: the config names it and the
+// server has loaded exactly that config. It is what a coordinator's
+// reconcile-host-turn request runs, so the host applies its own tenant set
+// (config is never pushed between hosts) and answers for it.
+//
+// A written config is not enough: the server picks tenants up on its next
+// reload tick, and a client pointed at it before then is refused ("TURN
+// credential for a namespace this server does not serve").
+func (cm *ClusterManager) ConfirmHostTURN(ctx context.Context, namespace string) error {
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(served, namespace) {
+		return fmt.Errorf("this host's shared TURN server does not serve namespace %s (serving %v)", namespace, served)
+	}
+	return cm.awaitHostTURNServing(ctx, namespace)
+}
+
+// awaitHostTURNServing waits until the running shared TURN server serves the
+// namespace.
+func (cm *ClusterManager) awaitHostTURNServing(ctx context.Context, namespace string) error {
+	if cm.waitHostTURNServingFn != nil {
+		return cm.waitHostTURNServingFn(ctx, namespace)
+	}
+	return cm.waitHostTURNServing(ctx, namespace)
+}
+
+// ReleaseHostTURN reconciles this host's shared TURN server after the namespace
+// lost its allocation or WebRTC config, and returns nil only when the host no
+// longer lists it. It drops the namespace's secret now rather than on the next
+// sweep.
+func (cm *ClusterManager) ReleaseHostTURN(ctx context.Context, namespace string) error {
+	served, err := cm.ReconcileHostTURN(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(served, namespace) {
+		return fmt.Errorf("this host's shared TURN server still serves namespace %s after its allocation was released (serving %v)", namespace, served)
+	}
+	return nil
+}
+
+// hostTURNActive reports whether orama-turn.service is active.
+func (cm *ClusterManager) hostTURNActive() (bool, error) {
+	if cm.hostTURNActiveFn != nil {
+		return cm.hostTURNActiveFn()
+	}
+	if cm.systemdSpawner == nil || cm.systemdSpawner.systemdMgr == nil {
+		return false, fmt.Errorf("no systemd manager on this node")
+	}
+	return cm.systemdSpawner.systemdMgr.IsHostTURNActive()
+}
+
+// waitHostTURNServing polls the running server's published tenant set until it
+// reflects the config file on disk and includes the namespace.
+func (cm *ClusterManager) waitHostTURNServing(ctx context.Context, namespace string) error {
+	deadline := time.NewTimer(hostTURNServeTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(hostTURNServePollInterval)
+	defer ticker.Stop()
+
+	var last error
+	for {
+		last = cm.checkHostTURNServing(namespace)
+		if last == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for the shared TURN server to serve namespace %s: %w (last check: %v)", namespace, ctx.Err(), last)
+		case <-deadline.C:
+			return fmt.Errorf("the shared TURN server did not load namespace %s within %s; is orama-turn running and able to write %s? last check: %w",
+				namespace, hostTURNServeTimeout, hostTURNServedPath, last)
+		case <-ticker.C:
+		}
+	}
+}
+
+// checkHostTURNServing reports whether the running server has loaded the config
+// now on disk and serves the namespace. The unit must be active: the status file
+// survives only as long as the process that wrote it, but a crash-looping unit
+// is between files, and a confirmation must never rest on a dead server.
+func (cm *ClusterManager) checkHostTURNServing(namespace string) error {
+	active, err := cm.hostTURNActive()
+	if err != nil {
+		return fmt.Errorf("determine the shared TURN service state: %w", err)
+	}
+	if !active {
+		return fmt.Errorf("the shared TURN service (orama-turn) is not active")
+	}
+	cfg, err := os.ReadFile(hostTURNConfigPath)
+	if err != nil {
+		return fmt.Errorf("read the shared TURN config: %w", err)
+	}
+	st, err := turn.ReadServedTenants(hostTURNServedPath)
+	if err != nil {
+		return err
+	}
+	if st.ConfigSHA256 != turn.ConfigDigest(cfg) {
+		return fmt.Errorf("the running server has not loaded the current config yet")
+	}
+	if !slices.Contains(st.Namespaces, namespace) {
+		return fmt.Errorf("the running server loaded the current config but does not serve %s (serving %v)", namespace, st.Namespaces)
+	}
+	return nil
+}
+
+// applyHostTURN writes the shared config for a non-empty tenant set and makes
+// sure the shared server is running it.
+func (cm *ClusterManager) applyHostTURN(ctx context.Context, tenants []hostTURNTenant) ([]string, error) {
 	changed, err := cm.writeHostTURNConfig(ctx, tenants)
 	if err != nil {
-		cm.logger.Warn("Failed to write shared TURN config", zap.Error(err))
-		return nil
+		return nil, fmt.Errorf("write the shared TURN config %s: %w", hostTURNConfigPath, err)
 	}
 
-	running, aerr := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
-	if aerr != nil {
-		cm.logger.Warn("Could not determine shared TURN service state", zap.Error(aerr))
-		return nil
+	running, err := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
+	if err != nil {
+		return nil, fmt.Errorf("determine the shared TURN service state: %w", err)
 	}
 	// Open the relay ports before starting. The root-level firewall phase only
 	// runs at install/upgrade, so a node that GAINS a TURN allocation between
@@ -109,18 +255,12 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) []string {
 		// unavoidable price of moving the process; leaving it stuck is not.
 		cm.stopLegacyPerNamespaceTURN(ctx)
 
-		if serr := cm.systemdSpawner.systemdMgr.StartHostTURN(); serr != nil {
-			// Error, not Warn: the legacy units were just stopped, so this node is
-			// now relaying for nobody. The most likely cause is a missing sudoers
-			// grant for orama-turn.service, which produces "command not allowed"
-			// and is silent apart from this line.
-			cm.logger.Error("Shared TURN service failed to start; this node is relaying for NO namespace. If the cause is 'command not allowed', the sudoers grant for orama-turn.service is missing on this host.",
-				zap.Strings("tenants", tenantNames(tenants)), zap.Error(serr))
-			return nil
+		if err := cm.systemdSpawner.systemdMgr.StartHostTURN(); err != nil {
+			return nil, fmt.Errorf("start the shared TURN service: %w", err)
 		}
 		cm.logger.Info("Started shared TURN service (bugboard #283)",
 			zap.Strings("tenants", tenantNames(tenants)))
-		return tenantNames(tenants)
+		return tenantNames(tenants), nil
 	}
 
 	if changed {
@@ -132,7 +272,7 @@ func (cm *ClusterManager) ReconcileHostTURN(ctx context.Context) []string {
 	// Catch any legacy unit that came back (a node restart re-runs the old
 	// restore path until it is fully upgraded). Idempotent.
 	cm.stopLegacyPerNamespaceTURN(ctx)
-	return tenantNames(tenants)
+	return tenantNames(tenants), nil
 }
 
 // desiredHostTURNTenants collects every namespace on this node that holds a TURN
@@ -262,8 +402,8 @@ func (cm *ClusterManager) writeHostTURNConfig(ctx context.Context, tenants []hos
 	// turn-<ns>.<base> host AND every tenant's cdn-<hash>.<base> stealth host,
 	// so one cert serves the whole shared listener.
 	//
-	// Self-signed is NOT accepted here (allowSelfSigned=false), unlike the
-	// per-namespace spawn this replaces. A shared listener answers stealth
+	// Self-signed is NOT accepted here, unlike the per-namespace spawn this
+	// replaced. A shared listener answers stealth
 	// hostnames too, and a cert clients reject is indistinguishable from being
 	// censored — the one outcome the stealth design forbids. Worse, a tenant
 	// whose own stealth cert failed to load falls back to this primary cert by
@@ -271,8 +411,7 @@ func (cm *ClusterManager) writeHostTURNConfig(ctx context.Context, tenants []hos
 	// that must not fail. Disabling TURNS instead leaves clients on plain TURN
 	// (3478), which works.
 	if tls > 0 {
-		certPath, keyPath, cerr := cm.systemdSpawner.resolveTURNSCert(
-			"", "", cm.baseDomain, publicIP, filepath.Dir(hostTURNConfigPath), false)
+		certPath, keyPath, cerr := cm.systemdSpawner.resolveTURNSCert(cm.baseDomain)
 		if cerr != nil {
 			cm.logger.Warn("No CA-valid wildcard cert for the shared TURN server; TURNS disabled (clients use plain TURN on 3478). Stealth endpoints on this host will not serve until the wildcard exists.",
 				zap.String("base_domain", cm.baseDomain), zap.Error(cerr))
@@ -296,37 +435,47 @@ func (cm *ClusterManager) writeHostTURNConfig(ctx context.Context, tenants []hos
 		return false, nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(hostTURNConfigPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(hostTURNConfigPath), hostTURNConfigDirMode); err != nil {
 		return false, fmt.Errorf("create shared TURN config dir: %w", err)
 	}
-	if err := writeConfigAtomic(hostTURNConfigPath, data, 0600); err != nil {
+	if err := writeConfigAtomic(hostTURNConfigPath, data, 0600, keepGroup); err != nil {
 		return false, fmt.Errorf("write shared TURN config: %w", err)
 	}
 	return true, nil
 }
 
 // stopHostTURNAndLegacyUnits tears TURN down on a node that holds no allocation.
-func (cm *ClusterManager) stopHostTURNAndLegacyUnits(ctx context.Context) {
+func (cm *ClusterManager) stopHostTURNAndLegacyUnits(ctx context.Context) error {
 	running, err := cm.systemdSpawner.systemdMgr.IsHostTURNActive()
-	if err == nil && running {
-		if serr := cm.systemdSpawner.systemdMgr.StopHostTURN(); serr != nil {
-			cm.logger.Warn("Failed to stop shared TURN service", zap.Error(serr))
-			return
+	if err != nil {
+		return fmt.Errorf("determine the shared TURN service state: %w", err)
+	}
+	if running {
+		if err := cm.systemdSpawner.systemdMgr.StopHostTURN(); err != nil {
+			return fmt.Errorf("stop the shared TURN service on a node that holds no TURN allocation: %w", err)
 		}
 		cm.logger.Info("Stopped shared TURN service: this node holds no TURN allocation")
 	}
 
-	// Remove the config too. It holds every tenant's HMAC secret, and leaving it
-	// behind on a node that no longer relays is the same stale-secret-on-disk
-	// problem the legacy 0644 cleanup exists to fix. It also keeps hostRunsTURN()
-	// true forever, so the firewall phase would go on holding the relay range
-	// open on a node with no TURN at all.
-	if rerr := os.Remove(hostTURNConfigPath); rerr != nil && !os.IsNotExist(rerr) {
-		cm.logger.Warn("Failed to remove the shared TURN config on a node that no longer relays; it still holds every tenant's HMAC secret",
-			zap.String("path", hostTURNConfigPath), zap.Error(rerr))
+	if err := removeHostTURNConfig(); err != nil {
+		return err
 	}
-
 	cm.stopLegacyPerNamespaceTURN(ctx)
+	return nil
+}
+
+// removeHostTURNConfig deletes the shared config on a node that no longer relays.
+//
+// It holds every tenant's HMAC secret, and leaving it behind on a node that no
+// longer relays is the same stale-secret-on-disk problem the legacy 0644 cleanup
+// exists to fix. It also keeps hostRunsTURN() true forever, so the firewall
+// phase would go on holding the relay range open on a node with no TURN at all.
+func removeHostTURNConfig() error {
+	if err := os.Remove(hostTURNConfigPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove the shared TURN config %s on a node that no longer relays; it still holds every tenant's HMAC secret: %w",
+			hostTURNConfigPath, err)
+	}
+	return nil
 }
 
 // stopLegacyPerNamespaceTURN retires the pre-#283 orama-namespace-turn@<ns>
@@ -350,24 +499,24 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 			continue
 		}
 		ns := state.NamespaceName
-
-		// Stop and disable UNCONDITIONALLY, without consulting IsServiceActive.
-		//
-		// That check reports a crash-looping unit as NOT active — and after the
-		// config migration the legacy units crash-loop by construction, because
-		// their configs are gone. Gating on "active" therefore skips exactly the
-		// units that most need retiring, leaving them restarting forever. Both
-		// calls are idempotent on an already-stopped or never-installed unit.
-		//
-		// Disabling matters as much as stopping: without it the unit returns on
-		// the next boot and starts crash-looping again.
-		if serr := cm.systemdSpawner.systemdMgr.StopService(ns, systemd.ServiceTypeTURN); serr != nil {
-			cm.logger.Warn("Failed to stop legacy per-namespace TURN unit",
-				zap.String("namespace", ns), zap.Error(serr))
+		// The name comes from a file on disk and names systemd units below.
+		if !httputil.ValidateNamespace(ns) {
+			cm.logger.Warn("Skipping a cluster state whose namespace name is not valid",
+				zap.String("path", path))
+			continue
 		}
-		if derr := cm.systemdSpawner.systemdMgr.DisableService(ns, systemd.ServiceTypeTURN); derr != nil {
-			cm.logger.Warn("Failed to disable legacy per-namespace TURN unit; it will return on the next boot",
-				zap.String("namespace", ns), zap.Error(derr))
+		// Every local namespace, not just current tenants: a namespace that LOST
+		// its TURN allocation still has a legacy unit to retire, and that unit
+		// would go on holding 3478 against the shared server.
+		retired, rerr := retireLegacyTURNUnit(cm.systemdSpawner.systemdMgr, ns)
+		if rerr != nil {
+			cm.logger.Warn("Failed to retire the legacy per-namespace TURN unit; while it runs it holds 3478/5349 against the shared server, and while its env file remains every upgrade restarts it",
+				zap.String("namespace", ns), zap.Error(rerr))
+			continue
+		}
+		if retired {
+			cm.logger.Info("Retired legacy per-namespace TURN unit; the shared host TURN serves this namespace now (bugboard #283)",
+				zap.String("namespace", ns))
 		}
 
 		// Deleting the legacy config is NOT conditional on having just stopped the
@@ -380,6 +529,46 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 	}
 }
 
+// legacyTURNUnits is what retiring a legacy per-namespace TURN unit needs from
+// the systemd manager.
+type legacyTURNUnits interface {
+	HasUnitEnv(namespace string, serviceType systemd.ServiceType) (bool, error)
+	ServiceState(namespace string, serviceType systemd.ServiceType) (systemd.ActiveState, error)
+	TeardownServiceAndEnv(namespace string, serviceType systemd.ServiceType) error
+}
+
+// retireLegacyTURNUnit stops, disables and removes the env file of namespace's
+// legacy orama-namespace-turn@ unit while anything of it remains, and reports
+// whether it did.
+//
+// It used to stop the unit only while systemd reported it active. Once the
+// migration has deleted a legacy unit's config the unit crash-loops, and a
+// crash-looping unit does not read as active, so exactly the units that needed
+// retiring were skipped and restarted forever; the unit also stayed enabled and
+// kept its env file, so every boot and every `orama node upgrade` (which
+// restarts each unit it finds an env file for) started it again (devnet,
+// bugboard #283 part 2). A unit with an env file, or in any state but inactive
+// (starting, restarting or failed included — the layout migration may already
+// have removed the env file of one that crash-loops), is retired, by the rule
+// the WebRTC sweep uses (needsRetiring).
+func retireLegacyTURNUnit(units legacyTURNUnits, namespace string) (bool, error) {
+	hasEnv, err := units.HasUnitEnv(namespace, systemd.ServiceTypeTURN)
+	if err != nil {
+		return false, fmt.Errorf("check for the legacy TURN env file of %s: %w", namespace, err)
+	}
+	state, err := units.ServiceState(namespace, systemd.ServiceTypeTURN)
+	if err != nil {
+		return false, fmt.Errorf("read the state of the legacy TURN unit of %s: %w", namespace, err)
+	}
+	if !needsRetiring(state, hasEnv) {
+		return false, nil
+	}
+	if err := units.TeardownServiceAndEnv(namespace, systemd.ServiceTypeTURN); err != nil {
+		return false, fmt.Errorf("retire the legacy TURN unit of %s: %w", namespace, err)
+	}
+	return true, nil
+}
+
 // removeLegacyTURNConfig deletes the retired per-namespace TURN config.
 //
 // Those files were written 0644 and contain the namespace's HMAC secret, so any
@@ -388,16 +577,6 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 // config would leave exactly the exposure the tighter mode exists to close, on
 // precisely the hosts this migration touches.
 func (cm *ClusterManager) removeLegacyTURNConfig(namespace, namespaceDir string) {
-	// turn.env is what marks the unit "provisioned": both the upgrade's rolling
-	// restart and hostRunsTURN() enumerate namespaces by the presence of this
-	// file. Leaving it behind makes the upgrade restart a configless unit into a
-	// permanent crash-loop, so the migration is not complete without removing it.
-	envPath := filepath.Join(namespaceDir, "turn.env")
-	if eerr := os.Remove(envPath); eerr != nil && !os.IsNotExist(eerr) {
-		cm.logger.Warn("Failed to remove the legacy TURN env file; the upgrade will keep restarting a configless unit",
-			zap.String("namespace", namespace), zap.String("path", envPath), zap.Error(eerr))
-	}
-
 	path := filepath.Join(namespaceDir, "configs",
 		fmt.Sprintf("turn-%s.yaml", cm.localNodeID))
 	err := os.Remove(path)
@@ -431,10 +610,10 @@ func tenantNames(tenants []hostTURNTenant) []string {
 // from and that the root-level firewall phase uses, so the two cannot drift into
 // a server relaying on ports UFW drops.
 //
-// orama-node runs unprivileged; the sudoers drop-in grants exactly the `ufw`
-// verbs this needs.
+// orama-node runs unprivileged; orama-privhelper allows exactly these TURN
+// rules and no others (pkg/privhelper).
 func (cm *ClusterManager) openTURNRelayPorts() {
-	fw := production.NewFirewallProvisioner(production.FirewallConfig{})
+	fw := install.NewFirewallProvisioner(install.FirewallConfig{})
 	if err := fw.AddWebRTCRules(TURNRelayPortRangeStart, TURNRelayPortRangeEnd); err != nil {
 		// Not fatal: on a node whose firewall phase already opened these, TURN
 		// works regardless. Loud because the failure mode when they are NOT open

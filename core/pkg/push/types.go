@@ -93,6 +93,10 @@ type PushDevice struct {
 	CreatedAt int64 // unix seconds
 	UpdatedAt int64
 	LastSeen  int64
+	// SessionDeviceID is the session device the registration was made from —
+	// the verified `did` of the caller's token — or "" for a session bound to
+	// the account alone. Revoking that device ends the registration too.
+	SessionDeviceID string
 }
 
 // PushDeviceStore persists per-user device registrations.

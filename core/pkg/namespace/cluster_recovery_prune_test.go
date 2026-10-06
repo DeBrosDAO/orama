@@ -163,6 +163,13 @@ func TestStaleClusterNodeSQL_purgeHorizonBoundary(t *testing.T) {
 func TestPruneStaleClusterNodes_removesReturnedRowsAndReportsThem(t *testing.T) {
 	db := &recoveryMockDB{}
 	db.queryFunc = func(dest any, query string, _ ...any) error {
+		if strings.Contains(query, "FROM namespace_clusters") {
+			appendToSlice(dest, map[string]any{"ID": "cluster-1", "RQLiteNodeCount": 3})
+			return nil
+		}
+		if strings.Contains(query, "FROM dns_nodes") {
+			return nil // the node is gone from the registry: nothing to confirm
+		}
 		if query != staleClusterNodeSQL {
 			t.Fatalf("unexpected query: %s", query)
 		}
@@ -191,12 +198,16 @@ func TestPruneStaleClusterNodes_removesReturnedRowsAndReportsThem(t *testing.T) 
 		switch {
 		case strings.Contains(ec.Query, "DELETE FROM namespace_cluster_nodes"):
 			memberDeletes++
-		case strings.Contains(ec.Query, "DELETE FROM namespace_port_allocations"):
+		case strings.Contains(ec.Query, "DELETE FROM namespace_port_allocations"),
+			strings.Contains(ec.Query, "DELETE FROM webrtc_port_allocations"):
 			// expected companion delete
+		case strings.Contains(ec.Query, "namespace_pending_cleanup"):
+			// the owed teardown recorded before the membership went, and its
+			// claim settled after (removeAndEvictMember)
 		default:
 			t.Errorf("unexpected exec query = %q", ec.Query)
 		}
-		if len(ec.Args) >= 2 {
+		if len(ec.Args) >= 2 && strings.Contains(ec.Query, "DELETE FROM namespace_") {
 			gotNodeIDs[ec.Args[1].(string)] = true
 		}
 	}
@@ -212,6 +223,10 @@ func TestPruneStaleClusterNodes_removesReturnedRowsAndReportsThem(t *testing.T) 
 func TestPruneStaleClusterNodes_noStaleMembersIsNoop(t *testing.T) {
 	db := &recoveryMockDB{}
 	db.queryFunc = func(dest any, query string, _ ...any) error {
+		if strings.Contains(query, "FROM namespace_clusters") {
+			appendToSlice(dest, map[string]any{"ID": "cluster-1", "RQLiteNodeCount": 3})
+			return nil
+		}
 		if query != staleClusterNodeSQL {
 			t.Fatalf("unexpected query: %s", query)
 		}

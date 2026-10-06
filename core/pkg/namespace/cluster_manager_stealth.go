@@ -14,9 +14,8 @@ import (
 // Enabling stealth for a namespace whose WebRTC is already running:
 //  1. creates DNS A records for the neutral stealth host -> the TURN nodes,
 //  2. flips namespace_webrtc_config.stealth_enabled,
-//  3. re-spawns the namespace's TURN servers with the stealth domain (the
-//     spawner provisions a Let's Encrypt cert for it — hard-fail, never
-//     self-signed),
+//  3. re-spawns the namespace's TURN servers with the stealth domain (served
+//     with the *.<base> wildcard cert — hard-fail, never self-signed),
 //  4. rewrites cluster-state.json on every node (so DB-less restores keep
 //     the stealth domain), and
 //  5. restarts the namespace gateways so turn.credentials advertises
@@ -199,7 +198,9 @@ func (cm *ClusterManager) respawnTURNWithStealth(
 	// down a server that is also relaying for OTHER namespaces, dropping their
 	// live calls to enable stealth for this one. The shared server picks up a new
 	// stealth cert by reloading its tenant set, with no restart at all.
-	cm.ReconcileHostTURN(ctx)
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		return fmt.Errorf("apply the stealth change to this host's shared TURN server: %w", err)
+	}
 	cm.logger.Info("Stealth TURNS enabled; hosts apply it on their next reconcile",
 		zap.String("namespace", cluster.NamespaceName),
 		zap.String("stealth_domain", stealthDomain))

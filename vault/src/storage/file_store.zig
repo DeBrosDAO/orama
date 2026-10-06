@@ -6,7 +6,7 @@
 /// Directory layout:
 ///   <data_dir>/shares/<identity_hash_hex>/
 ///     meta.json          - Share metadata (JSON)
-///     share.bin          - Raw encrypted share data
+///     share.bin          - Share bytes (HMAC-integrity-protected; this layer does not encrypt)
 ///     wrapped_dek1.bin   - KEK1-wrapped DEK
 ///     wrapped_dek2.bin   - KEK2-wrapped DEK
 ///     checksum.bin       - HMAC-SHA256 of share.bin

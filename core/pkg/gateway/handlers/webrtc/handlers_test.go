@@ -228,7 +228,7 @@ func TestSignalHandler_NoSFUPort(t *testing.T) {
 
 func TestSignalHandler_NoProxyFunc(t *testing.T) {
 	h := testHandlers() // proxyWebSocket is nil
-	req := requestWithNamespace("GET", "/v1/webrtc/signal", "test-ns")
+	req := requestWithNamespace("GET", "/v1/webrtc/signal?room=r1", "test-ns")
 	w := httptest.NewRecorder()
 
 	h.SignalHandler(w, req)

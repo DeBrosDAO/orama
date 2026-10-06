@@ -3,18 +3,16 @@ package boot
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -98,11 +96,7 @@ func DistributeKeyShares(key []byte, peers []types.Peer, nodeID string) error {
 		return fmt.Errorf("no peers available for key distribution")
 	}
 
-	// Adaptive threshold: at least 3, or n/3 (whichever is greater)
-	k := int(math.Max(3, float64(n)/3.0))
-	if k > n {
-		k = n
-	}
+	k := adaptiveThreshold(n)
 
 	log.Printf("splitting LUKS key into %d shares (threshold=%d)", n, k)
 
@@ -111,26 +105,24 @@ func DistributeKeyShares(key []byte, peers []types.Peer, nodeID string) error {
 		return fmt.Errorf("shamir split failed: %w", err)
 	}
 
-	// Derive agent identity from the node's WG private key
-	identity, err := deriveAgentIdentity()
+	id, err := loadOrCreateVaultIdentity()
 	if err != nil {
-		return fmt.Errorf("failed to derive agent identity: %w", err)
+		return fmt.Errorf("failed to load vault identity: %w", err)
 	}
 
-	for i, peer := range peers {
-		session, err := vaultAuth(peer.WGIP, identity)
+	secretName := fmt.Sprintf("luks-key-%s", nodeID)
+	for i := range peers {
+		session, err := vaultAuth(peers[i].WGIP, id)
 		if err != nil {
-			return fmt.Errorf("failed to authenticate with peer %s: %w", peer.WGIP, err)
+			return fmt.Errorf("failed to authenticate with peer %d: %w", i+1, err)
 		}
 
 		shareB64 := base64.StdEncoding.EncodeToString(shares[i])
-		secretName := fmt.Sprintf("luks-key-%s", nodeID)
-
-		if err := vaultPutSecret(peer.WGIP, session, secretName, shareB64, 1); err != nil {
-			return fmt.Errorf("failed to store share on peer %s: %w", peer.WGIP, err)
+		if err := vaultPutSecret(peers[i].WGIP, session, id, secretName, shareB64, 1); err != nil {
+			return fmt.Errorf("failed to store share on peer %d: %w", i+1, err)
 		}
 
-		log.Printf("stored share %d/%d on peer %s", i+1, n, peer.WGIP)
+		log.Printf("stored share %d/%d", i+1, n)
 	}
 
 	return nil
@@ -149,16 +141,13 @@ func FetchAndReconstruct(wg *wireguard.Manager) ([]byte, error) {
 		return nil, fmt.Errorf("failed to load node ID: %w", err)
 	}
 
-	identity, err := deriveAgentIdentity()
+	id, err := loadOrCreateVaultIdentity()
 	if err != nil {
-		return nil, fmt.Errorf("failed to derive agent identity: %w", err)
+		return nil, fmt.Errorf("failed to load vault identity: %w", err)
 	}
 
 	n := len(peers)
-	k := int(math.Max(3, float64(n)/3.0))
-	if k > n {
-		k = n
-	}
+	k := adaptiveThreshold(n)
 
 	secretName := fmt.Sprintf("luks-key-%s", nodeID)
 
@@ -173,22 +162,22 @@ func FetchAndReconstruct(wg *wireguard.Manager) ([]byte, error) {
 		}
 
 		shares = nil
-		for _, peer := range peers {
-			session, authErr := vaultAuth(peer.WGIP, identity)
+		for i, peer := range peers {
+			session, authErr := vaultAuth(peer.WGIP, id)
 			if authErr != nil {
-				log.Printf("auth failed with peer %s: %v", peer.WGIP, authErr)
+				log.Printf("auth failed with peer %d: %v", i+1, authErr)
 				continue
 			}
 
-			shareB64, getErr := vaultGetSecret(peer.WGIP, session, secretName)
+			shareB64, getErr := vaultGetSecret(peer.WGIP, session, id, secretName)
 			if getErr != nil {
-				log.Printf("share fetch failed from peer %s: %v", peer.WGIP, getErr)
+				log.Printf("share fetch failed from peer %d: %v", i+1, getErr)
 				continue
 			}
 
 			shareBytes, decErr := base64.StdEncoding.DecodeString(shareB64)
 			if decErr != nil {
-				log.Printf("invalid share from peer %s: %v", peer.WGIP, decErr)
+				log.Printf("invalid share from peer %d: %v", i+1, decErr)
 				continue
 			}
 
@@ -213,13 +202,17 @@ func FetchAndReconstruct(wg *wireguard.Manager) ([]byte, error) {
 		return nil, fmt.Errorf("shamir combine failed: %w", err)
 	}
 
-	// If we have K+1 shares, verify consistency (malicious share detection)
+	// If we have K+1 shares, the two windows must reconstruct the same key.
+	// A mismatch is a failed unlock, not a warning that still returns a key.
 	if len(shares) > k {
 		altKey, altErr := shamirCombine(shares[1 : k+1])
-		if altErr == nil && !bytes.Equal(key, altKey) {
+		if altErr != nil || !bytes.Equal(key, altKey) {
+			ZeroBytes(key)
 			ZeroBytes(altKey)
-			log.Println("WARNING: malicious share detected — share sets produce different keys")
-			// TODO: identify the bad share, alert cluster, exclude that peer
+			if altErr != nil {
+				return nil, fmt.Errorf("share sets disagree: %w", altErr)
+			}
+			return nil, fmt.Errorf("share sets disagree")
 		}
 		ZeroBytes(altKey)
 	}
@@ -232,27 +225,32 @@ func ZeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+	runtime.KeepAlive(b)
 }
 
-// deriveAgentIdentity derives a deterministic identity from the WG private key.
-func deriveAgentIdentity() (string, error) {
-	data, err := os.ReadFile("/etc/wireguard/private.key")
-	if err != nil {
-		return "", fmt.Errorf("failed to read WG private key: %w", err)
+func adaptiveThreshold(n int) int {
+	if n <= 0 {
+		return 0
 	}
-	hash := sha256.Sum256(bytes.TrimSpace(data))
-	return hex.EncodeToString(hash[:]), nil
+	k := n / 3
+	if k < 2 {
+		k = 2
+	}
+	if k > n {
+		k = n
+	}
+	return k
 }
 
 // vaultAuth authenticates with a peer's vault-guardian using the V2 challenge-response flow.
-// Returns a session token valid for 1 hour.
-func vaultAuth(peerIP, identity string) (string, error) {
+// Returns a session token valid for 1 hour. The session is not an ownership proof;
+// PUT/GET still sign with the vault identity key.
+func vaultAuth(peerIP string, id *vaultIdentity) (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Step 1: Request challenge
-	challengeBody, _ := json.Marshal(map[string]string{"identity": identity})
+	challengeBody, _ := json.Marshal(map[string]string{"identity": id.identity})
 	resp, err := client.Post(
-		fmt.Sprintf("http://%s:7500/v2/vault/auth/challenge", peerIP),
+		fmt.Sprintf("http://%s:10106/v2/vault/auth/challenge", peerIP),
 		"application/json",
 		bytes.NewReader(challengeBody),
 	)
@@ -266,21 +264,22 @@ func vaultAuth(peerIP, identity string) (string, error) {
 	}
 
 	var challengeResp struct {
-		Nonce string `json:"nonce"`
-		Tag   string `json:"tag"`
+		Nonce     string `json:"nonce"`
+		CreatedNs int64  `json:"created_ns"`
+		Tag       string `json:"tag"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&challengeResp); err != nil {
 		return "", fmt.Errorf("failed to parse challenge response: %w", err)
 	}
 
-	// Step 2: Create session
-	sessionBody, _ := json.Marshal(map[string]string{
-		"identity": identity,
-		"nonce":    challengeResp.Nonce,
-		"tag":      challengeResp.Tag,
+	sessionBody, _ := json.Marshal(map[string]interface{}{
+		"identity":   id.identity,
+		"nonce":      challengeResp.Nonce,
+		"created_ns": challengeResp.CreatedNs,
+		"tag":        challengeResp.Tag,
 	})
 	resp2, err := client.Post(
-		fmt.Sprintf("http://%s:7500/v2/vault/auth/session", peerIP),
+		fmt.Sprintf("http://%s:10106/v2/vault/auth/session", peerIP),
 		"application/json",
 		bytes.NewReader(sessionBody),
 	)
@@ -294,17 +293,19 @@ func vaultAuth(peerIP, identity string) (string, error) {
 	}
 
 	var sessionResp struct {
-		Token string `json:"token"`
+		Identity string `json:"identity"`
+		ExpiryNs int64  `json:"expiry_ns"`
+		Tag      string `json:"tag"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&sessionResp); err != nil {
 		return "", fmt.Errorf("failed to parse session response: %w", err)
 	}
 
-	return sessionResp.Token, nil
+	return fmt.Sprintf("%s:%d:%s", id.identity, sessionResp.ExpiryNs, sessionResp.Tag), nil
 }
 
 // vaultPutSecret stores a secret via the V2 vault API (PUT).
-func vaultPutSecret(peerIP, sessionToken, name, value string, version int) error {
+func vaultPutSecret(peerIP, sessionToken string, id *vaultIdentity, name, value string, version int) error {
 	client := &http.Client{Timeout: 10 * time.Second}
 	body, _ := json.Marshal(map[string]interface{}{
 		"share":   value,
@@ -312,13 +313,16 @@ func vaultPutSecret(peerIP, sessionToken, name, value string, version int) error
 	})
 
 	req, err := http.NewRequest("PUT",
-		fmt.Sprintf("http://%s:7500/v2/vault/secrets/%s", peerIP, name),
+		fmt.Sprintf("http://%s:10106/v2/vault/secrets/%s", peerIP, name),
 		bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
+	msg := fmt.Sprintf("vault-secret-put-v1:%s:%s:%d", id.identity, name, version)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Session-Token", sessionToken)
+	req.Header.Set("X-Vault-Pubkey", id.pubHex)
+	req.Header.Set("X-Vault-Signature", id.sign(msg))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -335,15 +339,20 @@ func vaultPutSecret(peerIP, sessionToken, name, value string, version int) error
 }
 
 // vaultGetSecret retrieves a secret via the V2 vault API (GET).
-func vaultGetSecret(peerIP, sessionToken, name string) (string, error) {
+func vaultGetSecret(peerIP, sessionToken string, id *vaultIdentity, name string) (string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	req, err := http.NewRequest("GET",
-		fmt.Sprintf("http://%s:7500/v2/vault/secrets/%s", peerIP, name), nil)
+		fmt.Sprintf("http://%s:10106/v2/vault/secrets/%s", peerIP, name), nil)
 	if err != nil {
 		return "", err
 	}
+	ts := time.Now().Unix()
+	msg := fmt.Sprintf("vault-secret-get-v1:%s:%s:%d", id.identity, name, ts)
 	req.Header.Set("X-Session-Token", sessionToken)
+	req.Header.Set("X-Vault-Pubkey", id.pubHex)
+	req.Header.Set("X-Vault-Signature", id.sign(msg))
+	req.Header.Set("X-Vault-Timestamp", fmt.Sprintf("%d", ts))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -377,24 +386,22 @@ func shamirSplit(secret []byte, n, k int) ([][]byte, error) {
 
 	shares := make([][]byte, n)
 	for i := range shares {
-		shares[i] = make([]byte, len(secret))
+		shares[i] = make([]byte, 1+len(secret))
+		shares[i][0] = byte(i + 1) // x-coordinate travels with the share
 	}
 
 	// For each byte of the secret, create a random polynomial of degree k-1
 	for byteIdx := 0; byteIdx < len(secret); byteIdx++ {
-		// Generate random coefficients for the polynomial
-		// coeffs[0] = secret byte, coeffs[1..k-1] = random
 		coeffs := make([]byte, k)
 		coeffs[0] = secret[byteIdx]
 		if _, err := rand.Read(coeffs[1:]); err != nil {
 			return nil, err
 		}
 
-		// Evaluate polynomial at points 1, 2, ..., n
 		for i := 0; i < n; i++ {
-			x := byte(i + 1) // x = 1, 2, ..., n (never 0)
-			shares[i][byteIdx] = evalPolynomial(coeffs, x)
+			shares[i][1+byteIdx] = evalPolynomial(coeffs, shares[i][0])
 		}
+		ZeroBytes(coeffs)
 	}
 
 	return shares, nil
@@ -406,14 +413,29 @@ func shamirCombine(shares [][]byte) ([]byte, error) {
 		return nil, fmt.Errorf("need at least 2 shares")
 	}
 
-	secretLen := len(shares[0])
+	if len(shares[0]) < 2 {
+		return nil, fmt.Errorf("share too short")
+	}
+	secretLen := len(shares[0]) - 1
 	secret := make([]byte, secretLen)
 
-	// Share indices are 1-based (x = 1, 2, 3, ...)
-	// We need to know which x values we have
 	xs := make([]byte, len(shares))
-	for i := range xs {
-		xs[i] = byte(i + 1)
+	ys := make([][]byte, len(shares))
+	seen := make(map[byte]struct{}, len(shares))
+	for i, share := range shares {
+		if len(share) != len(shares[0]) {
+			return nil, fmt.Errorf("share length mismatch")
+		}
+		x := share[0]
+		if x == 0 {
+			return nil, fmt.Errorf("share x-coordinate must not be 0")
+		}
+		if _, dup := seen[x]; dup {
+			return nil, fmt.Errorf("duplicate share x-coordinate")
+		}
+		seen[x] = struct{}{}
+		xs[i] = x
+		ys[i] = share[1:]
 	}
 
 	for byteIdx := 0; byteIdx < secretLen; byteIdx++ {
@@ -427,11 +449,11 @@ func shamirCombine(shares [][]byte) ([]byte, error) {
 				if i == j {
 					continue
 				}
-				num = gf256Mul(num, xj)           // 0 - xj = xj in GF(256) (additive inverse = self)
-				den = gf256Mul(den, xi^xj)         // xi - xj = xi XOR xj
+				num = gf256Mul(num, xj)    // 0 - xj = xj in GF(256) (additive inverse = self)
+				den = gf256Mul(den, xi^xj) // xi - xj = xi XOR xj
 			}
 			lagrange := gf256Mul(num, gf256Inv(den))
-			val ^= gf256Mul(shares[i][byteIdx], lagrange)
+			val ^= gf256Mul(ys[i][byteIdx], lagrange)
 		}
 		secret[byteIdx] = val
 	}
@@ -501,4 +523,3 @@ func loadNodeID() (string, error) {
 	}
 	return strings.TrimSpace(string(data)), nil
 }
-

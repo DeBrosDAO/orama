@@ -1,0 +1,16 @@
+# Items of the coverage universe that have no e2e test yet.
+#
+# Every entry needs:
+#   id:      the universe id, exactly as `go run ./cmd/e2e-fleet coverage` prints it
+#            (cli:orama app env set, route:/v1/rqlite/query, msg:orama.token.v1.MsgMint,
+#             query:orama.token.v1.Params, unit:orama-namespace-rqlite@.service)
+#   reason:  why it cannot be tested today
+#   trigger: the event that ends the waiver (a task id, a merged feature)
+#
+# The gate fails on a waiver whose item is covered by a manifest (stale), on a
+# waiver for an item that no longer ships, and on a waiver without a reason or
+# a trigger. See e2e/README.md, "Waivers".
+waivers:
+  - id: unit:orama-namespace-sni-router@.service
+    reason: The SNI router is off on every node by default. Turning it on needs a node.yaml edit (sni_router.enabled) followed by an upgrade, and the fleet harness cannot prepare a node's config before install.
+    trigger: orama node install gains a flag for the SNI router, or the harness can write node.yaml before install (Bugboard 2818 E2E-19)

@@ -43,7 +43,7 @@ func TestDBTransaction_transportFailureCarriesReason(t *testing.T) {
 	}
 	h := newHFWithDB(fake)
 
-	out, err := h.DBTransaction(context.Background(),
+	out, err := h.DBTransaction(nsCtx(),
 		[]byte(`{"ops":[{"kind":"exec","sql":"INSERT INTO t (x) VALUES (?)","args":[1]}]}`))
 	if err != nil {
 		t.Fatalf("a batch-level failure must be reported in the envelope, not as a Go error: %v", err)
@@ -77,7 +77,7 @@ func TestDBTransaction_statementFailureKeepsPerOpDetail(t *testing.T) {
 	}
 	h := newHFWithDB(fake)
 
-	out, err := h.DBTransaction(context.Background(),
+	out, err := h.DBTransaction(nsCtx(),
 		[]byte(`{"ops":[{"kind":"exec","sql":"A"},{"kind":"exec","sql":"B"}]}`))
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
@@ -106,7 +106,7 @@ func TestDBTransaction_overStatementCapIsNamed(t *testing.T) {
 	}
 	payload := fmt.Sprintf(`{"ops":[%s]}`, strings.Join(ops, ","))
 
-	_, err := newHFWithDB(&fakeBatchClient{}).DBTransaction(context.Background(), []byte(payload))
+	_, err := newHFWithDB(&fakeBatchClient{}).DBTransaction(nsCtx(), []byte(payload))
 	if err == nil {
 		t.Fatal("a batch over the statement cap must fail")
 	}
@@ -127,14 +127,14 @@ func TestExecAndPublish_transportFailureCarriesReason(t *testing.T) {
 				errors.New("rqlite.BatchWithSeq: no leader")
 		},
 	}
-	h := &HostFunctions{db: fake, pubsub: &pubsub.ClientAdapter{}}
+	h := &HostFunctions{db: fake, dbNamespace: testNamespace, pubsub: &pubsub.ClientAdapter{}}
 
 	// A namespace must be resolvable from the invocation context, and the
 	// publish budget must be live — the failure under test happens at the
 	// batch, well before either is exercised further.
 	ctx := serverless.WithInvocationContext(
 		serverless.WithPublishCounter(context.Background()),
-		&serverless.InvocationContext{Namespace: "ns-test"},
+		&serverless.InvocationContext{Namespace: testNamespace},
 	)
 	out, err := h.ExecAndPublish(ctx,
 		[]byte(`{"ops":[{"kind":"exec","sql":"INSERT INTO t (x) VALUES (1)"}]}`),
@@ -167,7 +167,7 @@ func TestExecAndPublish_transportFailureCarriesReason(t *testing.T) {
 func TestBatchEnvelopes_successCarriesNoErrorFields(t *testing.T) {
 	h := newHFWithDB(&fakeBatchClient{})
 
-	out, err := h.DBTransaction(context.Background(),
+	out, err := h.DBTransaction(nsCtx(),
 		[]byte(`{"ops":[{"kind":"exec","sql":"INSERT INTO t (x) VALUES (1)"}]}`))
 	if err != nil {
 		t.Fatalf("DBTransaction: %v", err)

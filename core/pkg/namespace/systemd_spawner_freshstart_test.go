@@ -26,6 +26,15 @@ func raftDirFor(base, namespace, nodeID string) string {
 	return filepath.Join(base, namespace, "rqlite", nodeID)
 }
 
+func writeRQLiteAuth(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, "rqlite-auth.json")
+	if err := os.WriteFile(p, []byte(`[{"username":"orama","password":"x","perms":["all"]}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // seedStaleRaftState writes a marker into the raft directory a previous incarnation
 // of this namespace would have left behind.
 func seedStaleRaftState(t *testing.T, base, namespace, nodeID string) string {
@@ -54,6 +63,7 @@ func TestSpawnRQLite_freshStartClearsLeftoverRaftState(t *testing.T) {
 		HTTPPort:   10005,
 		RaftPort:   10006,
 		FreshStart: true,
+		AuthFile:   writeRQLiteAuth(t, base),
 	}
 
 	// SpawnRQLite will fail later (no systemd in a unit test); we only care that
@@ -79,6 +89,7 @@ func TestSpawnRQLite_restartPreservesRaftState(t *testing.T) {
 		HTTPPort:   10000,
 		RaftPort:   10001,
 		FreshStart: false,
+		AuthFile:   writeRQLiteAuth(t, base),
 	}
 
 	_ = s.SpawnRQLite(context.Background(), "anchat-test", "node-1", cfg)
@@ -90,6 +101,18 @@ func TestSpawnRQLite_restartPreservesRaftState(t *testing.T) {
 
 // TestSpawnRQLite_freshStartWithNoExistingStateIsFine: the common case, nothing on
 // disk, must not error out.
+func TestSpawnRQLite_missingAuthFileRefusesStart(t *testing.T) {
+	base := t.TempDir()
+	s := NewSystemdSpawner(base, "", zap.NewNop())
+	err := s.SpawnRQLite(context.Background(), "ns", "node-1", rqlite.InstanceConfig{
+		HTTPPort: 10020,
+		RaftPort: 10021,
+	})
+	if err == nil || !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("missing auth file must refuse to start, got %v", err)
+	}
+}
+
 func TestSpawnRQLite_freshStartWithNoExistingStateIsFine(t *testing.T) {
 	base := t.TempDir()
 	s := NewSystemdSpawner(base, "", zap.NewNop())
@@ -99,6 +122,7 @@ func TestSpawnRQLite_freshStartWithNoExistingStateIsFine(t *testing.T) {
 		HTTPPort:   10010,
 		RaftPort:   10011,
 		FreshStart: true,
+		AuthFile:   writeRQLiteAuth(t, base),
 	}
 
 	err := s.SpawnRQLite(context.Background(), "brand-new", "node-1", cfg)

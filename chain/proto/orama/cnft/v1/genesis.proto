@@ -1,0 +1,17 @@
+syntax = "proto3";
+package orama.cnft.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/cnft/types";
+
+import "gogoproto/gogo.proto";
+import "orama/cnft/v1/cnft.proto";
+
+// GenesisState is x/cnft's genesis state.
+message GenesisState {
+  repeated Collection collections = 1 [(gogoproto.nullable) = false];
+  repeated Tree trees = 2 [(gogoproto.nullable) = false];
+  repeated DecompressedAsset decompressed = 3 [(gogoproto.nullable) = false];
+  repeated Snapshot snapshots = 4 [(gogoproto.nullable) = false];
+  uint64 next_collection_id = 5;
+  uint64 next_tree_id = 6;
+}

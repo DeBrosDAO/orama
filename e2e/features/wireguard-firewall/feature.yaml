@@ -1,0 +1,24 @@
+# The overlay and the edge, observed without disturbing anything: a full,
+# live WireGuard mesh with one /32 per peer at its public endpoint, traffic
+# over wg0, the overlay unit outside the supervisor and ordered before
+# everything that binds it; a listener audit of every node (only the edge
+# ports on public addresses, internals on loopback or the mesh), and a TCP
+# scan of every public address from the runner.
+id: wireguard-firewall
+title: WireGuard mesh, listeners and the public edge
+area: infrastructure
+subtasks: [2822]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-namespace-wireguard@.service
+  claims:
+    - "docs/ARCHITECTURE.md: inter-node traffic uses the WireGuard overlay; every node peers with every other"
+    - "docs/ARCHITECTURE.md: the overlay unit is not PartOf the supervisor and every overlay unit is ordered after it"
+    - "docs/SECURITY.md#network-isolation: every gateway, rqlite and the chain P2P bind the WireGuard address; local APIs bind loopback"
+    - "docs/SECURITY.md#network-isolation: only SSH, HTTP(S), WireGuard, DNS on nameservers and TURN while relaying are public"

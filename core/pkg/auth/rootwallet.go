@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,16 +13,35 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth/siw"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/DeBrosOfficial/network/pkg/tlsutil"
+	"github.com/mattn/go-isatty"
 )
 
+// archiveSigningPrefix is the first line of a build-archive signing request.
+// Login must never sign one: that grant is a different capability, and a
+// gateway that asked for it here would be asking the operator to approve an
+// archive with the login prompt.
+const archiveSigningPrefix = "Orama build archive v1"
+
+// loginFreshnessSkew is how far ahead of this machine the gateway's clock may
+// be before a challenge is refused as not yet valid.
+const loginFreshnessSkew = 2 * time.Minute
+
 // IsRootWalletInstalled checks if the rootwallet agent is reachable.
+//
+// An agent the e2e guard refuses (ORAMA_E2E=1 with RW_AGENT_SOCK empty or
+// pointing at the real wallet) is reported as present: the caller then takes
+// the RootWallet path, whose first agent call returns the guard's error
+// (rwagent.ErrE2EGuard), instead of reading the refusal as "no wallet here"
+// and falling into an interactive device login.
 func IsRootWalletInstalled() bool {
 	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return client.IsRunning(ctx)
+	_, err := client.Status(ctx)
+	return err == nil || errors.Is(err, rwagent.ErrE2EGuard)
 }
 
 // getRootWalletAddress gets the EVM address from the rootwallet agent.
@@ -44,7 +64,11 @@ func getRootWalletAddress() (string, error) {
 // The desktop app may prompt the user for approval.
 func signWithRootWallet(message string) (string, error) {
 	client := rwagent.New(os.Getenv("RW_AGENT_SOCK"))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// The agent waits up to its own approval timeout for someone to answer the
+	// prompt. A context of exactly that length races it, and the loser is the
+	// user: they approve the request and the command has already given up with
+	// a context deadline instead of the agent's answer.
+	ctx, cancel := context.WithTimeout(context.Background(), rwagent.AgentApprovalTimeout+30*time.Second)
 	defer cancel()
 
 	data, err := client.Sign(ctx, message, "evm")
@@ -57,9 +81,24 @@ func signWithRootWallet(message string) (string, error) {
 	return data.Signature, nil
 }
 
+// promptNamespace asks for the namespace to sign in to. With no terminal to
+// ask — a script, CI, a pipe — there is no answer to wait for, and blank is
+// the documented one: sign in without a namespace. Pass --namespace to choose.
+func promptNamespace(in *bufio.Reader, out io.Writer, interactive bool) (string, error) {
+	if !interactive {
+		return "", nil
+	}
+	fmt.Fprint(out, "Enter namespace (blank to sign in without one, then 'orama namespace create <name>'): ")
+	line, err := in.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("failed to read namespace: %w", err)
+	}
+	return strings.TrimSpace(line), nil
+}
+
 // PerformRootWalletAuthentication performs a challenge-response authentication flow
 // using the RootWallet CLI to sign a gateway-issued nonce
-func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials, error) {
+func PerformRootWalletAuthentication(gatewayURL, namespace string, device *LoginDevice) (*Credentials, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\n🔐 RootWallet Authentication")
@@ -72,43 +111,56 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 		return nil, fmt.Errorf("failed to get wallet address: %w", err)
 	}
 
-	if !ValidateWalletAddress(wallet) {
+	if !validateEVMWalletAddress(wallet) {
 		return nil, fmt.Errorf("invalid wallet address from rw: %s", wallet)
 	}
 
 	fmt.Printf("✅ Wallet: %s\n", wallet)
 
-	// 2. Prompt for namespace if not provided
+	// 2. Prompt for namespace if not provided.
+	//
+	// Blank is a real answer: a wallet that owns nothing yet signs in to the
+	// lobby, which is where you stand before you own anything, and creates a
+	// namespace from there. It used to loop until you typed one, and typing a
+	// name you did not own made you its owner.
 	if namespace == "" {
-		for {
-			fmt.Print("Enter namespace (required): ")
-			nsInput, err := reader.ReadString('\n')
-			if err != nil {
-				return nil, fmt.Errorf("failed to read namespace: %w", err)
-			}
-
-			namespace = strings.TrimSpace(nsInput)
-			if namespace != "" {
-				break
-			}
-			fmt.Println("⚠️  Namespace cannot be empty. Please enter a namespace.")
+		namespace, err = promptNamespace(reader, os.Stdout, isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd()))
+		if err != nil {
+			return nil, err
 		}
 	}
-	fmt.Printf("✅ Namespace: %s\n", namespace)
+	if namespace == "" {
+		fmt.Println("✅ Signing in without a namespace")
+	} else {
+		fmt.Printf("✅ Namespace: %s\n", namespace)
+	}
 
 	// 3. Request challenge nonce from gateway
 	fmt.Println("⏳ Requesting authentication challenge...")
 	domain := extractDomainFromURL(gatewayURL)
 	client := tlsutil.NewHTTPClientForDomain(30*time.Second, domain)
 
-	nonce, err := requestChallenge(client, gatewayURL, wallet, namespace)
+	deviceID := ""
+	if device != nil {
+		deviceID = device.ID
+	}
+	message, err := requestChallenge(client, gatewayURL, wallet, namespace, deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get challenge: %w", err)
 	}
 
-	// 4. Sign the nonce with RootWallet
+	// 4. Sign the message with RootWallet, byte for byte.
+	//
+	// The gateway verifies the signature against the text it issued, so
+	// anything that alters it — trimming, re-wrapping, re-rendering the same
+	// fields — produces a signature over different bytes and a failed login.
+	// It is also what the RootWallet dialog shows the user, which is the point:
+	// it names the domain, the namespace and the deadline in words.
+	if err := acceptLoginChallenge(gatewayURL, wallet, message, time.Now()); err != nil {
+		return nil, err
+	}
 	fmt.Println("⏳ Signing challenge with RootWallet...")
-	signature, err := signWithRootWallet(nonce)
+	signature, err := signWithRootWallet(message)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign challenge: %w", err)
 	}
@@ -116,7 +168,7 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 
 	// 5. Verify signature with gateway
 	fmt.Println("⏳ Verifying signature with gateway...")
-	creds, err := verifySignature(client, gatewayURL, wallet, nonce, signature, namespace)
+	creds, err := verifySignature(client, gatewayURL, message, signature, namespace, device)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify signature: %w", err)
 	}
@@ -140,10 +192,16 @@ func PerformRootWalletAuthentication(gatewayURL, namespace string) (*Credentials
 }
 
 // requestChallenge sends POST /v1/auth/challenge and returns the nonce
-func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string) (string, error) {
+// requestChallenge asks the gateway for the sign-in message to put in front of
+// the user, and returns it verbatim.
+func requestChallenge(client *http.Client, gatewayURL, wallet, namespace, deviceID string) (string, error) {
 	reqBody := map[string]string{
-		"wallet":    wallet,
-		"namespace": namespace,
+		"wallet":     wallet,
+		"namespace":  namespace,
+		"chain_type": "ETH",
+	}
+	if deviceID != "" {
+		reqBody["device_id"] = deviceID
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -153,16 +211,17 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string)
 
 	resp, err := client.Post(gatewayURL+"/v1/auth/challenge", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("failed to call gateway: %w", err)
+		return "", fmt.Errorf("%w: %w", ErrGatewayUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
+		return "", GatewayErrorFrom(resp.StatusCode, body)
 	}
 
 	var result struct {
+		Message   string `json:"message"`
 		Nonce     string `json:"nonce"`
 		Wallet    string `json:"wallet"`
 		Namespace string `json:"namespace"`
@@ -172,21 +231,60 @@ func requestChallenge(client *http.Client, gatewayURL, wallet, namespace string)
 		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if result.Nonce == "" {
-		return "", fmt.Errorf("no nonce in challenge response")
+	if result.Message == "" {
+		return "", fmt.Errorf("no sign-in message in challenge response: this gateway is older than " +
+			"this CLI and still answers with a bare nonce; upgrade the gateway")
 	}
 
-	return result.Nonce, nil
+	return result.Message, nil
 }
 
-// verifySignature sends POST /v1/auth/verify and returns credentials
-func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, namespace string) (*Credentials, error) {
-	reqBody := map[string]string{
-		"wallet":     wallet,
-		"nonce":      nonce,
-		"signature":  signature,
-		"namespace":  namespace,
-		"chain_type": "ETH",
+// acceptLoginChallenge reports whether message is a sign-in request this CLI
+// may put in front of the wallet. The gateway's text is signed byte for byte,
+// so the checks happen before that: it has to be a sign-in message for this
+// gateway and this wallet, still inside its own lifetime, and not an archive
+// signing request. The signature itself is wallet:sign, with no purpose.
+func acceptLoginChallenge(gatewayURL, wallet, message string, now time.Time) error {
+	if strings.HasPrefix(message, archiveSigningPrefix) {
+		return fmt.Errorf("refusing to sign %q: that is an archive, and login does not sign archives", archiveSigningPrefix)
+	}
+	parsed, err := siw.Parse(message)
+	if err != nil {
+		return fmt.Errorf("the gateway's challenge is not a sign-in message: %w", err)
+	}
+	if err := parsed.Validate(); err != nil {
+		return fmt.Errorf("the gateway's challenge is not a sign-in message: %w", err)
+	}
+	host := extractDomainFromURL(gatewayURL)
+	if err := parsed.CheckDomain(host); err != nil {
+		return fmt.Errorf("refusing the challenge: %w", err)
+	}
+	if !strings.EqualFold(parsed.Address, wallet) {
+		return fmt.Errorf("the challenge names wallet %s, not this wallet %s", parsed.Address, wallet)
+	}
+	if err := parsed.CheckFreshness(now, loginFreshnessSkew); err != nil {
+		return fmt.Errorf("refusing the challenge: %w", err)
+	}
+	return nil
+}
+
+// verifySignature sends POST /v1/auth/verify and returns credentials.
+//
+// The message is the whole credential: the wallet, the nonce and the namespace
+// are read out of it by the gateway, because those are the fields the user saw
+// and the signature covers.
+func verifySignature(client *http.Client, gatewayURL, message, signature, namespace string, device *LoginDevice) (*Credentials, error) {
+	reqBody := map[string]any{
+		"message":   message,
+		"signature": signature,
+	}
+	if device != nil {
+		sig, err := device.Sign(message)
+		if err != nil {
+			return nil, fmt.Errorf("sign the challenge with the device key: %w", err)
+		}
+		reqBody["device_key"] = json.RawMessage(device.PublicJWK)
+		reqBody["device_signature"] = sig
 	}
 
 	payload, err := json.Marshal(reqBody)
@@ -196,13 +294,13 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 
 	resp, err := client.Post(gatewayURL+"/v1/auth/verify", "application/json", bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("failed to call gateway: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrGatewayUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gateway returned status %d: %s", resp.StatusCode, string(body))
+		return nil, GatewayErrorFrom(resp.StatusCode, body)
 	}
 
 	var result struct {
@@ -220,37 +318,27 @@ func verifySignature(client *http.Client, gatewayURL, wallet, nonce, signature, 
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	if result.APIKey == "" {
-		return nil, fmt.Errorf("no api_key in verify response")
-	}
-
-	// Build namespace gateway URL
-	namespaceURL := ""
-	if d := extractDomainFromURL(gatewayURL); d != "" {
-		if namespace == "default" {
-			namespaceURL = fmt.Sprintf("https://%s", d)
-		} else {
-			namespaceURL = fmt.Sprintf("https://ns-%s.%s", namespace, d)
-		}
-	}
-
 	creds := &Credentials{
 		APIKey:       result.APIKey,
-		RefreshToken: result.RefreshToken,
 		Namespace:    result.Namespace,
 		UserID:       result.Subject,
 		Wallet:       result.Subject,
 		IssuedAt:     time.Now(),
-		NamespaceURL: namespaceURL,
+		NamespaceURL: namespaceGatewayURL(gatewayURL, namespace),
 	}
+	// The session this login was handed. Both of these were read out of the
+	// response and dropped, and the API key was sent as the bearer credential
+	// of every request afterwards instead.
+	creds.SetSession(result.AccessToken, result.RefreshToken, result.ExpiresIn)
 
 	// If 202, namespace cluster is being provisioned — set poll URL
 	if resp.StatusCode == http.StatusAccepted && result.PollURL != "" {
 		creds.ProvisioningPollURL = result.PollURL
 	}
 
-	// Note: result.ExpiresIn is the JWT access token lifetime (15min),
-	// NOT the API key lifetime. Don't set ExpiresAt — the API key is permanent.
+	// ExpiresAt stays unset: it is the API key's own life, and result.ExpiresIn
+	// is the access token's. They are different clocks and conflating them made
+	// a fifteen-minute number look like the key's expiry.
 
 	return creds, nil
 }

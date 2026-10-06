@@ -225,6 +225,10 @@ func (m *MockHostServices) PushSendV2(ctx context.Context, userID string, msgJSO
 	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
 }
 
+func (m *MockHostServices) PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error) {
+	return []byte(`{"ok":true,"devices_attempted":0,"devices_succeeded":0,"results":[]}`), nil
+}
+
 func (m *MockHostServices) TurnCredentials(ctx context.Context) ([]byte, error) {
 	// Mirror PushSendV2's silent-noop-style envelope when not configured —
 	// matches the documented host-fn contract for TURN being absent.
@@ -283,7 +287,7 @@ func (m *MockHostServices) HTTPFetch(ctx context.Context, method, url string, he
 	return nil, nil
 }
 
-func (m *MockHostServices) AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
+func (m *MockHostServices) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
 	return nil, nil
 }
 
@@ -315,6 +319,22 @@ func (m *MockHostServices) GetCallerJWTSubject(ctx context.Context) string {
 	return ""
 }
 
+func (m *MockHostServices) GetCallerDeviceID(ctx context.Context) string {
+	return ""
+}
+
+func (m *MockHostServices) GetCallerCapability(ctx context.Context) string {
+	return ""
+}
+
+func (m *MockHostServices) MintCapability(ctx context.Context, resource string, ttl time.Duration) (string, error) {
+	return "", nil
+}
+
+func (m *MockHostServices) RevokeCapability(ctx context.Context, token string) error {
+	return nil
+}
+
 func (m *MockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
 	return "job-123", nil
 }
@@ -338,6 +358,10 @@ func (m *MockHostServices) LogError(ctx context.Context, message string) {
 // MockIPFSClient is a mock for ipfs.IPFSClient
 type MockIPFSClient struct {
 	data map[string][]byte
+	// adds and localAdds count Add and AddLocal calls; pins records the
+	// replication factor of every Pin.
+	adds, localAdds int
+	pins            []int
 }
 
 func NewMockIPFSClient() *MockIPFSClient {
@@ -345,6 +369,16 @@ func NewMockIPFSClient() *MockIPFSClient {
 }
 
 func (m *MockIPFSClient) Add(ctx context.Context, reader io.Reader, filename string) (*ipfs.AddResponse, error) {
+	m.adds++
+	return m.store(reader, filename)
+}
+
+func (m *MockIPFSClient) AddLocal(ctx context.Context, reader io.Reader, filename string) (*ipfs.AddResponse, error) {
+	m.localAdds++
+	return m.store(reader, filename)
+}
+
+func (m *MockIPFSClient) store(reader io.Reader, filename string) (*ipfs.AddResponse, error) {
 	data, _ := io.ReadAll(reader)
 	cid := "cid-" + filename
 	m.data[cid] = data
@@ -357,6 +391,7 @@ func (m *MockIPFSClient) AddDirectory(ctx context.Context, dirPath string) (*ipf
 }
 
 func (m *MockIPFSClient) Pin(ctx context.Context, cid string, name string, replicationFactor int) (*ipfs.PinResponse, error) {
+	m.pins = append(m.pins, replicationFactor)
 	return &ipfs.PinResponse{Cid: cid, Name: name}, nil
 }
 
@@ -372,7 +407,11 @@ func (m *MockIPFSClient) Get(ctx context.Context, cid, apiURL string) (io.ReadCl
 	return io.NopCloser(strings.NewReader(string(data))), nil
 }
 
-func (m *MockIPFSClient) Unpin(ctx context.Context, cid string) error             { return nil }
+func (m *MockIPFSClient) Unpin(ctx context.Context, cid string) error { return nil }
+func (m *MockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
+	return m.Get(ctx, cid, ipfsAPIURL)
+}
+
 func (m *MockIPFSClient) EvictLocal(ctx context.Context, cid string) (int, error) { return 0, nil }
 func (m *MockIPFSClient) Health(ctx context.Context) error                        { return nil }
 func (m *MockIPFSClient) GetPeerCount(ctx context.Context) (int, error)           { return 1, nil }

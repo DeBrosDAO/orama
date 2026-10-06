@@ -3,6 +3,7 @@ package namespace
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -32,8 +33,6 @@ func NewDNSRecordManager(db rqlite.Client, baseDomain string, logger *zap.Logger
 // Each namespace gets records for ns-{namespace}.{baseDomain} pointing to its gateway nodes.
 // Multiple A records enable round-robin DNS load balancing.
 func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespaceName string, nodeIPs []string) error {
-	internalCtx := client.WithInternalAuth(ctx)
-
 	if len(nodeIPs) == 0 {
 		return &ClusterError{Message: "no node IPs provided for DNS records"}
 	}
@@ -47,61 +46,12 @@ func (drm *DNSRecordManager) CreateNamespaceRecords(ctx context.Context, namespa
 		zap.Strings("node_ips", nodeIPs),
 	)
 
-	// First, delete any existing records for this namespace
-	deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
-	_, err := drm.db.Exec(internalCtx, deleteQuery, fqdn, "namespace:"+namespaceName)
-	if err != nil {
-		drm.logger.Warn("Failed to delete existing DNS records", zap.Error(err))
-		// Continue anyway - the insert will just add more records
-	}
-
-	// Create A records for each node IP
+	// Additive. A DELETE of the whole FQDN here raced the 30s per-node
+	// ensure: one node wiped the round-robin while another re-inserted its
+	// own row. Repair already uses AddNamespaceRecord; provision does too.
 	for _, ip := range nodeIPs {
-		insertQuery := `
-			INSERT INTO dns_records (
-				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`
-		now := time.Now()
-		_, err := drm.db.Exec(internalCtx, insertQuery,
-			fqdn, "A", ip, 60,
-			"namespace:"+namespaceName, "cluster-manager",
-			now, now,
-		)
-		if err != nil {
-			return &ClusterError{
-				Message: fmt.Sprintf("failed to create DNS record for %s -> %s", fqdn, ip),
-				Cause:   err,
-			}
-		}
-	}
-
-	// Also create wildcard records for deployments under this namespace
-	// *.ns-{namespace}.{baseDomain} -> same IPs
-	wildcardFqdn := fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain)
-
-	// Delete existing wildcard records
-	_, _ = drm.db.Exec(internalCtx, deleteQuery, wildcardFqdn, "namespace:"+namespaceName)
-
-	for _, ip := range nodeIPs {
-		insertQuery := `
-			INSERT INTO dns_records (
-				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		`
-		now := time.Now()
-		_, err := drm.db.Exec(internalCtx, insertQuery,
-			wildcardFqdn, "A", ip, 60,
-			"namespace:"+namespaceName, "cluster-manager",
-			now, now,
-		)
-		if err != nil {
-			drm.logger.Warn("Failed to create wildcard DNS record",
-				zap.String("fqdn", wildcardFqdn),
-				zap.String("ip", ip),
-				zap.Error(err),
-			)
-			// Continue - wildcard is nice to have but not critical
+		if err := drm.AddNamespaceRecord(ctx, namespaceName, ip); err != nil {
+			return err
 		}
 	}
 
@@ -166,34 +116,6 @@ func (drm *DNSRecordManager) GetNamespaceGatewayIPs(ctx context.Context, namespa
 	return ips, nil
 }
 
-// CountActiveNamespaceRecords returns the number of active A records for a namespace's main FQDN.
-// Used as a safety check before disabling records to prevent disabling the last one.
-func (drm *DNSRecordManager) CountActiveNamespaceRecords(ctx context.Context, namespaceName string) (int, error) {
-	internalCtx := client.WithInternalAuth(ctx)
-
-	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
-
-	type countResult struct {
-		Count int `db:"count"`
-	}
-
-	var results []countResult
-	query := `SELECT COUNT(*) as count FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND is_active = TRUE`
-	err := drm.db.Query(internalCtx, &results, query, fqdn)
-	if err != nil {
-		return 0, &ClusterError{
-			Message: "failed to count active namespace DNS records",
-			Cause:   err,
-		}
-	}
-
-	if len(results) == 0 {
-		return 0, nil
-	}
-
-	return results[0].Count, nil
-}
-
 // AddNamespaceRecord adds DNS A records for a single IP to an existing namespace.
 // Unlike CreateNamespaceRecords, this does NOT delete existing records — it's purely additive.
 // Used when adding a new node to an under-provisioned cluster (repair).
@@ -210,10 +132,28 @@ func (drm *DNSRecordManager) AddNamespaceRecord(ctx context.Context, namespaceNa
 
 	now := time.Now()
 	for _, f := range []string{fqdn, wildcardFqdn} {
+		// An upsert, not a bare INSERT.
+		//
+		// dns_records has UNIQUE(fqdn, record_type, value), and
+		// DisableNamespaceRecord leaves the row in place with is_active = 0. So
+		// re-advertising a node that had been withdrawn — the repair path's
+		// whole purpose — hit the constraint, and the caller logged and
+		// continued: the repaired node was never advertised and the repair
+		// reported success.
+		//
+		// Re-enabling here is correct rather than surprising: this is the
+		// explicit "advertise this node" action, and the only reason the row
+		// was disabled is that something previously decided it should not
+		// serve. Saying it should now IS the decision.
 		insertQuery := `
 			INSERT INTO dns_records (
-				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at, is_active
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE)
+			ON CONFLICT(fqdn, record_type, value) DO UPDATE SET
+				is_active = TRUE,
+				ttl = excluded.ttl,
+				namespace = excluded.namespace,
+				updated_at = excluded.updated_at
 		`
 		_, err := drm.db.Exec(internalCtx, insertQuery,
 			f, "A", ip, 60,
@@ -271,7 +211,7 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 				now := time.Now()
 				tag := "namespace:" + namespaceName
 				if _, ierr := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
-					f, newIP, tag, now, now, f, newIP, tag); ierr != nil {
+					f, newIP, tag, now, now, tag, f, newIP, tag); ierr != nil {
 					drm.logger.Warn("Failed to insert replacement DNS record after a no-op update",
 						zap.String("fqdn", f), zap.String("new_ip", newIP), zap.Error(ierr))
 					continue
@@ -286,23 +226,56 @@ func (drm *DNSRecordManager) UpdateNamespaceRecord(ctx context.Context, namespac
 }
 
 // DisableNamespaceRecord marks a specific IP's record as inactive (for temporary failover)
-func (drm *DNSRecordManager) DisableNamespaceRecord(ctx context.Context, namespaceName, ip string) error {
+func (drm *DNSRecordManager) DisableNamespaceRecord(ctx context.Context, namespaceName, ip string) (int64, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
 	fqdn := fmt.Sprintf("ns-%s.%s.", namespaceName, drm.baseDomain)
 	wildcardFqdn := fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain)
 
-	drm.logger.Info("Disabling namespace DNS record",
-		zap.String("namespace", namespaceName),
-		zap.String("ip", ip),
-	)
-
+	var disabled int64
 	for _, f := range []string{fqdn, wildcardFqdn} {
-		updateQuery := `UPDATE dns_records SET is_active = FALSE, updated_at = ? WHERE fqdn = ? AND value = ?`
-		_, _ = drm.db.Exec(internalCtx, updateQuery, time.Now(), f, ip)
+		// The "never disable the last active record" guard is INSIDE the
+		// statement.
+		//
+		// It used to be a separate COUNT followed by an unconditional UPDATE.
+		// Every node that observes a suspect node runs this, so two observers
+		// could both read a count of 2, both conclude they were not the last,
+		// and both disable — leaving the namespace resolving nowhere. The
+		// window is small and the consequence is a total outage for that
+		// namespace, which is the worst trade a race can offer.
+		//
+		// Each name is guarded on its OWN count. Guarding the wildcard on the
+		// primary's count would let the last wildcard record go while the
+		// primary still had two.
+		res, err := drm.db.Exec(internalCtx, `
+			UPDATE dns_records SET is_active = FALSE, updated_at = ?
+			 WHERE fqdn = ? AND value = ? AND is_active = TRUE
+			   AND (SELECT COUNT(*) FROM dns_records d2
+			         WHERE d2.fqdn = dns_records.fqdn
+			           AND d2.record_type = 'A'
+			           AND d2.is_active = TRUE) > 1`,
+			time.Now(), f, ip)
+		if err != nil {
+			// This used to be `_, _ =` and the function always returned nil, so
+			// a failure to withdraw a dead node's record was invisible.
+			return disabled, &ClusterError{
+				Message: fmt.Sprintf("failed to disable DNS record %s for %s", f, ip),
+				Cause:   err,
+			}
+		}
+		if res != nil {
+			if n, err := res.RowsAffected(); err == nil {
+				disabled += n
+			}
+		}
 	}
 
-	return nil
+	drm.logger.Info("Disabled namespace DNS records",
+		zap.String("namespace", namespaceName),
+		zap.String("ip", ip),
+		zap.Int64("records_disabled", disabled))
+
+	return disabled, nil
 }
 
 // CreateTURNRecords creates DNS A records for TURN servers.
@@ -333,33 +306,51 @@ func (drm *DNSRecordManager) CreateTURNRecords(ctx context.Context, namespaceNam
 	tag := "namespace-turn:" + namespaceName
 	now := time.Now()
 	for _, host := range []string{fqdn, tlsFQDN} {
-		// Delete existing records for this host+namespace, then recreate.
-		deleteQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ?`
-		_, _ = drm.db.Exec(internalCtx, deleteQuery, host, tag)
-
-		for _, ip := range turnIPs {
-			insertQuery := `
-				INSERT INTO dns_records (
-					fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			`
-			_, err := drm.db.Exec(internalCtx, insertQuery,
-				host, "A", ip, 60, tag, "cluster-manager", now, now,
-			)
-			if err != nil {
-				return &ClusterError{
-					Message: fmt.Sprintf("failed to create TURN DNS record %s -> %s", host, ip),
-					Cause:   err,
-				}
+		if err := drm.setTURNHostRecords(internalCtx, host, tag, turnIPs, now); err != nil {
+			return &ClusterError{
+				Message: fmt.Sprintf("failed to set TURN DNS records for %s", host),
+				Cause:   err,
 			}
 		}
 	}
 
-	drm.logger.Info("TURN DNS records created",
+	drm.logger.Info("TURN DNS records set",
 		zap.String("namespace", namespaceName),
 		zap.Int("record_count", len(turnIPs)*2),
 	)
+	return nil
+}
 
+// insertTURNRecordSQL adds one TURN A record unless that fqdn already holds
+// that address, which is what the unique index on (fqdn, record_type, value)
+// allows once. Args: fqdn, value, tag, created_at, updated_at, fqdn, value.
+const insertTURNRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
+	SELECT ?, 'A', ?, 60, ?, 'cluster-manager', ?, ?
+	WHERE NOT EXISTS (SELECT 1 FROM dns_records WHERE fqdn = ? AND record_type = 'A' AND value = ?)`
+
+// setTURNHostRecords makes host's TURN records for the namespace exactly ips.
+// It used to delete them all, ignoring a failed delete, and insert each
+// address plainly. The per-node reconciler adds the same rows additively, and
+// one that landed between the two failed the enable on the unique index
+// (stagenet e2e, 2026-10-01). Stale addresses go, missing ones are added, and
+// an address already there is left: run twice, or beside the reconciler, it
+// converges.
+func (drm *DNSRecordManager) setTURNHostRecords(ctx context.Context, host, tag string, ips []string, now time.Time) error {
+	args := []interface{}{host, tag}
+	placeholders := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		placeholders = append(placeholders, "?")
+		args = append(args, ip)
+	}
+	staleQuery := `DELETE FROM dns_records WHERE fqdn = ? AND namespace = ? AND value NOT IN (` + strings.Join(placeholders, ", ") + `)`
+	if _, err := drm.db.Exec(ctx, staleQuery, args...); err != nil {
+		return fmt.Errorf("remove the stale TURN records of %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if _, err := drm.db.Exec(ctx, insertTURNRecordSQL, host, ip, tag, now, now, host, ip); err != nil {
+			return fmt.Errorf("add TURN record %s -> %s: %w", host, ip, err)
+		}
+	}
 	return nil
 }
 
@@ -375,7 +366,7 @@ const ensureTURNRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, 
 // EnsureTURNRecordForNode additively upserts THIS node's TURN (and stealth) A
 // records so a live TURN node always advertises itself (bugboard #158).
 //
-// CreateTURNRecords is a one-shot DELETE+INSERT run only at WebRTC-enable time,
+// CreateTURNRecords sets the whole address set only at WebRTC-enable time,
 // and the #158 sweep only DELETES records for inactive nodes — so a TURN node
 // whose record was purged while it was briefly down (e.g. mid-deploy) never got
 // re-added, leaving the turn domain empty (NXDOMAIN → clients resolve no TURN
@@ -443,9 +434,15 @@ func (drm *DNSRecordManager) EnsureTURNRecordForNode(ctx context.Context, namesp
 // row, and an existing row that recovery deliberately soft-disabled
 // (DisableNamespaceRecord, used by the suspect-node path) must stay disabled —
 // re-enabling it would fight the health monitor.
+//
+// The record is written only while the namespace is in `namespaces` (the tag's
+// last argument is matched against 'namespace:'||name). A node mid-spawn can
+// reach this after the namespace was deleted; without the guard it re-created the
+// records the delete had just removed.
 const ensureNamespaceHostRecordSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, created_at, updated_at)
 	SELECT ?, 'A', ?, 60, ?, 'namespace-dns-reconcile', ?, ?
-	WHERE NOT EXISTS (
+	WHERE EXISTS (SELECT 1 FROM namespaces WHERE 'namespace:'||name = ?)
+	  AND NOT EXISTS (
 	    SELECT 1 FROM dns_records
 	    WHERE fqdn = ? AND record_type = 'A' AND value = ? AND namespace = ?
 	)`
@@ -477,7 +474,7 @@ func (drm *DNSRecordManager) EnsureNamespaceHostRecordForNode(ctx context.Contex
 		fmt.Sprintf("*.ns-%s.%s.", namespaceName, drm.baseDomain),
 	} {
 		if _, err := drm.db.Exec(internalCtx, ensureNamespaceHostRecordSQL,
-			fqdn, nodeIP, tag, now, now, fqdn, nodeIP, tag); err != nil {
+			fqdn, nodeIP, tag, now, now, tag, fqdn, nodeIP, tag); err != nil {
 			return &ClusterError{
 				Message: fmt.Sprintf("ensure namespace host A record %s -> %s", fqdn, nodeIP),
 				Cause:   err,

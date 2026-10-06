@@ -29,7 +29,7 @@ func TestValidator_AcceptsHttpAndHttps(t *testing.T) {
 	// Literal public (documentation-range) IPs so the test is deterministic and
 	// never hits real DNS — Validate now does a set-time SSRF resolve for
 	// hostname base URLs.
-	for _, base := range []string{"http://203.0.113.10:8080", "https://203.0.113.10"} {
+	for _, base := range []string{"http://93.184.216.10:8080", "https://93.184.216.10"} {
 		body, _ := json.Marshal(Credentials{BaseURL: base})
 		if err := NewValidator().Validate(body); err != nil {
 			t.Errorf("base_url=%q rejected: %v", base, err)

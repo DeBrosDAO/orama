@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -72,4 +73,88 @@ func WaitForLeader(ctx context.Context, db *sql.DB, timeout time.Duration) error
 		case <-time.After(readinessPollInterval):
 		}
 	}
+}
+
+// raftReadyPollInterval is how often WaitForRaftReady re-reads /status. Short
+// enough that an already-converged node proceeds almost immediately.
+const raftReadyPollInterval = 500 * time.Millisecond
+
+// WaitForRaftReady blocks until the rqlite at ep reports a raft state in
+// which it is actually participating in the cluster - Leader or Follower - or
+// until timeout elapses.
+//
+// Why the state and not the port: rqlited binds its HTTP listener before it has
+// joined anything, so "the port answers" is true of a node that is still
+// Candidate, still replaying its log, or still retrying a join. Both readiness
+// checks in this package used to accept the first HTTP 200 (one of them by
+// reading a top-level "raft" key that rqlite does not emit - it nests under
+// store.raft - and returning success from the else branch when the assertion
+// failed). Boot then continued past "RQLite ready" before consensus existed,
+// and the real wait landed in a much longer, fatal timeout further down.
+//
+// An unreadable or unparseable status is NOT readiness: it keeps polling and,
+// on timeout, reports the last state it managed to observe.
+func WaitForRaftReady(ctx context.Context, ep Endpoint, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	lastState := "unknown"
+	var lastErr error
+
+	for {
+		state, err := readRaftState(ctx, ep)
+		if err == nil {
+			lastState = state
+			switch strings.ToLower(state) {
+			case "leader", "follower":
+				return nil
+			}
+		} else {
+			lastErr = err
+		}
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on %s (last state %q): %w", ep, lastState, ctxErr)
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil && lastState == "unknown" {
+				return fmt.Errorf("rqlite.WaitForRaftReady: %s never reported a raft state within %s (last error: %w)", ep, timeout, lastErr)
+			}
+			return fmt.Errorf("rqlite.WaitForRaftReady: %s still in raft state %q after %s (want Leader or Follower)", ep, lastState, timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("rqlite.WaitForRaftReady: cancelled on %s (last state %q): %w", ep, lastState, ctx.Err())
+		case <-time.After(raftReadyPollInterval):
+		}
+	}
+}
+
+// RaftState reports the raft state of the rqlite at ep — Leader, Follower,
+// Candidate or Shutdown. Exposed for diagnostics: a caller that is waiting for
+// readiness wants to log WHY it is waiting, and "Candidate" is a very different
+// answer from "the port is not answering".
+//
+// It takes an Endpoint rather than a port because the caller's rqlite is not
+// always this node's index — a namespace gateway can be configured against a
+// remote DSN, and reporting the LOCAL node's raft state under a remote address
+// would be confidently wrong rather than merely unknown.
+func RaftState(ctx context.Context, ep Endpoint) (string, error) {
+	return readRaftState(ctx, ep)
+}
+
+// raftStateTimeout bounds a single /status probe.
+const raftStateTimeout = 2 * time.Second
+
+// readRaftState fetches /status and returns store.raft.state.
+func readRaftState(ctx context.Context, ep Endpoint) (string, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, raftStateTimeout)
+	defer cancel()
+	status, err := ep.Admin().Status(probeCtx)
+	if err != nil {
+		return "", err
+	}
+	if status.Store.Raft.State == "" {
+		return "", fmt.Errorf("status carried no store.raft.state")
+	}
+	return status.Store.Raft.State, nil
 }

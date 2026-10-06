@@ -1,0 +1,21 @@
+server:
+  bindAddr: "{{.ServerBindAddr}}"
+  bindPort: {{.HTTPPort}}
+
+memberlist:
+  environment: {{.MemberlistEnvironment}}
+  bindAddr: "{{.MemberlistBindAddr}}"
+  bindPort: {{.MemberlistPort}}
+{{- if .MemberlistAdvertiseAddr}}
+  advertiseAddr: "{{.MemberlistAdvertiseAddr}}"
+{{- end}}
+{{- if .Peers}}
+  peers:
+{{- range .Peers}}
+    - "{{.}}"
+{{- end}}
+{{- end}}
+
+dmaps:
+  maxInuse: {{.DMapMaxInuse}}
+  evictionPolicy: "{{.DMapEvictionPolicy}}"

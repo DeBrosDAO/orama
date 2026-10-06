@@ -1,0 +1,21 @@
+syntax = "proto3";
+package orama.relay.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/relay/types";
+
+import "gogoproto/gogo.proto";
+import "orama/relay/v1/relay.proto";
+
+// GenesisState is x/relay's genesis state. The reporter set is a declared
+// trust point (Orama's dirauth reporter keys). After genesis it changes
+// only through MsgUpdateReporters.
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false];
+  repeated string reporters = 2;
+  repeated Relay relays = 3 [(gogoproto.nullable) = false];
+  Activation activation = 4 [(gogoproto.nullable) = false];
+  repeated EpochResult epoch_results = 5 [(gogoproto.nullable) = false];
+  repeated RelayPayout payouts = 6 [(gogoproto.nullable) = false];
+  repeated ReportChunk chunks = 7 [(gogoproto.nullable) = false];
+  repeated CompleteReport reports = 8 [(gogoproto.nullable) = false];
+}

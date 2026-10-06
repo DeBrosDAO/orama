@@ -7,74 +7,143 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 )
 
-func TestRequiredScope(t *testing.T) {
+// What each route requires, in the model that replaced the single `admin` word.
+//
+// The table is the review: fifty-eight routes used to declare `admin`, so a
+// credential that could deploy could also mint keys and transfer the namespace.
+// Each line here is a decision about which of those a route actually needs.
+func TestRoutePermission(t *testing.T) {
 	tests := []struct {
-		path string
-		want string
+		path   string
+		domain auth.Domain
+		action auth.Action
 	}{
-		// public / invoke — no scope
-		{"/health", ""},
-		{"/v1/invoke/ns/fn", ""},
-		{"/v1/functions/fn/invoke", ""},
-		{"/v1/auth/token", ""},   // not public, but any key may exchange
-		{"/v1/auth/whoami", ""},  // any valid credential
+		// public / invoke — nothing required
+		{"/health", "", ""},
+		{"/v1/invoke/ns/fn", "", ""},
+		{"/v1/node/enroll", "", ""},
+		{"/v1/functions/fn/invoke", "", ""},
+		{"/v1/auth/token", "", ""},  // not public, but any key may exchange
+		{"/v1/auth/whoami", "", ""}, // any valid credential
 		// invoke transport
-		{"/v1/functions/fn/ws", auth.ScopeInvoke},
-		// functions control-plane
-		{"/v1/functions", auth.ScopeAdmin},
-		{"/v1/functions/fn", auth.ScopeAdmin},
-		{"/v1/functions/secrets", auth.ScopeAdmin},
-		// storage (data-plane)
-		{"/v1/storage/upload", auth.ScopeStorage},
-		{"/v1/storage/get/Qm123", auth.ScopeStorage},
-		{"/v1/storage/unpin/Qm123", auth.ScopeStorage},
+		{"/v1/functions/fn/ws", auth.DomainFn, auth.ActionInvoke},
+		// functions control-plane: managing one is not invoking it
+		{"/v1/functions", auth.DomainFn, auth.ActionManage},
+		{"/v1/functions/fn", auth.DomainFn, auth.ActionManage},
+		{"/v1/functions/secrets", auth.DomainFn, auth.ActionManage},
+		// storage (data-plane), read and write told apart
+		{"/v1/storage/upload", auth.DomainStorage, auth.ActionWrite},
+		{"/v1/storage/get/Qm123", auth.DomainStorage, auth.ActionRead},
+		{"/v1/storage/unpin/Qm123", auth.DomainStorage, auth.ActionWrite},
 		// push — mixed prefix
-		{"/v1/push/devices", auth.ScopePush},
-		{"/v1/push/devices/42", auth.ScopePush},
-		{"/v1/push/config", auth.ScopeAdmin},
-		{"/v1/push/send", auth.ScopeAdmin},
-		{"/v1/namespace/push-credentials", auth.ScopeAdmin},
-		{"/v1/namespace/push-credentials/apns", auth.ScopeAdmin},
-		// webrtc (data-plane) vs namespace webrtc mgmt (admin) vs status (read)
-		{"/v1/webrtc/signal", auth.ScopeWebRTC},
-		{"/v1/webrtc/turn/credentials", auth.ScopeWebRTC},
-		{"/v1/namespace/webrtc/enable", auth.ScopeAdmin},
-		{"/v1/namespace/webrtc/status", ""},
+		{"/v1/push/devices", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/devices/42", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/send", auth.DomainPush, auth.ActionWrite},
+		// rotating topics (FEAT-265) carry the same grants as their account twins
+		{"/v1/push/topics", auth.DomainPush, auth.ActionWrite},
+		{"/v1/push/topics/send", auth.DomainPush, auth.ActionWrite},
+		// a push provider's credentials are secrets, not push
+		{"/v1/push/config", auth.DomainSecrets, auth.ActionWrite},
+		{"/v1/namespace/push-credentials", auth.DomainSecrets, auth.ActionWrite},
+		{"/v1/namespace/push-credentials/apns", auth.DomainSecrets, auth.ActionWrite},
+		// webrtc (data-plane) vs the namespace's own switches vs status (read)
+		{"/v1/webrtc/signal", auth.DomainWebRTC, auth.ActionRead},
+		{"/v1/webrtc/turn/credentials", auth.DomainWebRTC, auth.ActionRead},
+		{"/v1/namespace/webrtc/enable", auth.DomainNamespace, auth.ActionWrite},
+		{"/v1/namespace/webrtc/status", "", ""},
 		// proxy / pubsub / cache
-		{"/v1/proxy/anon", auth.ScopeProxy},
-		{"/v1/pubsub/publish", auth.ScopePubsub},
-		{"/v1/cache/get", auth.ScopeCache},
-		// control-plane
-		{"/v1/rqlite/query", auth.ScopeAdmin},
-		{"/v1/deployments/list", auth.ScopeAdmin},
-		{"/v1/db/sqlite/query", auth.ScopeAdmin},
-		{"/v1/serverless/ws/connections", auth.ScopeAdmin},
-		{"/v1/namespace/rate-limit", auth.ScopeAdmin},
-		{"/v1/namespace/keys", auth.ScopeAdmin},
-		{"/v1/namespace/keys/5", auth.ScopeAdmin},
+		{"/v1/proxy/anon", auth.DomainProxy, auth.ActionWrite},
+		{"/v1/pubsub/publish", auth.DomainPubsub, auth.ActionWrite},
+		{"/v1/pubsub/topics", auth.DomainPubsub, auth.ActionRead},
+		{"/v1/cache/get", auth.DomainCache, auth.ActionRead},
+		{"/v1/cache/put", auth.DomainCache, auth.ActionWrite},
+		// control plane, in parts rather than in one word
+		{"/v1/rqlite/query", auth.DomainDB, auth.ActionWrite},
+		{"/v1/db/sqlite/query", auth.DomainDB, auth.ActionWrite},
+		{"/v1/db/sqlite/list", auth.DomainDB, auth.ActionRead},
+		{"/v1/deployments/list", auth.DomainDeploy, auth.ActionRead},
+		{"/v1/deployments/delete", auth.DomainDeploy, auth.ActionWrite},
+		{"/v1/deployments/env", auth.DomainSecrets, auth.ActionRead},
+		{"/v1/deployments/grants", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/audit", auth.DomainAudit, auth.ActionRead},
+		{"/v1/serverless/ws/connections", auth.DomainFn, auth.ActionRead},
+		{"/v1/namespace/rate-limit", auth.DomainNamespace, auth.ActionWrite},
+		{"/v1/namespace/keys", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/namespace/keys/5", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/namespace/members", auth.DomainMembers, auth.ActionWrite},
+		{"/v1/node/status", auth.DomainOperator, auth.ActionRead},
+		{"/v1/node/command", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/node/logs", auth.DomainOperator, auth.ActionRead},
+		{"/v1/node/leave", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/network/connect", auth.DomainOperator, auth.ActionWrite},
+		{"/v1/network/disconnect", auth.DomainOperator, auth.ActionWrite},
+		// the one route that still asks for everything, because that is what
+		// it hands out
+		{"/v1/operator/invite", auth.PermissionWildcard, auth.PermissionWildcard},
+		{"/v1/network/status", auth.DomainOperator, auth.ActionRead},
+		{"/v1/network/peers", auth.DomainOperator, auth.ActionRead},
+		{"/v1/operator/health", auth.DomainOperator, auth.ActionRead},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
-			if got := requiredScope(http.MethodPost, tt.path); got != tt.want {
-				t.Errorf("requiredScope(%q) = %q, want %q", tt.path, got, tt.want)
+			policy := policyOf(http.MethodPost, tt.path)
+			if policy.Domain != string(tt.domain) || policy.Action != string(tt.action) {
+				t.Errorf("%q requires %q, want %q", tt.path,
+					policy.Domain+":"+policy.Action, string(tt.domain)+":"+string(tt.action))
 			}
 		})
 	}
 }
 
-func TestRequiresUserJWT(t *testing.T) {
-	yes := []string{auth.ScopeStorage, auth.ScopeWebRTC, auth.ScopeProxy}
-	no := []string{auth.ScopeInvoke, auth.ScopePush, auth.ScopeAdmin, auth.ScopePubsub, auth.ScopeCache, ""}
-	for _, g := range yes {
-		if !requiresUserJWT(g) {
-			t.Errorf("requiresUserJWT(%q) = false, want true", g)
+// The token a route asks for beyond the grant. It used to be derived from the
+// grant name, so every route sharing a grant shared the requirement whether or
+// not that was intended; it is declared per route now, and this is the set that
+// must still ask for a logged-in user.
+func TestRouteToken(t *testing.T) {
+	principal := []string{
+		"/v1/storage/upload", "/v1/storage/pin", "/v1/storage/get/Qm1", "/v1/storage/status/Qm1",
+		"/v1/webrtc/signal", "/v1/webrtc/rooms", "/v1/webrtc/turn/credentials",
+	}
+	for _, path := range principal {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.PrincipalToken {
+			t.Errorf("%q asks for token %v, want a user or an app's own token — an extracted runtime "+
+				"key would otherwise reach it on its own", path, got)
 		}
 	}
-	for _, g := range no {
-		if requiresUserJWT(g) {
-			t.Errorf("requiresUserJWT(%q) = true, want false", g)
+	wallet := []string{"/v1/proxy/anon", "/v1/proxy/tunnel", "/v1/namespaces"}
+	for _, path := range wallet {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.WalletToken {
+			t.Errorf("%q asks for token %v, want a logged-in user and nothing else", path, got)
+		}
+	}
+
+	anyCredential := []string{
+		"/v1/pubsub/publish", "/v1/push/devices", "/v1/push/topics", "/v1/cache/get",
+		"/v1/functions/fn/ws", "/v1/deployments/list", "/v1/audit",
+	}
+	for _, path := range anyCredential {
+		if got := policyOf(http.MethodPost, path).Token; got != routepolicy.AnyCredential {
+			t.Errorf("%q asks for token %v, want none beyond the grant", path, got)
+		}
+	}
+}
+
+// FEAT-265: registering a topic is registering a device by another key, and a
+// topic send is a send. Each must ask for exactly what its account-path twin
+// asks for — grant, ownership and token — no more and no less.
+func TestRoutePolicy_pushTopicsMatchTheirAccountTwins(t *testing.T) {
+	for topicPath, twin := range map[string]string{
+		"/v1/push/topics":      "/v1/push/devices",
+		"/v1/push/topics/send": "/v1/push/send",
+	} {
+		for _, method := range []string{http.MethodPost, http.MethodDelete} {
+			got, want := policyOf(method, topicPath), policyOf(method, twin)
+			if got != want {
+				t.Errorf("%s %s policy = %+v, want its twin %s's %+v", method, topicPath, got, twin, want)
+			}
 		}
 	}
 }
@@ -89,12 +158,22 @@ func TestHasWalletJWT(t *testing.T) {
 		t.Error("wallet JWT should be recognized")
 	}
 	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "ak_abc:ns"})) {
-		t.Error("api-key-exchanged JWT (ak_ prefix) must NOT count as a wallet JWT")
+		t.Error("an api-key-exchanged JWT in the legacy key format counted as a wallet JWT")
 	}
-	// A colon-bearing but non-ak_ subject (e.g. a future DID/CAIP wallet) IS a
-	// user — only the ak_ prefix marks an exchanged key.
-	if !hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "did:ethr:0xabc"})) {
-		t.Error("non-ak_ subject must count as a wallet JWT")
+	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "orama_rk_2fJ8xQ_9Zc"})) {
+		t.Error("an api-key-exchanged JWT counted as a wallet JWT — this is the check that stops " +
+			"an extracted runtime key acting as a logged-in user")
+	}
+	// A subject that is neither an address nor a key shape is treated as a key,
+	// not as a user. It used to be the other way round — anything without the
+	// `ak_` prefix was a wallet — which is fail-open: the one thing that must
+	// never happen is a key being read as a logged-in user.
+	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "did:ethr:not-an-address"})) {
+		t.Error("a subject nothing recognises counted as a wallet JWT")
+	}
+	// A Solana address is a wallet, in whatever case it was normalised to.
+	if !hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"})) {
+		t.Error("a Solana wallet JWT was not recognised")
 	}
 	if hasWalletJWT(reqWithJWT(&auth.JWTClaims{Sub: ""})) {
 		t.Error("empty subject must not count")
@@ -104,51 +183,114 @@ func TestHasWalletJWT(t *testing.T) {
 	}
 }
 
-func TestCallerScopes(t *testing.T) {
+func TestCallerPermissions(t *testing.T) {
 	g := &Gateway{}
 
-	// API-key identity: scopes come from ctx.
+	// The gate's question: does this reach the domain at all, whatever the
+	// object. The handler asks again with the object.
+	reachesStorage := func(p auth.PermissionSet) bool {
+		return p.PermitsDomain(auth.DomainStorage, auth.ActionWrite)
+	}
+	reachesPubsub := func(p auth.PermissionSet) bool {
+		return p.PermitsDomain(auth.DomainPubsub, auth.ActionWrite)
+	}
+
+	// API-key identity: the key's own permissions, from the row.
 	rKey := httptest.NewRequest(http.MethodPost, "/x", nil)
-	rKey = rKey.WithContext(context.WithValue(rKey.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
-	if s := g.callerScopes(rKey); !s.Has(auth.ScopeStorage) || s.Has(auth.ScopeAdmin) {
-		t.Errorf("api-key scopes wrong: %v", s)
+	rKey = rKey.WithContext(context.WithValue(rKey.Context(), ctxKeyScopes,
+		auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
+	if p := g.callerPermissions(rKey); !reachesStorage(p) || p.IsAdmin() {
+		t.Errorf("api-key permissions wrong: %v", p.List())
 	}
 
-	// Exchanged RUNTIME key JWT must NOT escalate to admin.
-	rRun := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke,storage"}})
-	if s := g.callerScopes(rRun); s.Has(auth.ScopeAdmin) {
-		t.Error("exchanged runtime-key JWT escalated to admin — escalation hole open")
+	// An exchanged RUNTIME key's token must not escalate to admin.
+	rRun := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
+	rRun = rRun.WithContext(context.WithValue(rRun.Context(), ctxKeyScopes,
+		auth.ScopeSet{auth.ScopeInvoke: {}, auth.ScopeStorage: {}}))
+	if g.callerPermissions(rRun).IsAdmin() {
+		t.Error("a token's own scopes claim was trusted over the key's row — that is the claim-injection hole, " +
+			"and it is also why narrowing a key took a token lifetime to bite")
 	}
 
-	// Exchanged ADMIN key JWT keeps admin.
-	rAdm := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
-	if s := g.callerScopes(rAdm); !s.IsAdmin() {
-		t.Error("exchanged admin-key JWT should be admin")
+	// An exchanged ADMIN key keeps admin, from its row.
+	rAdm := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns"})
+	rAdm = rAdm.WithContext(context.WithValue(rAdm.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeAdmin: {}}))
+	if !g.callerPermissions(rAdm).IsAdmin() {
+		t.Error("an admin key's token is not admin")
 	}
 
-	// Wallet JWT, no owner confirmation → data-plane, never admin.
+	// Wallet JWT, no grant resolved → the data plane, never the control plane.
 	rWallet := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
-	s := g.callerScopes(rWallet)
-	if s.IsAdmin() {
-		t.Error("plain wallet JWT must not be admin")
+	rWallet = rWallet.WithContext(context.WithValue(rWallet.Context(), CtxKeyNamespaceOverride, "anchat"))
+	wallet := g.callerPermissions(rWallet)
+	if wallet.IsAdmin() {
+		t.Error("a plain wallet JWT is admin")
 	}
-	if !s.Has(auth.ScopeStorage) {
-		t.Error("wallet JWT should hold data-plane storage grant")
+	if !reachesStorage(wallet) {
+		t.Error("a wallet JWT does not hold the data plane")
 	}
 
-	// CRITICAL regression (claims-provider injection): a WALLET JWT that carries
-	// an injected custom["scopes"]="admin" must NOT be trusted — a non-ak_
-	// subject's scopes claim is ignored, so it stays data-plane.
+	// A wallet JWT carrying an injected scopes claim must not be trusted: a
+	// tenant's claims provider sets those.
 	rInjected := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET", Custom: map[string]string{"scopes": "admin"}})
-	if g.callerScopes(rInjected).IsAdmin() {
-		t.Error("wallet JWT with injected scopes:admin escalated to admin — claims-provider injection hole open")
+	if g.callerPermissions(rInjected).IsAdmin() {
+		t.Error("a wallet JWT with an injected scopes claim escalated to admin")
 	}
 
-	// Wallet JWT + confirmed owner → admin.
-	rOwner := reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"})
-	rOwner = rOwner.WithContext(context.WithValue(rOwner.Context(), ctxKeyOwnerConfirmed, true))
-	if s := g.callerScopes(rOwner); !s.IsAdmin() {
-		t.Error("confirmed owner wallet should be admin")
+	// A grant decides, whatever the token says.
+	rOwner := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"}), &auth.Grant{Role: auth.RoleOwner})
+	if !g.callerPermissions(rOwner).IsAdmin() {
+		t.Error("the namespace owner's wallet is not admin")
+	}
+
+	rRuntime := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xTEAMMATE"}), &auth.Grant{Role: auth.RoleRuntime})
+	runtime := g.callerPermissions(rRuntime)
+	if runtime.IsAdmin() {
+		t.Error("a runtime member reached the control plane")
+	}
+	if !reachesStorage(runtime) {
+		t.Error("a runtime member does not hold the data plane")
+	}
+
+	// The role that could not exist while `admin` was one word.
+	rDev := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xDEV"}), &auth.Grant{Role: auth.RoleDeveloper})
+	dev := g.callerPermissions(rDev)
+	if !dev.PermitsDomain(auth.DomainDeploy, auth.ActionWrite) {
+		t.Error("a developer cannot deploy")
+	}
+	if dev.PermitsDomain(auth.DomainMembers, auth.ActionWrite) {
+		t.Error("a developer can hand out authority, so the role is a label on admin")
+	}
+
+	rReader := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xREADER"}), &auth.Grant{Role: auth.RoleReader})
+	if p := g.callerPermissions(rReader); p.IsAdmin() || reachesStorage(p) {
+		t.Error("a reader holds something")
+	}
+
+	// A grant with a selector holds that permission and nothing else. The gate
+	// lets it reach the domain; the handler decides which object.
+	rScoped := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xSCOPED"}),
+		&auth.Grant{Role: auth.RoleRuntime, Resource: "storage:avatars/*"})
+	scoped := g.callerPermissions(rScoped)
+	if !reachesStorage(scoped) {
+		t.Error("a grant narrowed to storage:avatars/* cannot reach storage at all")
+	}
+	if reachesPubsub(scoped) || scoped.IsAdmin() {
+		t.Errorf("it holds %v; a storage selector says nothing about anything else", scoped.List())
+	}
+	if !scoped.Permits(auth.Resource{Domain: auth.DomainStorage, Name: "avatars/me.png", Action: auth.ActionWrite}) {
+		t.Error("it cannot reach the object it names")
+	}
+	if scoped.Permits(auth.Resource{Domain: auth.DomainStorage, Name: "keys/private.pem", Action: auth.ActionRead}) {
+		t.Error("it reaches an object outside the prefix")
+	}
+
+	// A selector for something the role never had grants nothing, or a
+	// selector could widen a grant.
+	rWidening := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xWIDE"}),
+		&auth.Grant{Role: auth.RoleRuntime, Resource: "db:table=posts:read"})
+	if p := g.callerPermissions(rWidening); len(p) != 0 {
+		t.Errorf("a runtime member narrowed to a table was given %v", p.List())
 	}
 }
 
@@ -159,6 +301,39 @@ func reqDelJWT(path string, claims *auth.JWTClaims) *http.Request {
 		r = r.WithContext(context.WithValue(r.Context(), ctxKeyJWT, claims))
 	}
 	return r
+}
+
+// TestHasRequiredToken_principalTokenAdmitsAUserOrAnApp: a deployed app holds
+// a workload token its owner's grant gives storage; it must reach storage as
+// itself, and an exchanged key must not, nor may an app create a namespace.
+func TestHasRequiredToken_principalTokenAdmitsAUserOrAnApp(t *testing.T) {
+	g := &Gateway{}
+	principal := routepolicy.Policy{Token: routepolicy.PrincipalToken}
+	walletOnly := routepolicy.Policy{Token: routepolicy.WalletToken}
+	cases := []struct {
+		name          string
+		sub           string
+		principal, wo bool
+	}{
+		{"a wallet", "0x1111111111111111111111111111111111111111", true, true},
+		{"a deployed app", "app:acme/notes", true, false},
+		{"an exchanged key", "orama_rk_2fJ8xQ_9Zc", false, false},
+		{"a legacy key", "ak_abc:acme", false, false},
+		{"an unknown subject", "did:ethr:not-an-address", false, false},
+		{"no subject", "", false, false},
+	}
+	for _, c := range cases {
+		r := reqWithJWT(&auth.JWTClaims{Sub: c.sub})
+		if got := g.hasRequiredToken(r, principal, auth.PermissionSet{}); got != c.principal {
+			t.Errorf("%s on a principal route: %v, want %v", c.name, got, c.principal)
+		}
+		if got := g.hasRequiredToken(r, walletOnly, auth.PermissionSet{}); got != c.wo {
+			t.Errorf("%s on a user-only route: %v, want %v", c.name, got, c.wo)
+		}
+	}
+	if g.hasRequiredToken(httptest.NewRequest(http.MethodPost, "/v1/storage/upload", nil), principal, auth.PermissionSet{}) {
+		t.Error("a request with no token passed a principal route")
+	}
 }
 
 func TestHasAnyJWT(t *testing.T) {
@@ -179,59 +354,172 @@ func TestHasAnyJWT(t *testing.T) {
 	}
 }
 
-func TestIsStorageUnpinPath(t *testing.T) {
-	if !isStorageUnpinPath(http.MethodDelete, "/v1/storage/unpin/Qm123") {
-		t.Error("DELETE /v1/storage/unpin/:cid should match")
+// Unpinning is the one storage operation a userless job may reach: it is
+// ownership-checked in its handler and can only drop the namespace's own pins.
+// Every other storage operation keeps the strict requirement, and so does every
+// other method on the unpin route.
+func TestStorageUnpinToken(t *testing.T) {
+	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123").Token; got != routepolicy.AnyToken {
+		t.Errorf("DELETE unpin asks for token %v, want any exchanged token (#151)", got)
 	}
-	if isStorageUnpinPath(http.MethodPost, "/v1/storage/unpin/Qm123") {
-		t.Error("only DELETE should match the unpin exception")
+	if got := policyOf(http.MethodPost, "/v1/storage/unpin/Qm123").Token; got != routepolicy.PrincipalToken {
+		t.Errorf("POST to the unpin route asks for token %v; only DELETE is the reclaim", got)
 	}
-	// Every OTHER storage op keeps the strict wallet-JWT requirement.
-	for _, p := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
-		if isStorageUnpinPath(http.MethodDelete, p) {
-			t.Errorf("%q must NOT be treated as the unpin exception", p)
+	for _, path := range []string{"/v1/storage/upload", "/v1/storage/get/Qm1", "/v1/storage/pin", "/v1/storage/status/Qm1"} {
+		if got := policyOf(http.MethodDelete, path).Token; got != routepolicy.PrincipalToken {
+			t.Errorf("%q asks for token %v, want a user or an app's own token", path, got)
+		}
+	}
+	// And the permission is unchanged: the relaxation is about the token, not
+	// what the credential must hold. A key with no storage permission reaches
+	// none of it.
+	if got := policyOf(http.MethodDelete, "/v1/storage/unpin/Qm123"); got.Domain != string(auth.DomainStorage) {
+		t.Errorf("DELETE unpin requires %q, want storage", got.Domain+":"+got.Action)
+	}
+}
+
+// The exact relaxation scopeMiddleware applies for bugboard #151: unpin with
+// any exchanged token is allowed, a bare API key is not, and it never leaks to
+// another storage operation.
+func TestUnpinException_decision(t *testing.T) {
+	g := &Gateway{}
+	storage := auth.PermissionsFromScopes("invoke,storage,push,webrtc,proxy")
+
+	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns"})
+	if !g.hasRequiredToken(exchanged, policyOf(http.MethodDelete, exchanged.URL.Path), storage) {
+		t.Error("unpin with an exchanged storage-scoped token must be allowed (#151)")
+	}
+
+	bare := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/Qm1", nil)
+	if g.hasRequiredToken(bare, policyOf(http.MethodDelete, bare.URL.Path), storage) {
+		t.Error("unpin with a bare API key (no token) must NOT be allowed")
+	}
+
+	upload := reqDelJWT("/v1/storage/upload", &auth.JWTClaims{Sub: "ak_x:ns"})
+	if g.hasRequiredToken(upload, policyOf(http.MethodDelete, upload.URL.Path), storage) {
+		t.Error("upload must keep the strict logged-in-user requirement")
+	}
+
+	// An admin credential is exempt everywhere: the requirement exists to make
+	// a leaked data-plane key inert, and an admin key is not one.
+	if !g.hasRequiredToken(bare, policyOf(http.MethodPost, "/v1/storage/upload"), auth.PermissionsFromScopes("admin")) {
+		t.Error("an admin credential must not be asked for a user token")
+	}
+}
+
+// Minting a cluster invite hands the holder every secret the cluster has, and
+// the JWT signing key is derived from one of them. These paths had no entry at
+// all, so they fell through to "any valid credential is enough" — and a key out
+// of a public app bundle is a valid credential.
+func TestRoutePermission_operatorEndpointsNeedOperator(t *testing.T) {
+	runtime := auth.PermissionsFromScopes("invoke,storage,push,webrtc,proxy,pubsub,cache")
+	developer := auth.RoleDeveloper.Permissions()
+	reaches := func(p auth.PermissionSet, r auth.Resource) bool { return p.PermitsDomain(r.Domain, r.Action) }
+
+	for _, path := range []string{
+		"/v1/operator/invite",
+		"/v1/operator/nodes",
+		"/v1/operator/node/register",
+		"/v1/operator/operators",
+		"/v1/operator/operators/0xabc",
+		"/v1/operator/settings",
+		"/v1/operator/settings/namespace-creation",
+		"/v1/operator/creators",
+		"/v1/operator/creators/0xabc",
+	} {
+		policy := policyOf(http.MethodPost, path)
+		required := auth.Resource{Domain: auth.Domain(policy.Domain), Action: auth.Action(policy.Action)}
+
+		if reaches(runtime, required) {
+			t.Errorf("%s is reachable by a runtime key", path)
+		}
+		// The split is only worth having if it draws a line somebody can be on
+		// the wrong side of: a developer builds and runs the application and
+		// does not operate the cluster.
+		if reaches(developer, required) {
+			t.Errorf("%s is reachable by a developer", path)
+		}
+		if !reaches(auth.RoleAdmin.Permissions(), required) {
+			t.Errorf("%s is not reachable by an admin", path)
 		}
 	}
 }
 
-// TestUnpinException_decision locks in the exact layer-1 relaxation used by
-// scopeMiddleware for bugboard #151: unpin + any scoped JWT is allowed; a bare
-// api key (no JWT) is not; and the exception never leaks to other storage ops.
-func TestUnpinException_decision(t *testing.T) {
-	// unpin + exchanged storage-scoped JWT → allowed.
-	exchanged := reqDelJWT("/v1/storage/unpin/Qm1", &auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "invoke,storage,push,webrtc,proxy"}})
-	if !(isStorageUnpinPath(exchanged.Method, exchanged.URL.Path) && hasAnyJWT(exchanged)) {
-		t.Error("unpin with an exchanged storage-scoped JWT must be allowed (#151)")
+// What a credential may do is read from the grant, per request. A token that
+// carries its own answer is a token whose answer cannot be changed until it
+// expires — which is the asymmetry this replaced: narrowing a grant took effect
+// at once for a wallet and only at the next token for a key.
+func TestCallerPermissions_readsTheGrantAndNotTheToken(t *testing.T) {
+	g := &Gateway{}
+
+	// A token minted when the key held admin, presented after the key was
+	// narrowed to storage. The row is what counts.
+	stale := reqWithJWT(&auth.JWTClaims{Sub: "ak_x:ns", Custom: map[string]string{"scopes": "admin"}})
+	stale = stale.WithContext(context.WithValue(stale.Context(), ctxKeyScopes, auth.ScopeSet{auth.ScopeStorage: {}}))
+
+	perms := g.callerPermissions(stale)
+	if perms.IsAdmin() {
+		t.Fatal("a token minted before the key was narrowed still holds what it was minted with")
 	}
-	// unpin + BARE api key (no JWT) → NOT allowed.
-	bare := httptest.NewRequest(http.MethodDelete, "/v1/storage/unpin/Qm1", nil)
-	if isStorageUnpinPath(bare.Method, bare.URL.Path) && hasAnyJWT(bare) {
-		t.Error("unpin with a bare api key (no JWT) must NOT be allowed")
+	if !perms.PermitsDomain(auth.DomainStorage, auth.ActionWrite) {
+		t.Error("it does not hold what the key holds now")
 	}
-	// The exception must never apply to upload (a DELETE-shaped probe still
-	// fails because the path isn't the unpin path).
-	if isStorageUnpinPath(http.MethodDelete, "/v1/storage/upload") {
-		t.Error("upload must keep the strict wallet-JWT requirement, not the unpin exception")
+
+	// And a grant resolved on the request wins over both.
+	narrowed := markGrant(stale, &auth.Grant{Role: auth.RoleReader})
+	if p := g.callerPermissions(narrowed); len(p) != 0 {
+		t.Errorf("a reader grant was overridden by the token or the key: %v", p.List())
 	}
 }
 
-// Device revocation is namespace administration (feat-384).
-//
-// An end-user JWT sets CtxKeyNamespaceOverride from its own `namespace` claim,
-// so the handler's namespace resolution alone does NOT restrict this endpoint
-// to admins. Without an explicit admin scope any authenticated user of the
-// namespace could revoke devices — other accounts' included — and a compromised
-// device could revoke the legitimate ones to keep itself the only one serving.
-func TestRequiredScope_deviceRevokeIsAdminOnly(t *testing.T) {
-	if got := requiredScope(http.MethodPost, "/v1/auth/device/revoke"); got != auth.ScopeAdmin {
-		t.Errorf("requiredScope(/v1/auth/device/revoke) = %q, want %q", got, auth.ScopeAdmin)
+// The one number that says how long narrowing a key takes to bite. It is a
+// promise, not a tuning knob, so it is named and it is the cache's TTL.
+func TestCredentialStaleness_isTheCachesTTL(t *testing.T) {
+	cache := newMiddlewareCache(CredentialStaleness)
+	if cache.ttl != CredentialStaleness {
+		t.Errorf("the cache holds a credential for %v, and the documented staleness is %v",
+			cache.ttl, CredentialStaleness)
+	}
+	if CredentialStaleness <= 0 {
+		t.Error("a credential is cached for ever")
 	}
 }
 
-// The endpoint must NOT be on the public path list, or the scope gate is never
-// consulted at all.
-func TestDeviceRevoke_isNotAPublicPath(t *testing.T) {
-	if isPublicPath("/v1/auth/device/revoke") {
-		t.Error("/v1/auth/device/revoke is public — it would accept unauthenticated device revocations")
+// A lobby session holds nothing (docs/AUTH.md, "The lobby"). It used to get
+// the data plane like any wallet session, so every signed-in wallet shared the
+// index namespace's cache, pub/sub and storage (stagenet e2e, 2026-09-30).
+func TestCallerPermissions_lobbySessionHoldsNothing(t *testing.T) {
+	g := &Gateway{}
+	r := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	r = r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, auth.LobbyNamespace))
+	if p := g.callerPermissions(r); len(p) != 0 {
+		t.Fatalf("a lobby session holds %v, want nothing", p.List())
+	}
+
+	inNamespace := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	inNamespace = inNamespace.WithContext(context.WithValue(inNamespace.Context(), CtxKeyNamespaceOverride, "anchat"))
+	if !g.callerPermissions(inNamespace).PermitsDomain(auth.DomainCache, auth.ActionWrite) {
+		t.Error("a session in a namespace lost the data plane")
+	}
+}
+
+// A grant recorded in the lobby (a cluster from before ownership was fixed
+// gave one to whichever wallet signed in first) confers nothing, and a wallet
+// session naming no namespace is the lobby's (security review, 2026-09-30).
+func TestCallerPermissions_lobbyGrantAndNamelessSessionHoldNothing(t *testing.T) {
+	g := &Gateway{}
+	owner := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xFIRST"}), &auth.Grant{Role: auth.RoleOwner})
+	owner = owner.WithContext(context.WithValue(owner.Context(), CtxKeyNamespaceOverride, auth.LobbyNamespace))
+	if p := g.callerPermissions(owner); len(p) != 0 {
+		t.Errorf("a lobby owner grant holds %v", p.List())
+	}
+	nameless := reqWithJWT(&auth.JWTClaims{Sub: "0xWALLET"})
+	if p := g.callerPermissions(nameless); len(p) != 0 {
+		t.Errorf("a session naming no namespace holds %v", p.List())
+	}
+	elsewhere := markGrant(reqWithJWT(&auth.JWTClaims{Sub: "0xOWNER"}), &auth.Grant{Role: auth.RoleOwner})
+	elsewhere = elsewhere.WithContext(context.WithValue(elsewhere.Context(), CtxKeyNamespaceOverride, "anchat"))
+	if !g.callerPermissions(elsewhere).IsAdmin() {
+		t.Error("an owner grant in a namespace lost its authority")
 	}
 }

@@ -3,8 +3,10 @@ package namespace
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -18,9 +20,25 @@ import (
 
 // SpawnRequest represents a request to spawn or stop a namespace instance
 type SpawnRequest struct {
-	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, save-cluster-state, delete-cluster-state
+	Action    string `json:"action"` // spawn-{rqlite,olric,gateway,sfu,turn}, stop-{rqlite,olric,gateway,sfu,turn}, teardown-{namespace,sfu,turn}, save-cluster-state, delete-cluster-state, reconcile-host-turn
 	Namespace string `json:"namespace"`
 	NodeID    string `json:"node_id"`
+
+	// PurgeData, with action = "teardown-namespace", also removes the
+	// namespace's tenant data (SQLite databases, deployment directories): the
+	// namespace is being deleted, not moved or rolled back.
+	PurgeData bool `json:"purge_data,omitempty"`
+
+	// Release, with action = "reconcile-host-turn", asks the host to drop the
+	// namespace from its shared TURN server instead of confirming it is served.
+	Release bool `json:"release,omitempty"`
+
+	// ClusterID, with a teardown-* action, is the cluster the teardown was asked
+	// for. The node refuses it when its own state says the namespace here belongs
+	// to another cluster: the name was created again, and the teardown would
+	// delete the new namespace. Absent from a sender on the previous release,
+	// whose teardown is then carried out as before.
+	ClusterID string `json:"cluster_id,omitempty"`
 
 	// RQLite config (when action = "spawn-rqlite")
 	RQLiteHTTPPort    int      `json:"rqlite_http_port,omitempty"`
@@ -99,14 +117,87 @@ type SpawnResponse struct {
 type SpawnHandler struct {
 	systemdSpawner *namespacepkg.SystemdSpawner
 	logger         *zap.Logger
+	// clusterSecretPath is where this node keeps the cluster secret. It is
+	// read per request rather than at construction so that a node whose secret
+	// is rotated does not have to be restarted to accept coordination calls.
+	clusterSecretPath string
+	// nodeID is this node's peer ID. A spawn request is addressed to one node by
+	// the node_id in its body; a request for any other node is refused, so a
+	// stamped request captured on its way to one node cannot act on another.
+	nodeID string
+	// hostTURN applies this host's shared TURN tenant set and confirms the
+	// namespace is served (action = "reconcile-host-turn").
+	hostTURN HostTURNConfirmer
+	// registryDSN is this node's own connection to the cluster registry (its
+	// local rqlite). A gateway spawned here reads the registry through it, not
+	// through the DSN the requesting node sent: that one names the requester's
+	// rqlite, and a gateway reading the registry through another node stops
+	// working the moment that node is cut off.
+	registryDSN string
+}
+
+// hostTURNRequestTimeout bounds a reconcile-host-turn request. It runs under its
+// own context, not the request's: the reconcile may wait for the TURN server to
+// reload, and an unbounded background context would let a stuck host hold the
+// handler forever.
+const hostTURNRequestTimeout = 30 * time.Second
+
+// HostTURNConfirmer reconciles the host's shared TURN server and reports an
+// error unless it serves the namespace (Confirm), or unless it has dropped it
+// (Release).
+type HostTURNConfirmer interface {
+	ConfirmHostTURN(ctx context.Context, namespace string) error
+	ReleaseHostTURN(ctx context.Context, namespace string) error
+}
+
+// SetHostTURN wires the confirmer for the "reconcile-host-turn" action.
+func (h *SpawnHandler) SetHostTURN(c HostTURNConfirmer) { h.hostTURN = c }
+
+// SetRegistryDSN sets the registry connection gateways spawned on this node use.
+func (h *SpawnHandler) SetRegistryDSN(dsn string) { h.registryDSN = dsn }
+
+// gatewayRegistryDSN is the registry DSN a gateway spawned by req gets. A
+// request carrying none is the index gateway's, which is its own registry and
+// stays without one.
+func (h *SpawnHandler) gatewayRegistryDSN(req SpawnRequest) (string, error) {
+	if req.GatewayGlobalRQLiteDSN == "" {
+		return "", nil
+	}
+	if h.registryDSN == "" {
+		return "", fmt.Errorf("node %s has no registry rqlite address configured, so gateway %s cannot be given one", h.nodeID, req.Namespace)
+	}
+	return h.registryDSN, nil
 }
 
 // NewSpawnHandler creates a new spawn handler
-func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, logger *zap.Logger) *SpawnHandler {
+func NewSpawnHandler(systemdSpawner *namespacepkg.SystemdSpawner, clusterSecretPath, nodeID string, logger *zap.Logger) *SpawnHandler {
 	return &SpawnHandler{
-		systemdSpawner: systemdSpawner,
-		logger:         logger.With(zap.String("component", "namespace-spawn-handler")),
+		systemdSpawner:    systemdSpawner,
+		clusterSecretPath: clusterSecretPath,
+		nodeID:            nodeID,
+		logger:            logger.With(zap.String("component", "namespace-spawn-handler")),
 	}
+}
+
+// verifyCoordination reports whether this spawn request came from inside the
+// cluster. See pkg/auth/coordination.go. Only the v2 stamp is accepted: every
+// spawn action carries its parameters in the body (DSNs, peer addresses, TURN
+// and encryption secrets), which the v1 stamp does not cover.
+func (h *SpawnHandler) verifyCoordination(r *http.Request) bool {
+	if !auth.IsWireGuardPeer(r.RemoteAddr) {
+		return false
+	}
+	secret, err := os.ReadFile(h.clusterSecretPath)
+	if err != nil {
+		h.logger.Error("cannot read the cluster secret, so no coordination request can be authenticated",
+			zap.String("path", h.clusterSecretPath), zap.Error(err))
+		return false
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return false
+	}
+	return auth.VerifyCoordinationV2(key, r, time.Now(), h.nodeID)
 }
 
 // ServeHTTP implements http.Handler
@@ -116,8 +207,15 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate via internal auth header + WireGuard subnet check
-	if r.Header.Get("X-Orama-Internal-Auth") != "namespace-coordination" || !auth.IsWireGuardPeer(r.RemoteAddr) {
+	// Two independent things: the request carries a MAC produced with a key
+	// derived from the cluster secret, and it arrived over the WireGuard
+	// overlay. The MAC is the credential — the header this replaces was a
+	// constant in the source, and being on the overlay is not a privilege,
+	// since every namespace's services are on that mesh.
+	//
+	// The action and the namespace are in the body, so verification reads it
+	// (bounded, and restored for the decode below) and the v2 MAC covers it.
+	if !h.verifyCoordination(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -128,9 +226,19 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "invalid request body"})
 		return
 	}
-
 	if req.Namespace == "" || req.NodeID == "" {
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: "namespace and node_id are required"})
+		return
+	}
+	if req.NodeID != h.nodeID {
+		h.logger.Warn("refused a spawn request addressed to another node",
+			zap.String("action", req.Action), zap.String("namespace", req.Namespace),
+			zap.String("request_node_id", req.NodeID), zap.String("this_node_id", h.nodeID))
+		writeSpawnResponse(w, http.StatusForbidden, SpawnResponse{Error: "node_id is not this node"})
+		return
+	}
+	if err := req.validate(); err != nil {
+		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: err.Error()})
 		return
 	}
 
@@ -230,13 +338,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			olricTimeout = 30 * time.Second
 		}
 
+		registryDSN, err := h.gatewayRegistryDSN(req)
+		if err != nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
 		cfg := gateway.InstanceConfig{
 			Namespace:             req.Namespace,
 			NodeID:                req.NodeID,
 			HTTPPort:              req.GatewayHTTPPort,
 			BaseDomain:            req.GatewayBaseDomain,
 			RQLiteDSN:             req.GatewayRQLiteDSN,
-			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
+			GlobalRQLiteDSN:       registryDSN,
 			OlricServers:          req.GatewayOlricServers,
 			OlricTimeout:          olricTimeout,
 			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
@@ -286,13 +399,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			olricTimeout = 30 * time.Second
 		}
+		registryDSN, err := h.gatewayRegistryDSN(req)
+		if err != nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
 		cfg := gateway.InstanceConfig{
 			Namespace:             req.Namespace,
 			NodeID:                req.NodeID,
 			HTTPPort:              req.GatewayHTTPPort,
 			BaseDomain:            req.GatewayBaseDomain,
 			RQLiteDSN:             req.GatewayRQLiteDSN,
-			GlobalRQLiteDSN:       req.GatewayGlobalRQLiteDSN,
+			GlobalRQLiteDSN:       registryDSN,
 			OlricServers:          req.GatewayOlricServers,
 			OlricTimeout:          olricTimeout,
 			IPFSClusterAPIURL:     req.IPFSClusterAPIURL,
@@ -334,6 +452,19 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
+	case "teardown-namespace":
+		// Stop AND disable every unit of the namespace, then delete its data and
+		// env files: nothing is left for an upgrade or boot to start again. The
+		// stop-* actions only stop, and are for restarts.
+		// purge_data is the namespace's delete: its SQLite databases and
+		// deployment directories go too. A node on the previous release ignores
+		// the field and keeps them.
+		if err := h.systemdSpawner.TeardownNamespaceOfCluster(ctx, req.Namespace, req.ClusterID, req.PurgeData); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down namespace", err)
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
 	case "spawn-sfu":
 		cfg := namespacepkg.SFUInstanceConfig{
 			Namespace:      req.Namespace,
@@ -361,6 +492,40 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
 
+	case "teardown-sfu":
+		// Stop, disable and remove the env/config: a restart must not find it.
+		if err := h.systemdSpawner.TeardownSFUOfCluster(ctx, req.Namespace, req.NodeID, req.ClusterID); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down SFU instance", err)
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "reconcile-host-turn":
+		if h.hostTURN == nil {
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: "this node has no shared TURN reconciler"})
+			return
+		}
+		turnCtx, cancel := context.WithTimeout(context.Background(), hostTURNRequestTimeout)
+		defer cancel()
+		reconcile, what := h.hostTURN.ConfirmHostTURN, "confirm the shared TURN server serves the namespace"
+		if req.Release {
+			reconcile, what = h.hostTURN.ReleaseHostTURN, "drop the namespace from the shared TURN server"
+		}
+		if err := reconcile(turnCtx, req.Namespace); err != nil {
+			h.logger.Error("Failed to "+what, zap.Error(err))
+			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
+	case "teardown-turn":
+		// Retires only the legacy per-namespace unit, never the shared host TURN.
+		if err := h.systemdSpawner.TeardownTURNOfCluster(ctx, req.Namespace, req.NodeID, req.ClusterID); err != nil {
+			h.writeTeardownFailure(w, "Failed to tear down TURN instance", err)
+			return
+		}
+		writeSpawnResponse(w, http.StatusOK, SpawnResponse{Success: true})
+
 	case "stop-turn":
 		if err := h.systemdSpawner.StopTURN(ctx, req.Namespace, req.NodeID); err != nil {
 			h.logger.Error("Failed to stop TURN instance", zap.Error(err))
@@ -372,6 +537,18 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeSpawnResponse(w, http.StatusBadRequest, SpawnResponse{Error: fmt.Sprintf("unknown action: %s", req.Action)})
 	}
+}
+
+// writeTeardownFailure answers a failed teardown: 409 when it was refused
+// because the namespace on this node belongs to another cluster, 500 otherwise.
+func (h *SpawnHandler) writeTeardownFailure(w http.ResponseWriter, msg string, err error) {
+	if errors.Is(err, namespacepkg.ErrClusterMismatch) {
+		h.logger.Warn(msg, zap.Error(err))
+		writeSpawnResponse(w, http.StatusConflict, SpawnResponse{Error: err.Error()})
+		return
+	}
+	h.logger.Error(msg, zap.Error(err))
+	writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 }
 
 func writeSpawnResponse(w http.ResponseWriter, status int, resp SpawnResponse) {

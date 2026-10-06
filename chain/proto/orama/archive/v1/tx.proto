@@ -1,0 +1,100 @@
+syntax = "proto3";
+package orama.archive.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/archive/types";
+
+import "cosmos/msg/v1/msg.proto";
+
+// Msg is x/archive's transaction service. Both messages are signed by the
+// archiver field. There is no authority signer and no admin message.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // Attest pins or confirms the bundle CID, content hash and block-hash
+  // Merkle root of an inclusive height range.
+  rpc Attest(MsgAttest) returns (MsgAttestResponse);
+
+  // AttachReplicas records storage-deal ids for a range. The deals themselves
+  // live in x/storage; this message only records their ids.
+  rpc AttachReplicas(MsgAttachReplicas) returns (MsgAttachReplicasResponse);
+
+  // CreateArchiveDeal opens a protocol ARCHIVE deal in x/storage for the bundle
+  // of an attested range and records it on that range in the same message.
+  rpc CreateArchiveDeal(MsgCreateArchiveDeal) returns (MsgCreateArchiveDealResponse);
+}
+
+// MsgAttest is an archiver attestation of one height range.
+message MsgAttest {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  string bundle_cid = 4;
+  bytes bundle_hash = 5;
+  bytes merkle_root = 6;
+  // node_id is the x/nodes node the archiver field is the hot key of. The
+  // node must be active with an ARCHIVER role bond.
+  string node_id = 7;
+  // piece_root .. piece_bytes are the piece/ commitment of the bundle file (not the
+  // SHA-256 in bundle_hash). The first attestation pins it with the rest of the range;
+  // later ones must repeat it. piece_bytes is at most Params.max_piece_bytes.
+  bytes piece_root = 8;
+  uint64 real_leaf_count = 9;
+  uint64 padded_leaf_count = 10;
+  uint64 piece_bytes = 11;
+}
+
+// MsgAttestResponse is the Msg/Attest response.
+message MsgAttestResponse {
+  bool archived = 1;
+  uint32 attesters = 2;
+}
+
+// MsgAttachReplicas records replica deal ids for a height range. The signer
+// is the archiver. x/archive does not create or pay the deals.
+message MsgAttachReplicas {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  // deal_ids are x/storage ARCHIVE deal ids, as decimal strings. Each must be
+  // an active ARCHIVE deal.
+  repeated string deal_ids = 4;
+  // node_id is the x/nodes node the archiver field is the hot key of.
+  string node_id = 5;
+}
+
+// MsgAttachReplicasResponse is the Msg/AttachReplicas response.
+message MsgAttachReplicasResponse {
+  bool archived = 1;
+  uint32 replicas = 2;
+}
+
+// MsgCreateArchiveDeal opens one protocol ARCHIVE deal for the bundle of a range
+// the signer's operator attested, and attaches it to that range. The chain
+// chooses the price and the duration. The piece commitment fields must equal the
+// commitment the range's attestations pinned, and the range must have attestations
+// from at least the archived quorum of operators: an archiver cannot open deals for
+// any other content. A range holds at most a fixed number of live deals.
+message MsgCreateArchiveDeal {
+  option (cosmos.msg.v1.signer) = "archiver";
+
+  string archiver = 1;
+  int64 start_height = 2;
+  int64 end_height = 3;
+  // node_id is the x/nodes node the archiver field is the hot key of.
+  string node_id = 4;
+  bytes piece_root = 5;
+  uint64 real_leaf_count = 6;
+  uint64 padded_leaf_count = 7;
+  uint64 piece_bytes = 8;
+}
+
+// MsgCreateArchiveDealResponse is the Msg/CreateArchiveDeal response.
+message MsgCreateArchiveDealResponse {
+  uint64 deal_id = 1;
+  bool archived = 2;
+  uint32 replicas = 3;
+}

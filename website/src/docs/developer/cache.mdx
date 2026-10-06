@@ -71,7 +71,7 @@ await client.cache.put("rate-limits", "ip:203.0.113.1", { count: 1 }, "30m");
 await client.cache.put("dedup", "request:abc123", true, "5s");
 ```
 
-When TTL is omitted, the entry does not expire automatically.
+When TTL is omitted (or `"0s"`), the entry does not expire automatically. A TTL that does not parse, is negative, or exceeds 10 years is refused with a 400.
 
 ## Batch Operations
 

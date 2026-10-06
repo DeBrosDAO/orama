@@ -67,8 +67,8 @@ const (
 // RPCErrorEnvelope is the canonical wire shape. Use WriteRPCError to emit;
 // the struct is exported so SDK clients can decode/match against it.
 type RPCErrorEnvelope struct {
-	OK    bool             `json:"ok"`
-	Error *RPCErrorDetail  `json:"error"`
+	OK    bool            `json:"ok"`
+	Error *RPCErrorDetail `json:"error"`
 }
 
 // RPCErrorDetail is the typed error body. `Code` and `Message` are
@@ -84,6 +84,7 @@ type RPCErrorDetail struct {
 
 // RPCErrorOption customizes the envelope (request id, retry-after, etc.).
 // Callers build chains like WriteRPCError(w, 429, code, msg,
+//
 //	WithRetryAfter(2.5), WithRequestID(reqID)).
 type RPCErrorOption func(*RPCErrorDetail)
 

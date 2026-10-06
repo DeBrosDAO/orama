@@ -2,7 +2,11 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,14 +54,49 @@ func dnsUpserts(db *recoveryMockDB) int {
 	return n
 }
 
+func servingGatewayPort(t *testing.T, status int, body string) int {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	_, portStr, err := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatalf("split %s: %v", srv.URL, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("port %q: %v", portStr, err)
+	}
+	return port
+}
+
+func TestNamespaceGatewayProbe_usesTheWireGuardAddress(t *testing.T) {
+	got, ok := namespaceGatewayProbe(&ClusterLocalState{
+		LocalIP:    "10.0.0.1",
+		LocalPorts: ClusterLocalStatePorts{GatewayHTTPPort: 10004},
+	})
+	if !ok || got != "10.0.0.1:10004" {
+		t.Fatalf("probe = %q ok=%v, want 10.0.0.1:10004", got, ok)
+	}
+}
+
+func TestNamespaceGatewayProbe_loopbackWhenTheStateHasNoAddress(t *testing.T) {
+	got, ok := namespaceGatewayProbe(&ClusterLocalState{
+		LocalPorts: ClusterLocalStatePorts{GatewayHTTPPort: 10004},
+	})
+	if !ok || got != "127.0.0.1:10004" {
+		t.Fatalf("probe = %q ok=%v, want 127.0.0.1:10004", got, ok)
+	}
+}
+
 // The reproduction's fix: gateway serving, so the record is asserted.
 func TestEnsureNamespaceHostRecordIfServing_advertisesWhenGatewayAnswers(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
+	body, _ := json.Marshal(map[string]any{"status": "ok", "services": map[string]string{}})
+	port := servingGatewayPort(t, http.StatusOK, string(body))
 
 	cm, db := dnsProbeCM(t, "203.0.113.10")
 	state := &ClusterLocalState{
@@ -95,6 +134,25 @@ func TestEnsureNamespaceHostRecordIfServing_skipsWhenGatewayIsDown(t *testing.T)
 	}
 }
 
+// TCP-open is not "serving". A gateway that accepts connections but returns
+// 404 / starting would be withdrawn by the HTTP health loop and put back by
+// a TCP probe — the two must not fight.
+func TestEnsureNamespaceHostRecordIfServing_skipsWhenGatewayAcceptsTCPButIsNotReady(t *testing.T) {
+	port := servingGatewayPort(t, http.StatusNotFound, "not this namespace")
+
+	cm, db := dnsProbeCM(t, "203.0.113.10")
+	state := &ClusterLocalState{
+		NamespaceName: "anchat-v2",
+		LocalPorts:    ClusterLocalStatePorts{GatewayHTTPPort: port},
+	}
+
+	cm.ensureNamespaceHostRecordIfServing(context.Background(), state)
+
+	if dnsUpserts(db) != 0 {
+		t.Error("advertised a node whose gateway accepts TCP but is not ready")
+	}
+}
+
 // A state file with no gateway port recorded must be a no-op rather than a panic
 // or a bogus probe against port 0.
 func TestEnsureNamespaceHostRecordIfServing_noPortIsNoop(t *testing.T) {
@@ -110,12 +168,8 @@ func TestEnsureNamespaceHostRecordIfServing_noPortIsNoop(t *testing.T) {
 
 // No public IP recorded: skip rather than write a record with an empty value.
 func TestEnsureNamespaceHostRecordIfServing_skipsWithoutPublicIP(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-	port := ln.Addr().(*net.TCPAddr).Port
+	body, _ := json.Marshal(map[string]any{"status": "ok", "services": map[string]string{}})
+	port := servingGatewayPort(t, http.StatusOK, string(body))
 
 	cm, db := dnsProbeCM(t, "") // lookup yields nothing
 	state := &ClusterLocalState{

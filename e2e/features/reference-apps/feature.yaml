@@ -1,0 +1,74 @@
+# The reference applications of e2e/apps deployed exactly as a customer does,
+# with the customer's own CLI, and used by simulated users: a static marketing
+# site and a real Next.js SSR app (updated in place), a Node.js API whose users
+# sign in with wallets bound to device keys and whose data goes through a WASM
+# store function and the cache, a Go backend storing notes in IPFS and the
+# cache as itself, a WASM bundle with cron, pubsub, push and http_fetch, an
+# AnChat-like chat (devices, presence sockets, many small functions, push
+# fan-out through ntfy, attachments) and a WebRTC call app. Every server-side
+# app renews its workload token at /v1/auth/renew from inside its sandbox and
+# proves the renewed token works; its grants are enforced on redeploy.
+# Node.js apps need npm on the runner (the CLI installs there); the Next.js
+# app also builds there; the functions need tinygo. Missing tools are not
+# applicable (not covered).
+id: reference-apps
+title: Reference applications and simulated user journeys
+area: tenancy
+subtasks: [2862]
+stage: 5
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama deploy static
+    - orama deploy nextjs
+    - orama deploy nodejs
+    - orama deploy go
+    - orama app grants set
+    - orama app rollback
+    - orama function deploy
+    - orama function triggers add
+    - orama members add
+    - orama namespace enable
+    - orama namespace disable
+  routes:
+    - /v1/deployments/nextjs/update
+    - /v1/deployments/static/update
+    - /v1/deployments/go/update
+    - /v1/deployments/delete
+    - /v1/internal/deployments/replica/setup
+    - /v1/internal/deployments/replica/update
+    - /v1/internal/deployments/replica/rollback
+    - /v1/deployments/rollback
+    - /v1/internal/deployments/replica/teardown
+    - /v1/internal/deployments/replica/env
+    - /v1/auth/renew
+    - /v1/auth/whoami
+    - /v1/auth/refresh
+    - /v1/functions/
+    - /v1/pubsub/ws
+    - /v1/pubsub/presence
+    - /v1/pubsub/publish
+    - /v1/push/devices
+    - /v1/storage/upload
+    - /v1/storage/get/
+    - /v1/cache/put
+    - /v1/cache/get
+    - /v1/cache/delete
+    - /v1/webrtc/signal
+  units:
+    - orama-deploy-go@.service
+    - orama-deploy-node@.service
+    - orama-deploy-clean@.service
+  claims:
+    - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app renews its workload token from inside its sandbox and the renewed token is accepted"
+    - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app reaches nothing it was not granted; a grant change reaches a running app on redeploy"
+    - "docs/AUTH.md#a-workloads-identity: an app's grant applies to a running app on every node without a redeploy, and an app the grant does not cover is refused 403 when it invokes a private function"
+    - "docs/DEPLOYMENT_GUIDE.md#updating-a-deployment: an update replaces the app on its home node and its replica"
+    - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: every node serves every app by name"
+    - "docs/SERVERLESS.md#pubsub-triggers: a publish invokes the triggered function, which can push to a user's devices"
+    - "docs/PUSH_NOTIFICATIONS.md#self-hosted-ntfy-installed-on-every-node: a push lands on every node's ntfy"
+    - "docs/AUTH.md#devices: a device-bound session refreshes only with a device proof"

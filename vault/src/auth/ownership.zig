@@ -7,8 +7,12 @@
 /// overwriting it — the previous HMAC challenge proved nothing about ownership.
 ///
 /// Signed messages (ASCII, must match the Go gateway and client exactly):
-///   push: "vault-push-v1:" ++ identity_hex ++ ":" ++ decimal(version)
-///   pull: "vault-pull-v1:" ++ identity_hex ++ ":" ++ decimal(unix_seconds)
+///   push:   "vault-push-v1:" ++ identity_hex ++ ":" ++ decimal(version)
+///   pull:   "vault-pull-v1:" ++ identity_hex ++ ":" ++ decimal(unix_seconds)
+///   put:    "vault-secret-put-v1:" ++ identity_hex ++ ":" ++ name ++ ":" ++ decimal(version)
+///   get:    "vault-secret-get-v1:" ++ identity_hex ++ ":" ++ name ++ ":" ++ decimal(unix_seconds)
+///   delete: "vault-secret-delete-v1:" ++ identity_hex ++ ":" ++ name ++ ":" ++ decimal(unix_seconds)
+///   list:   "vault-secret-list-v1:" ++ identity_hex ++ ":" ++ decimal(unix_seconds)
 ///
 /// The push message binds the monotonic version (so a captured signature cannot
 /// be reused for a different version), and the pull message binds a timestamp
@@ -73,6 +77,56 @@ pub fn verifyPull(identity_hex: []const u8, timestamp: i64, now: i64, pubkey_hex
     return verifySig(msg, pubkey, sig);
 }
 
+fn decodeKeyAndSig(pubkey_hex: []const u8, sig_hex: []const u8) ?struct { pk: [32]u8, sig: [64]u8 } {
+    const pubkey = decodeHex(32, pubkey_hex) orelse return null;
+    const sig = decodeHex(64, sig_hex) orelse return null;
+    return .{ .pk = pubkey, .sig = sig };
+}
+
+fn timestampInWindow(timestamp: i64, now: i64) bool {
+    const diff = now - timestamp;
+    return diff <= PULL_MAX_SKEW_S and diff >= -PULL_MAX_SKEW_S;
+}
+
+/// PUT /v2/vault/secrets/{name}: bind identity, name and version.
+pub fn verifySecretPut(identity_hex: []const u8, name: []const u8, version: u64, pubkey_hex: []const u8, sig_hex: []const u8) bool {
+    const keys = decodeKeyAndSig(pubkey_hex, sig_hex) orelse return false;
+    if (!identityMatchesPubkey(identity_hex, keys.pk)) return false;
+    var msg_buf: [320]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "vault-secret-put-v1:{s}:{s}:{d}", .{ identity_hex, name, version }) catch return false;
+    return verifySig(msg, keys.pk, keys.sig);
+}
+
+/// GET /v2/vault/secrets/{name}: bind identity, name and a fresh timestamp.
+pub fn verifySecretGet(identity_hex: []const u8, name: []const u8, timestamp: i64, now: i64, pubkey_hex: []const u8, sig_hex: []const u8) bool {
+    if (!timestampInWindow(timestamp, now)) return false;
+    const keys = decodeKeyAndSig(pubkey_hex, sig_hex) orelse return false;
+    if (!identityMatchesPubkey(identity_hex, keys.pk)) return false;
+    var msg_buf: [320]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "vault-secret-get-v1:{s}:{s}:{d}", .{ identity_hex, name, timestamp }) catch return false;
+    return verifySig(msg, keys.pk, keys.sig);
+}
+
+/// DELETE /v2/vault/secrets/{name}.
+pub fn verifySecretDelete(identity_hex: []const u8, name: []const u8, timestamp: i64, now: i64, pubkey_hex: []const u8, sig_hex: []const u8) bool {
+    if (!timestampInWindow(timestamp, now)) return false;
+    const keys = decodeKeyAndSig(pubkey_hex, sig_hex) orelse return false;
+    if (!identityMatchesPubkey(identity_hex, keys.pk)) return false;
+    var msg_buf: [320]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "vault-secret-delete-v1:{s}:{s}:{d}", .{ identity_hex, name, timestamp }) catch return false;
+    return verifySig(msg, keys.pk, keys.sig);
+}
+
+/// GET /v2/vault/secrets (list).
+pub fn verifySecretList(identity_hex: []const u8, timestamp: i64, now: i64, pubkey_hex: []const u8, sig_hex: []const u8) bool {
+    if (!timestampInWindow(timestamp, now)) return false;
+    const keys = decodeKeyAndSig(pubkey_hex, sig_hex) orelse return false;
+    if (!identityMatchesPubkey(identity_hex, keys.pk)) return false;
+    var msg_buf: [160]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "vault-secret-list-v1:{s}:{d}", .{ identity_hex, timestamp }) catch return false;
+    return verifySig(msg, keys.pk, keys.sig);
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 test "verifyPush/verifyPull round-trip with a real keypair" {
@@ -100,6 +154,32 @@ test "verifyPush/verifyPull round-trip with a real keypair" {
     const pull_sig_hex = std.fmt.bytesToHex(pull_sig.toBytes(), .lower);
     try std.testing.expect(verifyPull(&identity_hex, ts, ts + 10, &pubkey_hex, &pull_sig_hex));
     try std.testing.expect(!verifyPull(&identity_hex, ts, ts + 10_000, &pubkey_hex, &pull_sig_hex)); // stale
+
+    // V2 put / get
+    var smsg: [320]u8 = undefined;
+    const put_msg = try std.fmt.bufPrint(&smsg, "vault-secret-put-v1:{s}:{s}:{d}", .{ &identity_hex, "api-key", @as(u64, 3) });
+    const put_sig = try kp.sign(put_msg, null);
+    const put_sig_hex = std.fmt.bytesToHex(put_sig.toBytes(), .lower);
+    try std.testing.expect(verifySecretPut(&identity_hex, "api-key", 3, &pubkey_hex, &put_sig_hex));
+    try std.testing.expect(!verifySecretPut(&identity_hex, "api-key", 4, &pubkey_hex, &put_sig_hex));
+    try std.testing.expect(!verifySecretPut(&identity_hex, "other", 3, &pubkey_hex, &put_sig_hex));
+
+    const get_msg = try std.fmt.bufPrint(&smsg, "vault-secret-get-v1:{s}:{s}:{d}", .{ &identity_hex, "api-key", ts });
+    const get_sig = try kp.sign(get_msg, null);
+    const get_sig_hex = std.fmt.bytesToHex(get_sig.toBytes(), .lower);
+    try std.testing.expect(verifySecretGet(&identity_hex, "api-key", ts, ts + 10, &pubkey_hex, &get_sig_hex));
+    try std.testing.expect(!verifySecretGet(&identity_hex, "api-key", ts, ts + 10_000, &pubkey_hex, &get_sig_hex));
+
+    const del_msg = try std.fmt.bufPrint(&smsg, "vault-secret-delete-v1:{s}:{s}:{d}", .{ &identity_hex, "api-key", ts });
+    const del_sig = try kp.sign(del_msg, null);
+    const del_sig_hex = std.fmt.bytesToHex(del_sig.toBytes(), .lower);
+    try std.testing.expect(verifySecretDelete(&identity_hex, "api-key", ts, ts, &pubkey_hex, &del_sig_hex));
+
+    var lmsg: [160]u8 = undefined;
+    const list_msg = try std.fmt.bufPrint(&lmsg, "vault-secret-list-v1:{s}:{d}", .{ &identity_hex, ts });
+    const list_sig = try kp.sign(list_msg, null);
+    const list_sig_hex = std.fmt.bytesToHex(list_sig.toBytes(), .lower);
+    try std.testing.expect(verifySecretList(&identity_hex, ts, ts, &pubkey_hex, &list_sig_hex));
 }
 
 test "identity must match pubkey" {

@@ -1,138 +1,67 @@
 package serverless
 
-import (
-	"context"
-	"testing"
+import "testing"
 
-	"go.uber.org/zap"
-)
-
-// canInvokeMockRegistry is a minimal FunctionRegistry surface for the
-// CanInvoke tests. Only Get is exercised; everything else panics so
-// accidental drift is loud.
-type canInvokeMockRegistry struct {
-	FunctionRegistry // embedded interface — calling unimplemented methods panics
-
-	fn  *Function
-	err error
-}
-
-func (m *canInvokeMockRegistry) Get(_ context.Context, _, _ string, _ int) (*Function, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.fn, nil
-}
-
-func newInvokerForCanInvokeTest(fn *Function) *Invoker {
-	return &Invoker{
-		registry: &canInvokeMockRegistry{fn: fn},
-		logger:   zap.NewNop(),
-	}
-}
-
-// TestCanInvoke_publicAllowsAnyone — public functions bypass the
-// authorization check entirely (auth middleware lets unauthenticated
-// requests through to the handler too).
-func TestCanInvoke_publicAllowsAnyone(t *testing.T) {
-	inv := newInvokerForCanInvokeTest(&Function{
-		Namespace: "anchat-test",
-		Name:      "username-check",
-		IsPublic:  true,
-	})
-	for _, wallet := range []string{"", "8oxu7UzzaSXc...", "anchat-test"} {
-		ok, err := inv.CanInvoke(context.Background(), "anchat-test", "username-check", wallet, false)
-		if err != nil {
-			t.Fatalf("wallet=%q: %v", wallet, err)
-		}
-		if !ok {
-			t.Errorf("wallet=%q: public function denied", wallet)
-		}
-	}
-}
-
-// TestCanInvoke_privateRejectsAnonymous — empty callerWallet means the
-// auth middleware didn't establish any identity; private functions reject.
-func TestCanInvoke_privateRejectsAnonymous(t *testing.T) {
-	inv := newInvokerForCanInvokeTest(&Function{
-		Namespace: "anchat-test",
-		Name:      "user-create",
-		IsPublic:  false,
-	})
-	ok, _ := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "", false)
-	if ok {
-		t.Error("anonymous caller should be denied for private function")
-	}
-	// Whitespace-only is still anonymous.
-	ok, _ = inv.CanInvoke(context.Background(), "anchat-test", "user-create", "   ", false)
-	if ok {
-		t.Error("whitespace-only callerWallet should be denied")
-	}
-}
-
-// TestCanInvoke_privateAllowsJWTAuthenticatedNewWallet is the regression
-// guard for bug #215 follow-up. A brand-new wallet (typical signup flow,
-// `user-create` style) calls a private function in a namespace it doesn't
-// "own" yet. Must succeed: auth middleware already validated the JWT
-// belongs to this namespace, the only role of CanInvoke is to confirm
-// SOMEONE is authenticated.
+// CanInvokeFunction replaces an exported Invoker.CanInvoke that re-read the
+// function from the registry — a leader-routed round trip — and then passed the
+// invoke grant as a hardcoded `true`, so it answered "yes" for a caller holding
+// no invoke grant at all. It had no callers outside its own tests.
 //
-// Pre-fix this returned false (the wallet wasn't equal to the namespace
-// string and wasn't the deployer), which was the entire reason AnChat saw
-// 401 unauthorized after the cluster_secret_path fix unblocked JWT
-// verification.
-func TestCanInvoke_privateAllowsJWTAuthenticatedNewWallet(t *testing.T) {
-	inv := newInvokerForCanInvokeTest(&Function{
-		Namespace: "anchat-test",
-		Name:      "user-create",
-		IsPublic:  false,
-		CreatedBy: "0xdeployer-wallet-not-this-caller",
-	})
-	const newUserWallet = "8oxu7UzzaSXcxZ9B3YuEqr3Qpmx7tgT9HzaA4NUGiand"
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", newUserWallet, false)
-	if err != nil {
-		t.Fatalf("CanInvoke: %v", err)
-	}
-	if !ok {
-		t.Fatal("new user wallet should be allowed to invoke private function (auth middleware vouches for them)")
+// These cases are the decision itself, which is what the persistent-WebSocket
+// upgrade and the invoker both make.
+
+func TestCanInvokeFunction_publicIsOpenToAnyone(t *testing.T) {
+	fn := &Function{Namespace: "anchat-test", Name: "username-check", IsPublic: true}
+	for _, wallet := range []string{"", "   ", "0xSomeone"} {
+		if !CanInvokeFunction(fn, wallet, false, false) {
+			t.Errorf("a public function refused wallet %q", wallet)
+		}
 	}
 }
 
-// TestCanInvoke_privateAllowsAPIKeyCaller — API-key callers get
-// callerWallet=namespace from the wallet resolver. They should still
-// succeed; this preserves the pre-#215 working flow for tenants who
-// only use API keys.
-func TestCanInvoke_privateAllowsAPIKeyCaller(t *testing.T) {
-	inv := newInvokerForCanInvokeTest(&Function{
-		Namespace: "anchat-test",
-		Name:      "user-create",
-		IsPublic:  false,
-		CreatedBy: "0xdeployer-wallet",
-	})
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", "anchat-test", false)
-	if err != nil {
-		t.Fatalf("CanInvoke: %v", err)
-	}
-	if !ok {
-		t.Error("API-key callers (callerWallet=namespace) must keep working")
+func TestCanInvokeFunction_privateRefusesAnonymous(t *testing.T) {
+	fn := &Function{Namespace: "anchat-test", Name: "user-create", IsPublic: false}
+	for _, wallet := range []string{"", "   ", "\t"} {
+		if CanInvokeFunction(fn, wallet, false, true) {
+			t.Errorf("a private function accepted wallet %q", wallet)
+		}
 	}
 }
 
-// TestCanInvoke_privateAllowsDeployer — the function deployer can invoke
-// their own private function. Was true pre-fix and must remain true.
-func TestCanInvoke_privateAllowsDeployer(t *testing.T) {
-	const deployer = "0xdeployer-wallet"
-	inv := newInvokerForCanInvokeTest(&Function{
-		Namespace: "anchat-test",
-		Name:      "user-create",
-		IsPublic:  false,
-		CreatedBy: deployer,
-	})
-	ok, err := inv.CanInvoke(context.Background(), "anchat-test", "user-create", deployer, false)
-	if err != nil {
-		t.Fatalf("CanInvoke: %v", err)
+// The case the hardcoded grant hid: an identified caller who does not hold the
+// invoke grant (bugboard #259).
+func TestCanInvokeFunction_privateNeedsTheInvokeGrant(t *testing.T) {
+	fn := &Function{Namespace: "anchat-test", Name: "user-create", IsPublic: false}
+
+	if CanInvokeFunction(fn, "0xIdentified", false, false) {
+		t.Error("a caller with an identity but no invoke grant reached a private function")
 	}
-	if !ok {
-		t.Error("deployer must always be allowed to invoke their own function")
+	if !CanInvokeFunction(fn, "0xIdentified", false, true) {
+		t.Error("a caller holding the invoke grant was refused a private function")
+	}
+}
+
+func TestCanInvokeFunction_adminReachesPrivate(t *testing.T) {
+	fn := &Function{Namespace: "anchat-test", Name: "user-create", IsPublic: false}
+	if !CanInvokeFunction(fn, "", true, false) {
+		t.Error("an admin was refused a private function")
+	}
+}
+
+// bugboard #152: internal means admin or the gateway, and nothing else — not
+// even an identified caller holding the invoke grant, and not a function marked
+// public as well.
+func TestCanInvokeFunction_internalIsAdminOnly(t *testing.T) {
+	internal := &Function{Namespace: "anchat-test", Name: "migrate", IsInternal: true}
+	if CanInvokeFunction(internal, "0xIdentified", false, true) {
+		t.Error("an identified non-admin caller reached an internal function")
+	}
+	if !CanInvokeFunction(internal, "0xAdmin", true, false) {
+		t.Error("an admin was refused an internal function")
+	}
+
+	internalAndPublic := &Function{Namespace: "anchat-test", Name: "migrate", IsInternal: true, IsPublic: true}
+	if CanInvokeFunction(internalAndPublic, "", false, false) {
+		t.Error("marking an internal function public made it reachable by anyone")
 	}
 }

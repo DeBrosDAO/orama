@@ -1,6 +1,7 @@
 package vault
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,8 +50,8 @@ func TestIPRateLimiter_PushIndependentOfPull(t *testing.T) {
 	}
 }
 
-// TestClientIP checks precedence: X-Forwarded-For first, then X-Real-IP, then
-// the TCP peer address.
+// clientIP resolves the client like the cluster gateway's limits do: the peer address, X-Forwarded-For
+// only from the local reverse proxy and then only its last entry, and an IPv6 client as its /64.
 func TestClientIP(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -60,8 +61,11 @@ func TestClientIP(t *testing.T) {
 		want       string
 	}{
 		{"remote_addr", "192.0.2.5:54321", "", "", "192.0.2.5"},
-		{"x_real_ip", "192.0.2.5:54321", "", "198.51.100.2", "198.51.100.2"},
-		{"xff_first", "192.0.2.5:54321", "203.0.113.1, 70.41.3.18", "198.51.100.2", "203.0.113.1"},
+		{"a forged xff from a direct caller is ignored", "192.0.2.5:54321", "203.0.113.1", "", "192.0.2.5"},
+		{"a forged x-real-ip is ignored", "192.0.2.5:54321", "", "198.51.100.2", "192.0.2.5"},
+		{"through the proxy the last entry counts, not the first", "127.0.0.1:54321", "6.6.6.6, 203.0.113.7", "", "203.0.113.7"},
+		{"a forged first entry cannot pick the bucket", "127.0.0.1:54321", "9.9.9.9, 203.0.113.7", "", "203.0.113.7"},
+		{"an ipv6 client is its /64", "[2001:db8:1:2:aaaa::1]:443", "", "", "2001:db8:1:2::/64"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -77,5 +81,22 @@ func TestClientIP(t *testing.T) {
 				t.Fatalf("clientIP() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Two addresses in one /64 share a pull bucket, and a forged header does not buy another.
+func TestIPRateLimiter_aSlash64SharesOneBucketAndAForgedHeaderIsIgnored(t *testing.T) {
+	rl := NewIPRateLimiter()
+	served := 0
+	for i := 0; i < pullPerMinutePerIP*2; i++ {
+		r := httptest.NewRequest(http.MethodPost, "/v1/vault/pull", nil)
+		r.RemoteAddr = fmt.Sprintf("[2001:db8:7:7:%x::1]:443", i+1)
+		r.Header.Set("X-Forwarded-For", fmt.Sprintf("203.0.113.%d", i%200+1))
+		if rl.AllowPull(clientIP(r)) {
+			served++
+		}
+	}
+	if served != pullPerMinutePerIP {
+		t.Fatalf("served %d pulls from one /64 with rotating headers, want the %d burst", served, pullPerMinutePerIP)
 	}
 }

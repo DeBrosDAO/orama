@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	gwauth "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -104,6 +105,20 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// The name is the only thing a `storage:avatars/*` selector has to compare
+	// against, and it comes from the client. Normalising it first is what makes
+	// the comparison mean one thing: `/avatars/me.png` and `avatars//me.png`
+	// are the same object, and `avatars/../keys/x` is not under `avatars/` at
+	// all however it is spelled.
+	name, err := gwauth.NormalizeStoragePath(name)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.authorizeStoragePath(w, r, name, gwauth.ActionWrite) {
+		return
+	}
+
 	// Server-side per-namespace storage quota (bugboard #141). Reject BEFORE we
 	// add/pin so the namespace's RF-inclusive budget is a real ceiling, not a
 	// client-trusted gate. A namespace with no configured budget is unlimited
@@ -131,8 +146,15 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add to IPFS
-	addResp, err := h.ipfsClient.Add(ctx, reader, name)
+	// Add to IPFS. Content that is to be pinned is imported here only and
+	// pinned once, with its replication factor, by pinAsync: Add would pin it
+	// everywhere first, and narrowing that made every other peer start
+	// fetching it and then cancel and unpin it.
+	add := h.ipfsClient.Add
+	if shouldPin {
+		add = h.ipfsClient.AddLocal
+	}
+	addResp, err := add(ctx, reader, name)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to add content to IPFS", zap.Error(err))
 		httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add content: %v", err))
@@ -155,6 +177,16 @@ func (h *Handlers) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		Size: addResp.Size,
 	}
 
+	// The reference goes into the cluster index before the pin is requested, so
+	// another namespace unpinning the same bytes right now counts it.
+	if shouldPin {
+		if err := h.registerRef(ctx, addResp.Cid, namespace); err != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "failed to record the pin reference", zap.Error(err), zap.String("cid", addResp.Cid))
+			httputil.WriteError(w, http.StatusServiceUnavailable, "the content was stored but could not be registered for pinning; retry the upload")
+			return
+		}
+	}
+
 	// Pin asynchronously in background if requested
 	if shouldPin {
 		go h.pinAsync(addResp.Cid, name, replicationFactor, namespace)
@@ -173,7 +205,8 @@ const (
 )
 
 // pinAsync pins a CID asynchronously in the background with retry logic.
-// It retries once if the first attempt fails, then gives up.
+// It retries once if the first attempt fails, then gives up and drops the
+// registration the upload made, since no pin will exist for it.
 func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace string) {
 	ctx := context.Background()
 
@@ -198,6 +231,14 @@ func (h *Handlers) pinAsync(cid, name string, replicationFactor int, namespace s
 		// Final failure - log and give up
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin retry failed, giving up",
 			zap.Error(err), zap.String("cid", cid))
+		h.dropRef(ctx, cid, namespace)
+		// Content to be pinned was imported on this node only (AddLocal), so
+		// its local pin is all that keeps it, and nothing tracks it once the
+		// reference is gone: give it back too.
+		if unpinErr := h.ipfsClient.Unpin(ctx, cid); unpinErr != nil {
+			h.logger.ComponentError(logging.ComponentGeneral, "an upload whose pin failed could not be unpinned on this node; it stays until removed",
+				zap.Error(unpinErr), zap.String("cid", cid))
+		}
 	} else {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "async pin succeeded on retry", zap.String("cid", cid))
 		// Update pin status in database

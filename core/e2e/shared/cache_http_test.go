@@ -237,7 +237,8 @@ func TestCache_Delete(t *testing.T) {
 func TestCache_TTL(t *testing.T) {
 	e2e.SkipIfMissingGateway(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Longer than the expiry poll below, so the poll is what fails, not the ctx.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	dmap := e2e.GenerateDMapName()
@@ -280,13 +281,14 @@ func TestCache_TTL(t *testing.T) {
 		t.Fatalf("get immediately after put failed: status %d, err %v", status, err)
 	}
 
-	// Wait for TTL expiry (2 seconds + buffer)
-	e2e.Delay(2500)
-
-	// Verify value is expired
-	_, status, err = getReq.Do(ctx)
-	if status != http.StatusNotFound {
-		t.Logf("warning: TTL expiry may not be fully implemented; got status %d", status)
+	// Poll rather than sleep once: expiry is an absolute time set on one Olric
+	// member and checked on another, so clock skew eats a fixed margin.
+	expired := e2e.WaitForCondition(10*time.Second, func() bool {
+		_, status, _ := getReq.Do(ctx)
+		return status == http.StatusNotFound
+	})
+	if expired != nil {
+		t.Fatalf("value written with ttl=2s still readable after 10s: %v", expired)
 	}
 }
 

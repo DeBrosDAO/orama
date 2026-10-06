@@ -11,7 +11,7 @@ export const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          "bg-accent text-black relative border border-white/[0.08] border-t-white/20 shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)] hover:shadow-[0_0_20px_rgba(161,161,170,0.35),0_1px_3px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.1)] hover:bg-accent/95 active:shadow-[inset_0_1px_3px_rgba(0,0,0,0.3)] active:translate-y-px",
+          "bg-accent text-bg relative border border-white/[0.08] border-t-white/20 shadow-[0_1px_2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.08)] hover:shadow-[0_0_20px_rgba(161,161,170,0.35),0_1px_3px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.1)] hover:bg-accent/95 active:shadow-[inset_0_1px_3px_rgba(0,0,0,0.3)] active:translate-y-px",
         ghost:
           "border border-border/60 text-muted hover:border-fg/30 hover:text-fg hover:bg-white/[0.03] active:bg-white/[0.05]",
         dashed:

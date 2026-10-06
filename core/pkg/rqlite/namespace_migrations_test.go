@@ -18,6 +18,7 @@ import (
 //     namespace since the isolated path never creates schema_migrations.
 //   - a CREATE INDEX on subscriptions(namespace_id) — fails "no such column" when
 //     a tenant owns a differently shaped subscriptions.
+//
 // Both must be stripped in the namespace path (applySQLNamespace).
 func nsTestFS() fs.FS {
 	return fstest.MapFS{
@@ -252,6 +253,23 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER)`,
 		`CREATE INDEX idx ON subscriptions(namespace_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_subscriptions_ns ON subscriptions(topic)`,
+		// Cluster-only tables, which have no business in a tenant's database
+		// at all. Every keyword a migration puts one after has to be covered:
+		// the first version of this matched only INTO/TABLE/ON, so a migration
+		// that UPDATEd a stripped table failed "no such table".
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (id INTEGER)`,
+		`CREATE INDEX idx ON refresh_tokens(subject)`,
+		`CREATE TABLE nonces (wallet TEXT)`,
+		`UPDATE refresh_tokens SET revoked_at = datetime('now')`,
+		`DELETE FROM nonces WHERE expires_at < datetime('now')`,
+		`INSERT INTO grants(principal_id) SELECT id FROM principals`,
+		// A table rebuild renames its scratch table over the real one. The
+		// source is not stripped and the target is, and missing this failed
+		// with "there is already another table with this name" on any
+		// namespace database that still had the old table.
+		`ALTER TABLE api_keys_new RENAME TO api_keys`,
+		// Deployments are cluster state (schema_placement.go).
+		`CREATE TABLE IF NOT EXISTS deployments (id INTEGER)`,
 	}
 	for _, s := range strip {
 		if !stmtTargetsStrippedTable(s) {
@@ -262,8 +280,7 @@ func TestStmtTargetsStrippedTable(t *testing.T) {
 		`CREATE TABLE IF NOT EXISTS functions (id INTEGER)`,
 		`CREATE TABLE IF NOT EXISTS user_subscriptions (id INTEGER)`, // not our table
 		`INSERT OR IGNORE INTO orama_schema_migrations(version) VALUES (2)`,
-		`CREATE INDEX idx ON refresh_tokens(subject)`,
-		`CREATE TABLE nonces (wallet TEXT)`,
+		`CREATE INDEX idx ON push_devices(user_id)`,
 	}
 	for _, s := range keep {
 		if stmtTargetsStrippedTable(s) {
@@ -332,5 +349,116 @@ func TestIsCoreSubscriptionsShape(t *testing.T) {
 	// missing column must NOT match
 	if isCoreSubscriptionsShape([]string{"id", "namespace_id", "app_id", "topic", "endpoint"}) {
 		t.Error("subset must not match core")
+	}
+}
+
+// A namespace database migrated by an earlier release already holds the
+// platform's tables — the strip list only stops them being created again. They
+// have to be removed, or the tenant keeps a copy of `api_keys` and `grants` in
+// the database they can export whole.
+func TestNamespaceApply_removesClusterOnlyTablesAnEarlierReleaseCreated(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	// The shape an earlier release left behind.
+	for _, ddl := range []string{
+		`CREATE TABLE api_keys (id INTEGER PRIMARY KEY, key TEXT)`,
+		`CREATE TABLE grants (id INTEGER PRIMARY KEY, role TEXT)`,
+		`CREATE TABLE refresh_tokens (id INTEGER PRIMARY KEY, token TEXT)`,
+	} {
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			t.Fatalf("seed %q: %v", ddl, err)
+		}
+	}
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	for _, table := range []string{"api_keys", "grants", "refresh_tokens"} {
+		if exists, _ := tableExists(ctx, db, table); exists {
+			t.Errorf("%q is still in the tenant's database", table)
+		}
+	}
+}
+
+// The control-plane tables whose readers were checked (schema_placement.go) are
+// not created in a tenant's database, and the ones a namespace gateway still
+// reads on its own handle are, so that code keeps getting an empty answer
+// rather than "no such table".
+func TestNamespaceApply_controlPlaneTablesFollowTheirPlacement(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, table := range []string{
+		"dns_nameservers", "raft_evicted_nodes", "node_health_events", "rqlite_backups",
+		"namespace_cluster_events", "namespace_pending_cleanup", "webrtc_port_allocations", "webrtc_rooms",
+	} {
+		if exists, _ := tableExists(ctx, db, table); exists {
+			t.Errorf("%q is placed in the cluster registry and was created in the tenant's database", table)
+		}
+	}
+	for _, table := range []string{
+		"namespace_clusters", "namespace_cluster_nodes", "namespace_port_allocations",
+		"dns_nodes", "dns_records", "wireguard_peers", "invite_tokens", "global_deployment_subdomains",
+	} {
+		if exists, _ := tableExists(ctx, db, table); !exists {
+			t.Errorf("%q is read on a namespace gateway's own handle and was not created", table)
+		}
+	}
+}
+
+// A tenant that already owns a table with one of the newly reclassified names
+// keeps it, rows and all: the name is reserved from now on, but the data is
+// not the platform's to delete.
+func TestNamespaceApply_leavesATenantsPopulatedReclassifiedTable(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE webrtc_rooms (id INTEGER PRIMARY KEY, title TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO webrtc_rooms(id, title) VALUES (1, 'standup')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if n, err := tableRowCount(ctx, db, "webrtc_rooms"); err != nil || n != 1 {
+		t.Errorf("the tenant's table has %d rows (err %v), want its one row", n, err)
+	}
+}
+
+// A table with rows in it is left where it is. The rows are almost certainly
+// the platform's — legacy keys from before validation moved to the registry —
+// but a tenant may have created a table under the same name, and destroying a
+// tenant's data to tidy up the platform's is not a trade to make silently.
+func TestNamespaceApply_leavesAClusterOnlyTableThatHasRows(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+
+	if _, err := db.ExecContext(ctx, `CREATE TABLE api_keys (id INTEGER PRIMARY KEY, key TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO api_keys(id, key) VALUES (1, 'something')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ApplyEmbeddedMigrationsNamespace(ctx, db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	exists, err := tableExists(ctx, db, "api_keys")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("a table with rows in it was dropped")
+	}
+	if n, _ := tableRowCount(ctx, db, "api_keys"); n != 1 {
+		t.Errorf("%d rows remain, want the one that was there", n)
 	}
 }

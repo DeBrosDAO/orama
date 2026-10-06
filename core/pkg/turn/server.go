@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	pionTurn "github.com/pion/turn/v4"
+	pionTurn "github.com/pion/turn/v5"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +41,9 @@ type Server struct {
 	// restarting drops every OTHER tenant's active relays.
 	tenantMu sync.RWMutex
 	tenants  *tenantSet
+	// servedPath is where the live tenant set is published; empty publishes
+	// nothing. Set by WatchTenantConfig before the watcher starts.
+	servedPath string
 }
 
 // NewServer creates and starts a TURN server.
@@ -160,8 +163,11 @@ func NewServer(cfg *Config, logger *zap.Logger) (*Server, error) {
 	// Create TURN server with HMAC-SHA1 auth
 	serverConfig := pionTurn.ServerConfig{
 		Realm: cfg.Realm,
-		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
-			return s.authHandler(username, realm, srcAddr)
+		AuthHandler: func(ra *pionTurn.RequestAttributes) (string, []byte, bool) {
+			// The username doubles as the allocation's user ID, as it did
+			// before pion/turn v5 stopped deriving it implicitly.
+			key, ok := s.authHandler(ra.Username, ra.Realm, ra.SrcAddr)
+			return ra.Username, key, ok
 		},
 		PacketConnConfigs: packetConfigs,
 	}

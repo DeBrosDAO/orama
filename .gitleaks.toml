@@ -1,0 +1,73 @@
+# Secret-scan allowlist for `gitleaks dir` / `infisical scan` (the
+# TestSecretScan_committedTree gate in e2e/features/scanners).
+#
+# Every path below was reviewed: none holds a live credential. A finding in a
+# path that is not listed fails the gate, so a new fixture is added here by
+# name, after looking at it, not by a directory wildcard.
+
+title = "orama secret-scan allowlist"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Test vectors and key fixtures: deterministic keys and signatures that verify code, generated for the tests and worth nothing"
+paths = [
+  '''(^|/)chain/client/tx/testdata/tx_vectors\.json$''',
+  '''(^|/)chain/x/shielded/wallet/testdata/keys/keys\.json$''',
+  '''(^|/)contracts/enrollment/seal\.json$''',
+]
+
+[[allowlists]]
+description = "Unit tests: fake keys, tokens and passwords the test itself makes up (an example JWT, a stripe-shaped string, a throwaway P-256 key, a random hex secret)"
+paths = [
+  '''(^|/)core/cmd/gateway/config_secrets_test\.go$''',
+  '''(^|/)core/cmd/orama/internal/audit_commands_test\.go$''',
+  '''(^|/)core/cmd/orama/internal/functions/status_errors_test\.go$''',
+  '''(^|/)core/cmd/orama/internal/prod_commands_test\.go$''',
+  '''(^|/)core/cmd/orama/internal/production/install/remote_args_test\.go$''',
+  '''(^|/)core/pkg/config/decode_test\.go$''',
+  '''(^|/)core/pkg/deployments/envcodec_test\.go$''',
+  '''(^|/)core/pkg/gateway/handlers/auth/handlers_test\.go$''',
+  '''(^|/)core/pkg/gateway/scope_policy_test\.go$''',
+  '''(^|/)core/pkg/gateway/handlers/deployments/env_at_rest_test\.go$''',
+  '''(^|/)core/pkg/gateway/handlers/operator/authorize_test\.go$''',
+  '''(^|/)core/pkg/gateway/handlers/serverless/audit_test\.go$''',
+  '''(^|/)core/pkg/gateway/instance_spawner_test\.go$''',
+  '''(^|/)core/pkg/gateway/internal_auth_test\.go$''',
+  '''(^|/)core/pkg/gateway/middleware_apikey_lookup_test\.go$''',
+  '''(^|/)core/pkg/gateway/middleware_test\.go$''',
+  '''(^|/)core/pkg/gateway/secrets_key_test\.go$''',
+  '''(^|/)core/pkg/httputil/auth_test\.go$''',
+  '''(^|/)core/pkg/install/installers/coredns_test\.go$''',
+  '''(^|/)core/pkg/install/templates/render_test\.go$''',
+  '''(^|/)core/pkg/install/turn_secret_test\.go$''',
+  '''(^|/)core/pkg/install/wireguard_test\.go$''',
+  '''(^|/)core/pkg/privhelper/wireguard_test\.go$''',
+  '''(^|/)core/pkg/push/providers/apns/apns_test\.go$''',
+  '''(^|/)core/pkg/push/topic_test\.go$''',
+  '''(^|/)core/pkg/rqlite/endpoint_test\.go$''',
+  '''(^|/)core/pkg/secrets/encrypt_test\.go$''',
+  '''(^|/)core/pkg/serverless/hostfunctions/secrets_test\.go$''',
+  '''(^|/)core/pkg/storagefile/file_test\.go$''',
+  '''(^|/)core/pkg/telemetry/report/namespaces_rqlite_test\.go$''',
+  '''(^|/)e2e/features/external-vantage/edge_test\.go$''',
+  '''(^|/)e2e/harness/gw/gw_test\.go$''',
+  '''(^|/)e2e/harness/oramacli/proc_test\.go$''',
+  '''(^|/)e2e/harness/secrets/patterns_more_test\.go$''',
+  '''(^|/)e2e/harness/secrets/patterns_test\.go$''',
+  '''(^|/)e2e/harness/secrets/secrets_test\.go$''',
+  '''(^|/)os/agent/internal/command/receiver_auth_test\.go$''',
+  '''(^|/)sdk/tests/unit/chain/builder\.test\.ts$''',
+  '''(^|/)sdk/tests/unit/http/auth-headers\.test\.ts$''',
+]
+
+[[allowlists]]
+description = "Public constants and labels that only look like keys: a GPG fingerprint, an HKDF purpose string, a key type name, a doc sentence quoting an HKDF label, the scanner's own pattern for curl -u"
+paths = [
+  '''(^|/)core/pkg/install/installers/tor\.go$''',
+  '''(^|/)core/pkg/serverless/hostfunctions/secrets\.go$''',
+  '''(^|/)core/pkg/telemetry/report/chain_verify\.go$''',
+  '''(^|/)docs/SECURITY\.md$''',
+  '''(^|/)e2e/harness/secrets/patterns\.go$''',
+]

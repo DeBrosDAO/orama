@@ -3,6 +3,8 @@ package node
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -13,7 +15,13 @@ import (
 // (bugboard #858) can be exercised against real SQL.
 func newDNSTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
+	// cache=shared so a statement that runs while another connection still
+	// holds rows sees the same database. A plain :memory: DSN is per
+	// connection, and capping the pool at one connection deadlocks the stale
+	// reaper, which writes while its select is still open. The name is the
+	// test's, so parallel tests do not share one database.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +39,10 @@ func newDNSTestDB(t *testing.T) *sql.DB {
 			UNIQUE(fqdn, record_type, value))`,
 		`CREATE TABLE dns_nameservers (
 			hostname TEXT PRIMARY KEY, node_id TEXT NOT NULL, ip_address TEXT NOT NULL,
-			domain TEXT NOT NULL, UNIQUE(node_id, domain))`,
+			domain TEXT NOT NULL,
+			assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(node_id, domain))`,
 		`CREATE TABLE dns_nodes (
 			id TEXT PRIMARY KEY, ip_address TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'active',

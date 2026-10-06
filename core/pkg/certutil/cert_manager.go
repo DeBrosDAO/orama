@@ -28,6 +28,18 @@ func NewCertificateManager(baseDir string) *CertificateManager {
 	}
 }
 
+// mustSerial returns a 128-bit CSPRNG serial (bugboard #118).
+func mustSerial() *big.Int {
+	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		panic("certutil: crypto/rand unavailable: " + err.Error())
+	}
+	if n.Sign() == 0 {
+		n = big.NewInt(1)
+	}
+	return n
+}
+
 // EnsureCACertificate creates or loads the CA certificate
 func (cm *CertificateManager) EnsureCACertificate() ([]byte, []byte, error) {
 	caCertPath := filepath.Join(cm.baseDir, "ca.crt")
@@ -113,7 +125,7 @@ func (cm *CertificateManager) generateCACertificate() ([]byte, []byte, error) {
 
 	// Create certificate template
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: mustSerial(),
 		Subject: pkix.Name{
 			CommonName:   "Orama Network Root CA",
 			Organization: []string{"Orama"},
@@ -168,7 +180,7 @@ func (cm *CertificateManager) generateNodeCertificate(hostname string, caCertPEM
 
 	// Create certificate template
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		SerialNumber: mustSerial(),
 		Subject: pkix.Name{
 			CommonName: hostname,
 		},

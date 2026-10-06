@@ -29,6 +29,7 @@ type yamlCfgMirror struct {
 	SecretsEncryptionKey string   `yaml:"secrets_encryption_key"`
 	ClusterSecretPath    string   `yaml:"cluster_secret_path"`
 	APIKeyHMACSecret     string   `yaml:"api_key_hmac_secret"`
+	StateDir             string   `yaml:"state_dir"`
 }
 
 // applyAPIKeyHMACSecret mirrors the trim/assign block in parseGatewayConfig.

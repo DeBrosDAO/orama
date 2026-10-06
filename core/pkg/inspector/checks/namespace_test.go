@@ -2,6 +2,7 @@ package checks
 
 import (
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -10,13 +11,13 @@ func TestCheckNamespace_PerNodeHealthy(t *testing.T) {
 	nd := makeNodeData("1.1.1.1", "node")
 	nd.Namespaces = []inspector.NamespaceData{
 		{
-			Name:        "myapp",
-			PortBase:    10000,
-			RQLiteUp:    true,
-			RQLiteState: "Leader",
-			RQLiteReady: true,
-			OlricUp:     true,
-			GatewayUp:   true,
+			Name:          "myapp",
+			PortBase:      10000,
+			RQLiteUp:      true,
+			RQLiteState:   "Leader",
+			RQLiteReady:   true,
+			OlricUp:       true,
+			GatewayUp:     true,
 			GatewayStatus: 200,
 		},
 	}
@@ -162,4 +163,56 @@ func TestCheckNamespace_NoNamespaces(t *testing.T) {
 	for _, r := range results {
 		t.Errorf("unexpected check: %s", r.ID)
 	}
+}
+
+// A namespace the registry says is being created or deleted is up on some nodes
+// and not yet (or no longer) on others: an e2e namespace torn down during an
+// inspection failed it critically as "0/1 nodes fully healthy".
+func TestCheckNamespace_InTransitionIsNotJudged(t *testing.T) {
+	for _, status := range []string{"provisioning", "deprovisioning"} {
+		t.Run(status, func(t *testing.T) {
+			nd := makeNodeData("1.1.1.1", "node")
+			nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: status, TransitionAge: time.Minute}}
+			results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+			expectStatus(t, results, "ns.e2e-x.settled", inspector.StatusSkip)
+			expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusSkip)
+			for _, r := range results {
+				if r.Status == inspector.StatusFail {
+					t.Errorf("a namespace in transition failed %s: %s", r.ID, r.Message)
+				}
+			}
+		})
+	}
+}
+
+// Every other registry state, and an unreadable registry, is judged: a ready,
+// degraded or failed namespace with services down is unhealthy, and so is one
+// the registry does not know at all.
+func TestCheckNamespace_SettledOrUnknownIsJudged(t *testing.T) {
+	for _, status := range []string{"ready", "degraded", "failed", ""} {
+		t.Run("status="+status, func(t *testing.T) {
+			nd := makeNodeData("1.1.1.1", "node")
+			nd.Namespaces = []inspector.NamespaceData{{Name: "myapp", RegistryStatus: status}}
+			results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+			expectStatus(t, results, "ns.myapp.all_healthy", inspector.StatusFail)
+		})
+	}
+}
+
+// A namespace the registry has had in transition past the limit (the registry
+// itself would have taken it over by then) is stuck: it is judged, and said so.
+func TestCheckNamespace_StuckInTransitionIsJudged(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: "deprovisioning", TransitionAge: time.Hour}}
+	results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+	expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusFail)
+	expectStatus(t, results, "ns.e2e-x.transition_stuck", inspector.StatusFail)
+}
+
+// A transitional namespace whose stamp could not be read is judged, not excused.
+func TestCheckNamespace_UnknownTransitionAgeIsJudged(t *testing.T) {
+	nd := makeNodeData("1.1.1.1", "node")
+	nd.Namespaces = []inspector.NamespaceData{{Name: "e2e-x", RegistryStatus: "provisioning", TransitionAge: inspector.UnknownTransitionAge}}
+	results := CheckNamespace(makeCluster(map[string]*inspector.NodeData{"1.1.1.1": nd}))
+	expectStatus(t, results, "ns.e2e-x.all_healthy", inspector.StatusFail)
 }

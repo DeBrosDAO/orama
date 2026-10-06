@@ -1,23 +1,62 @@
 package deployments
 
 import (
-	"bufio"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
+	"sync"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/privhelper"
 	"go.uber.org/zap"
 )
+
+// defaultLogLines is how many lines a request without lines= gets.
+const defaultLogLines = 100
+
+// maxConcurrentLogReadsPerNamespace bounds the journal reads one namespace has
+// running at once. Each holds one of the privileged helper's shared slots, which
+// deploys, restarts and node reports also need, so a tenant polling logs must
+// not be able to take them all.
+const maxConcurrentLogReadsPerNamespace = 2
+
+// logReadRetryAfterSeconds is what a refused read is told to wait.
+const logReadRetryAfterSeconds = "1"
+
+// logsTruncatedHeader tells the client the oldest requested lines were cut to
+// fit the helper's response limit; the log text itself carries no notice.
+const logsTruncatedHeader = "X-Logs-Truncated"
 
 // LogsHandler handles deployment logs
 type LogsHandler struct {
 	service        *DeploymentService
 	processManager *process.Manager
 	logger         *zap.Logger
+
+	mu       sync.Mutex
+	inflight map[string]int // journal reads running, by namespace
+}
+
+// acquireLogRead takes one of namespace's read slots; false when none is free.
+func (h *LogsHandler) acquireLogRead(namespace string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight[namespace] >= maxConcurrentLogReadsPerNamespace {
+		return false
+	}
+	if h.inflight == nil {
+		h.inflight = make(map[string]int)
+	}
+	h.inflight[namespace]++
+	return true
+}
+
+func (h *LogsHandler) releaseLogRead(namespace string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.inflight[namespace]--; h.inflight[namespace] <= 0 {
+		delete(h.inflight, namespace)
+	}
 }
 
 // NewLogsHandler creates a new logs handler
@@ -44,24 +83,34 @@ func (h *LogsHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse parameters
-	lines := 100
+	lines := defaultLogLines
 	if linesStr := r.URL.Query().Get("lines"); linesStr != "" {
-		if l, err := strconv.Atoi(linesStr); err == nil {
-			lines = l
+		n, err := privhelper.ParseJournalLines(linesStr)
+		if err != nil {
+			http.Error(w, "invalid lines: "+err.Error(), http.StatusBadRequest)
+			return
 		}
+		lines = n
 	}
 
-	follow := false
-	if followStr := r.URL.Query().Get("follow"); followStr == "true" {
-		follow = true
+	// A follow would have to hold the journal open through the helper, which
+	// answers once; refuse it instead of returning a snapshot as if it followed.
+	if r.URL.Query().Get("follow") == "true" {
+		http.Error(w, "following logs is not supported; re-run without --follow to read the last lines", http.StatusNotImplemented)
+		return
 	}
+
+	if !h.acquireLogRead(namespace) {
+		w.Header().Set("Retry-After", logReadRetryAfterSeconds)
+		http.Error(w, "too many log reads of this namespace are running; retry shortly", http.StatusTooManyRequests)
+		return
+	}
+	defer h.releaseLogRead(namespace)
 
 	h.logger.Info("Streaming logs",
 		zap.String("namespace", namespace),
 		zap.String("name", name),
 		zap.Int("lines", lines),
-		zap.Bool("follow", follow),
 	)
 
 	// Get deployment
@@ -82,36 +131,19 @@ func (h *LogsHandler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get logs from process manager
-	logs, err := h.processManager.GetLogs(ctx, deployment, lines, follow)
+	logs, truncated, err := h.processManager.GetLogs(ctx, deployment, lines)
 	if err != nil {
-		h.logger.Error("Failed to get logs", zap.Error(err))
-		http.Error(w, "Failed to get logs", http.StatusInternalServerError)
+		h.logger.Error("Failed to get logs", zap.String("namespace", namespace), zap.String("name", name), zap.Error(err))
+		http.Error(w, "failed to read the logs of "+name+" on its node; the gateway journal on that node has the cause", http.StatusInternalServerError)
 		return
 	}
 
-	// Set headers for streaming
 	w.Header().Set("Content-Type", "text/plain")
-	w.Header().Set("Transfer-Encoding", "chunked")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-
-	// Stream logs
-	if follow {
-		// For follow mode, stream continuously
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-			return
-		}
-
-		scanner := bufio.NewScanner(strings.NewReader(string(logs)))
-		for scanner.Scan() {
-			fmt.Fprintf(w, "%s\n", scanner.Text())
-			flusher.Flush()
-		}
-	} else {
-		// For non-follow mode, write all logs at once
-		w.Write(logs)
+	if truncated {
+		w.Header().Set(logsTruncatedHeader, "true")
 	}
+	w.Write(logs)
 }
 
 // HandleGetEvents gets deployment events

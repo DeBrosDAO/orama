@@ -3,6 +3,7 @@ package gateway
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -129,17 +130,65 @@ func (nrl *NamespaceRateLimiter) Allow(namespace string) bool {
 }
 
 // rateLimitMiddleware returns 429 when a client exceeds the rate limit.
-// Internal traffic from the WireGuard subnet is exempt.
+// Traffic from another node over the overlay, and from a process on this
+// machine, is exempt.
+//
+// The client is resolved from the peer address, not from getClientIP: that
+// reads the first X-Forwarded-For entry, which any caller can write, and an
+// address in the WireGuard subnet was exempt from every limit. One header
+// removed all rate limiting from the endpoints that mint credentials. See
+// rate_limit_key.go.
 func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 	if g.rateLimiter == nil {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := getClientIP(r)
-
-		// Exempt internal cluster traffic (WireGuard subnet)
-		if isInternalIP(ip) {
+		client, exempt := rateLimitClient(r)
+		if exempt {
 			next.ServeHTTP(w, r)
+			return
+		}
+		// Every bucket below is keyed by the client's network, not its address: an IPv6 client is
+		// its /64, so a subscriber that can source requests from any address of its prefix does
+		// not get a fresh bucket for each one (see bucketKey).
+		ip := bucketKey(client)
+
+		// The credential-minting endpoints have their own, much tighter
+		// bucket. They are cheap to call and expensive to serve, and they are
+		// the ones worth grinding.
+		if g.authRateLimiter != nil && isAuthRateLimitPath(r.URL.Path) && !g.authRateLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "60")
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"too many authentication attempts — wait a minute and try again",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(60))
+			return
+		}
+
+		// Every /v1/chain/query/ request runs a query on the chain process, so it has a bucket
+		// of its own instead of drawing on the general one.
+		if g.chainQueryRateLimiter != nil && isChainQueryPath(r.URL.Path) && !g.chainQueryRateLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", "10")
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"too many chain queries from this address — wait a moment and try again",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(10))
+			return
+		}
+
+		// A capability-opened WebSocket carries no credential, so the address
+		// is all that can be limited. It gets a bucket of its own, on the
+		// gateway that sees the client; a namespace gateway sees only the
+		// overlay, which is exempt.
+		if g.capabilityRateLimiter != nil && isCapabilityUpgrade(r) && !g.capabilityRateLimiter.Allow(ip) {
+			w.Header().Set("Retry-After", strconv.Itoa(capabilityRetryAfterSeconds))
+			httputil.WriteRPCError(w, http.StatusTooManyRequests,
+				httputil.ErrCodeRateLimited,
+				"too many capability connections from this address — wait a minute and try again",
+				httputil.WithRetryable(),
+				httputil.WithRetryAfter(capabilityRetryAfterSeconds))
 			return
 		}
 

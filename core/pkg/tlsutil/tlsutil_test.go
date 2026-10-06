@@ -2,6 +2,7 @@ package tlsutil
 
 import (
 	"crypto/tls"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -176,6 +177,17 @@ func TestNewHTTPClientForDomain_Untrusted(t *testing.T) {
 	}
 	if client.Transport == nil {
 		t.Fatal("NewHTTPClientForDomain() returned client with nil Transport for untrusted domain")
+	}
+}
+
+func TestNewHTTPClientForDomain_neverSkipsVerify(t *testing.T) {
+	client := NewHTTPClientForDomain(5*time.Second, "api.orama.network")
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil {
+		t.Fatal("expected TLS client config")
+	}
+	if tr.TLSClientConfig.InsecureSkipVerify {
+		t.Error("NewHTTPClientForDomain must not set InsecureSkipVerify (bugboard #112)")
 	}
 }
 

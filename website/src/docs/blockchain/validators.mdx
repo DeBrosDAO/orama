@@ -1,0 +1,39 @@
+# Validators and voting power
+
+Bonds live in `x/staking`. The voting power CometBFT uses is computed by `x/power` at the end of every block. Staking's own validator updates are discarded.
+
+## Power is not raw stake
+
+Each bonded validator gets a share of the stake, then three limits apply.
+
+**A cap.** No validator's capped share can exceed 5% of the set. Once more than 60 validators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs.
+
+**A ramp.** A validator that has just become eligible does not receive its full share immediately. The share ramps over 30 epochs.
+
+**A redistribution bound.** Power moved off a capped validator cannot raise another validator to more than twice that validator's own raw stake share.
+
+If the ramp or the cap leaves some power unallocated, rewards are still paid on the power that was actually assigned, pro rata. They are not paid against a nominal total of 1, which would otherwise shrink the payout.
+
+A parameter called the useful-work multiplier is stored and must be between 0.75 and 1.25. The default is 1.0 and it is marked not activated. No keeper reads it. It does not change power.
+
+## Hand-over from the bootstrap committee
+
+A production genesis needs at least 30 bootstrap committee members. A devnet, stagenet, or localnet chain id may have fewer.
+
+A factor called lambda starts below 1 and never decreases. It reaches 1 when total bonded stake reaches 271,000 ORAMA, or at epoch 365, whichever comes first. Until then the bootstrap committee still carries weight next to stake-backed validators. The default parameters call 271,000 ORAMA the exit stake. That number is what the code uses. It is not 5% of the year-1 schedule maximum. The year-1 maximum is 730 times 14,848 ORAMA, which is 10,839,040 ORAMA.
+
+## Rewards
+
+Once an epoch closes, `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT is given in that block.
+
+Each validator's amount is split by that validator's commission rate. The commission, plus the operator's own self-delegation, goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account. There is no withdraw transaction.
+
+A bootstrap committee member has 50% of their own reward force-bonded into their self-delegation, until that self-bond reaches twice the minimum. The minimum self-bond in the default parameters is 1,000 ORAMA, so the ceiling is 2,000 ORAMA. Force-bonding is skipped if the member has no validator record yet, or the validator is jailed, or the exchange rate is invalid. In those cases the whole reward stays in earnings, so one bad validator cannot halt the epoch.
+
+A delegation smaller than 1 ORAMA does not receive rewards.
+
+## Slashing
+
+Downtime slashing is 0.01% inside a window of 10,000 signed blocks. Double-sign slashing is 5%. This app does not override the Cosmos SDK unbonding period, so unbonding stays at that SDK default.
+
+Jailing and undelegation still go through `x/staking`. An undelegation guard in `x/power` sits on that path so a committee member cannot drop the bond the power rules require.

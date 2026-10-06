@@ -1,0 +1,105 @@
+syntax = "proto3";
+package orama.market.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "gogoproto/gogo.proto";
+import "orama/cnft/v1/cnft.proto";
+
+// Msg is x/market's transaction service. Settlement pays the seller and the
+// collection creator through earnings accounts, never as a public bank balance.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc List(MsgList) returns (MsgListResponse);
+  rpc CancelListing(MsgCancelListing) returns (MsgCancelListingResponse);
+  rpc Bid(MsgBid) returns (MsgBidResponse);
+  rpc CancelBid(MsgCancelBid) returns (MsgCancelBidResponse);
+  rpc Settle(MsgSettle) returns (MsgSettleResponse);
+}
+
+message MsgList {
+  option (cosmos.msg.v1.signer) = "seller";
+  option (amino.name) = "orama/market/List";
+
+  string seller = 1;
+  uint64 tree_id = 2;
+  orama.cnft.v1.Leaf leaf = 3 [(gogoproto.nullable) = false];
+  orama.cnft.v1.MerkleProof proof = 4 [(gogoproto.nullable) = false];
+  string price = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgListResponse {
+  uint64 id = 1;
+}
+
+message MsgCancelListing {
+  option (cosmos.msg.v1.signer) = "seller";
+  option (amino.name) = "orama/market/CancelListing";
+
+  string seller = 1;
+  uint64 listing_id = 2;
+}
+
+message MsgCancelListingResponse {}
+
+message MsgBid {
+  option (cosmos.msg.v1.signer) = "bidder";
+  option (amino.name) = "orama/market/Bid";
+
+  string bidder = 1;
+  uint64 listing_id = 2;
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message MsgBidResponse {
+  uint64 id = 1;
+}
+
+message MsgCancelBid {
+  option (cosmos.msg.v1.signer) = "bidder";
+  option (amino.name) = "orama/market/CancelBid";
+
+  string bidder = 1;
+  uint64 listing_id = 2;
+  uint64 bid_id = 3;
+}
+
+message MsgCancelBidResponse {}
+
+// MsgSettle buys a listing at its price when bid_id is 0. Otherwise the seller
+// accepts that bid. The signer is the buyer in the first case and the seller
+// in the second.
+message MsgSettle {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/market/Settle";
+
+  string signer = 1;
+  uint64 listing_id = 2;
+  uint64 bid_id = 3;
+  orama.cnft.v1.Leaf leaf = 4 [(gogoproto.nullable) = false];
+  orama.cnft.v1.MerkleProof proof = 5 [(gogoproto.nullable) = false];
+}
+
+message MsgSettleResponse {
+  string price = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string royalty = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string seller_proceeds = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

@@ -16,6 +16,10 @@ type HomeNodeManager struct {
 	db            rqlite.Client
 	portAllocator *PortAllocator
 	logger        *zap.Logger
+	// now is the clock the liveness and staleness cutoffs are taken from;
+	// time.Now outside tests, which give it a time in a zone of their choosing
+	// instead of moving the process-wide time.Local.
+	now func() time.Time
 }
 
 // NewHomeNodeManager creates a new home node manager
@@ -24,6 +28,7 @@ func NewHomeNodeManager(db rqlite.Client, portAllocator *PortAllocator, logger *
 		db:            db,
 		portAllocator: portAllocator,
 		logger:        logger,
+		now:           time.Now,
 	}
 }
 
@@ -137,7 +142,7 @@ func (hnm *HomeNodeManager) UpdateHeartbeat(ctx context.Context, namespace strin
 func (hnm *HomeNodeManager) GetStaleNamespaces(ctx context.Context, staleThreshold time.Duration) ([]string, error) {
 	internalCtx := client.WithInternalAuth(ctx)
 
-	cutoff := time.Now().Add(-staleThreshold)
+	cutoff := hnm.now().UTC().Add(-staleThreshold)
 
 	type namespaceResult struct {
 		Namespace string `db:"namespace"`
@@ -181,10 +186,16 @@ func (hnm *HomeNodeManager) UpdateResourceUsage(ctx context.Context, namespace s
 	return nil
 }
 
+// activeNodeWindow is how recently a node must have checked in to count as active.
+const activeNodeWindow = 2 * time.Minute
+
 // getActiveNodes retrieves all active nodes from dns_nodes table
 func (hnm *HomeNodeManager) getActiveNodes(ctx context.Context) ([]string, error) {
-	// Query dns_nodes for active nodes with recent heartbeats
-	cutoff := time.Now().Add(-2 * time.Minute) // Nodes must have checked in within last 2 minutes
+	// Query dns_nodes for active nodes with recent heartbeats. The cutoff is
+	// UTC: last_seen is written with SQLite datetime('now') (UTC) and compared
+	// as a string, so a local-time cutoff on a node in a zone ahead of UTC sits
+	// hours past every last_seen and filters out every node.
+	cutoff := hnm.now().UTC().Add(-activeNodeWindow)
 
 	type nodeResult struct {
 		ID string `db:"id"`

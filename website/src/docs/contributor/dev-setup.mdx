@@ -35,8 +35,8 @@ pnpm --version
 The Orama codebase is a monorepo that includes the network services, CLI, Go SDK, TypeScript SDK, Vault guardian, and website:
 
 ```bash
-git clone https://github.com/DeBrosOfficial/network.git
-cd network
+git clone https://github.com/DeBrosDAO/orama.git
+cd orama
 ```
 
 ## Building from Source
@@ -56,7 +56,7 @@ make build
 # Run tests
 make test
 
-# The main CLI binary is built from cmd/cli/
+# The main CLI binary is built from cmd/orama/
 # After make build, binaries are in core/bin/
 ./bin/orama version
 ```
@@ -67,9 +67,10 @@ From the repository root, `make build` and `make test` delegate to `core/` for y
 
 | Binary | Entry Point | Purpose |
 |--------|-------------|---------|
-| `orama` | `cmd/cli/` | CLI tool for all operations |
+| `orama` | `cmd/orama/` | CLI tool for all operations |
+| `pubsub` | `cmd/pubsub/` | Namespace gossipsub HTTP API |
 | `gateway` | `cmd/gateway/` | API gateway / reverse proxy |
-| `orama-node` | `cmd/node/` | P2P node (RQLite + libp2p) |
+| `orama-node` | `cmd/node/` | Supervisor: starts systemd units; does not embed the gateway or rqlited |
 | `sfu` | `cmd/sfu/` | WebRTC Selective Forwarding Unit |
 | `turn` | `cmd/turn/` | TURN relay server for WebRTC |
 | `identity` | `cmd/identity/` | P2P identity key generator |
@@ -131,13 +132,12 @@ Import the `core/` directory as a Go module project. The Go module configuration
 network/
   core/          # Go network services + CLI (the Go module root)
     cmd/         # Binary entry points
-      cli/       # CLI (orama command)
+      cli/       # CLI (orama command, including inspect)
       gateway/   # API gateway
-      node/      # P2P node
+      node/      # supervisor
       sfu/       # WebRTC SFU
       turn/      # TURN relay
       identity/  # Key generator
-      inspector/ # SSH health inspector
       sni-router/ # SNI-based TLS router
     pkg/         # All Go packages
       gateway/   # Gateway core + handlers
@@ -146,7 +146,7 @@ network/
       rqlite/    # RQLite ORM layer
       serverless/ # WASM runtime + host functions
       config/    # Configuration management
-      anyoneproxy/ # Anyone Protocol integration
+      anonproxy/ # Tor SOCKS5 dialer (anonymity proxy)
     sdk/         # Go function SDK
     e2e/         # End-to-end tests
     systemd/     # Service templates

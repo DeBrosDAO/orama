@@ -32,27 +32,51 @@ orama function logs my-function
 ```
 my-function/
 ├── function.go      # Handler code
-└── function.yaml    # Configuration
+├── function.yaml    # Configuration
+├── go.mod           # Go module, named after the function
+└── fn/fn.go         # The function SDK (`sdk/fn`), copied in
 ```
+
+`orama function init` writes all four. The SDK is copied into the project
+because its import path in this repository is not one a function's module can
+fetch, and so `orama function build` fetches nothing. TinyGo builds a module,
+so a function written by hand needs a `go.mod` too; a handler that uses only
+the standard library needs nothing else.
 
 ### function.yaml
 
 ```yaml
 name: my-function       # Required. Letters, digits, hyphens, underscores.
-public: false           # Allow unauthenticated invocation (default: false)
-memory: 64              # Memory limit in MB (1-256, default: 64)
-timeout: 30             # Execution timeout in seconds (1-300, default: 30)
-                        # Bump to 60-300 for batch DB ops, schema migrations,
+public: false           # Allow unauthenticated invocation (default: false).
+                        # Private functions require a SIWE wallet JWT or an
+                        # API key that holds the `invoke` grant. A storage-only
+                        # key is rejected.
+memory: 64              # Memory limit in MB (1-256, default: 64). Enforced per
+                        # invocation: growing past it fails the call, and a
+                        # module whose minimum memory is already above it is
+                        # refused (command-mode functions; reactor/persistent
+                        # instances only get the runtime-wide 256 MB cap).
+                        # A deploy whose memory or timeout is not a whole number,
+                        # is below 1, or is above the gateway's maximum (256 MB,
+                        # 60 s) is refused 400 VALIDATION_FAILED naming the field.
+timeout: 30             # Execution timeout in seconds (1-60, default: 30)
+                        # Raise it toward the 60 s maximum for batch DB ops, schema migrations,
                         # or anything that does many sequential host calls.
                         # Exceeding this timeout on a direct invoke returns
                         # HTTP 429 {ok:false, error:{code:"RATE_LIMITED",...}}
                         # (retryable). The code "TIMEOUT" (HTTP 504) appears
                         # only when the namespace-proxy budget is exceeded.
 retry:
-  count: 0              # Retry attempts on failure (default: 0)
+  count: 0              # Retry attempts on failure (0-5, default: 0 = never retry;
+                        # a count above the gateway's max_retry_count or a negative
+                        # count or delay is refused 400 VALIDATION_FAILED)
   delay: 5              # Seconds between retries (default: 5)
 env:                    # Environment variables (accessible via get_env)
   MY_VAR: "value"
+ws_auth: capability     # Optional. Also let the function's WebSocket be opened
+                        # with a capability it minted, instead of a credential
+                        # (see "Capabilities" below). Empty (default): a
+                        # credential only. Refused on an internal function.
 ```
 
 ### function.go (minimal)
@@ -112,11 +136,40 @@ tinygo build -o function.wasm -target wasi function.go
 > deploy`. Redeploys otherwise take effect immediately (new version → new WASM CID →
 > the runtime loads it on the next invoke).
 
-> ℹ️ **Deploys are per-gateway.** `orama function deploy` targets the gateway of your
-> **active CLI environment** (`orama env`). To deploy into a namespace, point the CLI
-> at that namespace's gateway (`orama env add <name> https://ns-<ns>.<domain>` then
-> `orama env use <name>`), or set `ORAMA_GATEWAY_URL`. Verify against the same
-> namespace host — the bare/main gateway has a different function registry + DB view.
+> ℹ️ **A function lives on its namespace's gateway.** A function is deployed into
+> the namespace of the credential that deploys it, and stored in and run by that
+> namespace's own gateway, `https://ns-<ns>.<domain>`, against the namespace's own
+> RQLite. `orama function deploy` targets the gateway of your **active CLI
+> environment** (`orama env`); point it at the namespace gateway (`orama env add
+> <name> https://ns-<ns>.<domain>` then `orama env use <name>`), or set
+> `ORAMA_API_URL`.
+>
+> A gateway runs only its own namespace's functions, whichever path asks — an
+> HTTP or WebSocket invoke, a cron or pubsub trigger, the JWT claims provider,
+> a nested `function_invoke`. The cluster's main gateway is the `default`
+> namespace's. Any other function request that reaches it — deploy, list, logs,
+> secrets, triggers, invoke, the function WebSocket — is proxied to the
+> namespace's gateway: the namespace named by `/v1/invoke/<ns>/<name>` or
+> `?namespace=`, otherwise the credential's. A credential of another namespace
+> is refused (`NAMESPACE_MISMATCH`), and an anonymous request that names no
+> namespace is refused with a message pointing at
+> `https://ns-<namespace>.<domain>`. A signed-in wallet or an exchanged-key
+> token managing functions through that proxy has its grant read from the
+> cluster registry by the namespace gateway.
+>
+> Tenant functions deployed into the main gateway's registry before 0.200.0 are
+> no longer run there — not by requests, which are proxied to the namespace
+> gateway, and not by the triggers that pointed at them, which the main gateway
+> now refuses to fire. Redeploy them to the namespace gateway. A token minted by
+> the main gateway runs no tenant's `auth-claims-provider`; sign in through the
+> namespace gateway for its custom claims.
+>
+> `ORAMA_API_URL`, `ORAMA_GATEWAY_URL` and `ORAMA_GATEWAY` all name the gateway
+> and are read in that order; the credential is always the one stored for
+> whichever gateway wins, so pointing the CLI at a namespace gateway you have
+> not authenticated against fails instead of sending another gateway's key. With
+> none of them set and no active environment, commands stop with an error rather
+> than defaulting to a network.
 
 ## Host Functions API
 
@@ -144,7 +197,9 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 |----------|-------------|
 | `get_caller_wallet()` → string | Resolved caller wallet (JWT subject if Bearer auth, else namespace pseudo-id when API-key auth). |
 | `get_caller_jwt_subject()` → string | JWT `sub` claim explicitly. Empty when the request was not JWT-authenticated. Use this when binding on the JWT-signed identity matters (e.g. signup flows verifying the caller signed for the wallet they're registering). |
-| `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. See [Device attribution](#device-attribution) for the gateway-owned `device_fp` / `device_since` claims. |
+| `get_caller_device_id()` → string | The device the caller's session is bound to: the RFC 7638 thumbprint of a key the device proved it holds when the session was issued (the token's `did`). Empty for a session bound to the account alone, an API key, or no credential. Set only by the gateway — a claims provider cannot, and a client cannot state it. Carried into nested `function_invoke` calls. Requires gateway 0.200.0 or later on every node of the namespace. See [AUTH.md](AUTH.md#devices). |
+| `get_caller_capability()` → string | What the capability the caller's socket was opened with grants, as JSON `{"cap_id","resource","issuer_device","expires_at"}`. Empty when the caller came in on a credential. Not carried into nested `function_invoke` calls. See [Capabilities](#capabilities). |
+| `get_caller_claim(name)` → string | Custom JWT claim by name (tier, subscription, etc.). Empty if missing or non-JWT request. |
 | `get_request_id()` → string | Unique invocation ID |
 | `get_env(key)` → string | Environment variable from function.yaml |
 | `get_secret(name)` → string | Decrypted secret value (see [Managing Secrets](#managing-secrets)) |
@@ -153,8 +208,8 @@ If you see the runtime error `failed to instantiate module: module[X] not instan
 
 | Function | Description |
 |----------|-------------|
-| `db_query_v2(sql, argsJSON)` → JSON | **Recommended.** Execute SELECT. Returns `{"rows": [...], "error": "..."}` — distinguishes empty result from query failure. |
-| `db_execute_v2(sql, argsJSON)` → JSON | **Recommended.** Execute INSERT/UPDATE/DELETE. Returns `{"rows_affected": N, "last_insert_id": M, "error": "..."}` — distinguishes 0-rows-affected from a real failure. |
+| `db_query_v2(sql, argsJSON)` → JSON | **Recommended.** Execute SELECT. Returns `{"rows": [...], "error": "...", "code": "..."}` — distinguishes empty result from query failure. `code` classifies the failure; see the table under Database Transactions. |
+| `db_execute_v2(sql, argsJSON)` → JSON | **Recommended.** Execute INSERT/UPDATE/DELETE. Returns `{"rows_affected": N, "last_insert_id": M, "error": "...", "code": "..."}` — distinguishes 0-rows-affected from a real failure. A duplicate on a unique key is `code: "CONSTRAINT_VIOLATION"` with `error` naming the constraint. |
 | `db_query(sql, argsJSON)` → JSON | Legacy. Execute SELECT, returns JSON array of rows. No way to surface query errors — prefer `db_query_v2`. |
 | `db_execute(sql, argsJSON)` → int | Legacy. Returns affected rows ONLY. **Returns 0 for both "0 rows" and "SQL error" — caller can't distinguish.** Prefer `db_execute_v2`. |
 | `db_transaction(opsJSON)` → JSON | Atomic batch — see "Database Transactions" below. |
@@ -183,6 +238,56 @@ if res.Error != "" {
 
 The legacy `db_execute` is kept indefinitely so existing functions don't break. New code should use `db_execute_v2` for any path where distinguishing "no rows" from "SQL error" matters — most paths.
 
+**What a function's SQL may not do.** The same filter runs on the namespace gateway's raw-database routes (see SECURITY.md). Every database host function refuses,
+before anything runs: a second statement in one call; `ATTACH`, `DETACH`,
+`PRAGMA`, `VACUUM` and `CREATE TRIGGER`; `sqlite_dbpage` and `dbstat`; any
+identifier that is a platform table's name, however it is quoted and in any
+role — table, column, alias or named parameter; and a string literal whose whole
+text is one, such as `VALUES ('grants')`, because SQLite reads a string literal
+as a table name in many positions. Pass such a value as a bound argument (`?`)
+instead. A refusal is a failed host call: `db_query_v2` and `db_execute_v2` return `0`, which a function reads as no result at all (an accepted statement always returns a result object), and the reason goes to the gateway's log.
+
+The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
+`nonces`, `device_authorizations`, `session_devices`,
+`namespace_session_policy`, `invite_tokens`, `operators`, `cluster_settings`,
+`namespace_creators`, `principals`,
+`signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
+`namespace_ownership` (0.122.x's ownership table, kept for the rolling upgrade),
+`api_keys_expiry_cutoff`,
+`wireguard_peers`, `namespace_push_credentials`, `push_topics`, `function_secrets`,
+`function_env_vars`, `revoked_tokens`, `audit_events`, `status_uptime_hourly`, `namespace_quotas`,
+`namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
+`namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
+`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
+`orama_schema_migrations`, `namespaces`, `ipfs_content_ownership`,
+`ipfs_cid_refs`, `deployments`, `deployment_domains`, `deployment_replicas`,
+`home_node_assignments`, `port_allocations`, `functions`,
+`function_cron_triggers`, `function_pubsub_triggers`, `function_db_triggers`,
+`deployment_history`, `deployment_events`, `deployment_health_checks`, `namespace_push_config`, `namespace_webrtc_config`,
+`namespace_sqlite_databases`, `namespace_sqlite_backups`, `webrtc_rooms`,
+`webrtc_port_allocations`, `namespace_cluster_events`,
+`namespace_pending_cleanup`, `node_health_events`, `rqlite_backups`, `_pubsub_mesh_peers` and `_namespace_libp2p_peers` (the list in
+`core/pkg/sqlguard/sqlguard.go`, which is also what the namespace gateway's
+raw-database routes apply to a tenant's SQL: see
+[SECURITY.md](SECURITY.md#function-sql)). A deployment is created and changed
+through `/v1/deployments`, which validates its content, entry point and port;
+SQL against the deployment tables would skip all of that, so they are reserved.
+The tables that only record what happened (`deployment_events`,
+`deployment_health_checks`) are not. `functions` is a generic name: an
+application that owns a table of that name cannot use it from a function or
+over `/v1/rqlite`, and must rename it.
+
+**A function's database is its own namespace's.** Every database host function
+also refuses a call from a function whose namespace is not the one the
+gateway's database belongs to — the gateway's own `client_namespace` — and a
+call made outside an invocation (a warm-pool module's `_initialize`), where
+there is no namespace to check. On a namespace gateway that is the tenant's own
+namespace. On the cluster gateway no function gets a database, the `default`
+namespace's included: its database is the cluster registry, which holds every
+tenant's `deployments`, `deployment_domains`, `functions` and trigger rows side
+by side, so a function reaching it could rewrite another tenant's routing. The
+refusal is a host call error naming the function's namespace gateway.
+
 #### Database Transactions
 
 `db_transaction(opsJSON)` runs a set of statements as one atomic batch.
@@ -210,16 +315,30 @@ Always check `committed`. A non-empty return does **not** imply the writes lande
   single statement: a limit violation, an expired deadline, a lost leader, a
   transport fault. `code` classifies it.
 
-**`code` values** — always set together with `error`, never on success:
+Every failed op's `results` entry carries its own `code` as well, next to its
+`error`. For `db_transaction` a statement failure — a `CONSTRAINT_VIOLATION`
+included — is reported **only** there, in `results[failed_index]`; the
+top-level `error`/`code` stay empty. `exec_and_publish` additionally copies the
+failing op's reason to its top-level `error`/`code`. Branch on the code; the
+SQLite wording in `error` is for logs, not a contract.
+
+Batch-level `code` is sent from 0.122.103; per-op `code` and the `code` on
+`db_execute_v2` / `db_query_v2` from 0.200.0. An older gateway sends `error`
+without `code`: treat a missing code as unclassified.
+
+**`code` values** — always set together with `error`, never on success. The
+same codes appear on batch-level failures, on each failed op, and on
+`db_execute_v2` / `db_query_v2`:
 
 | Code | Meaning | Retry? |
 |---|---|---|
+| `CONSTRAINT_VIOLATION` | A statement violated a UNIQUE, PRIMARY KEY, NOT NULL, CHECK or FOREIGN KEY constraint. Which one is in `error`. A trigger's `RAISE(ABORT, …)` whose message contains one of those `<KIND> constraint failed` phrases produces it too, so check `error` before treating it as "already recorded" | No — the same write fails the same way every time |
 | `TOO_MANY_STATEMENTS` | Over the per-batch statement cap | No — split the batch |
 | `PAYLOAD_TOO_LARGE` | Result rows/bytes over the caps | No — paginate |
 | `DEADLINE_EXCEEDED` | The call ran past its deadline | Yes |
 | `UNAVAILABLE` | Database unreachable, or leader lost mid-call | Yes |
 | `INVALID_ARGUMENT` | Malformed request (bad JSON, unknown op kind) | No — fix the caller |
-| `INTERNAL` | Unclassified — read `error` | Depends |
+| `INTERNAL` | Unclassified — read `error`. Every other statement SQLite rejects (missing table or column, syntax error) is `INTERNAL`: a statement failure is never given a transport code, whatever identifiers its message names | Depends; a statement failure usually will not succeed on retry (a full disk or a locked database can) |
 
 The same `error` + `code` pair is returned by `db_query_batch` and
 `exec_and_publish` when they fail at the host level. None of the three ever
@@ -236,7 +355,10 @@ namespace outage diagnosable only by guessing (bugboard #175).
   own `results` entry gets `error` and `committed` stays `true`.
 - Result order always matches input order.
 
-**Limits** — exceeding any of these fails the whole batch with `error` set:
+**Limits** — exceeding the statement cap or the deadline fails the whole batch
+with `error` set. The row cap truncates only that op's rows; the byte cap is
+per batch, and every op after the budget runs out comes back with no rows. Both
+set that op's `code: PAYLOAD_TOO_LARGE`:
 
 | Limit | Value | Applies to |
 |---|---|---|
@@ -255,6 +377,10 @@ namespace outage diagnosable only by guessing (bugboard #175).
 resultBytes := callDBTransaction(ops)
 
 var res struct {
+    Results []struct {
+        Error string `json:"error"`
+        Code  string `json:"code"`
+    } `json:"results"`
     Committed   bool   `json:"committed"`
     FailedIndex int    `json:"failed_index"`
     Error       string `json:"error"`
@@ -271,7 +397,11 @@ if res.Error != "" {
     }
 }
 if !res.Committed {
-    return fmt.Errorf("batch rolled back at op %d", res.FailedIndex)
+    failed := res.Results[res.FailedIndex]
+    if failed.Code == "CONSTRAINT_VIOLATION" {
+        return errAlreadyRecorded(failed.Error)          // do not retry
+    }
+    return fmt.Errorf("batch rolled back at op %d [%s]: %s", res.FailedIndex, failed.Code, failed.Error)
 }
 ```
 
@@ -291,15 +421,34 @@ if !res.Committed {
 | Function | Description |
 |----------|-------------|
 | `cache_get(key)` → bytes | Get cached value by key. Returns empty on miss. |
-| `cache_set(key, value, ttl)` | Store value with TTL in seconds. |
+| `cache_set(key, value, ttl)` | Store value. `ttl` is in seconds: `> 0` expires the entry after that long (at most `olric.MaxEntryTTL`, 10 years), `0` means no expiry (lives until `cache_delete`), negative or longer is refused. No return value; a failure is logged by the gateway. |
+| `cache_delete(key)` → u32 | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. The only way to clear a no-expiry entry. Requires gateway 0.200.0 or later on every node of the namespace: wazero resolves imports at instantiation, so a function importing it fails every invocation on an older gateway. |
 | `cache_incr(key)` → int64 | Atomically increment by 1 (init to 0 if missing). |
 | `cache_incr_by(key, delta)` → int64 | Atomically increment by delta. |
+
+Each namespace has its own cache map (`:serverless_cache:<namespace>`), so a
+function reaches only its own namespace's keys, whichever Olric the gateway
+running it talks to. The cache
+host functions need an invocation, so they are unavailable while a warm-pool
+(stateless) reactor module runs `_initialize`; call them from `handle()`.
+
+**Upgrading to 0.200.0.** Before 0.200.0 every function shared one
+`serverless_cache` map and every entry was written without an expiry. After the
+upgrade those entries are invisible to functions, which is also what clears
+values that were stuck forever. While a namespace's gateways are on mixed
+versions, old and new nodes read different maps, so a value or counter written
+through one is not seen through the other; do not rely on cache state across
+the rollout. The old map keeps its entries in memory until the Olric members that hold it
+restart: the namespace's Olric, or the core Olric for functions run by the
+cluster gateway.
 
 ### HTTP
 
 | Function | Description |
 |----------|-------------|
-| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. |
+| `http_fetch(method, url, headersJSON, body)` → JSON | Make outbound HTTP request. Headers as JSON object. Returns `{"status": 200, "headers": {...}, "body": "..."}`. Timeout: 30s. The destination is checked on the socket, so a hostname that resolves to an internal address and a redirect to one are both refused, not just an internal address written literally in the URL. |
+| `anon_fetch(method, url, headersJSON, body)` → JSON | `http_fetch` through the node's **Tor** client: the destination sees a Tor exit address, not the gateway's. Same signature, same envelope and 30s timeout. Every connection goes through Tor — there is no fallback to a direct request. The host name is resolved by the exit, and Tor refuses private and local addresses, including on a redirect. When Tor is down the call returns `{"status": 0, "error": "..."}`. |
+| `anyone_fetch(method, url, headersJSON, body)` → JSON | **Deprecated** alias of `anon_fetch`: the same implementation, routed through **Tor**. It keeps the name it had while the anonymity backend was the Anyone network, which Orama no longer uses, because deployed functions import it and a module with a missing import fails to instantiate. New code imports `anon_fetch`. |
 
 ### Storage (IPFS)
 
@@ -313,13 +462,30 @@ API (`POST /v1/storage/upload`, `GET /v1/storage/get/:cid`).
 > secret either. The pattern that works: the **client** uploads with its user JWT and
 > passes the resulting CID to a function (which records/uses it). If your function
 > truly needs to originate IPFS content, it needs a user-JWT credential, not a
-> namespace API key.
+> namespace API key. (A deployed app, as opposed to a function, holds its own
+> workload token, which these endpoints accept within its grant: docs/AUTH.md.)
 
 ### PubSub
 
 | Function | Description |
 |----------|-------------|
 | `pubsub_publish(topic, dataJSON)` → bool | Publish message to a PubSub topic. Returns true on success. |
+
+### Push
+
+| Function | Description |
+|----------|-------------|
+| `push_send(userID, msgJSON)` → u32 | Push to every device the user registered in this namespace. 1 = ok, 0 = failure. Silent no-op (1) when push is not configured. |
+| `push_send_v2(userID, msgJSON)` → u64 | Same, returning a packed `ptr<<32\|len` JSON envelope with a result per device (HTTP status, reason, unregistered). 0 on an invalid call. |
+| `push_send_topic(topicID, msgJSON)` → u64 | Push to the device registered under a rotating push topic (FEAT-265) in this namespace. Same envelope as `push_send_v2`; an unknown or expired topic is `ok:false` with one result whose reason is `TopicNotFound`. 0 on an invalid call or when the gateway cannot look the topic up. |
+
+The namespace is always the invocation's own. `msgJSON`, the topic model and
+the envelope are described in [PUSH_NOTIFICATIONS.md](PUSH_NOTIFICATIONS.md).
+
+```go
+//go:wasmimport env push_send_topic
+func pushSendTopic(topicIDPtr *byte, topicIDLen uint32, msgPtr *byte, msgLen uint32) uint64 // ptr<<32|len of JSON
+```
 
 ### Ephemeral State (WS-subscribe-tracked)
 
@@ -353,7 +519,7 @@ Synthetic events are published **on the same topic** the state lives on, with
 the `_orama` control-frame discriminator (same dispatch pattern as the
 `auth.refresh` frame). Subscribers update their local view from the stream:
 
-```json
+```jsonl
 {"_orama":"ephemeral.set",  "topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "payload":"<base64>"}
 {"_orama":"ephemeral.clear","topic":"typing:room1", "key":"user-7", "client_id":"ws-abc", "reason":"disconnect"}
 ```
@@ -436,7 +602,9 @@ exact config to set.
 
 ## Managing Secrets
 
-Secrets are encrypted at rest (AES-256-GCM) and scoped to your namespace. Functions read them via `get_secret("name")` at runtime.
+Secrets are encrypted at rest (AES-256-GCM) and stored in your namespace's own database. Functions read them via `get_secret("name")` at runtime.
+
+The encryption key is derived from the cluster secret and is the same across the cluster, so what separates one namespace's secrets from another's is the database they are in, not a key only that namespace holds. A function cannot read them with SQL either: `function_secrets` is one of the tables a function's own SQL may not name.
 
 ### CLI Commands
 
@@ -461,11 +629,11 @@ orama function secrets delete APNS_KEY_ID --force
 
 1. **You set secrets** via the CLI → encrypted and stored in the database
 2. **Functions read secrets** at runtime via `get_secret("name")` → decrypted on demand
-3. **Namespace isolation** → each namespace has its own secret store; functions in namespace A cannot read secrets from namespace B
+3. **Namespace separation** → a namespace's secrets are stored in that namespace's own database, so a function in namespace A has no route to namespace B's. What this is not is a separate key per namespace: the encryption key is derived once from the cluster secret and is the same across the cluster, so the separation is the database boundary, not cryptography. Anything holding the cluster secret can read any namespace's secrets
 
 ## PubSub Triggers
 
-Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously.
+Triggers let functions react to events automatically. When a message is published to a PubSub topic, all functions with a trigger on that topic are invoked asynchronously. Each publish fires a trigger once across the namespace's gateways: every gateway that subscribes to the topic receives the message, and the first to claim it in the namespace's Olric dispatches while the others skip. Two byte-identical publishes at the same trigger depth within 30 seconds count as one (the same bytes republished one level deeper by a triggered function are a new publish), and if Olric cannot be reached the claim is skipped and a gateway fires on its own, so a duplicate is possible then (the gateway logs `PubSub dispatch dedup degraded`).
 
 ### CLI Commands
 
@@ -484,7 +652,7 @@ orama function triggers delete call-push-handler <trigger-id>
 
 When triggered via PubSub, the function receives this JSON via stdin:
 
-```json
+```jsonc
 {
   "topic": "calls:invite",
   "data": { ... },
@@ -498,11 +666,24 @@ When triggered via PubSub, the function receives this JSON via stdin:
 
 To prevent infinite loops (function A publishes to topic → triggers function A again), trigger depth is tracked. Maximum depth is **5**. If a function's output triggers another function, `trigger_depth` increments. At depth 5, no further triggers fire.
 
+The limit also holds when the function republishes over the network: a publish
+made by a function that was itself triggered carries the function's depth beside
+the message (a record keyed by namespace, topic and payload hash, kept for 30
+seconds on the gateway and, when the namespace has Olric, shared across its
+gateways), and the dispatcher that receives the message continues the chain from
+that depth. The payload is never changed, so subscribers see exactly what was
+published. A record only raises a message's depth: a message nothing recorded,
+such as one a client publishes, starts at depth 0, and a tenant cannot lower the
+depth of a function's publish. A publish whose depth cannot be recorded fails
+rather than going out with the chain restarted.
+
 ## Function Lifecycle
 
 ### Versioning
 
-Each deploy creates a new version. The WASM binary is stored in **IPFS** (content-addressed) and metadata is stored in **RQLite**.
+Each deploy creates a new version (1, 2, 3, ...) and keeps the ones before it.
+The WASM binary is stored in **IPFS** (content-addressed) and metadata is stored
+in **RQLite**, one `functions` row per version, keyed `(namespace, name, version)`.
 
 ```bash
 # List versions
@@ -512,6 +693,21 @@ orama function versions my-function
 curl -X POST .../v1/functions/my-function@2/invoke
 ```
 
+- The **current** version is the highest version that is active. Invoking, the
+  WebSocket, `function list` and a trigger that fires all use it; `name@N` runs
+  exactly version N and answers 404 `function version not found` when N does not
+  exist, was pruned or is disabled.
+- Triggers (cron, pub/sub, database) follow the current version: a deploy moves
+  them to the new row.
+- The last **10** versions are kept. A deploy past that removes the oldest; its
+  invocation history stays readable under the function's name.
+- `delete` without a version, `disable` and `enable` act on every version of the
+  function. A deleted function's versions are no longer invocable, and the next
+  deploy continues the numbering. A function deleted by a release before this
+  one carries status `inactive`, the same status `disable` sets, so `enable`
+  cannot tell it from a disabled function and brings it back; only deletes made
+  with this release or later are protected from `enable`.
+
 ### Invocation Logging
 
 Every invocation is logged with: request ID, duration, status (success/error/timeout), input/output size, and any `log_info`/`log_error` messages.
@@ -520,7 +716,14 @@ Every invocation is logged with: request ID, duration, status (success/error/tim
 orama function logs my-function
 ```
 
+`logs` and `versions` of a function that does not exist answer 404, which the
+CLI exits with 4 (not found); a function that exists and has not run has an
+empty log and a 200.
+
 ## CLI Reference
+
+Every flag of every command is in the [CLI reference](CLI_REFERENCE.md), which
+is generated from the command tree.
 
 | Command | Description |
 |---------|-------------|
@@ -533,6 +736,8 @@ orama function logs my-function
 | `orama function delete <name>` | Delete a function |
 | `orama function logs <name>` | View invocation logs |
 | `orama function versions <name>` | List function versions |
+| `orama function disable <name>` | Stop serving a function without deleting it |
+| `orama function enable <name>` | Serve a previously disabled function again (a deleted function stays deleted: 404) |
 | `orama function secrets set <name> <value>` | Set an encrypted secret |
 | `orama function secrets list` | List secret names |
 | `orama function secrets delete <name>` | Delete a secret |
@@ -559,6 +764,126 @@ orama function logs my-function
 | GET | `/v1/functions/{name}/triggers` | List triggers |
 | DELETE | `/v1/functions/{name}/triggers/{id}` | Delete trigger |
 | POST | `/v1/invoke/{namespace}/{name}` | Direct invoke (alt endpoint) |
+
+Every route except invoke acts on the namespace of the credential that calls it.
+A request that names a different namespace — the deploy metadata's or form's
+`namespace`, `?namespace=`, or an `X-Namespace` header — is refused with 403
+rather than acted on. `POST /v1/functions/{name}/invoke` runs the function of
+the namespace named by `?namespace=`, otherwise the credential's; an anonymous
+call that names neither is refused with 400. A public function is invocable
+without a credential, but the request has to say whose it is.
+
+### Invoke rate limits
+
+Each gateway holds token buckets for invokes, checked in this order, and the
+first to refuse answers `429 RATE_LIMITED` with `scope=` and `retry_after=` in
+the message and a `Retry-After` header:
+
+| Scope | Key | Sustained | Burst |
+|-------|-----|-----------|-------|
+| `per_function_wallet` | namespace, function, wallet | the function's own limit, only when it declares one | its own burst |
+| `per_wallet` | namespace, wallet | 600 a minute (10 a second) | 60 |
+| `per_ip` | namespace, address (callers with no wallet) | 120 a minute (2 a second) | 30 |
+| `per_namespace` | namespace | 60,000 a minute (1,000 a second) | 6,000 |
+
+An invoke is charged once, by the gateway that runs it; the hop that proxies a
+request to a namespace gateway is not charged. The buckets are per gateway, not
+shared across a namespace's gateways. A caller that sends 100 invokes at 30 a
+second from one wallet spends the 60-invoke burst in about two seconds and then
+gets 429s at the 10-a-second refill (the `per_wallet` scope).
+
+## WebSockets
+
+`/v1/functions/{name}/ws` runs a function over a WebSocket. With
+`ws_persistent: true` in function.yaml one WASM instance is bound to the socket
+for its lifetime (`ws_open` / `ws_frame` / `ws_close`); otherwise every frame is
+a separate invocation.
+
+The socket is authorized once, at the upgrade: `Authorization: Bearer <jwt>`,
+or `?jwt=<token>` where a client cannot set a header. Every frame then runs as
+the identity the upgrade established, so a socket is held to the token that
+opened it for as long as it stays open:
+
+- The gateway re-checks every open socket every 10 seconds. One whose token was
+  revoked — the token, its session, or its subject — is closed with **`4403`**;
+  sign in again. One whose token expired more than two minutes ago is closed with
+  **`4401`**; reconnect with a fresh token. A persistent socket also refuses an
+  application frame past that point without waiting for the next check.
+- A persistent socket stays open across token rotation with a control frame,
+  answered with an `__orama_ack`:
+
+  ```jsonl
+  {"__orama":"auth.refresh","jwt":"<new token>"}
+  {"__orama_ack":"auth.refresh","ok":true,"subject":"<wallet>"}
+  ```
+
+  The new token must be for the **same subject**, namespace and device the
+  socket was opened with; any other is refused with `ok:false` and the socket keeps its
+  current token. A socket opened with an API key, or with no credential on a
+  public function, has no token and cannot take one on — reconnect instead.
+- A socket opened with an API key is not re-checked; revoking the key refuses
+  its next upgrade.
+
+A stateless function socket and a `/v1/pubsub/ws` subscription are re-checked
+the same way. Neither takes `auth.refresh`, so either one is closed with `4401`
+two minutes after its token expires and has to reconnect with a fresh one. See
+[AUTH.md](AUTH.md#open-websockets).
+
+### Capabilities
+
+A function that declares `ws_auth: capability` may also have its socket opened
+with a **capability** instead of a credential:
+
+```
+GET /v1/functions/rpc-router/ws?namespace=anchat&cap=<token>
+```
+
+The function mints capabilities for its own socket, from a call made by a
+device-bound session (see [AUTH.md](AUTH.md#devices)):
+
+| Function | Description |
+|----------|-------------|
+| `capability_mint(resource, ttl_seconds)` → string | Mints a capability that opens **this** function's socket, naming `resource` (up to 256 bytes, chosen by the application — a mailbox id), issued by the calling session's device, for 60 seconds to 7 days. Returns JSON `{"token","cap_id","resource","issuer_device","expires_at"}`, or empty on failure (the gateway log says why): no device-bound caller, a ttl out of range, or a gateway without a cluster secret. Signature: `(res_ptr, res_len i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
+| `capability_revoke(token)` → i32 | Refuses one capability of this namespace from now on, named by the `token` `capability_mint` returned (an id alone is not accepted: only a capability the namespace was issued can be revoked); the sockets it opened are closed with `4403` within 10 seconds. `1` on success, including for one already revoked or expired; `0` for a token that is not this namespace's. Revoking the device that issued a capability refuses it too. Signature: `(token_ptr, token_len i32) → i32`. |
+| `get_caller_capability()` → string | See [Context](#context). |
+
+A socket opened with a capability reports no caller: `get_caller_wallet`,
+`get_caller_jwt_subject`, `get_caller_device_id` and every claim are empty, and
+`get_caller_capability` says what the capability grants. It cannot take
+`auth.refresh`, and it is closed with `4401` two minutes after the capability
+expires. A nested `function_invoke` from it runs with no caller, so it reaches
+only public functions. A capability opens the live version of the function
+(`name@N` is refused), and not while the function is disabled; one capability
+holds at most 16 sockets on a gateway at once. What the gateway checks, what it still learns, and the
+rate limit on these upgrades are in [AUTH.md](AUTH.md#capability-websockets).
+
+## Invoking from application code
+
+The TypeScript SDK calls the direct-invoke endpoint for you:
+
+```typescript
+import { createClient } from "@debros/orama";
+
+const client = createClient({
+  baseURL: "https://ns-myapp.orama-devnet.network",
+  apiKey: process.env.ORAMA_API_KEY,
+  functionsConfig: { namespace: "myapp" },
+});
+
+const result = await client.functions.invoke("my-function", { name: "World" });
+```
+
+A function whose output is JSON — any JSON value, `null`, a number or a string as
+much as an object — is answered with that output as it is
+(`Content-Type: application/json`). Output that is not JSON is wrapped:
+`{"request_id", "output", "status", "duration_ms"}`. An anonymous invocation on
+`ns-<name>` runs in that namespace; on the cluster's own host it must name one
+(`/v1/invoke/<namespace>/<function>`).
+
+Invoking needs the `invoke` grant, which the `invoke-only` and `app-runtime` key
+profiles both carry; deploying, secrets and triggers are control-plane and need
+an `admin` key. See [TS_SDK.md](TS_SDK.md), and
+[GO_CLIENT_SDK.md](GO_CLIENT_SDK.md) for the Go client.
 
 ## Example: Call Push Handler
 
@@ -653,105 +978,3 @@ orama function secrets set APNS_TEAM_ID "TEAM456"
 # Wire the PubSub trigger
 orama function triggers add call-push-handler --topic calls:invite
 ```
-
-## Device attribution
-
-A function can learn **which device** of an account is calling, not only which
-account (bugboard feat-384).
-
-Without it, every device of an account produces an identical JWT subject. That
-is fine for delivery, where the app controls fan-out, but not for retrieval:
-retrieval is authenticated per account, so anyone holding the account seed can
-call history endpoints as the account without being one of its devices.
-
-### Two claims
-
-| claim | meaning |
-|---|---|
-| `device_fp` | Fingerprint of the device key that signed this login. Derived by the gateway from the public key — never client-supplied. |
-| `device_since` | Unix seconds when **this gateway first observed** that key for this account. |
-
-Read them like any other claim:
-
-```go
-fp := oh.GetCallerClaim("device_fp")
-if fp == "" {
-    // No device assertion was presented. DENY if your function requires
-    // device attribution — absence is not permission.
-}
-```
-
-### Obtaining them
-
-`POST /v1/auth/verify` accepts two optional fields alongside the normal wallet
-signature:
-
-```json
-{
-  "wallet": "0x…", "nonce": "…", "signature": "…", "namespace": "myapp",
-  "device_public_key": "<base64 ed25519 public key>",
-  "device_signature":  "<base64 ed25519 signature>"
-}
-```
-
-The device signs `"orama-device-assertion:v1:" + nonce` — the **same** nonce the
-account signed, with a distinct prefix so neither signature can be replayed as
-the other. Both fields must be present or neither: supplying one is a **400** (a client
-bug, not a credential failure), a signature that does not verify is a **401**,
-and an infrastructure failure while recording the binding is a **503** so
-clients retry instead of tearing the session down. A failed assertion is never
-silently downgraded to a token without the claim.
-
-The assertion is optional at the protocol level because the CLI, the SDK and
-RootWallet-signed operator logins cannot produce one. Functions that require
-device attribution enforce it by denying when `device_fp` is empty.
-
-### Why `device_since` comes from the gateway
-
-An app's own device roster cannot establish when a device joined, if that roster
-is signed by a key derived from the account seed: an attacker holding the seed
-signs a roster backdating their device and claims the whole archive — the exact
-scenario a "new devices sync forward only" rule exists to bound. `device_since`
-records when this server first saw the key, which such an attacker cannot move.
-
-The gateway asserts **possession** ("this key signed this login"). Your function
-asserts **authorization** ("this fingerprint is on my current roster"). The
-gateway stores no roster and has no opinion about which devices an account may
-have.
-
-### What the claim is and is not proof of
-
-`device_fp` is minted only from a signature the gateway verified, and it is
-stripped from the internal proxy hop between gateways, so it cannot be asserted
-by a header from elsewhere on the cluster network. On a namespace gateway the
-caller's own JWT is re-verified against the cluster-wide signing key, so the
-claims a function sees come from a signature rather than from a forwarded
-header.
-
-It is **not** proof that the device is currently authorized — that is your
-roster's job — and it is not proof of freshness beyond the login that minted it:
-the token lives 15 minutes and the binding rides the refresh chain until the
-device is revoked.
-
-### Revoking a device
-
-```
-POST /v1/auth/device/revoke
-{ "subject": "<account>", "device_fingerprint": "<device_fp>" }
-```
-
-Namespace admin credentials required. This marks the binding revoked **and**
-revokes every refresh token that device obtained, which is what bounds a revoked
-device to one access-token TTL (15 minutes) instead of the refresh chain's
-30-day life. The response reports `refresh_tokens_revoked` — the difference
-between "marked revoked" and "actually stopped".
-
-A revoked device cannot log back in and re-acquire its claim — `BindDevice`
-refuses a revoked binding, so the login fails rather than silently resurrecting
-it. **There is no un-revoke endpoint**: revocation is currently permanent for
-that (account, device key) pair, and a device that is meant to return must be
-re-enrolled under a new key. If you need reinstatement, say so and it can be
-added — the column supports it, the API does not expose it.
-
-Revoking something that does not exist returns **404**, not 200. A revocation
-that silently matched nothing would be indistinguishable from one that worked.

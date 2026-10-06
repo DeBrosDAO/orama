@@ -1,6 +1,10 @@
 package gateway
 
-import "time"
+import (
+	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
+)
 
 // Config holds configuration for the gateway server
 type Config struct {
@@ -17,27 +21,52 @@ type Config struct {
 	// If empty, uses RQLiteDSN (for main/global gateways)
 	GlobalRQLiteDSN string
 
-	// HTTPS configuration
-	EnableHTTPS bool   // Enable HTTPS with ACME (Let's Encrypt)
-	DomainName  string // Domain name for HTTPS certificate
-	TLSCacheDir string // Directory to cache TLS certificates (default: ~/.orama/tls-cache)
+	// RQLiteReadyTimeout bounds ONE attempt at reaching a raft leader before
+	// the schema work is retried. Zero takes defaultRQLiteReadyTimeout.
+	//
+	// It is a per-attempt budget, not a deadline on the whole gateway: the
+	// readiness loop keeps retrying for as long as the process lives, so
+	// shortening this makes the gateway notice a recovered leader sooner
+	// rather than giving up on it earlier.
+	RQLiteReadyTimeout time.Duration
+
+	// SchemaApplyTimeout bounds applying the embedded migrations once a leader
+	// is reachable. Zero takes defaultSchemaApplyTimeout.
+	SchemaApplyTimeout time.Duration
+
+	// DomainName is loaded from YAML domain_name and copied onto BaseDomain.
+	// Public TLS is Caddy, not this process.
+	DomainName string
 
 	// Domain routing configuration
-	BaseDomain string // Base domain for deployment routing. Set via node config http_gateway.base_domain. Defaults to "dbrs.space"
+	// BaseDomain is the cluster's domain: deployment routing, namespace
+	// gateways (ns-<name>.<base>) and the TLS on-demand check all hang off it.
+	// Required (ValidateConfig); it has no default. Loaded from YAML
+	// domain_name, which the spawner writes from node.yaml
+	// http_gateway.base_domain.
+	BaseDomain string
 
-	// Data directory configuration
-	DataDir string // Base directory for node-local data (SQLite databases, deployments). Defaults to ~/.orama
+	// DataDir is the node's orama directory (/opt/orama/.orama). The gateway
+	// only READS under it (secrets/, identity, node config) and writes the
+	// shared trees under data/ (SQLite databases, deployments): secrets/ and
+	// configs/ are read-only to orama-namespace-gateway@.
+	DataDir string
+
+	// StateDir is this gateway's private, writable state directory
+	// (<DataDir>/data/namespaces/<ns>/gateway): its own signing keys and its
+	// encryption-root cache. Required, and never shared between gateways — two
+	// gateways on one host resolving the same key file is what this replaces.
+	StateDir string
 
 	// Olric cache configuration
-	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:3320"]). If empty, defaults to ["localhost:3320"]
+	OlricServers []string      // List of Olric server addresses (e.g., ["localhost:10102"]). If empty, defaults to the index Olric on localhost
 	OlricTimeout time.Duration // Timeout for Olric operations (default: 10s)
 
 	// IPFS Cluster configuration
 	IPFSClusterAPIURL     string        // IPFS Cluster HTTP API URL (e.g., "http://localhost:9094"). If empty, gateway will discover from node configs
-	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:4501"). If empty, gateway will discover from node configs
+	IPFSAPIURL            string        // IPFS HTTP API URL for content retrieval (e.g., "http://localhost:10107"). If empty, gateway will discover from node configs
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // Replication factor for pins (default: 3)
-	IPFSEnableEncryption  bool          // Enable client-side encryption before upload (default: true, discovered from node configs)
 
 	// RQLite authentication (basic auth credentials embedded in DSN)
 	RQLiteUsername string // RQLite HTTP basic auth username (default: "orama")
@@ -83,4 +112,60 @@ type Config struct {
 	NtfyBaseURL     string // ntfy server URL (e.g. "http://localhost:8080")
 	NtfyAuthToken   string // optional bearer token for ntfy
 	ExpoAccessToken string // optional Expo access token
+}
+
+// deploymentRegistry is the database every gateway's deployment family reads
+// and writes: the cluster registry. A deployment's rows, ports and home node
+// are cluster state, written by `orama deploy` through the main gateway and read
+// by host routing; a namespace gateway that served them from its own RQLite
+// read an empty table, and every deployment call on a namespace host answered
+// "Deployment not found".
+func deploymentRegistry(deps *Dependencies) rqlite.Client {
+	return deps.GlobalORMClient
+}
+
+// runsDeploymentHealthChecker reports whether this gateway checks and restarts
+// the node's deployment replicas. The checker covers every namespace's replicas
+// on the node, so exactly one gateway per node runs it: the main one.
+func runsDeploymentHealthChecker(cfg *Config) bool {
+	return !isNamespaceGateway(cfg)
+}
+
+// isNamespaceGateway reports whether this process serves a tenant namespace
+// rather than the index.
+//
+// A tenant gateway is the one configured with a GlobalRQLiteDSN pointing at a
+// DIFFERENT database from its own: its RQLiteDSN is the namespace's rqlite and
+// GlobalRQLiteDSN is the cluster registry. The index gateway is its own
+// registry, so EnsureGateway leaves GlobalRQLiteDSN empty.
+func isNamespaceGateway(cfg *Config) bool {
+	return cfg != nil && cfg.GlobalRQLiteDSN != "" && cfg.GlobalRQLiteDSN != cfg.RQLiteDSN
+}
+
+// Schema-readiness budget defaults.
+const (
+	// defaultRQLiteReadyTimeout is short because failing it is no longer
+	// terminal — the readiness loop retries. It used to be 90s, which made
+	// sense when giving up meant the gateway was broken; now a long budget only
+	// delays the gateway reporting WHY it is not ready, and two consecutive
+	// attempts could outlast the 120s window InstanceSpawner.waitForInstanceReady
+	// allows, turning a slow election into a failed spawn.
+	defaultRQLiteReadyTimeout = 20 * time.Second
+
+	// defaultSchemaApplyTimeout bounds the migration apply itself.
+	defaultSchemaApplyTimeout = 30 * time.Second
+)
+
+func (c *Config) rqliteReadyTimeout() time.Duration {
+	if c.RQLiteReadyTimeout > 0 {
+		return c.RQLiteReadyTimeout
+	}
+	return defaultRQLiteReadyTimeout
+}
+
+func (c *Config) schemaApplyTimeout() time.Duration {
+	if c.SchemaApplyTimeout > 0 {
+		return c.SchemaApplyTimeout
+	}
+	return defaultSchemaApplyTimeout
 }

@@ -3,118 +3,296 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
-	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
-	"go.uber.org/zap"
 )
 
-// DeviceRevokeRequest is the body of POST /v1/auth/device/revoke.
-type DeviceRevokeRequest struct {
-	// Subject is the account whose device is being revoked — the JWT `sub`
-	// that device authenticates as.
-	Subject string `json:"subject"`
-	// DeviceFingerprint is the value the gateway stamped as the `device_fp`
-	// claim.
-	DeviceFingerprint string `json:"device_fingerprint"`
+// The device authorization grant (RFC 8628), which is how a machine with no
+// wallet on it signs in.
+//
+// Three endpoints, and the split between them is the whole point:
+//
+//   - POST /v1/auth/device        the machine that wants a session asks
+//   - POST /v1/auth/device/approve  a human with a wallet approves the code
+//   - POST /v1/auth/device/token    the waiting machine collects its tokens
+//
+// The first and third are open, because the caller has no credential yet — that
+// is what it is asking for. The device code it is given is the credential for
+// the third, and it collects a session exactly once.
+//
+// Approving costs a wallet signature over this gateway's own challenge: the
+// same message /v1/auth/verify takes, verified by the same code. There is no
+// second way to prove who you are, so there is no second thing to get wrong.
+//
+// This gateway does not return `verification_uri`. The RFC's field names a page
+// a human opens, and there is no such page yet; `orama auth approve <code>` is
+// the client for the approval endpoint today. A field naming a page that does
+// not exist would send people somewhere that 404s.
+
+// DeviceAuthorizationRequest asks for a pending login.
+type DeviceAuthorizationRequest struct {
+	// Namespace the waiting machine wants a session in. Optional: omitted
+	// means whichever namespace the approver signs in to.
+	Namespace string `json:"namespace"`
+	// DeviceKey is the waiting device's public JWK. With one, the login is a
+	// device link: approved from one of the account's signed-in devices, and
+	// collected as a session bound to this key.
+	DeviceKey   json.RawMessage `json:"device_key,omitempty"`
+	DeviceLabel string          `json:"device_label,omitempty"`
 }
 
-// DeviceRevokeResponse reports what the revocation actually did.
-type DeviceRevokeResponse struct {
-	Subject           string `json:"subject"`
-	DeviceFingerprint string `json:"device_fingerprint"`
-	// RefreshTokensRevoked is how many live refresh chains were cut. Returned
-	// because it is the difference between "marked revoked" and "actually
-	// stopped": a device with a live chain keeps minting device-stamped access
-	// tokens until those rows are revoked.
-	RefreshTokensRevoked int64 `json:"refresh_tokens_revoked"`
+// DeviceTokenRequest collects an approved login. A device link is collected
+// with the device's proof over the device code.
+type DeviceTokenRequest struct {
+	DeviceCode  string               `json:"device_code"`
+	DeviceProof *authsvc.DeviceProof `json:"device_proof,omitempty"`
 }
 
-// DeviceRevokeHandler revokes a device binding and every refresh token that
-// device obtained.
+// DeviceApprovalRequest approves or refuses a pending login. See VerifyRequest
+// for why the signed message is the whole credential.
+type DeviceApprovalRequest struct {
+	UserCode  string `json:"user_code"`
+	Message   string `json:"message"`
+	Signature string `json:"signature"`
+	// Deny refuses the login instead of approving it, so the machine waiting
+	// on it stops rather than polling out its ten minutes.
+	Deny bool `json:"deny"`
+}
+
+// DeviceAuthorizationHandler starts a pending login.
 //
-// POST /v1/auth/device/revoke
-//
-// This is the seam that lets a namespace enforce "a revoked device stops being
-// served" WITHOUT the gateway knowing anything about rosters (bugboard
-// feat-384). The app decides a device is no longer current — that is its
-// policy, from its own signed roster — and tells the gateway, rather than the
-// gateway asking the app on every request. Asking would put a fail-open WASM
-// invoke with a 2s timeout inside the authorization path.
-//
-// After this returns, the device is out within one access-token TTL (15
-// minutes): its chain is dead so it cannot refresh, and its current access
-// token expires on its own.
-//
-// Authorization: namespace-scoped admin credentials, the same gate the other
-// namespace-administrative endpoints use. An end-user JWT must not be able to
-// revoke devices, or a compromised device could revoke the legitimate ones.
-func (h *Handlers) DeviceRevokeHandler(w http.ResponseWriter, r *http.Request) {
-	if h.authService == nil {
-		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+// POST /v1/auth/device
+func (h *Handlers) DeviceAuthorizationHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.deviceReady(w, r) {
 		return
 	}
 
-	namespace := namespaceFromRequest(r)
-	if namespace == "" {
-		writeError(w, http.StatusUnauthorized, "namespace could not be resolved from credentials")
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req DeviceAuthorizationRequest
+	// An empty body is a request for a session in whichever namespace the
+	// approver signs in to, which is the common case from a fresh machine.
+	// Empty is judged by reading, not by ContentLength: a chunked body has
+	// none (-1) and still carries the request.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid json body: expected {\"namespace\": \"...\"} or no body at all")
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
-	var req DeviceRevokeRequest
+	pending, deviceID, err := h.startPendingLogin(r.Context(), req)
+	if err != nil {
+		if !writeDeviceRefusal(w, err) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	h.authService.Audit().RecordFromRequest(r.Context(), r, authsvc.AuditEvent{
+		Namespace: req.Namespace,
+		Action:    authsvc.AuditDeviceLoginStarted,
+		Result:    authsvc.AuditSuccess,
+	})
+
+	body := map[string]any{
+		"device_code": pending.DeviceCode,
+		"user_code":   pending.UserCode,
+		"expires_in":  int(time.Until(pending.ExpiresAt).Seconds()),
+		"interval":    pending.Interval,
+	}
+	if deviceID != "" {
+		body["device_id"] = deviceID
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// DeviceApprovalHandler approves or refuses a pending login.
+//
+// POST /v1/auth/device/approve
+func (h *Handlers) DeviceApprovalHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.deviceReady(w, r) {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req DeviceApprovalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	subject := strings.TrimSpace(req.Subject)
-	fingerprint := strings.TrimSpace(req.DeviceFingerprint)
-	if subject == "" || fingerprint == "" {
-		writeError(w, http.StatusBadRequest, "subject and device_fingerprint are required")
+	if strings.TrimSpace(req.UserCode) == "" {
+		writeError(w, http.StatusBadRequest, "user_code is required: it is the code the waiting machine printed")
 		return
 	}
 
-	revoked, err := h.authService.RevokeDevice(r.Context(), namespace, subject, fingerprint)
+	// The signature comes first. Refusing a login is as consequential as
+	// approving one — it is how you would stop somebody else logging in — so
+	// both cost the same proof.
+	in, ok := h.signIn(w, r, req.Message, req.Signature)
+	if !ok {
+		return
+	}
+
+	ctx := r.Context()
+	if err := h.authService.RequireNamespaceOwner(ctx, in.Wallet, in.Namespace); err != nil {
+		writeCredentialError(w, in.Namespace, err)
+		return
+	}
+	// Approving a plain login hands the waiting machine a session bound to no
+	// device, which a namespace requiring device-bound sessions refuses. (A
+	// device link is refused here regardless: a device approves those.)
+	if !req.Deny && !h.requireNoDevicePolicy(w, r, in.Namespace, in.Wallet) {
+		return
+	}
+
+	// Approving and refusing are one or the other. A refusal used to run the
+	// approval first, so "deny" left the login approved — and, once approving
+	// had a policy check, skipped the check it was exempt from.
+	action := authsvc.AuditDeviceLoginApproved
+	var err error
+	if req.Deny {
+		action = authsvc.AuditDeviceLoginDenied
+		err = h.authService.DenyDeviceAuthorization(ctx, req.UserCode, in.Wallet)
+	} else {
+		err = h.authService.ApproveDeviceAuthorization(ctx, req.UserCode, in.Wallet, in.Namespace)
+	}
 	if err != nil {
-		// 404 when nothing matched: the caller asked to stop a device that is
-		// not there, and must not read that as "stopped".
-		if errors.Is(err, authsvc.ErrDeviceNotFound) {
-			writeError(w, http.StatusNotFound, "no device binding matched that subject and fingerprint")
-			return
-		}
-		// Everything else is infrastructure. The wrapped error carries SQL and
-		// namespace-resolution detail, so log it and return fixed text.
-		if h.logger != nil {
-			h.logger.Warn("device revocation failed",
-				zap.String("namespace", namespace), zap.Error(err))
-		}
-		writeError(w, http.StatusInternalServerError, "device revocation failed")
+		h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+			Namespace: in.Namespace,
+			Actor:     in.Wallet,
+			Action:    action,
+			Result:    authsvc.AuditFailure,
+			Metadata:  map[string]string{"reason": err.Error()},
+		})
+		writeDeviceError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, DeviceRevokeResponse{
-		Subject:              subject,
-		DeviceFingerprint:    fingerprint,
-		RefreshTokensRevoked: revoked,
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: in.Namespace,
+		Actor:     in.Wallet,
+		Action:    action,
+		Result:    authsvc.AuditSuccess,
+	})
+
+	status := "approved"
+	if req.Deny {
+		status = "denied"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    status,
+		"namespace": in.Namespace,
+		"subject":   in.Wallet,
 	})
 }
 
-// namespaceFromRequest resolves the namespace the caller is authorized for.
+// DeviceTokenHandler is the waiting machine's poll.
 //
-// Read from the context the auth middleware populated, never from the request
-// body: a body-supplied namespace would let any authenticated caller revoke
-// devices in someone else's namespace.
-func namespaceFromRequest(r *http.Request) string {
-	if v := r.Context().Value(ctxkeys.NamespaceOverride); v != nil {
-		if s, ok := v.(string); ok {
-			return strings.TrimSpace(s)
-		}
+// POST /v1/auth/device/token
+func (h *Handlers) DeviceTokenHandler(w http.ResponseWriter, r *http.Request) {
+	if !h.deviceReady(w, r) {
+		return
 	}
-	return ""
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	var req DeviceTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body: expected {\"device_code\": \"...\"}")
+		return
+	}
+
+	ctx := r.Context()
+	// A device link binds the session to the waiting device, which becomes one
+	// of the account's active devices as the login is collected.
+	var deviceID string
+	claimed, err := h.authService.ClaimDeviceAuthorization(ctx, req.DeviceCode,
+		h.claimCheck(ctx, req.DeviceCode, req.DeviceProof, &deviceID))
+	if err != nil {
+		if !writeDeviceRefusal(w, err) {
+			writeDeviceError(w, err)
+		}
+		return
+	}
+
+	// A session, not a key. The whole reason this flow exists is that the
+	// documented way onto a server was a permanent key in an environment
+	// variable; handing one back here would rebuild that by another route.
+	token, refresh, expUnix, err := h.authService.IssueDeviceTokens(ctx, claimed.Subject, claimed.Namespace, deviceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.authService.Audit().RecordFromRequest(ctx, r, authsvc.AuditEvent{
+		Namespace: claimed.Namespace,
+		Actor:     claimed.Subject,
+		Action:    authsvc.AuditDeviceLoginClaimed,
+		Result:    authsvc.AuditSuccess,
+	})
+
+	body := map[string]any{
+		"access_token":  token,
+		"token_type":    "Bearer",
+		"expires_in":    int(expUnix - time.Now().Unix()),
+		"refresh_token": refresh,
+		"subject":       claimed.Subject,
+		"namespace":     claimed.Namespace,
+	}
+	if deviceID != "" {
+		body["device_id"] = deviceID
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// deviceReady refuses anything this endpoint cannot honour, before it reads a
+// body.
+func (h *Handlers) deviceReady(w http.ResponseWriter, r *http.Request) bool {
+	if h.authService == nil {
+		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
+		return false
+	}
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed (POST)")
+		return false
+	}
+	return true
+}
+
+// writeDeviceError turns a device-flow outcome into the response RFC 8628 §3.5
+// names.
+//
+// The RFC's four are 400s carrying an `error` the client switches on, not
+// failures of the request: "nobody has approved it yet" is the expected answer
+// to almost every poll.
+func writeDeviceError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, authsvc.ErrDeviceAuthorizationPending),
+		errors.Is(err, authsvc.ErrDeviceSlowDown),
+		errors.Is(err, authsvc.ErrDeviceCodeExpired),
+		errors.Is(err, authsvc.ErrDeviceAccessDenied),
+		errors.Is(err, authsvc.ErrDeviceCodeUnknown):
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error":             err.Error(),
+			"error_description": deviceErrorDescriptions[err.Error()],
+		})
+	case errors.Is(err, authsvc.ErrDeviceAlreadyApproved):
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":             "already_approved",
+			"error_description": "somebody already approved this code; the machine waiting on it has its session",
+		})
+	default:
+		writeError(w, http.StatusBadRequest, err.Error())
+	}
+}
+
+// deviceErrorDescriptions says, in the response, what the client should do —
+// so a person reading a failed poll with curl is not left with one word.
+var deviceErrorDescriptions = map[string]string{
+	"authorization_pending": "nobody has approved this code yet; keep polling",
+	"slow_down":             "polled faster than the interval this login was issued with",
+	"expired_token":         "this login was not approved in time; ask for a new code",
+	"access_denied":         "the approver refused this login",
+	"invalid_grant":         "this code names no pending login, or its session was already collected",
 }

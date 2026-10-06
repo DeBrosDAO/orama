@@ -18,7 +18,7 @@
 | **Resource exhaustion** | Medium | Request body size limits (1 MiB push, 4 KiB pull), share size limit (512 KiB), peer protocol max payload (1 MiB). Systemd MemoryMax=512M. | Implemented |
 | **Man-in-the-middle (peer)** | High | WireGuard provides authenticated encryption between peers on the overlay. Note: in v0.1.0 the peer listener is never started, so nothing accepts connections on port 7501 -- there is no active peer protocol to attack. | Peer protocol not active (v0.1.0) |
 | **Man-in-the-middle (client)** | High | TLS termination planned for Phase 3. Currently plain TCP on port 7500. In production, the Orama gateway provides TLS. | Gateway-level |
-| **Unauthorized push/pull** | Medium | Two layers, both enforced by the push/pull handlers: (1) a session token (HMAC challenge-response via `/v1/vault/auth/challenge` + `/v1/vault/auth/session`, sent as `X-Session-Token`), and (2) an Ed25519 ownership proof — identity = SHA-256(pubkey), with a signature over the push message (binding the version) or pull message (binding a timestamp, max 120s skew). Requests without both get 401. | Implemented |
+| **Unauthorized push/pull** | Medium | Two layers, both enforced by the V1 push/pull handlers and the V2 secrets handlers: (1) a session token (HMAC challenge-response via `/v1/vault/auth/challenge` + `/v1/vault/auth/session`, sent as `X-Session-Token`), and (2) an Ed25519 ownership proof — identity = SHA-256(pubkey), with a signature over the push/put message (binding the version) or pull/get/delete/list message (binding a timestamp, max 120s skew). Requests without both get 401. | Implemented |
 | **Share epoch mixing** | High | After proactive re-sharing, old and new shares are algebraically independent. Mixing shares from different epochs does NOT reconstruct the secret. Tested and verified. | Implemented |
 
 ---
@@ -39,25 +39,51 @@ For a multi-byte secret of length L, this applies independently to each byte pos
 
 ### Threshold and Share Count
 
-The system uses an adaptive threshold:
+The system uses an adaptive read threshold and a write quorum derived from it:
 
 ```
-K = max(3, floor(N/3))
+K = max(2, floor(N/3))
+W = min(N, max(K + 1, ceil(2N/3)))
 ```
 
-Where N is the number of alive guardians. This means:
+Where N is the number of alive guardians. K is the number of shares a read must
+collect; W is the number of guardians that must acknowledge before a write is
+reported successful.
 
-| Alive Nodes (N) | Threshold (K) | Fault Tolerance (N-K) |
-|------------------|---------------|------------------------|
-| 3 | 3 | 0 |
-| 5 | 3 | 2 |
-| 9 | 3 | 6 |
-| 10 | 3 | 7 |
-| 14 | 4 | 10 |
-| 50 | 16 | 34 |
-| 100 | 33 | 67 |
+| Alive Nodes (N) | Threshold (K) | Write Quorum (W) | Read Fault Tolerance (N-K) |
+|------------------|---------------|------------------|-----------------------------|
+| 1 (eval only) | 1 | 1 | 0 — local key, not Shamir |
+| 3 | 2 | 3 | 1 |
+| 5 | 2 | 4 | 3 |
+| 9 | 3 | 6 | 6 |
+| 10 | 3 | 7 | 7 |
+| 14 | 4 | 10 | 10 |
+| 50 | 16 | 34 | 34 |
+| 100 | 33 | 67 | 67 |
 
-The minimum threshold of 3 ensures that at least 3 guardians must cooperate to reconstruct, even in small clusters. This prevents trivial collusion.
+Two is the smallest Shamir threshold that keeps the secret secret: with K = 1 a
+single guardian holds enough to reconstruct on its own.
+
+**Eval exception (one VPS).** Shamir `Split` requires `K≥2` and `N≥K`, so a
+single guardian cannot split. The gateway stores the envelope as a local key on
+that disk (`K=1`, `W=1`) and logs it. That is not information-theoretic secret
+sharing; lose the disk, lose the secret. See [EVAL.md](../EVAL.md). Production
+(`N≥3`) is unchanged. Do not fold K=1 into `AdaptiveThreshold`.
+
+`W > K` is the durability guarantee for **N≥3**. At N=1 it cannot hold (one
+disk). At N=2, W=K=2 (no spare share). A two-node fleet is refused at tenant
+provision. A write reported successful has persisted
+strictly more shares than a read requires, so it is always recoverable and
+survives the loss of at least one guardian. The floor used to be 3, which broke
+that guarantee in the other direction: at N = 3 it gave K = 3 against W = 2, so
+a write the system called successful had stored fewer shares than a read needed
+and was permanently unrecoverable, with nothing at the time of the write to say
+so.
+
+The three implementations — `vault/src/membership/quorum.zig`,
+`core/pkg/shamir/shamir.go` and `sdk-vault/src/quorum.ts` — must agree exactly.
+A client that believes a write needed two acknowledgements where the guardian
+required three reports a write as successful that the guardian refused.
 
 ---
 

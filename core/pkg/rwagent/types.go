@@ -12,6 +12,24 @@ type StatusResponse struct {
 	Uptime        int    `json:"uptime"`
 	PID           int    `json:"pid"`
 	ConnectedApps int    `json:"connectedApps"`
+	// PendingUnlocks is how many requests are parked waiting for the wallet to
+	// be unlocked.
+	PendingUnlocks int `json:"pendingUnlocks"`
+	// PendingApprovals is how many requests are waiting on an approval prompt
+	// someone has to answer in the desktop app. The agent reports it
+	// separately from PendingUnlocks; an older agent omits it (zero).
+	PendingApprovals int `json:"pendingApprovals"`
+}
+
+// TouchResponse from POST /v1/touch.
+type TouchResponse struct {
+	// Locked is true when the wallet was already locked; a touch never unlocks.
+	Locked bool `json:"locked"`
+	// AutoLockInSeconds is how long the session now has before it auto-locks;
+	// nil when locked or when the agent never auto-locks.
+	AutoLockInSeconds *int `json:"autoLockInSeconds"`
+	// PendingApprovals is how many requests are waiting on an approval prompt.
+	PendingApprovals int `json:"pendingApprovals"`
 }
 
 // VaultSSHData from GET /v1/vault/ssh/:host/:user.
@@ -36,13 +54,31 @@ type WalletSignData struct {
 	Signature string `json:"signature"`
 }
 
+// OramaTxSignature is POST /v1/orama/tx/sign's answer, decoded from base64.
+type OramaTxSignature struct {
+	// Signature is the 64-byte r||s, s low, over SHA-256 of the SignDoc: what
+	// goes into TxRaw.signatures.
+	Signature []byte
+	// PubKey is the 33-byte compressed secp256k1 key that made it.
+	PubKey []byte
+	// Address is PubKey's ORAMA account address (orama1…).
+	Address string
+}
+
+// oramaTxSignData is OramaTxSignature on the wire.
+type oramaTxSignData struct {
+	Signature string `json:"signature"`
+	PubKey    string `json:"pubKey"`
+	Address   string `json:"address"`
+}
+
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
-	BinaryHash   string               `json:"binaryHash"`
-	BinaryPath   string               `json:"binaryPath"`
-	Name         string               `json:"name"`
-	FirstSeen    string               `json:"firstSeen"`
-	LastUsed     string               `json:"lastUsed"`
+	BinaryHash   string                `json:"binaryHash"`
+	BinaryPath   string                `json:"binaryPath"`
+	Name         string                `json:"name"`
+	FirstSeen    string                `json:"firstSeen"`
+	LastUsed     string                `json:"lastUsed"`
 	Capabilities []PermittedCapability `json:"capabilities"`
 }
 

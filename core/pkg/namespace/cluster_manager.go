@@ -4,18 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/DeBrosOfficial/network/pkg/gateway"
+	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gatewayspec"
 	"github.com/DeBrosOfficial/network/pkg/olric"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/sfu"
@@ -31,7 +33,7 @@ type ClusterManagerConfig struct {
 	GlobalRQLiteDSN string // Global RQLite DSN for API key validation (e.g., "http://localhost:4001")
 	// IPFS configuration for namespace gateways (defaults used if not set)
 	IPFSClusterAPIURL     string        // IPFS Cluster API URL (default: "http://localhost:9094")
-	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:4501")
+	IPFSAPIURL            string        // IPFS API URL (default: "http://localhost:10107")
 	IPFSTimeout           time.Duration // Timeout for IPFS operations (default: 60s)
 	IPFSReplicationFactor int           // IPFS replication factor (default: 3)
 
@@ -40,10 +42,14 @@ type ClusterManagerConfig struct {
 	// If nil, TURN secrets are stored in plaintext (backward compatibility).
 	TurnEncryptionKey []byte
 
-	// ClusterSecretPath is the host's cluster-secret file path. Forwarded
-	// to spawned namespace gateways via YAML so they can derive the
-	// cluster-wide JWT signing key (bug #215 fix). Empty string disables
-	// cross-node JWT verification within namespace clusters.
+	// ClusterSecretPath is the host's <oramaDir>/secrets/cluster-secret,
+	// forwarded to every spawned namespace gateway as cluster_secret_path.
+	// A gateway refuses to start without it: it reads the cluster secret
+	// there (the key its node-to-node authentication, coordination and
+	// storage-wrap keys are derived from) and, from the orama directory the
+	// file is in, the node's identity key and peer id. Tokens are not signed
+	// with a cluster-derived key: each gateway signs with its own key from
+	// its state directory, and replaces a cluster-derived one it finds there.
 	ClusterSecretPath string
 
 	// SecretsEncryptionKey is the host's serverless secrets encryption key
@@ -70,13 +76,19 @@ type ClusterManager struct {
 	// crash-looping unit cannot be restarted every tick (bugboard #161).
 	webrtcSpawnMu       sync.Mutex
 	webrtcSpawnCooldown map[string]time.Time
-	nodeSelector        *ClusterNodeSelector
-	systemdSpawner      *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
-	dnsManager          *DNSRecordManager
-	logger              *zap.Logger
-	baseDomain          string
-	baseDataDir         string
-	globalRQLiteDSN     string // Global RQLite DSN for namespace gateway auth
+
+	// rqliteDownSweeps counts, per cluster, the consecutive tenant sweeps this
+	// node found its namespace rqlite unit not active (rqlite_liveness.go).
+	rqliteDownMu     sync.Mutex
+	rqliteDownSweeps map[string]int
+
+	nodeSelector    *ClusterNodeSelector
+	systemdSpawner  *SystemdSpawner // NEW: Systemd-based spawner replaces old spawners
+	dnsManager      *DNSRecordManager
+	logger          *zap.Logger
+	baseDomain      string
+	baseDataDir     string
+	globalRQLiteDSN string // Global RQLite DSN for namespace gateway auth
 
 	// IPFS configuration for namespace gateways
 	ipfsClusterAPIURL     string
@@ -101,9 +113,62 @@ type ClusterManager struct {
 	// paths do not wait the full production window.
 	readyTimeout time.Duration
 
+	// spawnRequestFn replaces the HTTP call to a remote node's spawn endpoint.
+	// Nil in production; set in tests so remote stop/spawn paths run without a
+	// network.
+	spawnRequestFn func(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error)
+
+	// raftRemoveFn replaces the admin call that removes a member from a
+	// namespace's raft configuration through one surviving member. Nil in
+	// production; set in tests so the removal paths run without an rqlited.
+	raftRemoveFn func(ctx context.Context, via survivingNodePorts, raftID string) error
+
+	// resuming holds the clusters whose abandoned teardown this process is
+	// carrying on (resumeStaleDeprovisioning); resumeWG lets a test wait for them.
+	resumeMu sync.Mutex
+	resuming map[string]bool
+	resumeWG sync.WaitGroup
+
 	// Track provisioning operations
 	provisioningMu sync.RWMutex
 	provisioning   map[string]bool // namespace -> in progress
+
+	// orphanStreak counts, per namespace, the consecutive tenant reconciler
+	// sweeps that found it on this node's disk with no assignment in the
+	// registry (reapOrphanedTenants).
+	orphanMu     sync.Mutex
+	orphanStreak map[string]int
+	// teardownAttempt records, per namespace whose teardown failed, when it was
+	// last attempted as a position in teardownSeq. The per-pass cap takes the
+	// namespaces attempted longest ago first, so every due namespace is tried in
+	// turn however many keep failing.
+	teardownAttempt map[string]uint64
+	teardownSeq     uint64
+	// disownedTenants is the tenant list of the last sweep that found the
+	// registry disowning every one of them, and disownedStreak how many
+	// consecutive sweeps did (RegistryDisownedTenants).
+	disownedTenants []string
+	disownedStreak  int
+
+	// bootTeardowns counts the namespaces the boot restore has torn down
+	// (restoreAssigned), capped at orphanTeardownsPerPass. Read and written by
+	// the one restore pass at boot only.
+	bootTeardowns int
+
+	// localTenantsFn and teardownLocalFn replace the node-local namespace
+	// listing and teardown. Nil in production; set in tests, which have no
+	// systemd.
+	localTenantsFn  func() ([]string, error)
+	teardownLocalFn func(ctx context.Context, namespace string, purgeData bool) error
+
+	// reconcileHostTURNFn replaces ReconcileHostTURN, which drives the real
+	// shared TURN unit. Nil in production; set in tests, which have no systemd.
+	reconcileHostTURNFn func(ctx context.Context) ([]string, error)
+	// waitHostTURNServingFn replaces the wait for the running shared TURN server
+	// to load the namespace, which reads files only a real server writes.
+	waitHostTURNServingFn func(ctx context.Context, namespace string) error
+	// hostTURNActiveFn replaces the systemd query for orama-turn being active.
+	hostTURNActiveFn func() (bool, error)
 
 	// Leadership-locality reconciler cooldown (bugboard #708): per-namespace
 	// timestamp of the last leadership transfer, to bound churn. Lazy-init.
@@ -119,6 +184,13 @@ type ClusterManager struct {
 	// case is always treated as "well past the grace period" rather than
 	// accidentally gating tests that don't care about startup timing.
 	startedAt time.Time
+
+	// drivers is the tenant ServiceDriver registry (rqlite, olric, gateway).
+	drivers *driverRegistry
+
+	// clusterSecretPath is where this node keeps the cluster secret. It is
+	// what a node-to-node coordination request is signed with.
+	clusterSecretPath string
 }
 
 // NewClusterManager creates a new cluster manager
@@ -137,11 +209,11 @@ func NewClusterManager(
 	// Set IPFS defaults
 	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
 	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
+		ipfsClusterAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSClusterAPIPort)
 	}
 	ipfsAPIURL := cfg.IPFSAPIURL
 	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
+		ipfsAPIURL = fmt.Sprintf("http://localhost:%d", IndexIPFSAPIPort)
 	}
 	ipfsTimeout := cfg.IPFSTimeout
 	if ipfsTimeout == 0 {
@@ -152,7 +224,8 @@ func NewClusterManager(
 		ipfsReplicationFactor = 3
 	}
 
-	return &ClusterManager{
+	cm := &ClusterManager{
+		clusterSecretPath:     cfg.ClusterSecretPath,
 		db:                    db,
 		portAllocator:         portAllocator,
 		webrtcPortAllocator:   webrtcPortAllocator,
@@ -173,56 +246,8 @@ func NewClusterManager(
 		provisioning:          make(map[string]bool),
 		startedAt:             time.Now(),
 	}
-}
-
-// NewClusterManagerWithComponents creates a cluster manager with custom components (useful for testing)
-func NewClusterManagerWithComponents(
-	db rqlite.Client,
-	portAllocator *NamespacePortAllocator,
-	nodeSelector *ClusterNodeSelector,
-	systemdSpawner *SystemdSpawner,
-	cfg ClusterManagerConfig,
-	logger *zap.Logger,
-) *ClusterManager {
-	// Set IPFS defaults (same as NewClusterManager)
-	ipfsClusterAPIURL := cfg.IPFSClusterAPIURL
-	if ipfsClusterAPIURL == "" {
-		ipfsClusterAPIURL = "http://localhost:9094"
-	}
-	ipfsAPIURL := cfg.IPFSAPIURL
-	if ipfsAPIURL == "" {
-		ipfsAPIURL = "http://localhost:4501"
-	}
-	ipfsTimeout := cfg.IPFSTimeout
-	if ipfsTimeout == 0 {
-		ipfsTimeout = 60 * time.Second
-	}
-	ipfsReplicationFactor := cfg.IPFSReplicationFactor
-	if ipfsReplicationFactor == 0 {
-		ipfsReplicationFactor = 3
-	}
-
-	return &ClusterManager{
-		db:                    db,
-		portAllocator:         portAllocator,
-		webrtcPortAllocator:   NewWebRTCPortAllocator(db, logger),
-		nodeSelector:          nodeSelector,
-		systemdSpawner:        systemdSpawner,
-		dnsManager:            NewDNSRecordManager(db, cfg.BaseDomain, logger),
-		baseDomain:            cfg.BaseDomain,
-		baseDataDir:           cfg.BaseDataDir,
-		globalRQLiteDSN:       cfg.GlobalRQLiteDSN,
-		ipfsClusterAPIURL:     ipfsClusterAPIURL,
-		ipfsAPIURL:            ipfsAPIURL,
-		ipfsTimeout:           ipfsTimeout,
-		ipfsReplicationFactor: ipfsReplicationFactor,
-		turnEncryptionKey:     cfg.TurnEncryptionKey,
-		secretsEncryptionKey:  cfg.SecretsEncryptionKey,
-		ntfyBaseURL:           cfg.NtfyBaseURL,
-		logger:                logger.With(zap.String("component", "cluster-manager")),
-		provisioning:          make(map[string]bool),
-		startedAt:             time.Now(),
-	}
+	cm.initTenantDrivers()
+	return cm
 }
 
 // SetLocalNodeID sets this node's peer ID for local/remote dispatch during provisioning
@@ -244,6 +269,112 @@ func (cm *ClusterManager) spawnOlricWithSystemd(ctx context.Context, cfg olric.I
 	return cm.systemdSpawner.SpawnOlric(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
+// peersJSONSource says where the peer list for a disk restore came from.
+type peersJSONSource int
+
+const (
+	// peersFromDB: live membership was readable and is authoritative.
+	peersFromDB peersJSONSource = iota
+	// peersSkip: membership is unreadable, so nothing is asserted; rqlited
+	// starts on its own raft configuration and waits for its peers.
+	peersSkip
+)
+
+func (s peersJSONSource) String() string {
+	switch s {
+	case peersFromDB:
+		return "live-membership"
+	case peersSkip:
+		return "skipped-membership-unreadable"
+	}
+	return "unknown"
+}
+
+// choosePeersJSONSource decides what a disk restore may assert about raft
+// membership.
+//
+// peers.json is rqlite's FORCE RECOVERY mechanism: it overwrites the raft
+// configuration at startup. The disk path used to build it from
+// cluster-state.json's AllNodes, which is refreshed only by a best-effort HTTP
+// push - so the node most likely to hold a stale copy is exactly the node that
+// was down while the cluster changed. On its next boot it reinstated a removed
+// member as a voter. That is the recorded "namespace RQLite lost quorum"
+// incident.
+//
+// Only verified membership is ever asserted. There used to be a third answer:
+// when the index database was unreadable and no peer's raft port answered, the
+// node wrote a single-node configuration "to at least get a leader". That is
+// every node's view during a full cold start — a power loss, every node
+// rebooting at once — so each would have made itself a cluster of one and
+// split every namespace. A node that keeps its configuration waits for its
+// peers, which is what raft is for; forcing a smaller cluster is an operator's
+// decision (`orama node recover-raft`).
+func choosePeersJSONSource(dbOK bool) peersJSONSource {
+	if dbOK {
+		return peersFromDB
+	}
+	return peersSkip
+}
+
+// writeRestorePeersJSON applies choosePeersJSONSource for one namespace, and
+// writes peers.json only when the live membership differs from what this node
+// recorded (needsPeersRecovery).
+func (cm *ClusterManager) writeRestorePeersJSON(ctx context.Context, state *ClusterLocalState, dataDir string) error {
+	dbPeers, dbErr := cm.liveRaftPeers(ctx, state.ClusterID)
+	dbOK := dbErr == nil && len(dbPeers) > 0
+
+	switch choosePeersJSONSource(dbOK) {
+	case peersFromDB:
+		record, err := readNamespaceMembership(dataDir, true)
+		if err != nil {
+			return fmt.Errorf("namespace %s: %w", state.NamespaceName, err)
+		}
+		if !needsPeersRecovery(record, dbPeers) {
+			cm.logger.Info("Not writing peers.json: this node's recorded membership is the live one, or none is recorded",
+				zap.String("namespace", state.NamespaceName), zap.Bool("membership_recorded", record != nil))
+			return nil
+		}
+		if err := cm.writePeersJSON(dataDir, dbPeers); err != nil {
+			return fmt.Errorf("write peers.json from live membership for namespace %s: %w", state.NamespaceName, err)
+		}
+		cm.logger.Info("Wrote peers.json from live membership",
+			zap.String("namespace", state.NamespaceName), zap.Int("peers", len(dbPeers)))
+	case peersSkip:
+		cm.logger.Warn("Not writing peers.json: membership is unreadable; rqlited restarts on its own raft configuration",
+			zap.String("namespace", state.NamespaceName),
+			zap.String("state_saved_at", state.SavedAt.Format(time.RFC3339)),
+			zap.Error(dbErr))
+	}
+	return nil
+}
+
+// liveRaftPeers reads current membership for a namespace cluster from the index
+// database. This is the same query the DB-backed restore path uses.
+func (cm *ClusterManager) liveRaftPeers(ctx context.Context, clusterID string) ([]rqlite.RaftPeer, error) {
+	if cm.db == nil {
+		return nil, fmt.Errorf("no index database handle")
+	}
+	var rows []struct {
+		InternalIP     string `db:"internal_ip"`
+		RQLiteRaftPort int    `db:"rqlite_raft_port"`
+	}
+	const q = `
+		SELECT COALESCE(dn.internal_ip, dn.ip_address) as internal_ip, pa.rqlite_raft_port
+		FROM namespace_port_allocations pa
+		JOIN dns_nodes dn ON pa.node_id = dn.id
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
+	`
+	if err := cm.db.Query(ctx, &rows, q, clusterID); err != nil {
+		return nil, err
+	}
+	peers := make([]rqlite.RaftPeer, 0, len(rows))
+	for _, r := range rows {
+		addr := fmt.Sprintf("%s:%d", r.InternalIP, r.RQLiteRaftPort)
+		peers = append(peers, rqlite.RaftPeer{ID: addr, Address: addr, NonVoter: false})
+	}
+	return peers, nil
+}
+
 // writePeersJSON writes RQLite peers.json file for Raft cluster recovery
 func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer) error {
 	raftDir := filepath.Join(dataDir, "raft")
@@ -257,17 +388,28 @@ func (cm *ClusterManager) writePeersJSON(dataDir string, peers []rqlite.RaftPeer
 		return fmt.Errorf("failed to marshal peers: %w", err)
 	}
 
+	removed, err := rqlite.RemoveRecoveryLeftovers(dataDir)
+	if err != nil {
+		return err
+	}
+	if len(removed) > 0 {
+		cm.logger.Warn("Removed leftovers of an earlier rqlite recovery before writing peers.json",
+			zap.String("data_dir", dataDir), zap.Strings("removed", removed))
+	}
+
 	return os.WriteFile(peersFile, data, 0644)
 }
 
 // spawnGatewayWithSystemd spawns Gateway via systemd (config creation now handled by spawner)
-func (cm *ClusterManager) spawnGatewayWithSystemd(ctx context.Context, cfg gateway.InstanceConfig) error {
+func (cm *ClusterManager) spawnGatewayWithSystemd(ctx context.Context, cfg gatewayspec.InstanceConfig) error {
 	// SystemdSpawner now handles config file creation
 	return cm.systemdSpawner.SpawnGateway(ctx, cfg.Namespace, cfg.NodeID, cfg)
 }
 
-// ProvisionCluster provisions a new 3-node cluster for a namespace
-// This is an async operation - returns immediately with cluster ID for polling
+// ProvisionCluster provisions a tenant namespace cluster (BlueprintTenant N=3
+// when the fleet can support it; BlueprintTenantN(1) on a one-node eval fleet).
+// Signature is unchanged; the HTTP path uses ProvisionNamespaceCluster for
+// background provision.
 func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int, namespaceName, provisionedBy string) (*NamespaceCluster, error) {
 	// Check if already provisioning
 	cm.provisioningMu.Lock()
@@ -284,24 +426,24 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 		cm.provisioningMu.Unlock()
 	}()
 
+	// Same bound as the async path: the stale-provisioning sweep assumes no run
+	// outlives provisioningTimeout.
+	ctx, cancel := context.WithTimeout(ctx, provisioningTimeout)
+	defer cancel()
+
 	cm.logger.Info("Starting cluster provisioning",
 		zap.String("namespace", namespaceName),
 		zap.Int("namespace_id", namespaceID),
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	// Create cluster record
-	cluster := &NamespaceCluster{
-		ID:               uuid.New().String(),
-		NamespaceID:      namespaceID,
-		NamespaceName:    namespaceName,
-		Status:           ClusterStatusProvisioning,
-		RQLiteNodeCount:  3,
-		OlricNodeCount:   3,
-		GatewayNodeCount: 3,
-		ProvisionedBy:    provisionedBy,
-		ProvisionedAt:    time.Now(),
+	bp, err := cm.tenantBlueprintForFleet(ctx)
+	if err != nil {
+		return nil, err
 	}
+	cm.logEvalProvision(namespaceName, bp)
+
+	cluster := newProvisioningClusterFrom(bp, namespaceID, namespaceName, provisionedBy)
 
 	// Insert cluster record
 	if err := cm.insertCluster(ctx, cluster); err != nil {
@@ -311,70 +453,29 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	// Log event
 	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
 
-	// Select 3 nodes for the cluster
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	nodes, portBlocks, err := cm.placeCluster(ctx, cluster.ID, bp)
 	if err != nil {
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-		return nil, fmt.Errorf("failed to select nodes: %w", err)
+		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
+		return nil, err
 	}
+	cm.logPlacement(ctx, cluster.ID, nodes, portBlocks)
 
-	nodeIDs := make([]string, len(nodes))
-	for i, n := range nodes {
-		nodeIDs[i] = n.NodeID
-	}
-	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
-
-	// Allocate ports on each node
-	portBlocks := make([]*PortBlock, len(nodes))
-	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
-		if err != nil {
-			// Rollback previous allocations
-			for j := 0; j < i; j++ {
-				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
-			}
-			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-			return nil, fmt.Errorf("failed to allocate ports on node %s: %w", node.NodeID, err)
-		}
-		portBlocks[i] = block
-		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
-			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
-	}
-
-	// Start RQLite instances (leader first, then followers)
-	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
+	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
 	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
-		return nil, fmt.Errorf("failed to start RQLite cluster: %w", err)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
+		return nil, err
 	}
 
-	// Start Olric instances
-	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
-	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
-		return nil, fmt.Errorf("failed to start Olric cluster: %w", err)
-	}
-
-	// Start Gateway instances (optional - may not be available in dev mode)
-	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-	if err != nil {
-		// Check if this is a "binary not found" error - if so, continue without gateways
-		if strings.Contains(err.Error(), "gateway binary not found") {
-			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err),
-			)
-			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
-		} else {
-			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-			return nil, fmt.Errorf("failed to start Gateway cluster: %w", err)
-		}
-	}
-
-	// Create DNS records for namespace gateway
+	// DNS is part of provisioning, not an optional extra. Without records the
+	// namespace resolves nowhere, so a cluster marked ready without them is a
+	// cluster nobody can reach — reported as a success. This used to log a
+	// warning and continue.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return nil, fmt.Errorf("namespace cluster has no DNS records, so nothing can reach it: %w", err)
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -383,16 +484,24 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.withdrawFailedCluster(ctx, cluster)
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return nil, fmt.Errorf("namespace cluster did not come up healthy: %w", err)
 	}
 
-	// Update cluster status to ready
+	// Update cluster status to ready. As in the async path: a cluster whose
+	// ready status cannot be recorded is undone, not left live and unlisted.
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
 	cluster.ReadyAt = &now
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	if err := retryWhileNoLeader(ctx, cm.logger, "mark cluster ready", func(ctx context.Context) error {
+		return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	}); err != nil {
+		reason := fmt.Sprintf("cluster started but ready status was not recorded: %v", err)
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, reason)
+		return nil, fmt.Errorf("namespace %s: %s", namespaceName, reason)
+	}
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
 	// Save cluster-state.json on all nodes (local + remote) for disk-based restore on restart
@@ -406,23 +515,91 @@ func (cm *ClusterManager) ProvisionCluster(ctx context.Context, namespaceID int,
 	return cluster, nil
 }
 
+// newProvisioningCluster writes each service's replica count. Tenant
+// default is all members (3/3/3). The columns are independent so a later
+// blueprint can select 10 nodes and run rqlite on only 3 of them.
+func newProvisioningCluster(namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
+	return newProvisioningClusterFrom(BlueprintTenant(), namespaceID, namespaceName, provisionedBy)
+}
+
+func newProvisioningClusterFrom(bp Blueprint, namespaceID int, namespaceName, provisionedBy string) *NamespaceCluster {
+	rqliteN, olricN, gatewayN := bp.serviceNodeCounts()
+	return &NamespaceCluster{
+		ID:               uuid.New().String(),
+		NamespaceID:      namespaceID,
+		NamespaceName:    namespaceName,
+		Status:           ClusterStatusProvisioning,
+		RQLiteNodeCount:  rqliteN,
+		OlricNodeCount:   olricN,
+		GatewayNodeCount: gatewayN,
+		ProvisionedBy:    provisionedBy,
+		ProvisionedAt:    time.Now(),
+	}
+}
+
+func (cm *ClusterManager) startTenantServices(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, bp Blueprint) (*provisionState, error) {
+	state := &provisionState{}
+	req := SpawnRequest{
+		Cluster:    cluster,
+		Nodes:      nodes,
+		PortBlocks: portBlocks,
+		State:      state,
+	}
+	if err := walkServices(ctx, bp, cm.drivers, req); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+// rqliteMemberConfigs builds per-node RQLite configs. Node 0 is the leader
+// with no -join. Followers join the leader's Raft address. A single node
+// (N=1) is leader-only.
+func rqliteMemberConfigs(namespace string, nodes []NodeCapacity, portBlocks []*PortBlock) []rqlite.InstanceConfig {
+	cfgs := make([]rqlite.InstanceConfig, len(nodes))
+	if len(nodes) == 0 {
+		return cfgs
+	}
+	leaderRaft := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort)
+	leaderHTTP := fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort)
+	for i, node := range nodes {
+		cfg := rqlite.InstanceConfig{
+			Namespace:      namespace,
+			NodeID:         node.NodeID,
+			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
+			RaftPort:       portBlocks[i].RQLiteRaftPort,
+			HTTPAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort),
+			RaftAdvAddress: fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteRaftPort),
+			IsLeader:       i == 0,
+			// Bugboard #281: these configs are only ever built for a BRAND-NEW
+			// cluster (startRQLiteCluster runs from the provisioning paths
+			// only), so any raft state already in the data directory is a
+			// leftover from a delete that failed to remove it. Adopting it made
+			// nodes disagree on membership and never elect a leader.
+			FreshStart: true,
+		}
+		if i > 0 {
+			cfg.JoinAddresses = []string{leaderRaft}
+			// Bugboard #275: prove the node we are about to join belongs to
+			// THIS namespace before starting. rqlited joins whatever answers at
+			// the -join address, so a port collision once put a namespace node
+			// into a FOREIGN raft group as a voter, serving another namespace's
+			// database.
+			cfg.JoinVerifyURL = "http://" + leaderHTTP
+		}
+		cfgs[i] = cfg
+	}
+	return cfgs
+}
+
 // startRQLiteCluster starts RQLite instances on all nodes (locally or remotely)
 func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock) ([]*rqlite.Instance, error) {
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes for RQLite cluster")
+	}
+	configs := rqliteMemberConfigs(cluster.NamespaceName, nodes, portBlocks)
 	instances := make([]*rqlite.Instance, len(nodes))
 
-	// Start leader first (node 0)
-	leaderCfg := rqlite.InstanceConfig{
-		Namespace:      cluster.NamespaceName,
-		NodeID:         nodes[0].NodeID,
-		HTTPPort:       portBlocks[0].RQLiteHTTPPort,
-		RaftPort:       portBlocks[0].RQLiteRaftPort,
-		HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteHTTPPort),
-		RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[0].InternalIP, portBlocks[0].RQLiteRaftPort),
-		IsLeader:       true,
-		// Bugboard #281: this path only runs when provisioning a NEW cluster, so
-		// any raft state already on disk is a leftover — never adopt it.
-		FreshStart: true,
-	}
+	leaderCfg := configs[0]
 
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
@@ -449,23 +626,9 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		cm.logger.Warn("Failed to record cluster node", zap.Error(err))
 	}
 
-	// Start followers
-	leaderRaftAddr := leaderCfg.RaftAdvAddress
+	// Start followers (none when N=1)
 	for i := 1; i < len(nodes); i++ {
-		followerCfg := rqlite.InstanceConfig{
-			Namespace:      cluster.NamespaceName,
-			NodeID:         nodes[i].NodeID,
-			HTTPPort:       portBlocks[i].RQLiteHTTPPort,
-			RaftPort:       portBlocks[i].RQLiteRaftPort,
-			HTTPAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteHTTPPort),
-			RaftAdvAddress: fmt.Sprintf("%s:%d", nodes[i].InternalIP, portBlocks[i].RQLiteRaftPort),
-			JoinAddresses:  []string{leaderRaftAddr},
-			IsLeader:       false,
-			FreshStart:     true, // bugboard #281 — see leaderCfg
-			// Bugboard #275: prove the node we are about to join belongs to THIS
-			// namespace before starting. rqlited joins whatever answers.
-			JoinVerifyURL: fmt.Sprintf("http://%s", leaderCfg.HTTPAdvAddress),
-		}
+		followerCfg := configs[i]
 
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
@@ -573,13 +736,13 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 		}
 	}
 
-	// All instances started — give memberlist time to converge.
-	// Olric's memberlist retries peer joins every ~1s for ~10 attempts.
-	// Since all instances are now up, they should discover each other quickly.
-	cm.logger.Info("All Olric instances started, waiting for memberlist convergence",
+	// No sleep here. Readiness is the driver's Ready probe, which walkServices
+	// runs against every node before the next service starts — the gateway was
+	// the thing this five-second guess was protecting, and it is now gated on
+	// Olric actually answering rather than on a timer.
+	cm.logger.Info("All Olric instances started",
 		zap.Int("node_count", len(nodes)),
 	)
-	time.Sleep(5 * time.Second)
 
 	// Log events and record cluster nodes
 	for i, node := range nodes {
@@ -607,8 +770,8 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 }
 
 // startGatewayCluster starts Gateway instances on all nodes (locally or remotely)
-func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gateway.GatewayInstance, error) {
-	instances := make([]*gateway.GatewayInstance, len(nodes))
+func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) ([]*gatewayspec.GatewayInstance, error) {
+	instances := make([]*gatewayspec.GatewayInstance, len(nodes))
 
 	// Build Olric server addresses — always use WireGuard IPs (Olric binds to WireGuard interface)
 	olricServers := make([]string, len(olricInstances))
@@ -618,10 +781,10 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 
 	// Start all Gateway instances
 	for i, node := range nodes {
-		// Connect to local RQLite instance on each node
-		rqliteDSN := fmt.Sprintf("http://localhost:%d", portBlocks[i].RQLiteHTTPPort)
+		// Connect to local RQLite instance on each node (WG bind, feat-269)
+		rqliteDSN := tenantRQLiteURL(node.InternalIP, portBlocks[i].RQLiteHTTPPort)
 
-		cfg := gateway.InstanceConfig{
+		cfg := gatewayspec.InstanceConfig{
 			Namespace:             cluster.NamespaceName,
 			NodeID:                node.NodeID,
 			HTTPPort:              portBlocks[i].GatewayHTTPPort,
@@ -638,20 +801,20 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			NtfyBaseURL:           cm.ntfyBaseURL,
 		}
 
-		var instance *gateway.GatewayInstance
+		var instance *gatewayspec.GatewayInstance
 		var err error
 		if node.NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning Gateway locally", zap.String("node", node.NodeID))
 			err = cm.spawnGatewayWithSystemd(ctx, cfg)
 			if err == nil {
-				instance = &gateway.GatewayInstance{
+				instance = &gatewayspec.GatewayInstance{
 					Namespace:    cfg.Namespace,
 					NodeID:       cfg.NodeID,
 					HTTPPort:     cfg.HTTPPort,
 					BaseDomain:   cfg.BaseDomain,
 					RQLiteDSN:    cfg.RQLiteDSN,
 					OlricServers: cfg.OlricServers,
-					Status:       gateway.InstanceStatusRunning,
+					Status:       gatewayspec.InstanceStatusRunning,
 					StartedAt:    time.Now(),
 				}
 			}
@@ -728,7 +891,7 @@ func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, c
 }
 
 // spawnGatewayRemote sends a spawn-gateway request to a remote node
-func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string, cfg gateway.InstanceConfig) (*gateway.GatewayInstance, error) {
+func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string, cfg gatewayspec.InstanceConfig) (*gatewayspec.GatewayInstance, error) {
 	ipfsTimeout := ""
 	if cfg.IPFSTimeout > 0 {
 		ipfsTimeout = cfg.IPFSTimeout.String()
@@ -768,7 +931,7 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 	if err != nil {
 		return nil, err
 	}
-	return &gateway.GatewayInstance{
+	return &gatewayspec.GatewayInstance{
 		Namespace:    cfg.Namespace,
 		NodeID:       cfg.NodeID,
 		HTTPPort:     cfg.HTTPPort,
@@ -786,9 +949,32 @@ type spawnResponse struct {
 	PID     int    `json:"pid,omitempty"`
 }
 
+// requireOverlayTarget refuses a spawn target outside the WireGuard overlay.
+// The request is stamped with the cluster secret's key and carries DSNs and
+// secrets: an address read from a registry row must not be able to send it to
+// a host off the mesh.
+func requireOverlayTarget(nodeIP string) error {
+	addr, err := netip.ParseAddr(nodeIP)
+	if err != nil || !constants.WireGuardOverlay().Contains(addr) {
+		return fmt.Errorf("refusing to send a spawn request to %q: it is not an address inside the WireGuard overlay %s", nodeIP, constants.WireGuardOverlay())
+	}
+	return nil
+}
+
 // sendSpawnRequest sends a spawn/stop request to a remote node's spawn endpoint
 func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, req map[string]interface{}) (*spawnResponse, error) {
-	url := fmt.Sprintf("http://%s:6001/v1/internal/namespace/spawn", nodeIP)
+	if cm.spawnRequestFn != nil {
+		return cm.spawnRequestFn(ctx, nodeIP, req)
+	}
+	if err := requireOverlayTarget(nodeIP); err != nil {
+		return nil, err
+	}
+	targetNodeID, _ := req["node_id"].(string)
+	if targetNodeID == "" {
+		return nil, fmt.Errorf("spawn request %q for namespace %v to %s names no node_id: the stamp is "+
+			"signed for one node and the endpoint refuses a request for any other", req["action"], req["namespace"], nodeIP)
+	}
+	url := fmt.Sprintf("http://%s:%d/v1/internal/namespace/spawn", nodeIP, IndexGatewayHTTPPort)
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal spawn request: %w", err)
@@ -799,7 +985,9 @@ func (cm *ClusterManager) sendSpawnRequest(ctx context.Context, nodeIP string, r
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Orama-Internal-Auth", "namespace-coordination")
+	if err := cm.signCoordination(httpReq, targetNodeID); err != nil {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(httpReq)
@@ -830,7 +1018,7 @@ func (cm *ClusterManager) stopRQLiteOnNode(ctx context.Context, nodeID, nodeIP, 
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopRQLite(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-rqlite", namespace, nodeID, cleanupScope{})
 	}
 }
 
@@ -839,7 +1027,7 @@ func (cm *ClusterManager) stopOlricOnNode(ctx context.Context, nodeID, nodeIP, n
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopOlric(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-olric", namespace, nodeID, cleanupScope{})
 	}
 }
 
@@ -848,24 +1036,65 @@ func (cm *ClusterManager) stopGatewayOnNode(ctx context.Context, nodeID, nodeIP,
 	if nodeID == cm.localNodeID {
 		cm.systemdSpawner.StopGateway(ctx, namespace, nodeID)
 	} else {
-		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID)
+		cm.sendStopRequest(ctx, nodeIP, "stop-gateway", namespace, nodeID, cleanupScope{})
 	}
 }
 
-// sendStopRequest sends a stop request to a remote node
-func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string) error {
-	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
-		"action":    action,
-		"namespace": namespace,
-		"node_id":   nodeID,
-	})
+// sendStopRequest sends a stop or teardown request to a remote node and, once
+// the node confirms it, forgets the retry record of it. scope is what the
+// request is owed for, kept with the retry record of a failed one.
+func (cm *ClusterManager) sendStopRequest(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	err := cm.sendStopKeepingRow(ctx, nodeIP, action, namespace, nodeID, scope)
+	if err == nil {
+		cm.clearPendingCleanup(ctx, namespace, nodeID, action)
+	}
+	return err
+}
+
+// sendStopKeepingRow is sendStopRequest that leaves the retry record of a
+// success in place: the replay frees the allocations the record stands for
+// before it clears it (settleCleanup).
+//
+// A destructive action carries the cluster id it is owed for. A teardown deletes
+// state, and the name may have been created again on the node since the request
+// was made: the node refuses a teardown whose cluster id is not the one its own
+// state belongs to. A node on the previous release does not read the field and
+// tears down as before.
+func (cm *ClusterManager) sendStopKeepingRow(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	err := cm.sendStop(ctx, nodeIP, action, namespace, nodeID, scope)
 	if err != nil {
-		cm.logger.Warn("Failed to send stop request to remote node",
+		// A stop that did not happen is work still owed, not a warning. The
+		// unit keeps running and keeps holding a port the allocator has
+		// already released — and the next namespace to be given that port
+		// finds it occupied and joins a foreign raft group (bugboard #275).
+		cm.logger.Warn("Failed to send stop request to remote node; recording it for retry",
 			zap.String("node_ip", nodeIP),
 			zap.String("action", action),
 			zap.Error(err),
 		)
+		if rerr := cm.recordPendingCleanup(ctx, namespace, nodeID, nodeIP, action, scope, err); rerr != nil {
+			return fmt.Errorf("%w; %w", err, rerr)
+		}
 	}
+	return err
+}
+
+// sendStop sends the stop or teardown request and records nothing: a replay
+// owns its row already and updates it (recordReplayFailure), and recording from
+// here would insert the row again after a re-add withdrew it.
+func (cm *ClusterManager) sendStop(ctx context.Context, nodeIP, action, namespace, nodeID string, scope cleanupScope) error {
+	req := map[string]interface{}{
+		"action":    action,
+		"namespace": namespace,
+		"node_id":   nodeID,
+	}
+	if scope.PurgeData && action == teardownAction {
+		req["purge_data"] = true
+	}
+	if scope.ClusterID != "" && isDestructiveCleanup(action) {
+		req["cluster_id"] = scope.ClusterID
+	}
+	_, err := cm.sendSpawnRequest(ctx, nodeIP, req)
 	return err
 }
 
@@ -897,34 +1126,50 @@ func (cm *ClusterManager) createDNSRecords(ctx context.Context, cluster *Namespa
 	return nil
 }
 
-// rollbackProvisioning cleans up a failed provisioning attempt
-func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, rqliteInstances []*rqlite.Instance, olricInstances []*olric.OlricInstance) {
+// rollbackProvisioning cleans up a failed provisioning attempt and records the
+// failure once, with reason as the message. It runs on its own bounded context:
+// the provisioning context is frequently the one that just expired, and a
+// rollback on a dead context stops nothing.
+func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *NamespaceCluster, nodes []NodeCapacity, portBlocks []*PortBlock, reason string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+
 	cm.logger.Info("Rolling back failed provisioning", zap.String("cluster_id", cluster.ID))
 
-	// Stop all namespace services (Gateway, Olric, RQLite) using systemd
-	cm.systemdSpawner.StopAll(ctx, cluster.NamespaceName)
-
-	// Stop Olric instances on each node
-	if olricInstances != nil && nodes != nil {
-		for _, node := range nodes {
-			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
+	// Tear the namespace down on every node it was given: units stopped AND
+	// disabled, data directory and unit env files deleted. Stopping alone left
+	// enabled units and their on-disk state behind, and the membership rows
+	// withdrawn below are what a later deprovision uses to find those nodes, so
+	// a rolled-back namespace that was then deleted was never cleaned up and
+	// came back on the next `orama node upgrade`. A node that cannot be reached
+	// keeps a pending-cleanup record (sendStopRequest) and, failing that, is
+	// reaped by its own tenant reconciler once it sees the namespace is gone.
+	members := make([]staleClusterNode, len(nodes))
+	for i, node := range nodes {
+		members[i] = staleClusterNode{NodeID: node.NodeID, InternalIP: node.InternalIP}
+	}
+	unconfirmed, err := cm.teardownNamespaceOnNodesReport(ctx, members, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID})
+	if err != nil {
+		cm.logger.Error("Rollback could not tear the namespace down on every node; the teardown is owed and replayed",
+			zap.String("namespace", cluster.NamespaceName), zap.Strings("unconfirmed_nodes", unconfirmed), zap.Error(err))
 	}
 
-	// Stop RQLite instances on each node
-	if rqliteInstances != nil && nodes != nil {
-		for i, inst := range rqliteInstances {
-			if inst != nil && i < len(nodes) {
-				cm.stopRQLiteOnNode(ctx, nodes[i].NodeID, nodes[i].InternalIP, cluster.NamespaceName, inst)
-			}
-		}
+	// Deallocate the ports of the nodes that confirmed. An unconfirmed node's
+	// units may still hold theirs; its block is freed when the owed teardown is
+	// carried out.
+	if err := cm.releaseConfirmedAllocations(ctx, cluster.ID, unconfirmed); err != nil {
+		cm.logger.Error("Rollback could not free the ports of the failed cluster",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 	}
 
-	// Deallocate ports
-	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
+	// Withdraw the DNS records and node membership. A rollback that left them
+	// leaked them for good: the nodes kept re-advertising a namespace that had
+	// been rolled back, and once the failed cluster row was deleted nothing
+	// knew to remove them.
+	cm.withdrawFailedCluster(ctx, cluster)
 
 	// Update cluster status
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, "Provisioning failed and rolled back")
+	cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, reason)
 }
 
 // deprovisionActiveNodesQuery selects the cluster members a teardown should
@@ -939,15 +1184,41 @@ func (cm *ClusterManager) rollbackProvisioning(ctx context.Context, cluster *Nam
 // and DNS removal below still cover those nodes, and if one ever returns the
 // periodic sweep stops services it no longer holds an allocation for.
 const deprovisionActiveNodesQuery = `
-		SELECT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
+		SELECT DISTINCT ncn.node_id, COALESCE(dn.internal_ip, dn.ip_address) as internal_ip
 		FROM namespace_cluster_nodes ncn
 		JOIN dns_nodes dn ON ncn.node_id = dn.id
 		WHERE ncn.namespace_cluster_id = ? AND dn.status = 'active'
 	`
 
+// Spawner is the cluster manager's systemd spawner. The node's spawn handler
+// uses this one rather than its own, so a namespace's teardown and restore on
+// this node take the same lock (SystemdSpawner.LockNamespace).
+func (cm *ClusterManager) Spawner() *SystemdSpawner { return cm.systemdSpawner }
+
+// DeprovisionTimeout bounds one teardown of a namespace cluster, whoever runs
+// it: the delete request's handler, or the reconciler resuming an abandoned one.
+// Neither may be bound to anything shorter-lived than the teardown itself: a
+// client that disconnects mid-delete cancelled the request context half way and
+// left the cluster in 'deprovisioning' for ever.
+const DeprovisionTimeout = 10 * time.Minute
+
+// ErrTeardownIncomplete is what DeprovisionCluster wraps when a node did not
+// confirm the teardown. The registry side is complete by then (cluster row, DNS
+// and membership are gone, and the ports of the nodes that confirmed) and what a
+// node did not confirm is owed: every unconfirmed node has a
+// namespace_pending_cleanup record (a teardown whose record could not be written
+// is not this error), replayed by the tenant reconciler until the node confirms
+// it, retried hourly after pendingCleanupMaxAttempts failures and logged at
+// Error each time. Until then the node's port blocks stay reserved and a create
+// of the namespace's name is refused. The caller may therefore finish deleting
+// the namespace instead of asking for the delete to be retried, which would find
+// no cluster and do exactly that.
+var ErrTeardownIncomplete = errors.New("namespace not torn down on every node")
+
 // DeprovisionCluster tears down a namespace cluster on all nodes.
-// Stops namespace infrastructure (Gateway, Olric, RQLite) on every cluster node,
-// deletes cluster-state.json, deallocates ports, removes DNS records, and cleans up DB.
+// Stops and disables the namespace's units (Gateway, Olric, RQLite, WebRTC) on every
+// cluster node, deletes its data directory and unit env files, deallocates ports,
+// removes DNS records, and cleans up DB.
 func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID int64) error {
 	cluster, err := cm.GetClusterByNamespaceID(ctx, namespaceID)
 	if err != nil {
@@ -964,7 +1235,13 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	)
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisionStarted, "", "Cluster deprovisioning started", nil)
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, "")
+	// The status is what stops this node's own restore and WebRTC sweeps from
+	// starting the services being torn down, and the stamp is what lets another
+	// node resume the teardown if this one stops. A teardown that could not
+	// record either does not begin: nothing has been touched yet.
+	if err := cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusDeprovisioning, ""); err != nil {
+		return fmt.Errorf("failed to mark namespace %s as deprovisioning, so its teardown was not started: %w", cluster.NamespaceName, err)
+	}
 
 	// Set when the namespace's data directory could not be removed on some node
 	// (bugboard #281). The control-plane teardown still completes — leaving half
@@ -972,96 +1249,76 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	// is no longer safe to reuse until the leftovers are dealt with.
 	var deprovisionDataErr error
 
+	// The nodes that did not confirm the teardown: their units may still hold
+	// their ports, so their core and WebRTC allocations are kept (the replay of
+	// the recorded teardown frees them) rather than handed to the next namespace.
+	var unconfirmed []string
+
 	// 1. Get cluster nodes WITH IPs (must happen before any DB deletion)
-	type deprovisionNodeInfo struct {
-		NodeID     string `db:"node_id"`
-		InternalIP string `db:"internal_ip"`
-	}
-	var clusterNodes []deprovisionNodeInfo
-	// Only fan stop requests out to nodes that are still ACTIVE.
+	var clusterNodes []staleClusterNode
+	// Only fan teardown requests out to nodes that are still ACTIVE.
 	//
-	// Every stop RPC uses a 60s HTTP timeout, and deprovisioning issues roughly
-	// six per node (SFU, TURN, gateway, olric, rqlite, delete-cluster-state),
-	// serially. A namespace whose nodes are gone — the exact case you delete such
-	// a namespace for — therefore blocked for ~18 minutes on three dead hosts
-	// before the control-plane rows were touched, which reads as a hang. There is
-	// nothing to stop on a node that is no longer part of the fleet: skip the
-	// round trips and let the row cleanup below proceed. Should such a node ever
-	// return, the periodic sweep stops services it no longer holds an allocation
-	// for (stopUnallocatedWebRTCServices) and prunes its membership.
+	// Every remote request uses a 60s HTTP timeout, and a teardown used to issue
+	// roughly six per node, serially. A namespace whose nodes are gone — the
+	// exact case you delete such a namespace for — therefore blocked for ~18
+	// minutes on three dead hosts before the control-plane rows were touched,
+	// which reads as a hang. There is nothing to stop on a node that is no
+	// longer part of the fleet: skip the round trips and let the row cleanup
+	// below proceed. Should such a node ever return, its own tenant reconciler
+	// tears down a namespace the registry no longer assigns it (reapOrphanedTenants).
 	if err := cm.db.Query(ctx, &clusterNodes, deprovisionActiveNodesQuery, cluster.ID); err != nil {
-		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only stop", zap.Error(err))
-		// Fall back to local-only stop (individual methods, NOT StopAll which uses dangerous glob)
-		// Stop WebRTC services first (SFU → TURN), then core services (Gateway → Olric → RQLite)
-		cm.systemdSpawner.StopSFU(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopTURN(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopGateway(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopOlric(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.StopRQLite(ctx, cluster.NamespaceName, cm.localNodeID)
-		cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
-	} else {
-		// 2. Stop WebRTC services first (SFU → TURN), then core infra (Gateway → Olric → RQLite)
-		for _, node := range clusterNodes {
-			cm.stopSFUOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopTURNOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopGatewayOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopOlricOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName)
-		}
-		for _, node := range clusterNodes {
-			cm.stopRQLiteOnNode(ctx, node.NodeID, node.InternalIP, cluster.NamespaceName, nil)
-		}
-
-		// 3. Delete the namespace data directory on all nodes.
-		//
-		// Bugboard #281: these failures used to be swallowed, so a delete that
-		// left the tenant's data on disk still reported success — and re-creating
-		// a namespace of the same name then inherited its raft state. Collect the
-		// failures and surface them; the caller decides, but it must be told.
-		var dataErrs []string
-		for _, node := range clusterNodes {
-			var derr error
-			if node.NodeID == cm.localNodeID {
-				derr = cm.systemdSpawner.DeleteClusterState(cluster.NamespaceName)
-			} else {
-				derr = cm.sendStopRequest(ctx, node.InternalIP, "delete-cluster-state", cluster.NamespaceName, node.NodeID)
-			}
-			if derr != nil {
-				dataErrs = append(dataErrs, fmt.Sprintf("%s: %v", node.NodeID, derr))
-			}
-		}
-		if len(dataErrs) > 0 {
-			cm.logger.Error("Namespace data directory was NOT removed on every node — re-creating this namespace would inherit its state (bugboard #281)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Strings("failures", dataErrs))
-			deprovisionDataErr = fmt.Errorf("namespace data not removed on %d node(s): %s",
-				len(dataErrs), strings.Join(dataErrs, "; "))
-		}
+		cm.logger.Warn("Failed to query cluster nodes for deprovisioning, falling back to local-only teardown", zap.Error(err))
+		clusterNodes = []staleClusterNode{{NodeID: cm.localNodeID}}
 	}
 
-	// 4. Deallocate all ports (core + WebRTC)
-	cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
-	cm.webrtcPortAllocator.DeallocateAll(ctx, cluster.ID)
+	// 2. Tear the namespace down on every node: units stopped AND disabled, data
+	// directory and unit env files deleted.
+	//
+	// Bugboard #281: failures here used to be swallowed, so a delete that left
+	// the tenant's data on disk still reported success — and re-creating a
+	// namespace of the same name then inherited its raft state. They are
+	// collected and surfaced; the caller decides, but it must be told.
+	unconfirmed, teardownErr := cm.teardownNamespaceOnNodesReport(ctx, clusterNodes, cluster.NamespaceName, cleanupScope{ClusterID: cluster.ID, PurgeData: true})
+	if errors.Is(teardownErr, errCleanupNotRecorded) {
+		// Nothing owes the node its teardown, so the delete cannot finish: the
+		// cluster row stays, and the caller's retry tears down again.
+		return fmt.Errorf("namespace %s was not torn down on every node and the teardown owed could not be recorded, so it is kept for a retry: %w", cluster.NamespaceName, teardownErr)
+	}
+	if teardownErr != nil {
+		cm.logger.Error("Namespace was NOT torn down on every node; the teardown is owed and replayed, and re-creating the name is refused until it is done (bugboard #281)",
+			zap.String("namespace", cluster.NamespaceName), zap.Strings("unconfirmed_nodes", unconfirmed), zap.Error(teardownErr))
+		deprovisionDataErr = fmt.Errorf("%w: %w", ErrTeardownIncomplete, teardownErr)
+	}
 
-	// 5. Delete namespace DNS records (gateway + TURN)
-	cm.dnsManager.DeleteNamespaceRecords(ctx, cluster.NamespaceName)
-	cm.dnsManager.DeleteTURNRecords(ctx, cluster.NamespaceName)
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
+
+	// 4. Free the ports (core + WebRTC) of every node that confirmed. A failure
+	// returns with the cluster row in place, so the caller's retry finds it.
+	if err := cm.releaseConfirmedAllocations(ctx, cluster.ID, unconfirmed); err != nil {
+		return fmt.Errorf("failed to free the ports of namespace %s: %w", cluster.NamespaceName, err)
+	}
+
+	// 5. Withdraw node membership, then the DNS records (gateway + TURN +
+	// stealth). Membership first: a node's 30s sweep re-adds its own gateway
+	// record for every cluster it is still a member of, so deleting DNS first
+	// left a window in which the record came straight back. A failure aborts
+	// here, with the cluster row still in place, so the caller's retry finds it.
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
+	if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
+		return fmt.Errorf("failed to remove the DNS records of namespace %s: %w", cluster.NamespaceName, err)
+	}
+	cm.refreshDeprovisionLease(ctx, cluster.ID)
 
 	// 6. Explicitly delete child tables (FK cascades disabled in rqlite)
 	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_events WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM namespace_cluster_nodes WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM namespace_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
-	cm.db.Exec(ctx, `DELETE FROM webrtc_port_allocations WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM webrtc_rooms WHERE namespace_cluster_id = ?`, cluster.ID)
 	cm.db.Exec(ctx, `DELETE FROM namespace_webrtc_config WHERE namespace_cluster_id = ?`, cluster.ID)
 
-	// 7. Delete cluster record
-	cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID)
+	// 7. Delete cluster record. A failure returns with the row in place, so the
+	// caller's retry finds the cluster and finishes the teardown.
+	if _, err := cm.db.Exec(ctx, `DELETE FROM namespace_clusters WHERE id = ?`, cluster.ID); err != nil {
+		return fmt.Errorf("failed to delete the cluster record of namespace %s: %w", cluster.NamespaceName, err)
+	}
 
 	cm.logEvent(ctx, cluster.ID, EventDeprovisioned, "", "Cluster deprovisioned", nil)
 
@@ -1089,6 +1346,7 @@ func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string
 	status := &ClusterProvisioningStatus{
 		Status:    cluster.Status,
 		ClusterID: cluster.ID,
+		Namespace: cluster.NamespaceName,
 	}
 
 	// Check individual service status by inspecting cluster nodes
@@ -1176,12 +1434,14 @@ func (cm *ClusterManager) insertCluster(ctx context.Context, cluster *NamespaceC
 			id, namespace_id, namespace_name, status,
 			rqlite_node_count, olric_node_count, gateway_node_count,
 			provisioned_by, provisioned_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`
+	// provisioned_at is stamped by the registry, not this node's clock: the
+	// stale-provisioning sweep compares it with the registry's own "now".
 	_, err := cm.db.Exec(ctx, query,
 		cluster.ID, cluster.NamespaceID, cluster.NamespaceName, cluster.Status,
 		cluster.RQLiteNodeCount, cluster.OlricNodeCount, cluster.GatewayNodeCount,
-		cluster.ProvisionedBy, cluster.ProvisionedAt,
+		cluster.ProvisionedBy,
 	)
 	return err
 }
@@ -1193,6 +1453,11 @@ func (cm *ClusterManager) updateClusterStatus(ctx context.Context, clusterID str
 	if status == ClusterStatusReady {
 		query = `UPDATE namespace_clusters SET status = ?, ready_at = ?, error_message = '' WHERE id = ?`
 		args = []interface{}{status, time.Now(), clusterID}
+	} else if status == ClusterStatusDeprovisioning {
+		// Stamped by the registry's clock, as provisioned_at is: the stale
+		// sweep compares it with the registry's own "now".
+		query = `UPDATE namespace_clusters SET status = ?, error_message = ?, deprovisioning_at = CURRENT_TIMESTAMP WHERE id = ?`
+		args = []interface{}{status, errorMsg, clusterID}
 	} else {
 		query = `UPDATE namespace_clusters SET status = ?, error_message = ? WHERE id = ?`
 		args = []interface{}{status, errorMsg, clusterID}
@@ -1260,6 +1525,9 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 	if namespaceName == "default" || namespaceName == "" {
 		return "", "default", false, nil
 	}
+	if IsReservedNamespace(namespaceName) {
+		return "", "reserved", false, nil
+	}
 
 	cluster, err := cm.GetClusterByNamespace(ctx, namespaceName)
 	if err != nil {
@@ -1277,11 +1545,20 @@ func (cm *ClusterManager) CheckNamespaceCluster(ctx context.Context, namespaceNa
 			zap.String("namespace", namespaceName),
 			zap.String("cluster_id", cluster.ID),
 		)
+		// Withdraw its DNS records and membership before the row that lets
+		// anything find them goes. Deleting the row alone orphaned them.
+		if err := cm.removeClusterServingRecords(ctx, cluster); err != nil {
+			return "", "", false, fmt.Errorf("failed to clean up the failed cluster of namespace %s: %w", namespaceName, err)
+		}
+		// Free its port reservations, except those of a node still owed a
+		// teardown of it: that node's units may still hold them, and its
+		// replay frees them. Before the row goes, so a failure is retried.
+		if err := cm.releaseAllocationsExceptOwed(ctx, cluster.ID, namespaceName); err != nil {
+			return "", "", false, fmt.Errorf("failed to free the ports of the failed cluster of namespace %s: %w", namespaceName, err)
+		}
 		// Delete the failed cluster record
 		query := `DELETE FROM namespace_clusters WHERE id = ?`
 		cm.db.Exec(ctx, query, cluster.ID)
-		// Also clean up any port allocations
-		cm.portAllocator.DeallocateAllPortBlocks(ctx, cluster.ID)
 		return "", "", true, nil
 	}
 
@@ -1308,18 +1585,16 @@ func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespa
 	cm.provisioning[namespaceName] = true
 	cm.provisioningMu.Unlock()
 
-	// Create cluster record synchronously to get the ID
-	cluster := &NamespaceCluster{
-		ID:               uuid.New().String(),
-		NamespaceID:      namespaceID,
-		NamespaceName:    namespaceName,
-		Status:           ClusterStatusProvisioning,
-		RQLiteNodeCount:  3,
-		OlricNodeCount:   3,
-		GatewayNodeCount: 3,
-		ProvisionedBy:    wallet,
-		ProvisionedAt:    time.Now(),
+	bp, err := cm.tenantBlueprintForFleet(ctx)
+	if err != nil {
+		cm.provisioningMu.Lock()
+		delete(cm.provisioning, namespaceName)
+		cm.provisioningMu.Unlock()
+		return "", "", err
 	}
+	cm.logEvalProvision(namespaceName, bp)
+
+	cluster := newProvisioningClusterFrom(bp, namespaceID, namespaceName, wallet)
 
 	// Insert cluster record
 	if err := cm.insertCluster(ctx, cluster); err != nil {
@@ -1332,14 +1607,82 @@ func (cm *ClusterManager) ProvisionNamespaceCluster(ctx context.Context, namespa
 	cm.logEvent(ctx, cluster.ID, EventProvisioningStarted, "", "Cluster provisioning started", nil)
 
 	// Start actual provisioning in background goroutine
-	go cm.provisionClusterAsync(cluster, namespaceID, namespaceName, wallet)
+	go cm.provisionClusterAsync(cluster, bp, namespaceID, namespaceName, wallet)
 
 	pollURL := "/v1/namespace/status?id=" + cluster.ID
 	return cluster.ID, pollURL, nil
 }
 
+// tenantBlueprintForFleet counts the fleet's members and picks N=1 (eval) or
+// N=3 (production), then checks that enough of them have room. A fleet that is
+// full is refused here, before anything is recorded, so the create answers a
+// capacity refusal instead of leaving a cluster that fails in the background.
+// It does not retry a failed N=3 select as N=1. Provisioning selects again,
+// and that select stays the check a concurrent create can still lose to.
+func (cm *ClusterManager) tenantBlueprintForFleet(ctx context.Context) (Blueprint, error) {
+	members, err := cm.nodeSelector.FleetMemberCount(ctx)
+	if err != nil {
+		return Blueprint{}, err
+	}
+	eligible, err := cm.nodeSelector.ListEligibleNodes(ctx)
+	if err != nil {
+		return Blueprint{}, err
+	}
+	return chooseTenantBlueprint(members, len(eligible))
+}
+
+// chooseTenantBlueprint is the recipe for a fleet of members nodes, withRoom
+// of which have a free namespace slot: sized by the fleet, refused when too
+// few have room.
+func chooseTenantBlueprint(members, withRoom int) (Blueprint, error) {
+	bp, err := TenantBlueprintForFleetSize(members)
+	if err != nil {
+		return Blueprint{}, err
+	}
+	if withRoom < bp.SelectCount {
+		return Blueprint{}, capacityShortfall(bp.SelectCount, withRoom)
+	}
+	return bp, nil
+}
+
+func (cm *ClusterManager) logEvalProvision(namespaceName string, bp Blueprint) {
+	if bp.SelectCount != 1 {
+		return
+	}
+	cm.logger.Warn("provisioning tenant as a 1-node eval cluster; this is not HA; vault is a local key on this disk",
+		zap.String("namespace", namespaceName),
+	)
+}
+
+// selectNodesWaitingForLeader is SelectNodesForCluster that waits out a
+// registry leader election instead of failing the provisioning on it.
+func (cm *ClusterManager) selectNodesWaitingForLeader(ctx context.Context, count int) ([]NodeCapacity, error) {
+	var nodes []NodeCapacity
+	err := retryWhileNoLeader(ctx, cm.logger, "select nodes", func(ctx context.Context) (err error) {
+		nodes, err = cm.nodeSelector.SelectNodesForCluster(ctx, count)
+		return err
+	})
+	return nodes, err
+}
+
+// allocatePortsWaitingForLeader is AllocatePortBlock that waits out a registry
+// leader election. AllocatePortBlock is idempotent per (cluster, node): a block
+// already recorded, including one whose INSERT committed before its reply was
+// lost, is returned, so a retry after an ambiguous failure cannot double-allocate
+// or fail on its own earlier write.
+func (cm *ClusterManager) allocatePortsWaitingForLeader(ctx context.Context, nodeID, clusterID string, bp Blueprint) (*PortBlock, error) {
+	var block *PortBlock
+	err := retryWhileNoLeader(ctx, cm.logger, "allocate ports", func(ctx context.Context) (err error) {
+		// A new cluster's id has no owed teardown to withdraw: its blocks are
+		// always its own, and a rollback may free them.
+		block, _, err = cm.portAllocator.AllocatePortBlock(ctx, nodeID, clusterID, bp)
+		return err
+	})
+	return block, err
+}
+
 // provisionClusterAsync performs the actual cluster provisioning in the background
-func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, namespaceID int, namespaceName, provisionedBy string) {
+func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, bp Blueprint, namespaceID int, namespaceName, provisionedBy string) {
 	defer func() {
 		// Recover from panics (e.g., gorqlite index-out-of-range) so the
 		// goroutine doesn't die silently leaving status stuck at "provisioning".
@@ -1348,8 +1691,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 				zap.String("namespace", namespaceName),
 				zap.Any("panic", r),
 			)
-			bgCtx := context.Background()
-			cm.updateClusterStatus(bgCtx, cluster.ID, ClusterStatusFailed,
+			cm.markProvisioningFailed(cluster.ID, namespaceName,
 				fmt.Sprintf("provisioning panicked: %v", r))
 		}
 		cm.provisioningMu.Lock()
@@ -1359,7 +1701,7 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 
 	// Overall timeout — prevents the goroutine from hanging indefinitely
 	// if a remote spawn request or RQLite write blocks.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), provisioningTimeout)
 	defer cancel()
 
 	cm.logger.Info("Starting async cluster provisioning",
@@ -1369,75 +1711,30 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 		zap.String("provisioned_by", provisionedBy),
 	)
 
-	// Select 3 nodes for the cluster
-	nodes, err := cm.nodeSelector.SelectNodesForCluster(ctx, 3)
+	nodes, portBlocks, err := cm.placeCluster(ctx, cluster.ID, bp)
 	if err != nil {
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-		cm.logger.Error("Failed to select nodes for cluster", zap.Error(err))
+		cm.markProvisioningFailed(cluster.ID, namespaceName, err.Error())
+		cm.logger.Error("Failed to place the cluster on nodes",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
+		return
+	}
+	cm.logPlacement(ctx, cluster.ID, nodes, portBlocks)
+
+	_, err = cm.startTenantServices(ctx, cluster, nodes, portBlocks, bp)
+	if err != nil {
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
+		cm.logger.Error("Failed to start cluster services", zap.Error(err))
 		return
 	}
 
-	nodeIDs := make([]string, len(nodes))
-	for i, n := range nodes {
-		nodeIDs[i] = n.NodeID
-	}
-	cm.logEvent(ctx, cluster.ID, EventNodesSelected, "", "Selected nodes for cluster", map[string]interface{}{"nodes": nodeIDs})
-
-	// Allocate ports on each node
-	portBlocks := make([]*PortBlock, len(nodes))
-	for i, node := range nodes {
-		block, err := cm.portAllocator.AllocatePortBlock(ctx, node.NodeID, cluster.ID)
-		if err != nil {
-			// Rollback previous allocations
-			for j := 0; j < i; j++ {
-				cm.portAllocator.DeallocatePortBlock(ctx, cluster.ID, nodes[j].NodeID)
-			}
-			cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
-			cm.logger.Error("Failed to allocate ports", zap.Error(err))
-			return
-		}
-		portBlocks[i] = block
-		cm.logEvent(ctx, cluster.ID, EventPortsAllocated, node.NodeID,
-			fmt.Sprintf("Allocated ports %d-%d", block.PortStart, block.PortEnd), nil)
-	}
-
-	// Start RQLite instances (leader first, then followers)
-	rqliteInstances, err := cm.startRQLiteCluster(ctx, cluster, nodes, portBlocks)
-	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, nil, nil)
-		cm.logger.Error("Failed to start RQLite cluster", zap.Error(err))
-		return
-	}
-
-	// Start Olric instances
-	olricInstances, err := cm.startOlricCluster(ctx, cluster, nodes, portBlocks)
-	if err != nil {
-		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, nil)
-		cm.logger.Error("Failed to start Olric cluster", zap.Error(err))
-		return
-	}
-
-	// Start Gateway instances (optional - may not be available in dev mode)
-	_, err = cm.startGatewayCluster(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-	if err != nil {
-		// Check if this is a "binary not found" error - if so, continue without gateways
-		if strings.Contains(err.Error(), "gateway binary not found") {
-			cm.logger.Warn("Skipping namespace gateway spawning (binary not available)",
-				zap.String("namespace", cluster.NamespaceName),
-				zap.Error(err),
-			)
-			cm.logEvent(ctx, cluster.ID, "gateway_skipped", "", "Gateway binary not available, cluster will use main gateway", nil)
-		} else {
-			cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, rqliteInstances, olricInstances)
-			cm.logger.Error("Failed to start Gateway cluster", zap.Error(err))
-			return
-		}
-	}
-
-	// Create DNS records for namespace gateway
+	// Same rule as the synchronous path: no DNS records means nothing can reach
+	// the namespace, so it is not ready.
 	if err := cm.createDNSRecords(ctx, cluster, nodes, portBlocks); err != nil {
-		cm.logger.Warn("Failed to create DNS records", zap.Error(err))
-		// Don't fail provisioning for DNS errors
+		cm.logger.Error("Failed to create DNS records for a new namespace",
+			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks, err.Error())
+		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
+		return
 	}
 
 	// Bugboard #277: verify the services actually came up before calling this
@@ -1446,7 +1743,8 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	if err := cm.verifyClusterHealthy(ctx, nodes, portBlocks); err != nil {
 		cm.logger.Error("Namespace cluster failed health verification after provisioning",
 			zap.String("namespace", cluster.NamespaceName), zap.Error(err))
-		cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusFailed, err.Error())
+		cm.withdrawFailedCluster(ctx, cluster)
+		cm.markProvisioningFailed(cluster.ID, cluster.NamespaceName, err.Error())
 		cm.logEvent(ctx, cluster.ID, EventClusterFailed, "", err.Error(), nil)
 		return
 	}
@@ -1455,7 +1753,17 @@ func (cm *ClusterManager) provisionClusterAsync(cluster *NamespaceCluster, names
 	now := time.Now()
 	cluster.Status = ClusterStatusReady
 	cluster.ReadyAt = &now
-	cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	if err := retryWhileNoLeader(ctx, cm.logger, "mark cluster ready", func(ctx context.Context) error {
+		return cm.updateClusterStatus(ctx, cluster.ID, ClusterStatusReady, "")
+	}); err != nil {
+		cm.logger.Error("Cluster came up but its ready status could not be recorded",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", cluster.ID), zap.Error(err))
+		// The services, DNS records and ports are live but the registry will not
+		// say so: undo them, and mark failed only once that is done.
+		cm.rollbackProvisioning(ctx, cluster, nodes, portBlocks,
+			fmt.Sprintf("cluster started but ready status was not recorded: %v", err))
+		return
+	}
 	cm.logEvent(ctx, cluster.ID, EventClusterReady, "", "Cluster is ready", nil)
 
 	// Save cluster-state.json on all nodes (local + remote) for disk-based restore
@@ -1494,7 +1802,7 @@ func (cm *ClusterManager) RestoreLocalClusters(ctx context.Context) error {
 		SELECT DISTINCT cn.namespace_cluster_id, c.namespace_name, cn.node_id, cn.role
 		FROM namespace_cluster_nodes cn
 		JOIN namespace_clusters c ON cn.namespace_cluster_id = c.id
-		WHERE cn.node_id = ? AND c.status = 'ready'
+		WHERE cn.node_id = ? AND c.status IN ('ready', 'degraded')
 	`
 	if err := cm.db.Query(ctx, &assignments, query, cm.localNodeID); err != nil {
 		return fmt.Errorf("failed to query local cluster assignments: %w", err)
@@ -1544,6 +1852,21 @@ func (cm *ClusterManager) RestoreLocalClusters(ctx context.Context) error {
 
 // restoreClusterOnNode restores all processes for a single cluster on this node
 func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, namespaceName, localIP string) error {
+	// The list of clusters to restore was read before this one was reached, and
+	// the namespace may have begun its delete since. Under the namespace's lock
+	// a teardown is either done or not yet started; reading the status again
+	// here decides which.
+	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+	cluster, err := cm.GetCluster(ctx, clusterID)
+	if err != nil {
+		return fmt.Errorf("re-read cluster %s before restoring it: %w", clusterID, err)
+	}
+	if cluster == nil || (cluster.Status != ClusterStatusReady && cluster.Status != ClusterStatusDegraded) {
+		cm.logger.Info("Not restoring a namespace cluster that is no longer ready or degraded",
+			zap.String("namespace", namespaceName), zap.String("cluster_id", clusterID))
+		return nil
+	}
+
 	cm.logger.Info("Restoring namespace cluster processes",
 		zap.String("namespace", namespaceName),
 		zap.String("cluster_id", clusterID),
@@ -1551,7 +1874,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// Get port allocation for this node
 	var portBlocks []PortBlock
-	portQuery := `SELECT * FROM namespace_port_allocations WHERE namespace_cluster_id = ? AND node_id = ?`
+	portQuery := `SELECT pa.* FROM namespace_port_allocations pa WHERE pa.namespace_cluster_id = ? AND pa.node_id = ? ` + notOwedTeardownSQL
 	if err := cm.db.Query(ctx, &portBlocks, portQuery, clusterID, cm.localNodeID); err != nil || len(portBlocks) == 0 {
 		return fmt.Errorf("no port allocation found for cluster %s on node %s", clusterID, cm.localNodeID)
 	}
@@ -1578,7 +1901,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 			pa.rqlite_http_port, pa.rqlite_raft_port, pa.olric_http_port, pa.olric_memberlist_port
 		FROM namespace_port_allocations pa
 		JOIN dns_nodes dn ON pa.node_id = dn.id
-		WHERE pa.namespace_cluster_id = ?
+		WHERE pa.namespace_cluster_id = ? ` + notOwedTeardownSQL + `
 	`
 	if err := cm.db.Query(ctx, &allNodePorts, allPortsQuery, clusterID); err != nil {
 		return fmt.Errorf("failed to get all node ports: %w", err)
@@ -1586,67 +1909,30 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(namespaceName, systemd.ServiceTypeRQLite)
+	// A transient systemctl/D-Bus failure is not "the service is down", and
+	// treating it as such re-spawns a service that is running fine.
+	rqliteRunning, known := serviceRunning(cm, namespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		return fmt.Errorf("cannot determine whether rqlite is running for %s, so not acting on a guess", namespaceName)
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, namespaceName, "rqlite", cm.localNodeID)
-		hasExistingData := false
-		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
-			hasExistingData = true
+		hasExistingData, err := namespaceHasRaftState(dataDir)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", namespaceName, err)
 		}
 
-		if hasExistingData {
-			// Write peers.json for Raft cluster recovery (official RQLite mechanism).
-			// When all nodes restart simultaneously, Raft can't form quorum from stale state.
-			// peers.json tells rqlited the correct voter list so it can hold a fresh election.
-			var peers []rqlite.RaftPeer
-			for _, np := range allNodePorts {
-				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
-				peers = append(peers, rqlite.RaftPeer{
-					ID:       raftAddr,
-					Address:  raftAddr,
-					NonVoter: false,
-				})
-			}
-			if err := cm.writePeersJSON(dataDir, peers); err != nil {
-				cm.logger.Error("Failed to write peers.json", zap.String("namespace", namespaceName), zap.Error(err))
-			}
+		members := make([]restoreMember, 0, len(allNodePorts))
+		var peers []rqlite.RaftPeer
+		for _, np := range allNodePorts {
+			raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
+			members = append(members, restoreMember{nodeID: np.NodeID, raftAddr: raftAddr})
+			peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
 		}
-
-		// Build join addresses for first-time joins (no existing data)
-		var joinAddrs []string
-		isLeader := false
-		if !hasExistingData {
-			// Deterministic leader selection: sort all node IDs and pick the first one.
-			// Every node independently computes the same result — no coordination needed.
-			// The elected leader bootstraps the cluster; followers use -join with retries
-			// to wait for the leader to become ready (up to 5 minutes).
-			sortedNodeIDs := make([]string, 0, len(allNodePorts))
-			for _, np := range allNodePorts {
-				sortedNodeIDs = append(sortedNodeIDs, np.NodeID)
-			}
-			sort.Strings(sortedNodeIDs)
-			electedLeaderID := sortedNodeIDs[0]
-
-			if cm.localNodeID == electedLeaderID {
-				isLeader = true
-				cm.logger.Info("Deterministic leader election: this node is the leader",
-					zap.String("namespace", namespaceName),
-					zap.String("node_id", cm.localNodeID))
-			} else {
-				// Follower: join the elected leader's raft address
-				for _, np := range allNodePorts {
-					if np.NodeID == electedLeaderID {
-						joinAddrs = append(joinAddrs, fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort))
-						break
-					}
-				}
-				cm.logger.Info("Deterministic leader election: this node is a follower",
-					zap.String("namespace", namespaceName),
-					zap.String("node_id", cm.localNodeID),
-					zap.String("leader_id", electedLeaderID),
-					zap.Strings("join_addrs", joinAddrs))
-			}
+		joinAddrs, isLeader, err := cm.planNamespaceRQLiteStart(namespaceName, dataDir, hasExistingData, members, peers)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", namespaceName, err)
 		}
 
 		rqliteCfg := rqlite.InstanceConfig{
@@ -1667,6 +1953,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 		}
 	} else {
 		cm.logger.Info("RQLite already running", zap.String("namespace", namespaceName), zap.Int("port", pb.RQLiteHTTPPort))
+		cm.recordRunningNamespace(ctx, namespaceName, localIP, pb.RQLiteHTTPPort)
 	}
 
 	// 2. Restore Olric
@@ -1716,7 +2003,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 
 	if hasGateway {
 		gwRunning := false
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
+		resp, err := http.Get(namespaceGatewayHealthURL(namespaceName, pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
 			gwRunning = true
@@ -1729,12 +2016,12 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 				olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
 			}
 
-			gwCfg := gateway.InstanceConfig{
+			gwCfg := gatewayspec.InstanceConfig{
 				Namespace:             namespaceName,
 				NodeID:                cm.localNodeID,
 				HTTPPort:              pb.GatewayHTTPPort,
 				BaseDomain:            cm.baseDomain,
-				RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+				RQLiteDSN:             tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 				GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 				OlricServers:          olricServers,
 				OlricTimeout:          30 * time.Second,
@@ -1786,14 +2073,7 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	// Save local state to disk for future restarts without DB dependency
 	var stateNodes []ClusterLocalStateNode
 	for _, np := range allNodePorts {
-		stateNodes = append(stateNodes, ClusterLocalStateNode{
-			NodeID:              np.NodeID,
-			InternalIP:          np.InternalIP,
-			RQLiteHTTPPort:      np.RQLiteHTTPPort,
-			RQLiteRaftPort:      np.RQLiteRaftPort,
-			OlricHTTPPort:       np.OlricHTTPPort,
-			OlricMemberlistPort: np.OlricMemberlistPort,
-		})
+		stateNodes = append(stateNodes, ClusterLocalStateNode(np))
 	}
 	localState := &ClusterLocalState{
 		ClusterID:     clusterID,
@@ -1869,58 +2149,51 @@ type ClusterLocalStateNode struct {
 // service to actually answer before declaring the cluster ready.
 const clusterReadyTimeout = 90 * time.Second
 
-// verifyClusterHealthy polls every node's spawned services until they respond, or
-// the timeout expires (bugboard #277).
+// verifyClusterHealthy waits for every service on every node to be genuinely
+// serving, and reports the first one that is not.
 //
-// Provisioning used to mark a cluster `ready` — and every node row `running` —
-// purely because the spawn RPCs returned. On devnet that produced a cluster
-// reported ready while 6 of its 9 processes were crash-looping on a port
-// collision, RQLite had no quorum, and the one surviving node had joined another
-// namespace's raft group. The operator saw a green result and would have handed
-// the namespace over. This is the check that turns every other provisioning
-// failure into a visible one.
+// It probes what each service does, not whether its port accepts a connection.
+// A TCP probe was the previous implementation and it is barely stronger than
+// the systemd `active` check it was written to replace: rqlite binds its HTTP
+// listener long before it has elected a leader, and a gateway answers TCP while
+// failing every request because it never reached Olric. Both would pass, and a
+// namespace with six of nine processes crash-looping was handed over as ready.
 func (cm *ClusterManager) verifyClusterHealthy(ctx context.Context, nodes []NodeCapacity, portBlocks []*PortBlock) error {
 	timeout := cm.readyTimeout
 	if timeout <= 0 {
 		timeout = clusterReadyTimeout
 	}
-	deadline := time.Now().Add(timeout)
-	var lastErr error
+	for i, node := range nodes {
+		if i >= len(portBlocks) || portBlocks[i] == nil {
+			return fmt.Errorf("node %s has no port block allocated, so it cannot be verified", node.NodeID)
+		}
+		block := portBlocks[i]
+		rqliteEP, err := cm.tenantRQLiteEndpoint(node.InternalIP, block.RQLiteHTTPPort)
+		if err != nil {
+			return fmt.Errorf("node %s: %w", node.NodeID, err)
+		}
 
-	for {
-		lastErr = nil
-		for i, node := range nodes {
-			if i >= len(portBlocks) || portBlocks[i] == nil {
-				continue
-			}
-			addr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].GatewayHTTPPort)
-			if err := probeTCP(addr); err != nil {
-				lastErr = fmt.Errorf("gateway on node %s (%s) not answering: %w", node.NodeID, addr, err)
-				break
-			}
-			raftAddr := fmt.Sprintf("%s:%d", node.InternalIP, portBlocks[i].RQLiteHTTPPort)
-			if err := probeTCP(raftAddr); err != nil {
-				lastErr = fmt.Errorf("rqlite on node %s (%s) not answering: %w", node.NodeID, raftAddr, err)
-				break
-			}
+		checks := []struct {
+			what  string
+			probe func(context.Context) error
+		}{
+			{"rqlite", func(ctx context.Context) error {
+				return rqliteReady(ctx, rqliteEP)
+			}},
+			{"olric", func(ctx context.Context) error {
+				return olricReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.OlricHTTPPort))
+			}},
+			{"gateway", func(ctx context.Context) error {
+				return gatewayReady(ctx, fmt.Sprintf("%s:%d", node.InternalIP, block.GatewayHTTPPort))
+			}},
 		}
-		if lastErr == nil {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("cluster did not become healthy within %s: %w", timeout, lastErr)
-		}
-		time.Sleep(2 * time.Second)
-	}
-}
 
-// probeTCP reports whether something is accepting connections at addr.
-func probeTCP(addr string) error {
-	conn, err := net.DialTimeout("tcp", addr, 3*time.Second)
-	if err != nil {
-		return err
+		for _, check := range checks {
+			if err := awaitReady(ctx, timeout, fmt.Sprintf("%s on node %s", check.what, node.NodeID), check.probe); err != nil {
+				return err
+			}
+		}
 	}
-	_ = conn.Close()
 	return nil
 }
 
@@ -2071,7 +2344,9 @@ func (cm *ClusterManager) RestoreLocalClustersFromDisk(ctx context.Context) (int
 	// This also subsumes the #158 per-namespace secret-drift repair: the shared
 	// config is rebuilt from the DB every time, so a rotated secret and a
 	// self-signed→wildcard cert switch both fall out of it.
-	cm.ReconcileHostTURN(ctx)
+	if _, err := cm.ReconcileHostTURN(ctx); err != nil {
+		return restored, fmt.Errorf("restored %d namespace(s) but not this host's shared TURN server: %w", restored, err)
+	}
 
 	return restored, nil
 }
@@ -2257,24 +2532,15 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 	)
 
 	// Self-check: verify this node is still assigned to this cluster in the DB.
-	// If we were replaced during downtime, do NOT restore — stop services instead.
+	// A node that was replaced, or a namespace that was deleted, during the
+	// downtime must NOT be restored.
 	if cm.db != nil {
-		type countResult struct {
-			Count int `db:"count"`
+		proceed, err := cm.restoreAssigned(ctx, state)
+		if err != nil {
+			return err
 		}
-		var results []countResult
-		verifyQuery := `SELECT COUNT(*) as count FROM namespace_cluster_nodes WHERE namespace_cluster_id = ? AND node_id = ?`
-		if err := cm.db.Query(ctx, &results, verifyQuery, state.ClusterID, cm.localNodeID); err == nil && len(results) > 0 {
-			if results[0].Count == 0 {
-				cm.logger.Warn("Node was replaced during downtime, stopping orphaned services instead of restoring",
-					zap.String("namespace", state.NamespaceName),
-					zap.String("cluster_id", state.ClusterID))
-				cm.systemdSpawner.StopAll(ctx, state.NamespaceName)
-				// Delete the stale cluster-state.json
-				stateFilePath := filepath.Join(cm.baseDataDir, state.NamespaceName, "cluster-state.json")
-				os.Remove(stateFilePath)
-				return nil
-			}
+		if !proceed {
+			return nil
 		}
 	}
 
@@ -2283,45 +2549,39 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 
 	// 1. Restore RQLite
 	// Check if RQLite systemd service is already running
-	rqliteRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeRQLite)
+	rqliteRunning, known := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeRQLite)
+	if !known {
+		cm.logger.Warn("Cannot determine whether rqlite is running; skipping this pass rather than acting on a guess",
+			zap.String("namespace", state.NamespaceName))
+		return nil
+	}
 	if !rqliteRunning {
 		// Check if RQLite data directory exists (has existing data)
 		dataDir := filepath.Join(cm.baseDataDir, state.NamespaceName, "rqlite", cm.localNodeID)
-		hasExistingData := false
-		if _, err := os.Stat(filepath.Join(dataDir, "raft")); err == nil {
-			hasExistingData = true
-		}
-
-		if hasExistingData {
-			var peers []rqlite.RaftPeer
-			for _, np := range state.AllNodes {
-				raftAddr := fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)
-				peers = append(peers, rqlite.RaftPeer{ID: raftAddr, Address: raftAddr, NonVoter: false})
-			}
-			if err := cm.writePeersJSON(dataDir, peers); err != nil {
-				cm.logger.Error("Failed to write peers.json", zap.String("namespace", state.NamespaceName), zap.Error(err))
-			}
+		hasExistingData, err := namespaceHasRaftState(dataDir)
+		if err != nil {
+			return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 		}
 
 		var joinAddrs []string
 		isLeader := false
-		if !hasExistingData {
-			sortedNodeIDs := make([]string, 0, len(state.AllNodes))
-			for _, np := range state.AllNodes {
-				sortedNodeIDs = append(sortedNodeIDs, np.NodeID)
+		if hasExistingData {
+			if err := cm.writeRestorePeersJSON(ctx, state, dataDir); err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 			}
-			sort.Strings(sortedNodeIDs)
-			electedLeaderID := sortedNodeIDs[0]
-
-			if cm.localNodeID == electedLeaderID {
-				isLeader = true
-			} else {
-				for _, np := range state.AllNodes {
-					if np.NodeID == electedLeaderID {
-						joinAddrs = append(joinAddrs, fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort))
-						break
-					}
-				}
+		} else {
+			members := make([]restoreMember, 0, len(state.AllNodes))
+			for _, np := range state.AllNodes {
+				members = append(members, restoreMember{nodeID: np.NodeID, raftAddr: fmt.Sprintf("%s:%d", np.InternalIP, np.RQLiteRaftPort)})
+			}
+			record, err := readNamespaceMembership(dataDir, false)
+			if err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
+			}
+			joinAddrs, isLeader, err = restoreJoinPlan(state.NamespaceName, cm.localNodeID, members, record,
+				rqlite.ClusterMembershipPath(dataDir))
+			if err != nil {
+				return fmt.Errorf("restore rqlite for %s: %w", state.NamespaceName, err)
 			}
 		}
 
@@ -2340,6 +2600,8 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		} else {
 			cm.logger.Info("Restored RQLite instance from state", zap.String("namespace", state.NamespaceName))
 		}
+	} else {
+		cm.recordRunningNamespace(ctx, state.NamespaceName, localIP, pb.RQLiteHTTPPort)
 	}
 
 	// 2. Restore Olric
@@ -2404,12 +2666,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		for _, np := range state.AllNodes {
 			olricServers = append(olricServers, fmt.Sprintf("%s:%d", np.InternalIP, np.OlricHTTPPort))
 		}
-		gwCfg := gateway.InstanceConfig{
+		gwCfg := gatewayspec.InstanceConfig{
 			Namespace:             state.NamespaceName,
 			NodeID:                cm.localNodeID,
 			HTTPPort:              pb.GatewayHTTPPort,
 			BaseDomain:            state.BaseDomain,
-			RQLiteDSN:             fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+			RQLiteDSN:             tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 			GlobalRQLiteDSN:       cm.globalRQLiteDSN,
 			OlricServers:          olricServers,
 			OlricTimeout:          30 * time.Second,
@@ -2521,7 +2783,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 			}
 		}
 
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/v1/health", pb.GatewayHTTPPort))
+		resp, err := http.Get(namespaceGatewayHealthURL(state.NamespaceName, pb.GatewayHTTPPort))
 		if err == nil {
 			resp.Body.Close()
 			switch {
@@ -2670,7 +2932,12 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		sfuAllocated = sfuPortBlockSpawnable(blk)
 	}
 	if sfuAllocated {
-		sfuRunning, _ := cm.systemdSpawner.systemdMgr.IsServiceActive(state.NamespaceName, systemd.ServiceTypeSFU)
+		sfuRunning, sfuKnown := serviceRunning(cm, state.NamespaceName, systemd.ServiceTypeSFU)
+		if !sfuKnown {
+			cm.logger.Warn("Cannot determine whether the SFU is running; leaving it alone this pass",
+				zap.String("namespace", state.NamespaceName))
+			sfuRunning = true // treat as running, so nothing is spawned on a guess
+		}
 		if !sfuRunning {
 			webrtcCfg, err := cm.GetWebRTCConfig(ctx, state.NamespaceName)
 			if err == nil && webrtcCfg != nil {
@@ -2702,7 +2969,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 						},
 						TURNSecret:  webrtcCfg.TURNSharedSecret,
 						TURNCredTTL: webrtcCfg.TURNCredentialTTL,
-						RQLiteDSN:   fmt.Sprintf("http://localhost:%d", pb.RQLiteHTTPPort),
+						RQLiteDSN:   tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 					}
 					if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
 						cm.logger.Error("Failed to restore SFU", zap.String("namespace", state.NamespaceName), zap.Error(err))
@@ -2745,4 +3012,44 @@ func (cm *ClusterManager) GetClusterStatusByID(ctx context.Context, clusterID st
 		"dns_ready":     status.DNSReady,
 		"error":         status.Error,
 	}, nil
+}
+
+// signCoordination stamps a node-to-node request as coming from inside the
+// cluster.
+//
+// The header this replaces was `X-Orama-Internal-Auth: namespace-coordination`
+// — a constant in this repository — guarded only by the source address being on
+// the WireGuard overlay. Every namespace's services are on that mesh, so any
+// tenant workload that could reach a node's gateway port could spawn or stop
+// services for any namespace on it.
+//
+// audience is the peer id of the node the request is sent to; only that node
+// accepts the stamp.
+//
+// The secret is read per request rather than cached, so a rotation does not
+// require restarting every node before coordination works again.
+func (cm *ClusterManager) signCoordination(r *http.Request, audience string) error {
+	secret, err := os.ReadFile(cm.clusterSecretPath)
+	if err != nil {
+		return fmt.Errorf("cannot read the cluster secret at %s, so this node cannot prove a "+
+			"coordination request came from inside the cluster: %w", cm.clusterSecretPath, err)
+	}
+	key, err := auth.CoordinationKey(string(secret))
+	if err != nil {
+		return err
+	}
+	return auth.SignCoordination(key, r, time.Now(), audience)
+}
+
+// namespaceGatewayHealthURL is where this node's copy of a namespace gateway
+// answers a health check.
+//
+// A tenant's gateway binds the overlay address rather than every interface, so
+// a probe on localhost reads every healthy gateway as dead — which is why
+// moving the bind and moving the probe are one change and not two.
+func namespaceGatewayHealthURL(namespace string, port int) string {
+	if ip, err := overlayIP(); err == nil && !isIndexNamespace(namespace) {
+		return fmt.Sprintf("http://%s:%d/v1/health", ip, port)
+	}
+	return fmt.Sprintf("http://localhost:%d/v1/health", port)
 }

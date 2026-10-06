@@ -1,0 +1,73 @@
+syntax = "proto3";
+package orama.power.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
+
+import "gogoproto/gogo.proto";
+import "orama/power/v1/power.proto";
+
+// Query defines the gRPC querier service for x/power. There is no Msg
+// service: bootstrap committee membership, the power formula and its
+// parameters are all genesis-only (see Params).
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
+  rpc BootstrapCommittee(QueryBootstrapCommitteeRequest) returns (QueryBootstrapCommitteeResponse);
+  rpc Lambda(QueryLambdaRequest) returns (QueryLambdaResponse);
+  rpc ValidatorPower(QueryValidatorPowerRequest) returns (QueryValidatorPowerResponse);
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryBootstrapCommitteeRequest {}
+
+message QueryBootstrapCommitteeResponse {
+  repeated BootstrapMember members = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryLambdaRequest {}
+
+message QueryLambdaResponse {
+  string lambda = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  uint64 last_updated_epoch = 2;
+  uint64 current_cap_bps = 3;
+  uint64 below_step_up_streak_epochs = 4;
+}
+
+message QueryValidatorPowerRequest {
+  string operator_address = 1;
+}
+
+message QueryValidatorPowerResponse {
+  string operator_address = 1;
+  string bootstrap_share = 2 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string capped_share = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string power_share = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  int64 comet_power = 5;
+}
+
+message QueryInvariantsRequest {}
+
+message QueryInvariantsResponse {
+  // module_account_empty is true when x/power's module account holds no norama.
+  // It only passes reward mints through in one call, so any balance between
+  // blocks is a stranded amount.
+  bool module_account_empty = 1;
+  string detail = 2;
+}

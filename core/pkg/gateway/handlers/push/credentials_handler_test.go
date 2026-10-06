@@ -57,9 +57,9 @@ func (f *fakeCredStore) ListProviders(_ context.Context, ns string) ([]string, e
 // fakeValidator records validate/redact calls and lets tests inject
 // validation errors.
 type fakeValidator struct {
-	name      string
-	validate  func([]byte) error
-	redact    func([]byte) (interface{}, error)
+	name     string
+	validate func([]byte) error
+	redact   func([]byte) (interface{}, error)
 }
 
 func (v fakeValidator) Provider() string { return v.name }

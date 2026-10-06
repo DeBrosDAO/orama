@@ -340,7 +340,7 @@ func TestReloadTenants_stopsWatchersForDroppedStealthCerts(t *testing.T) {
 }
 
 // An unchanged stealth cert must keep its existing watcher rather than being
-// reloaded from disk on every 15s tick.
+// reloaded from disk on every tick.
 func TestReloadTenants_keepsWatcherForUnchangedStealthCert(t *testing.T) {
 	dir := t.TempDir()
 	certPath, keyPath := writeTestCertPair(t, dir, "cdn-a.orama-devnet.network")

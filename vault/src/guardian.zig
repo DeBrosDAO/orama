@@ -75,8 +75,13 @@ pub const Guardian = struct {
     }
 
     /// Get current Shamir threshold (read quorum).
+    ///
+    /// This used to call a second implementation on NodeList that still
+    /// returned max(3, floor(N/3)) after quorum.zig moved to a floor of 2, so
+    /// GET /v1/vault/guardians advertised a threshold the cluster does not use.
+    /// quorum.readQuorum is the one definition.
     pub fn readThreshold(self: *const Guardian) usize {
-        return self.nodes.threshold();
+        return quorum.readQuorum(self.nodes.aliveCount());
     }
 
     /// Refresh share count from disk.

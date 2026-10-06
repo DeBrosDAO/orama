@@ -1,0 +1,45 @@
+{
+  "route": "/v1/rqlite/transaction",
+  "method": "POST",
+  "sdk": "db.transaction()",
+  "goStruct": "rqlite.transactionRequest",
+  "call": {
+    "module": "db",
+    "method": "transaction",
+    "args": [
+      [
+        {
+          "kind": "exec",
+          "sql": "INSERT INTO logs (msg) VALUES (?)",
+          "args": [
+            "a"
+          ]
+        }
+      ]
+    ]
+  },
+  "request": {
+    "ops": [
+      {
+        "kind": "exec",
+        "sql": "INSERT INTO logs (msg) VALUES (?)",
+        "args": [
+          "a"
+        ]
+      }
+    ],
+    "return_results": true
+  },
+  "response": {
+    "results": [
+      {
+        "rows_affected": 1
+      }
+    ]
+  },
+  "returns": [
+    {
+      "rows_affected": 1
+    }
+  ]
+}

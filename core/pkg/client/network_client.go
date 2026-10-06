@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -20,11 +22,11 @@ type NetworkInfoImpl struct {
 // GetPeers returns information about connected peers
 func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	if !n.client.isConnected() {
-		return nil, fmt.Errorf("client not connected")
+		return nil, ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return nil, fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	// Get peers from LibP2P host
@@ -32,7 +34,7 @@ func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 	host := n.client.host
 	n.client.mu.RUnlock()
 	if host == nil {
-		return nil, fmt.Errorf("no host available")
+		return nil, ErrNoHost
 	}
 
 	// Get connected peers
@@ -82,44 +84,38 @@ func (n *NetworkInfoImpl) GetPeers(ctx context.Context) ([]PeerInfo, error) {
 // GetStatus returns network status
 func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error) {
 	if !n.client.isConnected() {
-		return nil, fmt.Errorf("client not connected")
+		return nil, ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return nil, fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return nil, fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	n.client.mu.RLock()
 	host := n.client.host
 	dbClient := n.client.database
+	directDatabase := n.client.usesRQLiteEndpoints()
 	n.client.mu.RUnlock()
 	if host == nil {
-		return nil, fmt.Errorf("no host available")
+		return nil, ErrNoHost
 	}
 
 	// Get actual network status
 	connectedPeers := host.Network().Peers()
 
 	// Try to get database size from RQLite (optional - don't fail if unavailable)
+	// A client that reaches its database through a gateway has no RQLite
+	// connection to size.
 	var dbSize int64 = 0
-	if conn, err := dbClient.getRQLiteConnection(); err == nil {
-		// Query database size (rough estimate)
-		if result, err := conn.QueryOne("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()"); err == nil {
-			for result.Next() {
-				if row, err := result.Slice(); err == nil && len(row) > 0 {
-					if size, ok := row[0].(int64); ok {
-						dbSize = size
-					}
-				}
-			}
-		}
+	if directDatabase {
+		dbSize = rqliteDatabaseSize(dbClient)
 	}
 
 	// Try to get IPFS peer info (optional - don't fail if unavailable)
 	ipfsInfo := queryIPFSPeerInfo()
 
 	// Try to get IPFS Cluster peer info (optional - don't fail if unavailable)
-	ipfsClusterInfo := queryIPFSClusterPeerInfo()
+	ipfsClusterInfo := queryIPFSClusterPeerInfo(constants.LocalIPFSClusterURL(), n.client.config.IPFSClusterAPIPassword)
 
 	return &NetworkStatus{
 		NodeID:       host.ID().String(),
@@ -136,9 +132,10 @@ func (n *NetworkInfoImpl) GetStatus(ctx context.Context) (*NetworkStatus, error)
 // queryIPFSPeerInfo queries the local IPFS API for peer information
 // Returns nil if IPFS is not running or unavailable
 func queryIPFSPeerInfo() *IPFSPeerInfo {
-	// IPFS API typically runs on port 4501 in our setup
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Post("http://localhost:4501/api/v0/id", "", nil)
+	// IPFS API runs on constants.IPFSAPIPort in our setup
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	resp, err := ipfs.LocalPostAPI(ctx, fmt.Sprintf("http://localhost:%d/api/v0/id", constants.IPFSAPIPort))
 	if err != nil {
 		return nil // IPFS not available
 	}
@@ -171,12 +168,18 @@ func queryIPFSPeerInfo() *IPFSPeerInfo {
 	}
 }
 
-// queryIPFSClusterPeerInfo queries the local IPFS Cluster API for peer information
-// Returns nil if IPFS Cluster is not running or unavailable
-func queryIPFSClusterPeerInfo() *IPFSClusterPeerInfo {
-	// IPFS Cluster API typically runs on port 9094 in our setup
+// queryIPFSClusterPeerInfo queries this node's IPFS Cluster REST API at apiURL
+// for its peer information, with the API's basic-auth password
+// (ipfs.ClusterRESTPassword). Returns nil if IPFS Cluster is not running or
+// unavailable.
+func queryIPFSClusterPeerInfo(apiURL, password string) *IPFSClusterPeerInfo {
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:9094/id")
+	req, err := http.NewRequest(http.MethodGet, apiURL+"/id", nil)
+	if err != nil {
+		return nil
+	}
+	req.SetBasicAuth(ipfs.ClusterRESTUser, password)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil // IPFS Cluster not available
 	}
@@ -212,28 +215,32 @@ func queryIPFSClusterPeerInfo() *IPFSClusterPeerInfo {
 // ConnectToPeer connects to a specific peer
 func (n *NetworkInfoImpl) ConnectToPeer(ctx context.Context, peerAddr string) error {
 	if !n.client.isConnected() {
-		return fmt.Errorf("client not connected")
+		return ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	host := n.client.host
 	if host == nil {
-		return fmt.Errorf("no host available")
+		return ErrNoHost
 	}
 
 	// Parse the multiaddr
 	ma, err := multiaddr.NewMultiaddr(peerAddr)
 	if err != nil {
-		return fmt.Errorf("invalid multiaddr: %w", err)
+		return fmt.Errorf("%w: %q is not a multiaddr: %v", ErrInvalidPeer, peerAddr, err)
 	}
 
 	// Extract peer info
 	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
 	if err != nil {
-		return fmt.Errorf("failed to extract peer info: %w", err)
+		return fmt.Errorf("%w: %q must end in /p2p/<peer id>: %v", ErrInvalidPeer, peerAddr, err)
+	}
+
+	if len(peerInfo.Addrs) == 0 {
+		return fmt.Errorf("%w: %q names a peer but no address to dial it at", ErrInvalidPeer, peerAddr)
 	}
 
 	// Connect to the peer
@@ -247,22 +254,22 @@ func (n *NetworkInfoImpl) ConnectToPeer(ctx context.Context, peerAddr string) er
 // DisconnectFromPeer disconnects from a specific peer
 func (n *NetworkInfoImpl) DisconnectFromPeer(ctx context.Context, peerID string) error {
 	if !n.client.isConnected() {
-		return fmt.Errorf("client not connected")
+		return ErrNotConnected
 	}
 
 	if err := n.client.requireAccess(ctx); err != nil {
-		return fmt.Errorf("authentication required: %w - run CLI commands to authenticate automatically", err)
+		return fmt.Errorf("%w: %w - run CLI commands to authenticate automatically", ErrAuthRequired, err)
 	}
 
 	host := n.client.host
 	if host == nil {
-		return fmt.Errorf("no host available")
+		return ErrNoHost
 	}
 
 	// Parse the peer ID
 	pid, err := peer.Decode(peerID)
 	if err != nil {
-		return fmt.Errorf("invalid peer ID: %w", err)
+		return fmt.Errorf("%w: %q is not a peer ID: %v", ErrInvalidPeer, peerID, err)
 	}
 
 	// Close the connection to the peer
@@ -271,4 +278,25 @@ func (n *NetworkInfoImpl) DisconnectFromPeer(ctx context.Context, peerID string)
 	}
 
 	return nil
+}
+
+// rqliteDatabaseSize is the database's size in bytes, 0 when it cannot be read.
+func rqliteDatabaseSize(dbClient *DatabaseClientImpl) int64 {
+	conn, err := dbClient.getRQLiteConnection()
+	if err != nil {
+		return 0
+	}
+	result, err := conn.QueryOne("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()")
+	if err != nil {
+		return 0
+	}
+	var size int64
+	for result.Next() {
+		if row, err := result.Slice(); err == nil && len(row) > 0 {
+			if n, ok := row[0].(int64); ok {
+				size = n
+			}
+		}
+	}
+	return size
 }

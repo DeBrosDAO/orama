@@ -1,0 +1,42 @@
+# Namespace backup and restore with the owner's X25519 key: the sealed ORBK
+# file (0600), its contents (namespace, database), restore bringing back the
+# rows and keys of the moment and dropping what came after, re-running a
+# restore, the restore key (per namespace, stable), refusals before any write
+# (wrong key, corrupt, truncated, another namespace's backup, sealed to another
+# restore key), owner-only access, the restore size cap (413), one backup at a
+# time (429 + Retry-After), backup-seal/backup-open on arbitrary files, and the
+# namespace RQLite export/import (HTTP round trip, refusals, the CLI's export
+# and its confirmation-gated import). Leader change and restore-key rotation
+# are in namespace-backup-chaos, which runs alone.
+id: namespace-backup
+title: Namespace backup, restore and RQLite export/import
+area: tenancy
+subtasks: [2831]
+stage: 9
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama namespace backup
+    - orama namespace backup-open
+    - orama namespace backup-seal
+    - orama namespace restore
+    - orama namespace restore-key
+    - orama namespace rqlite
+    - orama namespace rqlite export
+    - orama namespace rqlite import
+  routes:
+    - /v1/namespace/backup
+    - /v1/namespace/restore
+    - /v1/namespace/restore-key
+    - /v1/rqlite/export
+    - /v1/rqlite/import
+  claims:
+    - "docs/CLI_REFERENCE.md#orama-namespace-backup: the backup is sealed to the owner's key; the cluster cannot open it"
+    - "docs/CLI_REFERENCE.md#orama-namespace-restore: a wrong key, a corrupt file or a different namespace stops before anything is sent"
+    - "docs/API_SURFACE.md#namespace-management: backup and restore are owner only; one at a time per gateway (429)"
+    - "docs/API_SURFACE.md#namespace-management: restore replaces the namespace RQLite with the backup"
+    - "docs/CLI_REFERENCE.md#orama-namespace-restore-key: the restore key is derived per namespace"

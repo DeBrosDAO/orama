@@ -2,7 +2,9 @@
 //
 // The gateway acts as a smart proxy between RootWallet clients and
 // vault guardian nodes on the WireGuard overlay network. It handles
-// Shamir split/combine so clients make a single HTTPS call.
+// Shamir split/combine so clients make a single HTTPS call. On a
+// one-node eval cluster it stores the envelope as a local key instead
+// (K=1, W=1); that is not Shamir.
 package vault
 
 import (
@@ -13,12 +15,13 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 const (
 	// VaultGuardianPort is the port vault guardians listen on (client API).
-	VaultGuardianPort = 7500
+	VaultGuardianPort = constants.VaultHTTPPort
 
 	// guardianTimeout is the per-guardian HTTP request timeout.
 	guardianTimeout = 5 * time.Second

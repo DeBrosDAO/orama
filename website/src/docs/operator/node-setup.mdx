@@ -7,16 +7,22 @@ This guide walks you through the full process of setting up an Orama node on a f
 The fastest way to set up a node is with `orama node setup` from your local machine:
 
 ```bash
-# First node (creates cluster)
-orama node setup --ip <IP> --password '<PASS>' --env devnet \
-  --base-domain orama-devnet.network --role nameserver --genesis
+# First node (creates cluster). --password reads the vault login from
+# `rw vault add <IP>` (username root). It does not take the password.
+orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet --base-domain orama-devnet.network --role nameserver --genesis
 
 # Authenticate with the new cluster
 orama auth login
 
 # Add more nodes (invite token handled automatically)
-orama node setup --ip <IP> --password '<PASS>' --env devnet \
-  --base-domain orama-devnet.network
+orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet --base-domain orama-devnet.network
+
+# Key-only image (no password). Do not pass --password.
+orama node setup --ip <IP> --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --env devnet --base-domain orama-devnet.network
 ```
 
 This handles everything: SSH key management (via RootWallet), binary upload, invite tokens, and installation. See [Getting Started](/docs/operator/getting-started) for the full walkthrough.
@@ -31,11 +37,11 @@ The sections below describe the manual installation process for advanced users o
 
 Provision a VPS with the following minimum specifications:
 
-| Resource | Minimum | Recommended |
+| Resource | Minimum (enforced by installer) | Recommended |
 |----------|---------|-------------|
 | CPU | 2 vCPUs | 4 vCPUs (dedicated) |
-| RAM | 4 GB | 8 GB |
-| Storage | 80 GB SSD | 160 GB NVMe |
+| RAM | 2 GB | 8 GB |
+| Storage | 10 GB free | 160 GB NVMe |
 | OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS (clean install) |
 | Network | Public static IPv4 | 1 Gbps, unmetered |
 
@@ -47,9 +53,8 @@ Provision a VPS with the following minimum specifications:
 | 80 | TCP | ACME challenges / HTTP-to-HTTPS redirect |
 | 443 | TCP | HTTPS (external traffic via Caddy) |
 | 51820 | UDP | WireGuard mesh tunnel |
-| 9001 | TCP | Anyone relay ORPort (only if running a relay) |
 
-All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure.
+All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure. The Tor client's SOCKS5 proxy binds to `127.0.0.1:9050` and is never exposed publicly.
 
 ## OS Preparation
 
@@ -62,17 +67,7 @@ apt install -y curl wget unzip jq
 
 ## Installing the Orama Binary
 
-Transfer the Orama binary to your VPS:
-
-```bash
-# Download and extract (URL provided upon acceptance)
-wget <binary-url> -O orama
-chmod +x orama
-mv orama /usr/local/bin/
-
-# Verify installation
-orama version
-```
+There is no download URL for the node binary. `orama node setup` and `orama push` put a signed archive at `/opt/orama`. The node installs from that archive. A machine with no archive cannot install.
 
 ## Node Installation
 
@@ -85,9 +80,12 @@ A genesis node is the first node in an environment. It initializes the Raft clus
 ```bash
 sudo orama node install \
   --vps-ip 203.0.113.10 \
-  --base-domain dbrs.space \
-  --domain my-node.dbrs.space
+  --base-domain orama-devnet.network \
+  --environment devnet \
+  --operator-wallet 0xYourWallet
 ```
+
+`--operator-wallet` is required on a genesis install. It is the wallet that signed the archive, and it becomes the node's archive trust anchor.
 
 When no `--join` flag is provided, the node bootstraps itself as a standalone cluster. Additional nodes can then join it.
 
@@ -98,8 +96,8 @@ To add a node to an existing cluster, use `--join` with the HTTPS URL of any cur
 ```bash
 sudo orama node install \
   --vps-ip 203.0.113.20 \
-  --base-domain dbrs.space \
-  --join https://existing-node.dbrs.space \
+  --base-domain orama-devnet.network \
+  --join https://orama-devnet.network \
   --token eyJhbGciOi...
 ```
 
@@ -119,7 +117,7 @@ The join process registers the new node with the cluster, exchanges WireGuard ke
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--vps-ip` | string | *required* | Public IPv4 address of the VPS |
-| `--base-domain` | string | *required* | Base domain used for routing (e.g., `dbrs.space`) |
+| `--base-domain` | string | prompted on a terminal | Base domain used for routing (e.g., `orama-devnet.network`). Required when there is no terminal to ask. |
 | `--domain` | string | auto-generated | Domain for this node's HTTPS endpoint |
 | `--join` | string | — | HTTPS URL of an existing node to join |
 | `--token` | string | — | Invite token for joining an existing cluster |
@@ -129,50 +127,15 @@ The join process registers the new node with the cluster, exchanges WireGuard ke
 | `--skip-checks` | bool | `false` | Skip system resource checks (RAM/CPU) |
 | `--skip-firewall` | bool | `false` | Skip UFW firewall setup |
 
-## Anyone Protocol Integration
+## Tor Client
 
-Orama nodes can participate in the [Anyone Protocol](https://anyone.io) network, providing privacy relay capabilities. Anyone flags are passed to `orama node install` alongside the standard flags.
+Every Orama node installs a [Tor](https://www.torproject.org) client for anonymized outbound requests (`/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` function host call). It is client only — no relay, no exit, no inbound port — and there is no flag for it: `orama node install` and `orama node upgrade` always set it up.
 
-### Relay Modes
+- Installed from the Tor Project's repository (`deb.torproject.org`), with the archive key pinned by fingerprint. The OS must be one the Tor Project publishes for: Ubuntu 22.04 (`jammy`), 24.04 (`noble`), 26.04 (`resolute`), Debian 12 (`bookworm`) or 13 (`trixie`).
+- Runs as `orama-namespace-tor@index` (user `debian-tor`), with its config in `/etc/orama/tor/torrc` and its state in `/var/lib/orama-tor`. The package's own `tor.service` is masked.
+- The SOCKS5 proxy binds to `127.0.0.1:9050` and is never reachable off-host.
 
-There are three mutually exclusive modes:
-
-- **Client only** (`--anyone-client`) — Installs Anyone as a local SOCKS5 proxy on port 9050. No relay traffic is served.
-- **Relay** (`--anyone-relay`) — Operates as a middle relay, forwarding encrypted traffic. This is the recommended mode for most operators.
-- **Exit relay** (`--anyone-exit`) — Operates as an exit relay, where traffic leaves the Anyone network. This has legal implications depending on your jurisdiction. Understand the risks before enabling.
-
-### Example: Installing with an Anyone Relay
-
-```bash
-sudo orama node install \
-  --vps-ip 203.0.113.10 \
-  --base-domain dbrs.space \
-  --join https://existing-node.dbrs.space \
-  --token eyJhbGciOi... \
-  --anyone-relay \
-  --anyone-nickname MyRelay01 \
-  --anyone-contact operator@example.com \
-  --anyone-wallet 0x1234...abcd \
-  --anyone-bandwidth 30
-```
-
-### Anyone Flag Reference
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--anyone-client` | bool | `false` | Install Anyone as SOCKS5 proxy only (port 9050) |
-| `--anyone-relay` | bool | `false` | Run as an Anyone relay operator |
-| `--anyone-exit` | bool | `false` | Run as an exit relay (legal implications apply) |
-| `--anyone-migrate` | bool | `false` | Migrate an existing Anyone installation |
-| `--anyone-nickname` | string | — | Relay nickname (1-19 alphanumeric characters) |
-| `--anyone-contact` | string | — | Contact info (email address or @telegram handle) |
-| `--anyone-wallet` | string | — | Ethereum wallet address for relay rewards |
-| `--anyone-orport` | int | `9001` | ORPort used for relay traffic |
-| `--anyone-family` | string | — | Comma-separated fingerprints for MyFamily directive |
-| `--anyone-bandwidth` | int | `30` | Limit relay to N% of VPS bandwidth (0 = unlimited) |
-| `--anyone-accounting` | int | `0` | Monthly data cap in GB (0 = unlimited) |
-
-Running an Anyone relay earns additional rewards in `$ANYONE` tokens alongside the standard `$ORAMA` node operator rewards.
+Nodes installed before Tor replaced the Anyone network have Anyone removed on their next upgrade — units, the `anon` package, its apt source and all of `/etc/anon`, `/var/lib/anon` and `/var/log/anon`. The old `--anyone-*` flags now fail with an error explaining that Tor is installed automatically.
 
 ## Service Stack
 
@@ -231,12 +194,12 @@ orama node report --json
 Stream logs from a specific service using shorthand aliases:
 
 ```bash
-orama node logs node       # Node service logs (includes RQLite)
-orama node logs gateway    # Gateway logs (embedded in the node service)
+orama node logs node       # Supervisor logs
+orama node logs gateway    # Index gateway (orama-namespace-gateway@index)
 orama node logs ipfs       # IPFS daemon logs
 orama node logs cluster    # IPFS Cluster logs
 orama node logs olric      # Olric cache logs
-orama node logs rqlite     # RQLite logs (included in node service logs)
+orama node logs rqlite     # Index RQLite (orama-namespace-rqlite@index)
 ```
 
 ### Invite Tokens
@@ -255,7 +218,7 @@ Share the generated token along with your node's HTTPS URL. The joining operator
 
 ### Upgrades
 
-Upgrade the Orama binaries on a node. The upgrade command installs from a pre-built binary archive already staged on the node (delivered via `orama push` or `orama rollout`), falling back to compiling from source at `/opt/orama/src` if no archive is present. It does not download anything itself, and it can optionally restart services.
+Upgrade the Orama binaries on a node. The upgrade command installs from the signed archive already staged on the node by `orama push` or `orama rollout`. It does not compile a source tree, and it does not download anything itself. It can restart services.
 
 ```bash
 # Upgrade binary only (no restart)
@@ -271,37 +234,33 @@ orama node upgrade --force
 orama node upgrade --skip-checks
 ```
 
-The upgrade command also accepts all `--anyone-*` flags to reconfigure the Anyone relay during an upgrade, plus `--env`, `--node`, and `--delay` for targeting specific environments and nodes.
+The upgrade command also accepts `--env`, `--node`, and `--delay` for targeting specific environments and nodes. Every upgrade also upgrades the Tor client from `deb.torproject.org` before the node's services stop, and on a node that still has it removes the Anyone network.
 
 ### Rolling Upgrades
 
 For operators managing multiple nodes, the rollout command automates the full build, push, and rolling upgrade process:
 
 ```bash
-# Full rollout: build, push, and rolling restart across all nodes
-orama node rollout --env mainnet
+# Build, push, print the plan, and restart. Nothing restarts without --yes.
+orama node rollout --env devnet --yes
 
-# Skip the build step (push pre-built binary)
-orama node rollout --env mainnet --no-build
-
-# Skip confirmation prompts
-orama node rollout --env mainnet --yes
+# Roll out an archive you already built
+orama node rollout --env devnet --no-build --archive /tmp/orama-<version>-linux-amd64.tar.gz --yes
 ```
+
+`--delay` defaults to 300 seconds. It is how long a node has to rejoin before the rollout stops, not a pause between nodes.
 
 ### Pushing Binaries
 
 Push a binary archive to nodes without performing a restart:
 
 ```bash
-# Push to all nodes in an environment
-orama node push --env mainnet
+orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
-# Push to a specific node
-orama node push --env mainnet --node 203.0.113.10
-
-# Push directly (bypass staging)
-orama node push --env mainnet --direct
+orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 203.0.113.10
 ```
+
+`--archive` is required. The upload comes from this computer. `--direct` is ignored.
 
 ### Uninstall
 
@@ -320,18 +279,17 @@ This stops and disables all services (including namespace services) and removes 
 Wipe data and services from nodes. Useful for resetting a node to a clean state.
 
 ```bash
-# Clean a specific node
-orama node clean --env mainnet --node 203.0.113.10
+orama node wipe --env devnet --node 203.0.113.10
 
-# Clean all nodes in an environment
-orama node clean --env mainnet
+orama node wipe --env devnet
 
-# Nuclear clean (removes everything including configuration)
-orama node clean --env mainnet --nuclear
+# Also remove shared binaries (rqlited, ipfs, caddy, and the Tor package)
+orama node wipe --env devnet --nuclear
 
-# Skip confirmation prompts
-orama node clean --env mainnet --force
+orama node wipe --env devnet --force
 ```
+
+`orama node clean` is the old name. It now runs `wipe`. `--nuclear` removes those shared binaries. It does not delete the node's configuration by itself.
 
 ### Raft Recovery
 

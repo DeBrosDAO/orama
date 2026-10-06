@@ -24,36 +24,6 @@ const asyncInvokeMaxInFlight = 256
 // invocation eventually frees its in-flight slot.
 const asyncInvokeTimeout = 30 * time.Second
 
-// SetInvocationContext sets the current invocation context on the
-// singleton field. STATELESS execution path uses this (paired with
-// ClearContext) for per-call binding via the executor's setter/clearer
-// hook. PERSISTENT WS uses ctx-propagation instead — see
-// invocation_context.go for the cross-tenant race rationale.
-func (h *HostFunctions) SetInvocationContext(invCtx *serverless.InvocationContext) {
-	h.invCtxLock.Lock()
-	defer h.invCtxLock.Unlock()
-	h.invCtx = invCtx
-	h.logs = make([]serverless.LogEntry, 0) // Reset logs for new invocation
-}
-
-// GetLogs returns the captured logs for the current invocation.
-func (h *HostFunctions) GetLogs() []serverless.LogEntry {
-	h.logsLock.Lock()
-	defer h.logsLock.Unlock()
-	logsCopy := make([]serverless.LogEntry, len(h.logs))
-	copy(logsCopy, h.logs)
-	return logsCopy
-}
-
-// ClearContext clears the singleton invocation context after stateless
-// execution. No-op effect for persistent WS (which never uses the
-// singleton field).
-func (h *HostFunctions) ClearContext() {
-	h.invCtxLock.Lock()
-	defer h.invCtxLock.Unlock()
-	h.invCtx = nil
-}
-
 // SetInvoker wires the function invoker used by FunctionInvoke. Must be
 // called once after both HostFunctions and Invoker exist (Invoker depends
 // on HostServices, so the cycle is broken via this setter rather than a
@@ -79,36 +49,22 @@ func (h *HostFunctions) SetTriggerDispatcher(d *triggers.PubSubDispatcher) {
 	h.triggerDispatcher = d
 }
 
-// nestedTriggerType decides the trigger type for a function_invoke made from
-// inside another function, given the PARENT invocation's trigger type.
+// A function_invoke is an internal call, and it says so. The trigger type used
+// to decide the callee's authorization: a system-triggered parent produced a
+// type that the invoker counted as "system", so the nested call skipped the
+// caller check, and an externally-triggered parent produced a type that did
+// not. That made a label the invoker read as authority, on a request built
+// inside a running function.
 //
-// Bugboard #159: this used to be hardcoded to TriggerTypeWebSocket, which made
-// every nested call re-enter the authorization gate as an ordinary external
-// caller. For a system-triggered parent (cron, pubsub, db-watcher, timer, job)
-// there is no caller identity by design — CallerWallet is "" and CallerIsAdmin
-// is false — so canInvokeFn("", false) rejected the nested call and any
-// `public: false` callee was unreachable from a cron. AnChat's cron-driven
-// payment reconciler reported SUCCESS on ~25 consecutive runs while settling
-// zero payments, because the settlement function it invoked was non-public.
+// The authority now travels as InvokeRequest.SystemOriginated, copied from the
+// parent's own invocation context, which only a gateway-internal dispatcher can
+// have set. The type is free to describe the call honestly.
 //
-// A system-originated parent therefore propagates as TriggerTypeInternal, which
-// isSystemTrigger already recognises: the gateway is the trusted invoker and the
-// auth boundary for a system trigger is at REGISTRATION time, not at fire time.
 // The call stays inside the parent's own namespace (the caller sets Namespace
 // from the parent context). NOTE: TriggerDepth does NOT bound function_invoke
 // chains — it is only incremented on the pubsub dispatch path — so a
 // function_invoke cycle is bounded by the parent's context deadline and the
 // executor's concurrency limit, not by maxTriggerDepth.
-//
-// An externally-triggered parent (HTTP/WebSocket) is unchanged: it keeps the
-// WebSocket type and is still gated, so external→internal stays blocked
-// (bugboard #152).
-func nestedTriggerType(parent serverless.TriggerType) serverless.TriggerType {
-	if serverless.IsSystemTrigger(parent) {
-		return serverless.TriggerTypeInternal
-	}
-	return serverless.TriggerTypeWebSocket
-}
 
 // FunctionInvoke synchronously runs another function in the same namespace
 // and returns its output bytes. Caller wallet, JWT claims, and WS client
@@ -142,16 +98,23 @@ func (h *HostFunctions) FunctionInvoke(ctx context.Context, name string, payload
 		Namespace:    cur.Namespace,
 		FunctionName: name,
 		Input:        payload,
-		TriggerType:  nestedTriggerType(cur.TriggerType),
+		TriggerType:  serverless.TriggerTypeInternal,
 		CallerWallet: cur.CallerWallet,
 		// Inherit the parent's admin bit so an internal→internal call works
 		// while external→internal stays blocked (bugboard #152). When the
 		// parent context never carried admin (external caller), this is false.
-		CallerIsAdmin:    cur.CallerIsAdmin,
+		CallerIsAdmin: cur.CallerIsAdmin,
+		// And the invoke grant, so a caller who may run this function directly
+		// is not refused by the same function's own nested call.
+		CallerHasInvoke: cur.CallerHasInvoke,
+		// A gateway-started invocation stays gateway-started down the chain.
+		// A caller-started one never becomes gateway-started.
+		SystemOriginated: cur.SystemOriginated,
 		CallerIP:         cur.CallerIP,
 		WSClientID:       cur.WSClientID,
 		CallerClaims:     cur.CallerClaims,
 		CallerJWTSubject: cur.CallerJWTSubject,
+		CallerDeviceID:   cur.CallerDeviceID,
 		// Propagate trigger depth so a wildcard-triggered handler that
 		// calls function_invoke(B) — and B then publishes a topic that
 		// matches A's own wildcard — still hits the maxTriggerDepth
@@ -242,15 +205,18 @@ func (h *HostFunctions) FunctionInvokeAsync(ctx context.Context, name string, pa
 			Namespace:    snapshot.Namespace,
 			FunctionName: name,
 			Input:        payloadCopy,
-			TriggerType:  nestedTriggerType(snapshot.TriggerType),
+			TriggerType:  serverless.TriggerTypeInternal,
 			CallerWallet: snapshot.CallerWallet,
 			// Inherit the parent's admin bit (bugboard #152): internal→internal
 			// async calls work; external→internal stay blocked.
 			CallerIsAdmin:    snapshot.CallerIsAdmin,
+			CallerHasInvoke:  snapshot.CallerHasInvoke,
+			SystemOriginated: snapshot.SystemOriginated,
 			CallerIP:         snapshot.CallerIP,
 			WSClientID:       snapshot.WSClientID,
 			CallerClaims:     snapshot.CallerClaims,
 			CallerJWTSubject: snapshot.CallerJWTSubject,
+			CallerDeviceID:   snapshot.CallerDeviceID,
 			TriggerDepth:     snapshot.TriggerDepth,
 		}
 		if _, err := inv.Invoke(bgCtx, req); err != nil && logger != nil {
@@ -359,4 +325,16 @@ func (h *HostFunctions) GetCallerJWTSubject(ctx context.Context) string {
 		return ""
 	}
 	return cur.CallerJWTSubject
+}
+
+// GetCallerDeviceID returns the device the caller's session is bound to, the
+// way GetCallerJWTSubject returns the account: the id of a key the device
+// proved it holds, never a value the client stated. Empty when the session is
+// bound to no device.
+func (h *HostFunctions) GetCallerDeviceID(ctx context.Context) string {
+	cur := h.currentInvocationContext(ctx)
+	if cur == nil {
+		return ""
+	}
+	return cur.CallerDeviceID
 }

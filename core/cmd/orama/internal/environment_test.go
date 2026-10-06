@@ -1,0 +1,198 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// writeTestConfig writes an EnvironmentConfig to a temp file and returns
+// a helper that patches GetEnvironmentConfigPath to return that path.
+// The returned cleanup restores the original function.
+func writeTestConfig(t *testing.T, cfg *EnvironmentConfig) func() {
+	t.Helper()
+
+	f, err := os.CreateTemp(t.TempDir(), "envconfig-*.json")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	if _, err := f.Write(data); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	f.Close()
+
+	origFn := getEnvironmentConfigPathFn
+	getEnvironmentConfigPathFn = func() (string, error) { return f.Name(), nil }
+	return func() { getEnvironmentConfigPathFn = origFn }
+}
+
+func TestUpsertEnvNode_recordsAndReplaces(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.5", User: "root", Role: "nameserver"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.6", User: "ubuntu", Role: "node"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "203.0.113.5", User: "root", Role: "nameserver"}); err != nil {
+		t.Fatal(err)
+	}
+	env, err := GetEnvironmentByName("devnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Nodes) != 2 {
+		t.Fatalf("nodes = %+v", env.Nodes)
+	}
+	if env.Nodes[0].Host != "203.0.113.5" || env.Nodes[1].Host != "203.0.113.6" {
+		t.Fatalf("nodes = %+v", env.Nodes)
+	}
+	if err := UpsertEnvNode("missing", EnvNode{Host: "203.0.113.1", Role: "node"}); err == nil {
+		t.Fatal("an unknown environment accepted a node")
+	}
+	if err := UpsertEnvNode("devnet", EnvNode{Host: "not-an-ip", Role: "node"}); err == nil {
+		t.Fatal("a hostname was stored as a node address")
+	}
+}
+
+func defaultTestConfig() *EnvironmentConfig {
+	return &EnvironmentConfig{
+		Environments: []Environment{
+			{Name: "sandbox", GatewayURL: "https://dbrs.space", Description: "Sandbox cluster"},
+			{Name: "devnet", GatewayURL: "https://orama-devnet.network", Description: "Development network"},
+			{Name: "testnet", GatewayURL: "https://orama-testnet.network", Description: "Test network"},
+		},
+		ActiveEnvironment: "sandbox",
+	}
+}
+
+func TestAddEnvironment_new(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := AddEnvironment("staging", "https://staging.example.com", "Staging env"); err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+
+	env, err := GetEnvironmentByName("staging")
+	if err != nil {
+		t.Fatalf("GetEnvironmentByName: %v", err)
+	}
+	if env.GatewayURL != "https://staging.example.com" {
+		t.Errorf("GatewayURL = %q, want %q", env.GatewayURL, "https://staging.example.com")
+	}
+	if env.Description != "Staging env" {
+		t.Errorf("Description = %q, want %q", env.Description, "Staging env")
+	}
+}
+
+func TestAddEnvironment_update(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := AddEnvironment("sandbox", "https://new.example.com", "Updated sandbox"); err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+
+	env, err := GetEnvironmentByName("sandbox")
+	if err != nil {
+		t.Fatalf("GetEnvironmentByName: %v", err)
+	}
+	if env.GatewayURL != "https://new.example.com" {
+		t.Errorf("GatewayURL = %q, want %q", env.GatewayURL, "https://new.example.com")
+	}
+	if env.Description != "Updated sandbox" {
+		t.Errorf("Description = %q, want %q", env.Description, "Updated sandbox")
+	}
+
+	// Verify upsert didn't create a duplicate
+	cfg, _ := LoadEnvironmentConfig()
+	count := 0
+	for _, e := range cfg.Environments {
+		if e.Name == "sandbox" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("sandbox entries = %d, want 1", count)
+	}
+}
+
+func TestRemoveEnvironment_existing(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := RemoveEnvironment("testnet"); err != nil {
+		t.Fatalf("RemoveEnvironment: %v", err)
+	}
+
+	_, err := GetEnvironmentByName("testnet")
+	if err == nil {
+		t.Error("expected error for removed environment, got nil")
+	}
+}
+
+func TestRemoveEnvironment_absent(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := RemoveEnvironment("nonexistent"); err != nil {
+		t.Errorf("RemoveEnvironment(absent) = %v, want nil", err)
+	}
+}
+
+func TestRemoveEnvironment_active_falls_back(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := RemoveEnvironment("sandbox"); err != nil {
+		t.Fatalf("RemoveEnvironment: %v", err)
+	}
+
+	cfg, err := LoadEnvironmentConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvironmentConfig: %v", err)
+	}
+	if cfg.ActiveEnvironment != "" {
+		t.Errorf("ActiveEnvironment = %q, want none", cfg.ActiveEnvironment)
+	}
+}
+
+// A config whose active name matches no environment used to resolve to the
+// "sandbox" entry, so a typo sent commands to a cluster nobody chose.
+func TestGetActiveEnvironment_UnknownActiveIsAnErrorNotAFallback(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.ActiveEnvironment = "stagnet" // typo
+	cleanup := writeTestConfig(t, cfg)
+	defer cleanup()
+
+	env, err := GetActiveEnvironment()
+	if err == nil {
+		t.Fatalf("expected an error, got environment %q", env.Name)
+	}
+	if !strings.Contains(err.Error(), "stagnet") || !strings.Contains(err.Error(), "orama env use") {
+		t.Errorf("error should name the missing environment and the fix: %v", err)
+	}
+}
+
+func TestFreshConfigHasNoEnvironments(t *testing.T) {
+	old := getEnvironmentConfigPathFn
+	defer func() { getEnvironmentConfigPathFn = old }()
+	getEnvironmentConfigPathFn = func() (string, error) { return filepath.Join(t.TempDir(), "absent.json"), nil }
+
+	cfg, err := LoadEnvironmentConfig()
+	if err != nil {
+		t.Fatalf("LoadEnvironmentConfig: %v", err)
+	}
+	if len(cfg.Environments) != 0 || cfg.ActiveEnvironment != "" {
+		t.Fatalf("fresh config = %+v, want no environments", cfg)
+	}
+	if _, err := GetActiveEnvironment(); err == nil || !strings.Contains(err.Error(), "orama env add") {
+		t.Fatalf("active environment error = %v, want the env add hint", err)
+	}
+}

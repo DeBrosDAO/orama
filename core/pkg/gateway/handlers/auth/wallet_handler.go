@@ -1,22 +1,31 @@
 package auth
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"strings"
 
 	authsvc "github.com/DeBrosOfficial/network/pkg/gateway/auth"
 )
 
-// WhoamiHandler returns the authenticated user's identity and method.
-// This endpoint shows whether the request is authenticated via JWT or API key,
-// and provides details about the authenticated principal.
+// WhoamiHandler answers "who am I here, and what may I do".
+//
+// It used to answer the first half and, for an API key, answer it by handing
+// the key itself back — into the caller's terminal, their shell history and
+// whatever logged the response. And it never answered the second half at all,
+// so the only way to find out whether a credential could do a thing was to try
+// the thing.
 //
 // GET /v1/auth/whoami
-// Response: { "authenticated", "method", "subject", "namespace", ... }
+// Response: { "authenticated", "method", "principal", "subject", "namespace",
+//
+//	"role", "grants", "expires_at" }
 func (h *Handlers) WhoamiHandler(w http.ResponseWriter, r *http.Request) {
+	if h.authService == nil {
+		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
+		return
+	}
 	ctx := r.Context()
-	// Determine namespace (may be overridden by auth layer)
 	ns := h.defaultNS
 	if v := ctx.Value(CtxKeyNamespaceOverride); v != nil {
 		if s, ok := v.(string); ok && s != "" {
@@ -24,97 +33,86 @@ func (h *Handlers) WhoamiHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Prefer JWT if present
-	if v := ctx.Value(CtxKeyJWT); v != nil {
-		if claims, ok := v.(*authsvc.JWTClaims); ok && claims != nil {
-			writeJSON(w, http.StatusOK, map[string]any{
-				"authenticated": true,
-				"method":        "jwt",
-				"subject":       claims.Sub,
-				"issuer":        claims.Iss,
-				"audience":      claims.Aud,
-				"issued_at":     claims.Iat,
-				"not_before":    claims.Nbf,
-				"expires_at":    claims.Exp,
-				"namespace":     ns,
-			})
-			return
-		}
+	body := map[string]any{"namespace": ns}
+
+	claims, _ := ctx.Value(CtxKeyJWT).(*authsvc.JWTClaims)
+	key, _ := ctx.Value(CtxKeyAPIKey).(string)
+
+	// What the grant is looked up by is not always what is shown: a key is
+	// identified in the answer by a fingerprint and in the grants table by its
+	// stored hash.
+	lookup := ""
+
+	switch {
+	case claims != nil:
+		body["authenticated"] = true
+		body["method"] = "jwt"
+		body["subject"] = claims.Sub
+		lookup = claims.Sub
+		body["issuer"] = claims.Iss
+		body["audience"] = claims.Aud
+		body["issued_at"] = claims.Iat
+		body["not_before"] = claims.Nbf
+		body["expires_at"] = claims.Exp
+	case key != "":
+		body["authenticated"] = true
+		body["method"] = "api_key"
+		// The key itself is not in the answer, and neither is the value the
+		// api_keys table holds: on a cluster with no HMAC secret configured
+		// that value *is* the key.
+		body["subject"] = authsvc.KeyFingerprint(key)
+		lookup = h.authService.HashAPIKey(key)
+	default:
+		// Reaching here needs a credential the middleware accepted, so this is
+		// the gateway that serves whoami with no auth layer in front of it —
+		// a namespace gateway in a test, and the honest answer is "nobody".
+		body["authenticated"] = false
+		body["method"] = "none"
+		writeJSON(w, http.StatusOK, body)
+		return
 	}
 
-	// Fallback: API key identity
-	var key string
-	if v := ctx.Value(CtxKeyAPIKey); v != nil {
-		if s, ok := v.(string); ok {
-			key = s
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated": key != "",
-		"method":        "api_key",
-		"api_key":       key,
-		"namespace":     ns,
-	})
+	h.describePrincipal(ctx, body, ns, lookup)
+	writeJSON(w, http.StatusOK, body)
 }
 
-// RegisterHandler registers a new application/client after wallet signature verification.
-// This allows wallets to register applications and obtain client credentials.
+// describePrincipal fills in what the caller may do here.
 //
-// POST /v1/auth/register
-// Request body: RegisterRequest
-// Response: { "client_id", "app": { ... }, "signature_verified" }
-func (h *Handlers) RegisterHandler(w http.ResponseWriter, r *http.Request) {
-	if h.authService == nil {
-		writeError(w, http.StatusServiceUnavailable, "auth service not initialized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+// A subject is a wallet or a credential, and which one it is decides where the
+// grant is looked up. A subject with no grant is not an error: a wallet that
+// has been removed from a namespace still holds a valid token until it expires,
+// and "you are signed in and hold nothing here" is the true answer rather than
+// a 500.
+func (h *Handlers) describePrincipal(ctx context.Context, body map[string]any, namespace, lookup string) {
+	if lookup == "" || h.authService == nil {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64KB
-	var req RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	ptype := authsvc.PrincipalServiceAccount
+	switch {
+	case strings.HasPrefix(lookup, authsvc.WorkloadSubjectPrefix):
+		ptype = authsvc.PrincipalApp
+	case authsvc.IsWalletSubject(lookup):
+		ptype = authsvc.PrincipalWallet
 	}
-	if strings.TrimSpace(req.Wallet) == "" || strings.TrimSpace(req.Nonce) == "" || strings.TrimSpace(req.Signature) == "" {
-		writeError(w, http.StatusBadRequest, "wallet, nonce and signature are required")
-		return
-	}
+	body["principal"] = string(ptype)
 
-	ctx := r.Context()
-	verified, err := h.authService.VerifySignature(ctx, req.Wallet, req.Nonce, req.Signature, req.ChainType)
-	if err != nil || !verified {
-		writeError(w, http.StatusUnauthorized, "signature verification failed")
-		return
-	}
-
-	// Mark nonce used
-	nsID, _ := h.resolveNamespace(ctx, req.Namespace)
-	h.markNonceUsed(ctx, nsID, strings.ToLower(req.Wallet), req.Nonce)
-
-	// In a real app we'd derive the public key from the signature, but for simplicity here
-	// we just use a placeholder or expect it in the request if needed.
-	// For Ethereum, we can recover it.
-	publicKey := "recovered-pk"
-
-	appID, err := h.authService.RegisterApp(ctx, req.Wallet, req.Namespace, req.Name, publicKey)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	grant, err := h.authService.WhoIs(ctx, namespace, ptype, lookup)
+	if err != nil || grant == nil {
+		// Distinguished from "reader": holding nothing and being listed as a
+		// member holding nothing are different situations, and an operator
+		// reading this needs to tell them apart.
+		body["role"] = nil
+		body["grants"] = []string{}
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"client_id": appID,
-		"app": map[string]any{
-			"app_id":    appID,
-			"name":      req.Name,
-			"namespace": req.Namespace,
-			"wallet":    strings.ToLower(req.Wallet),
-		},
-		"signature_verified": true,
-	})
+	body["role"] = string(grant.Role)
+	body["grants"] = grant.Scopes().List()
+	if grant.Resource != "" {
+		body["resource"] = grant.Resource
+	}
+	if grant.ExpiresAt != "" {
+		body["grant_expires_at"] = grant.ExpiresAt
+	}
 }
-

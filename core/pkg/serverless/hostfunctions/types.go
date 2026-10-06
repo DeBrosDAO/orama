@@ -29,26 +29,50 @@ type HostFunctionsConfig struct {
 	TURNDomain       string
 	TURNSecret       string
 	StealthCDNDomain string // optional; non-empty adds turns:<domain>:443 URI
+
+	// DatabaseNamespace is the namespace whose functions may use the database
+	// handle: a namespace gateway's own client_namespace. A database host call
+	// from a function in any other namespace is refused (bugboard #427). Empty
+	// means no function may use it — the cluster gateway's database is the
+	// cluster registry.
+	DatabaseNamespace string
 }
 
 // HostFunctions provides the bridge between WASM functions and Orama services.
-// It implements the HostServices interface and is injected into the execution context.
+// It implements the HostServices interface and is injected into the execution
+// context.
+//
+// It holds **no per-invocation state**. One of these exists for the life of the
+// gateway and is shared by every invocation running on it, so anything about
+// "the current invocation" kept here is a field two concurrent invocations
+// overwrite for each other. It had two — the invocation context and the
+// captured logs — and both produced exactly that: bugboard #348 was a
+// cross-tenant identity leak through the first, and #108 was one invocation's
+// log lines appearing in another's record through the second.
+//
+// Identity and logs ride the context instead, attached per invocation by the
+// engine. A host call with no invocation on its context is a host call outside
+// any invocation, and says so rather than picking up whoever ran last.
 type HostFunctions struct {
-	db          rqlite.Client
-	cacheClient olriclib.Client
+	db rqlite.Client
+	// dbNamespace is the namespace db belongs to; see checkDatabaseAccess.
+	dbNamespace string
+
+	// cacheClient yields the Olric client connected right now, nil when there
+	// is none; read on every operation because the gateway replaces the client
+	// when it reconnects.
+	cacheClient func() olriclib.Client
 	storage     ipfs.IPFSClient
 	ipfsAPIURL  string
-	pubsub      *pubsub.ClientAdapter
+	pubsub      pubsub.Bus
 	wsManager   serverless.WebSocketManager
 	secrets     serverless.SecretsManager
 	httpClient  *http.Client
-	// anyoneHTTPClient routes outbound requests through the Anyone SOCKS5
-	// proxy (feat-11). nil when Anyone routing is disabled on this
-	// gateway — AnyoneFetch returns a typed error in that case rather
-	// than falling back to the direct httpClient (no silent privacy
-	// regression).
-	anyoneHTTPClient *http.Client
-	logger           *zap.Logger
+	// anonHTTPClient routes every outbound request of AnonFetch through
+	// the node's Tor SOCKS5 port (feat-11). It never falls back to the
+	// direct httpClient (no silent privacy regression).
+	anonHTTPClient *http.Client
+	logger         *zap.Logger
 
 	// pushDispatcher (legacy) and pushManager (per-namespace, bug #220
 	// follow-up) provide push send-paths. When pushManager is set, PushSend
@@ -104,17 +128,17 @@ type HostFunctions struct {
 	// auto-clears the instant its WebSocket disconnects.
 	ephemeralStore *serverless.EphemeralStore
 
-	// Current invocation context (set per-execution)
-	invCtx     *serverless.InvocationContext
-	invCtxLock sync.RWMutex
-
-	// Captured logs for this invocation
-	logs     []serverless.LogEntry
-	logsLock sync.Mutex
+	// capabilityIssuer mints and revokes capabilities (feat-264). Set once at
+	// gateway start, before any function runs, via SetCapabilityIssuer; nil
+	// means capability_mint and capability_revoke fail and say why.
+	capabilityIssuer serverless.CapabilityIssuer
 }
 
 // Ensure HostFunctions implements HostServices interface.
 var _ serverless.HostServices = (*HostFunctions)(nil)
 
-// Cache constants
-const cacheDMapName = "serverless_cache"
+// cacheDMapName prefixes each namespace's function cache map
+// (":serverless_cache:<namespace>"). The HTTP cache API names its maps
+// "<namespace>:<dmap>" on the same Olric and refuses an empty namespace, so a
+// name that starts with ':' is one it can never produce.
+const cacheDMapName = ":serverless_cache"

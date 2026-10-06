@@ -17,6 +17,9 @@ const (
 	FunctionStatusActive   FunctionStatus = "active"
 	FunctionStatusInactive FunctionStatus = "inactive"
 	FunctionStatusError    FunctionStatus = "error"
+	// FunctionStatusDeleted marks a deleted version. It is distinct from
+	// inactive (a disabled function) so enabling can never revive a delete.
+	FunctionStatusDeleted FunctionStatus = "deleted"
 )
 
 // TriggerType identifies the type of event that triggered a function invocation.
@@ -80,12 +83,13 @@ const (
 // FunctionRegistry manages function metadata and bytecode storage.
 // Responsible for CRUD operations on function definitions.
 type FunctionRegistry interface {
-	// Register deploys a new function or updates an existing one.
-	// Returns the old function definition if it was updated, or nil if it was a new registration.
+	// Register deploys a function as a new version and keeps the versions before it.
+	// Returns the superseded (previously latest) version, or nil if it was a new registration.
 	Register(ctx context.Context, fn *FunctionDefinition, wasmBytes []byte) (*Function, error)
 
 	// Get retrieves a function by name and optional version.
-	// If version is 0, returns the latest version.
+	// If version is 0, returns the latest active version; otherwise exactly that
+	// version if it is active.
 	Get(ctx context.Context, namespace, name string, version int) (*Function, error)
 
 	// List returns all functions for a namespace.
@@ -217,8 +221,12 @@ type WebSocketManager interface {
 }
 
 // WebSocketConn abstracts a WebSocket connection for testability.
+//
+// WriteControl and Close must be safe to call concurrently with the reader and
+// the writer: they are how another goroutine ends the connection.
 type WebSocketConn interface {
 	WriteMessage(messageType int, data []byte) error
+	WriteControl(messageType int, data []byte, deadline time.Time) error
 	ReadMessage() (messageType int, p []byte, err error)
 	Close() error
 }
@@ -258,6 +266,11 @@ type FunctionDefinition struct {
 	// function may call set_http_response to emit a verbatim status/headers/
 	// body instead of the JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
 	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
+
+	// WSAuth is how the function's WebSocket may be opened: "" for a caller's
+	// credential, as every function has been, or WSAuthCapability to also
+	// accept a capability minted through the function (feat-264).
+	WSAuth string `json:"ws_auth,omitempty"`
 }
 
 // DBTriggerConfig defines a database trigger configuration.
@@ -300,6 +313,11 @@ type Function struct {
 	// verbatim HTTP response via set_http_response instead of the
 	// JSON/Ack-wrapped output. See pkg/serverless/raw_http.go.
 	RawHTTPResponse bool `json:"raw_http_response,omitempty"`
+
+	// WSAuth is how the function's WebSocket may be opened: "" for a caller's
+	// credential, as every function has been, or WSAuthCapability to also
+	// accept a capability minted through the function (feat-264).
+	WSAuth string `json:"ws_auth,omitempty"`
 }
 
 // InvocationContext provides context for a function invocation.
@@ -316,10 +334,21 @@ type InvocationContext struct {
 	// CallerIsAdmin marks the caller as holding the admin (control-plane)
 	// grant (bugboard #152). Propagated into child WASM→WASM invocations so
 	// an internal→internal call works while external→internal stays blocked.
-	CallerIsAdmin bool              `json:"caller_is_admin,omitempty"`
-	TriggerType   TriggerType       `json:"trigger_type"`
-	WSClientID    string            `json:"ws_client_id,omitempty"`
-	EnvVars       map[string]string `json:"env_vars,omitempty"`
+	CallerIsAdmin bool `json:"caller_is_admin,omitempty"`
+	// CallerHasInvoke mirrors InvokeRequest.CallerHasInvoke so a nested
+	// function_invoke can pass on the grant the caller actually holds. It was
+	// not carried, so a caller with the invoke grant but no admin bit reached
+	// a private function directly and was refused by the same function's own
+	// nested call.
+	CallerHasInvoke bool `json:"caller_has_invoke,omitempty"`
+	// SystemOriginated marks an invocation the gateway itself started; see
+	// InvokeRequest.SystemOriginated. A nested call made from inside such an
+	// invocation carries it on, so the chain keeps the authority the trigger
+	// had without the trigger type having to stand in for it.
+	SystemOriginated bool              `json:"-"`
+	TriggerType      TriggerType       `json:"trigger_type"`
+	WSClientID       string            `json:"ws_client_id,omitempty"`
+	EnvVars          map[string]string `json:"env_vars,omitempty"`
 	// CallerClaims holds custom JWT claims set on the caller's token (beyond
 	// the standard sub/namespace fields). Read via host fn `get_caller_claim`.
 	// Populated by auth handlers from JWTClaims.Custom; empty for non-JWT auth.
@@ -332,6 +361,19 @@ type InvocationContext struct {
 	// caller also presents an API key. Empty string when the request was
 	// not JWT-authenticated. Bug #215.
 	CallerJWTSubject string `json:"caller_jwt_subject,omitempty"`
+
+	// CallerDeviceID is the device the caller's session is bound to: the
+	// RFC 7638 thumbprint of a key the device proved it holds when the session
+	// was issued, carried as the token's `did`. Empty for a session bound to
+	// the account alone, an API key, or no credential. Read via host fn
+	// `get_caller_device_id`; like the subject, it is set only by the gateway.
+	CallerDeviceID string `json:"caller_device_id,omitempty"`
+
+	// CallerCapability is what the capability the caller's socket was opened
+	// with grants, or nil for a caller who came in on a credential. Read via
+	// host fn `get_caller_capability`. A nested function_invoke does not
+	// carry it: a capability opens the function that minted it, no other.
+	CallerCapability *CapabilityGrant `json:"caller_capability,omitempty"`
 
 	// TriggerDepth is the recursion-depth bucket for trigger-driven
 	// invocations. 0 means a top-level (HTTP/WS/cron) invocation; each
@@ -545,6 +587,13 @@ type HostServices interface {
 	// envelope. Same shape as DBTransaction's "structured per-op result".
 	PushSendV2(ctx context.Context, userID string, msgJSON []byte) ([]byte, error)
 
+	// PushSendTopic delivers to the device registered under a rotating push
+	// topic (FEAT-265) in the function's namespace, and returns the same JSON
+	// envelope as PushSendV2. topicID is the lowercase hex SHA-256 of the
+	// device's topic secret. An unknown or expired topic is reported in the
+	// envelope (reason "TopicNotFound"), not as a Go error.
+	PushSendTopic(ctx context.Context, topicID string, msgJSON []byte) ([]byte, error)
+
 	// TurnCredentials mints per-namespace TURN HMAC credentials for the
 	// caller's namespace (derived from invocation context — caller
 	// cannot spoof). Returns a JSON envelope matching the HTTP endpoint
@@ -663,14 +712,15 @@ type HostServices interface {
 	// HTTP operations
 	HTTPFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 
-	// AnyoneFetch is HTTPFetch routed through the Anyone (ANyONe
-	// protocol) SOCKS5 proxy so the external endpoint sees an Anyone
-	// exit IP, not the gateway's. Feat-11 — server-side analog of the
+	// AnonFetch is HTTPFetch routed through the node's Tor client
+	// (SOCKS5) so the external endpoint sees a Tor exit IP, not the
+	// gateway's. Feat-11 — server-side analog of the
 	// client-side proxy, for serverless functions fronting third-party
 	// APIs (e.g. wallet RPC) that shouldn't expose a gateway↔upstream
 	// metadata trail. NO silent fallback to direct: returns a typed
-	// error envelope when Anyone routing is unavailable.
-	AnyoneFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
+	// error envelope when Tor routing is unavailable. Exported to WASM
+	// as anon_fetch and as the deprecated alias anyone_fetch.
+	AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error)
 
 	// Context operations
 	GetEnv(ctx context.Context, key string) (string, error)
@@ -689,6 +739,18 @@ type HostServices interface {
 	// the JWT-signed identity (e.g. signup-time wallet ownership checks)
 	// and the caller may ALSO present an API key. Bug #215.
 	GetCallerJWTSubject(ctx context.Context) string
+	// GetCallerDeviceID returns the device the caller's session is bound to,
+	// or empty when it is bound to none.
+	GetCallerDeviceID(ctx context.Context) string
+	// GetCallerCapability returns what the caller's capability grants, as
+	// JSON, or empty when the caller came in on a credential.
+	GetCallerCapability(ctx context.Context) string
+	// MintCapability issues a capability for the calling function's
+	// WebSocket and returns it as JSON.
+	MintCapability(ctx context.Context, resource string, ttl time.Duration) (string, error)
+	// RevokeCapability refuses one capability of the calling namespace,
+	// named by its token.
+	RevokeCapability(ctx context.Context, token string) error
 
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)

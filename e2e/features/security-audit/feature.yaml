@@ -1,0 +1,38 @@
+# A root-shell audit of every node against docs/SECURITY.md, read-only apart
+# from a symlink and a WebRTC switch it removes: the privileged helper's
+# socket (root:orama 0660; nobody cannot connect; orama outside the two
+# admitted units, a tenant's gateway included, is refused; the cluster
+# gateway may reload but not rewrite the mesh), its server refusing every
+# argv outside the allow-list even from root (tools, units, ports,
+# set-property, tor/ntfy/wireguard env files, deploy bind ports outside
+# 10200-19999) and logging it, a symlinked deployment dir refused; which
+# account every daemon runs as; the documented environ residual between
+# orama daemons recorded as a known gap, closed for the isolated CoreDNS
+# account; no global IPv6; kernel hardening; secrets never on argv or in the
+# journal (scanned on the node, counts only); secret files and root-only
+# trees; no unit has PID 1 open an orama-owned path; systemd-analyze
+# exposure recorded; +BPF_FRAMEWORK against the report and its security
+# alert; the TURN secret sealed at rest.
+id: security-audit
+title: Node security audit
+area: security
+subtasks: [2844]
+stage: 7
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-namespace-tor@.service
+  claims:
+    - "docs/SECURITY.md#process-isolation: orama-privhelper serves only root and orama, authorised by the caller's unit; a tenant gateway is refused"
+    - "docs/SECURITY.md#process-isolation: the helper refuses every argv outside its allow-list, unitenv set for tor, ntfy and wireguard, and bind ports outside 10200-19999"
+    - "docs/SECURITY.md#process-isolation: a deployment directory that is a symlink is refused before systemd binds it"
+    - "docs/SECURITY.md#per-service-accounts: every orama daemon can read another's environ (known residual); CoreDNS's account cannot"
+    - "docs/SECURITY.md#network-isolation: IPv6 is disabled at runtime"
+    - "docs/SECURITY.md#network-isolation: secrets never travel on a command line"
+    - "docs/SECURITY.md#tenant-deployments: no unit has PID 1 read an env file or credential, or open output, under /opt/orama"
+    - "docs/SECURITY.md#tenant-deployments: without +BPF_FRAMEWORK the report says so and the monitor raises a security warning"
+    - "docs/SECURITY.md#token--key-storage: TURN shared secrets are stored as enc: envelopes"

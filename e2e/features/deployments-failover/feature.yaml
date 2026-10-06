@@ -1,0 +1,20 @@
+# Deployments under faults: the app's unit stopped on one of its nodes while
+# every node keeps serving it through the replica, and an app killed for
+# exceeding its memory limit restarted by its unit. Runs alone: it stops
+# tenant units and exhausts an app's memory.
+id: deployments-failover
+title: Deployment replica failover and OOM restart
+area: tenancy
+subtasks: [2832]
+stage: 11
+destructive: true
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  units:
+    - orama-deploy-go@.service
+  claims:
+    - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: an app is served by name from every node while one of its nodes is down"
+    - "docs/SECURITY.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"

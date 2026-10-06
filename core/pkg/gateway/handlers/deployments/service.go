@@ -5,12 +5,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -32,10 +39,42 @@ type DeploymentService struct {
 	logger          *zap.Logger
 	baseDomain      string // Base domain for deployments (e.g., "dbrs.space")
 	nodePeerID      string // Current node's peer ID (deployments run on this node)
+
+	// coordinationSecret is the cluster secret the replica coordination calls
+	// to and from other nodes are stamped with.
+	coordinationSecret string
+
+	// callReplica replaces callInternalAPI where set; tests use it to stand in
+	// for the peer node. It must give up when ctx ends.
+	callReplica func(ctx context.Context, nodeID, nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error)
+
+	// deploymentLocks and envVersions serialize and order the changes the home
+	// node makes to one deployment (deployment_lock.go).
+	deploymentLockMu sync.Mutex
+	deploymentLocks  map[string]*deploymentLock
+	envVersionMu     sync.Mutex
+	envVersions      map[string]int64
+
+	// envCodec seals a deployment's environment before it is stored. The
+	// column held plaintext JSON, and it is where the platform's own guide
+	// tells people to put their secrets, so every tenant's API keys and
+	// database passwords sat in a Raft-replicated table and in every backup of
+	// it.
+	envCodec *deployments.EnvCodec
+
+	// audit records who deployed and who deleted. A nil one drops the event,
+	// which is the test case; a gateway always has one.
+	audit *auth.AuditLog
+
+	// cidRefs is the cluster-wide reference index the deployment's content and
+	// build CIDs are recorded in (cidrefs.go).
+	cidRefs *storage.CIDRefs
 }
 
 // NewDeploymentService creates a new deployment service.
 // baseDomain is required and sets the domain used for deployment URLs (e.g., "dbrs.space").
+// envCodec is required: it is what keeps deployment environments out of the
+// database in the clear.
 func NewDeploymentService(
 	db rqlite.Client,
 	homeNodeManager *deployments.HomeNodeManager,
@@ -43,6 +82,8 @@ func NewDeploymentService(
 	replicaManager *deployments.ReplicaManager,
 	logger *zap.Logger,
 	baseDomain string,
+	envCodec *deployments.EnvCodec,
+	audit *auth.AuditLog,
 ) *DeploymentService {
 	return &DeploymentService{
 		db:              db,
@@ -51,7 +92,46 @@ func NewDeploymentService(
 		replicaManager:  replicaManager,
 		logger:          logger,
 		baseDomain:      baseDomain,
+		envCodec:        envCodec,
+		audit:           audit,
 	}
+}
+
+// RecordAudit records one deployment-plane event. Every handler in this package
+// reaches the audit trail through here: they all hold the service and none of
+// them holds the log.
+func (s *DeploymentService) RecordAudit(r *http.Request, namespace, action, resource string) {
+	s.audit.RecordFromRequest(r.Context(), r, auth.AuditEvent{
+		Namespace: namespace,
+		Actor:     auth.ActorFromRequest(r),
+		Action:    action,
+		Resource:  resource,
+		Result:    auth.AuditSuccess,
+	})
+}
+
+// EncodeEnvironment returns the stored form of a deployment's environment.
+func (s *DeploymentService) EncodeEnvironment(env map[string]string) (string, error) {
+	return s.envCodec.Encode(env)
+}
+
+// DecodeEnvironment reads a stored environment back, for a caller that loaded
+// the column itself.
+func (s *DeploymentService) DecodeEnvironment(namespace, name, stored string) (map[string]string, error) {
+	return s.decodeEnvironment(namespace, name, stored)
+}
+
+// decodeEnvironment reads a stored environment back.
+//
+// A failure here is returned, not swallowed. An environment that cannot be read
+// is not an empty one: starting the app without its database URL looks like the
+// tenant's own bug and is far harder to diagnose than a refusal.
+func (s *DeploymentService) decodeEnvironment(namespace, name, stored string) (map[string]string, error) {
+	env, err := s.envCodec.Decode(stored)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the environment of deployment %s/%s: %w", namespace, name, err)
+	}
+	return env, nil
 }
 
 // SetBaseDomain sets the base domain for deployments
@@ -186,12 +266,14 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 
 	// Generate unique subdomain with random suffix if not already set
 	// Format: {name}-{random} (e.g., "myapp-f3o4if")
+	registeredSubdomain := false
 	if deployment.Subdomain == "" {
 		subdomain, err := s.generateSubdomain(ctx, deployment.Name, deployment.Namespace, deployment.ID)
 		if err != nil {
 			return fmt.Errorf("failed to generate subdomain: %w", err)
 		}
 		deployment.Subdomain = subdomain
+		registeredSubdomain = true
 	}
 
 	// Allocate port for dynamic deployments
@@ -203,10 +285,15 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		deployment.Port = port
 	}
 
-	// Serialize environment variables
-	envJSON, err := json.Marshal(deployment.Environment)
+	// Seal the environment before it is stored.
+	storedEnv, err := s.EncodeEnvironment(deployment.Environment)
 	if err != nil {
-		return fmt.Errorf("failed to marshal environment: %w", err)
+		return fmt.Errorf("failed to encode the environment of %s/%s: %w", deployment.Namespace, deployment.Name, err)
+	}
+
+	registered, err := s.registerCIDs(ctx, deployment.Namespace, deployment.ContentCID, deployment.BuildCID)
+	if err != nil {
+		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 
 	// Insert deployment + record history in a single transaction
@@ -222,7 +309,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		`
 		_, insertErr := tx.Exec(ctx, insertQuery,
 			deployment.ID, deployment.Namespace, deployment.Name, deployment.Type, deployment.Version, deployment.Status,
-			deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, string(envJSON),
+			deployment.ContentCID, deployment.BuildCID, deployment.HomeNodeID, deployment.Port, deployment.Subdomain, storedEnv,
 			deployment.MemoryLimitMB, deployment.CPULimitPercent, deployment.DiskLimitMB,
 			deployment.HealthCheckPath, deployment.HealthCheckInterval, deployment.RestartPolicy, deployment.MaxRestartCount,
 			deployment.CreatedAt, deployment.UpdatedAt, deployment.DeployedBy,
@@ -243,7 +330,8 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 		return histErr
 	})
 	if err != nil {
-		return fmt.Errorf("failed to insert deployment: %w", err)
+		s.unregisterCIDs(ctx, deployment.Namespace, registered)
+		return s.createFailed(ctx, deployment, registeredSubdomain, err)
 	}
 
 	// Create replica records
@@ -261,6 +349,35 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 	)
 
 	return nil
+}
+
+// createFailed is CreateDeployment's answer when the insert failed. The
+// subdomain it registered for the deployment is released, since no deployment
+// will use it. A conflict on UNIQUE(namespace, name) is another create of the
+// same deployment that won the insert: the same answer CheckNewDeploymentName
+// gives, rather than a 500. Static sites claim no instance directory, so for
+// them the insert is the only thing that decides a race.
+func (s *DeploymentService) createFailed(ctx context.Context, deployment *deployments.Deployment, registeredSubdomain bool, insertErr error) error {
+	err := fmt.Errorf("failed to create deployment: %w", insertErr)
+	if isDeploymentNameConflict(insertErr) {
+		err = &instanceTakenError{instance: process.InstanceName(deployment.Namespace, deployment.Name), exists: true}
+	}
+	if !registeredSubdomain {
+		return err
+	}
+	if _, relErr := s.db.Exec(ctx, `DELETE FROM global_deployment_subdomains WHERE deployment_id = ?`, deployment.ID); relErr != nil {
+		return errors.Join(err, fmt.Errorf("failed to release subdomain %s of the deployment that was not created: %w", deployment.Subdomain, relErr))
+	}
+	return err
+}
+
+// isDeploymentNameConflict reports whether err is the deployments table's
+// UNIQUE(namespace, name) refusing a row. rqlite passes SQLite's message
+// through as a string, with no code to compare, and SQLite names the columns.
+func isDeploymentNameConflict(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed") &&
+		strings.Contains(msg, "deployments.namespace") && strings.Contains(msg, "deployments.name")
 }
 
 // createDeploymentReplicas creates replica records for a deployment.
@@ -339,13 +456,12 @@ func (s *DeploymentService) createDeploymentReplicas(ctx context.Context, deploy
 }
 
 // SetupDynamicReplica calls the secondary node's internal API to set up a deployment replica.
+// A setup that fails is recorded as a failed replica with its reason
+// (recordReplicaSetupFailure); the leader's reconciliation retries it.
 func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
-	nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+	nodeIP, err := s.replicaManager.GetNodeOverlayIP(ctx, nodeID)
 	if err != nil {
-		s.logger.Error("Failed to get node IP for replica setup",
-			zap.String("node_id", nodeID),
-			zap.Error(err),
-		)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("failed to get the node's overlay IP: %w", err))
 		return
 	}
 
@@ -359,48 +475,51 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 		return
 	}
 
-	// Call the internal API on the target node
-	envJSON, _ := json.Marshal(deployment.Environment)
-
-	payload := map[string]interface{}{
-		"deployment_id":        deployment.ID,
-		"namespace":            deployment.Namespace,
-		"name":                 deployment.Name,
-		"type":                 deployment.Type,
-		"content_cid":          deployment.ContentCID,
-		"build_cid":            deployment.BuildCID,
-		"environment":          string(envJSON),
-		"health_check_path":    deployment.HealthCheckPath,
-		"memory_limit_mb":      deployment.MemoryLimitMB,
-		"cpu_limit_percent":    deployment.CPULimitPercent,
-		"restart_policy":       deployment.RestartPolicy,
-		"max_restart_count":    deployment.MaxRestartCount,
+	// Call the internal API on the target node. The environment goes over as
+	// the sealed form: every node derives the same key from the cluster
+	// secret, so there is no reason to put it back in the clear on the wire.
+	storedEnv, envErr := s.EncodeEnvironment(deployment.Environment)
+	if envErr != nil {
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("failed to encode the environment: %w", envErr))
+		return
 	}
 
-	resp, err := s.callInternalAPI(nodeIP, "/v1/internal/deployments/replica/setup", payload)
+	payload := map[string]interface{}{
+		"deployment_id":     deployment.ID,
+		"namespace":         deployment.Namespace,
+		"name":              deployment.Name,
+		"type":              deployment.Type,
+		"content_cid":       deployment.ContentCID,
+		"build_cid":         deployment.BuildCID,
+		"environment":       storedEnv,
+		"version":           deployment.Version,
+		"health_check_path": deployment.HealthCheckPath,
+		"memory_limit_mb":   deployment.MemoryLimitMB,
+		"cpu_limit_percent": deployment.CPULimitPercent,
+		"restart_policy":    deployment.RestartPolicy,
+		"max_restart_count": deployment.MaxRestartCount,
+	}
+
+	resp, err := s.callInternalAPI(nodeID, nodeIP, "/v1/internal/deployments/replica/setup", payload)
 	if err != nil {
-		s.logger.Error("Failed to set up dynamic replica on remote node",
-			zap.String("deployment_id", deployment.ID),
-			zap.String("node_id", nodeID),
-			zap.String("node_ip", nodeIP),
-			zap.Error(err),
-		)
-		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, err)
 		return
 	}
 
 	// Update replica with allocated port
 	port, ok := resp["port"].(float64)
 	if !ok || port <= 0 {
-		s.logger.Error("Replica setup returned invalid port",
-			zap.String("deployment_id", deployment.ID),
-			zap.String("node_id", nodeID),
-			zap.Any("port_value", resp["port"]),
-		)
-		s.replicaManager.UpdateReplicaStatus(ctx, deployment.ID, nodeID, deployments.ReplicaStatusFailed)
+		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("replica setup returned an invalid port: %v", resp["port"]))
 		return
 	}
-	s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false, deployments.ReplicaStatusActive)
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, int(port), false, deployments.ReplicaStatusActive); err != nil {
+		s.logger.Error("Failed to record the set-up replica as active",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+		return
+	}
 
 	s.logger.Info("Dynamic replica set up on remote node",
 		zap.String("deployment_id", deployment.ID),
@@ -409,60 +528,122 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 	)
 
 	// Create DNS record for the replica node (after successful setup)
+	s.publishReplicaRecord(ctx, deployment, nodeID)
+}
+
+// recordReplicaSetupFailure keeps a replica whose setup failed: its row is
+// written as failed (so the deployment reports it and the leader's
+// reconciliation retries it, rather than the node silently missing) and the
+// reason goes into the deployment's events, which the tenant can read: it names
+// the node and says what kind of failure it was, and the peer's own text, which
+// can carry overlay addresses and ports, stays in this node's log. It runs after the request that started the setup may have ended, so
+// it does not take that request's cancellation.
+func (s *DeploymentService) recordReplicaSetupFailure(ctx context.Context, deployment *deployments.Deployment, nodeID string, cause error) {
+	ctx = context.WithoutCancel(ctx)
+	s.logger.Error("Failed to set up dynamic replica on remote node",
+		zap.String("deployment_id", deployment.ID),
+		zap.String("node_id", nodeID),
+		zap.Error(cause),
+	)
+
+	if err := s.replicaManager.CreateReplica(ctx, deployment.ID, nodeID, 0, false, deployments.ReplicaStatusFailed); err != nil {
+		s.logger.Error("Failed to record the replica as failed",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
+
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO deployment_events (deployment_id, event_type, message, created_at) VALUES (?, ?, ?, ?)`,
+		deployment.ID, replicaSetupFailedEvent,
+		fmt.Sprintf("Replica setup on node %s failed: %s", nodeID, publicReplicaReason(cause)), time.Now())
+	if err != nil {
+		s.logger.Error("Failed to record the replica setup failure event",
+			zap.String("deployment_id", deployment.ID),
+			zap.String("node_id", nodeID),
+			zap.Error(err),
+		)
+	}
+}
+
+// publishReplicaRecord adds the replica node's A record for the deployment.
+// The record is public: it takes the node's public address, as the home
+// node's does (getNodeIP). The WireGuard overlay address the internal setup
+// call used is reachable by nobody on the internet; the replica's record
+// used to publish it.
+func (s *DeploymentService) publishReplicaRecord(ctx context.Context, deployment *deployments.Deployment, nodeID string) {
 	dnsName := deployment.Subdomain
 	if dnsName == "" {
 		dnsName = deployment.Name
 	}
 	fqdn := fmt.Sprintf("%s.%s.", dnsName, s.BaseDomain())
-	if err := s.createDNSRecord(ctx, fqdn, "A", nodeIP, deployment.Namespace, deployment.ID); err != nil {
-		s.logger.Error("Failed to create DNS record for replica", zap.String("node_id", nodeID), zap.Error(err))
-	} else {
-		s.logger.Info("Created DNS record for replica",
-			zap.String("fqdn", fqdn),
-			zap.String("ip", nodeIP),
-			zap.String("node_id", nodeID),
-		)
+	publicIP, err := s.getNodeIP(ctx, nodeID)
+	if err != nil {
+		s.logger.Error("Failed to get the replica node's public IP for its DNS record", zap.String("node_id", nodeID), zap.Error(err))
+		return
 	}
+	if err := s.createDNSRecord(ctx, fqdn, "A", publicIP, deployment.Namespace, deployment.ID); err != nil {
+		s.logger.Error("Failed to create DNS record for replica", zap.String("node_id", nodeID), zap.Error(err))
+		return
+	}
+	s.logger.Info("Created DNS record for replica",
+		zap.String("fqdn", fqdn), zap.String("ip", publicIP), zap.String("node_id", nodeID))
 }
 
-// callInternalAPI makes an HTTP POST to a node's internal API.
-func (s *DeploymentService) callInternalAPI(nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
+// callInternalAPI makes an HTTP POST to the internal API of the node nodeID,
+// stamped for that node.
+func (s *DeploymentService) callInternalAPI(nodeID, nodeIP, path string, payload map[string]interface{}) (map[string]interface{}, error) {
+	return s.callInternalAPIWithin(context.Background(), nodeID, nodeIP, path, payload, replicaCallTimeout)
+}
+
+// callInternalAPIWithin is callInternalAPI for a caller that waits for the
+// answer: it gives up when ctx ends or timeout passes.
+func (s *DeploymentService) callInternalAPIWithin(ctx context.Context, nodeID, nodeIP, path string, payload map[string]interface{}, timeout time.Duration) (map[string]interface{}, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	url := fmt.Sprintf("http://%s:6001%s", nodeIP, path)
+	url := fmt.Sprintf("http://%s:%d%s", nodeIP, constants.GatewayAPIPort, path)
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Orama-Internal-Auth", "replica-coordination")
+	if err := s.signReplicaRequest(req, nodeID); err != nil {
+		return nil, err
+	}
 
-	client := &http.Client{Timeout: 120 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request to node %s failed: %w", nodeID, err)
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxReplicaResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the response of node %s: %w", nodeID, err)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return result, fmt.Errorf("remote node returned status %d", resp.StatusCode)
-	}
-
-	return result, nil
+	return parseReplicaResponse(nodeID, resp.StatusCode, body)
 }
 
 // GetDeployment retrieves a deployment by namespace and name
 func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name string) (*deployments.Deployment, error) {
+	deployment, _, err := s.getDeploymentSealed(ctx, namespace, name)
+	return deployment, err
+}
+
+// getDeploymentSealed is GetDeployment that also returns the environment column
+// as stored, sealed, from the same row. It is the compare-and-swap token for a
+// change to the environment (persistEnv): read in one query with the
+// deployment, it is by construction the value the deployment's environment was
+// decoded from, so a change landing between two reads cannot pass the swap.
+func (s *DeploymentService) getDeploymentSealed(ctx context.Context, namespace, name string) (*deployments.Deployment, string, error) {
 	type deploymentRow struct {
 		ID                  string    `db:"id"`
 		Namespace           string    `db:"namespace"`
@@ -492,17 +673,17 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 	query := `SELECT * FROM deployments WHERE namespace = ? AND name = ? LIMIT 1`
 	err := s.db.Query(ctx, &rows, query, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query deployment: %w", err)
+		return nil, "", fmt.Errorf("failed to query deployment: %w", err)
 	}
 
 	if len(rows) == 0 {
-		return nil, deployments.ErrDeploymentNotFound
+		return nil, "", deployments.ErrDeploymentNotFound
 	}
 
 	row := rows[0]
-	var env map[string]string
-	if err := json.Unmarshal([]byte(row.Environment), &env); err != nil {
-		env = make(map[string]string)
+	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	if err != nil {
+		return nil, "", err
 	}
 
 	return &deployments.Deployment{
@@ -528,7 +709,7 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, namespace, name s
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,
 		DeployedBy:          row.DeployedBy,
-	}, nil
+	}, row.Environment, nil
 }
 
 // GetDeploymentByID retrieves a deployment by namespace and ID
@@ -570,9 +751,9 @@ func (s *DeploymentService) GetDeploymentByID(ctx context.Context, namespace, id
 	}
 
 	row := rows[0]
-	var env map[string]string
-	if err := json.Unmarshal([]byte(row.Environment), &env); err != nil {
-		env = make(map[string]string)
+	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	if err != nil {
+		return nil, err
 	}
 
 	return &deployments.Deployment{
@@ -782,7 +963,7 @@ func (s *DeploymentService) FanOutToReplicas(ctx context.Context, deployment *de
 			continue // Skip self
 		}
 
-		nodeIP, err := s.replicaManager.GetNodeIP(ctx, nodeID)
+		nodeIP, err := s.replicaManager.GetNodeOverlayIP(ctx, nodeID)
 		if err != nil {
 			s.logger.Warn("Failed to get IP for replica node",
 				zap.String("node_id", nodeID),
@@ -792,7 +973,7 @@ func (s *DeploymentService) FanOutToReplicas(ctx context.Context, deployment *de
 		}
 
 		go func(ip, nid string) {
-			_, err := s.callInternalAPI(ip, path, payload)
+			_, err := s.callInternalAPI(nid, ip, path, payload)
 			if err != nil {
 				s.logger.Error("Replica fan-out failed",
 					zap.String("node_id", nid),

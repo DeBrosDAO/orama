@@ -64,3 +64,71 @@ func verifyPull(identityHex string, timestamp, now int64, pubkeyHex, sigHex stri
 	msg := fmt.Sprintf("vault-pull-v1:%s:%d", identityHex, timestamp)
 	return ed25519.Verify(ed25519.PublicKey(pubkey), []byte(msg), sig)
 }
+
+func decodeKeyAndSig(pubkeyHex, sigHex string) (ed25519.PublicKey, []byte, bool) {
+	pubkey, err := hex.DecodeString(pubkeyHex)
+	if err != nil || len(pubkey) != ed25519.PublicKeySize {
+		return nil, nil, false
+	}
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return nil, nil, false
+	}
+	return ed25519.PublicKey(pubkey), sig, true
+}
+
+func timestampInWindow(timestamp, now int64) bool {
+	diff := now - timestamp
+	return diff <= pullMaxSkewSeconds && diff >= -pullMaxSkewSeconds
+}
+
+// verifySecretPut is the V2 PUT ownership proof. Message:
+// "vault-secret-put-v1:<identity>:<name>:<version>"
+func verifySecretPut(identityHex, name string, version uint64, pubkeyHex, sigHex string) bool {
+	pubkey, sig, ok := decodeKeyAndSig(pubkeyHex, sigHex)
+	if !ok || !identityMatchesPubkey(identityHex, pubkey) {
+		return false
+	}
+	msg := fmt.Sprintf("vault-secret-put-v1:%s:%s:%d", identityHex, name, version)
+	return ed25519.Verify(pubkey, []byte(msg), sig)
+}
+
+// verifySecretGet is the V2 GET ownership proof. Message:
+// "vault-secret-get-v1:<identity>:<name>:<timestamp>"
+func verifySecretGet(identityHex, name string, timestamp, now int64, pubkeyHex, sigHex string) bool {
+	if !timestampInWindow(timestamp, now) {
+		return false
+	}
+	pubkey, sig, ok := decodeKeyAndSig(pubkeyHex, sigHex)
+	if !ok || !identityMatchesPubkey(identityHex, pubkey) {
+		return false
+	}
+	msg := fmt.Sprintf("vault-secret-get-v1:%s:%s:%d", identityHex, name, timestamp)
+	return ed25519.Verify(pubkey, []byte(msg), sig)
+}
+
+// verifySecretDelete is the V2 DELETE ownership proof.
+func verifySecretDelete(identityHex, name string, timestamp, now int64, pubkeyHex, sigHex string) bool {
+	if !timestampInWindow(timestamp, now) {
+		return false
+	}
+	pubkey, sig, ok := decodeKeyAndSig(pubkeyHex, sigHex)
+	if !ok || !identityMatchesPubkey(identityHex, pubkey) {
+		return false
+	}
+	msg := fmt.Sprintf("vault-secret-delete-v1:%s:%s:%d", identityHex, name, timestamp)
+	return ed25519.Verify(pubkey, []byte(msg), sig)
+}
+
+// verifySecretList is the V2 LIST ownership proof.
+func verifySecretList(identityHex string, timestamp, now int64, pubkeyHex, sigHex string) bool {
+	if !timestampInWindow(timestamp, now) {
+		return false
+	}
+	pubkey, sig, ok := decodeKeyAndSig(pubkeyHex, sigHex)
+	if !ok || !identityMatchesPubkey(identityHex, pubkey) {
+		return false
+	}
+	msg := fmt.Sprintf("vault-secret-list-v1:%s:%d", identityHex, timestamp)
+	return ed25519.Verify(pubkey, []byte(msg), sig)
+}

@@ -32,11 +32,60 @@ const (
 	AuthChoiceExit
 )
 
-// LoadEnhancedCredentials loads the enhanced credential store, with migration support from legacy v2.0 format
+// LoadEnhancedCredentials loads the enhanced credential store, with migration
+// support from legacy v2.0 format. A migration is written back under the
+// credential lock, so it cannot overwrite a change another command is saving.
 func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
-	credPath, err := GetCredentialsPath()
+	store, migrated, err := loadEnhancedStore()
 	if err != nil {
 		return nil, err
+	}
+	if !migrated {
+		return store, nil
+	}
+	var current *EnhancedCredentialStore
+	err = UpdateEnhancedCredentials(func(locked *EnhancedCredentialStore) error {
+		current = locked
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to save migrated credentials: %v\n", err)
+		return store, nil
+	}
+	return current, nil
+}
+
+// UpdateEnhancedCredentials is the one way to change the stored credentials:
+// under the credential file's lock it loads the store as it is now, applies
+// update, and saves it, so two commands changing different entries at once both
+// land. A load-modify-save outside the lock lets the second writer's save drop
+// the first's change. update must not call anything that takes the lock again
+// (Load/Update/renewals): flock is per open file description, so a holder that
+// locks twice waits on itself. A failing update saves nothing.
+func UpdateEnhancedCredentials(update func(*EnhancedCredentialStore) error) error {
+	unlock, err := lockCredentialFile()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	store, _, err := loadEnhancedStore()
+	if err != nil {
+		return err
+	}
+	if err := update(store); err != nil {
+		return err
+	}
+	return store.Save()
+}
+
+// loadEnhancedStore reads the credential file without locking or writing. The
+// second result reports a legacy file converted in memory, which the caller
+// owes a save.
+func loadEnhancedStore() (*EnhancedCredentialStore, bool, error) {
+	credPath, err := GetCredentialsPath()
+	if err != nil {
+		return nil, false, err
 	}
 
 	// If file doesn't exist, return empty store
@@ -44,12 +93,12 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 		return &EnhancedCredentialStore{
 			Gateways: make(map[string]*GatewayCredentials),
 			Version:  "2.0",
-		}, nil
+		}, false, nil
 	}
 
 	data, err := os.ReadFile(credPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read credentials file: %w", err)
+		return nil, false, fmt.Errorf("failed to read credentials file: %w", err)
 	}
 
 	// First, try to parse as the proper enhanced store
@@ -82,7 +131,7 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 					gw.LastUsedIndex = gw.DefaultIndex
 				}
 			}
-			return &enhancedStore, nil
+			return &enhancedStore, false, nil
 		}
 	}
 
@@ -94,11 +143,11 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 	}
 
 	if err := json.Unmarshal(data, &legacyStore); err != nil {
-		return nil, fmt.Errorf("invalid credentials file format: %w", err)
+		return nil, false, fmt.Errorf("invalid credentials file format: %w", err)
 	}
 
 	if legacyStore.Version != "1.0" && legacyStore.Version != "2.0" {
-		return nil, fmt.Errorf("unsupported credentials version %q; expected \"1.0\" or \"2.0\"", legacyStore.Version)
+		return nil, false, fmt.Errorf("unsupported credentials version %q; expected \"1.0\" or \"2.0\"", legacyStore.Version)
 	}
 
 	// Convert legacy format to enhanced format
@@ -135,12 +184,7 @@ func LoadEnhancedCredentials() (*EnhancedCredentialStore, error) {
 		}
 	}
 
-	// Auto-save the migrated format
-	if err := enhanced.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to save migrated credentials: %v\n", err)
-	}
-
-	return enhanced, nil
+	return enhanced, true, nil
 }
 
 // Save saves the enhanced credential store
@@ -159,11 +203,15 @@ func (store *EnhancedCredentialStore) Save() error {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
-	return os.WriteFile(credPath, data, 0600)
+	if err := writeCredentialFile(credPath, data); err != nil {
+		return fmt.Errorf("failed to write credentials file: %w", err)
+	}
+	return nil
 }
 
-// AddCredential adds a new credential for the gateway
-func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Credentials) {
+// AddCredential adds a new credential for the gateway, or replaces the one for
+// the same wallet and namespace, and returns the index it is stored at.
+func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Credentials) int {
 	if store.Gateways == nil {
 		store.Gateways = make(map[string]*GatewayCredentials)
 	}
@@ -190,12 +238,13 @@ func (store *EnhancedCredentialStore) AddCredential(gatewayURL string, creds *Cr
 		if strings.EqualFold(existing.Wallet, creds.Wallet) && existing.Namespace == creds.Namespace {
 			// Update existing credential
 			gatewayCredentials.Credentials[i] = creds
-			return
+			return i
 		}
 	}
 
 	// Add new credential
 	gatewayCredentials.Credentials = append(gatewayCredentials.Credentials, creds)
+	return len(gatewayCredentials.Credentials) - 1
 }
 
 // GetDefaultCredential returns the default credential for a gateway
@@ -211,6 +260,42 @@ func (store *EnhancedCredentialStore) GetDefaultCredential(gatewayURL string) *C
 	}
 
 	return gatewayCredentials.Credentials[gatewayCredentials.DefaultIndex]
+}
+
+// CredentialForNamespace returns the stored credential for a namespace at a
+// gateway, or nil when there is none. A wallet signed in to the namespace more
+// than once has one slot for it (AddCredential replaces by wallet and
+// namespace); the first match is the one.
+func (store *EnhancedCredentialStore) CredentialForNamespace(gatewayURL, namespace string) *Credentials {
+	gatewayCredentials := store.Gateways[gatewayURL]
+	if gatewayCredentials == nil {
+		return nil
+	}
+	for _, c := range gatewayCredentials.Credentials {
+		if c != nil && c.Namespace == namespace {
+			return c
+		}
+	}
+	return nil
+}
+
+// SelectCredential makes the stored credential for wallet and namespace the
+// default and marks it used, and returns it, or nil when it is no longer stored.
+// A menu pick is an index into a snapshot; the file may have changed since, so
+// the pick is re-found by identity inside UpdateEnhancedCredentials.
+func (store *EnhancedCredentialStore) SelectCredential(gatewayURL, wallet, namespace string) *Credentials {
+	gatewayCredentials := store.Gateways[gatewayURL]
+	if gatewayCredentials == nil {
+		return nil
+	}
+	for i, c := range gatewayCredentials.Credentials {
+		if c != nil && strings.EqualFold(c.Wallet, wallet) && c.Namespace == namespace {
+			store.SetDefaultCredential(gatewayURL, i)
+			c.UpdateLastUsed()
+			return c
+		}
+	}
+	return nil
 }
 
 // SetDefaultCredential sets the default credential by index
@@ -362,111 +447,6 @@ func readUserChoice(maxChoice int) (int, error) {
 	return choice, nil
 }
 
-// GetOrPromptForCredentials handles the complete authentication flow
-func GetOrPromptForCredentials(gatewayURL string) (*Credentials, error) {
-	store, err := LoadEnhancedCredentials()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load credential store: %w", err)
-	}
-
-	// Check if we have a valid default credential
-	defaultCreds := store.GetDefaultCredential(gatewayURL)
-	if defaultCreds != nil && defaultCreds.IsValid() {
-		// Update last used time
-		defaultCreds.UpdateLastUsed()
-		if err := store.Save(); err != nil {
-			// Log warning but don't fail
-			fmt.Fprintf(os.Stderr, "Warning: failed to update last used time: %v\n", err)
-		}
-		return defaultCreds, nil
-	}
-
-	// Need to prompt user for credential selection
-	for {
-		choice, credIndex, err := store.DisplayCredentialMenu(gatewayURL)
-		if err != nil {
-			return nil, fmt.Errorf("menu selection failed: %w", err)
-		}
-
-		switch choice {
-		case AuthChoiceUseCredential:
-			gatewayCredentials := store.Gateways[gatewayURL]
-			if gatewayCredentials == nil || credIndex < 0 || credIndex >= len(gatewayCredentials.Credentials) {
-				fmt.Println("❌ Invalid credential selection")
-				continue
-			}
-
-			selectedCreds := gatewayCredentials.Credentials[credIndex]
-			if !selectedCreds.IsValid() {
-				fmt.Println("❌ Selected credentials are invalid or expired")
-				continue
-			}
-
-			// Update default and last used
-			store.SetDefaultCredential(gatewayURL, credIndex)
-			selectedCreds.UpdateLastUsed()
-
-			if err := store.Save(); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: failed to save credentials: %v\n", err)
-			}
-
-			return selectedCreds, nil
-
-		case AuthChoiceAddCredential:
-			fmt.Println("\n🌐 Opening browser for wallet authentication...")
-			newCreds, err := PerformWalletAuthentication(gatewayURL)
-			if err != nil {
-				fmt.Printf("❌ Authentication failed: %v\n", err)
-				continue
-			}
-
-			// Add the new credential
-			store.AddCredential(gatewayURL, newCreds)
-
-			// Set as default if it's the first credential
-			gatewayCredentials := store.Gateways[gatewayURL]
-			if gatewayCredentials != nil && len(gatewayCredentials.Credentials) == 1 {
-				store.SetDefaultCredential(gatewayURL, 0)
-			}
-
-			if err := store.Save(); err != nil {
-				return nil, fmt.Errorf("failed to save new credentials: %w", err)
-			}
-
-			fmt.Printf("✅ Wallet %s added successfully\n", newCreds.Wallet)
-			return newCreds, nil
-
-		case AuthChoiceLogout:
-			store.ClearAllCredentials()
-			if err := store.Save(); err != nil {
-				return nil, fmt.Errorf("failed to clear credentials: %w", err)
-			}
-			fmt.Println("✅ All credentials cleared")
-			continue
-
-		case AuthChoiceExit:
-			return nil, fmt.Errorf("authentication cancelled by user")
-
-		default:
-			fmt.Println("❌ Invalid choice")
-			continue
-		}
-	}
-}
-
-// HasValidEnhancedCredentials checks if there are valid credentials for the default gateway
-func HasValidEnhancedCredentials() (bool, error) {
-	store, err := LoadEnhancedCredentials()
-	if err != nil {
-		return false, err
-	}
-
-	gatewayURL := GetDefaultGatewayURL()
-	defaultCreds := store.GetDefaultCredential(gatewayURL)
-
-	return defaultCreds != nil && defaultCreds.IsValid(), nil
-}
-
 // GetValidEnhancedCredentials returns valid credentials for the default gateway
 func GetValidEnhancedCredentials() (*Credentials, error) {
 	store, err := LoadEnhancedCredentials()
@@ -474,7 +454,10 @@ func GetValidEnhancedCredentials() (*Credentials, error) {
 		return nil, err
 	}
 
-	gatewayURL := GetDefaultGatewayURL()
+	gatewayURL, err := ResolveGatewayURL()
+	if err != nil {
+		return nil, err
+	}
 	defaultCreds := store.GetDefaultCredential(gatewayURL)
 
 	if defaultCreds == nil {

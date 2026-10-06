@@ -46,6 +46,11 @@ type DatabaseClient interface {
 // PubSubClient provides publish/subscribe messaging
 type PubSubClient interface {
 	Subscribe(ctx context.Context, topic string, handler MessageHandler) error
+	// SubscribeHandle is Subscribe for a caller that must leave on its own:
+	// the returned function removes exactly this handler (idempotent), and the
+	// upstream subscription ends with the last handler. Unlike Unsubscribe it
+	// never removes another subscriber's handler.
+	SubscribeHandle(ctx context.Context, topic string, handler MessageHandler) (func() error, error)
 	Publish(ctx context.Context, topic string, data []byte) error
 	// PublishBatch publishes multiple messages in parallel, one per topic.
 	// See pubsub.Manager.PublishBatch for semantics (fail-fast vs. best-effort).
@@ -101,11 +106,18 @@ type MessageHandler func(topic string, data []byte) error
 
 // Data structures
 
-// QueryResult represents the result of a database query
+// QueryResult represents the result of a database query.
+//
+// LastInsertID and RowsAffected come from a write. A row this request just
+// inserted is addressed by LastInsertID: the registry is read from the local
+// node, and a follower has not applied the write yet, so selecting the new
+// row back misses it.
 type QueryResult struct {
-	Columns []string        `json:"columns"`
-	Rows    [][]interface{} `json:"rows"`
-	Count   int64           `json:"count"`
+	Columns      []string        `json:"columns"`
+	Rows         [][]interface{} `json:"rows"`
+	Count        int64           `json:"count"`
+	LastInsertID int64           `json:"last_insert_id,omitempty"`
+	RowsAffected int64           `json:"rows_affected,omitempty"`
 }
 
 // SchemaInfo contains database schema information
@@ -155,8 +167,8 @@ type IPFSPeerInfo struct {
 
 // IPFSClusterPeerInfo contains IPFS Cluster peer information for cluster discovery
 type IPFSClusterPeerInfo struct {
-	PeerID    string   `json:"peer_id"`    // Cluster peer ID (different from IPFS peer ID)
-	Addresses []string `json:"addresses"`  // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
+	PeerID    string   `json:"peer_id"`   // Cluster peer ID (different from IPFS peer ID)
+	Addresses []string `json:"addresses"` // Cluster multiaddresses (e.g., /ip4/x.x.x.x/tcp/9098)
 }
 
 // HealthStatus contains health check information

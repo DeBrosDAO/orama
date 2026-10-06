@@ -134,6 +134,47 @@ func (wpa *WebRTCPortAllocator) tryAllocateSFUPorts(ctx context.Context, nodeID,
 	return block, nil
 }
 
+// RecordSFUPorts records the ports an SFU already holds on a node, instead of
+// choosing new ones. It is how a unit that is running without an allocation row
+// (its row was lost, or it predates the table being kept consistent) becomes
+// visible to the allocator, which otherwise hands its ports to the next
+// namespace.
+//
+// It is idempotent for the same ports. A row that exists with other ports is an
+// error, not an overwrite: the registry and the unit disagree about what the
+// unit holds, and which one is right is not for this function to guess. A port
+// another cluster's row already holds is the unique index's conflict error.
+func (wpa *WebRTCPortAllocator) RecordSFUPorts(ctx context.Context, nodeID, namespaceClusterID string, signalingPort, mediaStart, mediaEnd int) (*WebRTCPortBlock, error) {
+	existing, err := wpa.GetSFUPorts(ctx, namespaceClusterID, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("check the SFU allocation of cluster %s on node %s before recording it: %w", namespaceClusterID, nodeID, err)
+	}
+	if existing != nil {
+		if existing.SFUSignalingPort != signalingPort || existing.SFUMediaPortStart != mediaStart || existing.SFUMediaPortEnd != mediaEnd {
+			return nil, fmt.Errorf("cluster %s holds SFU ports %d / %d-%d on node %s in the registry but its unit is configured for %d / %d-%d",
+				namespaceClusterID, existing.SFUSignalingPort, existing.SFUMediaPortStart, existing.SFUMediaPortEnd, nodeID,
+				signalingPort, mediaStart, mediaEnd)
+		}
+		return existing, nil
+	}
+
+	block := &WebRTCPortBlock{
+		ID:                 uuid.New().String(),
+		NodeID:             nodeID,
+		NamespaceClusterID: namespaceClusterID,
+		ServiceType:        "sfu",
+		SFUSignalingPort:   signalingPort,
+		SFUMediaPortStart:  mediaStart,
+		SFUMediaPortEnd:    mediaEnd,
+		AllocatedAt:        time.Now(),
+	}
+	if err := wpa.insertPortBlock(client.WithInternalAuth(ctx), block); err != nil {
+		return nil, fmt.Errorf("record the SFU ports %d / %d-%d that cluster %s already holds on node %s: %w",
+			signalingPort, mediaStart, mediaEnd, namespaceClusterID, nodeID, err)
+	}
+	return block, nil
+}
+
 // AllocateTURNPorts allocates TURN ports for a namespace on a node.
 // Each namespace gets: standard listen ports (3478/443) + 800 relay ports (49152-65535).
 // Returns the existing allocation if one already exists (idempotent).
@@ -395,6 +436,16 @@ func (wpa *WebRTCPortAllocator) insertPortBlock(ctx context.Context, block *WebR
 		}
 	}
 
+	// A teardown still owed for this service on this node would remove the one
+	// that is about to be spawned.
+	teardown := teardownSFUAction
+	if block.ServiceType == "turn" {
+		teardown = teardownTURNAction
+	}
+	if err := withdrawPendingTeardowns(ctx, wpa.db, block.NamespaceClusterID, block.NodeID, teardown); err != nil {
+		return fmt.Errorf("allocate the %s ports of cluster %s on node %s: %w", block.ServiceType, block.NamespaceClusterID, block.NodeID, err)
+	}
+
 	return nil
 }
 
@@ -531,5 +582,3 @@ func (wpa *WebRTCPortAllocator) getAllocatedValues(ctx context.Context, nodeIDs 
 	}
 	return result, nil
 }
-
-

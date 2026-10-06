@@ -4,27 +4,55 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"go.uber.org/zap"
 )
 
 // RegisterRequest is the body for POST /v1/operator/node/register.
 type RegisterRequest struct {
-	NodeID      string `json:"node_id"`                // dns_nodes.id (peer ID or hostname)
-	IPAddress   string `json:"ip_address,omitempty"`    // Public IP (alternative lookup key)
-	Environment string `json:"environment,omitempty"`   // e.g., "devnet", "sandbox"
-	Role        string `json:"role,omitempty"`          // e.g., "node", "nameserver"
-	SSHUser     string `json:"ssh_user,omitempty"`      // SSH user (default: "root")
+	NodeID      string `json:"node_id"`               // dns_nodes.id (peer ID or hostname)
+	IPAddress   string `json:"ip_address,omitempty"`  // Public IP (alternative lookup key)
+	Environment string `json:"environment,omitempty"` // e.g., "devnet", "sandbox"
+	Role        string `json:"role,omitempty"`        // e.g., "node", "nameserver"
+	SSHUser     string `json:"ssh_user,omitempty"`    // SSH user (default: "root")
 }
 
-var (
-	allowedEnvironments = map[string]bool{
-		"production": true, "devnet": true, "testnet": true, "sandbox": true, "mainnet": true,
+// validEnvironment reports whether name is one DNS label. Any cluster name
+// is fine; a label that is not a name is not.
+func validEnvironment(name string) bool {
+	return dnsLabel(name)
+}
+
+// validRole accepts a worker, a nameserver, or nameserver-nsN for N >= 1.
+func validRole(role string) bool {
+	if role == "node" || role == "nameserver" {
+		return true
 	}
-	allowedRoles = map[string]bool{
-		"node": true, "nameserver": true, "nameserver-ns1": true, "nameserver-ns2": true, "nameserver-ns3": true,
+	rest, ok := strings.CutPrefix(role, "nameserver-ns")
+	if !ok || rest == "" || rest[0] == '0' {
+		return false
 	}
-)
+	n, err := strconv.Atoi(rest)
+	return err == nil && n >= 1 && strconv.Itoa(n) == rest
+}
+
+func dnsLabel(name string) bool {
+	if name == "" || len(name) > 63 {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' && i > 0 && i < len(name)-1:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // HandleRegister tags an existing node with the operator's wallet.
 // The node must already exist in dns_nodes and be either unclaimed or
@@ -37,9 +65,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wallet := h.walletFromRequest(r)
-	if wallet == "" {
-		writeError(w, http.StatusUnauthorized, "wallet authentication required")
+	wallet, ok := h.requireOperator(w, r)
+	if !ok {
 		return
 	}
 
@@ -53,11 +80,11 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "node_id or ip_address required")
 		return
 	}
-	if req.Environment != "" && !allowedEnvironments[req.Environment] {
+	if req.Environment != "" && !validEnvironment(req.Environment) {
 		writeError(w, http.StatusBadRequest, "invalid environment")
 		return
 	}
-	if req.Role != "" && !allowedRoles[req.Role] {
+	if req.Role != "" && !validRole(req.Role) {
 		writeError(w, http.StatusBadRequest, "invalid role")
 		return
 	}
@@ -121,6 +148,15 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn("failed to update operator_wallet on wireguard_peers", zap.Error(err))
 		}
 	}
+
+	// Claiming a node is what puts it under an operator's control.
+	h.audit.RecordFromRequest(ctx, r, auth.AuditEvent{
+		Actor:    wallet,
+		Action:   auth.AuditOperatorAction,
+		Resource: "node.register",
+		Result:   auth.AuditSuccess,
+		Metadata: map[string]string{"node_id": req.NodeID, "ip_address": req.IPAddress},
+	})
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "registered",

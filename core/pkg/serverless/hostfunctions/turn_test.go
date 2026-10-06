@@ -24,9 +24,9 @@ func TestTurnCredentials_returnsConfiguredEnvelopeWhenSecretSet(t *testing.T) {
 		turnSecret:       "deadbeef-shared-secret-for-hmac",
 		stealthCDNDomain: "",
 	}
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "test-ns"})
+	invCtx := invocationCtx(&serverless.InvocationContext{Namespace: "test-ns"})
 
-	raw, err := h.TurnCredentials(context.Background())
+	raw, err := h.TurnCredentials(invCtx)
 	if err != nil {
 		t.Fatalf("TurnCredentials: %v", err)
 	}
@@ -65,9 +65,9 @@ func TestTurnCredentials_returnsURIsForDomain(t *testing.T) {
 		turnDomain: "turn.example.com",
 		turnSecret: "secret",
 	}
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns"})
+	invCtx := invocationCtx(&serverless.InvocationContext{Namespace: "ns"})
 
-	raw, _ := h.TurnCredentials(context.Background())
+	raw, _ := h.TurnCredentials(invCtx)
 	var env turnCredentialsEnvelope
 	_ = json.Unmarshal(raw, &env)
 
@@ -97,9 +97,9 @@ func TestTurnCredentials_stealthCDNAppendsTurns443(t *testing.T) {
 		turnSecret:       "secret",
 		stealthCDNDomain: "cdn.example.com",
 	}
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns"})
+	invCtx := invocationCtx(&serverless.InvocationContext{Namespace: "ns"})
 
-	raw, _ := h.TurnCredentials(context.Background())
+	raw, _ := h.TurnCredentials(invCtx)
 	var env turnCredentialsEnvelope
 	_ = json.Unmarshal(raw, &env)
 
@@ -122,9 +122,9 @@ func TestTurnCredentials_notConfiguredWhenSecretEmpty(t *testing.T) {
 	h := &HostFunctions{
 		turnSecret: "",
 	}
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns"})
+	invCtx := invocationCtx(&serverless.InvocationContext{Namespace: "ns"})
 
-	raw, err := h.TurnCredentials(context.Background())
+	raw, err := h.TurnCredentials(invCtx)
 	if err != nil {
 		t.Fatalf("TurnCredentials must NOT return Go error when TURN unconfigured; got %v", err)
 	}
@@ -169,13 +169,11 @@ func TestTurnCredentials_credentialsAreNamespaceScoped(t *testing.T) {
 		turnSecret: "shared-secret",
 	}
 
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns-a"})
-	rawA, _ := h.TurnCredentials(context.Background())
+	rawA, _ := h.TurnCredentials(invocationCtx(&serverless.InvocationContext{Namespace: "ns-a"}))
 	var envA turnCredentialsEnvelope
 	_ = json.Unmarshal(rawA, &envA)
 
-	h.SetInvocationContext(&serverless.InvocationContext{Namespace: "ns-b"})
-	rawB, _ := h.TurnCredentials(context.Background())
+	rawB, _ := h.TurnCredentials(invocationCtx(&serverless.InvocationContext{Namespace: "ns-b"}))
 	var envB turnCredentialsEnvelope
 	_ = json.Unmarshal(rawB, &envB)
 

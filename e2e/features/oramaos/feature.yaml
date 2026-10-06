@@ -1,0 +1,34 @@
+# OramaOS, the locked-down node image: a QEMU lane on the runner (the image
+# in E2E_ORAMAOS_IMAGE, qemu-system-x86_64 and UEFI firmware, booted the way
+# os/scripts/test-vm.sh does) checks the first-boot contract - no SSH and no
+# login shell, an 80-bit registration code printed on the console and never
+# served, an enrollment payload accepted only when it decrypts under that
+# code, completion accepted exactly once (a concurrent second POST is 409)
+# and the enrollment port closed afterwards. Against the fleet: the gateway's
+# enroll route refuses a node_ip that is not a public IPv4 before it spends
+# an invite, and the node management routes refuse non-operators. What a
+# single VM cannot reach (Shamir unlock needs K peers, A/B updates come only
+# from updates.orama.network) is not applicable and says why.
+id: oramaos
+title: OramaOS first boot, enrollment and node management contract
+area: infrastructure
+subtasks: [2852]
+stage: 11
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: false
+covers:
+  routes:
+    - /v1/node/enroll
+    - /v1/node/status
+    - /v1/node/logs
+    - /v1/node/command
+    - /v1/node/leave
+  claims:
+    - "docs/ORAMAOS_DEPLOYMENT.md#what-is-oramaos: no SSH, no shell"
+    - "docs/ORAMAOS_DEPLOYMENT.md#step-2-first-boot-enrollment-mode: an 80-bit code on the console TTY, not served over the network"
+    - "docs/SECURITY.md: the gateway proves it holds the code with a payload that decrypts under it; a second POST to /complete is 409"
+    - "docs/ORAMAOS_DEPLOYMENT.md#step-3-run-enrollment-from-cli: port 9999 closes after enrollment"
+    - "docs/ORAMAOS_DEPLOYMENT.md#node-management: status, command, logs and leave need an operator"

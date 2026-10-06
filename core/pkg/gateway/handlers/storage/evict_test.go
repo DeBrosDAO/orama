@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,9 +11,21 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 )
+
+// testClusterSecret is the cluster secret every test gateway shares.
+const testClusterSecret = "test-cluster-secret-for-evict-macs"
+
+// testNodePeerID is the peer id of the node the handlers under test run on, and
+// so the audience an evict call must be signed for.
+const testNodePeerID = "12D3KooWEvictTestNode"
+
+// nodeIDFor is the dns_nodes id the mock gives a node with the given IP.
+func nodeIDFor(ip string) string { return "node-" + ip }
 
 // mockStorageDB is a minimal rqlite.Client for the eviction-path tests. It
 // embeds the interface (so unimplemented methods panic if ever hit) and answers
@@ -20,15 +33,13 @@ import (
 // pin-status UPDATE that UnpinHandler runs first.
 type mockStorageDB struct {
 	rqlite.Client
-	pinCount      int      // remaining is_pinned=1 rows across ALL namespaces
-	otherPinCount int      // is_pinned=1 rows in OTHER namespaces (bugboard #156)
-	otherQueryErr error    // error to return from the cross-namespace check only
-	nodeIPs       []string // active node internal IPs
-	queryErr      error
+	refCount    int      // references to the CID across ALL namespaces (ipfs_cid_refs)
+	refQueryErr error    // error from the cluster reference index
+	nodeIPs     []string // active node internal IPs
+	queryErr    error
 
-	remainingQueried bool
-	otherQueried     bool
-	nodesQueried     bool
+	refsQueried  bool
+	nodesQueried bool
 
 	// namespaceScoped marks this mock as a NAMESPACE gateway's own database.
 	// dns_nodes exists there but is never written, so it answers topology reads
@@ -48,17 +59,12 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 		return nil
 	}
 	switch {
-	case strings.Contains(query, "namespace != ?") && strings.Contains(query, "ipfs_content_ownership"):
-		// cidPinnedByOtherNamespace (bugboard #156) — must be checked before the
-		// generic is_pinned branch (both contain "is_pinned = 1").
-		m.otherQueried = true
-		if m.otherQueryErr != nil {
-			return m.otherQueryErr
+	case strings.Contains(query, "ipfs_cid_refs"):
+		m.refsQueried = true
+		if m.refQueryErr != nil {
+			return m.refQueryErr
 		}
-		*out = []map[string]interface{}{{"count": float64(m.otherPinCount)}}
-	case strings.Contains(query, "is_pinned = 1") && strings.Contains(query, "ipfs_content_ownership"):
-		m.remainingQueried = true
-		*out = []map[string]interface{}{{"count": float64(m.pinCount)}}
+		*out = []map[string]interface{}{{"count": float64(m.refCount)}}
 	case strings.Contains(query, "dns_nodes"):
 		m.nodesQueried = true
 		if m.namespaceScoped {
@@ -68,7 +74,7 @@ func (m *mockStorageDB) Query(_ context.Context, dest any, query string, _ ...an
 		}
 		rows := make([]map[string]interface{}, 0, len(m.nodeIPs))
 		for _, ip := range m.nodeIPs {
-			rows = append(rows, map[string]interface{}{"ip": ip})
+			rows = append(rows, map[string]interface{}{"id": nodeIDFor(ip), "ip": ip})
 		}
 		*out = rows
 	case strings.Contains(query, "ipfs_content_ownership"):
@@ -92,12 +98,18 @@ func newHandlersWithDB(client IPFSClient, db rqlite.Client) *Handlers {
 	if m, ok := db.(*mockStorageDB); ok {
 		m.namespaceScoped = true
 		global.nodeIPs = m.nodeIPs
+		global.refCount = m.refCount
+		global.refQueryErr = m.refQueryErr
 	}
 	return newHandlersWithDBs(client, db, global)
 }
 
+// globalMock is the cluster-registry mock a handler set built by newHandlersWithDB
+// reads references and topology from.
+func globalMock(h *Handlers) *mockStorageDB { return h.globalDB.(*mockStorageDB) }
+
 func newHandlersWithDBs(client IPFSClient, db, globalDB rqlite.Client) *Handlers {
-	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001"}, db, globalDB)
+	return New(client, newTestLogger(), Config{IPFSReplicationFactor: 3, IPFSAPIURL: "http://localhost:5001", ClusterSecret: testClusterSecret}, db, globalDB)
 }
 
 // --- remainingPinsForCID ------------------------------------------------------
@@ -112,7 +124,7 @@ func TestRemainingPinsForCID(t *testing.T) {
 		{"shared", 3, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHandlersWithDB(&mockIPFSClient{}, &mockStorageDB{pinCount: tc.pin})
+			h := newHandlersWithDB(&mockIPFSClient{}, &mockStorageDB{refCount: tc.pin})
 			got, err := h.remainingPinsForCID(context.Background(), "QmCID")
 			if err != nil {
 				t.Fatalf("remainingPinsForCID: %v", err)
@@ -127,27 +139,27 @@ func TestRemainingPinsForCID(t *testing.T) {
 // --- maybeImmediateEvict gate -------------------------------------------------
 
 func TestMaybeImmediateEvict_skippedWhenNotRequested(t *testing.T) {
-	db := &mockStorageDB{pinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	h := newHandlersWithDB(&mockIPFSClient{}, db)
 	if got := h.maybeImmediateEvict(context.Background(), "QmCID", false); got != "skipped" {
 		t.Errorf("evicted = %q, want skipped", got)
 	}
-	if db.remainingQueried || db.nodesQueried {
+	if g := globalMock(h); g.refsQueried || g.nodesQueried {
 		t.Error("no DB work should happen when immediate is not requested")
 	}
 }
 
 func TestMaybeImmediateEvict_sharedCIDNotEvicted(t *testing.T) {
 	// Another namespace still pins the CID → must NOT fan out an eviction.
-	db := &mockStorageDB{pinCount: 2}
+	db := &mockStorageDB{refCount: 2}
 	h := newHandlersWithDB(&mockIPFSClient{}, db)
 	if got := h.maybeImmediateEvict(context.Background(), "QmShared", true); got != "shared" {
 		t.Errorf("evicted = %q, want shared", got)
 	}
-	if !db.remainingQueried {
-		t.Error("expected the cross-namespace reference check to run")
+	if !globalMock(h).refsQueried {
+		t.Error("expected the cluster-wide reference check to run")
 	}
-	if db.nodesQueried {
+	if globalMock(h).nodesQueried {
 		t.Error("shared CID must short-circuit BEFORE fan-out (dns_nodes must not be queried)")
 	}
 }
@@ -156,14 +168,14 @@ func TestMaybeImmediateEvict_zeroPins_noNodes_partial(t *testing.T) {
 	// A genuinely empty cluster topology cannot reclaim anything → partial.
 	// This is the honest failure signal; the bug it used to hide is covered by
 	// TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB below.
-	db := &mockStorageDB{pinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	global := &mockStorageDB{nodeIPs: nil}
 	db.namespaceScoped = true
 	h := newHandlersWithDBs(&mockIPFSClient{}, db, global)
 	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
 		t.Errorf("evicted = %q, want partial", got)
 	}
-	if !db.remainingQueried {
+	if !global.refsQueried {
 		t.Error("zero-pin path must check references")
 	}
 	if !global.nodesQueried {
@@ -178,18 +190,21 @@ func TestMaybeImmediateEvict_zeroPins_noNodes_partial(t *testing.T) {
 // "partial", and no block was ever reclaimed — while every unit test passed,
 // because the mock answered both roles from one handle.
 //
-// Mutation check: point activeNodeInternalIPs back at h.db and this fails.
+// Mutation check: point activeNodes back at h.db and this fails.
 func TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB(t *testing.T) {
 	nsDB := &mockStorageDB{namespaceScoped: true, nodeIPs: []string{"10.0.0.99"}}
 	global := &mockStorageDB{nodeIPs: []string{"10.0.0.1", "10.0.0.2", "10.0.0.17"}}
 	h := newHandlersWithDBs(&mockIPFSClient{}, nsDB, global)
 
-	ips, err := h.activeNodeInternalIPs(context.Background())
+	nodes, err := h.activeNodes(context.Background())
 	if err != nil {
-		t.Fatalf("activeNodeInternalIPs: %v", err)
+		t.Fatalf("activeNodes: %v", err)
 	}
-	if len(ips) != 3 {
-		t.Fatalf("got %d node IPs %v, want the 3 from the GLOBAL database", len(ips), ips)
+	if len(nodes) != 3 {
+		t.Fatalf("got %d nodes %v, want the 3 from the GLOBAL database", len(nodes), nodes)
+	}
+	if nodes[0].ID != nodeIDFor("10.0.0.1") || nodes[0].IP != "10.0.0.1" {
+		t.Fatalf("node 0 = %+v, want its id and IP", nodes[0])
 	}
 	if nsDB.topologyReadHere {
 		t.Error("topology was read from the namespace database, which is empty in production")
@@ -202,7 +217,7 @@ func TestActiveNodeInternalIPs_readsGlobalNotNamespaceDB(t *testing.T) {
 func TestActiveNodeInternalIPs_noGlobalHandleIsAnError(t *testing.T) {
 	// A missing global handle must surface, not read as "cluster has no nodes".
 	h := &Handlers{logger: newTestLogger()}
-	if _, err := h.activeNodeInternalIPs(context.Background()); err == nil {
+	if _, err := h.activeNodes(context.Background()); err == nil {
 		t.Fatal("want an error when no global database handle is configured")
 	}
 }
@@ -219,7 +234,7 @@ func TestMaybeImmediateEvict_evictsUsingGlobalTopology(t *testing.T) {
 	defer srv.Close()
 
 	h := newHandlersWithDBs(&mockIPFSClient{},
-		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
 		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
 	h.evictPort = portOf(t, srv.URL)
 
@@ -243,7 +258,7 @@ func TestMaybeImmediateEvict_nodePartialBodyIsNotTrue(t *testing.T) {
 	defer srv.Close()
 
 	h := newHandlersWithDBs(&mockIPFSClient{},
-		&mockStorageDB{namespaceScoped: true, pinCount: 0},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
 		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
 	h.evictPort = portOf(t, srv.URL)
 
@@ -269,39 +284,120 @@ func portOf(t *testing.T, rawURL string) int {
 
 // --- EvictHandler (per-node internal endpoint) --------------------------------
 
-func evictReq(t *testing.T, body, remoteAddr, marker string) (*httptest.ResponseRecorder, *http.Request) {
+// evictReq builds the request a peer gateway's fan-out sends for cid: the CID
+// in the query string, where the MAC covers it. secret is what the sender
+// signs with ("" sends the pre-MAC marker header alone).
+func evictReq(t *testing.T, cid, remoteAddr, secret string) (*httptest.ResponseRecorder, *http.Request) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/internal/storage/evict", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, evictPath+"?"+url.Values{"cid": {cid}}.Encode(),
+		strings.NewReader(`{"cid":"`+cid+`"}`))
 	req.RemoteAddr = remoteAddr
-	if marker != "" {
-		req.Header.Set("X-Orama-Internal-Auth", marker)
+	if secret != "" {
+		key, err := auth.CoordinationKey(secret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := auth.SignCoordination(key, req, time.Now(), testNodePeerID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return httptest.NewRecorder(), req
 }
 
 func TestEvictHandler_forbiddenWithoutWireGuard(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{"cid":"QmX"}`, "203.0.113.9:5000", storageInternalAuthMarker) // public IP
+	rec, req := evictReq(t, "QmX", "203.0.113.9:5000", testClusterSecret) // signed, but a public IP
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
 	}
 }
 
-func TestEvictHandler_forbiddenWithoutMarker(t *testing.T) {
-	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{"cid":"QmX"}`, "10.0.0.7:5000", "") // WG IP but no marker
+// Bug: the marker header plus a WireGuard source address was the whole
+// credential, and the marker is a constant in this repository. Any local
+// process on a node could evict any namespace's blobs from a peer. e2e:
+// TestInternal_evictNeedsMoreThanTheOverlay.
+//
+// Mutation check: accept the marker again and this fails.
+func TestEvictHandler_markerAndWireGuardAloneAreRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmVictim", "10.0.0.7:5000", "") // WG source + marker, no MAC
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if mock.evictCalls != 0 {
+		t.Fatal("an unauthenticated request evicted a blob")
+	}
+}
+
+func TestEvictHandler_wrongSecretRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmVictim", "10.0.0.7:5000", "another-cluster-entirely-secret")
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}
+
+// A MAC captured for one CID cannot be replayed onto another: the CID is in the
+// query string the MAC covers.
+func TestEvictHandler_macDoesNotMoveToAnotherCID(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmMine", "10.0.0.7:5000", testClusterSecret)
+	req.URL.RawQuery = url.Values{"cid": {"QmTheirs"}}.Encode()
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}
+
+// The v2 MAC covers the body, so a body swapped after signing is refused; the
+// handler reads the CID from the signed query, never the body.
+func TestEvictHandler_swappedBodyIsRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmSigned", "10.0.0.7:5000", testClusterSecret)
+	req.Body = io.NopCloser(strings.NewReader(`{"cid":"QmInjected"}`))
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || len(mock.evictedCIDs) != 0 {
+		t.Errorf("status = %d, evicted %v; want 403 and none", rec.Code, mock.evictedCIDs)
+	}
+}
+
+func TestEvictHandler_staleStampRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", "")
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	if err := auth.SignCoordination(key, req, time.Now().Add(-10*time.Minute), testNodePeerID); err != nil {
+		t.Fatal(err)
+	}
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none (replay window)", rec.Code, mock.evictCalls)
+	}
+}
+
+// A gateway with no cluster secret cannot authenticate anything, so it refuses
+// everything rather than accepting what it cannot check.
+func TestEvictHandler_noClusterSecretRefusesAll(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := New(mock, newTestLogger(), Config{}, nil, nil)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", testClusterSecret)
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
 	}
 }
 
 func TestEvictHandler_wrongMethod(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	req := httptest.NewRequest(http.MethodGet, "/v1/internal/storage/evict", nil)
+	req := httptest.NewRequest(http.MethodGet, evictPath, nil)
 	req.RemoteAddr = "10.0.0.7:5000"
-	req.Header.Set("X-Orama-Internal-Auth", storageInternalAuthMarker)
 	rec := httptest.NewRecorder()
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -311,7 +407,7 @@ func TestEvictHandler_wrongMethod(t *testing.T) {
 
 func TestEvictHandler_missingCID(t *testing.T) {
 	h := newTestHandlers(&mockIPFSClient{})
-	rec, req := evictReq(t, `{}`, "10.0.0.7:5000", storageInternalAuthMarker)
+	rec, req := evictReq(t, "", "10.0.0.7:5000", testClusterSecret)
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -321,7 +417,7 @@ func TestEvictHandler_missingCID(t *testing.T) {
 func TestEvictHandler_success(t *testing.T) {
 	mock := &mockIPFSClient{evictRemoved: 4}
 	h := newTestHandlers(mock)
-	rec, req := evictReq(t, `{"cid":"QmGone"}`, "10.0.0.7:5000", storageInternalAuthMarker)
+	rec, req := evictReq(t, "QmGone", "10.0.0.7:5000", testClusterSecret)
 	h.EvictHandler(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -332,6 +428,85 @@ func TestEvictHandler_success(t *testing.T) {
 	body := decodeBody(t, rec)
 	if body["removed"] != float64(4) {
 		t.Errorf("removed = %v, want 4", body["removed"])
+	}
+}
+
+// The fan-out and the handler agree: what evictBlobEverywhere sends is accepted
+// by EvictHandler (verifier sees the peer's address as WireGuard), and a fan-out
+// whose secret differs from the receiver's is refused.
+func TestEvictFanout_signedRequestIsAcceptedByTheHandler(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		receiver   string
+		wantStatus string
+		wantEvict  int
+	}{
+		{"same cluster", testClusterSecret, "true", 1},
+		{"other cluster", "a-different-cluster-secret", "partial", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recv := &mockIPFSClient{}
+			receiver := New(recv, newTestLogger(), Config{ClusterSecret: tc.receiver, NodePeerID: nodeIDFor("127.0.0.1")}, nil, nil)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				r.RemoteAddr = "10.0.0.7:5000" // the overlay address a peer arrives from
+				receiver.EvictHandler(w, r)
+			}))
+			defer srv.Close()
+
+			h := newHandlersWithDBs(&mockIPFSClient{},
+				&mockStorageDB{namespaceScoped: true},
+				&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+			h.evictPort = portOf(t, srv.URL)
+
+			if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != tc.wantStatus {
+				t.Errorf("evicted = %q, want %q", got, tc.wantStatus)
+			}
+			if recv.evictCalls != tc.wantEvict {
+				t.Errorf("receiver evicted %d times, want %d", recv.evictCalls, tc.wantEvict)
+			}
+		})
+	}
+}
+
+// The sender's credential is the stamp alone; the pre-MAC constant header is
+// not sent.
+func TestEvictFanout_sendsNoConstantCredentialHeader(t *testing.T) {
+	var gotHeader string
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		gotHeader = r.Header.Get("X-Orama-Internal-Auth")
+	}))
+	defer srv.Close()
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.config.ClusterSecret = testClusterSecret
+	h.evictPort = portOf(t, srv.URL)
+	h.maybeImmediateEvict(context.Background(), "QmGone", true)
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("evict call sent %d times, want 1", hits)
+	}
+	if gotHeader != "" {
+		t.Errorf("X-Orama-Internal-Auth = %q, want none", gotHeader)
+	}
+}
+
+// A sender with no cluster secret must not fire unsigned calls.
+func TestEvictFanout_noClusterSecret_sendsNothing(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+	}))
+	defer srv.Close()
+	h := New(&mockIPFSClient{}, newTestLogger(), Config{}, &mockStorageDB{namespaceScoped: true},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+	if got := h.maybeImmediateEvict(context.Background(), "QmGone", true); got != "partial" {
+		t.Errorf("evicted = %q, want partial", got)
+	}
+	if atomic.LoadInt32(&hits) != 0 {
+		t.Error("an unsigned evict call was sent")
 	}
 }
 
@@ -367,7 +542,7 @@ func unpinReq(ns string) (*httptest.ResponseRecorder, *http.Request) {
 // (removing it would orphan the other namespace's data at the next GC).
 func TestUnpinHandler_sharedByOtherNamespace_keepsClusterPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherPinCount: 1} // another namespace still pins it
+	db := &mockStorageDB{refCount: 1} // another namespace still references it
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
@@ -390,7 +565,7 @@ func TestUnpinHandler_sharedByOtherNamespace_keepsClusterPin(t *testing.T) {
 // The LAST pinner (no other namespace) DOES remove the cluster pin.
 func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherPinCount: 0}
+	db := &mockStorageDB{refCount: 0}
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
@@ -401,22 +576,22 @@ func TestUnpinHandler_lastPinner_removesClusterPin(t *testing.T) {
 	if mock.unpinCalls != 1 {
 		t.Errorf("last pinner must remove the cluster pin exactly once; unpinCalls=%d", mock.unpinCalls)
 	}
-	if !db.otherQueried {
-		t.Error("expected the cross-namespace reference check to run")
+	if !globalMock(h).refsQueried {
+		t.Error("expected the cluster-wide reference check to run")
 	}
 }
 
-// If the cross-namespace check errors, fail safe: do NOT remove the shared
-// cluster pin, but still return 200 (this namespace is logically unpinned).
+// If the reference index cannot be read, fail safe: do NOT remove the shared
+// cluster pin, and answer a retryable 503 so the caller tries again.
 func TestUnpinHandler_refcountError_failsSafeLeavingPin(t *testing.T) {
 	mock := &mockIPFSClient{}
-	db := &mockStorageDB{otherQueryErr: errStorageTest}
+	db := &mockStorageDB{refQueryErr: errStorageTest}
 	h := newHandlersWithDB(mock, db)
 	rec, req := unpinReq("ns-A")
 	h.UnpinHandler(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (logical unpin still succeeds)", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 	if mock.unpinCalls != 0 {
 		t.Errorf("on refcount error the cluster pin must be left intact; unpinCalls=%d", mock.unpinCalls)
@@ -428,3 +603,42 @@ var errStorageTest = errStorage("boom")
 type errStorage string
 
 func (e errStorage) Error() string { return string(e) }
+
+// The fan-out signs each call for the node it dials, so a captured call cannot
+// be replayed at another node.
+func TestMaybeImmediateEvict_signsEachCallForItsNode(t *testing.T) {
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	var audienceOK int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if auth.VerifyCoordination(key, r, time.Now(), nodeIDFor("127.0.0.1")) {
+			atomic.AddInt32(&audienceOK, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	h := newHandlersWithDBs(&mockIPFSClient{},
+		&mockStorageDB{namespaceScoped: true, refCount: 0},
+		&mockStorageDB{nodeIPs: []string{"127.0.0.1"}})
+	h.evictPort = portOf(t, srv.URL)
+	h.maybeImmediateEvict(context.Background(), "QmGone", true)
+	if atomic.LoadInt32(&audienceOK) != 1 {
+		t.Fatal("the evict call was not signed for the node it was sent to")
+	}
+}
+
+// A call signed for another node is refused here.
+func TestEvictHandler_aCallSignedForAnotherNodeIsRefused(t *testing.T) {
+	mock := &mockIPFSClient{}
+	h := newTestHandlers(mock)
+	rec, req := evictReq(t, "QmX", "10.0.0.7:5000", "")
+	key, _ := auth.CoordinationKey(testClusterSecret)
+	if err := auth.SignCoordination(key, req, time.Now(), "12D3KooWSomeOtherNode"); err != nil {
+		t.Fatal(err)
+	}
+	h.EvictHandler(rec, req)
+	if rec.Code != http.StatusForbidden || mock.evictCalls != 0 {
+		t.Errorf("status = %d, evictions = %d; want 403 and none", rec.Code, mock.evictCalls)
+	}
+}

@@ -27,6 +27,7 @@ export function Section({
       className={cn(
         "max-w-6xl mx-auto px-4 sm:px-6 lg:px-8",
         paddingVariants[padding],
+        id && "scroll-mt-20",
         className,
       )}
     >

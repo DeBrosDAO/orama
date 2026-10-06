@@ -5,28 +5,32 @@
 /// DELETE /v2/vault/secrets/{name}  — Delete a named secret
 /// GET    /v2/vault/secrets         — List all secrets for the identity
 ///
-/// All endpoints require session auth (X-Session-Token header).
+/// All endpoints require session auth (X-Session-Token header) AND an
+/// Ed25519 ownership proof (X-Vault-Pubkey + X-Vault-Signature, plus
+/// X-Vault-Timestamp on GET/DELETE/LIST). The HMAC session proved the
+/// caller could echo a server tag; it did not prove they hold the identity's key.
 const std = @import("std");
 const response = @import("response.zig");
 const router = @import("router.zig");
 const log = @import("../log.zig");
 const vault_store = @import("../storage/vault_store.zig");
 const handler_auth = @import("handler_auth.zig");
+const ownership = @import("../auth/ownership.zig");
 
 /// Maximum request body size for PUT (1 MiB).
 const MAX_BODY_SIZE = 1024 * 1024;
 
 /// PUT /v2/vault/secrets/{name}
 /// Body: {"share":"<base64>","version":<u64>}
-/// Auth: X-Session-Token (mandatory, identity extracted from token)
+/// Auth: X-Session-Token + Ed25519 ownership over identity/name/version.
 pub fn handlePut(
     writer: anytype,
     body: []const u8,
     name: []const u8,
     ctx: *const router.RouteContext,
-    session_token: ?[]const u8,
+    req: router.Request,
 ) !void {
-    const identity = requireAuth(writer, ctx, session_token) orelse return;
+    const identity = requireAuth(writer, ctx, req.session_token) orelse return;
 
     if (body.len == 0) {
         return response.badRequest(writer, "empty body");
@@ -58,6 +62,8 @@ pub fn handlePut(
 
     const share_b64 = parsed.value.share;
     const version = parsed.value.version;
+
+    if (!requireOwnership(writer, ctx, identity, req, .put, name, version)) return;
 
     // Decode base64
     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(share_b64) catch {
@@ -114,14 +120,15 @@ pub fn handlePut(
 }
 
 /// GET /v2/vault/secrets/{name}
-/// Auth: X-Session-Token (mandatory)
+/// Auth: X-Session-Token + Ed25519 ownership over identity/name/timestamp.
 pub fn handleGet(
     writer: anytype,
     name: []const u8,
     ctx: *const router.RouteContext,
-    session_token: ?[]const u8,
+    req: router.Request,
 ) !void {
-    const identity = requireAuth(writer, ctx, session_token) orelse return;
+    const identity = requireAuth(writer, ctx, req.session_token) orelse return;
+    if (!requireOwnership(writer, ctx, identity, req, .get, name, 0)) return;
 
     // Derive integrity key
     const integrity_key: []const u8 = if (ctx.guardian) |guardian|
@@ -155,14 +162,15 @@ pub fn handleGet(
 }
 
 /// DELETE /v2/vault/secrets/{name}
-/// Auth: X-Session-Token (mandatory)
+/// Auth: X-Session-Token + Ed25519 ownership over identity/name/timestamp.
 pub fn handleDelete(
     writer: anytype,
     name: []const u8,
     ctx: *const router.RouteContext,
-    session_token: ?[]const u8,
+    req: router.Request,
 ) !void {
-    const identity = requireAuth(writer, ctx, session_token) orelse return;
+    const identity = requireAuth(writer, ctx, req.session_token) orelse return;
+    if (!requireOwnership(writer, ctx, identity, req, .delete, name, 0)) return;
 
     vault_store.deleteSecret(ctx.data_dir, identity, name, ctx.allocator) catch |err| {
         return switch (err) {
@@ -187,13 +195,14 @@ pub fn handleDelete(
 }
 
 /// GET /v2/vault/secrets
-/// Auth: X-Session-Token (mandatory)
+/// Auth: X-Session-Token + Ed25519 ownership over identity/timestamp.
 pub fn handleList(
     writer: anytype,
     ctx: *const router.RouteContext,
-    session_token: ?[]const u8,
+    req: router.Request,
 ) !void {
-    const identity = requireAuth(writer, ctx, session_token) orelse return;
+    const identity = requireAuth(writer, ctx, req.session_token) orelse return;
+    if (!requireOwnership(writer, ctx, identity, req, .list, "", 0)) return;
 
     const names = vault_store.listSecrets(ctx.data_dir, identity, ctx.allocator) catch {
         return response.internalError(writer);
@@ -280,6 +289,58 @@ fn requireAuth(
     };
 
     return identity;
+}
+
+const OwnershipKind = enum { put, get, delete, list };
+
+/// Session tokens are HMAC-echo and prove nothing about key possession.
+/// V2 secrets therefore also require the same Ed25519 ownership V1 already
+/// enforces. Missing or invalid proofs are 401, same as a bad session.
+fn requireOwnership(
+    writer: anytype,
+    ctx: *const router.RouteContext,
+    identity: []const u8,
+    req: router.Request,
+    kind: OwnershipKind,
+    name: []const u8,
+    version: u64,
+) bool {
+    if (ctx.guardian == null) return true;
+
+    const pubkey = req.vault_pubkey orelse {
+        response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature") catch {};
+        return false;
+    };
+    const signature = req.vault_signature orelse {
+        response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature") catch {};
+        return false;
+    };
+
+    const ok = switch (kind) {
+        .put => ownership.verifySecretPut(identity, name, version, pubkey, signature),
+        .get, .delete, .list => blk: {
+            const ts_s = req.vault_timestamp orelse {
+                response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature") catch {};
+                break :blk false;
+            };
+            const ts = std.fmt.parseInt(i64, ts_s, 10) catch {
+                response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature") catch {};
+                break :blk false;
+            };
+            const now = std.time.timestamp();
+            break :blk switch (kind) {
+                .get => ownership.verifySecretGet(identity, name, ts, now, pubkey, signature),
+                .delete => ownership.verifySecretDelete(identity, name, ts, now, pubkey, signature),
+                .list => ownership.verifySecretList(identity, ts, now, pubkey, signature),
+                .put => unreachable,
+            };
+        },
+    };
+    if (!ok) {
+        response.jsonError(writer, 401, "Unauthorized", "invalid ownership signature") catch {};
+        return false;
+    }
+    return true;
 }
 
 /// Write the GET response with base64-encoded share data and metadata.

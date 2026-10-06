@@ -137,6 +137,14 @@ If no `function.wasm` file exists when you run `deploy`, it is built automatical
 
 Each deploy creates a new version. The WASM binary is stored on IPFS (content-addressed) and metadata is stored in RQLite.
 
+### Where a function lives
+
+A function belongs to the namespace of the credential that deploys it, and it is stored in and run by that namespace's own gateway, `https://ns-<namespace>.<domain>`. Point the CLI or your requests there.
+
+Every management request — deploy, delete, enable and disable, get, versions, logs, list, triggers, secrets — acts on the credential's namespace. A request that names a different namespace, in the deploy metadata, the `namespace` form field, `?namespace=` or an `X-Namespace` header, is refused with 403.
+
+A gateway runs only its own namespace's functions, and the cluster's main gateway is the `default` namespace's. A function request sent there for any other namespace is forwarded to that namespace's gateway: the namespace in `/v1/invoke/<namespace>/<name>` or `?namespace=`, otherwise the credential's. A credential of another namespace is refused, and an unauthenticated request that names no namespace is refused with a message pointing at the namespace gateway.
+
 ### REST API
 
 Deploy by uploading a multipart form with the compiled WASM binary and configuration:
@@ -210,6 +218,8 @@ curl -X POST https://gateway.example.com/v1/invoke/my-namespace/hello-world \
   -d '{"name": "World"}'
 ```
 
+A public function can be invoked without a credential, but the request has to name the namespace: `/v1/invoke/<namespace>/<name>`, or `/v1/functions/<name>/invoke?namespace=<namespace>`. With a credential and no namespace named, the credential's namespace is used.
+
 ### WebSocket Invoke
 
 Functions can also be invoked over WebSocket for streaming use cases:
@@ -219,6 +229,10 @@ WS /v1/functions/{name}/ws
 ```
 
 You can also invoke a specific version by appending `@version` to the name (e.g., `hello-world@2`).
+
+A socket is authorized at the upgrade and then held to the token that opened it: the gateway closes it with `4403` within 10 seconds of that token being revoked, and with `4401` two minutes after it expires. A persistent (`ws_persistent: true`) socket stays open across token rotation by sending `{"__orama":"auth.refresh","jwt":"<new token>"}` — for the same account the socket was opened with; a token for anyone else is refused.
+
+A function that declares `ws_auth: capability` in function.yaml can also have its socket opened with a **capability** instead of a credential: `WS /v1/functions/{name}/ws?namespace=<ns>&cap=<token>`. The function mints one for its own socket with `capability_mint(resource, ttl_seconds)`, from a call made by a device-bound session, and hands it to whoever should be able to write to that resource. The gateway checks it before the upgrade, refuses it with a credential beside it, and closes the socket within 10 seconds of `capability_revoke(token)` or of the issuing device being revoked. The function reads what it grants with `get_caller_capability()` and sees no caller. No credential names the sender, but the gateway still sees the client's address, the timing, the resource and which capability was used.
 
 ## Host Functions API
 
@@ -244,18 +258,19 @@ Read and write to the distributed RQLite database.
 
 ### Cache (Olric)
 
-Read and write to the distributed Olric cache. Cache operations use a fixed dmap (`serverless_cache`).
+Read and write to the distributed Olric cache. Each namespace has its own cache: a function reads and writes only its namespace's keys.
 
 | Function | Description |
 |----------|-------------|
 | `cache_get(key)` | Get cached value by key. Returns empty on miss. |
-| `cache_set(key, value, ttlSeconds)` | Store value with TTL in seconds. |
+| `cache_set(key, value, ttlSeconds)` | Store value. `ttlSeconds > 0` expires the entry after that long (at most 10 years); `0` means no expiry; a negative or longer ttl is refused. No return value; a failure is logged by the gateway. |
+| `cache_delete(key)` | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. Requires gateway 0.200.0 or later: a function that imports it fails to instantiate on an older gateway. |
 | `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). |
 | `cache_incr_by(key, delta)` | Atomically increment by delta. |
 
 ### Storage (IPFS)
 
-**Not yet available.** IPFS storage host functions (`storage_put`, `storage_get`) and `cache_delete` are not currently exported by the runtime -- a function that imports them will fail to instantiate. Use the [Storage API](/docs/developer/storage) from outside your function instead.
+**Not yet available.** IPFS storage host functions (`storage_put`, `storage_get`) are not currently exported by the runtime -- a function that imports them will fail to instantiate. Use the [Storage API](/docs/developer/storage) from outside your function instead.
 
 ### HTTP
 

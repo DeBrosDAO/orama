@@ -19,14 +19,14 @@ import (
 var timeAfter = func(d time.Duration) <-chan time.Time { return time.After(d) }
 
 const (
-	reconnectTimeout  = 15 * time.Second
-	emptyRoomTTL      = 60 * time.Second
-	rtpBufferSize     = 8192
+	reconnectTimeout = 15 * time.Second
+	emptyRoomTTL     = 60 * time.Second
+	rtpBufferSize    = 8192
 )
 
 var (
-	ErrRoomFull    = errors.New("room is full")
-	ErrRoomClosed  = errors.New("room is closed")
+	ErrRoomFull     = errors.New("room is full")
+	ErrRoomClosed   = errors.New("room is closed")
 	ErrPeerNotFound = errors.New("peer not found")
 )
 
@@ -121,6 +121,16 @@ func (rm *RoomManager) GetRoom(roomID string) *Room {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return rm.rooms[roomID]
+}
+
+// HasParticipants reports whether roomID is open here with at least one peer.
+// An empty room awaiting cleanup does not count: it hosts no call to join.
+func (rm *RoomManager) HasParticipants(roomID string) bool {
+	if roomID == "" {
+		return false
+	}
+	room := rm.GetRoom(roomID)
+	return room != nil && !room.IsClosed() && room.GetParticipantCount() > 0
 }
 
 // CloseAll closes all rooms (for graceful shutdown).

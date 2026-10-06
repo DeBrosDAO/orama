@@ -35,6 +35,12 @@ func newDNSTestDB(t *testing.T) *sql.DB {
 	)`); err != nil {
 		t.Fatalf("create dns_records: %v", err)
 	}
+	if _, err := db.Exec(`CREATE TABLE namespaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)`); err != nil {
+		t.Fatalf("create namespaces: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO namespaces (name) VALUES ('anchat-v2')`); err != nil {
+		t.Fatalf("seed namespace: %v", err)
+	}
 	return db
 }
 
@@ -93,7 +99,7 @@ func TestEnsureNamespaceHostRecordSQL_doesNotReenableDisabledRow(t *testing.T) {
 	}
 
 	if _, err := db.Exec(ensureNamespaceHostRecordSQL,
-		fqdn, value, tag, "2026-09-03 07:00:00", "2026-09-03 07:00:00", fqdn, value, tag); err != nil {
+		fqdn, value, tag, "2026-09-03 07:00:00", "2026-09-03 07:00:00", tag, fqdn, value, tag); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 

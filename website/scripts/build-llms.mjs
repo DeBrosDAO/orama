@@ -13,25 +13,33 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS = resolve(HERE, "../../docs");
+const CHAIN_DOCS = resolve(HERE, "../src/docs/blockchain");
 const DIST = resolve(HERE, "../dist");
-const BASE = "https://iofo4ifs.orama.network";
+const BASE = "https://orama.network";
 
 const PROJECT = "Orama Network";
 const SUMMARY =
   "Orama Network is a decentralized platform for deploying web apps, " +
-  "SQLite databases, custom domains, and serverless WASM functions across a " +
-  "peer-to-peer node network, reached through a single API gateway per namespace.";
+  "SQLite databases and serverless WASM functions across a peer-to-peer node " +
+  "network, reached through a single API gateway per namespace. A separate " +
+  "Cosmos SDK ledger, oramad, mints the ORAMA token. Application requests do " +
+  "not pass through that ledger. Custom domains can be verified, but " +
+  "certificates are issued only on the network's own domain.";
 
 // section -> [ [sourceDocPath, slug, title, description] ]
 const MANIFEST = {
   Deploying: [
     ["DEPLOYMENT_GUIDE.md", "deploying-apps", "Deploying Apps", "Deploy static, Next.js, Go, and Node.js apps; manage SQLite databases and custom domains via the orama CLI."],
     ["SERVERLESS.md", "functions", "Serverless Functions", "Write, deploy, and invoke WASM functions; host-function API, secrets, pubsub triggers, lifecycle."],
-    ["DEV_DEPLOY.md", "release-and-rollout", "Release & Rollout", "Build binaries, deploy to VPS nodes, enroll OramaOS, and run rolling cluster upgrades."],
+    ["DEV_DEPLOY.md", "release-and-rollout", "Release & Rollout", "Build binaries, deploy to VPS nodes, enroll OramaOS (in development), and run rolling cluster upgrades."],
   ],
   Reference: [
+    ["CLIENT_SURFACE.md", "client-surface", "Client Surface", "Humans use the orama CLI; programs use the SDK and gateway HTTP. No dashboard, no Orama MCP."],
     ["ARCHITECTURE.md", "architecture", "Architecture", "System architecture: gateway, namespaces, RQLite, Olric cache, IPFS storage, WASM runtime."],
-    ["CLIENT_SDK.md", "client-sdk", "Client SDK", "Go client SDK for talking to an Orama gateway from application code."],
+    ["CLI_REFERENCE.md", "cli-reference", "CLI Reference", "Every orama command and flag, generated from the command tree."],
+    ["API_SURFACE.md", "api-surface", "API Surface", "Every gateway route and which client owns it: SDK, CLI, direct, or internal."],
+    ["TS_SDK.md", "typescript-sdk", "TypeScript SDK", "@debros/orama — database, pub/sub, cache, storage, functions and auth from application code."],
+    ["GO_CLIENT_SDK.md", "go-client-sdk", "Go Client SDK", "Go client for talking to an Orama gateway from application code."],
     ["MONITORING.md", "monitoring", "Monitoring", "Cluster health and per-node reporting with the orama monitor / node report commands."],
     ["COMMON_PROBLEMS.md", "troubleshooting", "Troubleshooting", "Known failure modes and how to diagnose them."],
   ],
@@ -56,8 +64,26 @@ function build() {
     lines.push("");
   }
 
+  const chainPages = [
+    ["what-it-is.mdx", "blockchain-what-it-is", "The Orama chain", "What oramad is, which modules are wired, and what is deliberately absent."],
+    ["supply.mdx", "blockchain-supply", "ORAMA supply", "norama, the epoch schedule, and which shares are actually minted."],
+    ["fees.mdx", "blockchain-fees", "Chain fees", "Base fee burn, tips, state deposits, and earnings accounts."],
+    ["validators.mdx", "blockchain-validators", "Validators and voting power", "x/power, the stake cap, rewards, and slashing."],
+    ["running.mdx", "blockchain-running", "Running a chain node", "Ports, chain id, and the stagenet installer. orama node install does not start the chain."],
+  ];
+  lines.push("## Blockchain", "");
+  for (const [srcName, slug, title, desc] of chainPages) {
+    const src = join(CHAIN_DOCS, srcName);
+    if (!existsSync(src)) {
+      throw new Error(`build-llms: source doc missing: ${src} (referenced by "${title}")`);
+    }
+    copyFileSync(src, join(llmsDir, `${slug}.md`));
+    lines.push(`- [${title}](${BASE}/llms/${slug}.md): ${desc}`);
+  }
+  lines.push("");
+
   writeFileSync(join(DIST, "llms.txt"), lines.join("\n"));
-  const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0);
+  const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0) + chainPages.length;
   console.log(`build-llms: wrote llms.txt + ${count} docs to ${llmsDir}`);
 }
 

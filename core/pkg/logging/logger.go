@@ -53,7 +53,6 @@ const (
 	ComponentDatabase Component = "DATABASE"
 	ComponentClient   Component = "CLIENT"
 	ComponentGeneral  Component = "GENERAL"
-	ComponentAnyone   Component = "ANYONE"
 	ComponentGateway  Component = "GATEWAY"
 	ComponentSFU      Component = "SFU"
 	ComponentTURN     Component = "TURN"
@@ -77,8 +76,6 @@ func getComponentColor(component Component) string {
 		return Blue
 	case ComponentGeneral:
 		return Yellow
-	case ComponentAnyone:
-		return Cyan
 	case ComponentGateway:
 		return BrightGreen
 	case ComponentSFU:
@@ -150,9 +147,7 @@ func coloredConsoleEncoder(enableColors bool) zapcore.Encoder {
 			file = file[idx+1:]
 		}
 		// Remove .go extension for even more compact format
-		if strings.HasSuffix(file, ".go") {
-			file = file[:len(file)-3]
-		}
+		file = strings.TrimSuffix(file, ".go")
 		if enableColors {
 			enc.AppendString(fmt.Sprintf("%s%s%s", Dim, file, Reset))
 		} else {

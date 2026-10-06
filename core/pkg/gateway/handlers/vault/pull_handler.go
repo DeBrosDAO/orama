@@ -106,7 +106,7 @@ func (h *Handlers) HandlePull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	n := len(guardians)
-	k := shamir.AdaptiveThreshold(n)
+	k, _ := thresholdsForGuardianCount(n)
 
 	// Fan out pull requests to all guardians.
 	ctx, cancel := context.WithTimeout(r.Context(), overallTimeout)
@@ -127,12 +127,7 @@ func (h *Handlers) HandlePull(w http.ResponseWriter, r *http.Request) {
 		go func(idx int, gd guardian) {
 			defer wg.Done()
 
-			guardianReq := guardianPullRequest{
-				Identity:  req.Identity,
-				PubKey:    req.PubKey,
-				Signature: req.Signature,
-				Timestamp: req.Timestamp,
-			}
+			guardianReq := guardianPullRequest(req)
 			reqBody, _ := json.Marshal(guardianReq)
 
 			url := fmt.Sprintf("http://%s:%d/v1/vault/pull", gd.IP, gd.Port)
@@ -230,7 +225,8 @@ func (h *Handlers) HandlePull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Shamir combine exactly bestK shares of the chosen version.
-	envelope, err := shamir.Combine(bestShares[:bestK])
+	// bestK==1 is a local-key envelope stored on one guardian — not Shamir.
+	envelope, err := combineEnvelope(bestShares, bestK)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "Vault pull: Shamir combine failed", zap.Error(err))
 		writeError(w, http.StatusInternalServerError, "failed to reconstruct envelope")
