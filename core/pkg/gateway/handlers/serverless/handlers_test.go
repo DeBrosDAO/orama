@@ -873,3 +873,23 @@ func TestGetCallerHasInvokeFromRequest(t *testing.T) {
 		t.Error("anonymous must not resolve to hasInvoke")
 	}
 }
+
+// A Solana address is base58, which has an upper-case L and no lower-case l.
+// The subject used to be lowercased before it was classified, so a Solana
+// wallet whose address holds an L stopped looking like a wallet: it was read
+// as an API key, refused every private function, and could self-assert admin
+// through an injected scopes claim like a key.
+func TestCallerClassification_aSolanaWalletWithAnLIsAWallet(t *testing.T) {
+	h := newTestHandlers(nil)
+	const sol = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+	jwtReq := func(custom map[string]string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/v1/invoke/ns/fn", nil)
+		return r.WithContext(context.WithValue(r.Context(), ctxkeys.JWT, &auth.JWTClaims{Sub: sol, Custom: custom}))
+	}
+	if !h.getCallerHasInvokeFromRequest(jwtReq(nil)) {
+		t.Error("a Solana wallet's session was refused the invoke grant every wallet has")
+	}
+	if h.getCallerIsAdminFromRequest(jwtReq(map[string]string{"scopes": "admin"})) {
+		t.Error("a Solana wallet JWT self-asserted admin through an injected scopes claim")
+	}
+}

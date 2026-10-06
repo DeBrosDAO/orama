@@ -8,11 +8,15 @@
 --
 -- Writes are normalised from bug-329 onward; this brings existing rows in line.
 -- Idempotent: re-running changes nothing once every row is already lowercase.
+--
+-- Only EVM addresses (0x…) are lowercased. A Solana address is base58, where
+-- case is part of the value: lowercasing one would name a different key.
 
 -- Drop rows that would collide with an already-normalised row for the same
 -- namespace, so the UPDATE below cannot violate uniqueness.
 DELETE FROM namespace_ownership
  WHERE owner_type = 'wallet'
+   AND owner_id LIKE '0x%'
    AND owner_id <> LOWER(owner_id)
    AND EXISTS (
        SELECT 1 FROM namespace_ownership AS keep
@@ -24,12 +28,14 @@ DELETE FROM namespace_ownership
 UPDATE namespace_ownership
    SET owner_id = LOWER(owner_id)
  WHERE owner_type = 'wallet'
+   AND owner_id LIKE '0x%'
    AND owner_id <> LOWER(owner_id);
 
 -- Same treatment for the wallet -> api_key linkage, which is lowercased on
 -- write today but may hold rows from before that.
 DELETE FROM wallet_api_keys
- WHERE wallet <> LOWER(wallet)
+ WHERE wallet LIKE '0x%'
+   AND wallet <> LOWER(wallet)
    AND EXISTS (
        SELECT 1 FROM wallet_api_keys AS keep
         WHERE keep.namespace_id = wallet_api_keys.namespace_id
@@ -39,4 +45,5 @@ DELETE FROM wallet_api_keys
 
 UPDATE wallet_api_keys
    SET wallet = LOWER(wallet)
- WHERE wallet <> LOWER(wallet);
+ WHERE wallet LIKE '0x%'
+   AND wallet <> LOWER(wallet);

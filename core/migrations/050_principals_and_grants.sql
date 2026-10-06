@@ -104,12 +104,14 @@ CREATE TABLE IF NOT EXISTS namespace_ownership (
     UNIQUE(namespace_id, owner_type, owner_id)
 );
 --
--- Wallets become owners. Migration 043 already collapsed co-owners to the
+-- Wallets become owners. An EVM address (0x…) is lowercased, as the gateway
+-- normalises it; a Solana address is base58, where case is the value, and is
+-- kept as it is. Migration 043 already collapsed co-owners to the
 -- earliest row and the partial index above would refuse a second anyway, but
 -- the MIN(id) filter is here so this is correct against a database that somehow
 -- has more, rather than failing halfway through.
 INSERT OR IGNORE INTO principals(type, identifier, created_by)
-SELECT 'wallet', LOWER(owner_id), 'migration 050'
+SELECT 'wallet', CASE WHEN owner_id LIKE '0x%' THEN LOWER(owner_id) ELSE owner_id END, 'migration 050'
   FROM namespace_ownership
  WHERE owner_type = 'wallet';
 
@@ -122,7 +124,7 @@ INSERT INTO grants(principal_id, namespace_id, role, created_at, created_by)
 SELECT p.id, o.namespace_id, 'owner', o.created_at, 'migration 050'
   FROM namespace_ownership AS o
   JOIN principals AS p
-    ON p.type = 'wallet' AND p.identifier = LOWER(o.owner_id)
+    ON p.type = 'wallet' AND p.identifier = CASE WHEN o.owner_id LIKE '0x%' THEN LOWER(o.owner_id) ELSE o.owner_id END
  WHERE o.owner_type = 'wallet'
    AND o.id = (SELECT MIN(first.id) FROM namespace_ownership AS first
                 WHERE first.namespace_id = o.namespace_id AND first.owner_type = 'wallet')

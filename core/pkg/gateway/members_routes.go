@@ -269,7 +269,7 @@ func callerGrant(r *http.Request) *auth.Grant {
 func callerWallet(r *http.Request) string {
 	if v := r.Context().Value(ctxKeyJWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			if sub := strings.TrimSpace(claims.Sub); strings.HasPrefix(strings.ToLower(sub), "0x") {
+			if sub := strings.TrimSpace(claims.Sub); auth.IsWalletSubject(sub) {
 				return auth.NormalizeWallet(sub)
 			}
 		}

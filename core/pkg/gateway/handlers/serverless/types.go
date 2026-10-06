@@ -211,7 +211,7 @@ func (h *ServerlessHandlers) getCallerHasInvokeFromRequest(r *http.Request) bool
 	}
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
+			sub := strings.TrimSpace(claims.Sub)
 			// A deployed app holds what its grant says now. Its token carries
 			// the scopes of the grant at the moment its unit started, and an
 			// app is started before its owner can grant it anything, so the
@@ -253,7 +253,7 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 	// for an ak_ subject; a SIWE wallet JWT must never self-assert admin here.
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
-			sub := strings.ToLower(strings.TrimSpace(claims.Sub))
+			sub := strings.TrimSpace(claims.Sub)
 			if auth.IsAPIKeySubject(sub) && claims.Custom != nil {
 				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
 					return true

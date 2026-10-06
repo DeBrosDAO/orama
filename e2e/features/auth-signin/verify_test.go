@@ -82,7 +82,9 @@ func TestVerify_refreshLivesThirtyDays(t *testing.T) {
 	}
 }
 
-// TestVerify_solanaSignIn: a SIWS signature (base64 Ed25519) signs in.
+// TestVerify_solanaSignIn: a SIWS signature (base64 Ed25519) signs in, and the
+// session's subject is the address exactly as signed: base58 is case-sensitive,
+// and a lowercased subject names a different key (docs/AUTH.md).
 func TestVerify_solanaSignIn(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
@@ -95,8 +97,8 @@ func TestVerify_solanaSignIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SIWS verify: %v", err)
 	}
-	if resp.Status != http.StatusOK || s.AccessToken == "" || !strings.EqualFold(s.Subject, sol.Address()) {
-		t.Fatalf("SIWS sign-in answered %d subject %q", resp.Status, s.Subject)
+	if resp.Status != http.StatusOK || s.AccessToken == "" || s.Subject != sol.Address() {
+		t.Fatalf("SIWS sign-in answered %d subject %q, want exactly %q", resp.Status, s.Subject, sol.Address())
 	}
 	other, err := wallet.NewSolana()
 	if err != nil {

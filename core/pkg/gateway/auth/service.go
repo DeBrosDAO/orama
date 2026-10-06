@@ -254,13 +254,29 @@ var ErrRotationNotConfigured = fmt.Errorf("auth service not configured for atomi
 
 // NormalizeWallet canonicalises a wallet address for storage and lookup.
 //
-// The same wallet reaches the gateway in different cases: EIP-55 checksummed
-// from one client, lowercase from another. Every row keyed by a wallet is
-// matched by exact string equality, so unless both the write and the read
-// normalise the same way one login records ownership that a later login cannot
-// find, and the wallet ends up owning the namespace twice under two spellings.
+// An EVM address reaches the gateway in different cases: EIP-55 checksummed
+// from one client, lowercase from another, and both are the same account. Every
+// row keyed by a wallet is matched by exact string equality, so unless both the
+// write and the read normalise the same way one login records ownership that a
+// later login cannot find. An EVM address (0x…) is therefore lowercased.
+//
+// Nothing else is. A Solana address is base58, where case is part of the value:
+// lowercasing one names a different key, or none. Doing it made every Solana
+// session's subject an address its holder does not own, so an application that
+// compares the subject with the user's address — AnChat's signup does, strictly
+// for Solana — refused every Solana user.
 func NormalizeWallet(wallet string) string {
-	return strings.ToLower(strings.TrimSpace(wallet))
+	wallet = strings.TrimSpace(wallet)
+	if isEVMAddress(wallet) {
+		return strings.ToLower(wallet)
+	}
+	return wallet
+}
+
+// isEVMAddress reports whether a wallet is written as an EVM address, whose
+// case carries only the EIP-55 checksum.
+func isEVMAddress(wallet string) bool {
+	return len(wallet) >= 2 && wallet[0] == '0' && (wallet[1] == 'x' || wallet[1] == 'X')
 }
 
 // HashAPIKey returns the HMAC-SHA256 hash of an API key if the HMAC secret is set,

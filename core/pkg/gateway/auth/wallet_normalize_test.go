@@ -14,6 +14,11 @@ func TestNormalizeWallet(t *testing.T) {
 		{"0xAbCdEf0123456789", "0xabcdef0123456789"},
 		{"0xabcdef0123456789", "0xabcdef0123456789"},
 		{"  0xABCDEF0123456789  ", "0xabcdef0123456789"},
+		{"0XABCDEF0123456789", "0xabcdef0123456789"},
+		// Solana: base58, where case is part of the address. Lowercasing it
+		// named a different key.
+		{"7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV", "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"},
+		{"  7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV ", "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"},
 		{"", ""},
 	}
 	for _, tc := range cases {

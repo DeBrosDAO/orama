@@ -223,3 +223,34 @@ func TestMigration050_backfillIsIdempotent(t *testing.T) {
 		t.Errorf("grants went from %d to %d on a re-apply", before, after)
 	}
 }
+
+// A Solana address is base58, where case is part of the value: the backfill
+// keeps it as written, and lowercases only an EVM address. Lowercasing it gave
+// the owner a grant under an address that is not theirs, and the namespace's
+// only owner could never sign in to it again.
+func TestMigration050_aSolanaOwnerKeepsItsAddress(t *testing.T) {
+	db := registryAtV43(t)
+	const sol = "7EcDhSYGxXyscszYEp35KHN8vvw3svAuLKTzXwCFLtV"
+	if _, err := db.Exec(`INSERT OR IGNORE INTO namespaces(id, name) VALUES (78, 'solana-owned')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO namespace_ownership(namespace_id, owner_type, owner_id) VALUES (78, 'wallet', ?)`, sol); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version IN (42, 50)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rqlite.ApplyEmbeddedMigrations(t.Context(), db, migrations.FS, zap.NewNop()); err != nil {
+		t.Fatalf("re-apply 042 and 050: %v", err)
+	}
+	if role := grantRole(t, db, "wallet", sol, 78); role != "owner" {
+		t.Errorf("the Solana owner holds %q under its own address, want owner", role)
+	}
+	var stored string
+	if err := db.QueryRow(`SELECT owner_id FROM namespace_ownership WHERE namespace_id = 78`).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != sol {
+		t.Errorf("042 rewrote the Solana owner to %q", stored)
+	}
+}

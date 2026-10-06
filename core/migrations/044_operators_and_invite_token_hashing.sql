@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS operators (
 -- reach /v1/operator/* until a row is inserted here on a node. That is the
 -- correct failure: an empty allowlist denies, it does not fall back.
 INSERT OR IGNORE INTO operators (wallet, added_by)
-SELECT DISTINCT LOWER(TRIM(operator_wallet)), 'genesis:dns_nodes'
+SELECT DISTINCT CASE WHEN TRIM(operator_wallet) LIKE '0x%' THEN LOWER(TRIM(operator_wallet)) ELSE TRIM(operator_wallet) END, 'genesis:dns_nodes'
   FROM dns_nodes
  WHERE operator_wallet IS NOT NULL
    AND TRIM(operator_wallet) <> '';

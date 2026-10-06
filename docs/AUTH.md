@@ -14,6 +14,13 @@ Everything that reaches the gateway is one of two things.
 (Sign-In with Ethereum) for an EVM address, SIWS for a Solana one. The gateway
 issues the message, the wallet signs it, and the gateway hands back a JWT.
 
+The JWT's subject is the wallet's address. An EVM address is lowercased, since
+its case carries only the EIP-55 checksum and one account reaches the gateway
+checksummed from one client and lowercase from another. A Solana address is kept
+exactly as signed: it is base58, where case is part of the address. Compare a
+subject with a stored EVM address case-insensitively, and with a Solana address
+exactly.
+
 **A key** is a program. `orama_<type>_<payload>_<checksum>`, all base62, minted
 by an owner of a namespace and carrying a fixed set of grants. It proves itself
 by being presented.
