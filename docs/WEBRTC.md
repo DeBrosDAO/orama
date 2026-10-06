@@ -323,6 +323,14 @@ process deletes any leftover before its first load. That file, not the
 config, is what `reconcile-host-turn` waits on: a written config only means the server
 will serve a namespace on its next tick.
 
+The per-namespace `orama-namespace-turn@<ns>` units this replaced are retired on
+every WebRTC sweep: a unit that still has its env file, or is in any state but
+inactive (running, starting, restarting or failed), is stopped, disabled and its env
+file removed. A legacy unit whose config the migration deleted crash-loops and does
+not read as active, so the active state alone missed exactly those units; without the
+env file's removal every boot and every `orama node upgrade` would start the unit
+again. A cluster state whose namespace name is not valid is skipped.
+
 Relay allocations come from the host-wide range 49152-65535, which is also what the
 firewall opens. Each namespace still gets its own 800-port block recorded in
 `webrtc_port_allocations`; that block is the record of which namespaces hold TURN on

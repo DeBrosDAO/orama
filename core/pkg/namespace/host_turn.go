@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/systemd"
 	"github.com/DeBrosOfficial/network/pkg/turn"
@@ -498,16 +499,22 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 			continue
 		}
 		ns := state.NamespaceName
+		// The name comes from a file on disk and names systemd units below.
+		if !httputil.ValidateNamespace(ns) {
+			cm.logger.Warn("Skipping a cluster state whose namespace name is not valid",
+				zap.String("path", path))
+			continue
+		}
 		// Every local namespace, not just current tenants: a namespace that LOST
 		// its TURN allocation still has a legacy unit to retire, and that unit
 		// would go on holding 3478 against the shared server.
-		active, aerr := cm.systemdSpawner.systemdMgr.IsServiceActive(ns, systemd.ServiceTypeTURN)
-		if aerr == nil && active {
-			if serr := cm.systemdSpawner.systemdMgr.StopService(ns, systemd.ServiceTypeTURN); serr != nil {
-				cm.logger.Warn("Failed to stop legacy per-namespace TURN unit — it still holds 3478/5349, so the shared server cannot bind",
-					zap.String("namespace", ns), zap.Error(serr))
-				continue
-			}
+		retired, rerr := retireLegacyTURNUnit(cm.systemdSpawner.systemdMgr, ns)
+		if rerr != nil {
+			cm.logger.Warn("Failed to retire the legacy per-namespace TURN unit; while it runs it holds 3478/5349 against the shared server, and while its env file remains every upgrade restarts it",
+				zap.String("namespace", ns), zap.Error(rerr))
+			continue
+		}
+		if retired {
 			cm.logger.Info("Retired legacy per-namespace TURN unit; the shared host TURN serves this namespace now (bugboard #283)",
 				zap.String("namespace", ns))
 		}
@@ -520,6 +527,46 @@ func (cm *ClusterManager) stopLegacyPerNamespaceTURN(ctx context.Context) {
 		// namespace name recorded inside the state file.
 		cm.removeLegacyTURNConfig(ns, filepath.Dir(path))
 	}
+}
+
+// legacyTURNUnits is what retiring a legacy per-namespace TURN unit needs from
+// the systemd manager.
+type legacyTURNUnits interface {
+	HasUnitEnv(namespace string, serviceType systemd.ServiceType) (bool, error)
+	ServiceState(namespace string, serviceType systemd.ServiceType) (systemd.ActiveState, error)
+	TeardownServiceAndEnv(namespace string, serviceType systemd.ServiceType) error
+}
+
+// retireLegacyTURNUnit stops, disables and removes the env file of namespace's
+// legacy orama-namespace-turn@ unit while anything of it remains, and reports
+// whether it did.
+//
+// It used to stop the unit only while systemd reported it active. Once the
+// migration has deleted a legacy unit's config the unit crash-loops, and a
+// crash-looping unit does not read as active, so exactly the units that needed
+// retiring were skipped and restarted forever; the unit also stayed enabled and
+// kept its env file, so every boot and every `orama node upgrade` (which
+// restarts each unit it finds an env file for) started it again (devnet,
+// bugboard #283 part 2). A unit with an env file, or in any state but inactive
+// (starting, restarting or failed included — the layout migration may already
+// have removed the env file of one that crash-loops), is retired, by the rule
+// the WebRTC sweep uses (needsRetiring).
+func retireLegacyTURNUnit(units legacyTURNUnits, namespace string) (bool, error) {
+	hasEnv, err := units.HasUnitEnv(namespace, systemd.ServiceTypeTURN)
+	if err != nil {
+		return false, fmt.Errorf("check for the legacy TURN env file of %s: %w", namespace, err)
+	}
+	state, err := units.ServiceState(namespace, systemd.ServiceTypeTURN)
+	if err != nil {
+		return false, fmt.Errorf("read the state of the legacy TURN unit of %s: %w", namespace, err)
+	}
+	if !needsRetiring(state, hasEnv) {
+		return false, nil
+	}
+	if err := units.TeardownServiceAndEnv(namespace, systemd.ServiceTypeTURN); err != nil {
+		return false, fmt.Errorf("retire the legacy TURN unit of %s: %w", namespace, err)
+	}
+	return true, nil
 }
 
 // removeLegacyTURNConfig deletes the retired per-namespace TURN config.
