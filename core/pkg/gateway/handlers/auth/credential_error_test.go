@@ -264,3 +264,33 @@ func TestOwnershipIsCheckedBeforeAnythingIsIssued(t *testing.T) {
 		}
 	}
 }
+
+// Every refusal carries a code and a hint (docs/AUTH.md, the error envelope):
+// a client is told what to do, not only what went wrong. The credential
+// refusals had codes and no hints, which stagenet e2e caught on open sign-in.
+func TestWriteCredentialError_everyRefusalCarriesAHint(t *testing.T) {
+	for name, tc := range map[string]struct {
+		namespace string
+		err       error
+	}{
+		"not owned":    {"anchat", &authsvc.ErrNamespaceOwnedByAnother{Namespace: "anchat"}},
+		"unowned":      {"anchat", fmt.Errorf("%w: %q", authsvc.ErrNamespaceUnowned, "anchat")},
+		"no key":       {"anchat", authsvc.ErrNoKeyForRole},
+		"lobby no key": {authsvc.LobbyNamespace, fmt.Errorf("no keys in the lobby")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeCredentialError(rec, tc.namespace, tc.err)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if rec.Code != http.StatusForbidden || body["code"] == nil {
+				t.Fatalf("status %d body %v; want a 403 with a code", rec.Code, body)
+			}
+			if hint, _ := body["hint"].(string); strings.TrimSpace(hint) == "" {
+				t.Errorf("the %v refusal carries no hint: %v", body["code"], body)
+			}
+		})
+	}
+}

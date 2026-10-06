@@ -29,14 +29,18 @@ const ErrCodeNoKeyForRole = "ROLE_HAS_NO_KEY"
 // writeCredentialError turns a credential-issuing failure into a response.
 //
 // A namespace owned by another wallet is the caller's answer, not a server
-// fault: 403 with a code, and no credential of any kind in the body.
+// fault: 403 with a code and a hint, as every refusal carries (docs/AUTH.md),
+// and no credential of any kind in the body.
 func writeCredentialError(w http.ResponseWriter, namespace string, err error) {
 	var owned *authsvc.ErrNamespaceOwnedByAnother
 	if errors.As(err, &owned) {
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error": "namespace " + owned.Namespace + " belongs to another wallet: " +
 				"sign in with the wallet that owns it, or choose a namespace name nobody has taken",
-			"code":      ErrCodeNamespaceNotOwned,
+			"code": ErrCodeNamespaceNotOwned,
+			"hint": "ask the namespace's owner to add this wallet as a member, or to open sign-in " +
+				"(orama namespace session-policy --sign-in open); to make a namespace of your own, " +
+				"sign in to the lobby and create one (POST /v1/namespaces)",
 			"namespace": owned.Namespace,
 		})
 		return
@@ -46,14 +50,17 @@ func writeCredentialError(w http.ResponseWriter, namespace string, err error) {
 			"error": "namespace " + namespace + " has no owner, so nobody may sign in to it: " +
 				"it was created by a path that no longer exists, and the platform has to adopt or remove it",
 			"code":      ErrCodeNamespaceUnowned,
+			"hint":      "an operator has to adopt or remove this namespace; sign in to another one",
 			"namespace": namespace,
 		})
 		return
 	}
 	if errors.Is(err, authsvc.ErrNoKeyForRole) {
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error":     err.Error(),
-			"code":      ErrCodeNoKeyForRole,
+			"error": err.Error(),
+			"code":  ErrCodeNoKeyForRole,
+			"hint": "use the session this sign-in returned; keys are minted for members by an owner " +
+				"or admin (orama namespace keys create)",
 			"namespace": namespace,
 		})
 		return
@@ -62,6 +69,7 @@ func writeCredentialError(w http.ResponseWriter, namespace string, err error) {
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"error":     err.Error(),
 			"code":      ErrCodeNoKeysHere,
+			"hint":      "the lobby holds no keys: create a namespace (POST /v1/namespaces) and sign in to it",
 			"namespace": namespace,
 		})
 		return
