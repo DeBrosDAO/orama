@@ -3,7 +3,9 @@
 // It links no chain or Cosmos code. Each command names the read path it uses:
 // the gateway's /v1/chain/ proxy, a node's Cosmos REST API (--node), or a
 // node's CometBFT RPC (--rpc). The Orama modules' own state is read through
-// the gateway's /v1/chain/query/ route, or through --rpc's abci_query. It only reads; transactions are the `orama global`,
+// the gateway's /v1/chain/query/ route, or through --rpc's abci_query. It reads,
+// with one exception: `orama chain faucet` funds an account on a test network
+// by signing on a node over SSH. Other transactions are the `orama global`,
 // `orama storage` and `orama cluster` commands.
 package chaincmd
 
@@ -25,8 +27,9 @@ var readFlags struct{ gateway, node, rpc string }
 // Cmd is `orama chain`.
 var Cmd = &cobra.Command{
 	Use:   "chain",
-	Short: "Read the Orama chain: status, balances, earnings, nodes, deals, validators",
-	Long: `Read the Orama chain. Every command here only reads.
+	Short: "Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts",
+	Long: `Read the Orama chain. Every command here only reads, except 'faucet', which
+funds an account on a test network.
 
 Three read paths exist, and each command uses one:
 
@@ -42,7 +45,8 @@ Three read paths exist, and each command uses one:
              it directly instead of through the gateway.
 
 Transactions are built and signed by 'orama global', 'orama storage' and
-'orama cluster'; --onion on those submits through Tor.`,
+'orama cluster'; --onion on those submits through Tor. 'faucet' is the one
+transaction here, and it signs on a node over SSH (see 'orama chain faucet').`,
 }
 
 func init() {

@@ -42,10 +42,11 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama auth switch`](#orama-auth-switch) — Switch between stored credentials
   - [`orama auth whoami`](#orama-auth-whoami) — Ask the gateway who this credential is and what it may do
 - [`orama build`](#orama-build) — Build pre-compiled binary archive for deployment
-- [`orama chain`](#orama-chain) — Read the Orama chain: status, balances, earnings, nodes, deals, validators
+- [`orama chain`](#orama-chain) — Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts
   - [`orama chain balance`](#orama-chain-balance) — Show an account's bank balances
   - [`orama chain deal`](#orama-chain-deal) — Show a storage deal (x/storage)
   - [`orama chain earnings`](#orama-chain-earnings) — Show an account's earnings balance (x/fees)
+  - [`orama chain faucet`](#orama-chain-faucet) — Fund an account on a test network (stagenet, devnet)
   - [`orama chain node`](#orama-chain-node) — Show a registered node (x/nodes)
   - [`orama chain query`](#orama-chain-query) — Run any Orama module query through the gateway or --rpc
   - [`orama chain status`](#orama-chain-status) — Show the chain's height, network and sync state
@@ -614,13 +615,14 @@ Examples:
 
 ### orama chain
 
-Read the Orama chain: status, balances, earnings, nodes, deals, validators
+Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts
 
 ```
 orama chain [flags]
 ```
 
-Read the Orama chain. Every command here only reads.
+Read the Orama chain. Every command here only reads, except 'faucet', which
+funds an account on a test network.
 
 Three read paths exist, and each command uses one:
 
@@ -636,7 +638,8 @@ Three read paths exist, and each command uses one:
              it directly instead of through the gateway.
 
 Transactions are built and signed by 'orama global', 'orama storage' and
-'orama cluster'; --onion on those submits through Tor.
+'orama cluster'; --onion on those submits through Tor. 'faucet' is the one
+transaction here, and it signs on a node over SSH (see 'orama chain faucet').
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -644,7 +647,7 @@ Transactions are built and signed by 'orama global', 'orama storage' and
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003 |
 | `--rpc` | — | CometBFT RPC, for example http://127.0.0.1:31001 |
 
-Subcommands: `balance`, `deal`, `earnings`, `node`, `query`, `status`, `validator`
+Subcommands: `balance`, `deal`, `earnings`, `faucet`, `node`, `query`, `status`, `validator`
 
 ### orama chain balance
 
@@ -679,6 +682,43 @@ orama chain earnings <address>
 Show the earnings balance x/fees holds for an account, through the gateway (or --rpc). Earnings
 are what the account is paid for running nodes and services; they are not in
 the bank balance.
+
+### orama chain faucet
+
+Fund an account on a test network (stagenet, devnet)
+
+```
+orama chain faucet <recipient> [flags]
+```
+
+Send test ORAMA to an account from the chain's faucet (MsgFaucet).
+
+The faucet exists only on a test network: a chain whose id contains -stagenet-,
+-devnet- or -localnet- and whose genesis turned it on (faucet_enabled). This
+command reads the chain id from the node first and refuses any other chain
+before it signs anything. The chain refuses a drip over its maximum and a second
+drip to the same recipient inside its cooldown (24 hours by default).
+
+The transaction is signed ON a node, with the node's operator key (the
+"validator" key of oramad's test keyring), over SSH with the environment's
+wallet-provided key. The key never leaves the node and nothing secret is
+printed. The operator pays the fee from its earnings. The recipient need not
+exist yet. --amount is in norama (1 ORAMA = 1000000000 norama).
+
+Prints the transaction hash, the amount, and the recipient's bank balance once
+the transaction is in a block.
+
+  orama chain faucet orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 --env stagenet
+  orama chain faucet <address> --env stagenet --amount 5000000000 --node 57.129.166.16
+
+--node is the SSH host of the node that signs (here it is not the REST URL the
+other 'orama chain' commands take); without it the environment's first node
+signs.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--amount` | `100000000000` | Amount of norama to send (1 ORAMA = 1000000000 norama) |
+| `--env` | — | Environment whose node signs (default: the active environment) |
 
 ### orama chain node
 

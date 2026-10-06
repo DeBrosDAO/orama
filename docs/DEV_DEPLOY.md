@@ -656,6 +656,7 @@ cause the script detected in the chain's state and is never used to hide a failu
 | `HOT_KEY_FUND_NORAMA` | `2000000000` | fee-only balance of each hot key |
 | `TX_GAS` | `600000` | gas limit of each `orama global` transaction. Its fee is read from the chain right before it is sent: gas × the current base fee, with no tip, because the operator pays from earnings and x/fees pays a tip only from a bank balance |
 | `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
+| `FAUCET_ENABLED` | `1` | `1` sets `app_state.emission.params.faucet_enabled` in genesis, which switches on the test-network faucet (`MsgFaucet`; fund an account with `orama chain faucet <addr> --env stagenet`). `0` leaves it off. A genesis-only switch: it cannot be changed on a running chain |
 | `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-staging-roots.pem` | CA bundle that signs the gateway's certificate |
 | `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
 | `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |

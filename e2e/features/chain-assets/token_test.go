@@ -62,6 +62,30 @@ func TestToken_createNeedsBankBalance(t *testing.T) {
 	c.RequireInvariants(t, "a refused token create")
 }
 
+// TestToken_createSucceedsWithFaucetFunds: the success path of MsgCreateToken
+// that TestToken_createNeedsBankBalance could not reach before the faucet. A
+// fresh key funded with 30 ORAMA through `orama chain faucet` pays the
+// creation fee (10 ORAMA, burned) and the metadata deposit as BANK balance,
+// the token exists afterwards, and the key's balance fell by at least the
+// creation fee.
+func TestToken_createSucceedsWithFaucetFunds(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	funded := chain.Orama(30)
+	k := c.NewFundedKey(t, c.Node(t, 1), "e2e-token-funded", funded)
+	sub, name, symbol, desc := chain.UniqueID(t, "e2e"), "E2E Funded Token", "EFT", "fleet e2e, faucet funded"
+	chain.RequireOK(t, "create with a funded key", c.Submit(t, k, chain.TxOptions{}, createTokenMsg(k.Address, sub, name, symbol, desc, 0)))
+	denom := "factory/" + k.Address + "/" + sub
+	if out := c.QueryOut(t, k.Node, "token", "token", denom); out.Exit != 0 {
+		t.Errorf("token %s is not readable after a successful create: %s", denom, out.Stderr)
+	}
+	left := c.Bank(t, k.Node, k.Address)
+	if max := funded.Sub(chain.Orama(creationFeeOrama)); left.Cmp(max) > 0 {
+		t.Errorf("balance %s norama after the create, want at most %s (the creation fee is burned)", left.String(), max.String())
+	}
+	c.RequireInvariants(t, "a funded token create")
+}
+
 // TestToken_createShapeRefusals: subdenom, name, symbol, description and
 // transfer fee bounds are checked before any fee (boundary values).
 func TestToken_createShapeRefusals(t *testing.T) {

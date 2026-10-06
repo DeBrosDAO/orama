@@ -447,7 +447,7 @@ The structural tier stays closed until its opening rules hold, so a fresh chain 
 take this path. Each `CeilingRecord` also stores `development_minted`. The
 all-time total is `cumulative_development_minted`, which is **not** part of `cumulative_minted`
 (that field stays the validator share, so the schedule equality check is unchanged). Supply is
-`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`.
+`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned`.
 `x/emission` keeps the trailing 30 epochs of ceiling records (`types.CeilingWindow`) and prunes
 older ones. Pruning does not reduce `cumulative_development_minted`. Nothing reads an expired
 ceiling, so a spend against a pruned epoch is refused.
@@ -518,6 +518,66 @@ re-gated, since recomputing it from live bank supply at that point would double-
 already minted. Either way, `InitGenesis` finishes by checking the full supply invariant (below)
 and refuses to start the chain if it doesn't hold.
 
+### Test-network faucet
+
+`x/emission` carries one Msg, `MsgFaucet` (`/orama.emission.v1.MsgFaucet`, `signer`, `recipient`,
+`amount` in norama), so a devnet, stagenet or localnet can fund accounts without a premine. It
+mints nothing on a production chain.
+
+**Gates**, each a typed refusal (`x/emission/types/errors.go`) returned before anything is minted:
+
+- The chain-id must contain `-devnet-`, `-stagenet-` or `-localnet-` (`ErrFaucetProduction`). This
+  is enforced twice: `InitGenesis` rejects `faucet_enabled = true` on any other chain-id, so a
+  production genesis cannot switch the faucet on, and `Msg.Faucet` checks `ctx.ChainID()` again at
+  execution.
+- `faucet_enabled` must be true (`ErrFaucetDisabled`). It defaults to false.
+- `0 < amount <= faucet_max_drip` (`ErrFaucetAmount`).
+- The recipient must be a valid address that is not a module or otherwise blocked account
+  (`ErrFaucetRecipient`). It need not exist: the drip creates the account.
+- The recipient must not have drawn within `faucet_recipient_cooldown_seconds` of BFT time
+  (`ErrFaucetCooldown`). The last drip time per recipient is kept in `x/emission` state and is not
+  carried by a genesis export, so a re-imported chain starts with no cooldowns.
+- The faucet's mint in the current epoch plus the drip must not exceed `faucet_epoch_cap`
+  (`ErrFaucetEpochCap`). The per-epoch counter (`faucet_epoch_minted`) resets when the epoch closes.
+
+Any existing account may sign. The signer pays its own transaction fee through `x/fees`, for example
+a validator operator spending earnings, so the faucet needs no funded account of its own.
+
+**Parameters** (genesis only, in `x/emission` params; `genesis set-emission-params` takes
+`--faucet-enabled`, `--faucet-max-drip`, `--faucet-epoch-cap` and `--faucet-cooldown`, and keeps the
+values already in genesis for any flag it is not given):
+
+| Parameter | Default |
+|---|---|
+| `faucet_enabled` | `false` |
+| `faucet_max_drip` | 1,000 ORAMA (`1000000000000` norama; the denom has 9 decimals) |
+| `faucet_epoch_cap` | 100 max drips, 100,000 ORAMA per epoch |
+| `faucet_recipient_cooldown_seconds` | 86,400 (24 hours; 0 disables the cooldown) |
+
+When enabled, `faucet_max_drip` must be positive and `faucet_epoch_cap` at least `faucet_max_drip`.
+G1's locked-genesis check lets a devnet or stagenet chain-id change these four (`testnetRelaxedParams`
+in `app/locked_genesis.go`); a production chain-id must keep the defaults, so `faucet_enabled`
+stays false there.
+
+**Supply accounting.** A drip mints into the `x/emission` module account and sends the coins to the
+recipient. `x/emission` adds the amount to `cumulative_faucet_minted` (and `faucet_epoch_minted`) in
+the same transaction, and the supply identity includes it:
+`bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned`.
+`ReconcileBurns` only reconciles shortfalls, and a faucet mint is never one. A genesis export carries
+both counters; a nonzero `cumulative_faucet_minted` also stops `InitGenesis` from treating an epoch-1
+export as a fresh genesis, so the genesis supply is not recomputed and double counted. The module
+emits a `faucet` event with `recipient`, `amount` (for example `1000000000000norama`) and `signer`.
+
+**Limits of the bounds.** The cooldown is per recipient, so a signer sending to fresh addresses is
+bounded only by `faucet_epoch_cap` per epoch. The per-recipient cooldown records are kept in state,
+never pruned, and not exported: a re-imported genesis starts with no cooldowns (the cap counters are
+exported). Both are acceptable for a test network and the reason the faucet exists only there.
+
+**A running chain does not gain it.** The message service and the faucet parameters are new state
+and a new message type; a chain started from an earlier binary has neither, and there is no upgrade
+handler for them. A stagenet or devnet gets the faucet from a new genesis (`deploy.sh reset` then
+`deploy.sh up`, which enables it by default; see [DEV_DEPLOY.md](DEV_DEPLOY.md)).
+
 ### Tracking burns from elsewhere in the chain
 
 `x/emission` has no burn path of its own, but other modules do - `x/slashing` burns a validator's
@@ -526,7 +586,7 @@ bonded or not-bonded stake on a double-sign or downtime slash, and `x/fees`' ant
 has already minted the block's validator share (and updated `cumulative_minted` to match) by the
 time `EndBlock` runs, `x/emission`'s `EndBlock` (`Keeper.ReconcileBurns`, run last in `app.go`'s
 end-blocker order) compares live bank supply against
-`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`: any shortfall it finds must be a burn
+`genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned`: any shortfall it finds must be a burn
 that happened elsewhere this block, and gets added to `cumulative_burned`. This keeps the supply
 invariant holding without `x/emission` needing a direct dependency on `x/slashing` or `x/fees`.
 
@@ -536,7 +596,7 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
 
 | Command | Returns |
 |---|---|
-| `params` | the genesis-only `epoch_duration`/`min_blocks_per_epoch` |
+| `params` | the genesis-only `epoch_duration`/`min_blocks_per_epoch`, `allow_bootstrap_stake` and the `faucet_*` parameters |
 | `current-epoch` | the live `EpochState`: current epoch, when it started, cumulative minted/burned/genesis supply |
 | `schedule-at [epoch]` | that epoch's maximum mint and its four-way split |
 | `cumulative-minted` | all-time cumulative minted and burned |
@@ -551,11 +611,12 @@ invariant holding without `x/emission` needing a direct dependency on `x/slashin
    `x/houses` has enacted a split, the target is the canonical cumulative plus
    `validator_split_delta`. Every `CeilingRecord` is checked the same way: its four amounts must
    match `SplitEpochMintAt` for its epoch and the split recorded on it exactly.
-2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted - cumulative_burned`,
+2. **Supply matches minted:** `bank_supply == genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned`,
    with `cumulative_burned` kept current by `ReconcileBurns` (above). `cumulative_development_minted`
    is zero until `MintDevelopmentSpend` runs; `cumulative_service_minted` is zero until a storage
-   or relay payment is minted. In one line: `supply == emitted - burned`, where emitted is the genesis
-   supply plus every epoch, development and service mint.
+   or relay payment is minted; `cumulative_faucet_minted` is zero unless the test-network faucet
+   (below) has run. In one line: `supply == emitted - burned`, where emitted is the genesis
+   supply plus every epoch, development, service and faucet mint.
 
 Both are exposed as `oramad query emission invariants` and as a keeper-level Go function
 (`Keeper.CheckSupplyInvariant`) any test can call directly. They are checked on every `InitGenesis`

@@ -15,6 +15,7 @@
 #   E2E_KNOWN_HOSTS   the run's pinned known_hosts file
 #   E2E_SSH_USER      default root
 #   EPOCH_DURATION    default 60s; EPOCH_MIN_BLOCKS default 5
+#   (the genesis always sets emission.params.faucet_enabled: this chain id is a devnet, and the e2e suite funds test accounts through `orama chain faucet`)
 #   CHAIN_ROOT        the chain module; default ../../chain from this script
 #   CHAIN_READY_TIMEOUT  seconds `up` waits for every node to produce blocks; default 300
 #
@@ -190,7 +191,8 @@ build_genesis() {
 	first_ip="$(field "${NODES[0]}" 2)"
 	log "building genesis on $(field "${NODES[0]}" 1)"
 	as_chain "$first_ip" genesis set-emission-params \
-		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake
+		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake \
+		--faucet-enabled
 	local first=true n ip name addr pubkey
 	for n in "${NODES[@]}"; do
 		ip="$(field "$n" 2)"

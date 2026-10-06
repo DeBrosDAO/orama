@@ -9,7 +9,9 @@
 # a factory denom not caught by the norama restriction); x/wasmpolicy against
 # the build (no-VM: no wasm types; VM: upload closed before the sunset).
 # Bank-paid paths (token create and everything after it, bids, direct buys,
-# royalty payout on a sale) are reported blocked (features/internal/chain funds.go).
+# royalty payout on a sale) are reported blocked (features/internal/chain funds.go),
+# except token create, which a key funded through the faucet reaches
+# (TestToken_createSucceedsWithFaucetFunds).
 id: chain-assets
 title: Compressed NFTs, market, factory tokens, wasm policy
 area: chain
