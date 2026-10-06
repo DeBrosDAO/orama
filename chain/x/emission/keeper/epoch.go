@@ -109,6 +109,7 @@ func (k Keeper) closeEpoch(ctx sdk.Context, state types.EpochState) error {
 	state.CurrentEpoch = closingEpoch + 1
 	state.EpochStartUnixNano = ctx.BlockTime().UnixNano()
 	state.BlocksInEpoch = 0
+	state.FaucetEpochMinted = math.ZeroInt()
 	if err := k.EpochState.Set(ctx, state); err != nil {
 		return fmt.Errorf("failed to advance emission epoch state past epoch %d: %w", closingEpoch, err)
 	}

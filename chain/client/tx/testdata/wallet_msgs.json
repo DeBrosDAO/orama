@@ -13,6 +13,7 @@
     "/orama.cnft.v1.MsgRecordSnapshot",
     "/orama.cnft.v1.MsgTransfer",
     "/orama.cnft.v1.MsgUpdateMetadata",
+    "/orama.emission.v1.MsgFaucet",
     "/orama.houses.v1.MsgExecuteProposal",
     "/orama.houses.v1.MsgLockHouseBond",
     "/orama.houses.v1.MsgSubmitProposal",

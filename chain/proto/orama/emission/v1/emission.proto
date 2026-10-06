@@ -6,8 +6,8 @@ option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
 import "gogoproto/gogo.proto";
 
 // Params are the genesis-only parameters of x/emission. They are set once at
-// genesis and are immutable afterward: there is no Msg service on this
-// module, so no transaction can ever change them (see D18 in
+// genesis and are immutable afterward: the module's only Msg (the test-network
+// faucet) never writes them, so no transaction can ever change them (see D18 in
 // plans/open-network.md: the emission schedule is ossified and can change
 // only by hard fork).
 message Params {
@@ -39,6 +39,29 @@ message Params {
   // epoch requires either genuinely fast, honest block production or a
   // supermajority equivocation - see docs/CHAIN.md.
   bool allow_bootstrap_stake = 3;
+
+  // faucet_enabled turns on the test-network faucet (Msg.Faucet). It defaults to
+  // false and is rejected at genesis unless the chain-id is a non-production
+  // one (devnet, stagenet or localnet), so a production chain can never mint
+  // through the faucet.
+  bool faucet_enabled = 4;
+  // faucet_max_drip is the most norama one MsgFaucet may mint. Must be positive
+  // when faucet_enabled is set.
+  string faucet_max_drip = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // faucet_epoch_cap is the most norama the faucet may mint in one emission
+  // epoch, across all recipients. Must be at least faucet_max_drip when
+  // faucet_enabled is set.
+  string faucet_epoch_cap = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // faucet_recipient_cooldown_seconds is the BFT time, in seconds, that must
+  // pass between two faucet drips to the same recipient. Zero disables the
+  // cooldown.
+  uint64 faucet_recipient_cooldown_seconds = 7;
 }
 
 // EpochState is the mutable bookkeeping state x/emission updates every block.
@@ -83,7 +106,7 @@ message EpochState {
   // point 4 of this module's task spec), where genesis accounts self-delegate stake before the
   // C4 bootstrap-committee module exists. The supply invariant is
   // supply == genesis_supply + cumulative_minted + cumulative_development_minted
-  // + cumulative_service_minted - cumulative_burned.
+  // + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned.
   string genesis_supply = 6 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
@@ -108,6 +131,19 @@ message EpochState {
   // and may be negative. cumulative_minted must equal the canonical schedule's
   // cumulative validator mint plus this delta.
   string validator_split_delta = 9 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+
+  // cumulative_faucet_minted is the all-time total of norama minted by the
+  // test-network faucet (Msg.Faucet). Always zero on a production chain.
+  string cumulative_faucet_minted = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // faucet_epoch_minted is how much of faucet_epoch_cap the faucet has minted
+  // in the current epoch. It resets to zero when the epoch closes.
+  string faucet_epoch_minted = 11 [
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];

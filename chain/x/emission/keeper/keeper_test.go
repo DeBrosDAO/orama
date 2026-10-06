@@ -39,12 +39,14 @@ const testFeeCollectorName = "fee_collector"
 // on.
 type fakeBankKeeper struct {
 	balances map[string]math.Int
+	blocked  map[string]bool
 	supply   math.Int
 }
 
 func newFakeBankKeeper() *fakeBankKeeper {
 	return &fakeBankKeeper{
 		balances: make(map[string]math.Int),
+		blocked:  make(map[string]bool),
 		supply:   math.ZeroInt(),
 	}
 }
@@ -61,6 +63,24 @@ func (b *fakeBankKeeper) SendCoinsFromModuleToModule(_ context.Context, senderMo
 	b.balances[senderModule] = b.balanceOf(senderModule).Sub(amount)
 	b.balances[recipientModule] = b.balanceOf(recipientModule).Add(amount)
 	return nil
+}
+
+func (b *fakeBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error {
+	amount := amt.AmountOf(params.BaseDenom)
+	b.balances[senderModule] = b.balanceOf(senderModule).Sub(amount)
+	b.balances[recipientAddr.String()] = b.balanceOf(recipientAddr.String()).Add(amount)
+	return nil
+}
+
+// BlockedAddr reports whether addr was registered with BlockAddr, standing in for x/bank's
+// blocked module-account set.
+func (b *fakeBankKeeper) BlockedAddr(addr sdk.AccAddress) bool {
+	return b.blocked[addr.String()]
+}
+
+// BlockAddr marks addr as a blocked (module) account.
+func (b *fakeBankKeeper) BlockAddr(addr sdk.AccAddress) {
+	b.blocked[addr.String()] = true
 }
 
 func (b *fakeBankKeeper) GetSupply(_ context.Context, denom string) sdk.Coin {

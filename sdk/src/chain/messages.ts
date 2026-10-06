@@ -1,5 +1,6 @@
 import * as archive from "./gen/orama/archive/v1/tx";
 import * as cnft from "./gen/orama/cnft/v1/tx";
+import * as emission from "./gen/orama/emission/v1/tx";
 import * as houses from "./gen/orama/houses/v1/tx";
 import * as market from "./gen/orama/market/v1/tx";
 import * as nodes from "./gen/orama/nodes/v1/tx";
@@ -317,6 +318,13 @@ export const MSG = {
   ),
   cnftRecordSnapshot: defineMsg("/orama.cnft.v1.MsgRecordSnapshot", cnft.MsgRecordSnapshot, (m) =>
     desc("Record tree snapshot", `Record snapshot ${m.cid} of tree ${m.treeId}`),
+  ),
+
+  // ---- x/emission ----
+  emissionFaucet: defineMsg("/orama.emission.v1.MsgFaucet", emission.MsgFaucet, (m) =>
+    desc("Test-network faucet", `Mint ${norama(m.amount)} to ${m.recipient}`, [
+      "Only a devnet, stagenet or localnet chain accepts this.",
+    ]),
   ),
 
   // ---- x/market ----

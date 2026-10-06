@@ -1,6 +1,6 @@
 // Package cli implements x/emission's read-only CLI query commands
-// (`oramad query emission ...`). x/emission ships no Msg service, so there is no tx.go in this
-// package.
+// (`oramad query emission ...`). x/emission's only Msg is the test-network faucet, sent as a generic tx, so there is no tx.go in
+// this package.
 package cli
 
 import (

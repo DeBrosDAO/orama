@@ -58,7 +58,13 @@ var testnetRelaxedParams = map[string]bool{
 	"emission.epoch_duration_seconds": true,
 	"emission.min_blocks_per_epoch":   true,
 	"emission.allow_bootstrap_stake":  true,
-	"power.min_committee_size":        true,
+	// The faucet params: x/emission's InitGenesis rejects faucet_enabled on a production
+	// chain-id, and the faucet's own Msg checks the chain-id again at execution.
+	"emission.faucet_enabled":                    true,
+	"emission.faucet_max_drip":                   true,
+	"emission.faucet_epoch_cap":                  true,
+	"emission.faucet_recipient_cooldown_seconds": true,
+	"power.min_committee_size":                   true,
 }
 
 // IsLocalnetChainID reports whether chainID names a localnet, the chain class where nothing is locked

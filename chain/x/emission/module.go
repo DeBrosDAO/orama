@@ -34,19 +34,22 @@ var (
 	_ appmodule.HasEndBlocker   = AppModule{}
 )
 
-// AppModuleBasic defines the basic application module used by x/emission. There is no Msg
-// service and nothing to register on the legacy Amino codec or the interface registry: x/emission
-// carries no messages and no Any-packed types.
+// AppModuleBasic defines the basic application module used by x/emission. Its only message is the
+// test-network faucet's MsgFaucet.
 type AppModuleBasic struct{}
 
 // Name returns the module's name.
 func (AppModuleBasic) Name() string { return types.ModuleName }
 
-// RegisterLegacyAminoCodec is a no-op: x/emission has no Msg types.
-func (AppModuleBasic) RegisterLegacyAminoCodec(*codec.LegacyAmino) {}
+// RegisterLegacyAminoCodec registers x/emission's messages on the legacy Amino codec.
+func (AppModuleBasic) RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
+	types.RegisterLegacyAminoCodec(cdc)
+}
 
-// RegisterInterfaces is a no-op: x/emission has no Any-packed types.
-func (AppModuleBasic) RegisterInterfaces(cdctypes.InterfaceRegistry) {}
+// RegisterInterfaces registers x/emission's sdk.Msg implementations.
+func (AppModuleBasic) RegisterInterfaces(r cdctypes.InterfaceRegistry) {
+	types.RegisterInterfaces(r)
+}
 
 // RegisterGRPCGatewayRoutes is a no-op: x/emission does not generate a gRPC-gateway (REST)
 // handler. Queries are available over gRPC and the `oramad query emission` CLI.
@@ -87,8 +90,9 @@ func (AppModule) IsOnePerModuleType() {}
 // IsAppModule implements the appmodule.AppModule interface.
 func (AppModule) IsAppModule() {}
 
-// RegisterServices registers x/emission's gRPC query service. There is no Msg service.
+// RegisterServices registers x/emission's Msg (faucet) and gRPC query services.
 func (am AppModule) RegisterServices(cfg module.Configurator) {
+	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServer(am.keeper))
 	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
 }
 

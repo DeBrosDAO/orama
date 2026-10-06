@@ -20,7 +20,8 @@ var nonProductionChainIDMarkers = []string{"-stagenet-", "-devnet-", "-localnet-
 // so that, on a true fresh genesis, it can observe whatever norama supply genesis accounts
 // created.
 //
-// A "true fresh genesis" is detected as CurrentEpoch <= 1 and CumulativeMinted == 0: on that path
+// A "true fresh genesis" is detected as CurrentEpoch <= 1, CumulativeMinted == 0 and
+// CumulativeFaucetMinted == 0 (a faucet drip can precede the first epoch close): on that path
 // GenesisSupply is (re)computed from the live bank supply and checked against the bootstrap-stake
 // premine gate (checkPremineGate). On any other path (a genesis file produced by ExportGenesis,
 // used to continue a chain after an upgrade or a coordinated hard fork) the given GenesisSupply is
@@ -44,10 +45,15 @@ func (k Keeper) InitGenesis(ctx sdk.Context, genState types.GenesisState) error 
 	if err := checkBootstrapChainID(ctx, genState.Params); err != nil {
 		return err
 	}
+	if err := checkFaucetChainID(ctx, genState.Params); err != nil {
+		return err
+	}
 	if state.CumulativeDevelopmentMinted.IsNil() {
 		state.CumulativeDevelopmentMinted = math.ZeroInt()
 	}
-	isFreshGenesis := state.CurrentEpoch <= 1 && state.CumulativeMinted.IsZero()
+	state.CumulativeFaucetMinted = nonNilInt(state.CumulativeFaucetMinted)
+	state.FaucetEpochMinted = nonNilInt(state.FaucetEpochMinted)
+	isFreshGenesis := state.CurrentEpoch <= 1 && state.CumulativeMinted.IsZero() && state.CumulativeFaucetMinted.IsZero()
 	if isFreshGenesis {
 		state.CurrentEpoch = 1
 		state.GenesisSupply = k.bankKeeper.GetSupply(ctx, params.BaseDenom).Amount
@@ -113,6 +119,19 @@ func checkBootstrapChainID(ctx sdk.Context, p types.Params) error {
 	if p.AllowBootstrapStake && !isNonProductionChainID(ctx.ChainID()) {
 		return fmt.Errorf(
 			"allow_bootstrap_stake requires a chain-id containing one of %v, got %q",
+			nonProductionChainIDMarkers, ctx.ChainID(),
+		)
+	}
+	return nil
+}
+
+// checkFaucetChainID rejects faucet_enabled on a production chain-id, on both fresh and
+// re-imported genesis: the faucet mints norama for anyone who asks, so a production chain must
+// never be able to switch it on.
+func checkFaucetChainID(ctx sdk.Context, p types.Params) error {
+	if p.FaucetEnabled && !isNonProductionChainID(ctx.ChainID()) {
+		return fmt.Errorf(
+			"faucet_enabled requires a chain-id containing one of %v, got %q",
 			nonProductionChainIDMarkers, ctx.ChainID(),
 		)
 	}

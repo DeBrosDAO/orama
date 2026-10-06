@@ -12,13 +12,18 @@ import (
 
 // BankKeeper is the subset of x/bank's keeper that x/emission needs: minting the validator share
 // (which x/power's DistributeEpochRewards then pulls out of x/emission's own module account - see
-// PowerKeeper) and reading total supply for the invariant check. x/emission never sends coins to
-// any user account directly.
+// PowerKeeper) and reading total supply for the invariant check. x/emission sends coins to a user account only for
+// a test-network faucet drip.
 type BankKeeper interface {
 	MintCoins(ctx context.Context, moduleName string, amt sdk.Coins) error
 	// SendCoinsFromModuleToModule moves a storage or relay service mint from
 	// x/emission, the only norama minter, to the module that pays it out.
 	SendCoinsFromModuleToModule(ctx context.Context, senderModule, recipientModule string, amt sdk.Coins) error
+	// SendCoinsFromModuleToAccount pays a faucet drip from x/emission's module account to the
+	// recipient, creating the account if it does not exist.
+	SendCoinsFromModuleToAccount(ctx context.Context, senderModule string, recipientAddr sdk.AccAddress, amt sdk.Coins) error
+	// BlockedAddr reports whether addr (a module account) may not receive a direct send.
+	BlockedAddr(addr sdk.AccAddress) bool
 	GetSupply(ctx context.Context, denom string) sdk.Coin
 	// GetBalance is used only by the devnet-only bootstrap-stake premine gate (Keeper.InitGenesis):
 	// it checks that genesis supply sits entirely in the staking bonded pool, never idle elsewhere.

@@ -17,9 +17,9 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/emission/types"
 )
 
-// Keeper is x/emission's keeper. It has no authority address and no Msg service: nothing can ever
-// change the emission schedule or its genesis parameters after genesis (plans/open-network.md
-// D18).
+// Keeper is x/emission's keeper. It has no authority address, and its only Msg is the
+// test-network faucet: nothing can ever change the emission schedule or its genesis parameters
+// after genesis (plans/open-network.md D18).
 type Keeper struct {
 	storeService storetypes.KVStoreService
 	bankKeeper   types.BankKeeper
@@ -37,6 +37,9 @@ type Keeper struct {
 	// Ceilings is the bounded trailing window (types.CeilingWindow epochs) of non-minted per-epoch
 	// storage/relay/development ceiling records, keyed by epoch number.
 	Ceilings collections.Map[uint64, types.CeilingRecord]
+	// FaucetDrips is each faucet recipient's last drip time in Unix seconds of BFT time. It backs
+	// the per-recipient cooldown and is not exported with genesis.
+	FaucetDrips collections.Map[sdk.AccAddress, int64]
 }
 
 // NewKeeper builds a new x/emission Keeper.
@@ -56,6 +59,7 @@ func NewKeeper(
 		Params:         collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		EpochState:     collections.NewItem(sb, types.EpochStateKey, "epoch_state", codec.CollValue[types.EpochState](cdc)),
 		Ceilings:       collections.NewMap(sb, types.CeilingsPrefix, "ceilings", collections.Uint64Key, codec.CollValue[types.CeilingRecord](cdc)),
+		FaucetDrips:    collections.NewMap(sb, types.FaucetDripsPrefix, "faucet_drips", sdk.AccAddressKey, collections.Int64Value),
 	}
 
 	schema, err := sb.Build()

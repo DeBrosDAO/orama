@@ -1,0 +1,42 @@
+syntax = "proto3";
+package orama.emission.v1;
+
+option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+// Msg is x/emission's transaction service. It carries only the test-network
+// faucet: the emission schedule and its parameters stay genesis-only.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // Faucet mints norama to a recipient. It is refused on every production
+  // chain-id and unless the genesis enabled it (Params.faucet_enabled).
+  rpc Faucet(MsgFaucet) returns (MsgFaucetResponse);
+}
+
+// MsgFaucet asks the faucet to mint amount norama to recipient. Any existing
+// account may sign; the signer pays its own transaction fee.
+message MsgFaucet {
+  option (cosmos.msg.v1.signer) = "signer";
+  option (amino.name) = "orama/emission/Faucet";
+
+  string signer = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string recipient = 2 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // amount is in norama, the base denom.
+  string amount = 3 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// MsgFaucetResponse reports the norama minted.
+message MsgFaucetResponse {
+  string amount = 1 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

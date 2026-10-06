@@ -15,7 +15,7 @@ import (
 // modules do (x/slashing burns a validator's bonded/not-bonded stake on a double-sign or downtime
 // slash). Since x/emission's own BeginBlocker has already minted this block's validator share (and
 // updated CumulativeMinted to match) by the time EndBlock runs, any further drop in bank supply
-// below genesis_supply + cumulative_minted + cumulative_development_minted - cumulative_burned
+// below genesis_supply + cumulative_minted + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned
 // during the block must be a burn
 // that happened elsewhere, and is attributed to CumulativeBurned here so the supply invariant
 // keeps holding without x/emission needing a direct dependency on x/slashing.
@@ -47,11 +47,12 @@ func (k Keeper) ReconcileBurns(ctx sdk.Context) error {
 //     epochs already completed, plus the running delta of any enacted split (validator_split_delta) - not merely "no more than", since x/emission's CloseEpoch mints
 //     that exact amount unconditionally every time an epoch closes;
 //  2. the base-denom bank supply must equal genesis_supply + cumulative_minted
-//     + cumulative_development_minted + cumulative_service_minted - cumulative_burned, where genesis_supply is the
+//     + cumulative_development_minted + cumulative_service_minted + cumulative_faucet_minted - cumulative_burned, where genesis_supply is the
 //     (normally zero) norama supply observed at this chain incarnation's genesis - see the
 //     devnet-only bootstrap-stake exception documented on Keeper.InitGenesis, and
 //     cumulative_burned is kept current by ReconcileBurns. cumulative_development_minted is
-//     only what MintDevelopmentSpend has minted.
+//     only what MintDevelopmentSpend has minted, and cumulative_faucet_minted is only what the
+//     test-network faucet (Msg.Faucet) has minted.
 //
 // It returns a human-readable detail message and whether either invariant is broken.
 func (k Keeper) CheckSupplyInvariant(ctx sdk.Context) (string, bool) {
@@ -81,18 +82,18 @@ func (k Keeper) checkSupplyInvariantDetailed(ctx sdk.Context) (detail string, mi
 
 	detail = fmt.Sprintf(
 		"minted exactly matches schedule: %t (cumulative_minted=%s, want=%s for %d completed epochs)\n"+
-			"supply matches minted: %t (bank_supply=%s, expected=%s = genesis_supply(%s)+validator_minted(%s)+development_minted(%s)+service_minted(%s)-burned(%s))\n",
+			"supply matches minted: %t (bank_supply=%s, expected=%s = genesis_supply(%s)+validator_minted(%s)+development_minted(%s)+service_minted(%s)+faucet_minted(%s)-burned(%s))\n",
 		mintedExact, state.CumulativeMinted, wantMinted, completedEpochs,
 		supplyMatches, actualSupply, expected,
 		state.GenesisSupply, state.CumulativeMinted, nonNilInt(state.CumulativeDevelopmentMinted),
-		nonNilInt(state.CumulativeServiceMinted), state.CumulativeBurned,
+		nonNilInt(state.CumulativeServiceMinted), nonNilInt(state.CumulativeFaucetMinted), state.CumulativeBurned,
 	)
 
 	return detail, mintedExact, supplyMatches
 }
 
 // expectedSupply is genesis_supply + validator mints + development mints +
-// storage and relay service mints - burns.
+// storage and relay service mints + faucet mints - burns.
 // cumulative_minted stays the validator share only, so a development mint does
 // not disturb the schedule equality check.
 func expectedSupply(state types.EpochState) math.Int {
@@ -100,6 +101,7 @@ func expectedSupply(state types.EpochState) math.Int {
 		Add(nonNilInt(state.CumulativeMinted)).
 		Add(nonNilInt(state.CumulativeDevelopmentMinted)).
 		Add(nonNilInt(state.CumulativeServiceMinted)).
+		Add(nonNilInt(state.CumulativeFaucetMinted)).
 		Sub(nonNilInt(state.CumulativeBurned))
 }
 

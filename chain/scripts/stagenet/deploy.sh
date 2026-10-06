@@ -44,6 +44,7 @@
 #   HOT_KEY_FUND_NORAMA      the fee-only balance given to each hot key (2 ORAMA).
 #   TX_GAS                   gas limit of each `orama global` transaction; its fee is gas x the base fee.
 #   EPOCH_DURATION EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT   as before (genesis).
+#   FAUCET_ENABLED           1 (default) sets emission.params.faucet_enabled in genesis, so `orama chain faucet` works; 0 leaves it off.
 #   CA_FILE                  PEM bundle that signs the gateway certificate (smoke).
 #   GATEWAY_URL              the gateway smoke reads through (https://stagenet.dbrsteting.bid).
 #   SHIELDED_SCENARIO        scenario JSON from `gen-shielded` (smoke).
@@ -98,6 +99,8 @@ EPOCH_DURATION="${EPOCH_DURATION:-300s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-10}"
 # C13 inclusion lists: the height vote extensions turn on at, patched into genesis (see build_genesis).
 VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-2}"
+# The test-network faucet (x/emission MsgFaucet): on by default on stagenet, patched into genesis (see build_genesis).
+FAUCET_ENABLED="${FAUCET_ENABLED:-1}"
 
 PUBLIC_STORAGE_GB="${PUBLIC_STORAGE_GB:-10}"
 ARCHIVER_BOND_NORAMA="${ARCHIVER_BOND_NORAMA:-1000000000}"
@@ -137,6 +140,11 @@ for v in EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT PUBLIC_STORAGE_GB ARCHIV
 		exit 1
 	fi
 done
+
+if ! [[ "$FAUCET_ENABLED" =~ ^[01]$ ]]; then
+	echo "invalid FAUCET_ENABLED (expected 0 or 1): $FAUCET_ENABLED" >&2
+	exit 1
+fi
 
 # The bond that backs the declared capacity: 1 ORAMA of STORAGE bond backs 1 GiB (bond_per_gib), so
 # it is the capacity in GiB rounded up, in whole ORAMA.
@@ -472,8 +480,12 @@ build_genesis() {
 	# Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
 	# committee (plans/open-network.md D16), which needs no self-bond and no gentx - replacing the
 	# old devnet-only self-bonded-validator exception (see docs/CHAIN.md).
+	# The test-network faucet is a genesis-only switch (x/emission has no Msg that changes params).
+	local faucet_flag=()
+	if [ "$FAUCET_ENABLED" = 1 ]; then faucet_flag=(--faucet-enabled); fi
 	as_chain_at "$first_alias" "$GENESIS_WORK" genesis set-emission-params \
-		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake
+		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake \
+		${faucet_flag[@]+"${faucet_flag[@]}"}
 
 	local first=true
 	for n in "${NODES[@]}"; do

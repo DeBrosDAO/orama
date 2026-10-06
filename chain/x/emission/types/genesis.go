@@ -21,6 +21,8 @@ func DefaultGenesisState() *GenesisState {
 			GenesisSupply:               math.ZeroInt(),
 			CumulativeDevelopmentMinted: math.ZeroInt(),
 			CumulativeServiceMinted:     math.ZeroInt(),
+			CumulativeFaucetMinted:      math.ZeroInt(),
+			FaucetEpochMinted:           math.ZeroInt(),
 		},
 		Ceilings: []CeilingRecord{},
 	}
@@ -146,5 +148,22 @@ func (gs GenesisState) Validate() error {
 		return fmt.Errorf("cumulative_service_minted %s is less than the %s still recorded on ceiling records", cumulativeService, serviceMintedSum)
 	}
 
+	return gs.validateFaucetState()
+}
+
+// validateFaucetState checks the faucet counters: both are non-negative, and one epoch's mint
+// cannot exceed the all-time total.
+func (gs GenesisState) validateFaucetState() error {
+	cumulative := intOrZero(gs.EpochState.CumulativeFaucetMinted)
+	epochMinted := intOrZero(gs.EpochState.FaucetEpochMinted)
+	if cumulative.IsNegative() {
+		return fmt.Errorf("cumulative_faucet_minted must be a non-negative integer")
+	}
+	if epochMinted.IsNegative() {
+		return fmt.Errorf("faucet_epoch_minted must be a non-negative integer")
+	}
+	if epochMinted.GT(cumulative) {
+		return fmt.Errorf("faucet_epoch_minted %s exceeds cumulative_faucet_minted %s", epochMinted, cumulative)
+	}
 	return nil
 }

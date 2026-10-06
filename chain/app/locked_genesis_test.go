@@ -46,6 +46,10 @@ var lockedRows = []lockedRow{
 	{"emission", "epoch_duration_seconds", "86400", "track-c C3: an epoch is 24 hours of BFT time"},
 	{"emission", "min_blocks_per_epoch", "14400", "track-c C3: minimum blocks per epoch (code default, production floor)"},
 	{"emission", "allow_bootstrap_stake", "false", "plans/open-network.md D12: zero premine"},
+	{"emission", "faucet_enabled", "false", "test-network faucet: off on every production chain (docs/CHAIN.md \"Test-network faucet\")"},
+	{"emission", "faucet_max_drip", "1000000000000", "test-network faucet, 1,000 ORAMA (code default)"},
+	{"emission", "faucet_epoch_cap", "100000000000000", "test-network faucet, 100 max drips per epoch (code default)"},
+	{"emission", "faucet_recipient_cooldown_seconds", "86400", "test-network faucet, 24 hours (code default)"},
 
 	// x/fees: D14, C2.
 	{"fees", "target_block_gas_fraction", "0.5", "track-c C2: base fee targets 50% fullness"},
@@ -200,10 +204,14 @@ func lockedRowKey(r lockedRow) string { return r.module + "." + r.key }
 
 func relaxedOnTestnets() map[string]bool {
 	return map[string]bool{
-		"emission.epoch_duration_seconds": true,
-		"emission.min_blocks_per_epoch":   true,
-		"emission.allow_bootstrap_stake":  true,
-		"power.min_committee_size":        true,
+		"emission.epoch_duration_seconds":            true,
+		"emission.min_blocks_per_epoch":              true,
+		"emission.allow_bootstrap_stake":             true,
+		"emission.faucet_enabled":                    true,
+		"emission.faucet_max_drip":                   true,
+		"emission.faucet_epoch_cap":                  true,
+		"emission.faucet_recipient_cooldown_seconds": true,
+		"power.min_committee_size":                   true,
 	}
 }
 
