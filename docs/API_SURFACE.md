@@ -5,7 +5,7 @@ are is [CLIENT_SURFACE.md](CLIENT_SURFACE.md): humans use the CLI, programs use
 the SDK and this HTTP API, and there is no Orama dashboard.
 
 The TypeScript SDK's coverage is a decision rather than an accident: it reaches
-39 of 170 routes, and the other 131 are here with a reason.
+39 of 172 routes, and the other 133 are here with a reason.
 
 `core/pkg/gateway/api_surface_test.go` keeps this document honest in both
 directions. A route registered in the gateway and missing here fails the Go
@@ -16,8 +16,8 @@ route therefore means deciding who calls it.
 |-------|---------|-------|
 | `SDK` | `@debros/orama` calls it | 39 |
 | `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 80 |
-| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 27 |
-| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 24 |
+| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 28 |
+| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 25 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures
 in [`contracts/`](../contracts), which both a Go handler test and a TypeScript
@@ -147,6 +147,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 
 | Route | Owner | Notes |
 |-------|-------|-------|
+| `/v1/webrtc/config` | direct | `GET` and `PUT {"require_admission": bool}`: the namespace's WebRTC policy. With it on, a room admits only users the namespace's functions admitted (`webrtc_admit`). A credential that may change the namespace's settings; docs/WEBRTC.md#admission. |
 | `/v1/webrtc/rooms` | direct | Room listing for the SFU. |
 | `/v1/webrtc/signal` | direct | SFU signalling. |
 | `/v1/webrtc/turn/credentials` | direct | Short-lived TURN credentials. Consumed by a WebRTC stack, not by this SDK; the SDK would only pass them through. |
@@ -277,6 +278,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/internal/storage/evict` | internal | A peer gateway's immediate-reclaim fan-out (`unpin?immediate=true`). Coordination MAC over the request (v2 signed for the receiving node, or v1 during a rolling upgrade; the CID is in the query string, which the MAC covers; the body is ignored) + overlay source; the overlay and the old `X-Orama-Internal-Auth` marker alone are refused with 403. |
 | `/v1/internal/telemetry` | internal | A peer's cluster gateway asking for this node's latest health report. Coordination MAC + overlay source; anything else is 404. |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
+| `/v1/internal/webrtc/events` | internal | A namespace's SFU reporting a participant joining or leaving a room, published on `_orama/webrtc/<room>` (docs/WEBRTC.md#membership-events). A MAC over the request keyed by the namespace's TURN secret; anything else is refused with 401. |
 | `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peer/remove` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/wg/peers` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

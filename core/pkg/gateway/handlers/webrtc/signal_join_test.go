@@ -19,17 +19,20 @@ import (
 func gatewayServer(t *testing.T, h *WebRTCHandlers) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.SignalHandler(w, r.WithContext(context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "ns")))
+		r = r.WithContext(context.WithValue(r.Context(), ctxkeys.NamespaceOverride, "ns"))
+		h.SignalHandler(w, asCaller(r, testUser, ""))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
 // joinGateway builds a gateway (with no proxy: the join-frame path must not need it).
-func joinGateway(dir SFUDirectory) *WebRTCHandlers {
+func joinGateway(t *testing.T, dir SFUDirectory) *WebRTCHandlers {
+	t.Helper()
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-	h := NewWebRTCHandlers(logger, "10.0.0.9", 30000, "", "", nil)
+	h := NewWebRTCHandlers(logger, "10.0.0.9", 30000, "", testTURNSecret, nil)
 	h.SetSFUDirectory(dir)
+	withAdmissions(t, h)
 	return h
 }
 
@@ -75,7 +78,7 @@ func nextJoin(f *fakeSFU) string {
 // SFU through any gateway, and its frames flow both ways.
 func TestSignalJoinFrame_noRoomQueryTwoGatewaysReachOwnerSFU(t *testing.T) {
 	sfus, dir := threeSFUs(t)
-	srvA, srvB := gatewayServer(t, joinGateway(dir)), gatewayServer(t, joinGateway(dir))
+	srvA, srvB := gatewayServer(t, joinGateway(t, dir)), gatewayServer(t, joinGateway(t, dir))
 
 	for i := 0; i < 10; i++ {
 		room := fmt.Sprintf("anchat-%d", i)
@@ -117,7 +120,7 @@ func TestSignalJoinFrame_noRoomQueryTwoGatewaysReachOwnerSFU(t *testing.T) {
 
 func TestSignalJoinFrame_ownerDownRehomes(t *testing.T) {
 	sfus, dir := threeSFUs(t)
-	srv := gatewayServer(t, joinGateway(dir))
+	srv := gatewayServer(t, joinGateway(t, dir))
 
 	c := dialGateway(t, srv, "")
 	_ = c.WriteMessage(websocket.TextMessage, []byte(joinJSON("r1")))
@@ -146,7 +149,7 @@ func TestSignalJoinFrame_ownerDownRehomes(t *testing.T) {
 // A bad first frame is refused with an error frame naming why, and no SFU sees it.
 func TestSignalJoinFrame_refusesBadFirstFrames(t *testing.T) {
 	sfus, dir := threeSFUs(t)
-	srv := gatewayServer(t, joinGateway(dir))
+	srv := gatewayServer(t, joinGateway(t, dir))
 
 	cases := []struct {
 		name  string
@@ -155,7 +158,6 @@ func TestSignalJoinFrame_refusesBadFirstFrames(t *testing.T) {
 	}{
 		{"not JSON", `not json`, "must be JSON"},
 		{"not a join", `{"type":"offer","data":{}}`, "must be a join"},
-		{"no user", `{"type":"join","data":{"roomId":"r1"}}`, "required"},
 		{"no room", `{"type":"join","data":{"userId":"u"}}`, "room id must not be empty"},
 		{"room with a space", joinJSON("my room"), "printable ASCII"},
 		{"room too long", joinJSON(strings.Repeat("a", 129)), "the limit is 128"},
@@ -179,7 +181,7 @@ func TestSignalJoinFrame_refusesBadFirstFrames(t *testing.T) {
 // An oversized first frame is cut off at the read limit (close 1009) and never replayed.
 func TestSignalJoinFrame_oversizedFirstFrameIsCutOff(t *testing.T) {
 	sfus, dir := threeSFUs(t)
-	c := dialGateway(t, gatewayServer(t, joinGateway(dir)), "")
+	c := dialGateway(t, gatewayServer(t, joinGateway(t, dir)), "")
 	big := `{"type":"join","data":{"roomId":"r1","userId":"` + strings.Repeat("u", joinFrameMaxBytes) + `"}}`
 	_ = c.WriteMessage(websocket.TextMessage, []byte(big))
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -196,7 +198,7 @@ func TestSignalJoinFrame_oversizedFirstFrameIsCutOff(t *testing.T) {
 
 func TestSignalJoinFrame_binaryFirstFrameRefused(t *testing.T) {
 	_, dir := threeSFUs(t)
-	c := dialGateway(t, gatewayServer(t, joinGateway(dir)), "")
+	c := dialGateway(t, gatewayServer(t, joinGateway(t, dir)), "")
 	_ = c.WriteMessage(websocket.BinaryMessage, []byte(joinJSON("r1")))
 	if got := readText(t, c); !strings.Contains(got, "text frame") {
 		t.Fatalf("reply = %s", got)
@@ -206,7 +208,7 @@ func TestSignalJoinFrame_binaryFirstFrameRefused(t *testing.T) {
 // A socket that never says which room it wants is dropped, not held open.
 func TestSignalJoinFrame_slowClientIsRefused(t *testing.T) {
 	_, dir := threeSFUs(t)
-	h := joinGateway(dir)
+	h := joinGateway(t, dir)
 	h.joinTimeout = 150 * time.Millisecond
 	c := dialGateway(t, gatewayServer(t, h), "")
 
@@ -226,7 +228,7 @@ func TestSignalJoinFrame_noHealthySFUTellsClient(t *testing.T) {
 	for _, s := range sfus {
 		s.setDraining(true)
 	}
-	c := dialGateway(t, gatewayServer(t, joinGateway(dir)), "")
+	c := dialGateway(t, gatewayServer(t, joinGateway(t, dir)), "")
 	_ = c.WriteMessage(websocket.TextMessage, []byte(joinJSON("r1")))
 	if got := readText(t, c); !strings.Contains(got, "no_sfu") {
 		t.Fatalf("reply = %s, want no_sfu", got)
@@ -238,7 +240,7 @@ func TestSignalJoinFrame_noHealthySFUTellsClient(t *testing.T) {
 func TestSignalHandler_rateLimitedJoinIs429(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string
-	h := gatewayFor(dir, &target)
+	h := gatewayFor(t, dir, &target)
 	allowed := 2
 	h.SetJoinLimiter(func(*http.Request) bool { allowed--; return allowed >= 0 })
 
@@ -255,7 +257,7 @@ func TestSignalHandler_rateLimitedJoinIs429(t *testing.T) {
 
 func TestSignalJoinFrame_rateLimitedBeforeUpgrade(t *testing.T) {
 	_, dir := threeSFUs(t)
-	h := joinGateway(dir)
+	h := joinGateway(t, dir)
 	h.SetJoinLimiter(func(*http.Request) bool { return false })
 	srv := gatewayServer(t, h)
 

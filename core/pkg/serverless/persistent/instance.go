@@ -242,6 +242,7 @@ func (i *Instance) withInvCtx(ctx context.Context) context.Context {
 	// bound how many messages one frame floods onto the shared gossipsub
 	// router (scoped per export call, like the rest of withInvCtx).
 	ctx = serverless.WithPublishCounter(ctx)
+	ctx = serverless.WithWebRTCCounter(ctx)
 	// Attach a fresh per-call LogBuffer so oh.LogInfo / oh.LogError from
 	// inside this ws_open / ws_frame / ws_close call write to a
 	// scoped slice instead of the HostFunctions singleton (bugboard

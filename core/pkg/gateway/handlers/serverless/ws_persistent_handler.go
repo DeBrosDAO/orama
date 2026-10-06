@@ -97,7 +97,7 @@ func (h *ServerlessHandlers) handlePersistentWebSocket(
 	// instance can call ws_pubsub_bridge from ws_open or any frame handler;
 	// the bridge needs to know which namespace owns this client.
 	if h.wsBridge != nil {
-		h.wsBridge.SetClientNamespace(clientID, namespace)
+		h.registerBridgeClient(r, clientID, namespace)
 		defer h.wsBridge.RemoveClient(context.Background(), clientID)
 	}
 

@@ -46,7 +46,7 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 
 	// Before the upgrade: a refusal after it is a WebSocket close frame the
 	// client has to decode, where this is a plain 403.
-	if !authorizeTopic(w, r, topic, gwauth.ActionRead) {
+	if !authorizeTopic(w, r, topic, gwauth.ActionRead) || refuseReservedSubscribe(w, r, topic) {
 		return
 	}
 
@@ -62,6 +62,12 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 	if enablePresence && memberID == "" {
 		p.logger.ComponentWarn("gateway", "pubsub ws: presence enabled but missing member_id")
 		writeError(w, http.StatusBadRequest, "missing 'member_id' for presence")
+		return
+	}
+	// Presence publishes presence.join and presence.leave on the topic under the
+	// caller's member_id and meta, so it is a write: a subscriber-only caller
+	// enabling it could announce anyone's presence on a topic it may only read.
+	if enablePresence && (refuseReservedPublish(w, topic) || !authorizeTopic(w, r, topic, gwauth.ActionWrite)) {
 		return
 	}
 
@@ -128,7 +134,12 @@ func (p *PubSubHandlers) WebsocketHandler(w http.ResponseWriter, r *http.Request
 	go p.writerLoop(wsCtx, wsClient, msgs, done)
 
 	// Reader loop: treat any client message as publish to the same topic
-	p.readerLoop(wsCtx, wsClient, topic)
+	// Whether this caller may publish on the topic is the publish routes'
+	// question, asked once for the socket: a subscriber-only caller reading
+	// the topic must not be able to write to it by sending a frame.
+	// A reserved topic is never published to from a socket, whoever holds it.
+	mayPublish := !isReservedTopic(topic) && holdsTopicGrant(r, topic)
+	p.readerLoop(wsCtx, wsClient, topic, mayPublish)
 	cancel()
 	<-done
 }
@@ -195,7 +206,7 @@ func (p *PubSubHandlers) forwardToSocket(topic string, msgs chan []byte) client.
 // readerLoop reads messages from the WebSocket client and publishes them. It
 // returns when the connection ends, for whatever reason: a close or read error,
 // or no frame, pong included, within the pong wait.
-func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, topic string) {
+func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, topic string, mayPublish bool) {
 	conn := wsClient.conn
 	refreshDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(p.pongWait)) }
 	if err := refreshDeadline(); err != nil {
@@ -229,6 +240,13 @@ func (p *PubSubHandlers) readerLoop(ctx context.Context, wsClient *wsClient, top
 				p.logger.ComponentInfo("gateway", "pubsub ws: filtering out heartbeat ping")
 				continue
 			}
+		}
+
+		if !mayPublish || classifyEnvelope(data) != envelopeClear {
+			p.logger.ComponentWarn("gateway", "pubsub ws: frame from a subscriber-only socket, or one carrying the reserved key, not published",
+				zap.String("topic", topic), zap.Bool("may_publish", mayPublish))
+			_ = wsClient.writeText([]byte("publish_error"))
+			continue
 		}
 
 		if err := p.client.PubSub().Publish(ctx, topic, data); err != nil {

@@ -1893,6 +1893,7 @@ Namespaces can opt in to WebRTC support for real-time voice, video, and data cha
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side — no direct peer connections.
 - **HMAC credentials**: Per-namespace TURN shared secret. Credentials from the REST endpoint and the host function last 24h; those the SFU signals to a client use the per-namespace TTL, 600s by default ([WEBRTC.md](WEBRTC.md)).
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
+- **Authenticated identity and admission**: the SFU takes a peer's user and device from a short-lived join ticket the namespace gateway signs (a key derived from the namespace's TURN secret), never from the client's join frame; a namespace can admit only users its functions admitted, and its functions can kick and mute ([WEBRTC.md](WEBRTC.md#identity-admission-and-moderation)).
 
 ### Port Allocation
 

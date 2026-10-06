@@ -68,8 +68,9 @@ func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 			return auth.PermissionSet{}
 		}
 		// A logged-in user with no grant in this namespace gets the data
-		// plane, as they always have.
-		return auth.DataPlanePermissions()
+		// plane, as they always have, except publishing to pub/sub: see
+		// auth.NoGrantPermissions.
+		return auth.NoGrantPermissions()
 	}
 
 	if scopes, ok := ctx.Value(ctxKeyScopes).(auth.ScopeSet); ok {
@@ -162,9 +163,7 @@ func (g *Gateway) scopeMiddleware(next http.Handler) http.Handler {
 				// What is missing goes in a field, not only in the prose. A
 				// client that has to regex the message to find out what it
 				// lacks cannot act on it.
-				forbidden(w, CodeScopeMissing,
-					"insufficient permission: this credential does not hold "+required.String()+
-						", required for "+r.URL.Path,
+				forbidden(w, CodeScopeMissing, refusedPermissionMessage(r, required),
 					map[string]any{"required_scope": policy.Domain, "required_permission": required.String()})
 				return
 			}
@@ -228,4 +227,36 @@ func hasWorkloadJWT(r *http.Request) bool {
 // what the roles exist to end.
 func markGrant(r *http.Request, grant *auth.Grant) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), ctxkeys.Grant, grant))
+}
+
+// noGrantPublishRemedy names what a signed-in user with no grant in the
+// namespace can do about being refused pub/sub write (bugboard #733).
+const noGrantPublishRemedy = "this wallet holds no grant in this namespace, and a signed-in user without " +
+	"one may subscribe but not publish: ask the namespace owner for a grant with pubsub write, " +
+	"or publish from a function"
+
+// refusedPermissionMessage is the sentence a refused caller reads. A wallet
+// with no grant is told what to do about publishing, where every other caller
+// is told which permission it lacks.
+func refusedPermissionMessage(r *http.Request, required auth.Resource) string {
+	if required.Domain == auth.SelectorPubsub && required.Action == auth.ActionWrite && isGrantlessWallet(r) {
+		return "insufficient permission: " + noGrantPublishRemedy + " (required " + required.String() + ", " + r.URL.Path + ")"
+	}
+	return "insufficient permission: this credential does not hold " + required.String() +
+		", required for " + r.URL.Path
+}
+
+// isGrantlessWallet reports whether the caller is a signed-in wallet that holds
+// no grant in a tenant namespace: the principal callerPermissions gives
+// auth.NoGrantPermissions.
+func isGrantlessWallet(r *http.Request) bool {
+	ctx := r.Context()
+	if grant, _ := ctx.Value(ctxKeyGrant).(*auth.Grant); grant != nil {
+		return false
+	}
+	ns, _ := ctx.Value(CtxKeyNamespaceOverride).(string)
+	if auth.IsLobbyNamespace(ns) || strings.TrimSpace(ns) == "" {
+		return false
+	}
+	return hasWalletJWT(r)
 }

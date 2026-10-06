@@ -146,6 +146,8 @@ var protectedTables = map[string]string{
 	// written by a handler that validates it; a row written here skips that.
 	"namespace_push_config":      "where and how a namespace's push is delivered",
 	"namespace_webrtc_config":    "the TURN shared secret of a namespace",
+	"webrtc_settings":            "whether a namespace's WebRTC rooms require admission",
+	"webrtc_admissions":          "who a namespace's functions admitted to its WebRTC rooms",
 	"namespace_sqlite_databases": "which tenant SQLite files exist and where",
 	"namespace_sqlite_backups":   "which backup belongs to which tenant SQLite file",
 	// Nothing on a namespace gateway reads these: the cluster manager owns

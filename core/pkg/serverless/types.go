@@ -752,6 +752,15 @@ type HostServices interface {
 	// named by its token.
 	RevokeCapability(ctx context.Context, token string) error
 
+	// WebRTCAdmit admits user to a WebRTC room of the calling namespace for ttl,
+	// from device (any device when empty), and returns the admission as JSON
+	// {"room","user_id","device_id","expires_at"}.
+	WebRTCAdmit(ctx context.Context, room, user, device string, ttl time.Duration) (string, error)
+	// WebRTCKick revokes user's admissions to room and closes their connection.
+	WebRTCKick(ctx context.Context, room, user string) error
+	// WebRTCMute stops (or resumes) the forwarding of user's audio in room.
+	WebRTCMute(ctx context.Context, room, user string, muted bool) error
+
 	// Job operations
 	EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error)
 	ScheduleOnce(ctx context.Context, functionName string, runAt time.Time, payload []byte) (string, error)
@@ -777,4 +786,13 @@ type DeployResult struct {
 	Function *Function `json:"function"`
 	WASMCID  string    `json:"wasm_cid"`
 	Triggers []string  `json:"triggers,omitempty"`
+}
+
+// WebRTCController is what the WebRTC host calls act through: the namespace's
+// admissions and the SFUs that hold its rooms. Every call names the namespace
+// the calling function runs in; a function never names another.
+type WebRTCController interface {
+	Admit(ctx context.Context, namespace, room, user, device string, ttl time.Duration) (time.Time, error)
+	Kick(ctx context.Context, namespace, room, user string) error
+	Mute(ctx context.Context, namespace, room, user string, muted bool) error
 }

@@ -7,12 +7,21 @@
 # from 49152-65535 on the TURN nodes), the signalling socket's access and
 # join rule, rooms, real RTP between headless pion peers relay-only through
 # TURN and the SFU (1:1 and a group call), the SFU's 600 s credential
-# refreshed at 80%, and stealth enable/disable or its rollback. Node death,
-# SFU draining and the role reconciler are webrtc-chaos.
+# refreshed at 80%, a call that outlasts the SFU's own relay credential,
+# offer glare answered by the polite SFU, a subscriber's keyframe request
+# reaching the publisher, and stealth enable/disable or its rollback. Node
+# death, SFU draining, the role reconciler and signalling-socket failover are
+# webrtc-chaos. Admission (bugboard #726): a peer's identity is the user the
+# gateway authenticated, a namespace that requires admission admits only users
+# its functions admitted (webrtc_admit) to that room, expired and revoked
+# admissions are refused with typed errors, joins and leaves are published on
+# _orama/webrtc/<room>, a kick closes the connection and blocks the rejoin, a
+# mute stops the user's audio on the server through a rejoin, and audio-state
+# and video-state are relayed to the room.
 id: webrtc
 title: WebRTC (SFU and TURN)
 area: webrtc
-subtasks: [2838]
+subtasks: [2838, 726]
 stage: 6
 destructive: false
 requires:
@@ -24,6 +33,8 @@ covers:
     - /v1/webrtc/turn/credentials
     - /v1/webrtc/signal
     - /v1/webrtc/rooms
+    - /v1/webrtc/config
+    - /v1/internal/webrtc/events
     - /v1/namespace/webrtc/stealth/enable
     - /v1/namespace/webrtc/stealth/disable
   units:
@@ -35,7 +46,16 @@ covers:
     - "docs/WEBRTC.md#room-placement: every peer of a room reaches the room's one SFU whichever node's gateway it connects through (1:1 and group calls across three gateways)"
     - "docs/WEBRTC.md#turn-topology: one shared TURN per host; turn.yaml is 0600; isolation is the per-tenant secret; relays from 49152-65535"
     - "docs/WEBRTC.md#turn-credential-protocol: REST credentials last 24 h; SFU credentials 600 s refreshed at 80%"
+    - "docs/WEBRTC.md#turn-credential-protocol: the SFU's own relay credential lasts 24 h and is swapped before it expires, so a call outlives the 600 s signalled credential and the allocation lifetime after it"
+    - "docs/WEBRTC.md#negotiation-offer-glare-and-the-polite-sfu: a client offer that crosses the SFU's own is answered, not refused (no offer_failed), and both directions carry media"
+    - "docs/WEBRTC.md#keyframes-plifir: a subscriber's PLI on a video track is relayed to the track's publisher"
     - "docs/WEBRTC.md#turns-tls-certificate: TURNS on 5349 presents the wildcard for turn-<ns>.<base>"
     - "docs/WEBRTC.md#security-model: every WebRTC endpoint needs a signed-in user; a key alone is refused"
     - "docs/WEBRTC.md#what-happens-on-enable: a 32-byte TURN secret; DNS for turn.ns-<ns> and turn-<ns> names the TURN nodes"
     - "docs/STEALTH_TURN.md#enabling-stealth-for-a-namespace: stealth adds turns:cdn-<hash>:443 or rolls back; disable keeps the baseline ladder; requires WebRTC"
+    - "docs/WEBRTC.md#identity: a peer is the user the gateway authenticated (and its device); the userId in the join frame is ignored"
+    - "docs/WEBRTC.md#admission: with require_admission on, only a user a function admitted to the room, from that device, whose admission has not expired or been revoked, joins; every other join is refused with WEBRTC_ADMISSION_REQUIRED, _EXPIRED or _REVOKED (an admission_* error frame without ?room=)"
+    - "docs/WEBRTC.md#membership-events: every join and leave is published on _orama/webrtc/<room> with the authenticated user, device and peer, and a leave says why"
+    - "docs/WEBRTC.md#kick-and-mute: webrtc_kick closes the user's connection and the revoked admission refuses the rejoin; webrtc_mute stops forwarding the user's audio on the SFU, through a rejoin, until unmuted"
+    - "docs/WEBRTC.md#audio-and-video-state: audio-state and video-state are relayed to the room as participant-state; a frame without enabled is invalid_state, not unknown_message"
+    - "docs/SERVERLESS.md#host-functions-api: webrtc_admit, webrtc_kick and webrtc_mute act on the calling function's namespace"

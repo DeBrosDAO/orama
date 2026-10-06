@@ -46,7 +46,10 @@ func (p *PubSubHandlers) PublishHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !authorizeTopic(w, r, body.Topic, gwauth.ActionWrite) {
+	if refuseReservedPublish(w, body.Topic) || !authorizeTopic(w, r, body.Topic, gwauth.ActionWrite) {
+		return
+	}
+	if refuseReservedEnvelope(w, data, "the message") {
 		return
 	}
 
@@ -145,7 +148,10 @@ func (p *PubSubHandlers) PublishBatchHandler(w http.ResponseWriter, r *http.Requ
 		}
 		// Every topic in the batch, before any of them is delivered: a batch
 		// that is half refused is worse than one that is refused.
-		if !authorizeTopic(w, r, m.Topic, gwauth.ActionWrite) {
+		if refuseReservedPublish(w, m.Topic) || !authorizeTopic(w, r, m.Topic, gwauth.ActionWrite) {
+			return
+		}
+		if refuseReservedEnvelope(w, data, "message at index "+strconv.Itoa(i)) {
 			return
 		}
 		decoded = append(decoded, pubsub.TopicMessage{Topic: m.Topic, Data: data})
@@ -226,7 +232,7 @@ func (p *PubSubHandlers) TopicsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Client returns topics already trimmed to its namespace; return as-is
-	writeJSON(w, http.StatusOK, map[string]any{"topics": all})
+	writeJSON(w, http.StatusOK, map[string]any{"topics": withoutReservedTopics(r, all)})
 }
 
 // writeError writes an error response

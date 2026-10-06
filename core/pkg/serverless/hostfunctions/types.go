@@ -132,6 +132,11 @@ type HostFunctions struct {
 	// gateway start, before any function runs, via SetCapabilityIssuer; nil
 	// means capability_mint and capability_revoke fail and say why.
 	capabilityIssuer serverless.CapabilityIssuer
+
+	// webrtc admits, kicks and mutes users in the namespace's rooms. Set once
+	// at gateway start via SetWebRTCController; nil means webrtc_admit,
+	// webrtc_kick and webrtc_mute fail and say why.
+	webrtc serverless.WebRTCController
 }
 
 // Ensure HostFunctions implements HostServices interface.

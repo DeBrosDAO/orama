@@ -30,7 +30,7 @@ func testHandlers() *WebRTCHandlers {
 func requestWithNamespace(method, path, namespace string) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	ctx := context.WithValue(req.Context(), ctxkeys.NamespaceOverride, namespace)
-	return req.WithContext(ctx)
+	return asCaller(req.WithContext(ctx), testUser, "")
 }
 
 // --- Credentials handler tests ---

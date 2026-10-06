@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/sfu/ctrlauth"
 	"github.com/DeBrosOfficial/network/pkg/sfu/roomid"
 	"go.uber.org/zap"
 )
@@ -59,6 +60,12 @@ func (h *WebRTCHandlers) SignalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ticket, refusal := h.authorizeJoin(r.Context(), r, ns, room)
+	if refusal != nil {
+		refusal.write(w)
+		return
+	}
+
 	owner, err := h.ownerOf(r.Context(), ns, room)
 	if err != nil {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "No SFU available for room",
@@ -74,6 +81,10 @@ func (h *WebRTCHandlers) SignalHandler(w http.ResponseWriter, r *http.Request) {
 		zap.String("sfu_node", owner.NodeID),
 		zap.String("target", targetHost),
 	)
+
+	// The ticket is what the SFU takes the peer's identity from. Whatever the
+	// client sent under that name is replaced, never forwarded.
+	r.Header.Set(ctrlauth.TicketHeader, ticket)
 
 	// Rewrite the URL path to match the SFU's expected endpoint
 	r.URL.Path = "/ws/signal"

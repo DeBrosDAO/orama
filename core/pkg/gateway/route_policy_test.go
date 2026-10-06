@@ -108,6 +108,7 @@ var publicRoutes = []string{
 	"/v1/internal/storage/evict",
 	"/v1/internal/telemetry",
 	"/v1/internal/tls/check",
+	"/v1/internal/webrtc/events",
 	"/v1/internal/wg/peer",
 	"/v1/internal/wg/peer/remove",
 	"/v1/internal/wg/peers",

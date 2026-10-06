@@ -265,7 +265,7 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `function_cron_triggers`, `function_pubsub_triggers`, `function_db_triggers`,
 `deployment_history`, `deployment_events`, `deployment_health_checks`, `namespace_push_config`, `namespace_webrtc_config`,
 `namespace_sqlite_databases`, `namespace_sqlite_backups`, `webrtc_rooms`,
-`webrtc_port_allocations`, `namespace_cluster_events`,
+`webrtc_settings`, `webrtc_admissions`, `webrtc_port_allocations`, `namespace_cluster_events`,
 `namespace_pending_cleanup`, `node_health_events`, `rqlite_backups`, `_pubsub_mesh_peers` and `_namespace_libp2p_peers` (the list in
 `core/pkg/sqlguard/sqlguard.go`, which is also what the namespace gateway's
 raw-database routes apply to a tenant's SQL: see
@@ -549,6 +549,49 @@ ephemeralStateClear(ptr("typing:"+room), len32("typing:"+room), ptr(userID), len
 // immediately. On (re)connect, call ephemeral_state_list("typing:"+room) once
 // to seed local state, then track the event stream.
 ```
+
+### Pub/sub delivery to WebSocket clients
+
+`ws_pubsub_bridge(client_id, topic)` forwards every message on a topic to a
+function WebSocket client without invoking the function per message (and
+`ws_pubsub_unbridge` stops it). Two rules protect what the client reads
+(bugboard #733):
+
+- **`_orama` is reserved.** A payload that is a JSON object with a top-level
+  `_orama` key (any letter case) is refused on `POST /v1/pubsub/publish` and
+  `/v1/pubsub/publish-batch` for every caller, the namespace owner included: `400`
+  `PUBSUB_RESERVED_KEY`, and a batch is refused whole, naming the item. The key
+  marks events the platform publishes itself (`ephemeral.set`, `ephemeral.clear`
+  above), which do not go through those routes. Frames sent on a subscribe
+  socket are held to the same rule. Rename the key in your own events. The check
+  fails closed: a payload that starts as a JSON object but is not strict JSON (a
+  byte-order mark before invalid JSON, trailing commas, nesting deeper than 10,000
+  levels) could still be an object, with the key in it, to a lenient subscriber,
+  so it is refused `400` `PUBSUB_INVALID_OBJECT`. A leading byte-order mark before
+  valid JSON is read through.
+- **Platform topics are bridged like any other.** A function runs as the namespace, so
+  `ws_pubsub_bridge` may bridge a reserved `_orama/` topic (the WebRTC membership topic
+  `_orama/webrtc/<room>`) to a client. That is the application's decision and the platform
+  does not narrow it: a function that passes user input as the topic exposes every
+  room's membership to that user. Fix the topic in the function (`_orama/webrtc/` plus a
+  room the user was admitted to), never take it from the request
+  ([WEBRTC.md](WEBRTC.md#membership-events)).
+- **Stamped delivery (opt-in).** By default the client receives the publisher's
+  bytes unchanged, so anything in them, a `topic` field included, is what the
+  publisher chose to claim. Open the function WebSocket with
+  `?pubsub_delivery=stamped` and every bridged message arrives instead as
+
+  ```json
+  {"_orama":"pubsub.message","topic":"chat.general","data_base64":"<publisher bytes, base64>"}
+  ```
+
+  `topic` is the topic the platform delivered the message on, and the payload is
+  untouched inside `data_base64`, so nothing in it can be read as part of the
+  envelope. A client that does not pass the parameter sees no change; a client
+  that does must base64-decode `data_base64` and dispatch on `topic` from the
+  envelope, not from the payload. Platform events (`ephemeral.*`) arrive inside
+  `data_base64` like any other message. The option applies to both the stateless
+  and the persistent function WebSocket.
 
 ### Logging
 
@@ -856,6 +899,34 @@ only public functions. A capability opens the live version of the function
 (`name@N` is refused), and not while the function is disabled; one capability
 holds at most 16 sockets on a gateway at once. What the gateway checks, what it still learns, and the
 rate limit on these upgrades are in [AUTH.md](AUTH.md#capability-websockets).
+
+### WebRTC rooms
+
+A namespace with WebRTC enabled can decide who joins its rooms and remove or mute a participant from a
+function ([WEBRTC.md](WEBRTC.md#identity-admission-and-moderation)). These act on the **calling
+function's own namespace** and on no other; the room, the user and the device are the function's to name.
+
+| Function | Description |
+|----------|-------------|
+| `webrtc_admit(room, user, device, ttl_seconds)` → string | Admits `user` (the authenticated subject they will join as) to `room` for `ttl_seconds` (1 to 86400), from any device when `device` is empty or from that device only. A namespace that [requires admission](WEBRTC.md#admission) lets in only users admitted this way. Admitting again extends the admission and lifts a revocation. Returns JSON `{"room","user_id","device_id","expires_at"}` (unix seconds), or empty on failure (the gateway log says why): an invalid room, a user or device over 256 bytes, a ttl out of range, or a gateway with no WebRTC set up. Signature: `(room_ptr, room_len, user_ptr, user_len, device_ptr, device_len i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
+| `webrtc_kick(room, user)` → i32 | Revokes every admission of `user` to `room` and closes their connection on every SFU of the namespace; the rejoin is refused until they are admitted again. `1` when both were done, `0` otherwise: when any SFU could not be told, the revocation still stands (the log says so) and repeating the call is safe. Signature: `(room_ptr, room_len, user_ptr, user_len i32) → i32`. |
+| `webrtc_mute(room, user, muted)` → i32 | Stops (`muted` non-zero) or resumes the forwarding of `user`'s audio in `room`, on every SFU of the namespace, so a modified client that keeps sending is still silent. Recorded on their admissions, so it holds when they rejoin (for 7 days after the admission expires), and logged by each SFU so a ticket issued before it cannot undo it. `1` on success, `0` on failure. Signature: `(room_ptr, room_len, user_ptr, user_len, muted i32) → i32`. |
+
+```go
+//go:wasmimport env webrtc_admit
+func webrtcAdmit(roomPtr, roomLen, userPtr, userLen, devPtr, devLen uint32, ttlSeconds int64) uint64
+
+// admit the caller to the call they were invited to, for ten minutes
+admitted := unpack(webrtcAdmit(ptr(room), uint32(len(room)), ptr(user), uint32(len(user)), 0, 0, 600))
+```
+
+A single invocation (or persistent-socket frame) may make at most 100 `webrtc_admit`,
+`webrtc_kick` and `webrtc_mute` calls together, because each writes the namespace's database
+and a kick or mute calls every SFU; the 101st fails (`0`, and the gateway log says the
+budget is exceeded), as `pubsub_publish` does past 1000.
+
+Who joined and left is published by the platform on `_orama/webrtc/<room>`; a pubsub trigger on
+`_orama/webrtc/*` runs a function for each.
 
 ## Invoking from application code
 

@@ -52,6 +52,11 @@ const (
 	ErrCodeInternal           RPCErrorCode = "INTERNAL"
 	ErrCodeServiceUnavailable RPCErrorCode = "SERVICE_UNAVAILABLE"
 	ErrCodeTimeout            RPCErrorCode = "TIMEOUT"
+	// ErrCodeNamespaceGatewayUnavailable — none of the namespace's gateways
+	// could be reached (every member refused the connection or has its circuit
+	// open). Nothing was sent to any of them, so the exact request is safe to
+	// retry; a WebSocket client should reconnect with backoff.
+	ErrCodeNamespaceGatewayUnavailable RPCErrorCode = "NAMESPACE_GATEWAY_UNAVAILABLE"
 
 	// Function-specific (5xx-mapped but distinct codes for client routing)
 	ErrCodeFunctionExecution RPCErrorCode = "FUNCTION_EXECUTION_FAILED"
@@ -176,6 +181,8 @@ func defaultMessageFor(code RPCErrorCode) string {
 		return "service temporarily unavailable"
 	case ErrCodeTimeout:
 		return "request timed out"
+	case ErrCodeNamespaceGatewayUnavailable:
+		return "no namespace gateway could be reached, retry"
 	case ErrCodeFunctionExecution:
 		return "function execution failed"
 	case ErrCodeFunctionUnavailable:
@@ -193,7 +200,7 @@ func defaultMessageFor(code RPCErrorCode) string {
 // Callers can override via WithRetryable() / WithRetryAfter().
 func defaultRetryableFor(code RPCErrorCode) bool {
 	switch code {
-	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout, ErrCodeFunctionUnavailable:
+	case ErrCodeRateLimited, ErrCodeServiceUnavailable, ErrCodeTimeout, ErrCodeFunctionUnavailable, ErrCodeNamespaceGatewayUnavailable:
 		return true
 	default:
 		return false

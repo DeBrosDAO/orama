@@ -90,6 +90,9 @@ type Dependencies struct {
 	ServerlessEngine   *serverless.Engine
 	ServerlessRegistry *serverless.Registry
 	ServerlessInvoker  *serverless.Invoker
+	// HostFuncs is what functions call the platform through; the gateway wires
+	// into it what only it can build (the WebRTC controller).
+	HostFuncs          *hostfunctions.HostFunctions
 	ServerlessWSMgr    *serverless.WSManager
 	ServerlessHandlers *serverlesshandlers.ServerlessHandlers
 
@@ -811,6 +814,8 @@ func initializeServerless(logger *logging.ColoredLogger, cfg *Config, deps *Depe
 		hostFuncsCfg,
 		logger.Logger,
 	)
+
+	deps.HostFuncs = hostFuncs
 
 	// Create WASM engine with multi-tier rate limiter (per-(ns, fn, wallet, ip),
 	// per-(ns, wallet), per-(ns)). The legacy global limit is honored as

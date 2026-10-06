@@ -1,12 +1,14 @@
 package webrtc
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/sfu/ctrlauth"
 )
 
 // WebRTCHandlers handles all WebRTC-related HTTP and WebSocket endpoints.
@@ -43,6 +45,55 @@ type WebRTCHandlers struct {
 
 	// proxyWebSocket is injected from the gateway to reuse its WebSocket proxy logic
 	proxyWebSocket func(w http.ResponseWriter, r *http.Request, targetHost string) bool
+
+	// admissions holds the namespace's admission policy and the admissions its
+	// functions issued; checked on every join (join_auth.go).
+	admissions *AdmissionStore
+
+	// controlKey signs the join tickets the SFU trusts and authenticates the
+	// control calls to it and the events from it (pkg/sfu/ctrlauth). Derived
+	// from turnSecret; nil when the namespace has none.
+	controlKey []byte
+
+	// eventSink is the internal URL of this gateway, named in every ticket so
+	// the SFU can report membership to it. Empty reports nowhere.
+	eventSink string
+
+	// publishEvent publishes a membership event on the namespace's pubsub.
+	publishEvent func(ctx context.Context, topic string, data []byte) error
+
+	// controlClient makes the kick and mute calls to an SFU.
+	controlClient *http.Client
+
+	// namespace is the namespace this gateway serves. The controller (admit,
+	// kick, mute) acts on this one only, whatever namespace a caller names.
+	namespace string
+
+	// replays refuses an SFU event whose MAC was already served.
+	replays *ctrlauth.ReplayGuard
+
+	// now is the clock tickets and admissions are judged by.
+	now func() time.Time
+}
+
+// SetAdmissionStore sets where the namespace's admission policy and admissions
+// are read. Safe to call before serving begins.
+func (h *WebRTCHandlers) SetAdmissionStore(s *AdmissionStore) {
+	h.admissions = s
+}
+
+// SetNamespace sets the namespace this gateway serves. Safe to call before
+// serving begins.
+func (h *WebRTCHandlers) SetNamespace(ns string) {
+	h.namespace = ns
+}
+
+// SetEventSink sets the internal URL SFUs report membership to (empty for none)
+// and the function that publishes what they report. Safe to call before serving
+// begins.
+func (h *WebRTCHandlers) SetEventSink(url string, publish func(ctx context.Context, topic string, data []byte) error) {
+	h.eventSink = url
+	h.publishEvent = publish
 }
 
 // SetJoinLimiter sets the per-identity limit on opening signalling sockets.
@@ -82,7 +133,14 @@ func NewWebRTCHandlers(
 	if sfuHost == "" {
 		sfuHost = "127.0.0.1"
 	}
+	// An empty secret derives no key: this gateway then refuses joins and
+	// control calls, saying why, instead of signing with a key anyone can derive.
+	controlKey, _ := ctrlauth.Key(turnSecret)
 	return &WebRTCHandlers{
+		controlKey:     controlKey,
+		controlClient:  newSFUProbeClient(),
+		replays:        ctrlauth.NewReplayGuard(ctrlauth.DefaultReplayCapacity),
+		now:            time.Now,
 		logger:         logger,
 		sfuHost:        sfuHost,
 		sfuPort:        sfuPort,

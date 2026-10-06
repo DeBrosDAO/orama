@@ -135,6 +135,9 @@ func buildRoutePolicies() *routepolicy.Table {
 		// coordination MAC over the request plus a WireGuard-peer source
 		// check, in the handler (internalTelemetryHandler).
 		"/v1/internal/telemetry",
+		// An SFU of this namespace reporting a join or leave: a MAC under the
+		// key derived from the namespace's TURN secret, in the handler.
+		"/v1/internal/webrtc/events",
 		// A MAC over the request, keyed by a value derived from the cluster
 		// secret, naming the node the claim is about. The handler acts on that
 		// name and never on the body's. Declared MainGateway below: `dns_nodes`
@@ -225,6 +228,9 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(control(auth.DomainNamespace, auth.ActionWrite),
 		"/v1/namespace/rate-limit", "/v1/namespace/session-policy",
 		"/v1/namespace/webrtc/enable", "/v1/namespace/webrtc/disable",
+		// The namespace's own WebRTC policy: whether its rooms admit only
+		// users its functions admitted.
+		"/v1/webrtc/config",
 		"/v1/namespace/webrtc/stealth/enable", "/v1/namespace/webrtc/stealth/disable")
 
 	// Topology mutation and node operation: an operator's. The handlers

@@ -280,3 +280,18 @@ func DataPlanePermissions() PermissionSet {
 		Permission{Domain: DomainFn, Action: ActionInvoke, Resource: PermissionWildcard},
 	)
 }
+
+// NoGrantPermissions is what a signed-in wallet holds in a namespace where it
+// has no grant at all: the data plane, except that it may read pub/sub and not
+// publish to it (bugboard #733). Such a wallet is an application's end user,
+// and a topic an end user may write to is a decision the application makes, by
+// publishing from a function or by granting the wallet pubsub write. Without
+// it any end user could publish to any topic of the namespace, including the
+// ones the application's own functions publish authoritative events on.
+func NoGrantPermissions() PermissionSet {
+	return append(
+		wholeDomains(DomainStorage, DomainCache, DomainPush, DomainWebRTC, DomainProxy),
+		Permission{Domain: DomainPubsub, Action: ActionRead, Resource: PermissionWildcard},
+		Permission{Domain: DomainFn, Action: ActionInvoke, Resource: PermissionWildcard},
+	)
+}

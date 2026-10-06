@@ -436,6 +436,32 @@ is `storage:*:avatars/*`, and `db:table=posts:read` is `db:read:posts`.
 
 ---
 
+### Reserved pub/sub topics
+
+Topics under `_orama/` belong to the platform (today `_orama/webrtc/<room>`, the WebRTC membership events:
+see [WEBRTC.md](WEBRTC.md#membership-events)). They are not an application's to write and not every signed-in
+user's to read:
+
+| Caller | Publish (`/v1/pubsub/publish`, `publish-batch`, a frame on `/v1/pubsub/ws`) | Subscribe (`/v1/pubsub/ws`) | Listed by `/v1/pubsub/topics` |
+|--------|------|------|------|
+| Anyone, whatever the credential | refused `403` `PUBSUB_RESERVED_TOPIC` (the platform publishes in-process; a socket on the topic is read-only and `presence` on it is refused) | | |
+| A signed-in user with no grant in the namespace (`NoGrantPermissions`: pub/sub read only) | | refused `403` `PUBSUB_RESERVED_TOPIC` | hidden |
+| A credential holding a pub/sub grant that covers the topic (an API key of role `runtime` or above, an admin, a wallet with a grant) | | allowed | listed |
+| A function (a pubsub trigger, the `ws_pubsub_bridge` host function) | `pubsub_publish` is not narrowed here | allowed: functions run as the namespace | |
+
+"Holds a grant" is judged as the ability to **write** pub/sub on the topic, which a wallet with no grant does
+not have, and which a grant narrowed to other topics (`pubsub:topic=chat.*`) does not extend to `_orama/`.
+So the credentials that may subscribe to `_orama/*` are exactly: a wallet whose pubsub write grant covers the
+topic, an API key of role `runtime` or any higher role (`developer`, `admin`, `owner`). **A runtime key ships
+inside the applications that use it**, so every user of such an application can read every room's membership
+with it: an application that needs membership to stay private keeps it behind functions (republishing what it
+chooses on a topic of its own) and does not ship a runtime key. A function's `ws_pubsub_bridge` may bridge an
+`_orama/` topic because functions run as the namespace; whether to bridge one to an end user is the
+application's decision, and a function that takes the topic from user input exposes every room
+([SERVERLESS.md](SERVERLESS.md#pubsub-delivery-to-websocket-clients)). The
+prefix is matched case-insensitively. The publish routes also still refuse a payload carrying the
+`_orama` key (`PUBSUB_RESERVED_KEY`), on every topic.
+
 ## Roles
 
 A namespace has exactly one owner and any number of members. A member holds a
@@ -512,8 +538,19 @@ narrowed, revoked or moved to another role therefore reaches the data plane
 within ten seconds. A read that fails is not remembered and answers `503`: a
 role that cannot be read is not a role, and a wallet is not handed the data
 plane in its place. A wallet that holds no grant in the namespace holds the data
-plane, as every signed-in user does; an API key stays on its own scopes and is
-never looked up here. `enforced` in
+plane, as every signed-in user does, with one exception: it may read pub/sub
+(subscribe, list topics, read who is present) and may not publish to it (bugboard
+#733). Announcing presence on a subscribe socket (`presence=true`) publishes
+`presence.join` and `presence.leave` under the caller's `member_id`, so it needs
+pubsub write too and is refused `403` before the upgrade otherwise. Such
+a wallet is an application's end user, and a topic an end user may write to is the
+application's decision: grant the wallet `pubsub` write (a runtime grant, or
+`pubsub:topic=chat.*`), or publish from a function, which is unaffected. The
+refusal is `403 INSUFFICIENT_SCOPE` with `required_permission: pubsub:write:*` and a
+message naming those two remedies, on `/v1/pubsub/publish` and
+`/v1/pubsub/publish-batch`, and a frame sent on a subscribe socket the caller may
+not write to is not published (the socket answers `publish_error`). An API key
+stays on its own scopes and is never looked up here. `enforced` in
 `orama members list` and in the answer to adding a member says whether the
 selector's domain is one of the four above.
 

@@ -283,6 +283,10 @@ func (g *Gateway) Routes() http.Handler {
 		if g.webrtcServeSFURoutes {
 			mux.HandleFunc("/v1/webrtc/signal", g.webrtcHandlers.SignalHandler)
 			mux.HandleFunc("/v1/webrtc/rooms", g.webrtcHandlers.RoomsHandler)
+			// The namespace's WebRTC policy, and where its SFUs report
+			// membership (docs/WEBRTC.md#admission).
+			mux.HandleFunc("/v1/webrtc/config", g.webrtcHandlers.ConfigHandler)
+			mux.HandleFunc("/v1/internal/webrtc/events", g.webrtcHandlers.EventsHandler) // ctrlauth.EventsPath
 		}
 	}
 

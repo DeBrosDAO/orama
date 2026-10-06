@@ -570,12 +570,27 @@ func isWebSocketUpgrade(r *http.Request) bool {
 }
 
 // proxyWebSocket proxies a WebSocket connection by hijacking the client connection
-// and tunneling bidirectionally to the backend
+// and tunneling bidirectionally to the backend. A backend that cannot be dialed
+// is answered with a typed, retryable 503 (see tunnelWebSocket).
 func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetHost string) bool {
+	proxied, dialErr := g.tunnelWebSocket(w, r, targetHost)
+	if dialErr != nil {
+		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
+			"WebSocket backend unavailable, retry", httputil.WithRetryable())
+		return false
+	}
+	return proxied
+}
+
+// tunnelWebSocket does the work of proxyWebSocket. A non-nil dialErr means the
+// backend could not be dialed: nothing was sent to it and nothing was written
+// to w, so the caller may try another backend or answer the client itself.
+// Every other failure has already been answered on w.
+func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, targetHost string) (proxied bool, dialErr error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "WebSocket proxy not supported", http.StatusInternalServerError)
-		return false
+		return false, nil
 	}
 
 	// Connect to backend
@@ -585,8 +600,7 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 			zap.String("target", targetHost),
 			zap.Error(err),
 		)
-		http.Error(w, "Backend unavailable", http.StatusServiceUnavailable)
-		return false
+		return false, fmt.Errorf("failed to dial WebSocket backend %s: %w", targetHost, err)
 	}
 
 	// Write the original request to backend (this initiates the WebSocket handshake)
@@ -596,7 +610,7 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 			zap.Error(err),
 		)
 		http.Error(w, "Failed to initiate WebSocket", http.StatusBadGateway)
-		return false
+		return false, nil
 	}
 
 	// Hijack client connection
@@ -606,7 +620,7 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 		g.logger.ComponentError(logging.ComponentGeneral, "WebSocket hijack failed",
 			zap.Error(err),
 		)
-		return false
+		return false, nil
 	}
 
 	// Flush any buffered data from the client
@@ -635,7 +649,7 @@ func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetH
 	backendConn.Close()
 	<-done
 
-	return true
+	return true, nil
 }
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
@@ -702,7 +716,7 @@ func (g *Gateway) securityHeadersMiddleware(next http.Handler) http.Handler {
 		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
 			w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		}
-		next.ServeHTTP(w, r)
+		noStoreAPIResponses(next).ServeHTTP(w, r)
 	})
 }
 
@@ -1783,9 +1797,6 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 			httputil.WithRetryable())
 		return
 	}
-	gatewayIP := selected.ip
-	gatewayPort := selected.port
-	targetHost := gatewayIP + ":" + strconv.Itoa(gatewayPort)
 
 	// Handle WebSocket upgrade requests specially (http.Client can't handle 101 Switching Protocols)
 	if isWebSocketUpgrade(r) {
@@ -1829,23 +1840,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
-		r.URL.Scheme = "http"
-		r.URL.Host = targetHost
-		r.Host = targetHost
-		// Record the outcome. Without this a WS upgrade that happened to be the
-		// half-open probe held the breaker's single probe slot for the life of
-		// the process, silently removing a healthy node from the round-robin -
-		// and a target that failed ONLY on WS never opened a breaker at all, so
-		// it kept receiving signalling traffic forever.
-		if g.proxyWebSocket(w, r, targetHost) {
-			if cb != nil {
-				cb.RecordSuccess()
-			}
-			return
-		}
-		if cb != nil {
-			cb.RecordFailure()
-		}
+		g.proxyNamespaceWebSocket(w, r, orderedTargets, selectedIdx, cb, namespaceName)
 		return
 	}
 

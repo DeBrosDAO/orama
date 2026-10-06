@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/sfu/ctrlauth"
 	"github.com/DeBrosOfficial/network/pkg/sfu/roomid"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
@@ -42,13 +43,13 @@ var signalUpgrader = websocket.Upgrader{
 	CheckOrigin:     func(*http.Request) bool { return true }, // authenticated before this handler
 }
 
-// joinFrame is the client's first frame: {"type":"join","data":{"roomId","userId"}}
-// (core/pkg/sfu/signaling.go).
+// joinFrame is the client's first frame: {"type":"join","data":{"roomId"}}
+// (core/pkg/sfu/signaling.go). A userId in it is ignored: the peer is the user
+// the gateway authenticated.
 type joinFrame struct {
 	Type string `json:"type"`
 	Data struct {
 		RoomID string `json:"roomId"`
-		UserID string `json:"userId"`
 	} `json:"data"`
 }
 
@@ -60,9 +61,6 @@ func parseJoinFrame(raw []byte) (string, error) {
 	}
 	if f.Type != joinMessageType {
 		return "", errors.New("the first frame must be a join")
-	}
-	if f.Data.UserID == "" {
-		return "", errors.New("roomId and userId are required")
 	}
 	if err := roomid.Validate(f.Data.RoomID); err != nil {
 		return "", err
@@ -86,6 +84,12 @@ func (h *WebRTCHandlers) signalByJoinFrame(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ticket, refusal := h.authorizeJoin(r.Context(), r, ns, room)
+	if refusal != nil {
+		refuse(client, refusal.frameCode, refusal.message)
+		return
+	}
+
 	owner, err := h.ownerOf(r.Context(), ns, room)
 	if err != nil {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "No SFU available for room",
@@ -94,7 +98,7 @@ func (h *WebRTCHandlers) signalByJoinFrame(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	backend, err := dialSFU(r, owner, room)
+	backend, err := dialSFU(r, owner, room, ticket)
 	if err != nil {
 		h.logger.ComponentWarn(logging.ComponentGeneral, "SFU dial failed",
 			zap.String("namespace", ns), zap.String("target", owner.Addr()), zap.Error(err))
@@ -133,11 +137,12 @@ func readJoinFrame(c *websocket.Conn, timeout time.Duration) (frame []byte, room
 }
 
 // dialSFU opens the signalling socket to the owning SFU, naming the room in the
-// URL so the SFU's own room check applies.
-func dialSFU(r *http.Request, owner SFUNode, room string) (*websocket.Conn, error) {
+// URL so the SFU's own room check applies, and presenting the join ticket the
+// SFU takes the peer's identity from.
+func dialSFU(r *http.Request, owner SFUNode, room, ticket string) (*websocket.Conn, error) {
 	target := "ws://" + owner.Addr() + "/ws/signal?" + url.Values{roomQueryParam: {room}}.Encode()
 	d := websocket.Dialer{HandshakeTimeout: sfuDialTimeout, Proxy: nil}
-	conn, _, err := d.DialContext(r.Context(), target, nil)
+	conn, _, err := d.DialContext(r.Context(), target, http.Header{ctrlauth.TicketHeader: {ticket}})
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial SFU %s: %w", owner.Addr(), err)
 	}

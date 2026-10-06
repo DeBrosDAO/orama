@@ -32,11 +32,13 @@ type PubSubManager interface {
 // Reference-counted libp2p subscriptions: only one active sub per
 // (namespace, topic) regardless of how many clients are bridged.
 type Bridge struct {
-	mu     sync.RWMutex
-	perNS  map[string]*nsTable
-	pubsub PubSubManager
-	ws     WSSender
-	logger *zap.Logger
+	mu    sync.RWMutex
+	perNS map[string]*nsTable
+	// enveloped is the set of clients that opted in to Delivery frames.
+	enveloped map[string]struct{}
+	pubsub    PubSubManager
+	ws        WSSender
+	logger    *zap.Logger
 }
 
 // nsTable holds bridge state for one namespace.
@@ -62,10 +64,11 @@ type clientNSTable struct {
 // host functions degrade to no-ops in that case.
 func New(ps PubSubManager, ws WSSender, logger *zap.Logger) *Bridge {
 	return &Bridge{
-		perNS:  make(map[string]*nsTable),
-		pubsub: ps,
-		ws:     ws,
-		logger: logger,
+		perNS:     make(map[string]*nsTable),
+		enveloped: make(map[string]struct{}),
+		pubsub:    ps,
+		ws:        ws,
+		logger:    logger,
 	}
 }
 
@@ -171,6 +174,9 @@ func (b *Bridge) RemoveClient(ctx context.Context, clientID string) {
 	cns.mu.Lock()
 	delete(cns.m, clientID)
 	cns.mu.Unlock()
+	b.mu.Lock()
+	delete(b.enveloped, clientID)
+	b.mu.Unlock()
 
 	b.mu.RLock()
 	tables := make([]*nsTable, 0, len(b.perNS))
@@ -251,38 +257,6 @@ func (b *Bridge) Stats() Stats {
 	}
 	out.ActiveClients = len(uniqueClients)
 	return out
-}
-
-// forward fans an inbound libp2p message out to all bridged clients on the
-// given (namespace, topic). Direct send; if a client's WS is slow/closed
-// the send returns an error which we log-and-drop (no per-message buffering
-// in v1; revisit if metrics show drops).
-func (b *Bridge) forward(namespace, topic string, data []byte) {
-	b.mu.RLock()
-	tbl, ok := b.perNS[namespace]
-	b.mu.RUnlock()
-	if !ok {
-		return
-	}
-	tbl.mu.Lock()
-	clients := tbl.topicToClients[topic]
-	cidSlice := make([]string, 0, len(clients))
-	for c := range clients {
-		cidSlice = append(cidSlice, c)
-	}
-	tbl.mu.Unlock()
-
-	if b.ws == nil {
-		return
-	}
-	for _, cid := range cidSlice {
-		if err := b.ws.Send(cid, data); err != nil {
-			b.logger.Debug("wsbridge.forward: ws send failed (slow/closed client)",
-				zap.String("client_id", cid),
-				zap.String("topic", topic),
-				zap.Error(err))
-		}
-	}
 }
 
 func (b *Bridge) getOrCreateNS(namespace string) *nsTable {

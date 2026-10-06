@@ -246,13 +246,11 @@ func TestRoomBuildICEServersMultipleTURN(t *testing.T) {
 
 func TestEmptyRoomCleanup(t *testing.T) {
 	// Override timeAfter for instant timer
-	origTimeAfter := timeAfter
-	timeAfter = func(d time.Duration) <-chan time.Time {
+	defer overrideTimeAfter(func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
 		ch <- time.Now()
 		return ch
-	}
-	defer func() { timeAfter = origTimeAfter }()
+	})()
 
 	rm := NewRoomManager(testConfig(), testLogger())
 	room := rm.GetOrCreateRoom("room-1")
@@ -317,13 +315,11 @@ func TestHealthEndpointDraining(t *testing.T) {
 
 func TestServerDrainSetsFlag(t *testing.T) {
 	// Override timeAfter for instant timer
-	origTimeAfter := timeAfter
-	timeAfter = func(d time.Duration) <-chan time.Time {
+	defer overrideTimeAfter(func(d time.Duration) <-chan time.Time {
 		ch := make(chan time.Time, 1)
 		ch <- time.Now()
 		return ch
-	}
-	defer func() { timeAfter = origTimeAfter }()
+	})()
 
 	cfg := testConfig()
 	server, err := NewServer(cfg, testLogger())
@@ -369,4 +365,10 @@ func TestServerSignalEndpointRejectsDraining(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
 	}
+}
+
+// overrideTimeAfter replaces timeAfter and returns the function that restores it.
+func overrideTimeAfter(f func(time.Duration) <-chan time.Time) func() {
+	timeAfterHook.Store(&f)
+	return func() { timeAfterHook.Store(nil) }
 }

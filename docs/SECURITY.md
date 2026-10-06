@@ -263,6 +263,19 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - **IPFS Cluster:** generated unit and `ipfs-cluster-service init` refuse an empty `CLUSTER_SECRET`
 - **Agent logs:** `/v1/agent/logs?service=` is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`); path traversal is rejected
 
+### Response caching
+
+Every `/v1/*` response carries `Cache-Control: no-store` and `Pragma: no-cache`
+(bugboard #735), so a download or an API answer is not kept in a browser's or a
+WebView's disk cache where it would outlive the session. It is a default, set in
+the gateway's middleware chain (`securityHeadersMiddleware`) on the cluster
+gateway and on every namespace gateway: a response that reaches its status line
+with a `Cache-Control` of its own keeps it, which is how the public status
+endpoint (`/v1/status`, `public, max-age=5`) and the status page (`public,
+max-age=300`) stay cacheable, and a proxied response keeps the upstream's value
+rather than gaining a second one. Paths outside `/v1/` (deployments, static
+sites, custom domains) are not touched and keep whatever their own handler sets.
+
 ### Token & Key Storage
 
 **Refresh Token Hashing (Step 1.5)**

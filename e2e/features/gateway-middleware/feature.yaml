@@ -31,3 +31,4 @@ covers:
     - "docs/ARCHITECTURE.md#middleware-stack: security headers and CORS run before routing and authentication"
     - "docs/MONITORING.md#public-status-page: /status is the page to a browser and JSON otherwise, under a CSP that allows nothing else; a subdomain's /status is its deployment's"
     - "docs/ARCHITECTURE.md#data-flow: the namespace host is proxied to the namespace's gateways from every node"
+    - "docs/SECURITY.md#response-caching: every /v1/* response is Cache-Control: no-store unless the route chooses its own (/v1/status is public, max-age=5)"

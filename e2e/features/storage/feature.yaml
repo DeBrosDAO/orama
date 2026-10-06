@@ -43,3 +43,4 @@ covers:
     - "docs/MONITORING.md#ipfs: the collector reads Kubo, the cluster and the pin-lock list with their credentials"
     - "docs/API_SURFACE.md#storage: unpin is idempotent; immediate=true reclaims everywhere; shared content is kept"
     - "docs/API_SURFACE.md#internal: /v1/internal/storage/evict is node-to-node only and never reachable by a client or by an unprivileged local process"
+    - "docs/SECURITY.md#response-caching: /v1/storage/get answers Cache-Control: no-store so a download is not kept in a client disk cache"

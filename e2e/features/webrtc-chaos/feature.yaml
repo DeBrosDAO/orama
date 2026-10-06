@@ -1,7 +1,10 @@
 # WebRTC under failure: an SFU stopped mid-call tells its peers
 # server-draining and a reconnect through another node carries media again;
 # a node partitioned past the viability grace loses its TURN role to live
-# nodes (DNS and relays follow), and the cluster converges after it heals.
+# nodes (DNS and relays follow), and the cluster converges after it heals; a
+# signalling socket entering at a node whose namespace gateway is down is
+# taken by another member, and with every member down is answered with a typed
+# retryable 503.
 id: webrtc-chaos
 title: WebRTC with an SFU down and a node partitioned
 area: webrtc
@@ -15,5 +18,6 @@ requires:
 covers:
   claims:
     - "docs/WEBRTC.md#3-connect-signaling-websocket: server-draining tells clients to reconnect to another node"
+    - "docs/WEBRTC.md#signaling-socket-failover: a signalling upgrade whose selected namespace gateway cannot be dialed is taken by the next member; with every member down the answer is a typed, retryable NAMESPACE_GATEWAY_UNAVAILABLE 503"
     - "docs/WEBRTC.md#room-placement: a room whose SFU is down is placed on a healthy SFU, and all peers reconnecting through different gateways meet there"
     - "docs/WEBRTC.md#role-reconciliation: roles of a node non-viable past the grace move to live members; DNS advertises only nodes serving TURN"

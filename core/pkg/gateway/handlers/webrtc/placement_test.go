@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/sfu/ctrlauth"
 	"github.com/gorilla/websocket"
 )
 
@@ -24,11 +25,12 @@ type fakeSFU struct {
 	draining bool
 	rooms    map[string]bool
 	joins    chan string // first frame of each signalling socket, with its ?room=
+	tickets  chan string // the join ticket each signalling socket presented
 }
 
 func newFakeSFU(t *testing.T, id string) *fakeSFU {
 	t.Helper()
-	f := &fakeSFU{rooms: map[string]bool{}, joins: make(chan string, 16)}
+	f := &fakeSFU{rooms: map[string]bool{}, joins: make(chan string, 16), tickets: make(chan string, 16)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/signal", f.handleSignal)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +56,10 @@ func newFakeSFU(t *testing.T, id string) *fakeSFU {
 
 // handleSignal records the first frame and its ?room=, answers welcome, then echoes.
 func (f *fakeSFU) handleSignal(w http.ResponseWriter, r *http.Request) {
+	select {
+	case f.tickets <- r.Header.Get(ctrlauth.TicketHeader):
+	default:
+	}
 	c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -86,13 +92,15 @@ func (d staticDirectory) SFUNodes(context.Context, string) ([]SFUNode, error) { 
 
 // gatewayFor builds the signal handler of one gateway node over a shared
 // directory and reports the SFU each socket it proxies is sent to.
-func gatewayFor(dir SFUDirectory, target *string) *WebRTCHandlers {
+func gatewayFor(t *testing.T, dir SFUDirectory, target *string) *WebRTCHandlers {
+	t.Helper()
 	logger, _ := logging.NewColoredLogger(logging.ComponentGeneral, false)
-	h := NewWebRTCHandlers(logger, "10.0.0.9", 30000, "", "", func(w http.ResponseWriter, r *http.Request, targetHost string) bool {
+	h := NewWebRTCHandlers(logger, "10.0.0.9", 30000, "", testTURNSecret, func(w http.ResponseWriter, r *http.Request, targetHost string) bool {
 		*target = targetHost
 		return true
 	})
 	h.SetSFUDirectory(dir)
+	withAdmissions(t, h)
 	return h
 }
 
@@ -211,7 +219,7 @@ func TestPickSFUOwner(t *testing.T) {
 func TestSignalHandler_twoGatewaysSameRoomSameSFU(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var targetA, targetB string
-	gwA, gwB := gatewayFor(dir, &targetA), gatewayFor(dir, &targetB)
+	gwA, gwB := gatewayFor(t, dir, &targetA), gatewayFor(t, dir, &targetB)
 
 	for i := 0; i < 20; i++ {
 		room := fmt.Sprintf("call-%d", i)
@@ -230,7 +238,7 @@ func TestSignalHandler_twoGatewaysSameRoomSameSFU(t *testing.T) {
 func TestSignalHandler_differentRoomsUseMoreThanOneSFU(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 	seen := map[string]bool{}
 	for i := 0; i < 40; i++ {
 		signalTo(gw, "ns", fmt.Sprintf("r-%d", i))
@@ -244,7 +252,7 @@ func TestSignalHandler_differentRoomsUseMoreThanOneSFU(t *testing.T) {
 func TestSignalHandler_proxiesToSFUSignalPath(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 	req := requestWithNamespace("GET", "/v1/webrtc/signal?room=r1", "ns")
 	gw.SignalHandler(httptest.NewRecorder(), req)
 	if req.URL.Path != "/ws/signal" || req.URL.Host != target || req.Host != target {
@@ -260,7 +268,7 @@ func TestSignalHandler_proxiesToSFUSignalPath(t *testing.T) {
 func TestSignalHandler_ownerDownRehomesAllGatewaysToSameNode(t *testing.T) {
 	sfus, dir := threeSFUs(t)
 	var targetA, targetB string
-	gwA, gwB := gatewayFor(dir, &targetA), gatewayFor(dir, &targetB)
+	gwA, gwB := gatewayFor(t, dir, &targetA), gatewayFor(t, dir, &targetB)
 
 	signalTo(gwA, "ns", "standup")
 	owner := sfuByAddr(sfus, targetA)
@@ -282,7 +290,7 @@ func TestSignalHandler_ownerDownRehomesAllGatewaysToSameNode(t *testing.T) {
 func TestSignalHandler_drainingOwnerRehomes(t *testing.T) {
 	sfus, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 
 	signalTo(gw, "ns", "standup")
 	owner := sfuByAddr(sfus, target)
@@ -297,7 +305,7 @@ func TestSignalHandler_drainingOwnerRehomes(t *testing.T) {
 func TestSignalHandler_recoveredOwnerDoesNotStealLiveRoom(t *testing.T) {
 	sfus, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 
 	signalTo(gw, "ns", "standup")
 	owner := sfuByAddr(sfus, target)
@@ -318,7 +326,7 @@ func TestSignalHandler_recoveredOwnerDoesNotStealLiveRoom(t *testing.T) {
 func TestSignalHandler_joinsRoomAlreadyLiveOnNonTopNode(t *testing.T) {
 	sfus, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 
 	signalTo(gw, "ns", "legacy")
 	top := sfuByAddr(sfus, target)
@@ -337,7 +345,7 @@ func TestSignalHandler_joinsRoomAlreadyLiveOnNonTopNode(t *testing.T) {
 func TestSignalHandler_setChangeMovesOnlyRoomsOfRemovedNode(t *testing.T) {
 	sfus, dir := threeSFUs(t)
 	var target string
-	gw := gatewayFor(dir, &target)
+	gw := gatewayFor(t, dir, &target)
 
 	before := map[string]string{}
 	for i := 0; i < 30; i++ {
@@ -363,7 +371,7 @@ func TestSignalHandler_setChangeMovesOnlyRoomsOfRemovedNode(t *testing.T) {
 func TestSignalHandler_invalidRoomQueryIs400(t *testing.T) {
 	_, dir := threeSFUs(t)
 	var target string
-	w := signalTo(gatewayFor(dir, &target), "ns", "has a space")
+	w := signalTo(gatewayFor(t, dir, &target), "ns", "has a space")
 	if w.Code != http.StatusBadRequest || target != "" {
 		t.Fatalf("status = %d target = %q, want 400 and no proxy", w.Code, target)
 	}
@@ -371,7 +379,7 @@ func TestSignalHandler_invalidRoomQueryIs400(t *testing.T) {
 
 func TestSignalHandler_noSFUNodesIs503(t *testing.T) {
 	var target string
-	w := signalTo(gatewayFor(staticDirectory{}, &target), "ns", "r")
+	w := signalTo(gatewayFor(t, staticDirectory{}, &target), "ns", "r")
 	if w.Code != http.StatusServiceUnavailable || target != "" {
 		t.Fatalf("status = %d target = %q, want 503 and no proxy", w.Code, target)
 	}
@@ -383,7 +391,7 @@ func TestSignalHandler_noHealthySFUIs503(t *testing.T) {
 		s.setDraining(true)
 	}
 	var target string
-	w := signalTo(gatewayFor(dir, &target), "ns", "r")
+	w := signalTo(gatewayFor(t, dir, &target), "ns", "r")
 	if w.Code != http.StatusServiceUnavailable || target != "" {
 		t.Fatalf("status = %d target = %q, want 503 and no proxy", w.Code, target)
 	}
@@ -391,7 +399,7 @@ func TestSignalHandler_noHealthySFUIs503(t *testing.T) {
 
 func TestSignalHandler_registryErrorIs503(t *testing.T) {
 	var target string
-	w := signalTo(gatewayFor(staticDirectory{err: errors.New("rqlite down")}, &target), "ns", "r")
+	w := signalTo(gatewayFor(t, staticDirectory{err: errors.New("rqlite down")}, &target), "ns", "r")
 	if w.Code != http.StatusServiceUnavailable || target != "" {
 		t.Fatalf("status = %d target = %q, want 503 and no proxy", w.Code, target)
 	}

@@ -32,6 +32,12 @@ const (
 	MsgRefreshCreds   = "refresh-credentials"
 	MsgServerDraining = "server-draining"
 	MsgError          = "error"
+	// Participant state and moderation (docs/WEBRTC.md#audio-and-video-state,
+	// #kick-and-mute).
+	MsgAudioState       = "audio-state"
+	MsgVideoState       = "video-state"
+	MsgParticipantState = "participant-state"
+	MsgKicked           = "kicked"
 	// rtcPacketBurst is how many RTP packets one Publish call writes.
 	rtcPacketBurst = 50
 	opusPayload    = 111
@@ -61,9 +67,24 @@ type RTCPeer struct {
 	track    *webrtc.TrackLocalStaticRTP
 	received atomic.Int64
 	seq      uint16
-	Messages chan SignalMsg // every frame, for tests that watch the protocol
-	Creds    TURNCreds
-	PeerID   string
+	// video publishing and keyframe feedback (rtc_video.go)
+	videoTrack *webrtc.TrackLocalStaticRTP
+	videoSeq   uint16
+	videoSSRC  atomic.Uint32  // SSRC of the video track received from the room
+	plis       atomic.Int64   // PLI/FIR read on the published video track's sender
+	Messages   chan SignalMsg // every frame, for tests that watch the protocol
+	Creds      TURNCreds
+	PeerID     string
+	// Participants are who the welcome listed in the room, this peer included,
+	// as the SFU names them: by the identity the gateway authenticated.
+	Participants []Participant
+}
+
+// Participant is one entry of the welcome's participant list.
+type Participant struct {
+	PeerID   string `json:"peerId"`
+	UserID   string `json:"userId"`
+	DeviceID string `json:"deviceId"`
 }
 
 // JoinRoom opens the signalling socket through c as token, joins room as
@@ -88,12 +109,13 @@ func JoinRoom(ctx context.Context, c *gw.Client, token, room, userID string) (*R
 		switch m.Type {
 		case MsgWelcome:
 			var w struct {
-				PeerID string `json:"peerId"`
+				PeerID       string        `json:"peerId"`
+				Participants []Participant `json:"participants"`
 			}
 			if err := json.Unmarshal(m.Data, &w); err != nil {
 				return nil, fmt.Errorf("welcome: %w", err)
 			}
-			p.PeerID = w.PeerID
+			p.PeerID, p.Participants = w.PeerID, w.Participants
 		case MsgTURNCreds:
 			if err := json.Unmarshal(m.Data, &p.Creds); err != nil {
 				return nil, fmt.Errorf("turn-credentials: %w", err)
@@ -104,6 +126,11 @@ func JoinRoom(ctx context.Context, c *gw.Client, token, room, userID string) (*R
 	}
 	return p, nil
 }
+
+// SendState tells the room whether this peer is sending audio or video: kind
+// is MsgAudioState or MsgVideoState, data the frame's payload as the client
+// would send it.
+func (p *RTCPeer) SendState(kind string, data any) error { return p.send(kind, data) }
 
 // Close leaves the room.
 func (p *RTCPeer) Close() {
@@ -152,6 +179,9 @@ func (p *RTCPeer) Start(publish bool) error {
 		}
 	})
 	pc.OnTrack(func(tr *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		if tr.Kind() == webrtc.RTPCodecTypeVideo {
+			p.videoSSRC.Store(uint32(tr.SSRC()))
+		}
 		for {
 			if _, _, err := tr.ReadRTP(); err != nil {
 				return
@@ -175,6 +205,11 @@ func (p *RTCPeer) publishTrack() error {
 		return fmt.Errorf("add the track: %w", err)
 	}
 	p.track = track
+	return p.sendOffer()
+}
+
+// sendOffer makes the peer's own offer and sends it.
+func (p *RTCPeer) sendOffer() error {
 	offer, err := p.pc.CreateOffer(nil)
 	if err != nil {
 		return fmt.Errorf("create the offer: %w", err)

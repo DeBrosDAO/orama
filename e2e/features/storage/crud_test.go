@@ -42,6 +42,11 @@ func TestUpload_multipartRoundTrip(t *testing.T) {
 	if cd := r.Header.Get("Content-Disposition"); !strings.Contains(cd, u.Cid) {
 		t.Errorf("download disposition %q does not name the CID", cd)
 	}
+	// A download is a user's data: it must not land in a client's disk cache
+	// (docs/SECURITY.md#response-caching, bugboard #735).
+	if cc := r.Header.Values("Cache-Control"); len(cc) != 1 || cc[0] != "no-store" {
+		t.Errorf("download Cache-Control %v, want exactly no-store", cc)
+	}
 }
 
 // TestUpload_jsonBase64RoundTrip: the JSON form {name, data} is what the

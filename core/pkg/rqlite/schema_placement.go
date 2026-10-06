@@ -139,6 +139,8 @@ var tablePlacement = map[string]tableNote{
 	"namespace_webrtc_config":     {PlacementNamespace, TrustPlatform, "read on the WebRTC path, per namespace"},
 	"push_devices":                {PlacementNamespace, TrustTenantData, "the tenant's devices"},
 	"push_topics":                 {PlacementNamespace, TrustTenantData, "the tenant's devices, addressed by rotating topic (FEAT-265)"},
+	"webrtc_settings":             {PlacementNamespace, TrustPlatform, "the namespace's own WebRTC policy (require_admission), read on the join path of its gateways; written through /v1/webrtc/config, which validates it"},
+	"webrtc_admissions":           {PlacementNamespace, TrustPlatform, "who the namespace's functions admitted to its rooms, checked on the join path of its gateways; written through webrtc_admit, which bounds the room, the user and the ttl"},
 	"webrtc_rooms":                {PlacementCluster, TrustPlatform, "only the cluster manager and namespace delete touch it (both on the index gateway, both to delete a namespace's rows); no namespace gateway code reads or writes a room row"},
 	"request_logs":                {PlacementNamespace, TrustTelemetry, "this gateway's own request log"},
 	"subscriptions":               {PlacementNamespace, TrustTenantData, "dead since 002_core; stripped separately by name collision"},

@@ -553,6 +553,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			gw.webrtcHandlers.SetSFUDirectory(newRegistrySFUDirectory(deps.globalSQLDB, sfuDirectoryTTL))
 		}
 		applyTURNHosts(gw.webrtcHandlers, cfg)
+		gw.wireWebRTCAdmission(cfg, deps)
 		logger.ComponentInfo(logging.ComponentGeneral, "WebRTC handlers initialized",
 			zap.Int("sfu_port", cfg.SFUPort),
 			zap.Bool("turn_secret_set", cfg.TURNSecret != ""),

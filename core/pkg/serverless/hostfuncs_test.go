@@ -222,6 +222,18 @@ func (m *mockHostServices) RevokeCapability(ctx context.Context, token string) e
 	return nil
 }
 
+func (m *mockHostServices) WebRTCAdmit(ctx context.Context, room, user, device string, ttl time.Duration) (string, error) {
+	return "", nil
+}
+
+func (m *mockHostServices) WebRTCKick(ctx context.Context, room, user string) error {
+	return nil
+}
+
+func (m *mockHostServices) WebRTCMute(ctx context.Context, room, user string, muted bool) error {
+	return nil
+}
+
 func (m *mockHostServices) EnqueueBackground(ctx context.Context, functionName string, payload []byte) (string, error) {
 	return "", nil
 }

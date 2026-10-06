@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/sfu/ctrlauth"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,8 +20,52 @@ type rawFrame struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// dialSignal opens a signalling socket to a real handleSignal behind httptest.
+// testTicket is a valid ticket for room, as the namespace gateway would issue it.
+func testTicket(t *testing.T, s *Server, room, user string) ctrlauth.Ticket {
+	t.Helper()
+	return ctrlauth.Ticket{
+		Namespace:  s.config.Namespace,
+		Room:       room,
+		UserID:     user,
+		IssuedAtMs: time.Now().UnixMilli(),
+		Expires:    time.Now().Add(ctrlauth.TicketTTL).Unix(),
+	}
+}
+
+// sealTicket signs tk with the server's own key.
+func sealTicket(t *testing.T, s *Server, tk ctrlauth.Ticket) string {
+	t.Helper()
+	token, err := tk.Seal(s.controlKey)
+	if err != nil {
+		t.Fatalf("seal ticket: %v", err)
+	}
+	return token
+}
+
+// dialSignal opens a signalling socket to a real handleSignal behind httptest,
+// as user u1 admitted to the room the query names (r1 when it names none).
 func dialSignal(t *testing.T, s *Server, query string) *websocket.Conn {
+	t.Helper()
+	room, _ := url.ParseQuery(query)
+	id := room.Get("room")
+	if id == "" {
+		id = "r1"
+	}
+	return dialSignalAs(t, s, query, testTicket(t, s, id, "u1"))
+}
+
+// dialSignalAs opens a signalling socket presenting tk.
+func dialSignalAs(t *testing.T, s *Server, query string, tk ctrlauth.Ticket) *websocket.Conn {
+	t.Helper()
+	conn, resp, err := tryDial(t, s, query, http.Header{ctrlauth.TicketHeader: {sealTicket(t, s, tk)}})
+	if err != nil {
+		t.Fatalf("dial: %v (status %v)", err, resp)
+	}
+	return conn
+}
+
+// tryDial dials with exactly the headers given and returns what came back.
+func tryDial(t *testing.T, s *Server, query string, header http.Header) (*websocket.Conn, *http.Response, error) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(s.handleSignal))
 	t.Cleanup(srv.Close)
@@ -28,12 +73,11 @@ func dialSignal(t *testing.T, s *Server, query string) *websocket.Conn {
 	if query != "" {
 		u += "?" + query
 	}
-	conn, _, err := websocket.DefaultDialer.Dial(u, nil)
-	if err != nil {
-		t.Fatalf("dial %s: %v", u, err)
+	conn, resp, err := websocket.DefaultDialer.Dial(u, header)
+	if err == nil {
+		t.Cleanup(func() { conn.Close() })
 	}
-	t.Cleanup(func() { conn.Close() })
-	return conn
+	return conn, resp, err
 }
 
 func sendJoin(t *testing.T, conn *websocket.Conn, room string) {

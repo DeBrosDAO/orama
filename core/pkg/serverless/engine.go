@@ -353,6 +353,9 @@ func (e *Engine) Execute(ctx context.Context, fn *Function, input []byte, invCtx
 	// shared gossipsub router (no WASM fuel metering exists; the rate limiter
 	// gates invocation frequency, not per-invocation host-call volume).
 	execCtx = WithPublishCounter(execCtx)
+	// Likewise for the webrtc_* host calls, each of which writes the namespace's
+	// database and calls every SFU.
+	execCtx = WithWebRTCCounter(execCtx)
 
 	// Raw-HTTP-response mode (bugboard #835). Only RawHTTPResponse functions
 	// get a collector attached — set_http_response is a validated no-op for
@@ -953,6 +956,9 @@ func (e *Engine) registerHostModule(ctx context.Context) error {
 			NewFunctionBuilder().WithFunc(e.hPushSendV2).Export("push_send_v2").
 			NewFunctionBuilder().WithFunc(e.hPushSendTopic).Export("push_send_topic").
 			NewFunctionBuilder().WithFunc(e.hTurnCredentials).Export("turn_credentials").
+			NewFunctionBuilder().WithFunc(e.hWebRTCAdmit).Export("webrtc_admit").
+			NewFunctionBuilder().WithFunc(e.hWebRTCKick).Export("webrtc_kick").
+			NewFunctionBuilder().WithFunc(e.hWebRTCMute).Export("webrtc_mute").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubBridge).Export("ws_pubsub_bridge").
 			NewFunctionBuilder().WithFunc(e.hWSPubSubUnbridge).Export("ws_pubsub_unbridge").
 			NewFunctionBuilder().WithFunc(e.hWSSend).Export("ws_send").

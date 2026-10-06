@@ -162,7 +162,7 @@ func (h *ServerlessHandlers) handleStatelessWebSocket(w http.ResponseWriter, r *
 	// Track client → namespace for ws_pubsub_bridge auth checks, and
 	// auto-clean any bridged topics when the connection ends.
 	if h.wsBridge != nil {
-		h.wsBridge.SetClientNamespace(clientID, namespace)
+		h.registerBridgeClient(r, clientID, namespace)
 		defer h.wsBridge.RemoveClient(context.Background(), clientID)
 	}
 

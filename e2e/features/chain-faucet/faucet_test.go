@@ -86,7 +86,7 @@ func TestFaucet_secondDripInTheCooldownIsRefused(t *testing.T) {
 	n := signer(t, c)
 	p := readParams(t, c, n)
 	if p.Params.Cooldown.IsZero() {
-		t.Skip("the run chain has no faucet cooldown (faucet_recipient_cooldown_seconds is 0)")
+		harness.SkipNotApplicable(t, "the run chain has no faucet cooldown (faucet_recipient_cooldown_seconds is 0)")
 	}
 	k := c.NewKey(t, n, "e2e-faucet-cooldown")
 	first := chain.Orama(1)
