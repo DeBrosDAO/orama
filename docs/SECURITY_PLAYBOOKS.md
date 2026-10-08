@@ -124,7 +124,8 @@ chain-id is not settled. Rehearse it on stagenet first. Not possible: adding a s
 `x/relay` pays relays from reports signed by a reporter set. The set is separate from the `DIRAUTH`
 role in `x/nodes`, which is only a registered, bonded role. Nothing on chain links a reporter to a
 `DIRAUTH` node. No code runs a directory authority yet (`core/pkg/tornet` validates a parameter
-set and nothing more), so a compromise today means a compromised reporter key.
+set and nothing more), so a compromise today means a compromised reporter key. A reporter is
+`orama-global reporter` on a dirauth host, signing with its own hot key ([TOR_NETWORK.md](TOR_NETWORK.md#the-relay-bandwidth-reporter)).
 
 **What can be seen**
 - `oramad query relay reporters`, `params`, `epoch <n>`, `relay <fingerprint>` and `invariants`.

@@ -1924,6 +1924,9 @@ The storage commands:
 - `core/pkg/tornet` accepts a parameter set only when it names at least three
   authorities, the exit policy is `reject *:*`, and signing certificates last
   12 months. `StartExit` refuses to launch an exit.
+- `chain/x/vpnlaunch` is the public-VPN launch gate: every threshold on each of the last 30 days and a launch
+  switch that is off in every build. Nothing links it into `oramad`
+  ([TOR_NETWORK.md](TOR_NETWORK.md#the-public-launch-gate)).
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
@@ -2329,6 +2332,11 @@ environment proxy, no redirects. Each command run uses one new SOCKS credential,
 circuit, so two transactions never share one. A failed onion path returns the error ("the transaction was not
 sent, and nothing was tried outside Tor") and never falls back to the clearnet. Reads (`orama chain`) do not
 go through Tor yet.
+
+`--onion-network <network.json>` (or `ORAMA_ONION_NETWORK`) makes the command start its own Tor client on an
+Orama Tor network, with that network's directory authorities and no others, and submit through it; without
+`--onion` it picks a validator onion service from the file at random for the transaction. The network file, the
+client and the failure behaviour are in [TOR_NETWORK.md](TOR_NETWORK.md#onion-transaction-submission).
 
 ## `x/wasm`: contracts
 
