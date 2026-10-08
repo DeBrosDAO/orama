@@ -82,7 +82,19 @@ ns2.stagenet.dbrsteting.bid.    IN  A   203.0.113.11
 ns3.stagenet.dbrsteting.bid.    IN  A   203.0.113.12
 ```
 
-`--json` prints the same as data. It reads the registry over SSH from the
+Below the records it asks DNS whether the parent zone returns them. Each
+nameserver must appear in the domain's NS set, and its own name must resolve to
+the address the cluster holds it at. Before you have created anything the
+answer is "not delegated yet" and lists every missing record; a record that
+resolves to another address is shown with what DNS returned and what the
+cluster expects. The result (delegated or not, and the findings, with the time)
+is stored on the environment in `environments.json`, per domain, and replaced on
+each run. If the resolver itself cannot answer (a timeout, SERVFAIL), the
+command says the delegation is unverified and stores nothing. Run it again once
+the records have propagated.
+
+`--json` prints the same as data, with `delegated` and `findings` added to each
+domain. It reads the registry over SSH from the
 environment's first node, and lists only slots whose glue exists — the same
 set the cluster's zone publishes. **Run it again after adding or removing a
 nameserver, and update the parent zone to match.**
