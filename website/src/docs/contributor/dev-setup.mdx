@@ -1,193 +1,90 @@
-# Development Environment Setup
+# Development setup
 
-This guide walks you through setting up a local development environment for contributing to the Orama ecosystem.
+How to build and test Orama from a checkout. Everything lives in one repository.
+
+## Repository layout
+
+| Path | What | Language |
+|---|---|---|
+| `core/` | Node software: gateway, CLI (`orama`), supervisor, install, monitor | Go 1.27.1+ |
+| `chain/` | The Orama chain (`oramad`, `orama-global`). Its own Go module; `core/` does not import it | Go |
+| `caddy/` | The Caddy modules built into every node's Caddy | Go |
+| `sdk/` | `@debros/orama`, the TypeScript SDK | TypeScript |
+| `sdk-vault/` | `@debros/orama-vault`, the vault client | TypeScript |
+| `vault/` | The guardian daemon | Zig |
+| `os/` | OramaOS: agent and Buildroot image | Go, Buildroot |
+| `website/` | The website and these docs | TypeScript (pnpm) |
+| `e2e/` | The fleet end-to-end suite | Go |
+| `docs/` | Engineering docs (architecture, CLI reference, runbooks) | Markdown |
+| `contracts/` | Request and response fixtures shared by Go and TypeScript tests | JSON |
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Go | 1.24+ | Core network services (go.mod requires 1.24.6) |
-| Node.js | 18+ | SDK, website, tooling |
-| pnpm | Latest | Node.js package management |
-| Git | Latest | Version control |
-| Make | Latest | Build automation |
-
-Zig and WireGuard tools are only needed if you're working on the Vault guardian binary or deploying to production nodes — they are not required for general development.
-
-### Installing Prerequisites
+| Tool | Version | Needed for |
+|---|---|---|
+| Go | 1.27.1 or newer | Everything in Go |
+| Node.js | 22.12 or newer (the repo pins 24 in `.nvmrc`) | The SDK and the website |
+| pnpm | Current | TypeScript packages |
+| Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama build` (it builds the vault), the vault |
+| xcaddy | Any recent | `orama build` (it builds Caddy with the Orama modules) |
+| git, make | Current | Version stamps, the Makefiles |
 
 ```bash
-# macOS (via Homebrew)
+# macOS
 brew install go node pnpm git make
-
-# Ubuntu/Debian
-sudo apt install -y golang-go nodejs npm git make
-npm install -g pnpm
-
-# Verify installations
-go version    # must be 1.24+
-node --version
-pnpm --version
+# Zig 0.15.x from https://ziglang.org/download/ (the build checks the minor release)
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+go version        # 1.27.1 or newer
+zig version       # 0.15.x
 ```
 
-## Cloning the Repository
+For a real cluster you also need [RootWallet](/docs/rootwallet/install) for signing and SSH keys.
 
-The Orama codebase is a monorepo that includes the network services, CLI, Go SDK, TypeScript SDK, Vault guardian, and website:
+## Build and test
 
-```bash
-git clone https://github.com/DeBrosDAO/orama.git
-cd orama
-```
-
-## Building from Source
-
-### Network (Go)
-
-The Go module lives in `core/`, not the repository root — either `cd core` first or run everything through the root `Makefile`, which delegates to it.
+The Go module for the node is `core/`, not the repository root. The root `Makefile` delegates to it.
 
 ```bash
-# Install dependencies
 cd core
-go mod download
-
-# Build all binaries (CLI, gateway, node, SFU, TURN, identity, SNI router)
-make build
-
-# Run tests
-make test
-
-# The main CLI binary is built from cmd/orama/
-# After make build, binaries are in core/bin/
-./bin/orama version
+make deps
+make build              # binaries in core/bin/: orama, orama-node, gateway, identity, sfu, turn, orama-sni-router, ...
+make test               # go test ./...
+make lint
 ```
 
-From the repository root, `make build` and `make test` delegate to `core/` for you, so `go mod download` and `go build`/`go test` invocations still need to run inside `core/`.
+| Task | Command |
+|---|---|
+| All unit tests | `make -C core test` (the root `make test` also runs the e2e coverage gate) |
+| One package | `cd core && go test ./pkg/path/to/package/...` |
+| One test | `go test ./pkg/path/... -run TestName` |
+| Race detector | `go test -race ./pkg/path/...` |
+| Regenerate the CLI reference | `make -C core docs` (a test fails if `docs/CLI_REFERENCE.md` drifts from the command tree) |
+| The chain | `cd chain && make build && make test` (see [Running a chain node](/docs/blockchain/running)) |
+| The SDK | `cd sdk && pnpm install && pnpm build && pnpm test` |
+| The vault | `cd vault && zig build && zig build test` |
+| This website | `cd website && pnpm install && pnpm dev` (build: `pnpm build`; docs check: `node scripts/check-docs.mjs`) |
 
-`make build` produces these binaries in `core/bin/`:
+`make build` writes an `orama` into `core/bin/`. A signed archive for a cluster is `orama build` from `core/` ([Build and sign](/docs/operator/build-and-sign)).
 
-| Binary | Entry Point | Purpose |
-|--------|-------------|---------|
-| `orama` | `cmd/orama/` | CLI tool for all operations |
-| `pubsub` | `cmd/pubsub/` | Namespace gossipsub HTTP API |
-| `gateway` | `cmd/gateway/` | API gateway / reverse proxy |
-| `orama-node` | `cmd/node/` | Supervisor: starts systemd units; does not embed the gateway or rqlited |
-| `sfu` | `cmd/sfu/` | WebRTC Selective Forwarding Unit |
-| `turn` | `cmd/turn/` | TURN relay server for WebRTC |
-| `identity` | `cmd/identity/` | P2P identity key generator |
-| `orama-sni-router` | `cmd/sni-router/` | SNI-based TLS router |
+## Run against a cluster
 
-### SDK (TypeScript)
-
-The TypeScript SDK is inside the same repo at `sdk/`:
+There is no local single-process mode that skips systemd. To exercise node code, use a sandbox ([Sandbox clusters](/docs/contributor/sandbox)) or the one-VPS evaluation path ([One-VPS evaluation](/docs/operator/one-vps)).
 
 ```bash
-cd sdk
-pnpm install
-pnpm build
-pnpm test
+orama env add dev https://cluster.example.com
+orama env use dev
+orama auth login
 ```
 
-## Connecting to Devnet
+## IDE
 
-For testing against a live network, connect to the devnet environment:
+VS Code with the Go extension, or GoLand. `core/`, `chain/` and `e2e/` are separate Go modules; open each as its own module.
 
-```bash
-# Set active environment to devnet (the default is sandbox)
-./bin/orama env use devnet
+## The rules of the codebase
 
-# Verify current environment
-./bin/orama env current
+Read [Code style](/docs/contributor/code-style) and [Testing](/docs/contributor/testing) before your first change. In short:
 
-# Login to the network (opens browser for wallet authentication)
-./bin/orama auth login
-```
-
-Run these from `core/` (or point at `core/bin/orama`) — see [Building from Source](#building-from-source).
-
-Available environments:
-
-| Name | Gateway URL | Description |
-|------|-------------|-------------|
-| `sandbox` | `https://dbrs.space` | Sandbox cluster (default) |
-| `devnet` | `https://orama-devnet.network` | Development network |
-| `testnet` | `https://orama-testnet.network` | Test network (staging) |
-
-## IDE Setup
-
-### VS Code (Recommended)
-
-Install the following extensions:
-
-- **Go** — Go language support
-- **ESLint** — TypeScript linting
-- **Prettier** — Code formatting
-
-### GoLand / IntelliJ
-
-Import the `core/` directory as a Go module project. The Go module configuration is in `core/go.mod`, not at the repository root.
-
-## Project Structure
-
-```
-network/
-  core/          # Go network services + CLI (the Go module root)
-    cmd/         # Binary entry points
-      cli/       # CLI (orama command, including inspect)
-      gateway/   # API gateway
-      node/      # supervisor
-      sfu/       # WebRTC SFU
-      turn/      # TURN relay
-      identity/  # Key generator
-      sni-router/ # SNI-based TLS router
-    pkg/         # All Go packages
-      gateway/   # Gateway core + handlers
-      cli/       # CLI command implementations
-      auth/      # Authentication (wallet, JWT)
-      rqlite/    # RQLite ORM layer
-      serverless/ # WASM runtime + host functions
-      config/    # Configuration management
-      anonproxy/ # Tor SOCKS5 dialer (anonymity proxy)
-    sdk/         # Go function SDK
-    e2e/         # End-to-end tests
-    systemd/     # Service templates
-    scripts/     # Build and deployment scripts
-    docs/        # Internal documentation
-    go.mod       # Go module definition
-  sdk/           # TypeScript SDK
-  vault/         # Vault guardian (Zig)
-  os/            # OramaOS
-  website/       # This documentation site
-  Makefile       # Root build targets (delegates to core/, sdk/, vault/, os/)
-```
-
-## Sandbox Clusters
-
-For testing against a full multi-node cluster without production infrastructure, use the sandbox system. Sandboxes create 5-node Hetzner Cloud clusters:
-
-```bash
-# One-time setup (Hetzner API key, domain, SSH key)
-orama sandbox setup
-
-# Create a 5-node ephemeral cluster
-orama sandbox create --name my-test
-
-# List running sandbox clusters
-orama sandbox list
-
-# Check sandbox status
-orama sandbox status --name my-test
-
-# SSH into a sandbox node (1-5)
-orama sandbox ssh 1 --name my-test
-
-# Deploy code to sandbox
-orama sandbox rollout --name my-test
-
-# Destroy when done
-orama sandbox destroy --name my-test
-
-# Nuclear reset (delete all infra and config)
-orama sandbox reset
-```
-
-Sandboxes are disposable — create one for testing, destroy it when done.
+- Code is the source of truth, docs describe what the code does today, and a change ends with a check that no doc now lies.
+- Every change ships unit tests; every user-visible change (a CLI command, gateway route, chain message or query, systemd unit, documented guarantee) ships a fleet e2e test and lists it under `covers:` in `e2e/features/<x>/feature.yaml`. `make test` fails the coverage gate otherwise.
+- Fix root causes. No fallbacks, no retries that mask flakiness, no catch-and-continue.
+- Rolling upgrades only: never restart several RQLite voters at once.

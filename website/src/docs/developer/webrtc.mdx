@@ -206,7 +206,7 @@ The SFU reports every join and leave to the namespace, which publishes it on the
 {"_orama":"webrtc.leave","room":"standup","user_id":"0xabc…","peer_id":"<uuid>","reason":"left","at":"…"}
 ```
 
-`reason` is `left`, `kicked`, `expired` or `closed`. The `_orama` key is the platform's: publish routes refuse a payload carrying it, so a subscriber that sees it knows the platform wrote the message. The whole `_orama/` prefix is reserved ([Access control](/docs/developer/access-control#reserved-pubsub-topics)); delivery is at most once, and a subscriber resynchronises from the `participants` list of a `welcome`.
+`reason` is `left`, `kicked`, `expired` or `closed`. The `_orama` key is the platform's: publish routes refuse a payload carrying it, so a subscriber that sees it knows the platform wrote the message. The whole `_orama/` prefix is reserved ([Access control](/docs/developer/access-control#reserved-pub-sub-topics)); delivery is at most once, and a subscriber resynchronises from the `participants` list of a `welcome`.
 
 ### Kick and mute
 

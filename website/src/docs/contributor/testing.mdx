@@ -1,227 +1,86 @@
-# Testing Guide
+# Testing
 
-Testing is a critical part of contributing to Orama. All logic changes require tests, and all bug fixes require a test that reproduces the bug before the fix. This guide covers the testing tools, patterns, and CI pipeline.
+Every code change ships tests. This page covers the three layers: unit tests, the end-to-end cluster guide, and the fleet e2e suite that gates a release, and the rules each follows.
 
-## Running Tests
-
-### Go (Network)
-
-The Go module lives in `core/` — run these from `core/` (or `make test` from the repo root, which delegates there):
+## Unit tests
 
 ```bash
 cd core
-
-# Run all tests
-make test
-
-# Run tests for a specific package
-go test ./pkg/gateway/...
-
-# Run a specific test
-go test ./pkg/gateway/... -run TestHandleDeployment
-
-# Run with verbose output
-go test -v ./pkg/...
-
-# Run with race detection
-go test -race ./pkg/...
-
-# Run with coverage
-go test -cover ./pkg/...
-go test -coverprofile=coverage.out ./pkg/...
-go tool cover -html=coverage.out
+make test                                  # go test -v ./...
+go test ./pkg/path/to/package/...          # one package
+go test ./pkg/path/... -run TestName       # one test
+go test -race ./pkg/path/...               # race detector
 ```
 
-### TypeScript (SDK)
+The root `make test` runs the unit tests and the **e2e coverage gate** (below). `make -C core lint`, `cd chain && make test && make lint`, `cd sdk && pnpm test`, `cd vault && zig build test`.
+
+### What a change needs
+
+- At least one happy-path test, one error-path test and one edge case (empty input, nil, zero value, boundary).
+- A bug fix needs a test that reproduces the bug. If you deleted your implementation, a test should fail.
+- Test behaviour, not implementation. Name tests `Test{Function}_{scenario}` (for example `TestGetWGPeers_empty_table`). Config or template-only changes do not need tests.
+- Edge cases to consider every time: empty slices, nil maps and pointers, zero values, missing fields in a request, races in concurrent code, timeouts and refused connections, expired or invalid tokens, state after a restart.
+
+### Patterns
+
+- **Table-driven tests** for many inputs. Interfaces for dependencies so a fake can stand in; the clients (`NetworkClient`, `StorageClient`, `DatabaseClient`, `PubSubClient`) are interfaces for this reason.
+- **Real SQLite, real behaviour.** A gateway SQL guard test asks a real SQLite whether it reads a protected table. A migration round-trip test (`go test ./migrations/`) applies every embedded migration and exercises representative SQL, so a Go handler that references a column no migration creates fails at review time. When adding a platform table: write the migration, update the Go code, add an exemplar to `migrations/roundtrip_test.go`, and place the table in the schema placement list (a test fails if a table is left unplaced).
+- **The generated references are tests too.** `docs/CLI_REFERENCE.md` is checked against the cobra tree, `docs/API_SURFACE.md` against the registered gateway routes, in both directions. Adding a command or a route fails the build until the doc is regenerated or updated.
+- **Verify on the live system, not only in unit tests.** RQLite is not SQLite: query the live cluster and read gateway logs.
+
+## The cluster guide e2e
 
 ```bash
-cd sdk
-
-# Run all tests
-pnpm test
-
-# Run in watch mode
-pnpm test --watch
-
-# Run with coverage
-pnpm test --coverage
+make e2e-cluster
 ```
 
-## Test Structure
+Executes the commands of [Install a cluster from scratch](/docs/operator/install-from-scratch) in order against machines you provide (`core/e2e/clusterguide`). Change a command in that guide and the test fails until its plan matches.
 
-### Go Test Files
+## Fleet e2e (the release gate)
 
-Test files live alongside the code they test, following Go conventions:
-
-```
-pkg/
-  gateway/
-    handler.go          # Implementation
-    handler_test.go     # Tests for handler.go
-    middleware.go
-    middleware_test.go
-  handlers/
-    auth/
-      auth.go
-      auth_test.go
-    storage/
-      storage.go
-      storage_test.go
-```
-
-### Test Naming
-
-Name tests descriptively using the pattern `Test<Function>_<Scenario>`:
-
-```go
-func TestCreateDeployment_ValidInput(t *testing.T) {
-    // Test that a deployment is created successfully with valid input
-}
-
-func TestCreateDeployment_MissingName(t *testing.T) {
-    // Test that an error is returned when the name is missing
-}
-
-func TestCreateDeployment_DuplicateName(t *testing.T) {
-    // Test that a conflict error is returned for duplicate names
-}
-```
-
-### Table-Driven Tests
-
-Use table-driven tests for testing multiple input/output scenarios:
-
-```go
-func TestValidateConfig(t *testing.T) {
-    tests := []struct {
-        name    string
-        config  Config
-        wantErr bool
-    }{
-        {
-            name:    "valid config",
-            config:  Config{Name: "app", Env: "devnet"},
-            wantErr: false,
-        },
-        {
-            name:    "missing name",
-            config:  Config{Env: "devnet"},
-            wantErr: true,
-        },
-        {
-            name:    "invalid environment",
-            config:  Config{Name: "app", Env: "invalid"},
-            wantErr: true,
-        },
-    }
-
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            err := ValidateConfig(tt.config)
-            if (err != nil) != tt.wantErr {
-                t.Errorf("ValidateConfig() error = %v, wantErr %v", err, tt.wantErr)
-            }
-        })
-    }
-}
-```
-
-## Mocking Patterns
-
-### Interfaces for Dependencies
-
-Design code with interface dependencies to make testing straightforward:
-
-```go
-// Define an interface for the dependency
-type CacheStore interface {
-    Get(key string) ([]byte, error)
-    Set(key string, value []byte, ttl time.Duration) error
-}
-
-// In tests, use a mock implementation
-type mockCache struct {
-    data map[string][]byte
-}
-
-func (m *mockCache) Get(key string) ([]byte, error) {
-    v, ok := m.data[key]
-    if !ok {
-        return nil, ErrNotFound
-    }
-    return v, nil
-}
-
-func (m *mockCache) Set(key string, value []byte, ttl time.Duration) error {
-    m.data[key] = value
-    return nil
-}
-```
-
-### Test Helpers
-
-Create reusable test helpers for common setup patterns:
-
-```go
-func newTestServer(t *testing.T) *httptest.Server {
-    t.Helper()
-    handler := setupRoutes(newMockServices())
-    return httptest.NewServer(handler)
-}
-```
-
-## End-to-End Tests
-
-E2E tests verify that components work together against a real cluster. They are organized by scope. The `test-e2e-*` targets are defined in `core/Makefile`, so run them from `core/`:
+One command provisions a disposable three-node Orama fleet on Hetzner with a real Cloudflare delegation, real Let's Encrypt staging certificates and a throwaway RootWallet agent. It runs every feature package against it, stage by stage (eleven ordered stages from bootstrap through namespaces, auth, data plane, deployments, realtime, security audit, chain, ops and chaos and soak), collects artifacts, writes a report and always tears the fleet down.
 
 ```bash
-cd core
-
-# Run all E2E tests (auto-discovers config)
-make test-e2e
-
-# Quick smoke tests (static deploys, health checks)
-make test-e2e-quick
-
-# Specific scopes
-make test-e2e-deployments    # Deployment lifecycle
-make test-e2e-fullstack      # Full-stack (frontend + backend + DB)
-make test-e2e-https          # HTTPS and external access
-make test-e2e-shared         # Shared services (cache, storage, pubsub, auth)
-make test-e2e-cluster        # Cluster operations (libp2p, olric, rqlite, namespace)
-make test-e2e-integration    # Integration (fullstack, persistence, concurrency)
-
-# Production-only tests (requires ORAMA_GATEWAY_URL env var)
-make test-e2e-production     # DNS, HTTPS, cross-node routing
-make test-e2e-prod           # All E2E including production-only
+make e2e-fleet E2E_RUNNER_CIDR=203.0.113.7/32        # the whole run (secrets through infisical)
+make e2e-fleet E2E_FLAGS=--keep-on-fail
+make e2e-coverage                                    # the coverage gate, no servers
+make e2e-lint                                        # go vet with and without the tag, plus the contract lint
+make e2e-test-unit                                   # the harness's own unit tests
 ```
 
-E2E tests are slower and require a running cluster (sandbox or real environment). They are not part of CI — run them manually before merging changes that touch deployment, clustering, or cross-node behavior.
+The owner runs the fleet suite. As a contributor you write the feature package and run the gate, lint and unit targets. The full contract is `e2e/README.md`.
 
-## CI/CD Pipeline
+### The coverage gate
 
-Every pull request triggers the CI pipeline (`.github/workflows/ci.yml`), which runs:
+`make test` runs `make e2e-coverage`. It fails on any CLI command, gateway route, chain message or query, or systemd unit that no feature package claims under `covers:` in its `feature.yaml`, and on any entry that matches nothing that ships (a typo cannot cover anything). What has no test yet needs a waiver in `e2e/waivers.yaml` with a reason and a trigger.
 
-1. **Go tests** — `go vet ./...` and `go test -race ./...`, both run in `core/`
-2. **SDK build** — `pnpm typecheck`, `pnpm build`, and `pnpm vitest run tests/unit` in `sdk/`
-3. **Version sanity** — checks that the root `VERSION` file matches `sdk/package.json`
+### Writing a feature package
 
-There is no `go fmt` check, no ESLint step, no all-binaries build job, and no E2E job in CI — E2E tests are run manually against a sandbox or real environment. All checks must pass before a PR can be merged. If CI fails, fix the issue locally and push the fix — do not ask to skip checks.
+1. `mkdir e2e/features/<id>` (lowercase letters, digits, hyphens; equals the manifest `id`).
+2. Write `feature.yaml` (`id`, `title`, `area`, `stage`, `destructive`, `requires`, and `covers` with `cli`, `routes`, `msgs`, `queries`, `units`, `config`, `claims`), `main_test.go` (a `TestMain` calling `harness.Main(m)`), and tests. Every `.go` file starts with `//go:build e2e_fleet`.
+3. `make e2e-lint && make e2e-coverage`, then `go vet -tags e2e_fleet ./features/<id>/`.
 
-## Sandbox Testing
+The rules the lint enforces:
 
-For full E2E testing against a real multi-node cluster:
+- **No sleeps.** `time.Sleep`, `After`, `NewTimer`, `Tick`, `NewTicker` and `AfterFunc` are banned. Wait for a readiness signal with `eventually.Require`, `Eventually` or `Poll`.
+- **No bare skips.** `t.Skip` is banned; use `harness.SkipNotApplicable(t, reason)`. Every skip counts as "not covered".
+- **Clean up everything**, with a cleanup that restores and verifies. Cleanups get their own context (`fleet.CleanupContext(t)`), because `t.Context()` is cancelled before cleanups run.
+- **One namespace per test** (`ns.New`), never a shared one. A namespace lives on three nodes, so a per-namespace check loops over `tenancy.Members(t, f, name)`.
+- **Real paths only.** Requests go to the public name through DNS and TLS pinned to the run's CA. Logins are real signatures. Operator actions go through the CLI under test. SSH observes nodes and injects failures, never sets up state the product should set up.
+- **No retries that turn red into green.** The runner re-runs a failed test once, alone, only to label it deterministic or flaky.
+- **Destructive tests** (kill, partition, reboot, upgrade) go in a `destructive: true` package, usually stage 9 to 11.
+- **Credential calls are paced** by the harness under the gateway's rate limits (30 a minute, burst 10 per address; challenges 10 a minute, burst 5 per wallet). A 429 on a paced request is a `PacingError`, never retried.
 
-```bash
-# Create a 5-node sandbox cluster
-orama sandbox create --name my-test
+Test names are `Test{Function}_{scenario}`.
 
-# Deploy your changes to the sandbox
-orama sandbox rollout --name my-test
+## Lifecycle harness
 
-# Run E2E tests against the sandbox (from core/)
-cd core && make test-e2e
+`make -C core test-lifecycle` drives a real three-node cluster through the `orama` CLI: reboot, kill a voter, join, decommission, rolling upgrade, DNS with the index RQLite down. It reads `orama monitor report --json` as its only view of the cluster, so the report's schema is a test contract.
 
-# Tear down when done
-orama sandbox destroy --name my-test
-```
+## Sandbox clusters
+
+For development without the fleet suite, use [Sandbox clusters](/docs/contributor/sandbox).
+
+## CI
+
+`.github/workflows/ci.yml` builds and tests the packages; `security.yml` runs scanners (govulncheck among them, with accepted advisories listed in `e2e/features/scanners/govulncheck-accepted.yaml`, each with a reason and a review date); `release.yaml` builds with GoReleaser on a `v*` tag and checks that the `VERSION` file matches the tag; `publish-sdk.yml` and `release-apt.yml` publish the SDK and the apt packages.

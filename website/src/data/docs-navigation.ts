@@ -99,7 +99,7 @@ export const DEVELOPER_DOCS: DocLink[] = [
 
   { title: "Backups and restore", slug: "developer/backups", icon: DatabaseBackup, description: "Sealed namespace backups", group: "Run your app" },
 
-  { title: "TypeScript SDK", slug: "developer/sdk-reference", icon: FileCode, description: "@debros/orama API", group: "Reference" },
+  { title: "TypeScript SDK", slug: "developer/sdk-reference", icon: FileCode, description: "The JavaScript and TypeScript client", group: "Reference" },
   { title: "Go client", slug: "developer/go-sdk", icon: Binary, description: "The Go client for a gateway", group: "Reference" },
   { title: "Gateway HTTP API", slug: "developer/api-surface", icon: Network, description: "Every route and who owns it", group: "Reference" },
   { title: "CLI overview", slug: "developer/cli-overview", icon: Terminal, description: "Install, global flags, exit codes", group: "Reference" },
@@ -148,7 +148,6 @@ export const OPERATOR_DOCS: DocLink[] = [
   { title: "OramaOS", slug: "operator/orama-os", icon: Cpu, description: "Locked-down node OS", group: "Platforms" },
   { title: "Global nodes", slug: "operator/global-nodes", icon: Globe2, description: "Run the chain and its services", group: "Platforms" },
   { title: "Hardening checklist", slug: "operator/security", icon: Shield, description: "What to verify on every node", group: "Platforms" },
-  { title: "Video tutorials", slug: "operator/video-tutorials", icon: MonitorPlay, description: "Step-by-step video guides", group: "More" },
 ];
 
 export const ARCHITECTURE_DOCS: DocLink[] = [
@@ -205,7 +204,6 @@ export const CONTRIBUTOR_DOCS: DocLink[] = [
   { title: "Testing", slug: "contributor/testing", icon: FlaskConical, description: "Unit, fleet e2e and the coverage gate" },
   { title: "Deployment", slug: "contributor/deployment", icon: Upload, description: "Build, push, rollout" },
   { title: "Sandbox clusters", slug: "contributor/sandbox", icon: TestTube2, description: "Ephemeral Hetzner clusters" },
-  { title: "Video tutorials", slug: "contributor/video-tutorials", icon: MonitorPlay, description: "Step-by-step video guides" },
 ];
 
 /** Lookup table: section to its ordered doc list. */

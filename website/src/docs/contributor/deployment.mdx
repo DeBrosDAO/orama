@@ -1,205 +1,58 @@
-# Deployment Guide for Contributors
+# Release and rollout
 
-How Orama releases are built, tested, and deployed to the network. Understanding this process is important for contributors who need to test changes against live infrastructure or participate in the release cycle.
+How code gets from a checkout onto nodes. For installing a cluster the first time see [Install a cluster from scratch](/docs/operator/install-from-scratch); for the full upgrade protocol see [Upgrades](/docs/operator/upgrades). This page is the contributor's view.
 
-## Release Process Overview
+## The model
 
-1. **Feature development** on feature branches
-2. **Code review and merge** to the main branch
-3. **Binary building** — Cross-compile for target architectures
-4. **Rolling deployment** — One node at a time across the environment
+Nodes never compile. You build one **signed archive** on your computer and every node unpacks it. A new version is a new archive and a **rolling restart**: extract can be parallel, restarts are serial, with a health gate between nodes.
 
-## Building Binaries
-
-The `orama build` command cross-compiles all Go binaries into a deployment archive:
+## The commands
 
 ```bash
-# Build for Linux amd64 (default, target platform for VPS nodes)
-orama build
-
-# Build for a specific architecture
-orama build --arch arm64
-
-# Custom output path
-orama build --output ./release/orama-v1.0.0.tar.gz
-
-# Verbose output
-orama build --verbose
+cd core
+orama build                                     # signed archive; prints its path
+orama push --env <env> --archive <path>         # upload and verify on every node, restart nothing
+orama node upgrade --env <env>                  # read every node's state, print the plan
+orama node upgrade --env <env> --yes            # execute it
+orama rollout --env <env> --yes                 # build + push + upgrade in one
+orama rollout --env <env> --no-build --archive <path> --yes
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--arch` | `amd64` | Target architecture (`amd64`, `arm64`) |
-| `--output` | `/tmp/orama-<version>-linux-<arch>.tar.gz` | Output archive path |
-| `--verbose` | `false` | Verbose output |
+RootWallet must be open and unlocked for the whole run. The first run after a rebuild asks you to approve the new `orama` binary once (approval is keyed on the binary's hash).
 
-The build pipeline:
-1. Cross-compiles all Go binaries for `linux/<arch>` (CLI, gateway, node, SFU, TURN, identity, SNI router)
-2. Bundles third-party dependencies (RQLite, Olric, IPFS, CoreDNS, Caddy)
-3. Includes systemd service templates
-4. Packages everything into a tar.gz archive with a `manifest.json` (checksums)
+## Versions and releases
 
-## Deploying to Nodes
+`VERSION` at the repository root is the single version. `make -C core bump VER=<x.y.z>` updates it everywhere; a release tag `v<version>` must match it or the release workflow fails. GoReleaser builds the CLI and node binaries for GitHub releases, Homebrew (stable only) and apt packages. The signed **install archive** that nodes use is not a release artifact: you build it from a checkout with `orama build`, signed by your own wallet.
 
-### Push (Upload Only)
+## Before rolling out
 
-Upload the binary archive to nodes without restarting services:
+- Unit tests and `make test` (including the coverage gate) pass.
+- Docs updated for any behaviour change, in the same change.
+- If the change touches inter-node coordination, secrets, namespaces or deployments, read the upgrade page's **mixed-version windows**: pause namespace and deployment create and delete during the roll, and do not add a node until every cluster you are upgrading is on the same version.
+- If the change adds a migration, it must be applied before the gateway that requires it starts; migrations take a cluster-wide lock, and the gateway refuses to start if its required schema is not applied (`orama node schema status`).
+- RQLite v10 is one way. Take a registry backup first.
+
+## Verification between nodes
 
 ```bash
-# Push to all nodes in an environment
-orama node push --env devnet
-
-# Push to a single node
-orama node push --env devnet --node 1.2.3.4
-
-# Direct upload (no hub fanout)
-orama node push --env devnet --direct
+orama monitor report --env <env> --node <ip>     # that node: services, RQLite state, WireGuard peers
+orama monitor report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
 ```
 
-### Rollout (Build + Deploy)
+Proceed only when both pass. `orama rollout` gates on the same signals itself and stops the moment a node fails to rejoin.
 
-Build and deploy in one step with automatic rolling restart:
+## What not to do
 
-```bash
-# Build the archive
-orama build
+- Do not stop all nodes, replace binaries, then start all nodes.
+- Do not run `orama node upgrade --restart` on several nodes in parallel.
+- Do not clear RQLite data directories unless you are rebuilding the whole cluster.
+- Do not stop `orama-node` on several nodes at once; it takes the index services with it.
+- Do not fix a node by hand. Fix in source, test, then roll out.
 
-# Roll out to all your nodes (recommended — uses wallet-based node discovery)
-orama rollout --env devnet
+## Environments
 
-# Custom delay between nodes
-orama rollout --env devnet --delay 60
-```
+An environment is just a name for a cluster in your CLI. Promotion is rolling the same archive to the next one (`orama push --env <next> --archive <same path>`), which the nodes verify against their own trust anchor. Pushing the same archive to several clusters works only if each trusts the signer.
 
-The legacy `orama node rollout` command is still available and uses `nodes.conf` directly:
+## Test clusters
 
-```bash
-orama node rollout --env devnet
-orama node rollout --env devnet --no-build --yes
-```
-
-### Upgrade (Restart Only)
-
-When the binary is already on the node, restart services with the new code:
-
-```bash
-# Rolling upgrade of all nodes in an environment
-orama node upgrade --env devnet
-
-# Upgrade a single node
-orama node upgrade --env devnet --node 1.2.3.4
-
-# Also restart services after upgrade
-orama node upgrade --env devnet --restart
-```
-
-## Other Node Management Commands
-
-```bash
-# Diagnose common node issues (8 automated checks)
-orama node doctor
-
-# Generate invite tokens for new nodes to join the cluster
-orama node invite --expiry 24h
-
-# Wipe a node for reinstallation
-orama node clean --env devnet --node 1.2.3.4
-orama node clean --env devnet --nuclear    # Also removes shared binaries
-
-# Recover RQLite from a cluster split
-orama node recover-raft --env devnet --leader 1.2.3.4
-
-# Service management (on-node)
-orama node start
-orama node stop
-orama node restart
-orama node status
-```
-
-## Cluster Inspection and Monitoring
-
-Two tools for verifying cluster health:
-
-```bash
-# Deep SSH-based health inspection (runs checks on each node)
-orama inspect --env devnet
-orama inspect --env devnet --subsystem rqlite    # Specific subsystem
-orama inspect --env devnet --format json         # JSON output
-
-# Real-time cluster monitoring (interactive TUI)
-orama monitor --env devnet
-
-# One-shot reports
-orama monitor cluster --env devnet       # Cluster overview
-orama monitor node --env devnet          # Per-node health
-orama monitor service --env devnet       # Service status
-orama monitor mesh --env devnet          # WireGuard mesh
-orama monitor dns --env devnet           # DNS health
-orama monitor namespaces --env devnet    # Namespace usage
-orama monitor alerts --env devnet        # Active alerts
-orama monitor report --env devnet        # Full JSON report
-```
-
-## Rolling Upgrade Process
-
-Deploying to the network follows a strict rolling upgrade process to maintain cluster availability:
-
-1. Verify cluster health (all nodes, quorum OK)
-2. Upload new binary to the node
-3. Stop services (reverse dependency order: Gateway -> Olric -> RQLite)
-4. Replace binary
-5. Start services (correct dependency order: WireGuard -> RQLite -> Olric -> Gateway)
-6. Verify node health
-7. Verify cluster health
-8. Proceed to next node
-
-### Deployment Order
-
-1. **Followers first** — Upgrade RQLite follower nodes before the leader
-2. **Leader last** — Upgrading the leader triggers a leader election; do this last
-3. **One at a time** — Never upgrade multiple nodes simultaneously
-
-## Health Verification Between Nodes
-
-After each node upgrade, both node-level and cluster-level health must be confirmed:
-
-```bash
-# Node health
-orama monitor report --env <environment> --node <node-ip>
-
-# Cluster health
-orama monitor report --env <environment>
-```
-
-Do not proceed to the next node until:
-
-- All services on the upgraded node are `active`
-- RQLite shows `Leader` or `Follower` state
-- Raft log indices are in sync across the cluster
-- WireGuard peers are all connected
-
-## Environment Promotion
-
-Changes flow through environments in this order:
-
-```
-devnet → testnet → sandbox
-```
-
-- **devnet** — First deployment target, used for active development and testing
-- **testnet** — Staging environment, mirrors sandbox configuration
-- **sandbox** — Production-facing cluster (`dbrs.space`), requires extra verification and approval. This is the CLI's default active environment.
-
-There is no separate `production` environment name in the CLI — `dbrs.space` is configured as `sandbox` (defaults: `sandbox`, `devnet`, `testnet`).
-
-## CI/CD Pipeline
-
-The CI pipeline (`.github/workflows/ci.yml`) runs on every push and PR:
-
-| Stage | What It Does |
-|-------|-------------|
-| Go tests | `go vet ./...` and `go test -race ./...`, run in `core/` |
-| SDK build | `pnpm typecheck`, `pnpm build`, `pnpm vitest run tests/unit` in `sdk/` |
-| Version sanity | Checks the root `VERSION` file matches `sdk/package.json` |
-
-There is no `go fmt` check, no all-binaries build stage, and no E2E stage in CI — E2E tests are run manually against a sandbox or real environment.
+[Sandbox clusters](/docs/contributor/sandbox) create five Hetzner servers, install the archive and give you a throwaway cluster. For release confidence the owner runs the fleet suite ([Testing](/docs/contributor/testing#fleet-e2e-the-release-gate)).
