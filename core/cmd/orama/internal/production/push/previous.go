@@ -18,21 +18,20 @@ import (
 // replace it.
 const PreviousRelease = ".release-previous"
 
-// previousDirPerm: only root reads a kept release.
-const previousDirPerm = 0o700
+// keepRename is os.Rename; a test fails it to exercise keepPrevious's caller.
+var keepRename = os.Rename
 
-// keepPrevious moves the entries a stage replaced (oldDir) to base's
-// PreviousRelease, replacing the one kept before.
+// keepPrevious moves the entries a stage replaced (oldDir, which swapArchive
+// made 0700: only root reads a kept release) to base's PreviousRelease,
+// replacing the one kept before. When it fails, oldDir still holds the replaced
+// entries, so the caller can put them back.
 func keepPrevious(base, oldDir string) error {
 	kept := filepath.Join(base, PreviousRelease)
 	if err := os.RemoveAll(kept); err != nil {
 		return fmt.Errorf("remove the release kept before: %w", err)
 	}
-	if err := os.Rename(oldDir, kept); err != nil {
+	if err := keepRename(oldDir, kept); err != nil {
 		return fmt.Errorf("keep the replaced release at %s: %w", kept, err)
-	}
-	if err := os.Chmod(kept, previousDirPerm); err != nil {
-		return fmt.Errorf("restrict %s: %w", kept, err)
 	}
 	return nil
 }

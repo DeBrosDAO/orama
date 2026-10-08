@@ -190,7 +190,7 @@ func TestWipeScript_stopsTheAutoUpdateTimerAndForgetsTheReleaseState(t *testing.
 	if stopAt < 0 || nsAt < 0 || stopAt > nsAt {
 		t.Error("the auto-update timer must be stopped before anything else is torn down")
 	}
-	for _, path := range append([]string{"/etc/orama/update-notice.json"}, releaseverify.NodeStatePaths()...) {
+	for _, path := range append([]string{"/etc/orama/update-notice.json", "/var/lib/orama-autoupdate"}, releaseverify.NodeStatePaths()...) {
 		if !strings.Contains(script, path) {
 			t.Errorf("the wipe script keeps %s", path)
 		}

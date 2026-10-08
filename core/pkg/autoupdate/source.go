@@ -12,10 +12,10 @@ import (
 )
 
 const (
-	// fetchBudget bounds fetching the metadata and one archive.
-	fetchBudget = 40 * time.Minute
 	// workDirPerm: only root reads what a fetch leaves.
 	workDirPerm = 0o700
+	// archiveFilePerm: the downloaded archive is root's alone.
+	archiveFilePerm = 0o600
 	// downloadName is the archive a fetch leaves in its directory.
 	downloadName = "release.tar.gz"
 )
@@ -90,7 +90,7 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 // against the verified metadata. Only a release that passes has raised the
 // rollback record.
 func (s Source) Download(ctx context.Context, repoURL string, rel Release) (err error) {
-	f, err := os.OpenFile(rel.ArchivePath(), os.O_RDWR|os.O_CREATE|os.O_EXCL, workDirPerm&0o600)
+	f, err := os.OpenFile(rel.ArchivePath(), os.O_RDWR|os.O_CREATE|os.O_EXCL, archiveFilePerm)
 	if err != nil {
 		return fmt.Errorf("create the archive file: %w", err)
 	}

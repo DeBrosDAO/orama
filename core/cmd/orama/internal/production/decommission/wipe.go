@@ -132,6 +132,8 @@ rm -rf /opt/orama
 rm -rf /var/lib/orama-unit-env /var/lib/orama-deploy
 rm -rf /var/lib/private/orama-deploy-* /var/cache/private/orama-deploy-* /var/cache/private/orama-build
 rm -rf /var/lib/ntfy /run/ntfy
+# Fetched releases and the install intent of the auto-update agent.
+rm -rf /var/lib/orama-autoupdate
 # Caddy storage: the TLS private keys of the node and its ACME account key.
 # A wiped node that kept them would serve the old certificate and hold keys for
 # a domain it no longer belongs to.

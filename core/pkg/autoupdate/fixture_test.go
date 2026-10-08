@@ -120,6 +120,36 @@ func (r *release) publish(t *testing.T, snapshot int64, timestampExpires time.Ti
 	}
 }
 
+// testStore is the store over db. Every call opens a handle, as production
+// does; opens counts them.
+func testStore(db *sql.DB) SQLStore {
+	return SQLStore{Open: func(context.Context) (*sql.DB, func(), error) { return db, func() {}, nil }}
+}
+
+// memJournal is the journal in memory.
+type memJournal struct {
+	intent    *Intent
+	beginErr  error
+	clearErrs int
+}
+
+func (j *memJournal) Begin(i Intent) error {
+	if j.beginErr != nil {
+		return j.beginErr
+	}
+	if j.intent != nil {
+		return fmt.Errorf("an install is already under way")
+	}
+	j.intent = &i
+	return nil
+}
+func (j *memJournal) Pending() (*Intent, error) { return j.intent, nil }
+func (j *memJournal) Clear() error {
+	j.intent = nil
+	j.clearErrs++
+	return nil
+}
+
 // fakeNode records what the agent asks of the machine.
 type fakeNode struct {
 	current  string
@@ -131,12 +161,17 @@ type fakeNode struct {
 	restored   bool
 	stageErr   error
 	upgradeErr error
+	restoreErr error
+	previous   string
 }
 
 func (n *fakeNode) Current() string { return n.current }
 
-func (n *fakeNode) Stage(context.Context, Release) error {
+func (n *fakeNode) Stage(_ context.Context, rel Release) error {
 	n.calls = append(n.calls, "stage")
+	if n.stageErr == nil {
+		n.previous, n.current = n.current, rel.Version
+	}
 	return n.stageErr
 }
 
@@ -152,7 +187,8 @@ func (n *fakeNode) Upgrade(context.Context) error {
 func (n *fakeNode) Restore(context.Context) error {
 	n.calls = append(n.calls, "restore")
 	n.restored = true
-	return nil
+	n.current = n.previous
+	return n.restoreErr
 }
 
 func (n *fakeNode) Healthy(context.Context) error {
@@ -172,6 +208,7 @@ type harness struct {
 	db     *sql.DB
 	rel    *release
 	node   *fakeNode
+	jrnl   *memJournal
 	agent  *Agent
 	notice string
 	logs   []string
@@ -180,10 +217,10 @@ type harness struct {
 // newHarness is the agent on host (one of testNodes), running 0.3.0, over db.
 func newHarness(t *testing.T, db *sql.DB, rel *release, host string) *harness {
 	t.Helper()
-	h := &harness{db: db, rel: rel, node: &fakeNode{current: "0.3.0"}, notice: filepath.Join(t.TempDir(), "notice.json")}
+	h := &harness{db: db, rel: rel, node: &fakeNode{current: "0.3.0"}, jrnl: &memJournal{}, notice: filepath.Join(t.TempDir(), "notice.json")}
 	h.agent = &Agent{
-		Store: SQLStore{DB: db},
-		Raft:  fakeRaft{view: RaftView{LeaderHost: "10.0.0.1", Voters: 3, HealthyVoters: 3}},
+		Store: testStore(db), Journal: h.jrnl,
+		Raft: fakeRaft{view: RaftView{LeaderHost: "10.0.0.1", Voters: 3, HealthyVoters: 3}},
 		Source: Source{
 			RootPath: rel.rootOut, SeenPath: filepath.Join(t.TempDir(), "release-seen.json"),
 			WorkDir: t.TempDir(), Arch: testArch, Now: time.Now,

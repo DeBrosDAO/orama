@@ -279,7 +279,7 @@ func TestAgent_outsideTheMaintenanceWindowItOnlyNotifies(t *testing.T) {
 
 func TestAgent_aNodeThatFindsTheLockHeldWaits(t *testing.T) {
 	db, rel := newClusterDB(t), newRelease(t)
-	other := SQLStore{DB: db}
+	other := testStore(db)
 	free, err := other.Lock(t.Context(), "n3")
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +298,7 @@ func TestAgent_aNodeThatFindsTheLockHeldWaits(t *testing.T) {
 
 func TestAgent_aCrashedHoldersLeaseExpires(t *testing.T) {
 	db, rel := newClusterDB(t), newRelease(t)
-	if _, err := (SQLStore{DB: db}).Lock(t.Context(), "n3"); err != nil {
+	if _, err := testStore(db).Lock(t.Context(), "n3"); err != nil {
 		t.Fatal(err)
 	}
 	// The holder died: its lease ran out.

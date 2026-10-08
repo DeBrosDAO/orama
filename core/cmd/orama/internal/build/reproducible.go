@@ -51,19 +51,25 @@ var unpinnedGoEnv = []string{
 	"GOFLAGS", "GOSUMDB", "GONOSUMDB", "GONOSUMCHECK", "GOPRIVATE", "GONOPROXY", "GOINSECURE",
 }
 
-// hermeticGoEnv returns environ without the variables in unpinnedGoEnv.
+// pinnedGoEnv are set on every go command of the build. GOENV=off makes the
+// toolchain ignore the file `go env -w` writes, where the same settings can be
+// kept; GOWORK=off stops a go.work above the checkout from replacing modules.
+var pinnedGoEnv = []string{"GOENV=off", "GOWORK=off"}
+
+// hermeticGoEnv returns environ without the variables in unpinnedGoEnv, and
+// with pinnedGoEnv.
 func hermeticGoEnv(environ []string) []string {
-	out := make([]string, 0, len(environ))
+	out := make([]string, 0, len(environ)+len(pinnedGoEnv))
 next:
 	for _, entry := range environ {
-		for _, name := range unpinnedGoEnv {
+		for _, name := range append([]string{"GOENV", "GOWORK"}, unpinnedGoEnv...) {
 			if strings.HasPrefix(entry, name+"=") {
 				continue next
 			}
 		}
 		out = append(out, entry)
 	}
-	return out
+	return append(out, pinnedGoEnv...)
 }
 
 // goLDFlags are the linker flags every Go binary in the archive is built

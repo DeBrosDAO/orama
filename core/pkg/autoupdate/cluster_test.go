@@ -1,6 +1,8 @@
 package autoupdate
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"slices"
 	"strings"
@@ -110,7 +112,7 @@ func TestSQLStore_membersAreTheLiveRegisteredNodes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := SQLStore{DB: db}.Members(t.Context())
+	got, err := testStore(db).Members(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +133,7 @@ func TestSQLStore_membersAreTheLiveRegisteredNodes(t *testing.T) {
 
 func TestSQLStore_recordReplacesAndRefusesAnUnknownState(t *testing.T) {
 	db := newClusterDB(t)
-	s := SQLStore{DB: db}
+	s := testStore(db)
 	if err := s.Record(t.Context(), "1.0.0", "n1", StateFailed, "boom"); err != nil {
 		t.Fatal(err)
 	}
@@ -152,12 +154,12 @@ func TestSQLStore_recordReplacesAndRefusesAnUnknownState(t *testing.T) {
 
 func TestSQLStore_twoNodesRacingForTheLockOneWins(t *testing.T) {
 	db := newClusterDB(t)
-	s := SQLStore{DB: db}
+	s := testStore(db)
 	var wins, held atomic.Int32
 	var mu sync.Mutex
 	var releases []func()
 	var wg sync.WaitGroup
-	for _, id := range []string{"n1", "n2", "n3", "n1", "n2", "n3"} {
+	for _, id := range []string{"n1", "n2", "n3", "n4", "n5", "n6"} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -191,8 +193,45 @@ func TestSQLStore_storedReadsOnlyTheUpdateSettings(t *testing.T) {
 	db := newClusterDB(t)
 	setSetting(t, db, "namespace_creation", "open")
 	setSetting(t, db, updatepolicy.KeyChannel, "nightly")
-	got, err := SQLStore{DB: db}.Stored(t.Context())
+	got, err := testStore(db).Stored(t.Context())
 	if err != nil || len(got) != 1 || got[updatepolicy.KeyChannel] != "nightly" {
 		t.Fatalf("stored = %v, %v", got, err)
+	}
+}
+
+// A lease a node took and never freed (a run that was killed) is the node's
+// own: the next run takes the lock back at once, where another node still waits
+// for the lease to run out.
+func TestSQLStore_aNodeTakesBackItsOwnLeaseAndAnotherDoesNot(t *testing.T) {
+	db := newClusterDB(t)
+	s := testStore(db)
+	if _, err := s.Lock(t.Context(), "n1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Lock(t.Context(), "n2"); !errors.Is(err, rqlite.ErrClusterLockHeld) {
+		t.Fatalf("another node: %v, want the lock held", err)
+	}
+	if _, err := s.Lock(t.Context(), "n1"); err != nil {
+		t.Fatalf("the node that took the lease could not take it back: %v", err)
+	}
+}
+
+func TestSQLStore_theLockIsFreedThroughAHandleOfItsOwn(t *testing.T) {
+	db := newClusterDB(t)
+	opens := 0
+	s := SQLStore{Open: func(context.Context) (*sql.DB, func(), error) { opens++; return db, func() {}, nil }}
+	release, err := s.Lock(t.Context(), "n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLock := opens
+	if err := release(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if opens != afterLock+1 {
+		t.Fatalf("releasing the lock opened %d handles, want 1: it must not reuse the one from before the node restarted its database", opens-afterLock)
+	}
+	if _, err := s.Lock(t.Context(), "n2"); err != nil {
+		t.Fatalf("the lock was not freed: %v", err)
 	}
 }

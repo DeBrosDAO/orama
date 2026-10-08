@@ -30,6 +30,9 @@ const (
 	// archive and the paths it replaces (kept until the swap has succeeded).
 	stagedNew = "new"
 	stagedOld = "old"
+	// stagedBack receives the new release when a stage that cannot keep the old
+	// one puts it back.
+	stagedBack = "back"
 	// binPerm is /opt/orama/bin and every binary in it: root writes, the
 	// orama group runs them, nobody else reads them (as lockOramaBinDir).
 	binPerm = 0o750
@@ -235,7 +238,11 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 	}
 	if opts.KeepPrevious {
 		if err := keepPrevious(t.base, oldDir); err != nil {
-			return err
+			// The release this stage was asked to keep would be lost with the
+			// staging directory, and the caller would believe nothing changed.
+			// Put it back.
+			back := filepath.Join(staging, stagedBack)
+			return errors.Join(err, swapArchive(t.base, oldDir, back))
 		}
 	}
 	fmt.Printf("  ✓ v%s (%s) verified, signed by %s\n", verified.Manifest.Version, verified.Manifest.Commit, verified.Signer)
@@ -320,6 +327,9 @@ const SetupCLIPrefix = ".archive-cli-"
 // runs under the archive lock, so no staging directory is in use; the setup
 // CLI directory this process runs from, if any, is kept.
 func removeLeftoverStaging(base string) error {
+	if err := recoverInterruptedSwap(base); err != nil {
+		return err
+	}
 	self := runningFrom()
 	for _, prefix := range LeftoverPrefixes {
 		leftovers, err := filepath.Glob(filepath.Join(base, prefix+"*"))

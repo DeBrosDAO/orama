@@ -27,6 +27,9 @@ type Agent struct {
 	Raft   Raft
 	Source Source
 	Node   Node
+	// Journal keeps an install that has begun, so a run that dies in the middle
+	// of one is finished by the next.
+	Journal Journal
 	// Role is RoleCluster, or RoleValidator on a machine that runs the chain.
 	Role string
 	// NodeHost is this node's overlay address, the key of its registry row.
@@ -50,6 +53,9 @@ func (a *Agent) Run(ctx context.Context) (Outcome, error) {
 	settings, err := a.settings(ctx)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if out, done, err := a.resume(ctx, settings); done {
+		return out, err
 	}
 	if out, done, err := a.nothingToDo(settings); done {
 		return out, err
@@ -181,6 +187,9 @@ func memberAt(members []Member, host string) (Member, bool) {
 func (a *Agent) act(ctx context.Context, s Settings, rel Release, d Decision, mine bool) (Outcome, error) {
 	switch d.Action {
 	case ActionNone:
+		if err := a.recordCurrent(ctx, s, rel); err != nil {
+			return Outcome{}, err
+		}
 		return a.none(d.Reason)
 	case ActionRefuse:
 		return a.refuse(s, rel.Version, d.Reason)

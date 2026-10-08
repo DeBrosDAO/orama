@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,4 +136,31 @@ func TestRepository_aRedirectToPlainHTTPElsewhereIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not https") {
 		t.Fatalf("err = %v, want the downgrade refused", err)
 	}
+}
+
+// A repository on the internet cannot send a root-run client to a service on
+// the client's own loopback, where plain HTTP is otherwise allowed.
+func TestRepository_aRedirectToLoopbackFromAnotherHostIsRefused(t *testing.T) {
+	redirect := Repository{}.client().CheckRedirect
+	remote := []*http.Request{{URL: mustParse(t, "https://releases.example.org/tuf/timestamp.json")}}
+	err := redirect(&http.Request{URL: mustParse(t, "http://127.0.0.1:9/timestamp.json")}, remote)
+	if err == nil || !strings.Contains(err.Error(), "not https") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := redirect(&http.Request{URL: mustParse(t, "https://cdn.example.net/timestamp.json")}, remote); err != nil {
+		t.Fatalf("a redirect to another https host: %v", err)
+	}
+	loopback := []*http.Request{{URL: mustParse(t, "http://127.0.0.1:8080/timestamp.json")}}
+	if err := redirect(&http.Request{URL: mustParse(t, "http://127.0.0.1:8080/other.json")}, loopback); err != nil {
+		t.Fatalf("a loopback repository redirecting inside loopback: %v", err)
+	}
+}
+
+func mustParse(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

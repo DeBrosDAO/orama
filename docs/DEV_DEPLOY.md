@@ -664,19 +664,29 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
    first node without an `installed` row for the version. Another node's turn
    is a wait.
 2. The node takes the cluster-wide rollout lock (`cluster_locks`, name
-   `autoupdate`, 45 minute lease, so a node that dies frees it), and judges
-   again: the cluster can have changed in between.
-3. It downloads the archive and checks its length and hashes (this is what
-   raises `release-seen.json`).
+   `autoupdate`, held in the node's id, 45 minute lease, so a node that dies
+   frees it, and a node that finds a lease of its own left over takes it back),
+   and judges again: the cluster can have changed in between. A machine runs one
+   agent at a time (a lock on `/var/lib/orama-autoupdate/run.lock`; a second run
+   says so and exits 0).
+3. It records the intent (`/var/lib/orama-autoupdate/install-intent.json`:
+   the release and the one it replaces), then downloads the archive and checks
+   its length and hashes (this is what raises `release-seen.json`).
 4. `orama node stage-archive --release-only` places it under `/opt/orama` and
-   keeps the release it replaced in `/opt/orama/.release-previous`.
+   keeps the release it replaced in `/opt/orama/.release-previous`. If the old
+   release cannot be kept, the stage puts it back and fails.
 5. The new release's own `orama node upgrade --restart` runs: leadership is
    handed over, services stop in dependency order, the binaries are installed,
    units and configs are written, services start.
 6. The health gate (`pkg/nodehealth`): Raft Leader or Follower, a leader known,
    applied index within 200 of the commit, the gateway serving.
-7. Success is an `installed` row, and the lock is freed. The next node's timer
-   finds it is its turn.
+7. Success is an `installed` row, the intent is removed and the lock is freed,
+   through a database handle opened for the purpose: the upgrade restarted this
+   node's own RQLite. The next node's timer finds it is its turn.
+
+A node that already runs the release when auto-update is `auto` (pushed by hand,
+installed at that version) records itself as installed on its first run, so it
+does not hold the rollout at its place in the plan.
 
 **Failure.** If the upgrade or the gate fails, the kept release is put back
 (verified first), `orama node upgrade --restart` runs on it, and the gate is
@@ -689,13 +699,40 @@ the previous tree is put back, nothing restarts, no `failed` row is written, and
 the run fails so the unit shows failed. If the previous release does not come
 back healthy either, the run's error says so.
 
+**A run that did not finish.** If a run is killed between staging and the end
+of the upgrade (a signal, the service's timeout, power loss), the intent is
+still there, and `/opt/orama` holds the new release. The next run does not
+conclude that there is nothing to install: it takes the lock, upgrades onto the
+staged release and gates, and records the result or rolls back, even if the
+cluster turned updates off in between. An intent whose release is not the one
+installed (staging never completed) is discarded. A stage killed half-way
+through its swap is undone by the next stage or restore before it removes its
+leftovers, so a node is not left without a release. A run that is stopped by a
+signal rolls nothing back and blames nobody.
+
+**Time.** A run fetches metadata for at most 10 minutes, the archive for at most
+10, each `orama node upgrade --restart` for at most 12 and each health gate for
+at most 3 (`pkg/autoupdate/budgets.go`), so an install, with its rollback, fits
+inside the 45 minute lease and a run inside `TimeoutStartSec=1h`; a test holds
+the arithmetic. Nothing renews the lease. The maintenance window is in UTC
+whatever zone the node's clock is in.
+
 Migrations stay expand-only across one release, so a mixed-version cluster
 during the rollout is safe, and so is the rollback.
 
 **What this does not do.** It does not update the validator or any
 `orama-global-*` unit; it does not walk a chain of root versions; it does not
-sign anything (publishing a release is the signers' ceremony); a node that is
-down or unregistered holds the rollout until it is back or removed.
+sign anything (publishing a release is the signers' ceremony). Every registered
+node is in the rollout plan, so every node has to run the agent (install and
+upgrade enable the timer) and have adopted the root, which a cluster installed
+with `orama node setup --release` has on every node; a node that does not, is
+down, or cannot take the architecture the channel lists holds the rollout until
+it is fixed or removed (`orama node remove`). A node that can write to the index
+RQLite (a compromised one) can mark a release bad, forge another node's
+install, or hold the lock for a lease: it can stop an update, never install one,
+since nothing installs without the root's signatures. The install keeps the
+release it replaced beside the new one (hundreds of megabytes of `/opt/orama`);
+nothing checks free space first.
 
 ### Fresh Node Install
 

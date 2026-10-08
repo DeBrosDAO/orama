@@ -69,6 +69,15 @@ func TestHermeticGoEnv_dropsWhatSwitchesVerificationOff(t *testing.T) {
 			t.Errorf("%s survived:\n%s", name, got)
 		}
 	}
+	for _, pinned := range pinnedGoEnv {
+		if !strings.Contains(got, pinned) {
+			t.Errorf("%s is not set:\n%s", pinned, got)
+		}
+	}
+	again := strings.Join(hermeticGoEnv([]string{"GOENV=/home/u/.config/go/env", "GOWORK=/src/go.work"}), "\n")
+	if strings.Contains(again, "/home/u") || strings.Contains(again, "/src/go.work") {
+		t.Errorf("the environment's GOENV and GOWORK were kept:\n%s", again)
+	}
 }
 
 func TestGoBuildCommandArgs_readOnlyTrimmedAndWithoutVCS(t *testing.T) {

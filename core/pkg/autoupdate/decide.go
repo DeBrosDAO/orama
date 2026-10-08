@@ -56,7 +56,7 @@ type Settings struct {
 	Mode        string
 	Channel     string
 	MaxParallel int
-	// WindowStart and WindowEnd are hours in [0, 24). The window is
+	// WindowStart and WindowEnd are hours in [0, 24), UTC. The window is
 	// [start, end). A start equal to the end means the window is unset and
 	// auto may run at any hour. A start after the end wraps midnight.
 	WindowStart int
@@ -172,7 +172,7 @@ func inWindow(s Settings, now time.Time) bool {
 	if s.WindowStart == s.WindowEnd {
 		return true
 	}
-	hour := now.Hour()
+	hour := now.UTC().Hour()
 	if s.WindowStart < s.WindowEnd {
 		return hour >= s.WindowStart && hour < s.WindowEnd
 	}

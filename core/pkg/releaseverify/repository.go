@@ -64,12 +64,11 @@ func ParseRepositoryURL(raw string) (*url.URL, error) {
 }
 
 func allowedScheme(u *url.URL) bool {
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
+	return u.Scheme == "https" || u.Scheme == "http" && onLoopback(u)
+}
+
+// onLoopback reports whether u names this machine.
+func onLoopback(u *url.URL) bool {
 	ip := net.ParseIP(u.Hostname())
 	return ip != nil && ip.IsLoopback() || u.Hostname() == "localhost"
 }
@@ -172,7 +171,7 @@ func (r Repository) client() *http.Client {
 		if len(via) >= maxRedirects {
 			return errors.New("too many redirects")
 		}
-		if !allowedScheme(req.URL) {
+		if req.URL.Scheme != "https" && !(onLoopback(via[0].URL) && allowedScheme(req.URL)) {
 			return fmt.Errorf("redirect to %s is not https", req.URL.Redacted())
 		}
 		return nil

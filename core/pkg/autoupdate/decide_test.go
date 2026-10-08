@@ -150,3 +150,24 @@ func TestDecide_aValidatorIsNeverAuto(t *testing.T) {
 		t.Fatalf("a validator on notify: %+v, %v", d, err)
 	}
 }
+
+// The window is in UTC whatever zone a node's clock is set to: a node on
+// Europe/Berlin must not open it two hours early.
+func TestDecide_theWindowIsInUTCWhateverTheNodesZone(t *testing.T) {
+	berlin := time.FixedZone("CEST", 2*60*60)
+	settings := DefaultSettings()
+	settings.Mode = ModeAuto
+	settings.WindowStart, settings.WindowEnd = 1, 5
+	health := Health{Voters: 3, HealthyVoters: 3}
+	candidate := Candidate{Version: "1.0.1"}
+	// 04:30 UTC is 06:30 in Berlin: inside the window.
+	inside, err := Decide(settings, health, time.Date(2026, 10, 1, 6, 30, 0, 0, berlin), "1.0.0", candidate, nil)
+	if err != nil || inside.Action != ActionUpgrade {
+		t.Fatalf("04:30 UTC (06:30 local): %+v, %v", inside, err)
+	}
+	// 02:30 local is 00:30 UTC: outside the window.
+	outside, err := Decide(settings, health, time.Date(2026, 10, 1, 2, 30, 0, 0, berlin), "1.0.0", candidate, nil)
+	if err != nil || outside.Action != ActionNotify {
+		t.Fatalf("00:30 UTC (02:30 local): %+v, %v", outside, err)
+	}
+}

@@ -2919,6 +2919,10 @@ upgrade or the gate fails, the previous release is put back and the node is
 upgraded onto it again; the release is then marked bad for the cluster. A
 validator (a machine that runs the chain) is never installed automatically.
 
+If a run is killed in the middle of an install, the next run finishes it first
+(the intent is in /var/lib/orama-autoupdate/install-intent.json), whatever the
+policy now says. One agent runs at a time on a machine.
+
 ### orama node clean
 
 Deprecated: use 'orama node wipe' or 'orama node remove'

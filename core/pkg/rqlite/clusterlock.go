@@ -138,10 +138,20 @@ func (l *ClusterLock) Release(ctx context.Context) error {
 	if l == nil || l.db == nil {
 		return nil
 	}
-	if _, err := SafeExecContext(l.db, ctx,
+	return ReleaseClusterLock(ctx, l.db, l.name, l.holder)
+}
+
+// ReleaseClusterLock frees the named lock if holder has it. It is Release for a
+// caller that no longer has the ClusterLock, or whose database handle is gone:
+// a node that restarts its own database in the middle of the work the lock
+// guards frees it through a fresh handle. It also frees a lease holder took
+// earlier and never released, which is how a restarted holder takes the lock
+// back before the lease runs out.
+func ReleaseClusterLock(ctx context.Context, db *sql.DB, name, holder string) error {
+	if _, err := SafeExecContext(db, ctx,
 		`UPDATE cluster_locks SET holder = '', acquired_at = NULL, expires_at = NULL
-		  WHERE name = ? AND holder = ?`, l.name, l.holder); err != nil {
-		return fmt.Errorf("release cluster lock %q: %w", l.name, err)
+		  WHERE name = ? AND holder = ?`, name, holder); err != nil {
+		return fmt.Errorf("release cluster lock %q: %w", name, err)
 	}
 	return nil
 }

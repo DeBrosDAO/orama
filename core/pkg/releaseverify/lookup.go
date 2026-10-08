@@ -35,8 +35,10 @@ func Lookup(c FileCheck) (Target, error) {
 }
 
 // Newest is the highest-versioned archive for arch among the verified targets
-// of channel, ordered by compare (positive: a is newer than b). ok is false
-// when the channel lists none.
+// of channel, ordered by compare (positive: a is newer than b). A target whose
+// version compare cannot order is not a candidate, so one oddly named entry in
+// a signed channel does not stop the channel's updates. ok is false when the
+// channel lists no candidate.
 func (v *Verified) Newest(channel, arch string, compare func(a, b string) (int, error)) (Target, ArchiveRef, bool, error) {
 	var best Target
 	var bestRef ArchiveRef
@@ -44,6 +46,9 @@ func (v *Verified) Newest(channel, arch string, compare func(a, b string) (int, 
 	for _, t := range v.Targets {
 		ref, err := ParseArchiveTarget(t.Path)
 		if err != nil || ref.Channel != channel || ref.Arch != arch || t.Role != channel {
+			continue
+		}
+		if _, err := compare(ref.Version, ref.Version); err != nil {
 			continue
 		}
 		if !found {

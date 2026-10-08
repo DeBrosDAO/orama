@@ -19,28 +19,14 @@ const releaseLockBudget = 30 * time.Second
 // between the first look and the lock: another node may have failed, or
 // finished, or the cluster may have degraded.
 func (a *Agent) installUnderLock(ctx context.Context, s Settings, rel Release) (Outcome, error) {
-	members, err := a.Store.Members(ctx)
-	if err != nil {
-		return Outcome{}, err
-	}
-	self, found := memberAt(members, a.NodeHost)
-	if !found {
-		return Outcome{}, fmt.Errorf("this node (%s) is not in the cluster's registry", a.NodeHost)
-	}
-	release, err := a.Store.Lock(ctx, self.ID)
+	self, release, err := a.lock(ctx)
 	if errors.Is(err, rqlite.ErrClusterLockHeld) {
 		return Outcome{Action: OutcomeWait, Reason: "another node holds the rollout lock", Version: rel.Version}, nil
 	}
 	if err != nil {
 		return Outcome{}, err
 	}
-	defer func() {
-		freeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseLockBudget)
-		defer cancel()
-		if freeErr := release(freeCtx); freeErr != nil {
-			a.Logf("free the rollout lock: %v", freeErr)
-		}
-	}()
+	defer a.unlock(ctx, release)
 
 	d, mine, err := a.assess(ctx, s, rel)
 	if err != nil {
@@ -52,6 +38,29 @@ func (a *Agent) installUnderLock(ctx context.Context, s Settings, rel Release) (
 	return a.install(ctx, s, rel, self)
 }
 
+// lock takes the rollout lock for this node and returns the node's own member.
+func (a *Agent) lock(ctx context.Context) (Member, func(context.Context) error, error) {
+	members, err := a.Store.Members(ctx)
+	if err != nil {
+		return Member{}, nil, err
+	}
+	self, found := memberAt(members, a.NodeHost)
+	if !found {
+		return Member{}, nil, fmt.Errorf("this node (%s) is not in the cluster's registry (it is matched by its overlay address)", a.NodeHost)
+	}
+	release, err := a.Store.Lock(ctx, self.ID)
+	return self, release, err
+}
+
+// unlock frees the lock on a context of its own.
+func (a *Agent) unlock(ctx context.Context, release func(context.Context) error) {
+	freeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseLockBudget)
+	defer cancel()
+	if err := release(freeCtx); err != nil {
+		a.Logf("free the rollout lock: %v", err)
+	}
+}
+
 // install downloads rel, installs it and records the result.
 func (a *Agent) install(ctx context.Context, s Settings, rel Release, self Member) (Outcome, error) {
 	if err := a.Source.Download(ctx, s.RepoURL, rel); err != nil {
@@ -61,30 +70,103 @@ func (a *Agent) install(ctx context.Context, s Settings, rel Release, self Membe
 		return Outcome{}, err
 	}
 	a.Logf("installing release %s over %s", rel.Version, a.Node.Current())
-	res, installErr := Install(ctx, a.Node, rel)
-	switch {
-	case res.Installed:
-		if err := a.Store.Record(ctx, rel.Version, self.ID, StateInstalled, ""); err != nil {
-			return Outcome{}, err
-		}
-		if err := updatenotice.Clear(a.NoticePath); err != nil {
-			return Outcome{}, err
-		}
-		return Outcome{Action: OutcomeInstalled, Version: rel.Version}, nil
-	case res.ReleaseBad:
-		return a.markBad(ctx, s, rel, self, installErr)
+	if err := a.Journal.Begin(Intent{Version: rel.Version, Previous: a.Node.Current(), StartedAt: a.Now().UTC()}); err != nil {
+		return Outcome{}, fmt.Errorf("record that an install is beginning: %w", err)
 	}
-	return Outcome{}, installErr
+	res, installErr := Install(ctx, a.Node, rel)
+	return a.settle(ctx, s, rel.Version, self, res, installErr)
 }
 
-// markBad records that rel failed on this node, which stops every other node
-// from installing it, and reports it.
-func (a *Agent) markBad(ctx context.Context, s Settings, rel Release, self Member, installErr error) (Outcome, error) {
-	recordErr := a.Store.Record(ctx, rel.Version, self.ID, StateFailed, installErr.Error())
+// settle records how an install ended and, when the node is in a state no
+// later run has to repair, takes the intent off the journal.
+func (a *Agent) settle(ctx context.Context, s Settings, version string, self Member, res Result, installErr error) (Outcome, error) {
+	var out Outcome
+	var err error
+	switch {
+	case res.Installed:
+		out, err = a.installed(ctx, version, self)
+	case res.ReleaseBad:
+		out, err = a.markBad(ctx, s, version, self, installErr)
+	default:
+		out, err = Outcome{}, installErr
+	}
+	if res.Settled() {
+		err = errors.Join(err, a.Journal.Clear())
+	}
+	return out, err
+}
+
+func (a *Agent) installed(ctx context.Context, version string, self Member) (Outcome, error) {
+	if err := a.Store.Record(ctx, version, self.ID, StateInstalled, ""); err != nil {
+		return Outcome{}, err
+	}
+	if err := updatenotice.Clear(a.NoticePath); err != nil {
+		return Outcome{}, err
+	}
+	return Outcome{Action: OutcomeInstalled, Version: version}, nil
+}
+
+// markBad records that the release failed on this node, which stops every
+// other node from installing it, and reports it.
+func (a *Agent) markBad(ctx context.Context, s Settings, version string, self Member, installErr error) (Outcome, error) {
+	recordErr := a.Store.Record(ctx, version, self.ID, StateFailed, installErr.Error())
 	noticeErr := updatenotice.Write(a.NoticePath, updatenotice.Notice{
 		State: updatenotice.StateFailed, Mode: s.Mode, Channel: s.Channel,
-		Current: a.Node.Current(), Candidate: rel.Version, Reason: installErr.Error(), CheckedAt: a.Now().UTC(),
+		Current: a.Node.Current(), Candidate: version, Reason: installErr.Error(), CheckedAt: a.Now().UTC(),
 	})
-	return Outcome{Action: OutcomeFailed, Reason: installErr.Error(), Version: rel.Version},
+	return Outcome{Action: OutcomeFailed, Reason: installErr.Error(), Version: version},
 		errors.Join(installErr, recordErr, noticeErr)
+}
+
+// recordCurrent records that this node runs rel when auto-update is on and
+// nothing was recorded. A node that is on a release already (pushed by hand,
+// installed at that version) would otherwise stay the first node of the rollout
+// plan without an install, and every other node would wait for it.
+func (a *Agent) recordCurrent(ctx context.Context, s Settings, rel Release) error {
+	if s.Mode != ModeAuto {
+		return nil
+	}
+	if cmp, err := Compare(a.Node.Current(), rel.Version); err != nil || cmp != 0 {
+		return err
+	}
+	members, err := a.Store.Members(ctx)
+	if err != nil {
+		return err
+	}
+	self, found := memberAt(members, a.NodeHost)
+	if !found {
+		return fmt.Errorf("this node (%s) is not in the cluster's registry (it is matched by its overlay address)", a.NodeHost)
+	}
+	installs, err := a.Store.Installs(ctx, rel.Version)
+	if err != nil || installs[self.ID] == StateInstalled {
+		return err
+	}
+	return a.Store.Record(ctx, rel.Version, self.ID, StateInstalled, "already running it")
+}
+
+// resume finishes an install a previous run began and did not end. The release
+// is in place under /opt/orama if the node's installed release is the intent's;
+// otherwise staging never completed, or was undone, and the intent is stale.
+// It finishes whatever the policy now says: a half-installed node is not left
+// half-installed because the cluster turned updates off meanwhile.
+func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
+	intent, err := a.Journal.Pending()
+	if err != nil || intent == nil {
+		return Outcome{}, false, err
+	}
+	if a.Node.Current() != intent.Version {
+		return Outcome{}, false, a.Journal.Clear()
+	}
+	a.Logf("finishing the install of release %s that a previous run began", intent.Version)
+	self, release, err := a.lock(ctx)
+	if errors.Is(err, rqlite.ErrClusterLockHeld) {
+		return Outcome{Action: OutcomeWait, Reason: "another node holds the rollout lock", Version: intent.Version}, true, nil
+	}
+	if err != nil {
+		return Outcome{}, true, err
+	}
+	defer a.unlock(ctx, release)
+	res, finishErr := Finish(ctx, a.Node, intent.Version)
+	out, err := a.settle(ctx, s, intent.Version, self, res, finishErr)
+	return out, true, err
 }

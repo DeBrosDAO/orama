@@ -37,7 +37,7 @@ func TestInstall_aFailedGateRestoresUpgradesAgainAndBlamesTheRelease(t *testing.
 func TestInstall_aFailedStageChangesNothingAndBlamesNobody(t *testing.T) {
 	n := &fakeNode{current: "0.3.0", stageErr: errors.New("refused")}
 	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
-	if err == nil || res != (Result{}) {
+	if err == nil || res != (Result{Unchanged: true}) || !res.Settled() {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
 	if want := []string{"stage"}; !slices.Equal(n.calls, want) {
@@ -71,5 +71,45 @@ func TestInstall_aRestoreThatFailsIsReportedWithTheOriginalFailure(t *testing.T)
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error lacks %q: %v", want, err)
 		}
+	}
+}
+
+// A run that is stopped (SIGTERM, the service's timeout) did not find the
+// release bad: nothing is rolled back and nothing is blamed, and the next run
+// finishes the install.
+func TestFinish_aStoppedRunRollsNothingBackAndBlamesNobody(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	n := &stoppedNode{fakeNode: fakeNode{current: "0.3.1"}, stop: cancel}
+	res, err := Finish(ctx, n, "0.3.1")
+	if err == nil || res.ReleaseBad || res.Settled() {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "the next run finishes it") {
+		t.Fatalf("err = %v", err)
+	}
+	for _, call := range n.calls {
+		if call == "restore" {
+			t.Fatalf("a stopped run rolled back: %v", n.calls)
+		}
+	}
+}
+
+// stoppedNode is stopped during its upgrade.
+type stoppedNode struct {
+	fakeNode
+	stop context.CancelFunc
+}
+
+func (s *stoppedNode) Upgrade(ctx context.Context) error {
+	s.calls = append(s.calls, "upgrade")
+	s.stop()
+	return ctx.Err()
+}
+
+func TestFinish_aRestoreThatFailsLeavesTheResultUnsettled(t *testing.T) {
+	n := &fakeNode{current: "0.3.1", previous: "0.3.0", badRelease: true, restoreErr: errors.New("disk full")}
+	res, err := Finish(t.Context(), n, "0.3.1")
+	if err == nil || res.Settled() || !res.ReleaseBad {
+		t.Fatalf("result %+v, err %v", res, err)
 	}
 }

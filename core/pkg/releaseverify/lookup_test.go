@@ -47,7 +47,7 @@ func TestVerified_newestPicksTheHighestVersionOfTheChannelAndArch(t *testing.T) 
 	}
 }
 
-func TestVerified_newestRefusesAVersionItCannotOrder(t *testing.T) {
+func TestVerified_newestIgnoresAVersionItCannotOrder(t *testing.T) {
 	r := newChannelRepo(t)
 	files := r.files(t, 4, map[string]map[string][]byte{
 		"stable": {ArchiveTarget("stable", "1.0.0", "amd64"): []byte("a"), ArchiveTarget("stable", "1.x", "amd64"): []byte("b")},
@@ -56,8 +56,9 @@ func TestVerified_newestRefusesAVersionItCannotOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := v.Newest("stable", "amd64", numericCompare); err == nil {
-		t.Fatal("a version that cannot be ordered was ranked")
+	_, ref, ok, err := v.Newest("stable", "amd64", numericCompare)
+	if err != nil || !ok || ref.Version != "1.0.0" {
+		t.Fatalf("newest = %+v, ok=%v, err=%v: the unorderable 1.x should be skipped", ref, ok, err)
 	}
 }
 

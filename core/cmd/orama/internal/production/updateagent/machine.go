@@ -25,37 +25,44 @@ var installedCLI = filepath.Join(install.OramaBase, "bin", "orama")
 
 // machine is this node as autoupdate.Node.
 type machine struct {
-	current string
-	health  nodehealth.Target
+	health nodehealth.Target
+	// stage and restore are push.Stage and push.RestorePrevious; a test
+	// replaces them.
+	stage   func(push.StageOptions) error
+	restore func() error
 }
 
 var _ autoupdate.Node = (*machine)(nil)
 
-// newMachine reads the release this node runs from its installed manifest.
-func newMachine(ep rqlite.Endpoint) (*machine, error) {
-	data, err := os.ReadFile(filepath.Join(install.OramaBase, archivetrust.ManifestName))
-	if err != nil {
-		return nil, fmt.Errorf("read the installed release's manifest: %w", err)
-	}
-	manifest, err := archivetrust.ParseManifest(data)
-	if err != nil {
-		return nil, err
-	}
+func newMachine(ep rqlite.Endpoint) *machine {
 	return &machine{
-		current: manifest.Version,
 		health: nodehealth.Target{
 			RQLite:      ep,
 			GatewayBase: fmt.Sprintf("http://localhost:%d", constants.GatewayAPIPort),
 		},
-	}, nil
+		stage:   push.Stage,
+		restore: push.RestorePrevious,
+	}
 }
 
-func (m *machine) Current() string { return m.current }
+// Current is the version in the installed manifest, read each time: it changes
+// when a release is staged and when it is restored.
+func (m *machine) Current() string {
+	data, err := os.ReadFile(filepath.Join(install.OramaBase, archivetrust.ManifestName))
+	if err != nil {
+		return ""
+	}
+	manifest, err := archivetrust.ParseManifest(data)
+	if err != nil {
+		return ""
+	}
+	return manifest.Version
+}
 
 // Stage puts the downloaded release in place under /opt/orama on the release
 // root's checks alone, keeping the release it replaces.
 func (m *machine) Stage(_ context.Context, rel autoupdate.Release) error {
-	return push.Stage(push.StageOptions{
+	return m.stage(push.StageOptions{
 		Archive:         rel.ArchivePath(),
 		ReleaseMetadata: rel.MetadataDir(),
 		ReleaseTarget:   rel.Target.Path,
@@ -64,10 +71,13 @@ func (m *machine) Stage(_ context.Context, rel autoupdate.Release) error {
 	})
 }
 
-// Upgrade runs `orama node upgrade --restart` of the release in place. An exit
-// with the preflight code means a check refused before any service stopped, and
-// a CLI that could not be started changed nothing either.
+// Upgrade runs `orama node upgrade --restart` of the release in place, for at
+// most autoupdate.UpgradeBudget. An exit with the preflight code means a check
+// refused before any service stopped, and a CLI that could not be started
+// changed nothing either.
 func (m *machine) Upgrade(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, autoupdate.UpgradeBudget)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, installedCLI, "node", "upgrade", "--restart")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	err := cmd.Run()
@@ -84,7 +94,7 @@ func (m *machine) Upgrade(ctx context.Context) error {
 	return nil
 }
 
-func (m *machine) Restore(context.Context) error { return push.RestorePrevious() }
+func (m *machine) Restore(context.Context) error { return m.restore() }
 
 // Healthy waits for the node to carry its share of the cluster again.
 func (m *machine) Healthy(ctx context.Context) error {

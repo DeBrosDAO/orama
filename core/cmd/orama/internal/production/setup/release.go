@@ -87,6 +87,13 @@ func prepareRelease(ctx context.Context, opts Options, arch string) (archive str
 	if err != nil {
 		return "", nil, err
 	}
+	// The root that was validated, signed into the manifest and checked
+	// against is these bytes, read once.
+	rootPath := filepath.Join(work, "root.json")
+	if err := os.WriteFile(rootPath, root, 0o600); err != nil {
+		return "", nil, fmt.Errorf("keep the release root for the checks: %w", err)
+	}
+	opts.ReleaseRoot = rootPath
 	ctx, cancel := context.WithTimeout(ctx, releaseBudget)
 	defer cancel()
 	fetched, err := fetchVerifiedRelease(ctx, work, opts, channel, arch, seen)
