@@ -19,6 +19,9 @@ const (
 	envBaseDomain = "E2E_CLUSTER_BASE_DOMAIN"
 	envIPs        = "E2E_CLUSTER_IPS"
 	envArchive    = "E2E_CLUSTER_ARCHIVE"
+	envRelease    = "E2E_CLUSTER_RELEASE"
+	envRepo       = "E2E_CLUSTER_RELEASE_REPO"
+	envRoot       = "E2E_CLUSTER_RELEASE_ROOT"
 	envEnvName    = "E2E_CLUSTER_ENV"
 	envToken      = "E2E_CLUSTER_CLOUDFLARE_TOKEN_FILE"
 	envOrama      = "E2E_CLUSTER_ORAMA"
@@ -70,15 +73,18 @@ func fixtureFromEnv(t *testing.T, domain string) *Fixture {
 		t.Fatal(err)
 	}
 	fx := &Fixture{
-		BaseDomain: domain,
-		EnvName:    envOr(envEnvName, defaultEnvName),
-		Archive:    os.Getenv(envArchive),
-		TokenFile:  os.Getenv(envToken),
-		SiteDir:    site,
-		UseOnly:    os.Getenv(envMode) == modeUseOnly,
-		HostKey:    ScanHostKey,
-		LookupNS:   LookupNS,
-		CertServed: CertServed,
+		BaseDomain:  domain,
+		EnvName:     envOr(envEnvName, defaultEnvName),
+		Archive:     os.Getenv(envArchive),
+		Release:     os.Getenv(envRelease),
+		ReleaseRepo: os.Getenv(envRepo),
+		ReleaseRoot: os.Getenv(envRoot),
+		TokenFile:   os.Getenv(envToken),
+		SiteDir:     site,
+		UseOnly:     os.Getenv(envMode) == modeUseOnly,
+		HostKey:     ScanHostKey,
+		LookupNS:    LookupNS,
+		CertServed:  CertServed,
 	}
 	if mode := os.Getenv(envMode); mode != "" && mode != modeFull && mode != modeUseOnly {
 		t.Fatalf("%s=%q: want %s or %s", envMode, mode, modeFull, modeUseOnly)

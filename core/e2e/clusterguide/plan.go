@@ -31,8 +31,8 @@ func Plan() []Step {
 	setup := func(name string, need, deny []string) Step {
 		return Step{
 			Name: name, Section: SectionInstall, Words: []string{"orama", "node", "setup"},
-			Need: append([]string{"--ip", "--password", "--env", "--archive", "--base-domain", "--role", "--acme-ca"}, need...),
-			Deny: deny, Skip: skipIfUseOnly, Extra: hostKeyArg,
+			Need: append([]string{"--ip", "--password", "--env", "--release", "--release-repo", "--release-root", "--base-domain", "--role", "--acme-ca"}, need...),
+			Deny: append([]string{"--archive"}, deny...), Skip: skipIfUseOnly, Extra: hostKeyArg,
 		}
 	}
 	delegation := Step{
@@ -42,7 +42,6 @@ func Plan() []Step {
 	}
 	return []Step{
 		{Name: "store the VPS login", Section: SectionInstall, Words: []string{"rw", "vault", "add"}, Kind: Provided},
-		{Name: "build the archive", Section: SectionInstall, Words: []string{"orama", "build"}, Kind: Provided},
 		setup("install the genesis node", []string{"--genesis"}, nil),
 		delegation,
 		{
@@ -194,7 +193,9 @@ func listsDeployment(name string) func(*Fixture, string) error {
 // path from a fresh install to a working cluster, with why. A command in any
 // other section that Plan does not list fails the run.
 var uncoveredSections = map[string]string{
-	"A sealed backup": "an operation on a running cluster, not part of standing one up",
+	"A sealed backup":      "an operation on a running cluster, not part of standing one up",
+	"Keep it updated":      "settings of a running cluster; the update agent has its own tests (pkg/autoupdate, fleet e2e autoupdate-agent)",
+	"Building from source": "an alternative to the release the Install section installs: the fixture's archive stands in for it (Fixture.Archive)",
 }
 
 // CoveredCommands are the guide's commands the plan must match: everything

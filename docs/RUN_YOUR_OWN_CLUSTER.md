@@ -28,10 +28,27 @@ registry TLD (a parent with no dot, such as `com`). The record format is
 **On the machine you type from.** The RootWallet desktop app, open and
 unlocked. `orama node setup` and `orama auth login` ask its agent for a key
 and a signature. There is no SSH key on disk and no password flag: `rw vault
-add <ip>` stores the VPS login, and `--password` reads it. Build the archive
-you will install with `orama build` in a checkout of this repo; setup takes
-that path as `--archive`. A test cluster passes `--acme-ca letsencrypt-staging`
-so certificate issuance does not use the production Let's Encrypt quota.
+add <ip>` stores the VPS login, and `--password` reads it. You need no source
+checkout, Go or zig: setup installs a published release. It takes three things
+you choose, none of which it fetches for you:
+
+- `--release <version>`: the release to install, on the `stable` channel unless
+  you pass `--channel`.
+- `--release-repo <url>`: the https address of the release repository, which
+  serves the signed metadata and the archives.
+- `--release-root <root.json>`: the TUF root of the release signers you decided
+  to trust. It is the one thing that has to reach you by another road than the
+  repository (the project publishes its SHA-256; check the file against it).
+
+Setup fetches the release's metadata on your machine, verifies it against that
+root (every role at its threshold, a timestamp that has not expired, a snapshot
+no older than the newest this machine has accepted, the channel's own keys for
+its own files), downloads the archive and checks its length and hashes. Only then
+does your RootWallet sign it, as the build your cluster runs, with the root
+inside: your cluster trusts your wallet for what it installs, and every node
+adopts the root, so it can later update itself (below). A test cluster passes
+`--acme-ca letsencrypt-staging` so certificate issuance does not use the
+production Let's Encrypt quota.
 
 **Ports the installer opens.** On every node: SSH `22/tcp`, WireGuard
 `51820/udp`, `80/tcp` and `443/tcp`. On a nameserver it also opens `53/tcp` and
@@ -46,8 +63,8 @@ active one.
 
 ```bash
 rw vault add 203.0.113.10
-orama build
-orama node setup --ip 203.0.113.10 --password --env mycluster --archive /tmp/orama-linux-amd64.tar.gz \
+orama node setup --ip 203.0.113.10 --password --env mycluster --release 0.3.1 \
+  --release-repo https://releases.example.org/tuf --release-root ./root.json \
   --base-domain cluster.example.com --role nameserver --genesis --acme-ca letsencrypt-staging
 ```
 
@@ -70,9 +87,11 @@ invite over SSH, so the cluster name does not have to resolve on your machine
 yet.
 
 ```bash
-orama node setup --ip 203.0.113.11 --password --env mycluster --archive /tmp/orama-linux-amd64.tar.gz \
+orama node setup --ip 203.0.113.11 --password --env mycluster --release 0.3.1 \
+  --release-repo https://releases.example.org/tuf --release-root ./root.json \
   --base-domain cluster.example.com --role nameserver --join-via root@203.0.113.10 --acme-ca letsencrypt-staging
-orama node setup --ip 203.0.113.12 --password --env mycluster --archive /tmp/orama-linux-amd64.tar.gz \
+orama node setup --ip 203.0.113.12 --password --env mycluster --release 0.3.1 \
+  --release-repo https://releases.example.org/tuf --release-root ./root.json \
   --base-domain cluster.example.com --role nameserver --join-via root@203.0.113.10 --acme-ca letsencrypt-staging
 orama node dns delegation --env mycluster
 ```
@@ -116,6 +135,44 @@ Every command in Install, Use it and Check it is executed, in this order, by
 `make e2e-cluster` against machines the repo's owner provides
 (`core/e2e/clusterguide`, see [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide
 e2e"). Change a command here and that test fails until its plan matches.
+
+## Keep it updated
+
+A cluster does not update itself until you tell it where releases are. These
+are settings of the cluster, changed by an operator and written to the audit
+trail:
+
+```bash
+orama cluster settings set release-repo https://releases.example.org/tuf
+orama cluster settings set update-channel stable
+orama cluster settings set auto-update notify
+orama cluster settings show
+```
+
+With `notify`, the default, every node looks every 15 minutes, verifies what it
+finds against the release root it adopted at install, and `orama monitor` shows
+a newer release as information (a release that does not verify, or that a node
+rolled back, as a warning). Nothing is installed. With `orama cluster settings
+set auto-update auto` the nodes install it themselves, one at a time, followers
+first and the leader last, only while the cluster is healthy and the hour is
+inside `update-window`, and a release that fails on one node is not tried on the
+others. How it decides, and what it does when an install fails, is
+[DEV_DEPLOY.md](DEV_DEPLOY.md), "Auto-update".
+
+## Building from source
+
+A release is the way to run a cluster without a checkout. To run a build of your
+own instead, build it in a checkout of this repository, which needs Go, zig and
+the RootWallet agent, and pass the path to setup in place of the three release
+flags (`--archive` and `--release` are alternatives):
+
+```bash
+orama build
+```
+
+`orama build` prints the archive's path. The build is reproducible, so a second
+build of the same commit with `SOURCE_DATE_EPOCH` set to the commit's time gives
+the same archive, byte for byte (DEV_DEPLOY.md, "Reproducible builds").
 
 ## A sealed backup
 
