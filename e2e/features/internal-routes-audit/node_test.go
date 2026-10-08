@@ -21,18 +21,11 @@ const (
 // onNode is what a route owes a caller on a node who holds no node
 // credential: spawn and the node's own routes are reachable from the host
 // and the overlay and refuse a missing or forged MAC or stamp (401);
-// telemetry answers 404 to anything unverified; the WireGuard routes refuse
-// a loopback source (403) and, over the overlay, a wrong cluster secret —
-// in the body for registration (401), in X-Cluster-Secret for the others
-// (403) (core/pkg/gateway/handlers/wireguard/handler.go).
+// telemetry answers 404 to anything unverified.
 func onNode(r route, via string) int {
 	switch {
 	case r.path == "/v1/internal/telemetry":
 		return http.StatusNotFound
-	case r.path == "/v1/internal/wg/peer" && via == viaOverlay:
-		return http.StatusUnauthorized
-	case r.internet == http.StatusForbidden:
-		return http.StatusForbidden
 	default:
 		return http.StatusUnauthorized
 	}

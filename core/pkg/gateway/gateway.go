@@ -39,7 +39,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	vaulthandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/vault"
 	webrtchandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/webrtc"
-	wireguardhandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/wireguard"
 	"github.com/DeBrosOfficial/network/pkg/gateway/wssession"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -252,9 +251,8 @@ type Gateway struct {
 	webrtcServeTURNCredentials bool
 	webrtcServeSFURoutes       bool
 
-	// WireGuard peer exchange
-	wireguardHandler *wireguardhandlers.Handler
-	nodeAPIHandler   *nodeapihandlers.Handler
+	// A node recording itself in the core cluster
+	nodeAPIHandler *nodeapihandlers.Handler
 
 	// Node join handler
 	joinHandler *joinhandlers.Handler
@@ -666,9 +664,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// manager is unset.
 	gw.namespaceRateLimiter = NewNamespaceRateLimiter(rlDefaults.RequestsPerMinute, rlDefaults.Burst)
 
-	// Initialize WireGuard peer exchange handler
 	if deps.ORMClient != nil {
-		gw.wireguardHandler = wireguardhandlers.NewHandler(logger.Logger, deps.ORMClient, cfg.ClusterSecret)
 		// Nothing derived from the cluster secret is involved: a node is
 		// verified against the key it enrolled, and an enrolment against the
 		// key carried inside its own peer id.

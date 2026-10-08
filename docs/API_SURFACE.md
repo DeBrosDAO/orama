@@ -284,6 +284,3 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/internal/tls-store` | internal | The cluster's certificate store, for Caddy on this host (`caddy.storage.orama`): `POST {"op":"load|stat|store|delete|list|lock|renew|unlock",…}`. Coordination MAC v2 under the TLS store key install gives Caddy (`/etc/caddy/orama-tls-store.key`), body and nonce covered, from loopback only; anything else is 404. Values arrive sealed and are refused otherwise. Cluster gateway only. See [ARCHITECTURE.md](ARCHITECTURE.md#tlshttps). |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/webrtc/events` | internal | A namespace's SFU reporting a participant joining or leaving a room, published on `_orama/webrtc/<room>` (docs/WEBRTC.md#membership-events). A MAC over the request keyed by the namespace's TURN secret; anything else is refused with 401. |
-| `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/wg/peer/remove` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/wg/peers` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

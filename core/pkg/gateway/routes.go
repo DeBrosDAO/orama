@@ -63,13 +63,6 @@ func (g *Gateway) Routes() http.Handler {
 	// The cluster's certificate store, for this node's Caddy (tls_store_handler.go)
 	mux.HandleFunc("/v1/internal/tls-store", g.tlsStoreHandler)
 
-	// WireGuard peer exchange (internal, cluster-secret auth)
-	if g.wireguardHandler != nil {
-		mux.HandleFunc("/v1/internal/wg/peer", g.wireguardHandler.HandleRegisterPeer)
-		mux.HandleFunc("/v1/internal/wg/peers", g.wireguardHandler.HandleListPeers)
-		mux.HandleFunc("/v1/internal/wg/peer/remove", g.wireguardHandler.HandleRemovePeer)
-	}
-
 	// A node recording itself in the core cluster (internal, node-stamped)
 	if g.nodeAPIHandler != nil {
 		mux.HandleFunc("/v1/internal/node/register", g.nodeAPIHandler.HandleRegister)

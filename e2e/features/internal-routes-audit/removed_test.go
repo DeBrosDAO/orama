@@ -63,3 +63,39 @@ func TestRemovedWebRTCRoutes_answerLikeNoRoute(t *testing.T) {
 		}
 	}
 }
+
+// removedWireGuard are the peer-exchange endpoints that took the cluster
+// secret as a bearer credential and were removed (docs/SECURITY.md,
+// "Authentication"; #727).
+var removedWireGuard = []string{
+	"/v1/internal/wg/peer",
+	"/v1/internal/wg/peers",
+	"/v1/internal/wg/peer/remove",
+}
+
+// TestRemovedWireGuardRoutes_answer404OverTheOverlay: from every node's
+// shell, over the overlay to another node, each removed peer-exchange path
+// answers 404 to every method, as a path that never existed does, whatever
+// secret it carries.
+func TestRemovedWireGuardRoutes_answer404OverTheOverlay(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	for _, from := range f.State.Nodes {
+		to := otherNode(t, f, from)
+		for _, path := range removedWireGuard {
+			for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
+				p := edge.NodeCurl{
+					Method:  m,
+					URL:     edge.OverlayGateway(to, path),
+					Headers: []string{headerClusterSecret + ": " + notTheSecret},
+					Body:    `{"cluster_secret":"` + notTheSecret + `"}`,
+				}.Run(t, f, from)
+				if p.Status != http.StatusNotFound {
+					t.Errorf("%s -> %s %s over the overlay: HTTP %d (curl exit %d), want 404: %.200s",
+						from.Name, m, path, p.Status, p.Exit, p.Body)
+				}
+			}
+		}
+	}
+	requireConverged(t)
+}

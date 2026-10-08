@@ -37,24 +37,11 @@ This ensures any node can communicate directly with any other node with minimal 
 WireGuard configuration is fully automated during node installation. You do not need to manually configure WireGuard. The `orama node install` command handles everything:
 
 1. **Key generation** -- generates a WireGuard keypair for the node
-2. **Peer registration** -- registers the public key and endpoint with the cluster via the `/v1/internal/wg/peer` API
-3. **Peer discovery** -- downloads the peer list from the cluster via `/v1/internal/wg/peers`
+2. **Peer registration** -- registers the public key and endpoint with the cluster through the invite-gated join (or OramaOS enrolment), which also returns the peer list
 4. **Interface configuration** -- creates the WireGuard interface with all peer tunnels
 5. **Propagation** -- existing nodes are notified to add the new peer to their configurations
 
 When a new node joins, all existing nodes automatically update their WireGuard configurations to include the new peer. When a node is removed, its peer entry is cleaned up.
-
-### Internal API Endpoints
-
-The gateway provides these internal endpoints for WireGuard peer management (authenticated with the cluster secret):
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /v1/internal/wg/peer` | Register a new WireGuard peer |
-| `GET /v1/internal/wg/peers` | List all registered peers |
-| `DELETE /v1/internal/wg/peer/remove?node_id=<id>` | Remove a peer |
-
-These endpoints are for internal cluster coordination only. Operators do not call them directly.
 
 ## Key Management
 
