@@ -6,7 +6,8 @@
 # refused, cancel rules); x/token (create needs the fee + deposit as bank
 # balance: refused with the exact amount, every shape bound, every other
 # message on a token that does not exist, norama untouchable, bank MsgSend of
-# a factory denom not caught by the norama restriction); x/wasmpolicy against
+# a factory denom not caught by the norama restriction, and a paused token
+# refused by a plain bank MsgSend); x/wasmpolicy against
 # the build (no-VM: no wasm types; VM: upload closed before the sunset).
 # Bank-paid paths (token create and everything after it, bids, direct buys,
 # royalty payout on a sale) are reported blocked (features/internal/chain funds.go),
@@ -62,7 +63,7 @@ covers:
   claims:
     - "docs/CHAIN.md#x-fees: x/cnft locks a tree deposit through x/fees"
     - "docs/CHAIN.md#x-token: MsgCreateToken requires the 10 ORAMA creation fee plus 68359 norama per metadata byte as bank balance (the refusal names the exact amount)"
-    - "docs/CHAIN.md#x-token: x/bank MsgSend does not run x/token's checks"
+    - "docs/CHAIN.md#x-token: a token's pause, freeze, non-transferable flag and transfer fee hold on a plain x/bank MsgSend (the bank send restriction)"
     - "docs/CHAIN.md#x-emission: only x/emission mints norama (x/token cannot touch it)"
     - "docs/CHAIN.md#modules-wired: x/wasmpolicy is always wired; a no-VM build has no x/wasm"
     - "docs/CHAIN.md#state-deposits: REFUSAL PATHS ONLY: orama.market.v1.MsgBid; the success path needs a funded bank balance (trigger: a funding path exists)"

@@ -1025,10 +1025,16 @@ shields only ORAMA (multi-asset is off). A shieldable token still moves by the p
 `MsgTransfer` bank send.
 
 `MsgTransfer` does that send after the pause, non-transferable, signer, and freeze checks.
-`from` must be the signer unless the signer is the current permanent delegate. Because the
-module is not wired, `x/bank` `MsgSend` does not run these checks. The `token` module account
-would also need minter and burner permissions before a real bank would accept mint, burn, or
-the creation-fee burn. Neither is granted in `app.go`.
+`from` must be the signer unless the signer is the current permanent delegate.
+
+**The bank send restriction.** The same powers hold on every other path that moves a token, because
+`app.go` appends `Keeper.SendRestriction` to the bank keeper: `x/bank` `MsgSend` and `MsgMultiSend`, a
+contract's `BankMsg` and attached funds, and any module send. Such a send of a factory denom is refused
+when the token is paused or non-transferable, when it has a transfer fee or a transfer hook (those run
+only in `MsgTransfer`), or when the sender or the recipient is frozen. The restriction lets through a
+send with the `token` module account on either side (its own mint, burn and fee burn) and the bank send
+inside `MsgTransfer`, which has made the checks itself. A factory-looking denom with no token record
+is not governed. The permanent-delegate move exists only in `MsgTransfer`.
 
 State is one record per token plus one key per frozen account. A transfer is a single bank send,
 plus a burn when a fee is due. The invariant walks every token, the same shape as x/fees'

@@ -565,6 +565,8 @@ func NewOramaApp(
 
 	app.installWasm(keys, appOpts)
 	app.BankKeeper.AppendSendRestriction(app.contractSend.Restrict)
+	// A factory token's pause, freeze, non-transferable flag and transfer fee hold on a bank send too.
+	app.BankKeeper.AppendSendRestriction(app.TokenKeeper.SendRestriction)
 
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	baseModules := []module.AppModule{
