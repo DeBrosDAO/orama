@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
@@ -17,8 +19,10 @@ import (
 const (
 	// torDirMode is a Tor DataDirectory: Tor refuses one others can read.
 	torDirMode = 0o700
-	// torFileMode is the torrc and every key.
+	// torFileMode is every key.
 	torFileMode = 0o600
+	// torrcMode is the torrc: root's, readable by the role's account.
+	torrcMode = 0o644
 	// torKeyLimit bounds a key file read from the ceremony bundle.
 	torKeyLimit = 64 << 10
 	// torRejectLimit bounds the exit operator's reject list read back.
@@ -76,6 +80,8 @@ func (t TorOptions) validate(services []GlobalService) error {
 		return errors.New("the exit role is a relay with an exit policy: use --services relay,exit")
 	case relay && t.NodeID == "":
 		return errors.New("a relay's nickname is derived from its on-chain node id: give --tor-node-id")
+	case !relay && t.NodeID != "":
+		return errors.New("--tor-node-id applies only with the relay service: an authority's nickname is the one in the network file")
 	case dirauth && t.DirauthKeysDir == "":
 		return errors.New("a directory authority needs its key bundle from the key ceremony: give --tor-authority-keys")
 	case !dirauth && t.DirauthKeysDir != "":
@@ -127,6 +133,9 @@ func planGlobalTor(h GlobalHost, opts GlobalInstallOptions) (*torPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := requireOneTorPublisher(h, opts); err != nil {
+		return nil, err
+	}
 	plan := &torPlan{network: network, networkJSON: raw}
 	if relay {
 		inst, err := planTorRelay(h, opts.Tor, network)
@@ -152,13 +161,28 @@ func planGlobalTor(h GlobalHost, opts GlobalInstallOptions) (*torPlan, error) {
 	return plan, nil
 }
 
-func planTorRelay(h GlobalHost, t TorOptions, network tornet.Network) (torInstance, error) {
-	reject, err := readExitRejectList(h)
-	if err != nil {
-		return torInstance{}, err
+// requireOneTorPublisher refuses a relay on a host that is a directory authority
+// and the reverse, whichever install made the first: both publish the ORPort.
+func requireOneTorPublisher(h GlobalHost, opts GlobalInstallOptions) error {
+	other := map[GlobalService]GlobalService{GlobalServiceRelay: GlobalServiceDirauth, GlobalServiceDirauth: GlobalServiceRelay}
+	for s, o := range other {
+		if !slices.Contains(opts.Services, s) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(h.UnitDir, globalServiceSpecs[o].unit)); err == nil {
+			return fmt.Errorf("this host already runs the %s role, and a directory authority is a relay: it cannot also take the %s role on the same ORPort", o, s)
+		}
 	}
-	if !t.Exit {
-		reject = nil
+	return nil
+}
+
+func planTorRelay(h GlobalHost, t TorOptions, network tornet.Network) (torInstance, error) {
+	var reject []string
+	if t.Exit {
+		var err error
+		if reject, err = readExitRejectList(h); err != nil {
+			return torInstance{}, err
+		}
 	}
 	torrc, err := tornet.RelayTorrc(tornet.RelayConfig{
 		Network: network, Home: constants.GlobalTorRelayHome, Nickname: tornet.NicknameFor(t.NodeID),
@@ -230,9 +254,12 @@ func readDirauthKeys(dir string, auth tornet.Authority) ([]torKey, error) {
 	if ed != auth.Ed25519ID {
 		return nil, fmt.Errorf("the ed25519 identity in %s is %s, but authority %s is published as %s: this is another authority's bundle", dir, ed, auth.Nickname, auth.Ed25519ID)
 	}
-	v3, _, err := tornet.ParseAuthorityCertificate(string(byName[tornet.KeyAuthorityCert]))
+	v3, expires, err := tornet.ParseAuthorityCertificate(string(byName[tornet.KeyAuthorityCert]))
 	if err != nil {
 		return nil, fmt.Errorf("the certificate in %s: %w", dir, err)
+	}
+	if !expires.After(time.Now()) {
+		return nil, fmt.Errorf("the signing certificate in %s expired on %s: renew it offline (docs/TOR_NETWORK.md, Rotating a signing certificate)", dir, expires.Format(time.DateOnly))
 	}
 	if v3 != auth.V3Ident {
 		return nil, fmt.Errorf("the certificate in %s is for authority identity %s, but authority %s is published as %s", dir, v3, auth.Nickname, auth.V3Ident)
@@ -267,6 +294,15 @@ func applyGlobalTor(h GlobalHost, plan *torPlan) error {
 	if err := h.StateRoot.WriteFile(netPath, plan.networkJSON, globalUnitMode); err != nil {
 		return fmt.Errorf("write %s: %w", netPath, err)
 	}
+	// Every identity check comes before the first write, so a refusal leaves the
+	// installed keys exactly as they were.
+	for _, inst := range plan.instances {
+		for _, k := range inst.keys {
+			if err := keepIdentity(h, filepath.Join(h.StateDir, filepath.Base(inst.home), torKeysSubdir, k.name), k); err != nil {
+				return err
+			}
+		}
+	}
 	for _, inst := range plan.instances {
 		uid, gid, err := h.Lookup(inst.user)
 		if err != nil {
@@ -276,8 +312,10 @@ func applyGlobalTor(h GlobalHost, plan *torPlan) error {
 		if err := ownedDir(h, home, uid, gid); err != nil {
 			return err
 		}
-		if err := ownedFile(h, filepath.Join(home, "torrc"), []byte(inst.torrc), uid, gid); err != nil {
-			return err
+		// The torrc is root's and sits beside the DataDirectory, not in it.
+		torrc := filepath.Join(h.StateDir, filepath.Base(constants.GlobalTorrcFor(inst.home)))
+		if err := h.StateRoot.WriteFile(torrc, []byte(inst.torrc), torrcMode); err != nil {
+			return fmt.Errorf("write %s: %w", torrc, err)
 		}
 		if len(inst.keys) == 0 {
 			continue
@@ -294,9 +332,6 @@ func applyGlobalTor(h GlobalHost, plan *torPlan) error {
 				} else if !errors.Is(err, fs.ErrNotExist) {
 					return fmt.Errorf("read %s: %w", path, err)
 				}
-			}
-			if err := keepIdentity(h, path, k); err != nil {
-				return err
 			}
 			if err := ownedFile(h, path, k.data, uid, gid); err != nil {
 				return err

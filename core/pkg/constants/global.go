@@ -113,6 +113,12 @@ const (
 	GlobalMonitorFile = "monitor.json"
 )
 
+// GlobalTorrcFor is the torrc of the Tor role whose DataDirectory is home. It is
+// beside the DataDirectory, in the root-owned state root, not inside it: the
+// Tor account owns its DataDirectory and could rewrite a file there (its own
+// exit policy, say) and have the change survive a restart.
+func GlobalTorrcFor(home string) string { return home + ".torrc" }
+
 // ColocatedGlobalIPFSAPIURL is the public Kubo RPC on a co-located machine.
 func ColocatedGlobalIPFSAPIURL() string { return hostPortURL(GlobalNetnsAddr, GlobalIPFSAPIPort) }
 

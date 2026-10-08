@@ -41,7 +41,7 @@ host's public address). Adding a Tor role to a machine whose global services are
 already installed keeps the namespace's published ports: the rulesets are built
 from the installed units plus the ones being added.
 
-Every Tor unit runs `/usr/bin/tor -f <state dir>/torrc` under the shared global
+Every Tor unit runs `/usr/bin/tor -f /var/lib/orama-global/tor-<role>.torrc` under the shared global
 sandbox (private ranges denied, `/opt/orama`, `/etc/orama`, `/etc/wireguard`
 hidden, `NoNewPrivileges`, empty capability set, no `PartOf=orama-node.service`),
 plus `MemoryDenyWriteExecute`, netlink for tor's interface listing,
@@ -50,7 +50,10 @@ killing tor, and `IPAddressDeny=198.18.0.0/15` (the co-located namespace's
 address range, where the chain's RPC and REST API listen). In the co-located
 namespace a relay or authority also loses loopback, which holds the chain's gRPC
 and metrics listeners (its resolver there is public). The installer writes the
-unit and the torrc; nobody edits either on a node.
+unit and the torrc; nobody edits either on a node. The torrc is root's (0644)
+and sits beside the DataDirectory, not in it: the role's account owns its
+DataDirectory and could otherwise rewrite its own exit policy there and have it
+survive a restart.
 
 **Each role has an account of its own**: `orama-tor-dirauth`, `orama-tor-relay`,
 `orama-tor-onion` (and `orama-txgate`), not the Tor package's `debian-tor`: an
@@ -60,7 +63,8 @@ masked.
 
 State directories (each the unit's `StateDirectory` and tor's DataDirectory, the
 role's account, 0700): `/var/lib/orama-global/tor-dirauth`, `tor-relay`,
-`tor-onion`. The network file as installed is
+`tor-onion`; their torrc files are `tor-dirauth.torrc`, `tor-relay.torrc` and
+`tor-onion.torrc` beside them. The network file as installed is
 `/var/lib/orama-global/tor-network.json`.
 
 ## The network file
@@ -142,6 +146,13 @@ writes below `--out`:
 `--out` must be new or empty; a ceremony never writes over keys. The passphrase
 goes to `tor-gencert` on stdin, never on a command line.
 
+**The passphrase protects a legacy file.** `tor-gencert` encrypts the identity key
+with OpenSSL's old PEM scheme (3DES, an MD5-based single-iteration key
+derivation), so a stolen file is cheap to attack offline and the passphrase must
+carry the strength: use a long random one per custodian, not a phrase, keep the
+file on encrypted media, and keep the copies in two places. The passphrase file
+must be a regular file you own (not a link) with mode 0600.
+
 The ceremony cross-checks tor's own output: the fingerprint tor prints must equal
 the SHA-1 the ceremony computes from the key file it wrote, and the certificate
 must carry a parsable identity and expiry.
@@ -156,7 +167,11 @@ file publishes for `--tor-address`, whose ed25519 master key is not the
 published `ed25519_id`, or whose certificate names another v3 identity. It
 never replaces an installed identity key with different bytes (`secret_id_key`,
 `ed25519_master_id_secret_key`): that would give the host a new identity in the
-network. A rotated signing key and certificate (`authority_signing_key`,
+network. The identity checks run before anything is written, so a refused bundle
+leaves the installed keys as they were; an expired signing certificate is
+refused. The ed25519 master *secret* is not checked against the public key, and
+the certificate's signature is not verified: a damaged bundle that passes shows
+up as tor refusing to start. A rotated signing key and certificate (`authority_signing_key`,
 `authority_certificate`) do replace the old ones. The keys tor rotates by itself
 (`ed25519_signing_secret_key`, `ed25519_signing_cert`, `secret_onion_key`,
 `secret_onion_key_ntor`) are installed from the bundle once and never put back
@@ -191,7 +206,8 @@ loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-comp
 `orama global install --services dirauth --tor-address <ip> --tor-contact <who> --tor-authority-keys <bundle> --staged-dir <dir>`:
 
 - `--tor-address` must be one of the network file's authorities; its nickname
-  and ports come from the file.
+  and ports come from the file. A host that already runs a relay is refused the
+  authority role, and the reverse, whichever install came first.
 - The torrc sets `AuthoritativeDirectory 1`, `V3AuthoritativeDirectory 1`, the
   voting schedule, `ExitPolicy reject *:*` and the Sybil control
   `AuthDirMaxServersPerAddr 1` (at most one relay is listed per IP address).
@@ -244,6 +260,8 @@ account and the reader is root.
   lists the RSA fingerprints of the operator's other relays (`MyFamily`); list
   each relay in the others' families.
 - IPv4 only: `ORPort 31020 IPv4Only`, `IPv6Exit 0`.
+- The exit reject list is read only for an exit: a malformed list does not stop
+  a relay from installing.
 - The relay's RSA fingerprint appears after its first start:
   `orama global tor info`. That fingerprint, with the node's bond, is what
   `MsgRegisterRelay` takes (plan C8); registering relays on chain is not part of
@@ -268,7 +286,9 @@ default; then accept the rest. `ExitRelay 1`, `IPv6Exit 0`. Exit traffic leaves
 from the node's public address (`--colocated`: through the host's masquerade).
 
 Three layers keep an exit away from the node's own services, and the first is
-Tor's: the policy above (and Tor's own refusal of internal addresses), the
+Tor's: the policy above, with `ExitPolicyRejectPrivate 1` and
+`ExitPolicyRejectLocalInterfaces 1` written into the torrc rather than left to
+Tor's defaults, the
 unit's `IPAddressDeny` of private ranges and of `198.18.0.0/15` (the namespace
 address of the chain's RPC and REST API, the indexer and Kubo's RPC), and, in the
 namespace, the kernel firewall that drops RFC 1918, link-local and carrier-grade
@@ -276,7 +296,10 @@ destinations and, on the host, everything that arrives from the namespace except
 replies. Loopback inside the namespace is denied to an exit's unit as well. The
 policy is a single layer for one thing: a non-co-located exit host
 (`--services relay,exit` without `--colocated`) keeps loopback, for its resolver
-stub, and so protects its own loopback services only with Tor's policy.
+stub, and so protects its own loopback services only with Tor's policy. Do not
+put an exit on a host that runs the chain without `--colocated`; stagenet's
+exit runs in the namespace, where the chain's RPC and REST API are on the
+namespace address, which is denied to it, and loopback is denied as well.
 
 **Operator guidance**
 

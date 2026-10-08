@@ -217,11 +217,15 @@ func splitDocuments(raw []byte) [][]byte {
 
 // readLimited reads a whole file, refusing one larger than archiveFileLimit.
 func readLimited(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	// O_NONBLOCK: opening a FIFO a hostile directory holds must not hang the reader.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, archiveFileLimit+1))
 	if err != nil {
 		return nil, err

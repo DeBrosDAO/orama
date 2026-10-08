@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,8 +17,12 @@ const (
 	dataDirFingerprint      = "fingerprint"
 	dataDirFingerprintEd    = "fingerprint-ed25519"
 	dataDirMicrodescConsens = "cached-microdesc-consensus"
-	onionHostnameFile       = "onion/hostname"
+	onionDir                = "onion"
+	onionHostnameFile       = onionDir + "/hostname"
 )
+
+// flagWord is what a consensus flag looks like.
+var flagWord = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
 
 // onionAddress is a v3 onion address: 56 base32 characters and ".onion".
 var onionAddress = regexp.MustCompile(`^[a-z2-7]{56}\.onion$`)
@@ -79,6 +84,9 @@ func ReadNodeInfo(home string, now time.Time) (NodeInfo, error) {
 		}
 		info.Ed25519ID = strings.TrimSpace(id)
 	}
+	if st, err := os.Lstat(filepath.Join(home, onionDir)); err == nil && !st.IsDir() {
+		return NodeInfo{}, fmt.Errorf("%s is not a directory", onionDir)
+	}
 	if raw, ok, err := readIfExists(filepath.Join(home, onionHostnameFile)); err != nil {
 		return NodeInfo{}, err
 	} else if ok {
@@ -125,7 +133,13 @@ func summarise(c Consensus, fingerprint string, now time.Time) *ConsensusInfo {
 	}
 	if fingerprint != "" {
 		if r, ok := c.Listed(fingerprint); ok {
-			out.Listed, out.ListedFlags = true, r.Flags
+			out.Listed = true
+			for _, f := range r.Flags {
+				// A flag is a word; the file is the Tor account's and the reader prints it as root.
+				if flagWord.MatchString(f) {
+					out.ListedFlags = append(out.ListedFlags, f)
+				}
+			}
 		}
 	}
 	return out

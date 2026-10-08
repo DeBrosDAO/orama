@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -134,12 +135,15 @@ func parseAuthoritySpecs(pairs []string) ([]tornet.AuthoritySpec, error) {
 // readPassphrase reads the passphrase file: a regular file only its owner can
 // read, one line.
 func readPassphrase(path string) ([]byte, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, clierr.Usage("--passphrase-file: %v", err)
 	}
 	if !info.Mode().IsRegular() || info.Mode().Perm()&secretFileMask != 0 || info.Size() > passphraseFileMax {
-		return nil, clierr.Usage("--passphrase-file %s must be a regular file of mode 0600 (or stricter) under %d bytes", path, passphraseFileMax)
+		return nil, clierr.Usage("--passphrase-file %s must be a regular file (not a link) of mode 0600 (or stricter) under %d bytes", path, passphraseFileMax)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return nil, clierr.Usage("--passphrase-file %s belongs to another account", path)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

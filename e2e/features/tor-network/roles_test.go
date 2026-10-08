@@ -148,7 +148,7 @@ func TestRelays_onlyAnInstalledExitHasTheExitFlag(t *testing.T) {
 		if slices.ContainsFunc(r.dirauth, func(d fleet.Node) bool { return d.Name == n.Name }) {
 			home = constants.GlobalTorDirauthHome
 		}
-		torrc := string(f.ReadFile(t, n, home+"/torrc"))
+		torrc := string(f.ReadFile(t, n, constants.GlobalTorrcFor(home)))
 		isExit := strings.Contains(torrc, "\nExitRelay 1\n")
 		if !isExit && !strings.Contains(torrc, "\nExitPolicy reject *:*\n") {
 			t.Errorf("%s: a relay that is not an exit lacks `ExitPolicy reject *:*`", n.Name)
@@ -229,7 +229,7 @@ func TestExit_leavesFromTheNodeAndRefusesWhatItShould(t *testing.T) {
 	f, r := requireRoles(t)
 	var exit *fleet.Node
 	for _, n := range r.relay {
-		if strings.Contains(string(f.ReadFile(t, n, constants.GlobalTorRelayHome+"/torrc")), "\nExitRelay 1\n") {
+		if strings.Contains(string(f.ReadFile(t, n, constants.GlobalTorrcFor(constants.GlobalTorRelayHome))), "\nExitRelay 1\n") {
 			exit = &n
 			break
 		}

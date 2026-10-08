@@ -134,6 +134,9 @@ func (b *torrc) exit(c RelayConfig) {
 	b.comment("Exit: opt-in; the policy refuses mail, file sharing and every reserved range.")
 	b.line("ExitRelay 1")
 	b.line("IPv6Exit 0")
+	b.comment("Stated, not left to Tor's defaults: the exit never reaches private ranges or this host's own addresses.")
+	b.line("ExitPolicyRejectPrivate 1")
+	b.line("ExitPolicyRejectLocalInterfaces 1")
 	for _, l := range ExitPolicyLines(c.ExitReject) {
 		b.line(l)
 	}

@@ -18,6 +18,9 @@ RelayBandwidthBurst 100 Mbits
 # Exit: opt-in; the policy refuses mail, file sharing and every reserved range.
 ExitRelay 1
 IPv6Exit 0
+# Stated, not left to Tor's defaults: the exit never reaches private ranges or this host's own addresses.
+ExitPolicyRejectPrivate 1
+ExitPolicyRejectLocalInterfaces 1
 ExitPolicy reject 203.0.113.9:*
 ExitPolicy reject 0.0.0.0/8:*
 ExitPolicy reject 10.0.0.0/8:*

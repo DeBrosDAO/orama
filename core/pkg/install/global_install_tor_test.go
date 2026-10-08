@@ -92,7 +92,7 @@ func (tf *torFixture) bundle(t *testing.T, identity []byte, v3 string) string {
 	if err := os.MkdirAll(keys, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cert := fmt.Sprintf("dir-key-certificate-version 3\nfingerprint %s\ndir-key-expires 2027-10-08 00:00:00\n", v3)
+	cert := fmt.Sprintf("dir-key-certificate-version 3\nfingerprint %s\ndir-key-expires 2099-10-08 00:00:00\n", v3)
 	files := map[string][]byte{
 		tornet.KeyAuthoritySigning: []byte("signing key"), tornet.KeyAuthorityCert: []byte(cert),
 		tornet.KeyRelayIdentity: identity, tornet.KeyEd25519Master: []byte("master secret"), tornet.KeyEd25519MasterPub: ed25519PublicFile(1),
@@ -136,7 +136,7 @@ func TestInstallGlobal_relayWritesItsTorrcAndNeedsNoChain(t *testing.T) {
 	if tf.torInstalled != 1 {
 		t.Errorf("the Tor package was installed %d times", tf.torInstalled)
 	}
-	torrc := readFile(t, tf.state("tor-relay", "torrc"))
+	torrc := readFile(t, tf.state("tor-relay.torrc"))
 	for _, want := range []string{
 		"Nickname " + tornet.NicknameFor("node-1"), "ContactInfo " + torTestContact, "Address 57.129.166.18",
 		"ORPort 31020 IPv4Only", "ExitRelay 0", "ExitPolicy reject *:*", "DataDirectory " + constants.GlobalTorRelayHome,
@@ -152,14 +152,24 @@ func TestInstallGlobal_relayWritesItsTorrcAndNeedsNoChain(t *testing.T) {
 	if err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("DataDirectory = %v %v, want 0700", info, err)
 	}
-	info, _ = os.Stat(tf.state("tor-relay", "torrc"))
-	if info.Mode().Perm() != 0o600 {
+	// The torrc is root's, beside the DataDirectory and not in it: the Tor
+	// account owns its DataDirectory and could rewrite a file there.
+	info, _ = os.Stat(tf.state("tor-relay.torrc"))
+	if info.Mode().Perm() != 0o644 {
 		t.Errorf("torrc mode = %v", info.Mode())
 	}
-	for _, p := range []string{tf.state("tor-relay"), tf.state("tor-relay", "torrc")} {
-		if !slices.Contains(tf.chowns, chownCall{p, 990, 991}) {
-			t.Errorf("%s was not given to the Tor account", p)
-		}
+	if _, err := os.Stat(tf.state("tor-relay", "torrc")); !os.IsNotExist(err) {
+		t.Error("a torrc was written inside the Tor account's DataDirectory")
+	}
+	if !slices.Contains(tf.chowns, chownCall{tf.state("tor-relay"), 990, 991}) {
+		t.Error("the DataDirectory was not given to the Tor account")
+	}
+	if slices.ContainsFunc(tf.chowns, func(c chownCall) bool { return c.path == tf.state("tor-relay.torrc") }) {
+		t.Error("the torrc was given to the Tor account")
+	}
+	unit := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorRelayUnit))
+	if want := "ExecStart=/usr/bin/tor -f " + constants.GlobalTorRelayHome + ".torrc\n"; !strings.Contains(unit, want) {
+		t.Errorf("the unit does not run the root-owned torrc:\n%s", unit)
 	}
 	if !tf.node.users["orama-tor-relay"] || tf.node.users["debian-tor"] {
 		t.Errorf("accounts = %v: a relay runs as an account of its own, not the Tor package's", tf.node.users)
@@ -181,11 +191,11 @@ func TestInstallGlobal_relayIsIdempotent(t *testing.T) {
 	if err := InstallGlobal(opts, tf.host); err != nil {
 		t.Fatal(err)
 	}
-	first := readFile(t, tf.state("tor-relay", "torrc"))
+	first := readFile(t, tf.state("tor-relay.torrc"))
 	if err := InstallGlobal(opts, tf.host); err != nil {
 		t.Fatal(err)
 	}
-	if readFile(t, tf.state("tor-relay", "torrc")) != first {
+	if readFile(t, tf.state("tor-relay.torrc")) != first {
 		t.Error("a second install changed the torrc")
 	}
 }
@@ -203,7 +213,7 @@ func TestInstallGlobal_exitOptInWithRejectListAndFamily(t *testing.T) {
 	if err := InstallGlobal(opts, tf.host); err != nil {
 		t.Fatal(err)
 	}
-	torrc := readFile(t, tf.state("tor-relay", "torrc"))
+	torrc := readFile(t, tf.state("tor-relay.torrc"))
 	for _, want := range []string{"ExitRelay 1", "IPv6Exit 0", "ExitPolicy reject 203.0.113.9:*", "ExitPolicy reject *:25", "ExitPolicy accept *:*", "MyFamily $" + family, "RelayBandwidthRate 200 Mbits"} {
 		if !strings.Contains(torrc, want+"\n") {
 			t.Errorf("torrc lacks %q", want)
@@ -213,7 +223,7 @@ func TestInstallGlobal_exitOptInWithRejectListAndFamily(t *testing.T) {
 	if err := InstallGlobal(tf.relayOptions(nil), tf.host); err != nil {
 		t.Fatal(err)
 	}
-	plain := readFile(t, tf.state("tor-relay", "torrc"))
+	plain := readFile(t, tf.state("tor-relay.torrc"))
 	if strings.Contains(plain, "ExitRelay 1") || strings.Contains(plain, "ExitPolicy accept") || strings.Contains(plain, "203.0.113.9") {
 		t.Errorf("a relay re-installed without exit still exits:\n%s", plain)
 	}
@@ -289,7 +299,7 @@ func TestInstallGlobal_directoryAuthorityInstallsItsKeysAndPorts(t *testing.T) {
 	if err := InstallGlobal(opts, tf.host); err != nil {
 		t.Fatal(err)
 	}
-	torrc := readFile(t, tf.state("tor-dirauth", "torrc"))
+	torrc := readFile(t, tf.state("tor-dirauth.torrc"))
 	for _, want := range []string{"Nickname OramaAuth1", "AuthoritativeDirectory 1", "V3AuthoritativeDirectory 1", "DirPort 31021", "ExitPolicy reject *:*", "V3AuthVotingInterval 30 minutes"} {
 		if !strings.Contains(torrc, want+"\n") {
 			t.Errorf("torrc lacks %q:\n%s", want, torrc)
@@ -421,7 +431,7 @@ func TestInstallGlobal_onionServiceNeedsTheChainInstalledHereOrInTheInstall(t *t
 	if err := InstallGlobal(tf.options(GlobalServiceOnion), tf.host); err != nil {
 		t.Fatalf("an onion service beside an installed chain: %v", err)
 	}
-	if _, err := os.Stat(tf.state("tor-onion", "torrc")); err != nil {
+	if _, err := os.Stat(tf.state("tor-onion.torrc")); err != nil {
 		t.Errorf("the onion service was not configured: %v", err)
 	}
 }
@@ -431,7 +441,7 @@ func TestInstallGlobal_onionServiceWritesTheGateAndOpensNoPort(t *testing.T) {
 	if err := InstallGlobal(tf.options(GlobalServiceChain, GlobalServiceOnion), tf.host); err != nil {
 		t.Fatal(err)
 	}
-	torrc := readFile(t, tf.state("tor-onion", "torrc"))
+	torrc := readFile(t, tf.state("tor-onion.torrc"))
 	for _, want := range []string{"HiddenServicePort 80 127.0.0.1:31022", "ORPort 0", "SocksPort 0"} {
 		if !strings.Contains(torrc, want+"\n") {
 			t.Errorf("torrc lacks %q:\n%s", want, torrc)
@@ -682,5 +692,93 @@ func TestInstallGlobal_colocatedRelayAndAuthorityDenyLoopback(t *testing.T) {
 	}
 	if !strings.Contains(files[0].body, "IPAddressAllow=localhost") {
 		t.Error("the onion service cannot reach its gate on loopback")
+	}
+}
+
+// A directory authority is a relay, and both publish the ORPort: whichever role
+// a host took first, the other is refused, by a later install as well.
+func TestInstallGlobal_aHostIsAnAuthorityOrARelayNotBoth(t *testing.T) {
+	tf := newTorFixture(t)
+	dir := tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)
+	auth := tf.options(GlobalServiceDirauth)
+	auth.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: dir}
+	if err := InstallGlobal(tf.relayOptions(nil), tf.host); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(auth, tf.host); err == nil || !strings.Contains(err.Error(), "already runs the relay role") {
+		t.Fatalf("an authority beside an installed relay: %v", err)
+	}
+	other := newTorFixture(t)
+	dir = other.bundle(t, other.identityPEM, other.network.Authorities[0].V3Ident)
+	auth = other.options(GlobalServiceDirauth)
+	auth.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: dir}
+	if err := InstallGlobal(auth, other.host); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(other.relayOptions(nil), other.host); err == nil || !strings.Contains(err.Error(), "already runs the dirauth role") {
+		t.Fatalf("a relay beside an installed authority: %v", err)
+	}
+}
+
+// A refusal on the second key must not leave the first replaced: the identity
+// checks run before any write.
+func TestInstallGlobal_aRefusedBundleLeavesTheInstalledKeysAsTheyWere(t *testing.T) {
+	tf := newTorFixture(t)
+	opts := tf.options(GlobalServiceDirauth)
+	opts.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)}
+	if err := InstallGlobal(opts, tf.host); err != nil {
+		t.Fatal(err)
+	}
+	next := tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)
+	for name, data := range map[string]string{tornet.KeyAuthoritySigning: "new signing key", tornet.KeyEd25519Master: "another master"} {
+		if err := os.WriteFile(filepath.Join(next, "keys", name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts.Tor.DirauthKeysDir = next
+	if err := InstallGlobal(opts, tf.host); err == nil {
+		t.Fatal("a bundle with another master key was installed")
+	}
+	if got := readFile(t, tf.state("tor-dirauth", "keys", tornet.KeyAuthoritySigning)); got != "signing key" {
+		t.Errorf("the signing key was replaced before the identity check refused: %q", got)
+	}
+}
+
+func TestInstallGlobal_anExpiredAuthorityCertificateIsRefused(t *testing.T) {
+	tf := newTorFixture(t)
+	dir := tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)
+	expired := fmt.Sprintf("dir-key-certificate-version 3\nfingerprint %s\ndir-key-expires 2020-01-01 00:00:00\n", tf.network.Authorities[0].V3Ident)
+	if err := os.WriteFile(filepath.Join(dir, "keys", tornet.KeyAuthorityCert), []byte(expired), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := tf.options(GlobalServiceDirauth)
+	opts.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: dir}
+	err := InstallGlobal(opts, tf.host)
+	if err == nil || !strings.Contains(err.Error(), "expired on 2020-01-01") {
+		t.Fatalf("err = %v", err)
+	}
+	if tf.torInstalled != 0 {
+		t.Error("the host was changed before the certificate was checked")
+	}
+}
+
+// The reject list matters to an exit alone: a malformed one must not stop a relay.
+func TestInstallGlobal_theRejectListIsReadOnlyForAnExit(t *testing.T) {
+	tf := newTorFixture(t)
+	if err := os.MkdirAll(tf.host.StateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tf.state(constants.GlobalTorExitRejectFile), []byte("ExitRelay 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(tf.relayOptions(nil), tf.host); err != nil {
+		t.Fatalf("a malformed reject list stopped a relay that is not an exit: %v", err)
+	}
+}
+
+func TestTorOptionsValidate_nodeIDIsForRelays(t *testing.T) {
+	err := TorOptions{Address: torTestAddress, Contact: "c", NodeID: "n", DirauthKeysDir: "/k"}.validate([]GlobalService{GlobalServiceDirauth})
+	if err == nil || !strings.Contains(err.Error(), "--tor-node-id") {
+		t.Fatalf("a node id beside an authority: %v", err)
 	}
 }

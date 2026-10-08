@@ -356,10 +356,10 @@ func (o GlobalInstallOptions) unitFilesFor(s GlobalService) ([]globalUnitFile, e
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", files[i].name, err)
 		}
-		if s == GlobalServiceRelay || s == GlobalServiceDirauth {
+		if i == 0 && (s == GlobalServiceRelay || s == GlobalServiceDirauth) {
 			// Not the archive oneshot: it is the authority's own CLI on its own files.
-			if i == 0 {
-				body = denyLoopback(body)
+			if body, err = denyLoopback(body); err != nil {
+				return nil, fmt.Errorf("render %s: %w", files[i].name, err)
 			}
 		}
 		if i == 0 || files[i].name == constants.GlobalTxGateUnit {

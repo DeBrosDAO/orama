@@ -303,7 +303,7 @@ func RenderGlobalTorOnionUnit() string {
 // the filter refuses returns EPERM instead of killing the daemon.
 func renderTorUnit(description, user, home string) string {
 	state := strings.TrimPrefix(home, "/var/lib/")
-	exec := "/usr/bin/tor -f " + home + "/torrc"
+	exec := "/usr/bin/tor -f " + constants.GlobalTorrcFor(home)
 	extra := "MemoryDenyWriteExecute=yes\nSystemCallErrorNumber=EPERM\n"
 	unit := renderGlobalUnitExtra(description, user, user, "", state, home, exec, extra)
 	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK\n", 1)
@@ -321,8 +321,12 @@ const torNamespaceRange = "198.18.0.0/15"
 // resolver there is a public one (globalnetns.Resolvers), so it has no use for
 // loopback, and loopback in the namespace holds the chain's gRPC and metrics
 // listeners. IPAddressAllow would win over a deny, so it is dropped.
-func denyLoopback(unit string) string {
-	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=127.0.0.0/8\n", 1)
+func denyLoopback(unit string) (string, error) {
+	const allow = "IPAddressAllow=localhost\n"
+	if strings.Count(unit, allow) != 1 {
+		return "", fmt.Errorf("the unit has no single %q line to replace with a loopback deny", strings.TrimSpace(allow))
+	}
+	return strings.Replace(unit, allow, "IPAddressDeny=127.0.0.0/8\n", 1), nil
 }
 
 // RenderGlobalTxGateUnit is the tx gate behind the validator onion service:
@@ -343,7 +347,10 @@ var txGateListen = net.JoinHostPort("127.0.0.1", strconv.Itoa(constants.GlobalTx
 func RenderGlobalTorArchiveUnit() string {
 	home := constants.GlobalTorDirauthHome
 	exec := fmt.Sprintf("%s/%s global tor archive --data-dir %s --archive-dir %s/%s", globalBinDir, globalOramaCLI, home, home, constants.GlobalTorArchiveDir)
-	return renderGlobalOneshot("Orama Tor vote archive", globalTorDirauthUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	unit := renderGlobalOneshot("Orama Tor vote archive", globalTorDirauthUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	// It copies files and talks to nobody.
+	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_UNIX\n", 1)
+	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=any\nIPAddressAllow=localhost\n", 1)
 }
 
 // RenderGlobalTorArchiveTimer fires the archive. A consensus gains signatures

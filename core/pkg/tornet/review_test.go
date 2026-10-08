@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -79,5 +80,64 @@ func TestReadNodeInfo_refusesWhatATorProcessCouldPlant(t *testing.T) {
 	}
 	if _, err := ReadNodeInfo(home, time.Now()); err == nil {
 		t.Error("a link in the DataDirectory was followed")
+	}
+}
+
+func TestRelayTorrc_anExitStatesWhatItNeverReaches(t *testing.T) {
+	c := relayConfig()
+	c.Network.AllowExit, c.Exit = true, true
+	got, err := RelayTorrc(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	has(t, got, "ExitPolicyRejectPrivate 1")
+	has(t, got, "ExitPolicyRejectLocalInterfaces 1")
+	plain, _ := RelayTorrc(relayConfig())
+	if hasPrefix(plain, "ExitPolicyReject") {
+		t.Error("a relay that is not an exit carries exit options")
+	}
+}
+
+// A hostile DataDirectory can plant a FIFO or a link where root reads: neither
+// may hang or redirect `orama global tor info`.
+func TestReadNodeInfo_aFIFOOrALinkedOnionDirectoryIsRefusedNotWaitedOn(t *testing.T) {
+	home := t.TempDir()
+	fifo := filepath.Join(home, DataDirConsensus)
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("no FIFOs here: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ReadNodeInfo(home, time.Now()); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a FIFO was read as a consensus")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reading a FIFO hung")
+	}
+
+	home = t.TempDir()
+	elsewhere := t.TempDir()
+	write(t, filepath.Join(elsewhere, "hostname"), []byte(strings.Repeat("a", 56)+".onion\n"))
+	if err := os.Symlink(elsewhere, filepath.Join(home, onionDir)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadNodeInfo(home, time.Now()); err == nil {
+		t.Error("an onion directory that is a link was read")
+	}
+}
+
+func TestReadNodeInfo_flagsThatAreNotWordsAreNotPrinted(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, dataDirFingerprint), []byte("OramaAuth1 0000 0000 0000 0000 0000 0000 0000 0000 0000 00B0\n"))
+	doc := strings.Replace(string(readFixture(t, "consensus-microdesc.txt")), "s Authority Fast Guard HSDir Running Stable V2Dir Valid", "s Fast \x1b[2JEvil Running", 1)
+	write(t, filepath.Join(home, DataDirConsensus), []byte(doc))
+	info, err := ReadNodeInfo(home, time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC))
+	if err != nil || info.Consensus == nil || !info.Consensus.Listed {
+		t.Fatalf("%+v %v", info, err)
+	}
+	if strings.Join(info.Consensus.ListedFlags, " ") != "Fast Running" {
+		t.Errorf("flags = %v", info.Consensus.ListedFlags)
 	}
 }
