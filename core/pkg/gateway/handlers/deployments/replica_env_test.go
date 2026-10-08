@@ -135,7 +135,7 @@ func TestReconfigureReplicas_theEnvironmentTravelsSealedWithItsVersion(t *testin
 	if calls.payloads[0]["env_version"] != int64(42) {
 		t.Errorf("env_version = %v, want 42", calls.payloads[0]["env_version"])
 	}
-	got, err := svc.decodeEnvironment("acme", envTestAppName, sealed)
+	got, err := svc.decodeEnvironment("acme", envTestDeploy, envTestAppName, sealed)
 	if err != nil || got["APP_VERSION"] != "api-v2" {
 		t.Fatalf("decoded %v, %v; want APP_VERSION=api-v2", got, err)
 	}
@@ -485,7 +485,7 @@ func envReplicaHandler(t *testing.T, svc *DeploymentService, local envReconfigur
 
 func signedEnvRequest(t *testing.T, svc *DeploymentService, fields map[string]interface{}) *http.Request {
 	t.Helper()
-	sealed, err := svc.EncodeEnvironment(map[string]string{"APP_VERSION": "api-v2"})
+	sealed, err := svc.EncodeEnvironment("acme", envTestDeploy, map[string]string{"APP_VERSION": "api-v2"})
 	if err != nil {
 		t.Fatal(err)
 	}

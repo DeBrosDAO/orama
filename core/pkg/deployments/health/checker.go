@@ -49,7 +49,7 @@ type ReplicaProvisioner interface {
 	SetupDynamicReplica(ctx context.Context, deployment *deployments.Deployment, nodeID string)
 	// DecodeEnvironment reads the environment column back: it is stored sealed
 	// with the cluster key, so it is not JSON.
-	DecodeEnvironment(namespace, name, stored string) (map[string]string, error)
+	DecodeEnvironment(namespace, deploymentID, name, stored string) (map[string]string, error)
 }
 
 // deploymentRow represents a deployment record for health checking.
@@ -613,7 +613,7 @@ func (hc *HealthChecker) reconcileDeployments(ctx context.Context) {
 		// An environment that cannot be read is not an empty one: a replica
 		// started without the tenant's variables answers requests the home
 		// node's replica would not, so it is not provisioned at all.
-		env, err := hc.provisioner.DecodeEnvironment(row.Namespace, row.Name, row.Environment)
+		env, err := hc.provisioner.DecodeEnvironment(row.Namespace, row.ID, row.Name, row.Environment)
 		if err != nil {
 			hc.logger.Error("Cannot re-replicate a deployment whose environment cannot be read",
 				zap.String("deployment", row.Name),

@@ -44,7 +44,7 @@ type envReconfigurer interface {
 // because applying an environment is idempotent. It does not retry only the
 // failed ones: the replicas that applied it simply apply it again.
 func (s *DeploymentService) ReconfigureReplicas(ctx context.Context, deployment *deployments.Deployment, version int64) (int, error) {
-	storedEnv, err := s.EncodeEnvironment(deployment.Environment)
+	storedEnv, err := s.EncodeEnvironment(deployment.Namespace, deployment.ID, deployment.Environment)
 	if err != nil {
 		return 0, fmt.Errorf("failed to encode the environment: %w", err)
 	}
@@ -157,7 +157,7 @@ func (h *ReplicaHandler) applyEnv(ctx context.Context, req replicaEnvRequest) (i
 
 	// An environment that cannot be read is not an empty one: restarting the
 	// replica without its database URL would look like the tenant's own bug.
-	env, err := h.service.decodeEnvironment(req.Namespace, req.Name, req.Environment)
+	env, err := h.service.decodeEnvironment(req.Namespace, req.DeploymentID, req.Name, req.Environment)
 	if err != nil {
 		h.logger.Error("Failed to read the replica's environment", zap.Error(err))
 		return http.StatusBadRequest, errors.New("failed to read the deployment environment")

@@ -48,10 +48,32 @@ func NewEnvCodec(ikm string) (*EnvCodec, error) {
 	return &EnvCodec{key: key}, nil
 }
 
-// Encode returns the stored form of env.
-func (c *EnvCodec) Encode(env map[string]string) (string, error) {
+// envAAD is what an environment is sealed to: the namespace and the deployment
+// id of the row it is stored in. A ciphertext copied to another deployment's row
+// (or another namespace's) therefore does not open there. Both are required: an
+// environment with no row to be bound to is a bug in the caller.
+func envAAD(namespace, deploymentID string) ([]byte, error) {
+	aad := secrets.BoundAAD(EnvEncryptionPurpose, namespace, deploymentID)
+	if aad == nil {
+		return nil, fmt.Errorf("an environment is bound to its namespace and deployment id, got namespace %q and id %q", namespace, deploymentID)
+	}
+	return aad, nil
+}
+
+// Encode returns the stored form of the environment of deployment deploymentID
+// in namespace.
+//
+// Once the operator has enabled bound writes (`orama operator rotate-secrets`,
+// run when every gateway is on a binary that reads enc:v2:) the stored form is
+// bound to the namespace and the deployment id. Before that it is the unbound
+// form, which every gateway of the fleet can read during a rolling upgrade.
+func (c *EnvCodec) Encode(namespace, deploymentID string, env map[string]string) (string, error) {
 	if c == nil {
 		return "", fmt.Errorf("no deployment environment codec: refusing to store an environment in the clear")
+	}
+	aad, err := envAAD(namespace, deploymentID)
+	if err != nil {
+		return "", err
 	}
 	if err := ValidateEnv(env); err != nil {
 		return "", err
@@ -66,22 +88,27 @@ func (c *EnvCodec) Encode(env map[string]string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to encode the deployment environment: %w", err)
 	}
-	sealed, err := secrets.Seal(c.holder, EnvEncryptionPurpose, c.key, string(plain))
+	sealed, err := secrets.SealBound(c.holder, EnvEncryptionPurpose, c.key, aad, string(plain))
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt the deployment environment: %w", err)
 	}
 	return sealed, nil
 }
 
-// Decode returns the environment held in stored.
+// Decode returns the environment held in stored, the environment of deployment
+// deploymentID in namespace.
 //
-// A row written before the environment was encrypted holds plaintext JSON.
-// Those rows are read as they are and rewritten encrypted the next time the
-// deployment's environment is written, so the plaintext is not a permanent
-// second format. A row that is neither is an error: an environment that cannot
-// be read is not an empty environment, and starting the app without its
-// database URL is worse than not starting it.
-func (c *EnvCodec) Decode(stored string) (map[string]string, error) {
+// Three stored forms are read, told apart by their prefix and never by trying
+// one after another: plaintext JSON (written before the environment was
+// encrypted), the unbound envelopes enc: and enc:v1:<id>: (written before the
+// binding existed, or while a rolling upgrade had not finished), and the bound
+// enc:v2:<id>: envelope, which opens only for the namespace and deployment id it
+// was sealed to. Plaintext and unbound rows are rewritten bound the next time
+// the environment is written or the operator runs rotate-secrets, so neither is
+// a permanent second format. A row that is none of them is an error: an
+// environment that cannot be read is not an empty environment, and starting the
+// app without its database URL is worse than not starting it.
+func (c *EnvCodec) Decode(namespace, deploymentID, stored string) (map[string]string, error) {
 	if c == nil {
 		return nil, fmt.Errorf("no deployment environment codec: cannot read a stored environment")
 	}
@@ -92,8 +119,11 @@ func (c *EnvCodec) Decode(stored string) (map[string]string, error) {
 
 	plain := stored
 	if secrets.IsEncrypted(stored) {
-		var err error
-		plain, err = secrets.Open(c.holder, EnvEncryptionPurpose, c.key, stored)
+		aad, err := envAAD(namespace, deploymentID)
+		if err != nil {
+			return nil, err
+		}
+		plain, err = secrets.OpenBound(c.holder, EnvEncryptionPurpose, c.key, aad, stored)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decrypt the deployment environment: %w", err)
 		}

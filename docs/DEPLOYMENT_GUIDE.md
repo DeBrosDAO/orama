@@ -269,6 +269,19 @@ deployment it is named after if the gateway handling the request has that
 deployment, and refused otherwise — the files may be another gateway's, and
 until an operator removes them the name cannot be used.
 
+### Deployment addresses
+
+A deployment is served at `https://<name>-<random>.<base domain>`, the
+`subdomain` in `orama app get`: the name, a hyphen and a random suffix, unique
+across every namespace. A verified custom domain is served too.
+
+The bare `https://<name>.<base domain>` is only the address of a deployment
+created before subdomains existed, which has none. A deployment that has a
+subdomain is not served at its bare name: names are unique per namespace, not
+across them, so the bare host would not say whose deployment it is. If two
+namespaces still have a subdomain-less deployment of the same name, that bare
+host answers `404` for both until one of them is deleted.
+
 ### Replicas
 
 A dynamic deployment (Next.js SSR, Node.js, Go) runs on its home node and on a

@@ -29,6 +29,11 @@ const (
 	FirstID = "1"
 
 	rootTable = "encryption_roots"
+
+	// The values of encryption_roots.write_versioned.
+	writeLevelLegacy    = 0 // enc:<base64>
+	writeLevelVersioned = 1 // enc:v1:<id>:
+	writeLevelBound     = 2 // enc:v1: and, for columns tied to their row, enc:v2:
 )
 
 // Store is the slice of the registry the root is persisted in.
@@ -154,7 +159,8 @@ func loadFromRegistry(ctx context.Context, store Store) (Root, error) {
 		case "current":
 			r.CurrentID = row.KeyID
 			r.CurrentIKM = strings.TrimSpace(row.IKM)
-			r.WriteVersioned = row.WriteVersioned != 0
+			r.WriteVersioned = row.WriteVersioned >= writeLevelVersioned
+			r.WriteBound = row.WriteVersioned >= writeLevelBound
 		case "previous":
 			r.PreviousID = row.KeyID
 			r.PreviousIKM = strings.TrimSpace(row.IKM)
@@ -175,7 +181,7 @@ func saveToRegistry(ctx context.Context, store Store, r Root) error {
 			ikm = excluded.ikm,
 			write_versioned = excluded.write_versioned,
 			updated_at = excluded.updated_at`,
-		r.CurrentID, r.CurrentIKM, boolToInt(r.WriteVersioned)); err != nil {
+		r.CurrentID, r.CurrentIKM, writeLevel(r)); err != nil {
 		return err
 	}
 	if r.PreviousIKM == "" {
@@ -193,11 +199,18 @@ func saveToRegistry(ctx context.Context, store Store, r Root) error {
 	return err
 }
 
-func boolToInt(v bool) int {
-	if v {
-		return 1
+// writeLevel is the value of the write_versioned column. The column was a
+// boolean; a gateway from before the bound envelope reads any non-zero value
+// as "versioned", which is what level 2 also is, so the new level needs no
+// migration and no old node misreads it.
+func writeLevel(r Root) int {
+	switch {
+	case r.WriteBound:
+		return writeLevelBound
+	case r.WriteVersioned:
+		return writeLevelVersioned
 	}
-	return 0
+	return writeLevelLegacy
 }
 
 func loadFromFiles(dir string) (Root, error) {
@@ -291,6 +304,7 @@ func Rotate(ctx context.Context, store Store, secretsDir string, current Root) (
 		PreviousID:     current.CurrentID,
 		PreviousIKM:    current.CurrentIKM,
 		WriteVersioned: true,
+		WriteBound:     true,
 	}
 	if err := writeFiles(secretsDir, r); err != nil {
 		return Root{}, err
@@ -323,6 +337,7 @@ func ForgetPrevious(ctx context.Context, store Store, secretsDir string, current
 // rollout is finished before anything writes enc:v1:.
 func EnableVersionedWrites(ctx context.Context, store Store, secretsDir string, current Root) (Root, error) {
 	current.WriteVersioned = true
+	current.WriteBound = true
 	if err := writeFiles(secretsDir, current); err != nil {
 		return Root{}, err
 	}

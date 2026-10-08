@@ -62,7 +62,7 @@ func TestGetDeployment_refusesAnEnvironmentItCannotRead(t *testing.T) {
 
 func TestGetDeployment_readsASealedEnvironment(t *testing.T) {
 	codec := testEnvCodec()
-	sealed, err := codec.Encode(map[string]string{"DATABASE_URL": "postgres://u:p@h/db"})
+	sealed, err := codec.Encode("acme", "dep-1", map[string]string{"DATABASE_URL": "postgres://u:p@h/db"})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestPersistEnv_writesTheEnvironmentSealed(t *testing.T) {
 	}
 
 	err := handler.persistEnv(context.Background(),
-		&deployments.Deployment{Namespace: "acme", Name: "api"},
+		&deployments.Deployment{ID: "dep-1", Namespace: "acme", Name: "api"},
 		map[string]string{"STRIPE_KEY": "sk_live_supersecret"}, "", time.Now())
 	if err != nil {
 		t.Fatalf("persistEnv: %v", err)
@@ -166,7 +166,7 @@ func TestPersistEnv_aMissingResultIsAnError(t *testing.T) {
 		logger:  zap.NewNop(),
 	}
 	err := handler.persistEnv(context.Background(),
-		&deployments.Deployment{Namespace: "acme", Name: "api"}, map[string]string{"A": "1"}, "", time.Now())
+		&deployments.Deployment{ID: "dep-1", Namespace: "acme", Name: "api"}, map[string]string{"A": "1"}, "", time.Now())
 	if err == nil {
 		t.Fatal("a write with no result was reported as saved")
 	}

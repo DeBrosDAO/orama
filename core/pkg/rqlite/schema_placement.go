@@ -193,6 +193,17 @@ func PlacementOf(table string) (tableNote, bool) {
 	return note, ok
 }
 
+// KnownTables is every table the core migrations leave behind, as a set. A
+// scoped handle (GuardedClient) judges a statement against it: a name in this
+// set that the handle was not given is outside its scope.
+func KnownTables() map[string]bool {
+	out := make(map[string]bool, len(tablePlacement))
+	for table := range tablePlacement {
+		out[table] = true
+	}
+	return out
+}
+
 // ClusterOnlyTables are the tables that exist only in the cluster registry, and
 // are therefore stripped from a namespace RQLite.
 func ClusterOnlyTables() []string {

@@ -10,6 +10,9 @@
 # sources refused; workload token renewal; grants; custom domains up to
 # verification; name and archive validation; a same-name race; control-plane
 # only; crash restarts; updates forwarded from a node without the app.
+# An environment stored sealed to its own namespace and deployment id after
+# `orama operator rotate-secrets`; a bare {name} host not served for a
+# subdomained deployment.
 # Home-node failover and OOM are in deployments-failover, which runs alone.
 id: deployments
 title: Application deployments, runtimes and their sandbox
@@ -85,3 +88,5 @@ covers:
     - "docs/SECURITY.md: a deployment binds its own port and nothing else"
     - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: the app renews its workload token at /v1/auth/renew; it cannot be granted the control plane"
     - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: every node serves every app by name"
+    - "docs/SECURITY.md#deployment-environment-variables: after rotate-secrets a deployment's environment is stored sealed to its namespace and deployment id (enc:v2:) and still reaches the app"
+    - "docs/DEPLOYMENT_GUIDE.md#deployment-addresses: a deployment with a subdomain is not served at its bare name"

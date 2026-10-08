@@ -5,11 +5,14 @@
 // its own value so stored secrets can rotate without partitioning IPFS-Cluster
 // or the mesh bearer.
 //
-// Two on-disk envelopes exist:
+// Three on-disk envelopes exist:
 //
 //	enc:<base64>                 — legacy; still the default write until an
 //	                               operator rotate rewrites the rows
 //	enc:v1:<keyid>:<base64>      — versioned; keyid selects the generation
+//	enc:v2:<keyid>:<base64>      — versioned and bound: the GCM additional
+//	                               data names the row it belongs to, so the
+//	                               ciphertext opens nowhere else
 //
 // Decrypt fails closed on anything else. Callers that still hold a leftover
 // plaintext column (deployment env, TURN) check IsEncrypted themselves and
@@ -37,6 +40,10 @@ const (
 
 	// versionedPrefix is the envelope that carries a key id.
 	versionedPrefix = "enc:v1:"
+
+	// boundPrefix is the versioned envelope whose ciphertext is authenticated
+	// against caller-supplied additional data (the row it is stored in).
+	boundPrefix = "enc:v2:"
 )
 
 // DeriveKey derives a 32-byte AES-256 key from ikm using HKDF-SHA256.
@@ -83,7 +90,31 @@ func EncryptVersioned(plaintext, keyID string, key []byte) (string, error) {
 	return versionedPrefix + keyID + ":" + base64.StdEncoding.EncodeToString(sealed), nil
 }
 
+// EncryptBound encrypts plaintext and wraps it as enc:v2:<keyID>:<base64>. aad
+// is authenticated, not stored: opening needs the same value, so a ciphertext
+// moved to another row fails to open there.
+func EncryptBound(plaintext, keyID string, key, aad []byte) (string, error) {
+	if len(aad) == 0 {
+		return "", fmt.Errorf("refusing to write a bound envelope with no additional data")
+	}
+	if keyID == "" {
+		return "", fmt.Errorf("refusing to write a versioned envelope with an empty key id")
+	}
+	if strings.ContainsAny(keyID, ":\n\r") {
+		return "", fmt.Errorf("key id %q contains a separator", keyID)
+	}
+	sealed, err := sealAAD(plaintext, key, aad)
+	if err != nil {
+		return "", err
+	}
+	return boundPrefix + keyID + ":" + base64.StdEncoding.EncodeToString(sealed), nil
+}
+
 func seal(plaintext string, key []byte) ([]byte, error) {
+	return sealAAD(plaintext, key, nil)
+}
+
+func sealAAD(plaintext string, key, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
@@ -96,7 +127,7 @@ func seal(plaintext string, key []byte) ([]byte, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
-	return gcm.Seal(nonce, nonce, []byte(plaintext), nil), nil
+	return gcm.Seal(nonce, nonce, []byte(plaintext), aad), nil
 }
 
 // Envelope is a parsed ciphertext. Version 0 is the legacy enc: form.
@@ -109,9 +140,11 @@ type Envelope struct {
 // ParseEnvelope splits a stored value into its envelope fields.
 // Unprefixed input is an error: Decrypt fails closed.
 func ParseEnvelope(ciphertext string) (Envelope, error) {
-	if strings.HasPrefix(ciphertext, versionedPrefix) {
-		rest := strings.TrimPrefix(ciphertext, versionedPrefix)
-		keyID, encoded, ok := strings.Cut(rest, ":")
+	for version, prefix := range map[int]string{1: versionedPrefix, 2: boundPrefix} {
+		if !strings.HasPrefix(ciphertext, prefix) {
+			continue
+		}
+		keyID, encoded, ok := strings.Cut(strings.TrimPrefix(ciphertext, prefix), ":")
 		if !ok || keyID == "" || encoded == "" {
 			return Envelope{}, fmt.Errorf("malformed versioned envelope")
 		}
@@ -119,7 +152,7 @@ func ParseEnvelope(ciphertext string) (Envelope, error) {
 		if err != nil {
 			return Envelope{}, fmt.Errorf("failed to decode ciphertext: %w", err)
 		}
-		return Envelope{Version: 1, KeyID: keyID, Data: data}, nil
+		return Envelope{Version: version, KeyID: keyID, Data: data}, nil
 	}
 	if strings.HasPrefix(ciphertext, encryptedPrefix) {
 		data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(ciphertext, encryptedPrefix))
@@ -132,13 +165,34 @@ func ParseEnvelope(ciphertext string) (Envelope, error) {
 }
 
 // Decrypt decrypts an enc:-prefixed or enc:v1:<id>:-prefixed ciphertext.
-// Unprefixed input is an error, not plaintext.
+// Unprefixed input is an error, not plaintext, and so is a bound (enc:v2:)
+// envelope: it opens only through DecryptBound, with the data it was sealed to.
 func Decrypt(ciphertext string, key []byte) (string, error) {
 	env, err := ParseEnvelope(ciphertext)
 	if err != nil {
 		return "", err
 	}
-	return open(env.Data, key)
+	if env.Version == 2 {
+		return "", fmt.Errorf("ciphertext is bound to its row and needs its additional data to open")
+	}
+	return open(env.Data, key, nil)
+}
+
+// DecryptBound opens any envelope. A bound (enc:v2:) one is authenticated
+// against aad; the legacy and v1 envelopes carry no binding and ignore it, which
+// is how rows sealed before the binding existed keep reading.
+func DecryptBound(ciphertext string, key, aad []byte) (string, error) {
+	env, err := ParseEnvelope(ciphertext)
+	if err != nil {
+		return "", err
+	}
+	if env.Version != 2 {
+		return open(env.Data, key, nil)
+	}
+	if len(aad) == 0 {
+		return "", fmt.Errorf("ciphertext is bound to its row and no additional data was given")
+	}
+	return open(env.Data, key, aad)
 }
 
 // DecryptAny tries each key in order. Used while two generations are in flight.
@@ -162,7 +216,7 @@ func DecryptAny(ciphertext string, keys ...[]byte) (string, error) {
 	return "", last
 }
 
-func open(data, key []byte) (string, error) {
+func open(data, key, aad []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %w", err)
@@ -175,7 +229,7 @@ func open(data, key []byte) (string, error) {
 	if len(data) < nonceSize {
 		return "", fmt.Errorf("ciphertext too short")
 	}
-	plain, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	plain, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], aad)
 	if err != nil {
 		return "", fmt.Errorf("decryption failed (wrong key or corrupted data): %w", err)
 	}
