@@ -23,6 +23,10 @@ const (
 	FilePrevName = "encryption-root.prev"
 	// FilePrevIDName is the previous generation id.
 	FilePrevIDName = "encryption-root.prev.id"
+	// FileLevelName is the write level (see writeLevel) in the cache, so a
+	// gateway that could not reach the registry's row keeps it across a restart.
+	// A cache or seed without it is the legacy level.
+	FileLevelName = "encryption-root.level"
 
 	// FirstID is the generation assigned when the root is materialised from
 	// the cluster secret. Existing ciphertext was derived from that IKM.
@@ -104,7 +108,11 @@ func LoadOrMaterialize(ctx context.Context, store Store, cacheDir, seedDir, clus
 		return Root{}, fmt.Errorf("no encryption root: no registry row, no %s file in %s or %s, and no cluster secret to copy", FileName, cacheDir, seedDir)
 	}
 
-	r = Root{CurrentID: FirstID, CurrentIKM: clusterSecret}
+	// Nothing anywhere: this is the cluster's first root, so no gateway of an
+	// older version holds or will read rows under it, and it starts at the
+	// highest write level. A root that already existed is never here: an
+	// upgraded cluster has its row or its files and keeps their level.
+	r = Root{CurrentID: FirstID, CurrentIKM: clusterSecret, WriteVersioned: true, WriteBound: true}
 	if err := writeFiles(cacheDir, r); err != nil {
 		return Root{}, err
 	}
@@ -223,6 +231,14 @@ func loadFromFiles(dir string) (Root, error) {
 		id = s
 	}
 	r := Root{CurrentID: id, CurrentIKM: ikm}
+	if s, err := readSecretFile(filepath.Join(dir, FileLevelName)); err == nil {
+		level, err := strconv.Atoi(s)
+		if err != nil {
+			return Root{}, fmt.Errorf("%s holds %q, not a write level: %w", FileLevelName, s, err)
+		}
+		r.WriteVersioned = level >= writeLevelVersioned
+		r.WriteBound = level >= writeLevelBound
+	}
 	if prev, err := readSecretFile(filepath.Join(dir, FilePrevName)); err == nil && prev != "" {
 		r.PreviousIKM = prev
 		r.PreviousID = FirstID
@@ -247,6 +263,9 @@ func writeFiles(dir string, r Root) error {
 		return err
 	}
 	if err := writeSecretFile(filepath.Join(dir, FileIDName), r.CurrentID); err != nil {
+		return err
+	}
+	if err := writeSecretFile(filepath.Join(dir, FileLevelName), strconv.Itoa(writeLevel(r))); err != nil {
 		return err
 	}
 	if r.PreviousIKM == "" {

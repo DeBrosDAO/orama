@@ -877,7 +877,10 @@ restarts, or `$ORAMA_CACHE_DIR` for anything you can regenerate.
 ### How the values are handled
 
 Values are held encrypted in the cluster database, with a key derived from the
-cluster secret. On the node they are written to a file only the system can read,
+cluster secret, and sealed to the deployment's namespace and id, so a copy of
+the stored value in another deployment's row does not open (on a cluster
+upgraded from an earlier release this starts when an operator runs
+`orama operator rotate-secrets`; a new cluster has it from the start). On the node they are written to a file only the system can read,
 which systemd hands to your process — they are not written into the app's
 systemd unit, and they are removed from the node when the deployment stops.
 
