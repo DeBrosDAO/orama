@@ -3,6 +3,7 @@ package autoupdate
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -143,6 +144,10 @@ func (j *memJournal) Begin(i Intent) error {
 	j.intent = &i
 	return nil
 }
+func (j *memJournal) Replace(i Intent) error {
+	j.intent = &i
+	return nil
+}
 func (j *memJournal) Pending() (*Intent, error) { return j.intent, nil }
 func (j *memJournal) Clear() error {
 	j.intent = nil
@@ -163,13 +168,36 @@ type fakeNode struct {
 	upgradeErr error
 	restoreErr error
 	previous   string
+	// recoverTo is what Recover makes of a half-swapped tree: while unreadable
+	// is set, Current is "" until Recover has run.
+	unreadable bool
+	recoverErr error
+	// stagedThenFailed makes Stage swap the release in and then fail, as a
+	// step after the swap does.
+	stagedThenFailed bool
+	// restoreKilled makes Restore put the release back and then report a kill,
+	// as a run killed between the two steps of a rollback.
+	restoreKilled bool
 }
 
-func (n *fakeNode) Current() string { return n.current }
+func (n *fakeNode) Current() string {
+	if n.unreadable {
+		return ""
+	}
+	return n.current
+}
+
+func (n *fakeNode) Recover(context.Context) error {
+	n.calls = append(n.calls, "recover")
+	if n.recoverErr == nil {
+		n.unreadable = false
+	}
+	return n.recoverErr
+}
 
 func (n *fakeNode) Stage(_ context.Context, rel Release) error {
 	n.calls = append(n.calls, "stage")
-	if n.stageErr == nil {
+	if n.stageErr == nil || n.stagedThenFailed {
 		n.previous, n.current = n.current, rel.Version
 	}
 	return n.stageErr
@@ -188,6 +216,9 @@ func (n *fakeNode) Restore(context.Context) error {
 	n.calls = append(n.calls, "restore")
 	n.restored = true
 	n.current = n.previous
+	if n.restoreKilled {
+		return errors.New("killed")
+	}
 	return n.restoreErr
 }
 

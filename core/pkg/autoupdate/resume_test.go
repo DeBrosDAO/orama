@@ -87,7 +87,7 @@ func TestAgent_aRunKilledMidInstallIsFinishedByTheNext(t *testing.T) {
 	if err != nil || out.Action != OutcomeInstalled || out.Version != testVersion {
 		t.Fatalf("outcome %+v, err %v", out, err)
 	}
-	if want := []string{"upgrade", "healthy"}; !slices.Equal(h.node.calls, want) {
+	if want := []string{"recover", "upgrade", "healthy"}; !slices.Equal(h.node.calls, want) {
 		t.Fatalf("the node was asked %v, want %v", h.node.calls, want)
 	}
 	if got := installState(t, db, testVersion, "n2"); got != StateInstalled {
@@ -141,7 +141,7 @@ func TestAgent_aStaleIntentIsDiscarded(t *testing.T) {
 	if h.jrnl.intent != nil {
 		t.Fatalf("a stale intent survived: %+v", h.jrnl.intent)
 	}
-	if len(h.node.calls) != 0 {
+	if want := []string{"recover"}; !slices.Equal(h.node.calls, want) {
 		t.Fatalf("a stale intent made the node do something: %v", h.node.calls)
 	}
 }
@@ -161,7 +161,7 @@ func TestAgent_aResumeWaitsForTheLockAnotherNodeHolds(t *testing.T) {
 	if err != nil || out.Action != OutcomeWait || !strings.Contains(out.Reason, "lock") {
 		t.Fatalf("outcome %+v, err %v", out, err)
 	}
-	if len(h.node.calls) != 0 || h.jrnl.intent == nil {
+	if !slices.Equal(h.node.calls, []string{"recover"}) || h.jrnl.intent == nil {
 		t.Fatalf("calls %v, intent %+v: the install must wait, not give up", h.node.calls, h.jrnl.intent)
 	}
 }
@@ -196,5 +196,73 @@ func TestAgent_aNodeOnTheReleaseRecordsNothingOnNotify(t *testing.T) {
 	}
 	if got := installState(t, db, testVersion, "n2"); got != "" {
 		t.Fatalf("notify wrote %q to the cluster's registry", got)
+	}
+}
+
+// A run killed between the two steps of a swap leaves a tree whose manifest
+// cannot be read. The next run recovers it before it compares versions; without
+// that it would take the empty version for a stale intent and drop it.
+func TestAgent_aHalfSwappedTreeIsRecoveredBeforeTheIntentIsJudged(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	h.node.current, h.node.unreadable = testVersion, true
+	h.jrnl.intent = &Intent{Version: testVersion, Previous: "0.3.0", StartedAt: time.Now()}
+	out, err := h.run(t)
+	if err != nil || out.Action != OutcomeInstalled {
+		t.Fatalf("outcome %+v, err %v", out, err)
+	}
+	if len(h.node.calls) == 0 || h.node.calls[0] != "recover" {
+		t.Fatalf("calls %v: the tree was not recovered first", h.node.calls)
+	}
+}
+
+func TestAgent_anUnreadableTreeThatCannotBeRecoveredKeepsTheIntent(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	h.node.unreadable = true
+	h.node.recoverErr = fmt.Errorf("disk error")
+	h.jrnl.intent = &Intent{Version: testVersion, Previous: "0.3.0", StartedAt: time.Now()}
+	if _, err := h.run(t); err == nil {
+		t.Fatal("an unrecoverable tree was reported fine")
+	}
+	if h.jrnl.intent == nil {
+		t.Fatal("the intent was dropped for a node that is not settled")
+	}
+}
+
+func TestAgent_anUnreadableTreeAfterRecoveryIsAnErrorNotAStaleIntent(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	h.node.current = ""
+	h.jrnl.intent = &Intent{Version: testVersion, Previous: "0.3.0", StartedAt: time.Now()}
+	if _, err := h.run(t); err == nil || h.jrnl.intent == nil {
+		t.Fatalf("err %v, intent %+v", err, h.jrnl.intent)
+	}
+}
+
+// A run killed in the middle of a rollback has put the previous release back
+// (so the node no longer runs the intent's) and not yet brought it up. The next
+// run finishes the rollback and marks the release bad.
+func TestAgent_aRollbackKilledHalfWayIsFinishedByTheNext(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	h.node.current, h.node.previous = "0.3.0", "0.3.0"
+	h.jrnl.intent = &Intent{Version: testVersion, Previous: "0.3.0", StartedAt: time.Now(), RollingBack: true, Blame: true}
+	out, err := h.run(t)
+	if err == nil || out.Action != OutcomeFailed {
+		t.Fatalf("outcome %+v, err %v", out, err)
+	}
+	if want := []string{"recover", "upgrade", "healthy"}; !slices.Equal(h.node.calls, want) {
+		t.Fatalf("the node was asked %v, want %v", h.node.calls, want)
+	}
+	if got := installState(t, db, testVersion, "n2"); got != StateFailed {
+		t.Fatalf("n2 recorded %q", got)
+	}
+	if h.jrnl.intent != nil {
+		t.Fatalf("intent %+v survived the finished rollback", h.jrnl.intent)
 	}
 }

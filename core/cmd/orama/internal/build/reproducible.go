@@ -60,9 +60,10 @@ var pinnedGoEnv = []string{"GOENV=off", "GOWORK=off"}
 // with pinnedGoEnv.
 func hermeticGoEnv(environ []string) []string {
 	out := make([]string, 0, len(environ)+len(pinnedGoEnv))
+	dropped := append([]string{"GOENV", "GOWORK"}, unpinnedGoEnv...)
 next:
 	for _, entry := range environ {
-		for _, name := range append([]string{"GOENV", "GOWORK"}, unpinnedGoEnv...) {
+		for _, name := range dropped {
 			if strings.HasPrefix(entry, name+"=") {
 				continue next
 			}

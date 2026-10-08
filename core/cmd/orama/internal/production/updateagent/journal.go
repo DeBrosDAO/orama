@@ -38,6 +38,11 @@ func (j fileJournal) Begin(i autoupdate.Intent) error {
 	if pending != nil {
 		return fmt.Errorf("an install of release %s is already under way (%s)", pending.Version, j.path)
 	}
+	return j.Replace(i)
+}
+
+// Replace writes the intent over the one there.
+func (j fileJournal) Replace(i autoupdate.Intent) error {
 	data, err := json.Marshal(i)
 	if err != nil {
 		return fmt.Errorf("encode the install intent: %w", err)

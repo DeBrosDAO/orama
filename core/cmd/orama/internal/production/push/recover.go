@@ -7,8 +7,29 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/install"
 )
+
+// RecoverInterrupted undoes a swap of the node's /opt/orama that a killed run
+// left half-done, under the archive lock, so the installed release can be read
+// again. Nothing to undo is not an error.
+func RecoverInterrupted() (err error) {
+	if err := clierr.RequireRoot("recovering an interrupted release swap"); err != nil {
+		return err
+	}
+	base := install.OramaBase
+	if err := checkBaseOwnedByRoot(base); err != nil {
+		return err
+	}
+	unlock, err := archivetrust.LockArchiveDir(base)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, unlock()) }()
+	return recoverInterruptedSwap(base)
+}
 
 // recoverInterruptedSwap puts back the release a swap that was killed half-way
 // had moved aside. swapArchive moves the current manifest out first and the new

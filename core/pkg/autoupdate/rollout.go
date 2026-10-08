@@ -69,11 +69,16 @@ func (a *Agent) install(ctx context.Context, s Settings, rel Release, self Membe
 		}
 		return Outcome{}, err
 	}
-	a.Logf("installing release %s over %s", rel.Version, a.Node.Current())
-	if err := a.Journal.Begin(Intent{Version: rel.Version, Previous: a.Node.Current(), StartedAt: a.Now().UTC()}); err != nil {
+	prev := a.Node.Current()
+	if prev == "" {
+		return Outcome{}, errors.New("this node's installed release cannot be read, so there is nothing to roll back to")
+	}
+	a.Logf("installing release %s over %s", rel.Version, prev)
+	in := Intent{Version: rel.Version, Previous: prev, StartedAt: a.Now().UTC()}
+	if err := a.Journal.Begin(in); err != nil {
 		return Outcome{}, fmt.Errorf("record that an install is beginning: %w", err)
 	}
-	res, installErr := Install(ctx, a.Node, rel)
+	res, installErr := Install(ctx, a.Node, a.Journal, in, rel)
 	return a.settle(ctx, s, rel.Version, self, res, installErr)
 }
 
@@ -144,9 +149,11 @@ func (a *Agent) recordCurrent(ctx context.Context, s Settings, rel Release) erro
 	return a.Store.Record(ctx, rel.Version, self.ID, StateInstalled, "already running it")
 }
 
-// resume finishes an install a previous run began and did not end. The release
-// is in place under /opt/orama if the node's installed release is the intent's;
-// otherwise staging never completed, or was undone, and the intent is stale.
+// resume finishes an install a previous run began and did not end. A swap of
+// /opt/orama the run left half-done is recovered first, so the installed release
+// can be read. The release is in place if the node's installed release is the
+// intent's; otherwise staging never completed, or was undone, and the intent is
+// stale. An intent that says a rollback had begun is finished as a rollback.
 // It finishes whatever the policy now says: a half-installed node is not left
 // half-installed because the cluster turned updates off meanwhile.
 func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
@@ -154,7 +161,14 @@ func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
 	if err != nil || intent == nil {
 		return Outcome{}, false, err
 	}
-	if a.Node.Current() != intent.Version {
+	if err := a.Node.Recover(ctx); err != nil {
+		return Outcome{}, true, fmt.Errorf("recover the release a previous run left half-swapped: %w", err)
+	}
+	current := a.Node.Current()
+	if current == "" {
+		return Outcome{}, true, errors.New("this node's installed release cannot be read, so the install a previous run began cannot be finished")
+	}
+	if current != intent.Version && !intent.RollingBack {
 		return Outcome{}, false, a.Journal.Clear()
 	}
 	a.Logf("finishing the install of release %s that a previous run began", intent.Version)
@@ -166,7 +180,13 @@ func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
 		return Outcome{}, true, err
 	}
 	defer a.unlock(ctx, release)
-	res, finishErr := Finish(ctx, a.Node, intent.Version)
+	var res Result
+	var finishErr error
+	if intent.RollingBack {
+		res, finishErr = RollBack(ctx, a.Node, *intent, nil)
+	} else {
+		res, finishErr = Finish(ctx, a.Node, a.Journal, *intent)
+	}
 	out, err := a.settle(ctx, s, intent.Version, self, res, finishErr)
 	return out, true, err
 }

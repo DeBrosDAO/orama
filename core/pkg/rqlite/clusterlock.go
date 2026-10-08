@@ -77,7 +77,7 @@ func AcquireClusterLock(ctx context.Context, db *sql.DB, name, holder string, tt
 
 	deadline := time.Now().Add(wait)
 	for {
-		ok, err := tryAcquireClusterLock(ctx, db, name, holder, ttl)
+		ok, err := tryAcquireClusterLock(ctx, db, name, holder, ttl, false)
 		if err != nil {
 			return nil, err
 		}
@@ -98,26 +98,64 @@ func AcquireClusterLock(ctx context.Context, db *sql.DB, name, holder string, tt
 	}
 }
 
+// AcquireOwnClusterLock takes the lock once, at once, for a holder whose own
+// earlier lease may still stand. It is AcquireClusterLock with no wait and one
+// more case: a lock held in holder's own name is taken back, in the same
+// statement, so there is no moment at which it is free.
+//
+// It is for a holder id that names one process at a time (a node's id, with a
+// lock on the machine keeping it to one run): a lease in that name was left by
+// a run that died, and waiting for its lease to run out would only delay the
+// work that run did not finish.
+func AcquireOwnClusterLock(ctx context.Context, db *sql.DB, name, holder string, ttl time.Duration) (*ClusterLock, error) {
+	if db == nil {
+		return nil, fmt.Errorf("cluster lock %q: nil database handle", name)
+	}
+	if ttl <= 0 {
+		return nil, fmt.Errorf("cluster lock %q: a TTL is required, or a dead holder blocks it for ever", name)
+	}
+	if err := EnsureClusterLocksTable(ctx, db); err != nil {
+		return nil, err
+	}
+	ok, err := tryAcquireClusterLock(ctx, db, name, holder, ttl, true)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		current, _ := clusterLockHolder(ctx, db, name)
+		return nil, fmt.Errorf("%w: %q is held by %q", ErrClusterLockHeld, name, current)
+	}
+	return &ClusterLock{db: db, name: name, holder: holder}, nil
+}
+
 // tryAcquireClusterLock makes one attempt.
 //
 // Two statements, in this order. The INSERT creates the row only if it is
 // absent; it cannot steal a held lock, because a conflict does nothing. The
-// UPDATE then takes it only if it is unheld or expired. Both are conditional,
-// so two nodes racing produce exactly one winner: raft applies them in some
-// order, and the loser's condition is false by the time it runs.
-func tryAcquireClusterLock(ctx context.Context, db *sql.DB, name, holder string, ttl time.Duration) (bool, error) {
+// UPDATE then takes it only if it is unheld or expired (or, with own, already
+// held by holder). Both are conditional, so two nodes racing produce exactly
+// one winner: raft applies them in some order, and the loser's condition is
+// false by the time it runs.
+func tryAcquireClusterLock(ctx context.Context, db *sql.DB, name, holder string, ttl time.Duration, own bool) (bool, error) {
 	if _, err := SafeExecContext(db, ctx,
 		`INSERT OR IGNORE INTO cluster_locks (name, holder, acquired_at, expires_at)
 		 VALUES (?, '', NULL, NULL)`, name); err != nil {
 		return false, fmt.Errorf("cluster lock %q: ensure row: %w", name, err)
 	}
 
-	res, err := SafeExecContext(db, ctx,
-		`UPDATE cluster_locks
+	query := `UPDATE cluster_locks
 		    SET holder = ?, acquired_at = CURRENT_TIMESTAMP, expires_at = datetime('now', ?)
 		  WHERE name = ?
-		    AND (holder = '' OR expires_at IS NULL OR expires_at < CURRENT_TIMESTAMP)`,
-		holder, secondsFromNow(ttl), name)
+		    AND (holder = '' OR expires_at IS NULL OR expires_at < CURRENT_TIMESTAMP)`
+	args := []any{holder, secondsFromNow(ttl), name}
+	if own {
+		query = `UPDATE cluster_locks
+		    SET holder = ?, acquired_at = CURRENT_TIMESTAMP, expires_at = datetime('now', ?)
+		  WHERE name = ?
+		    AND (holder = '' OR holder = ? OR expires_at IS NULL OR expires_at < CURRENT_TIMESTAMP)`
+		args = append(args, holder)
+	}
+	res, err := SafeExecContext(db, ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("cluster lock %q: acquire: %w", name, err)
 	}

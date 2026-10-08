@@ -30,6 +30,7 @@ type machine struct {
 	// replaces them.
 	stage   func(push.StageOptions) error
 	restore func() error
+	recover func() error
 }
 
 var _ autoupdate.Node = (*machine)(nil)
@@ -42,6 +43,7 @@ func newMachine(ep rqlite.Endpoint) *machine {
 		},
 		stage:   push.Stage,
 		restore: push.RestorePrevious,
+		recover: push.RecoverInterrupted,
 	}
 }
 
@@ -95,6 +97,9 @@ func (m *machine) Upgrade(ctx context.Context) error {
 }
 
 func (m *machine) Restore(context.Context) error { return m.restore() }
+
+// Recover undoes a release swap a killed run left half-done.
+func (m *machine) Recover(context.Context) error { return m.recover() }
 
 // Healthy waits for the node to carry its share of the cluster again.
 func (m *machine) Healthy(ctx context.Context) error {

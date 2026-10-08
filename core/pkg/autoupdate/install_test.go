@@ -9,9 +9,11 @@ import (
 	"testing"
 )
 
+var intent031 = Intent{Version: "0.3.1", Previous: "0.3.0"}
+
 func TestInstall_aGoodReleaseStagesUpgradesAndPassesTheGate(t *testing.T) {
 	n := &fakeNode{current: "0.3.0"}
-	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
 	if err != nil || !res.Installed || res.ReleaseBad || res.RolledBack {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -22,7 +24,7 @@ func TestInstall_aGoodReleaseStagesUpgradesAndPassesTheGate(t *testing.T) {
 
 func TestInstall_aFailedGateRestoresUpgradesAgainAndBlamesTheRelease(t *testing.T) {
 	n := &fakeNode{current: "0.3.0", badRelease: true}
-	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
 	if err == nil || res.Installed || !res.ReleaseBad || !res.RolledBack {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -36,7 +38,7 @@ func TestInstall_aFailedGateRestoresUpgradesAgainAndBlamesTheRelease(t *testing.
 
 func TestInstall_aFailedStageChangesNothingAndBlamesNobody(t *testing.T) {
 	n := &fakeNode{current: "0.3.0", stageErr: errors.New("refused")}
-	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
 	if err == nil || res != (Result{Unchanged: true}) || !res.Settled() {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -47,7 +49,7 @@ func TestInstall_aFailedStageChangesNothingAndBlamesNobody(t *testing.T) {
 
 func TestInstall_anUpgradeThatStoppedNothingRestoresTheTreeAndDoesNotRestartAnything(t *testing.T) {
 	n := &fakeNode{current: "0.3.0", upgradeErr: fmt.Errorf("a check refused: %w", ErrNotStarted)}
-	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
 	if err == nil || res.ReleaseBad || !res.RolledBack {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -63,7 +65,7 @@ func (b *brokenRestore) Restore(context.Context) error { return errors.New("disk
 
 func TestInstall_aRestoreThatFailsIsReportedWithTheOriginalFailure(t *testing.T) {
 	n := &brokenRestore{fakeNode{current: "0.3.0", badRelease: true}}
-	res, err := Install(t.Context(), n, Release{Version: "0.3.1"})
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
 	if err == nil || res.RolledBack || !res.ReleaseBad {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -80,7 +82,7 @@ func TestInstall_aRestoreThatFailsIsReportedWithTheOriginalFailure(t *testing.T)
 func TestFinish_aStoppedRunRollsNothingBackAndBlamesNobody(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	n := &stoppedNode{fakeNode: fakeNode{current: "0.3.1"}, stop: cancel}
-	res, err := Finish(ctx, n, "0.3.1")
+	res, err := Finish(ctx, n, &memJournal{}, intent031)
 	if err == nil || res.ReleaseBad || res.Settled() {
 		t.Fatalf("result %+v, err %v", res, err)
 	}
@@ -108,8 +110,32 @@ func (s *stoppedNode) Upgrade(ctx context.Context) error {
 
 func TestFinish_aRestoreThatFailsLeavesTheResultUnsettled(t *testing.T) {
 	n := &fakeNode{current: "0.3.1", previous: "0.3.0", badRelease: true, restoreErr: errors.New("disk full")}
-	res, err := Finish(t.Context(), n, "0.3.1")
+	res, err := Finish(t.Context(), n, &memJournal{}, intent031)
 	if err == nil || res.Settled() || !res.ReleaseBad {
 		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+// A step after the swap can fail with the release already in place: the node is
+// not unchanged, and the health gate judges it.
+func TestInstall_aStageThatFailedAfterTheSwapGoesOnToTheGate(t *testing.T) {
+	n := &fakeNode{current: "0.3.0", stageErr: errors.New("sync failed"), stagedThenFailed: true}
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
+	if err != nil || !res.Installed || res.Unchanged {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if want := []string{"stage", "upgrade", "healthy"}; !slices.Equal(n.calls, want) {
+		t.Fatalf("calls %v", n.calls)
+	}
+}
+
+// The rollback is journaled before it begins, so a kill in the middle of it is
+// finished by the next run.
+func TestFinish_aRollbackIsJournaledBeforeItBegins(t *testing.T) {
+	j := &memJournal{}
+	n := &fakeNode{current: "0.3.1", previous: "0.3.0", badRelease: true, restoreKilled: true}
+	_, _ = Finish(t.Context(), n, j, intent031)
+	if j.intent == nil || !j.intent.RollingBack || !j.intent.Blame {
+		t.Fatalf("intent %+v", j.intent)
 	}
 }

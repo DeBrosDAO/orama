@@ -143,19 +143,16 @@ func (s SQLStore) Record(ctx context.Context, version, nodeID, state, detail str
 // Lock takes the rollout lock, refusing at once when another node holds it.
 //
 // A lease this node took earlier and never freed (a run that was killed) is
-// freed first: the holder is the node's id, and a node runs one agent at a
-// time (the run lock on the machine), so a lease in its own name is its own
-// run's. The release function opens a handle of its own.
+// taken back in one statement: the holder is the node's id, and a node runs one
+// agent at a time (the run lock on the machine), so a lease in its own name is
+// its own run's. The release function opens a handle of its own.
 func (s SQLStore) Lock(ctx context.Context, holder string) (func(context.Context) error, error) {
 	db, closeDB, err := s.Open(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer closeDB()
-	if err := rqlite.ReleaseClusterLock(ctx, db, LockName, holder); err != nil {
-		return nil, err
-	}
-	if _, err := rqlite.AcquireClusterLock(ctx, db, LockName, holder, LockTTL, 0); err != nil {
+	if _, err := rqlite.AcquireOwnClusterLock(ctx, db, LockName, holder, LockTTL); err != nil {
 		return nil, fmt.Errorf("take the rollout lock: %w", err)
 	}
 	return func(ctx context.Context) error {

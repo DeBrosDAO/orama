@@ -37,3 +37,20 @@ func TestReleaseClusterLock_neverFreesAnotherHoldersLock(t *testing.T) {
 		t.Fatalf("n1 freed n2's lock: %v", err)
 	}
 }
+
+func TestAcquireOwnClusterLock_takesBackItsOwnLeaseAtOnceAndNotAnothers(t *testing.T) {
+	db := lockDB(t)
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n1", time.Hour); err != nil {
+		t.Fatalf("a lock nobody holds (and a table nobody made): %v", err)
+	}
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n1", time.Hour); err != nil {
+		t.Fatalf("n1 could not take back its own lease: %v", err)
+	}
+	_, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n2", time.Hour)
+	if !errors.Is(err, ErrClusterLockHeld) {
+		t.Fatalf("n2 took n1's lease: %v", err)
+	}
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n3", 0); err == nil {
+		t.Fatal("a lock with no TTL was taken")
+	}
+}

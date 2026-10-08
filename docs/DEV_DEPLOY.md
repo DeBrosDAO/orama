@@ -707,8 +707,15 @@ staged release and gates, and records the result or rolls back, even if the
 cluster turned updates off in between. An intent whose release is not the one
 installed (staging never completed) is discarded. A stage killed half-way
 through its swap is undone by the next stage or restore before it removes its
-leftovers, so a node is not left without a release. A run that is stopped by a
-signal rolls nothing back and blames nobody.
+leftovers, and the agent does that recovery before it reads the installed
+version, so a node is not left without a release and an unreadable manifest is
+never taken for a stale intent. A stage that fails after its swap is not "the
+node unchanged": the install goes on to the health gate. The rollback is
+journaled before it begins (the intent says it is rolling back, and whether the
+release is to blame), so a run killed in the middle of it is finished by the
+next, which also marks the release bad. A run that is stopped by a signal rolls
+nothing back and blames nobody. The `orama node upgrade --restart` child of a
+killed run can outlive it; nothing in the agent stops it.
 
 **Time.** A run fetches metadata for at most 10 minutes, the archive for at most
 10, each `orama node upgrade --restart` for at most 12 and each health gate for
