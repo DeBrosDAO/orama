@@ -18,6 +18,12 @@ func TestCheckSuccessor(t *testing.T) {
 		{"no id on the pushed root", cur, Root{CurrentIKM: "gen-4"}, true},
 		{"a gateway with no root yet takes any", Root{}, Root{CurrentID: "1", CurrentIKM: "gen-1"}, false},
 		{"a root that predates generations is generation 1", Root{CurrentID: FirstID, CurrentIKM: "cluster-secret"}, Root{CurrentID: "2", CurrentIKM: "x"}, false},
+		{"same generation, a previous root this gateway already forgot", Root{CurrentID: "3", CurrentIKM: "gen-3"}, Root{CurrentID: "3", CurrentIKM: "gen-3", PreviousID: "2", PreviousIKM: "gen-2"}, true},
+		{"same generation, a different previous root", cur, Root{CurrentID: "3", CurrentIKM: "gen-3", PreviousID: "2", PreviousIKM: "attacker"}, true},
+		{"same generation, a different previous id", cur, Root{CurrentID: "3", CurrentIKM: "gen-3", PreviousID: "1", PreviousIKM: "gen-2"}, true},
+		{"same generation, the same previous root (retry)", cur, Root{CurrentID: "3", CurrentIKM: "gen-3", PreviousID: "2", PreviousIKM: "gen-2"}, false},
+		{"a generation skipped", cur, Root{CurrentID: "5", CurrentIKM: "gen-5", PreviousID: "4", PreviousIKM: "gen-4"}, true},
+		{"an absurd generation", cur, Root{CurrentID: "2147483647", CurrentIKM: "x"}, true},
 		{"unusable own root is an error, not a pass", Root{CurrentID: "abc", CurrentIKM: "k"}, Root{CurrentID: "4", CurrentIKM: "x"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

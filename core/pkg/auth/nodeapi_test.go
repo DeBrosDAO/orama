@@ -158,38 +158,55 @@ type noSuchNodeError struct{}
 func (*noSuchNodeError) Error() string { return "no key for that node" }
 
 // Every way a request can arrive without a usable stamp is a refusal, and none
-// of them panics.
+// of them panics. It holds for the nonced stamp and for the unnonced one a
+// node on the previous build sends.
 func TestNodeAPI_everyMalformedStampIsRefused(t *testing.T) {
+	for _, flavour := range []string{"nonced", "unnonced"} {
+		t.Run(flavour, func(t *testing.T) { everyMalformedStampIsRefused(t, flavour == "nonced") })
+	}
+}
+
+func everyMalformedStampIsRefused(t *testing.T, nonced bool) {
 	now := time.Now()
 	body := []byte(`{}`)
 	keys := testVerifier
+	header := NodeStampHeader
+	if nonced {
+		header = NodeStampV2Header
+	}
 
 	cases := map[string]func(*http.Request){
 		"no headers at all": func(r *http.Request) {
 			r.Header.Del(NodeIDHeader)
-			r.Header.Del(NodeStampHeader)
+			r.Header.Del(header)
 		},
 		"no node id": func(r *http.Request) { r.Header.Del(NodeIDHeader) },
-		"no stamp":   func(r *http.Request) { r.Header.Del(NodeStampHeader) },
+		"no stamp": func(r *http.Request) {
+			r.Header.Del(header)
+			r.Header.Del(NodeStampHeader)
+		},
 		"stamp with no separator": func(r *http.Request) {
-			r.Header.Set(NodeStampHeader, "not-a-stamp")
+			r.Header.Set(header, "not-a-stamp")
 		},
 		"stamp with an unreadable time": func(r *http.Request) {
-			_, sig, _ := strings.Cut(r.Header.Get(NodeStampHeader), ".")
-			r.Header.Set(NodeStampHeader, "when."+sig)
+			_, sig, _ := strings.Cut(r.Header.Get(header), ".")
+			r.Header.Set(header, "when."+sig)
 		},
 		"stamp with an unreadable mac": func(r *http.Request) {
-			stamp, _, _ := strings.Cut(r.Header.Get(NodeStampHeader), ".")
-			r.Header.Set(NodeStampHeader, stamp+".nothex")
+			stamp, _, _ := strings.Cut(r.Header.Get(header), ".")
+			r.Header.Set(header, stamp+".nothex")
 		},
 		"stamp of the right shape and the wrong value": func(r *http.Request) {
-			r.Header.Set(NodeStampHeader, strconv.FormatInt(now.Unix(), 10)+".00ff")
+			r.Header.Set(header, strconv.FormatInt(now.Unix(), 10)+".00ff")
 		},
 	}
 
 	for name, break_ := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := signedRequest(t, http.MethodPost, "/v1/internal/node/register", "node-a", body, now)
+			if !nonced {
+				r.Header.Del(NodeStampV2Header)
+			}
 			break_(r)
 			if _, _, ok := VerifyNodeAPI(keys, r, body, now); ok {
 				t.Errorf("a request with %s was accepted", name)

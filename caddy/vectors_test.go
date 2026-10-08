@@ -77,7 +77,9 @@ func TestCoordinationV2MAC_matchesCore(t *testing.T) {
 
 func TestProviderSign_matchesCore(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "http://localhost:6001/v1/internal/acme/present", nil)
-	sign([]byte("provider-test-key"), req, []byte(`{"fqdn":"_acme-challenge.example.com.","value":"x"}`), time.Unix(1790000000, 0))
+	if err := sign([]byte("provider-test-key"), req, []byte(`{"fqdn":"_acme-challenge.example.com.","value":"x"}`), time.Unix(1790000000, 0)); err != nil {
+		t.Fatal(err)
+	}
 	want := "1790000000.932194e4680fbf6651b9cf0642913158f59c7a25f4092808e906c12af317c419"
 	if got := req.Header.Get(acmeMACHeader); got != want {
 		t.Fatalf("provider stamp = %s, want %s", got, want)
@@ -88,5 +90,61 @@ func TestProviderSign_matchesCore(t *testing.T) {
 func TestMaxLease_matchesCore(t *testing.T) {
 	if maxLease != 2*time.Hour {
 		t.Fatalf("maxLease = %s, want core's MaxLease of 2h", maxLease)
+	}
+}
+
+func TestACMENoncedMAC_matchesCore(t *testing.T) {
+	got := acmeNoncedMAC([]byte("provider-test-key"), "post", "/v1/internal/acme/present", "",
+		[]byte(`{"fqdn":"_acme-challenge.example.com.","value":"x"}`), "00112233445566778899aabbccddeeff", 1790000000)
+	if want := "979cf48ef2b884a0b5bad5129fd9a4c471bc3e9b031587e7d82f1b5675b82af8"; got != want {
+		t.Fatalf("nonced ACME MAC = %s, want %s", got, want)
+	}
+}
+
+func TestProviderSign_carriesTheNoncedStampBesideTheUnnoncedOne(t *testing.T) {
+	key, body := []byte("provider-test-key"), []byte(`{"fqdn":"_acme-challenge.example.com.","value":"x"}`)
+	req, _ := http.NewRequest(http.MethodPost, "http://localhost:6001/v1/internal/acme/cleanup", nil)
+	if err := sign(key, req, body, time.Unix(1790000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	nonce := req.Header.Get(acmeNonceHeader)
+	want := "1790000000." + acmeNoncedMAC(key, "POST", "/v1/internal/acme/cleanup", "", body, nonce, 1790000000)
+	if got := req.Header.Get(acmeMACV2Header); got != want || len(nonce) != 2*nonceBytes {
+		t.Fatalf("nonced stamp = %s (nonce %q), want %s", got, nonce, want)
+	}
+	if req.Header.Get(acmeMACHeader) == "" {
+		t.Fatal("no unnonced stamp for a gateway built before the nonce")
+	}
+	again, _ := http.NewRequest(http.MethodPost, "http://localhost:6001/v1/internal/acme/cleanup", nil)
+	if err := sign(key, again, body, time.Unix(1790000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if again.Header.Get(acmeNonceHeader) == nonce {
+		t.Fatal("two calls drew the same nonce")
+	}
+}
+
+func TestCoordinationV3MAC_matchesCore(t *testing.T) {
+	mac, _ := vectorStoreKeys(t)
+	got := coordinationV3MAC(mac, "post", storeAudience, "6001", "/v1/internal/tls-store", "",
+		[]byte(`{"op":"load","key":"a"}`), "00112233445566778899aabbccddeeff", 1790000000)
+	if want := "e9c2a85ba619b989508ab660c2f98e006aa81cb37113f768a3a3ec1860795ff6"; got != want {
+		t.Fatalf("coordination v3 MAC = %s, want %s", got, want)
+	}
+}
+
+func TestSignV2_stampsV3ForTheTargetPortBesideV2(t *testing.T) {
+	mac, _ := vectorStoreKeys(t)
+	body := []byte(`{"op":"load","key":"a"}`)
+	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1:6001/v1/internal/tls-store", nil)
+	if err := signV2(mac, req, body, storeAudience, time.Unix(1790000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	nonce := req.Header.Get(nonceHeader)
+	if got, want := req.Header.Get(macV3Header), "1790000000."+coordinationV3MAC(mac, "POST", storeAudience, "6001", "/v1/internal/tls-store", "", body, nonce, 1790000000); got != want {
+		t.Fatalf("v3 stamp = %s, want %s", got, want)
+	}
+	if got, want := req.Header.Get(macV2Header), "1790000000."+coordinationV2MAC(mac, "POST", storeAudience, "/v1/internal/tls-store", "", body, nonce, 1790000000); got != want {
+		t.Fatalf("v2 stamp = %s, want %s", got, want)
 	}
 }

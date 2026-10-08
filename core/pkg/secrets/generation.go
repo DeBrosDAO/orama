@@ -21,10 +21,16 @@ func (r Root) Generation() (int, error) {
 // CheckSuccessor reports whether a gateway holding current may adopt next. A
 // rotate fan-out is signed, but a captured one replayed inside the signature's
 // window would otherwise put a gateway back on a root that has since been
-// rotated away, so the generation must not go backwards. The same generation
-// is accepted, because the fan-out is also how a format rewrite and the
-// forgetting of the previous root reach a gateway and a failed fan-out is
-// retried, but only with the same IKM: one generation has one key.
+// rotated away, so the generation must not go backwards, and it must not skip:
+// a rotation advances by exactly one, so a pushed generation further ahead is
+// not a rotation this cluster made.
+//
+// The same generation is accepted, because the fan-out is also how a format
+// rewrite and the forgetting of the previous root reach a gateway and a failed
+// fan-out is retried, but only with the same IKM (one generation has one key)
+// and with a previous root that is either gone or the one this gateway holds.
+// A push at the same generation that carries a previous root this gateway no
+// longer has is a captured pre-forget push, and would restore a retired key.
 func CheckSuccessor(current, next Root) error {
 	if current.CurrentIKM == "" {
 		return nil
@@ -40,8 +46,21 @@ func CheckSuccessor(current, next Root) error {
 	switch {
 	case want < have:
 		return fmt.Errorf("refusing the pushed encryption root: generation %d is older than this gateway's %d", want, have)
+	case want > have+1:
+		return fmt.Errorf("refusing the pushed encryption root: generation %d is more than one past this gateway's %d", want, have)
 	case want == have && next.CurrentIKM != current.CurrentIKM:
 		return fmt.Errorf("refusing the pushed encryption root: generation %d is already held with a different key", have)
+	case want == have && !samePreviousOrForgotten(current, next):
+		return fmt.Errorf("refusing the pushed encryption root: generation %d carries a previous root this gateway does not hold", have)
 	}
 	return nil
+}
+
+// samePreviousOrForgotten reports whether next's previous root is absent (the
+// previous root was forgotten) or is the one current holds.
+func samePreviousOrForgotten(current, next Root) bool {
+	if next.PreviousIKM == "" && next.PreviousID == "" {
+		return true
+	}
+	return next.PreviousIKM == current.PreviousIKM && next.PreviousID == current.PreviousID
 }

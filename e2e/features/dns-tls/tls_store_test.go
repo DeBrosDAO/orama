@@ -69,6 +69,26 @@ func TestTLSStore_refusesCallsNotFromCaddy(t *testing.T) {
 	}
 }
 
+// TestTLSStore_aStampIsGoodForOneProcessOnly: a v3 stamp made for the port the
+// call is sent to is accepted (the v2 stamp beside it is not needed), and one
+// made for another process's port on the same node is 404, so a stamp captured
+// on its way to one gateway process cannot be replayed to a sibling on the
+// node (docs/SECURITY.md "Coordination MAC v3").
+func TestTLSStore_aStampIsGoodForOneProcessOnly(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	n := f.State.Nodes[0]
+	load := map[string]any{"op": "load", "key": "acme"}
+	ps := (edge.TLSStoreCall{Body: load, Key: edge.KeyReal, Stamps: "v3"}).Run(t, f, n)
+	if len(ps) != 1 || ps[0].Status != http.StatusOK {
+		t.Errorf("%s: a v3 stamp for the gateway's own port: %+v, want 200", n.Name, ps)
+	}
+	ps = (edge.TLSStoreCall{Body: load, Key: edge.KeyReal, Stamps: "v3-other-port"}).Run(t, f, n)
+	if len(ps) != 1 || ps[0].Status != http.StatusNotFound {
+		t.Errorf("%s: a v3 stamp made for another port: %+v, want 404", n.Name, ps)
+	}
+}
+
 // TestTLSStore_holdsTheWildcardSealed: the store every node's Caddy uses holds
 // the cluster's *.<base> certificate and key, sealed — what the gateway keeps
 // in the registry is never a key in the clear (docs/SECURITY.md

@@ -58,8 +58,12 @@ const (
 	// CoordinationV1 covered method, path, query and time only. A request that
 	// verified this way can have had its body replaced.
 	CoordinationV1 CoordinationVersion = 1
-	// CoordinationV2 also covered the body and a single-use nonce.
+	// CoordinationV2 also covered the body and a single-use nonce. It named the
+	// node it was for but not which process on it.
 	CoordinationV2 CoordinationVersion = 2
+	// CoordinationV3 also covers the port the request was sent to, so a stamp
+	// is good for one process on the node and not its siblings.
+	CoordinationV3 CoordinationVersion = 3
 )
 
 // coordinationPayloadV2 is the exact string a v2 MAC covers: everything v1
@@ -83,8 +87,9 @@ func coordinationPayloadV2(method, audience, path, query string, body []byte, no
 }
 
 // SignCoordination stamps a request as coming from inside the cluster, with the
-// v2 MAC and, beside it, the v1 MAC a not-yet-upgraded peer reads. audience is
-// the peer id of the node the request is sent to; only that node verifies it.
+// v3 MAC and, beside it, the v2 and v1 MACs a not-yet-upgraded peer reads.
+// audience is the peer id of the node the request is sent to; only that node
+// verifies it, and only the process listening on the request URL's port.
 //
 // The body is part of what the v2 MAC covers, so it must be complete before the
 // request is signed; changing it afterwards makes the request fail verification.
@@ -108,10 +113,11 @@ func SignCoordination(key []byte, r *http.Request, now time.Time, audience strin
 	nonce := hex.EncodeToString(raw)
 	ts := now.Unix()
 
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
 	r.Header.Set(CoordinationNonceHeader, nonce)
-	r.Header.Set(CoordinationMACV2Header, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(mac.Sum(nil)))
+	setCoordinationStamp(key, r, CoordinationMACV2Header, ts,
+		coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts))
+	setCoordinationStamp(key, r, CoordinationMACV3Header, ts,
+		coordinationPayloadV3(r.Method, audience, requestPort(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts))
 	signCoordinationV1(key, r, now)
 	return nil
 }
@@ -141,19 +147,21 @@ func VerifyCoordination(key []byte, r *http.Request, now time.Time, audience str
 	return ok
 }
 
-// VerifyCoordinationV2 reports whether a request carries a valid v2 stamp. Use
-// it for a route whose parameters travel in the body or that changes what a
-// service points at: the v1 stamp does not cover the body, so a stripped-v2
-// replay with a swapped body would pass VerifyCoordination.
+// VerifyCoordinationV2 reports whether a request carries a valid stamp that
+// covers the body and a nonce: v3, or v2 while AcceptLegacyCoordinationV2 is
+// set. Use it for a route whose parameters travel in the body or that changes
+// what a service points at: the v1 stamp does not cover the body, so a
+// stripped-v2 replay with a swapped body would pass VerifyCoordination.
 func VerifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience string) bool {
 	v, ok := CheckCoordination(key, r, now, audience)
-	return ok && v == CoordinationV2
+	return ok && v >= CoordinationV2
 }
 
 // CheckCoordination verifies a coordination request and says which stamp it
 // carried. audience is this node's own libp2p peer id, from its configuration
-// and never from the request: a v2 stamp is valid only if it was signed for it.
-// A v1 stamp names no audience.
+// and never from the request: a v2 or v3 stamp is valid only if it was signed
+// for it. A v3 stamp is also valid only for the port the connection arrived on
+// (coordinationServedPort). A v1 stamp names no audience.
 //
 // It answers false for every reason: no key on this side, no stamp, a malformed
 // one, a stale or future timestamp, a MAC over a different request or body than
@@ -169,8 +177,11 @@ func CheckCoordination(key []byte, r *http.Request, now time.Time, audience stri
 	if len(key) == 0 {
 		return 0, false
 	}
+	if r.Header.Get(CoordinationMACV3Header) != "" {
+		return CoordinationV3, audience != "" && verifyCoordinationV3(key, r, now, audience)
+	}
 	if r.Header.Get(CoordinationMACV2Header) != "" {
-		return CoordinationV2, audience != "" && verifyCoordinationV2(key, r, now, audience)
+		return CoordinationV2, AcceptLegacyCoordinationV2 && audience != "" && verifyCoordinationV2(key, r, now, audience)
 	}
 	if AcceptLegacyCoordinationMAC && verifyCoordinationV1(key, r, now) {
 		return CoordinationV1, true
@@ -179,7 +190,17 @@ func CheckCoordination(key []byte, r *http.Request, now time.Time, audience stri
 }
 
 func verifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience string) bool {
-	stamp, sig, ok := strings.Cut(strings.TrimSpace(r.Header.Get(CoordinationMACV2Header)), ".")
+	return verifyCoordinationNonced(key, r, now, CoordinationMACV2Header,
+		func(body []byte, nonce string, ts int64) string {
+			return coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts)
+		})
+}
+
+// verifyCoordinationNonced checks the stamp in header, whose payload payload
+// builds from the body, nonce and time the request carries.
+func verifyCoordinationNonced(key []byte, r *http.Request, now time.Time, header string,
+	payload func(body []byte, nonce string, ts int64) string) bool {
+	stamp, sig, ok := strings.Cut(strings.TrimSpace(r.Header.Get(header)), ".")
 	if !ok {
 		return false
 	}
@@ -210,7 +231,7 @@ func verifyCoordinationV2(key []byte, r *http.Request, now time.Time, audience s
 		return false
 	}
 	expected := hmac.New(sha256.New, key)
-	expected.Write([]byte(coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts)))
+	expected.Write([]byte(payload(body, nonce, ts)))
 	if !hmac.Equal(presented, expected.Sum(nil)) {
 		return false
 	}

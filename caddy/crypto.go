@@ -29,11 +29,14 @@ const (
 	// storeAudience is the audience the store's calls are stamped for.
 	storeAudience = "caddy-tls-store"
 
-	acmeMACHeader  = "X-Orama-Coordination-MAC"
-	macV2Header    = "X-Orama-Coordination-MAC-V2"
-	nonceHeader    = "X-Orama-Coordination-Nonce"
-	nonceBytes     = 16
-	payloadVersion = "orama-coordination-v2"
+	acmeMACHeader   = "X-Orama-Coordination-MAC"
+	acmeMACV2Header = "X-Orama-ACME-MAC-V2"
+	acmeNonceHeader = "X-Orama-ACME-Nonce"
+	macV2Header     = "X-Orama-Coordination-MAC-V2"
+	macV3Header     = "X-Orama-Coordination-MAC-V3"
+	nonceHeader     = "X-Orama-Coordination-Nonce"
+	nonceBytes      = 16
+	payloadVersion  = "orama-coordination-v2"
 )
 
 // readHexKey reads a hex key file install wrote.
@@ -106,18 +109,46 @@ func newAEAD(sealKey []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// coordinationV2MAC is the MAC core/pkg/auth's coordination v2 stamp carries.
-func coordinationV2MAC(key []byte, method, audience, path, query string, body []byte, nonce string, ts int64) string {
-	sum := sha256.Sum256(body)
-	payload := strings.Join([]string{payloadVersion, strings.ToUpper(method), audience, path, query,
-		hex.EncodeToString(sum[:]), nonce, strconv.FormatInt(ts, 10)}, "\n")
+// hmacHex is the hex HMAC-SHA256 of payload under key.
+func hmacHex(key []byte, payload string) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(payload))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// coordinationV2MAC is the MAC core/pkg/auth's coordination v2 stamp carries.
+func coordinationV2MAC(key []byte, method, audience, path, query string, body []byte, nonce string, ts int64) string {
+	sum := sha256.Sum256(body)
+	return hmacHex(key, strings.Join([]string{payloadVersion, strings.ToUpper(method), audience, path, query,
+		hex.EncodeToString(sum[:]), nonce, strconv.FormatInt(ts, 10)}, "\n"))
+}
+
+// coordinationV3MAC is the MAC core/pkg/auth's coordination v3 stamp carries:
+// the v2 payload plus scope, the port of the gateway process the call is for.
+func coordinationV3MAC(key []byte, method, audience, scope, path, query string, body []byte, nonce string, ts int64) string {
+	sum := sha256.Sum256(body)
+	return hmacHex(key, strings.Join([]string{"orama-coordination-v3", strings.ToUpper(method), audience, scope, path, query,
+		hex.EncodeToString(sum[:]), nonce, strconv.FormatInt(ts, 10)}, "\n"))
+}
+
+// requestPort is the port req is sent to: the URL's, or the scheme's default.
+func requestPort(req *http.Request) string {
+	if port := req.URL.Port(); port != "" {
+		return port
+	}
+	switch req.URL.Scheme {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
+
 // signV2 stamps req as core/pkg/auth.VerifyCoordinationV2 checks it, for
-// audience, with a fresh nonce.
+// audience, with a fresh nonce: the v3 stamp, which is good for the gateway
+// process on req's port only, and beside it the v2 stamp a gateway built
+// before v3 reads.
 func signV2(key []byte, req *http.Request, body []byte, audience string, now time.Time) error {
 	raw := make([]byte, nonceBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -127,5 +158,7 @@ func signV2(key []byte, req *http.Request, body []byte, audience string, now tim
 	req.Header.Set(nonceHeader, nonce)
 	req.Header.Set(macV2Header, strconv.FormatInt(ts, 10)+"."+
 		coordinationV2MAC(key, req.Method, audience, req.URL.Path, req.URL.RawQuery, body, nonce, ts))
+	req.Header.Set(macV3Header, strconv.FormatInt(ts, 10)+"."+
+		coordinationV3MAC(key, req.Method, audience, requestPort(req), req.URL.Path, req.URL.RawQuery, body, nonce, ts))
 	return nil
 }
