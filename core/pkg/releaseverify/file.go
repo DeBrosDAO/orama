@@ -52,8 +52,12 @@ type FileCheck struct {
 	RootPath string
 	// SeenPath is the rollback record; it is created on first success.
 	SeenPath string
-	// MetadataDir holds timestamp.json, snapshot.json and targets.json.
+	// MetadataDir holds timestamp.json, snapshot.json and targets.json, and
+	// <role>.json for each of Roles.
 	MetadataDir string
+	// Roles are the delegated targets roles to read and verify, normally the
+	// release channel. Target may be one of theirs.
+	Roles []string
 	// Target is the name the targets metadata lists the file under.
 	Target string
 	// File is an open descriptor of the file that must be that target. It
@@ -74,7 +78,7 @@ func CheckFile(c FileCheck) (v *Verified, err error) {
 	if c.File == nil {
 		return nil, fmt.Errorf("no file to check against target %q", c.Target)
 	}
-	meta, err := readMetadata(c.RootPath, c.MetadataDir)
+	meta, err := readMetadata(c.RootPath, c.MetadataDir, c.Roles)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +160,7 @@ func newHash(algo string) (hash.Hash, error) {
 	}
 }
 
-func readMetadata(rootPath, dir string) (Metadata, error) {
+func readMetadata(rootPath, dir string, roles []string) (Metadata, error) {
 	root, err := readLimited(rootPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Metadata{}, fmt.Errorf("%w: %s does not exist", ErrNoRoot, rootPath)
@@ -175,6 +179,19 @@ func readMetadata(rootPath, dir string) (Metadata, error) {
 			return Metadata{}, fmt.Errorf("read release metadata: %w", err)
 		}
 		*dst = data
+	}
+	for _, role := range roles {
+		if err := validRoleName(role); err != nil {
+			return Metadata{}, err
+		}
+		data, err := readLimited(filepath.Join(dir, role+".json"))
+		if err != nil {
+			return Metadata{}, fmt.Errorf("read release metadata: %w", err)
+		}
+		if meta.Delegated == nil {
+			meta.Delegated = map[string][]byte{}
+		}
+		meta.Delegated[role] = data
 	}
 	return meta, nil
 }
@@ -224,19 +241,5 @@ func writeSeen(path string, version int64) error {
 	if err != nil {
 		return fmt.Errorf("encode the release rollback record: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-")
-	if err != nil {
-		return fmt.Errorf("write the release rollback record: %w", err)
-	}
-	name := tmp.Name()
-	_, werr := tmp.Write(data)
-	serr := tmp.Sync()
-	cerr := tmp.Close()
-	if err := errors.Join(werr, serr, cerr, os.Chmod(name, seenFilePerm)); err != nil {
-		return errors.Join(fmt.Errorf("write %s: %w", name, err), os.Remove(name))
-	}
-	if err := os.Rename(name, path); err != nil {
-		return errors.Join(fmt.Errorf("replace %s: %w", path, err), os.Remove(name))
-	}
-	return nil
+	return writeFileAtomic(path, data, seenFilePerm)
 }

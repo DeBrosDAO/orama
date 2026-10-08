@@ -212,5 +212,8 @@ func (ps *ProductionSetup) verifyPreBuiltArchive(detected *PreBuiltManifest) (*P
 	if rotated {
 		ps.logf("  ✓ Archive signers rotated: %s now trusts %s", archiveSignersPath, strings.Join(verified.Signers, ", "))
 	}
+	if verified.AdoptedRoot {
+		ps.logf("  ✓ Release root adopted from the archive: releases signed under it are accepted by this node")
+	}
 	return verified.Manifest, nil
 }

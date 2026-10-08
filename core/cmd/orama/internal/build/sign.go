@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
@@ -101,7 +102,13 @@ func (b *Builder) signingPlan() (string, error) {
 		if len(b.flags.Signers) > 0 {
 			return "", fmt.Errorf("--signers rotates the signers nodes trust, which only a signed archive can do; drop --unsigned")
 		}
+		if b.flags.ReleaseRoot != "" {
+			return "", fmt.Errorf("--release-root makes nodes adopt a release root, which only a signed archive can do; drop --unsigned")
+		}
 		return "", nil
+	}
+	if err := b.loadReleaseRoot(); err != nil {
+		return "", err
 	}
 	signer, err := signerAddress(b.agent)
 	if err != nil {
@@ -122,4 +129,21 @@ func (b *Builder) signingPlan() (string, error) {
 		b.flags.Signers = signers
 	}
 	return signer, nil
+}
+
+// loadReleaseRoot reads and validates the root --release-root names, so a
+// root no node would adopt fails before anything is compiled.
+func (b *Builder) loadReleaseRoot() error {
+	if b.flags.ReleaseRoot == "" {
+		return nil
+	}
+	root, err := os.ReadFile(b.flags.ReleaseRoot)
+	if err != nil {
+		return fmt.Errorf("--release-root: %w", err)
+	}
+	if _, err := releaseverify.ValidateRoot(root, time.Now()); err != nil {
+		return fmt.Errorf("--release-root %s: %w", b.flags.ReleaseRoot, err)
+	}
+	b.releaseRoot = archivetrust.EncodeReleaseRoot(root)
+	return nil
 }

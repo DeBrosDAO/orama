@@ -12,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/spf13/cobra"
 )
 
@@ -52,6 +53,15 @@ type StageOptions struct {
 	// Both or neither.
 	ReleaseMetadata string
 	ReleaseTarget   string
+	// ReleaseOnly accepts the archive on the release root's checks alone: it
+	// carries no wallet signature, and the node records that it was staged
+	// through the release root so the install and upgrade that follow
+	// accept it. It needs both release flags and a node that is already
+	// installed, and refuses an archive that names signers or a root.
+	ReleaseOnly bool
+	// KeepPrevious keeps the archive this stage replaces, whole, for
+	// RestorePrevious. A node that rolls back an update needs it.
+	KeepPrevious bool
 }
 
 // stageTarget is where an archive is staged and how the node's trust anchor is
@@ -70,8 +80,11 @@ type stageTarget struct {
 	// arch is the architecture this node runs; verify checks it itself.
 	arch string
 	// checkRelease verifies the archive file as a TUF target against the
-	// node's adopted release root and rollback record.
-	checkRelease func(archive *os.File, metadataDir, target string) error
+	// node's adopted release root and rollback record, and returns the
+	// snapshot version it was accepted at.
+	checkRelease func(archive *os.File, metadataDir, target string) (int64, error)
+	// endorse records a staged release (releaseverify.RecordStaged).
+	endorse func(releaseverify.Endorsement) error
 }
 
 // nodeTarget is /opt/orama and the node's real anchor.
@@ -86,6 +99,7 @@ func nodeTarget() stageTarget {
 		chownBin:      chownToOramaGroup,
 		arch:          runtime.GOARCH,
 		checkRelease:  checkReleaseFile,
+		endorse:       endorseStaged,
 	}
 }
 
@@ -116,7 +130,14 @@ targets, the timestamp is unexpired, the snapshot is not older than the one
 recorded in /etc/orama/release-seen.json, and the file has the target's length
 and hashes. Any failure refuses the archive; the wallet check is not tried
 instead. An archive that passes is then verified against the trust anchor as
-above: the release root is required in addition to it, not in place of it.`,
+above: the release root is required in addition to it, not in place of it.
+
+--release-only is the one case where the release root is enough: the archive
+is an unsigned release (the CI build), it must not name signers or a release
+root, and the node records in /etc/orama/release-staged.json that it was staged
+through the release root, which is what lets 'orama node upgrade' install it.
+A channel target ('stable/orama-...') is checked against that channel's
+delegated role.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return Stage(opts)
@@ -130,6 +151,8 @@ above: the release root is required in addition to it, not in place of it.`,
 		"Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target")
 	f.StringVar(&opts.ReleaseTarget, "release-target", "",
 		"Name the archive has in the release targets metadata; requires --release-metadata")
+	f.BoolVar(&opts.ReleaseOnly, "release-only", false,
+		"Accept the archive on the release root's checks alone, without a wallet signature (an installed node; needs --release-metadata and --release-target)")
 	return cmd
 }
 
@@ -137,6 +160,9 @@ above: the release root is required in addition to it, not in place of it.`,
 func Stage(opts StageOptions) error {
 	if opts.Archive == "" {
 		return clierr.Usage("--archive is required")
+	}
+	if opts.ReleaseOnly && (opts.ReleaseMetadata == "" || opts.ReleaseTarget == "" || len(opts.TrustSigners) > 0) {
+		return clierr.Usage("--release-only needs --release-metadata and --release-target, and takes no --trust-signers")
 	}
 	if err := clierr.RequireRoot("staging a build archive"); err != nil {
 		return err
@@ -185,7 +211,7 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 		}
 	}()
 
-	archive, err := releaseArchive(t, opts, staging)
+	archive, snapshot, err := releaseArchive(t, opts, staging)
 	if err != nil {
 		return fmt.Errorf("refusing %s, nothing under %s was changed: %w", opts.Archive, t.base, err)
 	}
@@ -196,18 +222,49 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 	if err := archivetrust.Extract(archive, newDir); err != nil {
 		return fmt.Errorf("extract %s: %w", opts.Archive, err)
 	}
-	verified, err := verifyStaged(t, opts, newDir)
+	verified, err := verifyForStage(t, opts, newDir, snapshot)
 	if err != nil {
 		return fmt.Errorf("refusing %s, nothing under %s was changed: %w", opts.Archive, t.base, err)
 	}
 	if err := lockBinDir(t, filepath.Join(newDir, "bin")); err != nil {
 		return err
 	}
-	if err := swapArchive(t.base, newDir, filepath.Join(staging, stagedOld)); err != nil {
+	oldDir := filepath.Join(staging, stagedOld)
+	if err := swapArchive(t.base, newDir, oldDir); err != nil {
 		return err
+	}
+	if opts.KeepPrevious {
+		if err := keepPrevious(t.base, oldDir); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("  ✓ v%s (%s) verified, signed by %s\n", verified.Manifest.Version, verified.Manifest.Commit, verified.Signer)
 	return nil
+}
+
+// verifyForStage verifies the extracted archive as the options ask: against
+// the trust anchor (verifyStaged), or, for a release the release root
+// accepted, on its own manifest, and records that it was.
+func verifyForStage(t stageTarget, opts StageOptions, dir string, snapshot int64) (*archivetrust.Verified, error) {
+	if !opts.ReleaseOnly {
+		return verifyStaged(t, opts, dir)
+	}
+	if _, err := t.readSigners(); err != nil {
+		return nil, fmt.Errorf("--release-only stages onto a node that is already installed: %w", err)
+	}
+	verified, manifestJSON, err := archivetrust.VerifyUnsignedTree(dir, t.arch)
+	if err != nil {
+		return nil, err
+	}
+	err = t.endorse(releaseverify.Endorsement{
+		ManifestSHA256:  archivetrust.ManifestDigest(manifestJSON),
+		Target:          opts.ReleaseTarget,
+		SnapshotVersion: snapshot,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("record the staged release: %w", err)
+	}
+	return verified, nil
 }
 
 // verifyStaged verifies the extracted archive. On a node without an anchor,

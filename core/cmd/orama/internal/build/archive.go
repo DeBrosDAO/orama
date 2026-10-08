@@ -35,6 +35,8 @@ func (b *Builder) generateManifest() (*Manifest, error) {
 		Arch:      b.flags.Arch,
 		Checksums: make(map[string]string),
 		Signers:   b.flags.Signers,
+		// Empty unless --release-root named a root (signingPlan).
+		ReleaseRoot: b.releaseRoot,
 	}
 	if err := addChecksums(m.Checksums, b.binDir, ""); err != nil {
 		return nil, err
@@ -102,19 +104,8 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest, manifestJ
 		}
 	}
 
-	f, err := os.Create(outputPath)
+	size, err := writeArchiveFile(outputPath, b.tmpDir, built, signature != "")
 	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
-
-	w := &archiveWriter{tw: tar.NewWriter(gw), modTime: built}
-	defer w.tw.Close()
-
-	if err := w.addBuildTree(b.tmpDir, signature != ""); err != nil {
 		return err
 	}
 
@@ -122,10 +113,31 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest, manifestJ
 	fmt.Printf("  systemd/:  namespace templates\n")
 	fmt.Printf("  manifest:  v%s (%s) linux/%s\n", manifest.Version, manifest.Commit, manifest.Arch)
 
-	if info, err := f.Stat(); err == nil {
-		fmt.Printf("  size:      %s\n", printer.FormatBytes(info.Size()))
-	}
+	fmt.Printf("  size:      %s\n", printer.FormatBytes(size))
 	return nil
+}
+
+// writeArchiveFile writes the tar.gz of the build tree under root to
+// outputPath, with every entry dated modTime, and returns its size. The
+// streams are closed in order with their errors kept: a gzip trailer that
+// failed to write is a corrupt archive.
+func writeArchiveFile(outputPath, root string, modTime time.Time, signed bool) (size int64, err error) {
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return 0, err
+	}
+	gw := gzip.NewWriter(f)
+	w := &archiveWriter{tw: tar.NewWriter(gw), modTime: modTime}
+	buildErr := w.addBuildTree(root, signed)
+	closeErr := errors.Join(w.tw.Close(), gw.Close(), f.Close())
+	if err := errors.Join(buildErr, closeErr); err != nil {
+		return 0, errors.Join(fmt.Errorf("write the archive %s: %w", outputPath, err), os.Remove(outputPath))
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
 }
 
 // archiveWriter writes tar entries whose headers hold nothing about the

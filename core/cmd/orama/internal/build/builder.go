@@ -38,6 +38,9 @@ type Builder struct {
 	zig string
 	// agent signs the manifest: the RootWallet agent.
 	agent archiveSigner
+	// releaseRoot is the manifest's release_root: base64 of the validated
+	// root.json --release-root named, or "".
+	releaseRoot string
 }
 
 // NewBuilder creates a new Builder.
@@ -165,7 +168,7 @@ func (b *Builder) Build() error {
 	}
 	switch {
 	case signer == "":
-		fmt.Printf("\n⚠️  Unsigned archive: no node will install it\n")
+		fmt.Printf("\n⚠️  Unsigned archive: a node installs it only through its adopted TUF release root\n")
 	case len(manifest.Signers) > 0:
 		fmt.Printf("  Signed. Nodes that install this build will trust only: %s\n", strings.Join(manifest.Signers, ", "))
 	default:

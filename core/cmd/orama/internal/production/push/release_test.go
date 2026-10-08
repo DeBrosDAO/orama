@@ -41,8 +41,8 @@ func newReleaseNode(t *testing.T) *releaseNode {
 	n.repo.WriteRoot(t, n.rootPath)
 	n.publish(t, releaseNow.Add(time.Hour))
 	n.target = trusting(n.base, addr)
-	n.target.checkRelease = func(archive *os.File, dir, target string) error {
-		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
+	n.target.checkRelease = func(archive *os.File, dir, target string) (int64, error) {
+		v, err := releaseverify.CheckFile(releaseverify.FileCheck{
 			RootPath:    n.rootPath,
 			SeenPath:    filepath.Join(etc, "release-seen.json"),
 			MetadataDir: dir,
@@ -50,7 +50,10 @@ func newReleaseNode(t *testing.T) *releaseNode {
 			File:        archive,
 			Now:         releaseNow,
 		})
-		return err
+		if err != nil {
+			return 0, err
+		}
+		return v.SnapshotVersion, nil
 	}
 	return n
 }
@@ -91,11 +94,12 @@ func TestStageRelease_extractsTheCopyThatWasChecked(t *testing.T) {
 	n.target.anchor = append(n.target.anchor, addr)
 	swapped := writeTarball(t, signedEntries(t, key, map[string]string{"bin/orama": "swapped cli"}))
 	check := n.target.checkRelease
-	n.target.checkRelease = func(archive *os.File, dir, target string) error {
-		if err := check(archive, dir, target); err != nil {
-			return err
+	n.target.checkRelease = func(archive *os.File, dir, target string) (int64, error) {
+		snapshot, err := check(archive, dir, target)
+		if err != nil {
+			return 0, err
 		}
-		return os.Rename(swapped, n.archive)
+		return snapshot, os.Rename(swapped, n.archive)
 	}
 	if err := n.stage(); err != nil {
 		t.Fatalf("stage: %v", err)

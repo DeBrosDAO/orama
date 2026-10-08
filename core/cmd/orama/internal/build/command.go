@@ -19,6 +19,10 @@ type Flags struct {
 	// the archive against its current trust anchor then trusts exactly these
 	// addresses (signer rotation, docs/SECURITY.md).
 	Signers []string
+	// ReleaseRoot is the path of a TUF root.json to put in the signed
+	// manifest: a node that installs the build adopts it as its release root,
+	// the way it takes a signer rotation.
+	ReleaseRoot string
 }
 
 // Run executes the build command.

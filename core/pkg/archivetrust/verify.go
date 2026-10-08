@@ -31,6 +31,11 @@ type Manifest struct {
 	// this manifest against its current anchor then trusts exactly these. The
 	// list must include the address that signed the manifest.
 	Signers []string `json:"signers,omitempty"`
+	// ReleaseRoot, when present, is a TUF release root, base64 of its
+	// root.json bytes. A node that verifies this manifest against its trust
+	// anchor adopts it as /etc/orama/release-root.json: the cluster then
+	// accepts releases signed under that root (docs/SECURITY.md).
+	ReleaseRoot string `json:"release_root,omitempty"`
 }
 
 // Names inside a build archive, and under /opt/orama once it is extracted.
@@ -83,6 +88,11 @@ type Verified struct {
 	// Signers is the rotation the manifest carries, normalized; nil when it
 	// names none.
 	Signers []string
+	// ReleaseRoot is the TUF release root the manifest carries, nil when it
+	// carries none. It has passed releaseverify.ValidateRoot.
+	ReleaseRoot []byte
+	// AdoptedRoot is set by VerifyAndRotate when it adopted ReleaseRoot.
+	AdoptedRoot bool
 }
 
 // SigningMessage is the text a signer signs for manifestJSON: a fixed domain
@@ -109,8 +119,8 @@ func SigningMessage(manifestJSON []byte) (string, error) {
 		}
 	}
 	sum := sha256.Sum256(manifestJSON)
-	return fmt.Sprintf("%s\nversion: %s\ncommit: %s\narch: %s\ndate: %s\nsigners: %s\nmanifest sha256: %s",
-		signingDomain, m.Version, m.Commit, m.Arch, m.Date, signers, hex.EncodeToString(sum[:])), nil
+	return fmt.Sprintf("%s\nversion: %s\ncommit: %s\narch: %s\ndate: %s\nsigners: %s\n%smanifest sha256: %s",
+		signingDomain, m.Version, m.Commit, m.Arch, m.Date, signers, releaseRootLine(&m), hex.EncodeToString(sum[:])), nil
 }
 
 // RecoverSigner returns the lowercase address whose EIP-191 personal_sign
@@ -154,18 +164,22 @@ func VerifyTree(dir string, trusted []string) (*Verified, error) {
 	if err != nil {
 		return nil, err
 	}
-	var manifest Manifest
-	if err := json.Unmarshal(manifestJSON, &manifest); err != nil {
-		return nil, fmt.Errorf("parse the signed manifest: %w", err)
+	manifest, err := ParseManifest(manifestJSON)
+	if err != nil {
+		return nil, err
 	}
-	rotation, err := manifestRotation(&manifest, signer)
+	rotation, err := manifestRotation(manifest, signer)
+	if err != nil {
+		return nil, err
+	}
+	root, err := manifest.releaseRootBytes()
 	if err != nil {
 		return nil, err
 	}
 	if err := verifyContents(dir, manifest.Checksums); err != nil {
 		return nil, err
 	}
-	return &Verified{Manifest: &manifest, Signer: signer, Signers: rotation}, nil
+	return &Verified{Manifest: manifest, Signer: signer, Signers: rotation, ReleaseRoot: root}, nil
 }
 
 // notPrintable reports a character that could draw something other than

@@ -41,6 +41,10 @@ var ErrFreeze = errors.New("timestamp freeze")
 // records for that role.
 var ErrThreshold = errors.New("signature threshold")
 
+// ErrTargetPath is a delegated role listing a target outside the paths its
+// delegation gives it, or a target listed by two roles.
+var ErrTargetPath = errors.New("target path")
+
 // ErrTargetHash is archive bytes that do not match the length and hashes
 // in the verified targets metadata.
 var ErrTargetHash = errors.New("target hash")
@@ -52,6 +56,11 @@ type Metadata struct {
 	Timestamp []byte
 	Snapshot  []byte
 	Targets   []byte
+	// Delegated holds the metadata of delegated targets roles the caller
+	// fetched (a release channel), by role name. A role is checked against
+	// the delegation in Targets, so it is trusted only for the paths that
+	// delegation names, and only if the snapshot lists it.
+	Delegated map[string][]byte
 }
 
 // Seen is the rollback state the caller stores between verifications.
@@ -62,7 +71,10 @@ type Seen struct {
 
 // Target is one file named by verified targets metadata.
 type Target struct {
-	Path   string
+	Path string
+	// Role is the delegated role that signed this target, "" for the
+	// top-level targets role.
+	Role   string
 	Length int64
 	// Hashes maps a TUF hash algorithm (sha256, sha512) to the raw digest.
 	Hashes map[string][]byte
@@ -120,11 +132,14 @@ func Verify(meta Metadata, seen Seen, now time.Time) (*Verified, error) {
 
 	out := make(map[string]Target, len(targets.Signed.Targets))
 	for path, info := range targets.Signed.Targets {
-		target, err := targetFrom(path, info)
+		target, err := targetFrom(path, "", info)
 		if err != nil {
 			return nil, err
 		}
 		out[path] = target
+	}
+	if err := verifyDelegated(trusted, targets, meta.Delegated, out); err != nil {
+		return nil, err
 	}
 	return &Verified{Targets: out, SnapshotVersion: version}, nil
 }
@@ -167,7 +182,7 @@ func (t Target) Match(content []byte) error {
 
 // targetFrom copies one targets entry. A target with no hash cannot be
 // checked later, so it is refused here rather than returned as trusted.
-func targetFrom(path string, info *metadata.TargetFiles) (Target, error) {
+func targetFrom(path, role string, info *metadata.TargetFiles) (Target, error) {
 	if info == nil || len(info.Hashes) == 0 {
 		return Target{}, fmt.Errorf("%w: %s has no hashes", ErrTargetHash, path)
 	}
@@ -178,7 +193,7 @@ func targetFrom(path string, info *metadata.TargetFiles) (Target, error) {
 		}
 		hashes[algo] = bytes.Clone(sum)
 	}
-	return Target{Path: path, Length: info.Length, Hashes: hashes}, nil
+	return Target{Path: path, Role: role, Length: info.Length, Hashes: hashes}, nil
 }
 
 // roleError turns a go-tuf failure into the refusal a caller can branch on.

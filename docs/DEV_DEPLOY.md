@@ -431,12 +431,27 @@ straight from `/opt/orama/bin`. Because the verifier is the node's installed
 CLI, push reaches only installed nodes; a fresh machine gets its first archive
 from `orama node setup` (or `orama node install --remote`).
 
-**Release root (opt-in).** A node that has adopted a TUF release root — a
-`root.json` placed at `/etc/orama/release-root.json` by its operator; no
-command writes that file yet — can require it when it stages:
+**Release root (opt-in).** A cluster may also trust a TUF **release root**: the
+key set of a group of release signers, whose threshold signature on release
+metadata makes an archive installable without the operator building and signing
+it. It is off by default; a cluster that never adopts one trusts only its
+operator's wallet. A node adopts a root as `/etc/orama/release-root.json`, by
+either of:
+
+- `sudo orama node trust add-root <root.json>`, on that node. The root is
+  checked first (well-formed, signed by its own keys at its threshold, not
+  expired); adopting a root other than the one already there needs `--replace`.
+- A signed archive that carries it: `orama build --release-root <root.json>` puts
+  the root in the signed manifest, and every node that installs that archive
+  adopts it, with the signer rotation's replay rule (a build older than the last
+  rotation cannot put an older root back). `orama node setup --release` builds
+  such an archive for you (below).
+
+A node with a root can require it when it stages:
 `orama node stage-archive --archive <file> --release-metadata <dir>
 --release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
-`targets.json`. The archive is first copied into the node's 0700 staging
+`targets.json`, and `<role>.json` for the channel when the target is
+`<channel>/orama-...`. The archive is first copied into the node's 0700 staging
 directory under `/opt/orama`; that copy is what is checked and what is
 extracted. Before anything is extracted, `pkg/releaseverify` checks the
 metadata against the adopted root (every role at its threshold, an unexpired
@@ -444,16 +459,56 @@ timestamp, a snapshot no older than the one recorded in
 `/etc/orama/release-seen.json`, which is read and raised under a `flock` on
 `release-seen.json.lock`) and checks, through the descriptor that wrote the
 copy, that it has the length and hashes `<name>` has in the verified targets.
-Any failure — no adopted root, a tampered archive, an
-expired timestamp, metadata signed under another root, an older snapshot —
-refuses the archive and leaves `/opt/orama` untouched; the command never falls
-back to the wallet-only path when these flags are given, and giving only one of
-the two is an error. An archive that passes is then verified against the
-wallet anchor exactly as above: the release root is required **in addition to**
-the operator's wallet signature, not in place of it. Without these flags
-nothing changes. `orama push`, `orama node setup` and `orama node upgrade` do
-not pass them, and no command fetches release metadata; the operator supplies
-the directory.
+Any failure — no adopted root, a tampered archive, an expired timestamp,
+metadata signed under another root, an older snapshot, a channel signing a path
+outside its own — refuses the archive and leaves `/opt/orama` untouched; the
+command never falls back to the wallet-only path when these flags are given, and
+giving only one of the two is an error. An archive that passes is then verified
+against the wallet anchor exactly as above: the release root is required **in
+addition to** the operator's wallet signature, not in place of it.
+
+`--release-only` is the one case where the root is enough. The archive is an
+unsigned release (the CI build, hashed in the TUF targets): it may not name
+signers or a release root, so a release can change what code runs and never who
+is trusted. After the TUF checks, the node verifies every file against the
+archive's own manifest and records the manifest's SHA-256, the root's SHA-256,
+the target and the snapshot version in `/etc/orama/release-staged.json`
+(outside `/opt/orama`, so no archive can write it). `orama node upgrade` and
+install accept an archive with no `manifest.sig` only when that record names its
+manifest under the root adopted now; replacing the root withdraws every earlier
+endorsement. This is how the auto-update agent installs (see "Auto-update"). It
+needs a node that is already installed, since the archive trust anchor must exist.
+
+**Release repository.** A repository is a static directory served over HTTPS
+(plain HTTP only to a loopback address): `timestamp.json`, `snapshot.json`,
+`targets.json`, one `<channel>.json` per delegated channel (`stable`, `nightly`),
+and the files under `targets/`, such as
+`targets/stable/orama-0.3.1-linux-amd64.tar.gz`. A channel is a delegated targets
+role with keys and a threshold of its own, trusted only for `<channel>/*`.
+`releaseverify.Repository` fetches it. The client reads no root from the
+repository: the root is the operator's out-of-band decision.
+
+**Install from a release.** `orama node setup --release <version> --release-repo
+<url> --release-root <root.json> [--channel stable]` needs no checkout, Go or
+zig. On your machine it fetches the metadata, verifies it against the root you
+name (threshold, expiry, a snapshot not older than the newest this machine has
+accepted, kept in `~/.orama/release-seen.json`), downloads
+`<channel>/orama-<version>-linux-<arch>.tar.gz` and checks its length and hashes.
+Only then does your RootWallet sign it: the manifest gains the root and your
+wallet's signature, and the archive goes on through the install above. The
+cluster therefore still trusts your wallet for what it installs, and now also
+trusts the root. `--release` and `--archive` are alternatives.
+
+**Signers and the test root.** Publishing a production release is a signing
+ceremony of the release signers (`pkg/releasesign`, a RootWallet purpose of its
+own); it is not implemented as a command. For a test network,
+`go run ./cmd/testtuf` (in `core/`) makes and updates a repository signed by
+software keys: `testtuf init -dir D`, `testtuf publish -dir D -channel stable
+-archive orama-0.3.1-linux-amd64.tar.gz`, and `testtuf refresh -dir D` before the
+timestamp (7 days by default) expires. Serve `D/repo` over HTTPS and give
+operators `D/repo/root.json`. Never adopt a test root on a production cluster.
+No code walks a chain of root versions: replacing a root is `add-root --replace`
+or a new signed archive.
 
 **First install.** A new machine has no verified binary of its own: the one
 that runs the install comes out of the archive. So `orama node setup` and
