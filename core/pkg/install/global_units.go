@@ -301,10 +301,14 @@ func RenderGlobalSBWSUnit() string {
 	return renderGlobalUnit("Orama sbws", globalSBWSUser, "/var/lib/orama-global/sbws", "/usr/bin/sbws generate", "")
 }
 
-// RenderGlobalReporterUnit posts bandwidth measurements. Dirauth hosts only.
+// RenderGlobalReporterUnit reports each closed epoch's relay bandwidth and
+// uptime to x/relay from this authority's votes. Dirauth hosts only. It reads
+// the epoch and signs through the local oramad RPC on loopback, so it starts
+// after the chain; its home (state, hot key, operator, authority-id and the
+// votes directory) is the unit's working directory.
 func RenderGlobalReporterUnit() string {
-	exec := fmt.Sprintf("%s/orama-global reporter", globalBinDir)
-	return renderGlobalUnit("Orama bandwidth reporter", globalReporterUser, "/var/lib/orama-global/reporter", exec, "")
+	exec := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s", globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome)
+	return needsChain(renderGlobalUnit("Orama bandwidth reporter", globalReporterUser, constants.GlobalReporterHome, exec, ""))
 }
 
 // RenderGlobalArchiverUnit bundles chain history. It reads blocks from the

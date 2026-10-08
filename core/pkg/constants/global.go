@@ -58,6 +58,7 @@ const (
 	GlobalArchiverHome = "/var/lib/orama-global/archiver"
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
 	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
+	GlobalReporterHome = "/var/lib/orama-global/reporter"
 
 	// GlobalNetnsPriorForwardFile, in GlobalStateRoot, holds the value net.ipv4.ip_forward had
 	// (0 or 1) before the first `orama global install --colocated` turned it on. Removing the

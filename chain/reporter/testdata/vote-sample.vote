@@ -1,0 +1,38 @@
+network-status-version 3
+vote-status vote
+consensus-methods 28 29 30 31 32
+published 2026-10-08 10:00:00
+valid-after 2026-10-08 10:00:00
+fresh-until 2026-10-08 11:00:00
+valid-until 2026-10-08 13:00:00
+voting-delay 300 300
+client-versions
+server-versions
+known-flags Authority BadExit Exit Fast Guard HSDir NoEdConsensus Running Stable StaleDesc Sybil V2Dir Valid
+params CircuitPriorityHalflifeMsec=30000
+dir-source dirauth1 abababababababababababababababababababab 192.0.2.10 192.0.2.10 31021 31020
+contact ops@example.invalid
+vote-digest 0000000000000000000000000000000000000000
+r guardone AQEBAQEBAQEBAQEBAQEBAQEBAQE LXqVLlWf14Ypk70Efk/bVvF10Es 2026-10-08 09:40:11 198.51.100.1 31020 0
+s Fast Guard Running Stable V2Dir Valid
+v Tor 0.4.8.12
+pr Cons=1-2 Desc=1-2 Link=1-5
+w Bandwidth=5200 Measured=5000
+p reject 1-65535
+id ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE
+r exitone AgICAgICAgICAgICAgICAgICAgI DzuBhFMdVgHEVu+0A4VsT5TLl3Y 2026-10-08 09:40:11 198.51.100.2 31020 0
+s Exit Fast Running Stable V2Dir Valid
+v Tor 0.4.8.12
+pr Cons=1-2 Desc=1-2 Link=1-5
+w Bandwidth=8100 Measured=8000
+p reject 1-65535
+id ed25519 QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI
+r selfreport AwMDAwMDAwMDAwMDAwMDAwMDAwM hy2p4F4/yrZJeQzCqL3/fPPEwT0 2026-10-08 09:40:11 198.51.100.3 31020 0
+s Fast Running V2Dir Valid
+v Tor 0.4.8.12
+pr Cons=1-2 Desc=1-2 Link=1-5
+w Bandwidth=999999999
+p reject 1-65535
+id ed25519 Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M
+directory-footer
+bandwidth-weights Wbd=0
