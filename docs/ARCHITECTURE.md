@@ -1650,7 +1650,7 @@ cost the operator a token they could not reuse *and* left a ghost peer row. If
 the write itself fails the token is released.
 
 **Overlay address allocation** (`pkg/overlay`) is the single path every
-allocating writer uses — the join handler, `/v1/internal/wg/peer` and the
+allocating writer uses — the join handler and the
 OramaOS enrolment handler. A node's own WireGuard self-registration stays
 outside it because it allocates nothing: it re-asserts the row it was already
 given, keyed by its own node id, and so upserts (`ON CONFLICT(node_id) DO
@@ -1675,7 +1675,7 @@ internal-auth check both accept.
 - **Olric:** memberlist binds the WireGuard address. An upgrade rewrites that config and seeds it from the WireGuard allowed IPs and the bootstrap multiaddrs, so genesis and the joiners name every other node and the index cache stays one cluster. Olric v0.7.4 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. Install refuses to initialize IPFS Cluster with an empty `CLUSTER_SECRET`. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
 - **TLS:** Caddy terminates public TLS (DNS-01). The gateway process does not bind `:80`/`:443` and refuses `enable_https: true`
-- **Internal endpoints:** every `/v1/internal/wg/*` endpoint requires the caller to be on the WireGuard overlay **and** to present the cluster secret. A gateway with no cluster secret configured refuses them outright rather than serving them unauthenticated
+- **Internal endpoints:** the former `/v1/internal/wg/*` peer-exchange endpoints no longer exist; peers enter the table only through the invite-gated join and the OramaOS enrolment. The other `/v1/internal/*` routes authenticate with a coordination stamp (see SECURITY.md)
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
 - **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH`, `VACUUM INTO`, any pragma outside a small allowlist of per-file ones (`table_info`, `index_list`, `foreign_keys`, `user_version`, `integrity_check`, …, also as `pragma_*` table functions), control bytes and multi-statement queries are rejected (a token-level check, so the words inside string literals or comments are data). Database files are `0600` in `0700` directories, read only by the gateway

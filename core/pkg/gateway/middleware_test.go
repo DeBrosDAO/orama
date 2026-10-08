@@ -179,7 +179,6 @@ func TestIsPublicPath(t *testing.T) {
 		// same prefix is not one of them and is not open.
 		{"internal replica setup", "/v1/internal/deployments/replica/setup", true},
 		{"internal replica made up", "/v1/internal/deployments/replica/xyz", false},
-		{"internal wg peers", "/v1/internal/wg/peers", true},
 		{"internal join", "/v1/internal/join", true},
 		{"internal namespace spawn", "/v1/internal/namespace/spawn", true},
 		{"internal namespace repair", "/v1/internal/namespace/repair", true},

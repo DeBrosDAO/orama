@@ -18,8 +18,7 @@ import (
 
 // Headers the node-to-node routes authenticate with (core/pkg/auth
 // coordination.go CoordinationMACHeader, nodeapi.go NodeIDHeader and
-// NodeStampHeader; core/pkg/gateway/handlers/wireguard X-Cluster-Secret), and
-// the constant the removed coordination header carried (core/pkg/auth
+// NodeStampHeader), and the constant the removed coordination header carried (core/pkg/auth
 // coordination.go: "X-Orama-Internal-Auth: namespace-coordination").
 const (
 	headerCoordination  = "X-Orama-Coordination-MAC"
@@ -33,8 +32,8 @@ const (
 	sigHexLen = 128
 	// notTheSecret is a cluster secret no cluster has.
 	notTheSecret = "e2e-not-the-cluster-secret"
-	// oversizeBody is past the node routes' 64 KiB and the WireGuard
-	// routes' 1 MiB body bounds (nodeapi maxBodyBytes, wireguard MaxBytesReader).
+	// oversizeBody is past the node routes' 64 KiB and the coordination
+	// routes' 1 MiB body bounds (nodeapi maxBodyBytes, auth.CoordinationMaxBody).
 	oversizeBody = 1<<20 + 64<<10
 )
 
@@ -63,21 +62,16 @@ func (r route) url() string {
 // routes is every node-to-node route that is not client-reachable, with the
 // status the public name owes each: spawn checks the method, then the
 // overlay and the MAC (401); the node's own routes refuse off-host callers
-// with 404; telemetry is 404 without a verified stamp from the overlay; the
-// WireGuard routes refuse a non-overlay source with 403 (handlers in
-// core/pkg/gateway).
+// with 404; telemetry is 404 without a verified stamp from the overlay
+// (handlers in core/pkg/gateway).
 func routes(t testing.TB) []route {
 	t.Helper()
-	unheld := unheldPeer(t)
 	return []route{
 		{path: "/v1/internal/namespace/spawn", method: http.MethodPost, body: `{}`, internet: http.StatusUnauthorized},
 		{path: "/v1/internal/node/enrol-key", method: http.MethodPost, body: `{}`, internet: http.StatusNotFound, nodeSelf: true},
 		{path: "/v1/internal/node/heartbeat", method: http.MethodPost, body: `{}`, internet: http.StatusNotFound, nodeSelf: true},
 		{path: "/v1/internal/node/register", method: http.MethodPost, body: `{}`, internet: http.StatusNotFound, nodeSelf: true},
 		{path: "/v1/internal/telemetry", method: http.MethodGet, internet: http.StatusNotFound},
-		{path: "/v1/internal/wg/peer", method: http.MethodPost, body: `{"cluster_secret":"` + notTheSecret + `"}`, internet: http.StatusForbidden},
-		{path: "/v1/internal/wg/peer/remove", method: http.MethodDelete, query: url.Values{"node_id": {unheld}}, internet: http.StatusForbidden},
-		{path: "/v1/internal/wg/peers", method: http.MethodGet, internet: http.StatusForbidden},
 	}
 }
 
