@@ -11,6 +11,8 @@ package decommission
 import (
 	"fmt"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
+	"github.com/DeBrosOfficial/network/pkg/updatenotice"
 	"path/filepath"
 	"strings"
 
@@ -44,6 +46,11 @@ func wipeScript(nuclear bool) string {
 
 	return fmt.Sprintf(`bash -c '
 %[1]s
+
+# The auto-update timer first: an install in progress would otherwise restart
+# the services this script is stopping.
+systemctl stop orama-autoupdate.timer orama-autoupdate.service 2>/dev/null
+systemctl disable orama-autoupdate.timer 2>/dev/null
 
 # Stop every namespace unit FIRST. These are template instances
 # (orama-namespace-rqlite@index, ...@<tenant>) and match none of the legacy
@@ -172,7 +179,9 @@ echo "  Node wiped"
 			filepath.Join(systemdUnitDir, privhelper.ServiceUnitName),
 		}, " "),
 		privhelper.Path,
-		strings.Join([]string{archivetrust.AnchorPath, archivetrust.RotationMarkPath(archivetrust.AnchorPath)}, " "),
+		strings.Join(append([]string{
+			archivetrust.AnchorPath, archivetrust.RotationMarkPath(archivetrust.AnchorPath), updatenotice.Path,
+		}, releaseverify.NodeStatePaths()...), " "),
 	)
 }
 

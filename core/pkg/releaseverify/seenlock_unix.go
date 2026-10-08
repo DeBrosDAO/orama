@@ -10,10 +10,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// seenLockSuffix names the lock file beside the rollback record. The
-// record itself is replaced by rename, so it cannot carry the lock.
-const seenLockSuffix = ".lock"
-
 // seenLockPerm: only root opens the lock.
 const seenLockPerm = 0o600
 

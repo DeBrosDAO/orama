@@ -140,6 +140,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 		alerts = append(alerts, checkNodeIPFS(r, host)...)
 		alerts = append(alerts, checkNodeVault(r, host)...)
 		alerts = append(alerts, checkNodeGateway(r, host)...)
+		alerts = append(alerts, checkNodeUpdate(r, host)...)
 	}
 
 	alerts = append(alerts, checkGlobalHealth(reports)...)

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 )
 
@@ -241,5 +242,5 @@ func writeSeen(path string, version int64) error {
 	if err != nil {
 		return fmt.Errorf("encode the release rollback record: %w", err)
 	}
-	return writeFileAtomic(path, data, seenFilePerm)
+	return durablefile.Write(path, data, seenFilePerm)
 }

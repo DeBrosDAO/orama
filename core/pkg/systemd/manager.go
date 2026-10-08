@@ -105,6 +105,15 @@ var DeploymentTemplateUnits = []string{
 	"orama-deploy-clean@.service",
 }
 
+// AutoUpdateServiceName and AutoUpdateTimerName are the host-level auto-update
+// agent: a oneshot service and the timer that runs it. Install enables the
+// timer; the agent does nothing until the cluster configures a release
+// repository and the node adopts a release root.
+const (
+	AutoUpdateServiceName = "orama-autoupdate.service"
+	AutoUpdateTimerName   = "orama-autoupdate.timer"
+)
+
 // UnitFilesToInstall is every unit file copied into /etc/systemd/system by
 // install and upgrade: the orama-namespace-*@ templates plus the shared,
 // host-level TURN unit.
@@ -118,10 +127,10 @@ var DeploymentTemplateUnits = []string{
 //
 // A fresh slice is returned so callers cannot alias TemplateUnits.
 func UnitFilesToInstall() []string {
-	units := make([]string, 0, len(TemplateUnits)+len(DeploymentTemplateUnits)+1)
+	units := make([]string, 0, len(TemplateUnits)+len(DeploymentTemplateUnits)+3)
 	units = append(units, TemplateUnits...)
 	units = append(units, DeploymentTemplateUnits...)
-	units = append(units, HostTURNServiceName)
+	units = append(units, HostTURNServiceName, AutoUpdateServiceName, AutoUpdateTimerName)
 	return units
 }
 

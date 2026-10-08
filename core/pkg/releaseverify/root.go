@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 	"github.com/theupdateframework/go-tuf/v2/metadata/trustedmetadata"
 )
@@ -70,7 +71,7 @@ func AdoptRoot(path string, data []byte, now time.Time) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), rootDirPerm); err != nil {
 		return false, fmt.Errorf("create the directory of the release root: %w", err)
 	}
-	if err := writeFileAtomic(path, data, rootFilePerm); err != nil {
+	if err := durablefile.Write(path, data, rootFilePerm); err != nil {
 		return false, fmt.Errorf("adopt the release root: %w", err)
 	}
 	return true, nil

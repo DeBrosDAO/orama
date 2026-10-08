@@ -654,7 +654,10 @@ func (ps *ProductionSetup) Phase5WriteSystemdServices(enableHTTPS bool) error {
 	}
 	ps.logf("  ✓ Systemd daemon reloaded")
 
-	return ps.enableNode()
+	if err := ps.enableNode(); err != nil {
+		return err
+	}
+	return ps.enableAutoUpdate()
 }
 
 // nodeServiceName is the supervisor's unit, the one host unit install writes.
@@ -730,6 +733,20 @@ func (ps *ProductionSetup) enableNode() error {
 		return err
 	}
 	ps.logf("  ✓ Leftover disabled: %s (interface left up)", systemd.LeftoverWireGuardUnit)
+	return nil
+}
+
+// enableAutoUpdate enables and starts the auto-update timer. The agent it runs
+// does nothing until the cluster stores a release repository and the node has
+// adopted a release root, so enabling it changes no node that has not opted in.
+func (ps *ProductionSetup) enableAutoUpdate() error {
+	if err := ps.serviceController.EnableService(systemd.AutoUpdateTimerName); err != nil {
+		return err
+	}
+	if err := ps.serviceController.RestartService(systemd.AutoUpdateTimerName); err != nil {
+		return err
+	}
+	ps.logf("  ✓ Service enabled: %s", systemd.AutoUpdateTimerName)
 	return nil
 }
 

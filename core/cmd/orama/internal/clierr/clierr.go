@@ -41,6 +41,11 @@ const (
 	// CodeAborted means the operator declined a confirmation. Nothing happened
 	// and nothing is wrong.
 	CodeAborted = 7
+	// CodePreflight means the command stopped at a check it makes before it
+	// changes anything, such as `orama node upgrade` before it stops a service.
+	// The node is as it was, and a caller that installs for an operator (the
+	// auto-update agent) does not blame the release for it.
+	CodePreflight = 8
 )
 
 // Error is a failure that carries an exit code.
@@ -91,6 +96,9 @@ func Conflict(format string, args ...any) error { return withCode(CodeConflict, 
 
 // Aborted reports that the operator declined a confirmation.
 func Aborted(format string, args ...any) error { return withCode(CodeAborted, format, args...) }
+
+// Preflight reports that a check made before anything changed refused.
+func Preflight(err error) error { return Wrap(CodePreflight, err) }
 
 // Failure reports an error with no more specific classification.
 func Failure(format string, args ...any) error { return withCode(CodeFailure, format, args...) }

@@ -11,17 +11,20 @@ import (
 )
 
 // The check does not install anything. Mode auto still only prints upgrade:
-// installing is autoupdate.Upgrade, which a caller runs after this decision
-// while it holds the rollout lock, one node at a time.
+// installing is `orama node autoupdate run`, which asks the same question of
+// the cluster's real state and installs one node at a time.
 var autoupdateCmd = &cobra.Command{
 	Use:   "autoupdate",
 	Short: "Decide whether a newer release should be installed",
 	Long: `Report what this cluster should do with a candidate release.
 
+This answers the question for the values you give it and changes nothing. The
+agent that asks it of the cluster's real state, and acts, is 'orama node
+autoupdate run'.
+
 The default mode is notify: a newer verified release is reported and not
 installed. auto means the node may install, and only when the cluster is
-healthy, the release is newer, and the maintenance window is open. The
-install itself is one node at a time and is not performed by this command.
+healthy, the release is newer, and the maintenance window is open.
 
 A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous

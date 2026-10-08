@@ -158,28 +158,36 @@ set and nothing more), so a compromise today means a compromised reporter key.
 
 A node verifies a staged `oramad` or archive against the TUF root at `/etc/orama/release-root.json`
 (`orama global stage-oramad`, `orama node stage-archive`, each with `--release-metadata <dir>
---release-target <name>`). Validators are on notify and nothing installs by itself: no command reaches
-`autoupdate.Upgrade`, so no node installs a release without an operator running a command.
+--release-target <name>`). Validators are on notify and nothing installs a validator by itself. On a
+cluster node the auto-update agent (`orama node autoupdate run`) installs releases under that root when
+the cluster's `auto-update` is `auto`; on `notify`, the default, nothing installs without an operator.
 
 **What is not implemented**
-- No code rotates the TUF root. `releaseverify` loads the root file it is given and does not walk a
-  chain of root versions, so a new root is not checked against the old one, and there is no key
-  revocation or threshold change. No command writes `release-root.json`, and no command signs TUF
-  metadata.
+- No code walks a chain of root versions. `releaseverify` loads the root file it is given, so a new
+  root is not checked against the old one, and there is no key revocation or threshold change inside
+  a root. Replacing a root is a trust decision made out of band: `orama node trust add-root <file>
+  --replace` on a node, or a build signed by the operator's wallet with `--release-root <file>`, which
+  every node that installs it adopts (no build older than the last rotation can put an older root back).
+- No command signs TUF metadata for a production root: that is the release signers' ceremony
+  (`pkg/releasesign`). `testtuf` signs with software keys, for test networks only.
 - The compromised keys' metadata stays valid for any node that still trusts the old root.
 
 **What an operator can do**
-1. Stop staging. Do not run `stage-oramad` or `stage-archive` for a release you cannot verify out of band,
-   and tell the other validators. Validators stay on notify, so a bad release reaches only a node whose
-   operator stages it.
+1. Stop staging. Set the cluster's `auto-update` to `off` (`orama cluster settings set auto-update off`) so
+   no node installs from the old root, do not run `stage-oramad` or `stage-archive` for a release you
+   cannot verify out of band, and tell the other validators. Validators stay on notify, so a bad release
+   reaches only a node whose operator stages it.
 2. Build a new root and new targets on a machine you trust, with new signing keys and reproducible builds
    (`make build` in `chain/`).
-3. On each node, replace `/etc/orama/release-root.json` by hand with the new root, after checking its
-   hash with the other operators over a channel that does not depend on the release repository.
-   Nothing verifies the new root, so this is the trust step.
+3. On each node, adopt the new root (`sudo orama node trust add-root <root.json> --replace`), or build the
+   next archive with `--release-root <root.json>` and push it, after checking the root's hash with the
+   other operators over a channel that does not depend on the release repository. Nothing verifies the
+   new root against the old one, so this is the trust step. Replacing the root withdraws every earlier
+   staged-release endorsement (`/etc/orama/release-staged.json`).
 4. `release-seen.json` records the highest snapshot version seen and refuses a lower one as a rollback. If
-   the new repository restarts numbering below it, remove or reset that file on each node. No command
-   does that and it is not documented elsewhere.
+   the new repository restarts numbering below it, remove or reset that file on each node (and
+   `~/.orama/release-seen.json` on an operator machine that installs with `orama node setup --release`).
+   No command does that.
 5. Re-stage the fix with the new root's metadata. If the compromise was used to ship a bad binary,
    this is the coordinated halt-height fix, with the new root.
 
@@ -187,7 +195,8 @@ A node verifies a staged `oramad` or archive against the TUF root at `/etc/orama
 - The wallet-signer anchor for archives (`/etc/orama/archive-signers`) rotates with
   `orama build --signers 0xA,0xB`: a build signed by a currently trusted signer replaces the list.
   Retiring a key takes two builds, and a recorded build date stops an older signed build from
-  replaying a retired key. It does not cover the TUF root or the chain binary.
+  replaying a retired key. The same replay rule covers a release root carried by a signed build
+  (`--release-root`). It does not cover the chain binary.
 
 ### Mass provider failure
 

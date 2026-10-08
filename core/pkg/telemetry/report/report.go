@@ -127,6 +127,7 @@ func collectors(rpt *NodeReport) []collector {
 		{"serverless", func() { rpt.Serverless = collectServerless() }},
 		{"chain", func() { rpt.Chain = collectChain() }},
 		{"global", func() { rpt.Global = collectGlobal() }},
+		{"update", func() { rpt.Update = collectUpdate() }},
 	}
 }
 

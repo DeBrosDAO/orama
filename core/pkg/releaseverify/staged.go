@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/fs"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/durablefile"
 )
 
 // StagedPath records the archives this node staged because they verified
@@ -68,7 +70,7 @@ func RecordStaged(path string, e Endorsement) (err error) {
 	if err != nil {
 		return fmt.Errorf("encode the staged-release record: %w", err)
 	}
-	return writeFileAtomic(path, data, stagedFilePerm)
+	return durablefile.Write(path, data, stagedFilePerm)
 }
 
 // FindStaged returns the endorsement for a manifest under a root, or nil.

@@ -4,21 +4,26 @@ import (
 	"fmt"
 )
 
-// Lookup verifies the metadata in c.MetadataDir against the adopted root and
-// the rollback record, as CheckFile does, and returns the target named
-// c.Target. It reads no file and writes nothing: a caller that must download
-// the target to check it learns its length and hashes here first, then calls
-// CheckFile on what it downloaded, which is what raises the rollback record.
-func Lookup(c FileCheck) (Target, error) {
+// Load verifies the metadata in c.MetadataDir against the adopted root and the
+// rollback record, as CheckFile does, and returns every target it names. It
+// reads no file and writes nothing.
+func Load(c FileCheck) (*Verified, error) {
 	meta, err := readMetadata(c.RootPath, c.MetadataDir, c.Roles)
 	if err != nil {
-		return Target{}, err
+		return nil, err
 	}
 	seen, err := readSeen(c.SeenPath)
 	if err != nil {
-		return Target{}, err
+		return nil, err
 	}
-	verified, err := Verify(meta, seen, c.Now)
+	return Verify(meta, seen, c.Now)
+}
+
+// Lookup is Load for one target, c.Target. A caller that must download the
+// target to check it learns its length and hashes here first, then calls
+// CheckFile on what it downloaded, which is what raises the rollback record.
+func Lookup(c FileCheck) (Target, error) {
+	verified, err := Load(c)
 	if err != nil {
 		return Target{}, err
 	}

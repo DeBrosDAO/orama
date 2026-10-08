@@ -1,0 +1,25 @@
+[Unit]
+Description=Orama auto-update: look for a newer release on the cluster's channel and act on it
+Documentation=https://github.com/DeBrosOfficial/network
+After=network-online.target orama-node.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Root, not the orama account: an install swaps the release under /opt/orama
+# (root's alone) and runs `orama node upgrade`, which restarts this node's
+# services. The agent decides nothing the cluster's policy has not allowed: it
+# does nothing unless the cluster stored a release repository and this node
+# adopted a release root (docs/DEV_DEPLOY.md, "Auto-update").
+WorkingDirectory=/opt/orama
+ExecStart=/opt/orama/bin/orama node autoupdate run
+# An install waits for the node to rejoin the cluster, and may roll back and
+# wait again. An hour is far past that; past it, something hung.
+TimeoutStartSec=1h
+Nice=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=orama-autoupdate
+
+NoNewPrivileges=yes
+PrivateTmp=yes

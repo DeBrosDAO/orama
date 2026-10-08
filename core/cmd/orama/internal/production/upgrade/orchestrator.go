@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/lifecycle"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/utils"
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
@@ -263,7 +264,7 @@ func (o *Orchestrator) Execute() error {
 		fmt.Printf("  Configurations will be updated to latest format\n\n")
 
 		if err := runSteps(o.preStopSteps(), "no services were stopped"); err != nil {
-			return err
+			return clierr.Preflight(err)
 		}
 		if err := runSteps(o.swapSteps(), ""); err != nil {
 			return err

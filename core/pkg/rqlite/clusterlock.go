@@ -3,6 +3,7 @@ package rqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -20,6 +21,11 @@ import (
 // an optimisation — but it does mean a caller has to finish inside it. Pick a
 // TTL comfortably longer than the work, and treat losing the lock the way you
 // would treat any other failure to finish.
+
+// ErrClusterLockHeld is wrapped by the error AcquireClusterLock returns when
+// another holder had the lock for the whole wait, as opposed to the registry
+// failing to answer.
+var ErrClusterLockHeld = errors.New("cluster lock is held")
 
 // ClusterLock is a held lock. Release it.
 type ClusterLock struct {
@@ -81,7 +87,7 @@ func AcquireClusterLock(ctx context.Context, db *sql.DB, name, holder string, tt
 
 		if time.Now().After(deadline) {
 			current, _ := clusterLockHolder(ctx, db, name)
-			return nil, fmt.Errorf("cluster lock %q is held by %q and did not free within %s", name, current, wait)
+			return nil, fmt.Errorf("%w: %q is held by %q and did not free within %s", ErrClusterLockHeld, name, current, wait)
 		}
 
 		select {

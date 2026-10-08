@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/shared"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
+	"github.com/DeBrosOfficial/network/pkg/updatepolicy"
 	"github.com/spf13/cobra"
 )
 
@@ -32,19 +33,19 @@ on the operator list, and is written to the audit trail.`,
 
 var settingsCmd = &cobra.Command{
 	Use:   "settings",
-	Short: "Show or change namespace-creation settings",
+	Short: "Show or change the cluster's settings",
 }
 
 var settingsShowCmd = &cobra.Command{
 	Use:   "show",
-	Short: "Show who may create namespaces, and the per-wallet cap",
+	Short: "Show who may create namespaces, the per-wallet cap and the update policy",
 	Args:  cobra.NoArgs,
 	RunE:  showSettings,
 }
 
 var settingsSetCmd = &cobra.Command{
 	Use:   "set <setting> <value>",
-	Short: "Change namespace creation or the per-wallet cap",
+	Short: "Change namespace creation, the per-wallet cap or the update policy",
 	Args:  cobra.ExactArgs(2),
 	RunE:  setSetting,
 }
@@ -86,7 +87,18 @@ func init() {
   allowlist   only wallets added with orama cluster creators add
   open        any signed-in wallet
 
-max-namespaces-per-wallet is an integer from 1 to %d. The default is %d.`,
+max-namespaces-per-wallet is an integer from 1 to %d. The default is %d.
+
+The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+
+  auto-update      off, notify (the default) or auto. notify reports a newer
+                   release in 'orama monitor'; auto installs it, one node at a
+                   time, when the cluster is healthy and the hour is in the window
+  update-channel   the release channel to follow: stable (the default) or nightly
+  update-window    start-end hours UTC when auto may install, for example 1-5;
+                   empty for any hour
+  release-repo     the https URL of the release repository; empty (the default)
+                   means no updates are looked up`,
 		operator.MaxNamespacesPerWalletCeiling, operator.DefaultMaxNamespacesPerWallet)
 	settingsCmd.AddCommand(settingsShowCmd)
 	settingsCmd.AddCommand(settingsSetCmd)
@@ -114,6 +126,26 @@ func showSettings(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("namespace-creation: %s\n", resp.Mode)
 	fmt.Printf("max-namespaces-per-wallet: %d\n", resp.Cap)
+	return printUpdateSettings(raw)
+}
+
+// printUpdateSettings prints the auto-update settings in a settings reply. A
+// gateway from before they existed sends none, and nothing is printed for it.
+func printUpdateSettings(raw []byte) error {
+	var all map[string]any
+	if err := json.Unmarshal(raw, &all); err != nil {
+		return clierr.Failure("could not parse the gateway's reply: %w", err)
+	}
+	if _, ok := all[updatepolicy.KeyMode]; !ok {
+		return nil
+	}
+	for _, name := range []string{"auto-update", "update-channel", "update-window", "release-repo"} {
+		value, _ := all[updateSettingKeys[name]].(string)
+		if value == "" {
+			value = "(none)"
+		}
+		fmt.Printf("%s: %s\n", name, value)
+	}
 	return nil
 }
 
@@ -163,9 +195,23 @@ func parseClusterSetting(name, value string) (string, any, error) {
 			return "", nil, clierr.Usage("max-namespaces-per-wallet is an integer from 1 to %d", operator.MaxNamespacesPerWalletCeiling)
 		}
 		return "/v1/operator/settings/max-namespaces-per-wallet", map[string]any{"value": n}, nil
+	case "auto-update", "update-channel", "update-window", "release-repo":
+		if err := updatepolicy.Validate(updateSettingKeys[name], value); err != nil {
+			return "", nil, clierr.Usage("%s: %v", name, err)
+		}
+		return "/v1/operator/settings/" + name, map[string]string{"value": value}, nil
 	default:
-		return "", nil, clierr.Usage("unknown setting %q; expected namespace-creation or max-namespaces-per-wallet", name)
+		return "", nil, clierr.Usage("unknown setting %q; expected namespace-creation, max-namespaces-per-wallet, "+
+			"auto-update, update-channel, update-window or release-repo", name)
 	}
+}
+
+// updateSettingKeys are the stored keys of the auto-update settings by CLI name.
+var updateSettingKeys = map[string]string{
+	"auto-update":    updatepolicy.KeyMode,
+	"update-channel": updatepolicy.KeyChannel,
+	"update-window":  updatepolicy.KeyWindow,
+	"release-repo":   updatepolicy.KeyRepo,
 }
 
 func listCreators(cmd *cobra.Command, args []string) error {

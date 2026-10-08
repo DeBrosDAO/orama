@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/hardening"
+	"github.com/DeBrosOfficial/network/pkg/updatenotice"
 )
 
 // NodeReport is the top-level JSON output of `orama node report --json`.
@@ -33,6 +34,9 @@ type NodeReport struct {
 	Serverless  *ServerlessReport  `json:"serverless,omitempty"`
 	Chain       *ChainReport       `json:"chain,omitempty"`
 	Global      *GlobalReport      `json:"global,omitempty"`
+	// Update is what this node's auto-update agent last found; nil when it has
+	// found nothing worth reporting (docs/MONITORING.md).
+	Update *updatenotice.Notice `json:"update,omitempty"`
 
 	// Traffic is filled in by the cluster gateway, which serves this node's
 	// requests, not by a collector: it is what the gateway counted in memory.

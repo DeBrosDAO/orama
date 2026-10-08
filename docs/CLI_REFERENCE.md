@@ -60,9 +60,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama cluster namespace remove`](#orama-cluster-namespace-remove) — Remove a namespace whose owner can no longer delete it
   - [`orama cluster register-onchain`](#orama-cluster-register-onchain) — Register this cluster's public name on the Orama chain
   - [`orama cluster retire-onchain`](#orama-cluster-retire-onchain) — Retire this cluster's public row on the Orama chain
-  - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
-    - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation or the per-wallet cap
-    - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, and the per-wallet cap
+  - [`orama cluster settings`](#orama-cluster-settings) — Show or change the cluster's settings
+    - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation, the per-wallet cap or the update policy
+    - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, the per-wallet cap and the update policy
 - [`orama db`](#orama-db) — Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) — Backup database to IPFS
   - [`orama db backups`](#orama-db-backups) — List backups for a database
@@ -174,6 +174,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) — Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) — Node operator commands
   - [`orama node autoupdate`](#orama-node-autoupdate) — Decide whether a newer release should be installed
+    - [`orama node autoupdate run`](#orama-node-autoupdate-run) — Look for a newer release on the cluster's channel and act on it (requires sudo)
   - [`orama node clean`](#orama-node-clean) — Deprecated: use 'orama node wipe' or 'orama node remove'
   - [`orama node dns`](#orama-node-dns) — Cluster DNS: what the outside world needs to reach its nameservers
     - [`orama node dns delegation`](#orama-node-dns-delegation) — Print the NS and glue records to create at the parent zone
@@ -956,7 +957,7 @@ the sign document and does not submit it.
 
 ### orama cluster settings
 
-Show or change namespace-creation settings
+Show or change the cluster's settings
 
 ```
 orama cluster settings
@@ -966,7 +967,7 @@ Subcommands: `set`, `show`
 
 ### orama cluster settings set
 
-Change namespace creation or the per-wallet cap
+Change namespace creation, the per-wallet cap or the update policy
 
 ```
 orama cluster settings set <setting> <value>
@@ -980,9 +981,20 @@ namespace-creation is operators, allowlist or open.
 
 max-namespaces-per-wallet is an integer from 1 to 10000. The default is 10.
 
+The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+
+  auto-update      off, notify (the default) or auto. notify reports a newer
+                   release in 'orama monitor'; auto installs it, one node at a
+                   time, when the cluster is healthy and the hour is in the window
+  update-channel   the release channel to follow: stable (the default) or nightly
+  update-window    start-end hours UTC when auto may install, for example 1-5;
+                   empty for any hour
+  release-repo     the https URL of the release repository; empty (the default)
+                   means no updates are looked up
+
 ### orama cluster settings show
 
-Show who may create namespaces, and the per-wallet cap
+Show who may create namespaces, the per-wallet cap and the update policy
 
 ```
 orama cluster settings show
@@ -2837,10 +2849,13 @@ orama node autoupdate [flags]
 
 Report what this cluster should do with a candidate release.
 
+This answers the question for the values you give it and changes nothing. The
+agent that asks it of the cluster's real state, and acts, is 'orama node
+autoupdate run'.
+
 The default mode is notify: a newer verified release is reported and not
 installed. auto means the node may install, and only when the cluster is
-healthy, the release is newer, and the maintenance window is open. The
-install itself is one node at a time and is not performed by this command.
+healthy, the release is newer, and the maintenance window is open.
 
 A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
@@ -2862,6 +2877,47 @@ upgrades are staged explicitly with 'orama global stage-oramad'.
 | `--verify` | — | simulated TUF failure: rollback, freeze, threshold, or hash |
 | `--voters` | `3` | raft voters |
 | `--window` | — | maintenance window as start-end hours, for example 1-5 |
+
+Subcommands: `run`
+
+### orama node autoupdate run
+
+Look for a newer release on the cluster's channel and act on it (requires sudo)
+
+```
+orama node autoupdate run
+```
+
+Run this node's auto-update agent once. orama-autoupdate.timer runs it every
+15 minutes on every node; running it by hand does the same thing.
+
+The agent reads the cluster's policy (orama cluster settings show): auto-update
+off, notify or auto; the channel; the maintenance window; the release repository.
+It does nothing unless the cluster stored a release repository and this node
+adopted a release root (orama node trust add-root).
+
+It fetches the channel's metadata and verifies it against the adopted root:
+every role at its threshold, an unexpired timestamp, a snapshot no older than the
+newest this node has accepted, and the channel's own keys for the channel's own
+paths. What does not verify is refused, reported in 'orama monitor', and never
+installed.
+
+With notify (the default) a newer release is reported in 'orama monitor' and
+nothing is installed. With auto the node installs it only when
+
+  - the cluster is not degraded and a majority of the raft voters are up;
+  - the hour is inside the maintenance window, if there is one;
+  - no node has failed the release (a failure anywhere marks the release bad for
+    every node, until a newer release supersedes it);
+  - it is this node's turn in the rollout plan: followers first, the leader
+    last, nameservers spaced, one node at a time;
+  - it holds the cluster-wide rollout lock.
+
+The install is 'orama node stage-archive --release-only', keeping the release it
+replaces, then 'orama node upgrade --restart', then the health gate. If the
+upgrade or the gate fails, the previous release is put back and the node is
+upgraded onto it again; the release is then marked bad for the cluster. A
+validator (a machine that runs the chain) is never installed automatically.
 
 ### orama node clean
 

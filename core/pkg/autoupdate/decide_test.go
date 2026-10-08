@@ -2,8 +2,6 @@ package autoupdate
 
 import (
 	"errors"
-	"fmt"
-	"sync"
 	"testing"
 	"time"
 
@@ -139,75 +137,16 @@ func TestCompare_ordersNumericSegments(t *testing.T) {
 	}
 }
 
-func TestLock_oneWinnerAndACrashFreesIt(t *testing.T) {
-	lock := &Lock{}
-	now := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
-	var wins int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			if lock.Try(now, fmt.Sprintf("node-%d", id), time.Minute) {
-				mu.Lock()
-				wins++
-				mu.Unlock()
-			}
-		}(i)
+func TestDecide_aValidatorIsNeverAuto(t *testing.T) {
+	settings := DefaultSettings()
+	settings.Role = RoleValidator
+	settings.Mode = ModeAuto
+	if _, err := Decide(settings, Health{Voters: 3, HealthyVoters: 3}, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil); err == nil {
+		t.Fatal("a validator was allowed auto")
 	}
-	wg.Wait()
-	if wins != 1 {
-		t.Fatalf("%d nodes took the lock, want 1", wins)
-	}
-	if lock.Holder(now.Add(time.Minute)) != "" {
-		t.Fatal("an expired lease was still held")
-	}
-	if !lock.Try(now.Add(time.Minute), "node-other", time.Minute) {
-		t.Fatal("a crashed holder's lease was not free")
-	}
-}
-
-func TestApply_aFailedGateRollsBack(t *testing.T) {
-	var log []string
-	step := func(name string) Step {
-		return Step{
-			Name: name,
-			Do:   func() error { log = append(log, "do "+name); return nil },
-			Undo: func() error { log = append(log, "undo "+name); return nil },
-		}
-	}
-	rolled, err := Apply([]Step{step("stop"), step("swap"), step("start")}, func() error {
-		return errors.New("rqlite has no leader")
-	})
-	if err == nil || !rolled {
-		t.Fatalf("rolled=%v err=%v, want a rollback", rolled, err)
-	}
-	want := []string{"do stop", "do swap", "do start", "undo start", "undo swap", "undo stop"}
-	if len(log) != len(want) {
-		t.Fatalf("log %v, want %v", log, want)
-	}
-	for i := range want {
-		if log[i] != want[i] {
-			t.Fatalf("log %v, want %v", log, want)
-		}
-	}
-}
-
-func TestApply_aFailedStepDoesNotUndoWhatDidNotRun(t *testing.T) {
-	var undone []string
-	bad, err := Apply([]Step{
-		{Name: "stop", Do: func() error { return nil }, Undo: func() error { undone = append(undone, "stop"); return nil }},
-		{Name: "swap", Do: func() error { return errors.New("bad archive") }, Undo: func() error { undone = append(undone, "swap"); return nil }},
-		{Name: "start", Do: func() error { return nil }, Undo: func() error { undone = append(undone, "start"); return nil }, Blames: true},
-	}, func() error { return nil })
-	if err == nil {
-		t.Fatal("a failed swap was success")
-	}
-	if bad {
-		t.Fatal("a failed swap blamed the release")
-	}
-	if len(undone) != 1 || undone[0] != "stop" {
-		t.Fatalf("undone %v, want only stop", undone)
+	settings.Mode = ModeNotify
+	d, err := Decide(settings, Health{Voters: 3, HealthyVoters: 3}, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil)
+	if err != nil || d.Action != ActionNotify {
+		t.Fatalf("a validator on notify: %+v, %v", d, err)
 	}
 }

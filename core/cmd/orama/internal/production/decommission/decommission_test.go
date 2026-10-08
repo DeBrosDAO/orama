@@ -2,6 +2,7 @@ package decommission
 
 import (
 	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"os/exec"
 	"strings"
 	"testing"
@@ -175,6 +176,23 @@ func TestWipeScript_removesInstallsDropIns(t *testing.T) {
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the wipe script lacks %q", strings.TrimSpace(want))
+		}
+	}
+}
+
+// A node wiped while the auto-update timer was armed could have an install
+// restart the services the wipe is stopping, and kept the old cluster's release
+// root and rollback records.
+func TestWipeScript_stopsTheAutoUpdateTimerAndForgetsTheReleaseState(t *testing.T) {
+	script := wipeScript(false)
+	stopAt := strings.Index(script, "systemctl stop orama-autoupdate.timer orama-autoupdate.service")
+	nsAt := strings.Index(script, "Stop every namespace unit FIRST")
+	if stopAt < 0 || nsAt < 0 || stopAt > nsAt {
+		t.Error("the auto-update timer must be stopped before anything else is torn down")
+	}
+	for _, path := range append([]string{"/etc/orama/update-notice.json"}, releaseverify.NodeStatePaths()...) {
+		if !strings.Contains(script, path) {
+			t.Errorf("the wipe script keeps %s", path)
 		}
 	}
 }
