@@ -29,6 +29,11 @@ func (c stubChain) ProviderURL(_ context.Context, id string) (string, error) {
 	return "http://" + id, nil
 }
 
+// stubHeight is the chain height every stubChain reports.
+const stubHeight = 150
+
+func (c stubChain) Height(context.Context) (int64, error) { return stubHeight, nil }
+
 type memNet struct {
 	pieces   map[string][]byte
 	uploaded map[string][]byte
@@ -75,6 +80,7 @@ func TestRepairDeal_rebuildsTheMissingSlotFromASurvivor(t *testing.T) {
 	seed := bytes.Repeat([]byte{5}, 32)
 	c, net := fixture(t, seed)
 	delete(net.pieces, "http://n0")
+	c.slots[2].AssignHeight = 100
 	d, err := New(c, net, "delegate")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +88,9 @@ func TestRepairDeal_rebuildsTheMissingSlotFromASurvivor(t *testing.T) {
 	done, err := d.RepairDeal(context.Background(), 1, seed)
 	if err != nil || len(done) != 1 || done[0].From != 1 {
 		t.Fatalf("done %+v err %v", done, err)
+	}
+	if done[0].BlocksSinceAssigned != stubHeight-100 {
+		t.Fatalf("restore latency %d blocks, want %d", done[0].BlocksSinceAssigned, stubHeight-100)
 	}
 	got, _ := piece.Commit(net.uploaded["http://n2"])
 	if !bytes.Equal(got.Root, c.slots[2].PieceRoot) {

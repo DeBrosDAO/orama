@@ -36,6 +36,8 @@ type Chain interface {
 	Deal(ctx context.Context, id uint64) (types.Deal, error)
 	Slot(ctx context.Context, dealID uint64, slot uint32) (types.Slot, error)
 	ProviderURL(ctx context.Context, nodeID string) (string, error)
+	// Height is the chain's latest block height.
+	Height(ctx context.Context) (int64, error)
 }
 
 // Transport moves pieces to and from providers.
@@ -66,6 +68,11 @@ type Repaired struct {
 	Slot     uint32
 	From     uint32
 	Provider string
+	// BlocksSinceAssigned is how many blocks passed between the chain
+	// assigning the replacement slot (the eviction) and the upload that
+	// restores the replica. It is the delegate's share of the time to restore
+	// the full replica count; the new provider's acceptance follows.
+	BlocksSinceAssigned int64
 }
 
 // RepairDeal uploads every assigned-but-unaccepted slot of dealID that it
@@ -126,10 +133,15 @@ func (d *Delegate) repairSlot(ctx context.Context, deal types.Deal, seed []byte,
 			errs = append(errs, fmt.Errorf("from slot %d: %w", src.Index, err))
 			continue
 		}
+		height, err := d.chain.Height(ctx)
+		if err != nil {
+			return Repaired{}, fmt.Errorf("read chain height: %w", err)
+		}
 		if err := d.net.Upload(ctx, dest, target.PieceRoot, body); err != nil {
 			return Repaired{}, fmt.Errorf("upload to %s: %w", target.NodeId, err)
 		}
-		return Repaired{DealID: deal.Id, Slot: target.Index, From: src.Index, Provider: target.NodeId}, nil
+		return Repaired{DealID: deal.Id, Slot: target.Index, From: src.Index, Provider: target.NodeId,
+			BlocksSinceAssigned: height - target.AssignHeight}, nil
 	}
 	return Repaired{}, fmt.Errorf("%w: %w", ErrNoSource, errors.Join(errs...))
 }

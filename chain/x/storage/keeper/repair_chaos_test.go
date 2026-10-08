@@ -36,6 +36,10 @@ func (c repairChain) Slot(ctx context.Context, dealID uint64, slot uint32) (type
 	return nodeChain{c.sim}.Slot(ctx, dealID, slot)
 }
 
+func (c repairChain) Height(context.Context) (int64, error) {
+	return c.sim.f.Ctx.BlockHeight(), nil
+}
+
 func (c repairChain) ProviderURL(_ context.Context, nodeID string) (string, error) {
 	return repair.FirstHTTPEndpoint(nodeID, []string{"/dns4/x/tcp/1", c.urls[nodeID]})
 }
@@ -113,6 +117,7 @@ func TestRepairChaos_killedProviderIsEvictedAndTheDelegateRestoresTheReplica(t *
 	require.Equal(t, uint32(0), repaired[0].Slot)
 	newNode := repaired[0].Provider
 	require.NotEqual(t, victim.NodeId, newNode)
+	require.GreaterOrEqual(t, repaired[0].BlocksSinceAssigned, int64(0), "the restore latency is measured from the reassignment")
 
 	stepAll(t, providers)
 	require.True(t, f.slot(t, dealID, 0).Accepted, "the new provider accepted the rebuilt replica")

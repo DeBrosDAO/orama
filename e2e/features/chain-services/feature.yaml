@@ -59,6 +59,7 @@ covers:
   claims:
     - "docs/CHAIN.md#x-nodes: orama storage grant is a deal allowance capping spend, piece size, duration and replica count"
     - "docs/CHAIN.md: accept and decline are signed by the node's hot key"
+    - "docs/CHAIN.md#repair-delegate-orama-global-repair: a deal seed file the delegate refuses is logged as an error each pass and the other deals are still visited"
     - "docs/CHAIN.md#history-archiver: a range is one of the canonical ranges of range_blocks; an attestation or replica record is signed by the hot key of an active ARCHIVER node"
     - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttest; pinning a range and the three-archiver quorum need bonded ARCHIVER nodes (trigger: a funding path exists)"
     - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgAttachReplicas; recording deals needs a decided range (trigger: a funding path exists)"
