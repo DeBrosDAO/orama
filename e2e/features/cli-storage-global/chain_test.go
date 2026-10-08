@@ -131,6 +131,24 @@ func TestStoragePut_absentDealUploadsNothing(t *testing.T) {
 	}
 }
 
+// TestStorageRepair_absentDealRestoresNothing: repair reads the deal on chain
+// before it fetches or uploads anything, so a deal that does not exist fails
+// as a runtime error naming the deal query and restores no slot
+// (docs/CLI_REFERENCE.md#orama-storage-repair).
+func TestStorageRepair_absentDealRestoresNothing(t *testing.T) {
+	t.Parallel()
+	harness.RequireChain(t)
+	f := harness.Fleet(t)
+	n := f.State.Nodes[0]
+	_, repair := nodeSeeds(t, f, n)
+	res := onNode(t, f, n, "storage", "repair", "--deal-id", absentDeal, "--rpc", nodeChainRPC(f),
+		"--repair-seed-file", repair, "--wait", putWait)
+	expectNodeFailure(t, f, res, "not found on chain: "+dealQuery, dealQuery+" failed with code")
+	if strings.Contains(res.Stdout, "restored slot") {
+		t.Errorf("storage repair for absent deal %s restored a slot:\n%s", absentDeal, f.Redact(res.Stdout))
+	}
+}
+
 // TestGlobalStageOramad_unverifiedBinaryRefused: stage-oramad places a binary
 // only after it verifies against the adopted release root through TUF
 // metadata; a binary with no metadata is refused and nothing is linked into

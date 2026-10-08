@@ -31,6 +31,7 @@ covers:
     - orama storage open
     - orama storage prove
     - orama storage put
+    - orama storage repair
     - orama storage revoke
     - orama storage rewrap
     - orama storage seal
@@ -50,3 +51,4 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-global-register: each binding's signature must verify for this chain id and operator"
     - "docs/CLI_REFERENCE.md#orama-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
     - "docs/CLI_REFERENCE.md#orama-storage-put: a wrong file or a wrong deal uploads nothing"
+    - "docs/CLI_REFERENCE.md#orama-storage-repair: a deal that does not exist fails and restores no slot"

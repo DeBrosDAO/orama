@@ -79,16 +79,13 @@ func runRepair(ctx context.Context, fl repairFlags) error {
 }
 
 func repairPass(ctx context.Context, d *repair.Delegate, dir string) error {
-	seeds, err := repair.LoadSeeds(dir)
-	if err != nil {
-		return err
-	}
+	seeds, loadErr := repair.LoadSeeds(dir)
 	ids := make([]uint64, 0, len(seeds))
 	for id := range seeds {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	var errs []error
+	errs := []error{loadErr}
 	for _, id := range ids {
 		start := time.Now()
 		done, err := d.RepairDeal(ctx, id, seeds[id])

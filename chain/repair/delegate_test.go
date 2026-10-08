@@ -161,6 +161,24 @@ func TestLoadSeeds_refusesReadableMismatchedAndShortSeeds(t *testing.T) {
 	}
 }
 
+func TestLoadSeeds_oneBadFileDoesNotHideTheOthers(t *testing.T) {
+	dir := t.TempDir()
+	good := `{"deal_id":4,"repair_seed":"` + string(bytes.Repeat([]byte("ab"), 32)) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "4.json"), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "9.json"), []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seeds, err := LoadSeeds(dir)
+	if err == nil {
+		t.Fatal("the malformed seed file was not reported")
+	}
+	if len(seeds[4]) != 32 || len(seeds) != 1 {
+		t.Fatalf("deal 4's seed must be served and deal 9 left out, got %d seeds", len(seeds))
+	}
+}
+
 func TestPublicHTTPClient_refusesALoopbackEndpoint(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer srv.Close()

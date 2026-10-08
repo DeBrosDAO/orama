@@ -75,7 +75,9 @@ type world struct {
 	providers []*fakeProvider
 	servers   []*httptest.Server
 	accepted  bool
-	chain     *httptest.Server
+	// live marks slots a provider has accepted: active and accepted.
+	live  map[uint64]bool
+	chain *httptest.Server
 }
 
 func newWorld(t *testing.T, plain []byte) *world {
@@ -121,8 +123,12 @@ func (w *world) answer(rw http.ResponseWriter, r *http.Request) {
 		slot := append(encodeUintField(slotDealField, 5), encodeUintField(slotIndexField, idx)...)
 		slot = append(slot, field(slotNodeField, []byte("n"+string(rune('0'+idx))))...)
 		slot = append(slot, field(slotRootField, s.Root)...)
-		slot = append(slot, encodeUintField(slotStatusField, slotAssigned)...)
-		if w.accepted {
+		status := uint64(slotAssigned)
+		if w.live[idx] {
+			status = slotActive
+		}
+		slot = append(slot, encodeUintField(slotStatusField, status)...)
+		if w.accepted || w.live[idx] {
 			slot = append(slot, encodeUintField(slotAcceptedField, 1)...)
 		}
 		body = field(respBodyField, slot)
