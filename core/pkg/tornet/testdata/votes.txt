@@ -1,0 +1,56 @@
+network-status-version 3
+vote-status vote
+consensus-methods 28 29 30 31 32
+published 2026-10-08 11:25:01
+valid-after 2026-10-08 12:00:00
+fresh-until 2026-10-08 12:30:00
+valid-until 2026-10-08 14:30:00
+voting-delay 300 300
+known-flags Authority Exit Fast Guard HSDir Running Stable V2Dir Valid
+dir-source OramaAuth1 00000000000000000000000000000000000000A0 57.129.166.16 57.129.166.16 31021 31020
+contact ops@example.org
+r OramaAuth1 AAAAAAAAAAAAAAAAAAAAAAAAALA yrThRCjxnDUQ/pst/UHbtFpjl4c 2026-10-08 11:49:00 57.129.166.16 31020 31021
+id ed25519 MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=5000 Measured=5000
+r OramaAuth2 AAAAAAAAAAAAAAAAAAAAAAAAALE uXRKsrBTcA405kSsIPNRyJsaXLc 2026-10-08 11:00:00 57.129.166.17 31020 31021
+id ed25519 MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=4000
+r OramaRelayA AAAAAAAAAAAAAAAAAAAAAAAAAMA e0/wllA1mN6Wq7M64w+kVH9wqNE 2026-10-08 11:15:00 161.97.184.202 31020 0
+id ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE
+s Exit Fast Running V2Dir Valid
+w Bandwidth=900
+directory-footer
+directory-signature 00000000000000000000000000000000000000A0 00000000000000000000000000000000000001A0
+-----BEGIN SIGNATURE-----
+c3ludGhldGljLXNpZ25hdHVyZS1ub3QtcmVhbA==
+-----END SIGNATURE-----
+network-status-version 3
+vote-status vote
+consensus-methods 28 29 30 31 32
+published 2026-10-08 11:25:02
+valid-after 2026-10-08 12:00:00
+fresh-until 2026-10-08 12:30:00
+valid-until 2026-10-08 14:30:00
+voting-delay 300 300
+known-flags Authority Exit Fast Guard HSDir Running Stable V2Dir Valid
+dir-source OramaAuth2 00000000000000000000000000000000000000A1 57.129.166.17 57.129.166.17 31021 31020
+contact ops@example.org
+r OramaAuth1 AAAAAAAAAAAAAAAAAAAAAAAAALA yrThRCjxnDUQ/pst/UHbtFpjl4c 2026-10-08 11:49:00 57.129.166.16 31020 31021
+id ed25519 MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=5000 Measured=5000
+r OramaAuth2 AAAAAAAAAAAAAAAAAAAAAAAAALE uXRKsrBTcA405kSsIPNRyJsaXLc 2026-10-08 11:00:00 57.129.166.17 31020 31021
+id ed25519 MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjI
+s Authority Fast Guard HSDir Running Stable V2Dir Valid
+w Bandwidth=4000
+r OramaRelayA AAAAAAAAAAAAAAAAAAAAAAAAAMA e0/wllA1mN6Wq7M64w+kVH9wqNE 2026-10-08 11:15:00 161.97.184.202 31020 0
+id ed25519 QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE
+s Exit Fast Running V2Dir Valid
+w Bandwidth=900
+directory-footer
+directory-signature 00000000000000000000000000000000000000A1 00000000000000000000000000000000000001A1
+-----BEGIN SIGNATURE-----
+c3ludGhldGljLXNpZ25hdHVyZS1ub3QtcmVhbA==
+-----END SIGNATURE-----

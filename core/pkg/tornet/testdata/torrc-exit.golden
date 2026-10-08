@@ -1,0 +1,51 @@
+# Managed by Orama Network: rewritten on every `orama global install`.
+# Relay of the Orama Tor network orama-teststage (docs/TOR_NETWORK.md).
+DataDirectory /var/lib/orama-global/tor-relay
+Log notice stdout
+SafeLogging 1
+UseDefaultFallbackDirs 0
+DirAuthority OramaAuth1 orport=31020 v3ident=00000000000000000000000000000000000000A0 57.129.166.16:31021 00000000000000000000000000000000000000B0
+DirAuthority OramaAuth2 orport=31020 v3ident=00000000000000000000000000000000000000A1 57.129.166.17:31021 00000000000000000000000000000000000000B1
+DirAuthority OramaAuth3 orport=31020 v3ident=00000000000000000000000000000000000000A2 161.97.184.199:31021 00000000000000000000000000000000000000B2
+SocksPort 0
+Nickname Orama35971be6e9bb02
+ContactInfo ops@example.org 0xabc
+Address 57.129.166.18
+ORPort 31020 IPv4Only
+DirPort 0
+RelayBandwidthRate 100 Mbits
+RelayBandwidthBurst 100 Mbits
+# Exit: opt-in; the policy refuses mail, file sharing and every reserved range.
+ExitRelay 1
+IPv6Exit 0
+ExitPolicy reject 203.0.113.9:*
+ExitPolicy reject 0.0.0.0/8:*
+ExitPolicy reject 10.0.0.0/8:*
+ExitPolicy reject 100.64.0.0/10:*
+ExitPolicy reject 127.0.0.0/8:*
+ExitPolicy reject 169.254.0.0/16:*
+ExitPolicy reject 172.16.0.0/12:*
+ExitPolicy reject 192.0.0.0/24:*
+ExitPolicy reject 192.0.2.0/24:*
+ExitPolicy reject 192.31.196.0/24:*
+ExitPolicy reject 192.52.193.0/24:*
+ExitPolicy reject 192.88.99.0/24:*
+ExitPolicy reject 192.168.0.0/16:*
+ExitPolicy reject 198.18.0.0/15:*
+ExitPolicy reject 198.51.100.0/24:*
+ExitPolicy reject 203.0.113.0/24:*
+ExitPolicy reject 224.0.0.0/4:*
+ExitPolicy reject 240.0.0.0/4:*
+ExitPolicy reject *:25
+ExitPolicy reject *:465
+ExitPolicy reject *:587
+ExitPolicy reject *:119
+ExitPolicy reject *:135-139
+ExitPolicy reject *:445
+ExitPolicy reject *:563
+ExitPolicy reject *:1214
+ExitPolicy reject *:4661-4666
+ExitPolicy reject *:6346-6429
+ExitPolicy reject *:6699
+ExitPolicy reject *:6881-6999
+ExitPolicy accept *:*
