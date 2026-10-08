@@ -266,6 +266,73 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 - **IPFS Cluster:** generated unit and `ipfs-cluster-service init` refuse an empty `CLUSTER_SECRET`
 - **Agent logs:** `/v1/agent/logs?service=` is an allowlist (`rqlite`, `olric`, `ipfs`, `ipfs-cluster`, `gateway`, `coredns`, `agent`); path traversal is rejected
 
+### Relayed fetch
+
+Bugboard #266: a download whose originating address the serving node (S) never
+sees. A second node, the relay (R), carries the bytes. The client opens
+`/v1/proxy/relay` on R, runs TLS to S's `ns-<name>.<base>` through R's Tor
+client, and sends `GET /v1/storage/relayed/{cid}` with a fetch capability
+([AUTH.md](AUTH.md#fetch-capabilities)) inside that TLS. S sees a Tor exit and a
+capability; R sees the client and a host.
+
+| Party | Learns | Does not learn |
+|---|---|---|
+| S | the CID, a capability, a Tor exit address | the client's address, which R carried it |
+| R | the client's address, the destination host, start time, duration, byte counts (in flight) | the CID, the capability, the content |
+| a network observer at the client | "the client talks to R over TLS" | S, the CID |
+
+**Retention, enforced in code.** Each route declares how much of a request the
+gateway records (route policy `RequestLog`). `/v1/proxy/relay` is `LogNone`: R
+writes no `request_logs` row and no access-log line for a stream, so no address,
+byte count or duration is written anywhere. All R keeps is the request metrics'
+count of the request by status (no size, no latency sample) and its rate-limit
+state, per address, in memory, for the bucket's lifetime. `/v1/storage/relayed/`
+is `LogNoAddress`: S keeps the row and the line (method, path, status, size,
+duration) with an empty `ip`, so S does not record the exit address. A failure
+on the relay is an error to the client, never a direct connection.
+
+**Abuse without identity.** R limits by client address (30 streams a minute,
+burst 10, and at most 4 streams open at once), keeps a pool of 128 streams apart
+from the authenticated tunnels, caps a stream at 64 MiB each way and 5 minutes,
+and pins the destination: a plain ASCII hostname (letters, digits, hyphens; the
+name that is checked is the name that is dialled, lowercased, with at most one
+trailing dot removed), equal to or under one of `relay_allowed_suffixes`, port
+443, no IP literal, so it is not an open Tor proxy and cannot be aimed at an
+arbitrary host. A `relay_allowed_suffixes` entry that is itself a public suffix
+(`co.uk`, `github.io`) is refused when the gateway starts. S limits a leaked
+capability by its expiry, its CID, revocation and 4 concurrent downloads per
+token, and the namespace's own rate limit. Revoking a capability by id takes the
+`revoke_key` the mint returned for it, so a caller cannot fill the revocation
+list with invented ids.
+
+**What this does not defend against** (stated, not hidden):
+
+- **A relay inside S's cluster is not a privacy boundary.** Every node of a
+  cluster holds the wildcard certificate key for its namespace hosts, so a relay
+  in the same cluster can terminate the TLS itself and read the capability, the
+  CID and the content, and it is the node that sees the client's address. The
+  default allowlist is the cluster's own base domain, so out of the box a relay
+  is a node of the cluster it fetches from. The property holds only when R is
+  another operator's node or another cluster, which an operator arranges by
+  listing that cluster's base domain in `relay_allowed_suffixes` on R. Relays
+  run by the same operator as S, or colluding with it, are not a boundary
+  either.
+- **Timing and volume join.** R and S together, or one operator running both,
+  can match R's "client, time, N bytes" with S's "capability, CID, time, N bytes"
+  through the Tor hop. A fresh circuit per fetch removes the easy join key (R's
+  address at S), not the timing one. Fetching fixed-size chunks and a client-side
+  delay narrow it.
+- **R sees the length** of the response as ciphertext length.
+- **S sees which CID** is asked for (this is not private information retrieval)
+  and can link two fetches made with the same capability, so a sender uses one
+  token per fetch.
+- **The anonymity set is Orama's own Tor network size.** With few relays it is
+  small. A global passive adversary is out of scope, as is hiding that the client
+  uses a relay.
+- **Transport:** TLS over a byte stream is straightforward in Node and a native
+  client; a browser or React Native needs a loopback helper. Browser transport,
+  a mixnet, paid relay admission and cross-operator relays are not built.
+
 ### Response caching
 
 Every `/v1/*` response carries `Cache-Control: no-store` and `Pragma: no-cache`

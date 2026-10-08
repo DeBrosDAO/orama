@@ -115,6 +115,8 @@ var publicRoutes = []string{
 	"/v1/invoke/",
 	"/v1/namespace/status",
 	"/v1/node/enroll",
+	"/v1/proxy/relay",
+	"/v1/storage/relayed/",
 	"/v1/status",
 	"/v1/vault/health",
 	"/v1/vault/pull",

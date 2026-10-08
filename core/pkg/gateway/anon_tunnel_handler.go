@@ -351,7 +351,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		zap.String("host", target.host), zap.Int("port", target.port))
 
 	start := time.Now()
-	sent, received := g.relayTunnel(conn, upstream)
+	sent, received := g.relayTunnel(conn, upstream, authenticatedTunnelLimits)
 	release()
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "tunnel closed",
@@ -362,13 +362,25 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		zap.Duration("duration", time.Since(start)))
 }
 
+// tunnelLimits are the caps one spliced tunnel is held to.
+type tunnelLimits struct {
+	maxBytes    int64
+	maxDuration time.Duration
+	// quiet keeps byte counts out of the log when a cap closes the tunnel: the
+	// anonymous relay (relay_tunnel_handler.go) logs nothing about a stream.
+	quiet bool
+}
+
+// authenticatedTunnelLimits are the caps of /v1/proxy/tunnel.
+var authenticatedTunnelLimits = tunnelLimits{maxBytes: tunnelMaxBytes, maxDuration: tunnelMaxDuration}
+
 // relayTunnel splices a WebSocket and a TCP connection until either side ends,
 // a cap is reached, or the tunnel goes idle. It returns the bytes carried in
 // each direction and closes both connections before returning.
-func (g *Gateway) relayTunnel(conn *websocket.Conn, upstream net.Conn) (toDest, toClient int64) {
+func (g *Gateway) relayTunnel(conn *websocket.Conn, upstream net.Conn, lim tunnelLimits) (toDest, toClient int64) {
 	// Lifetime ceiling. Both relay directions select on this, so neither can
 	// outlive it even if its peer is silent.
-	deadline := time.Now().Add(tunnelMaxDuration)
+	deadline := time.Now().Add(lim.maxDuration)
 	_ = upstream.SetDeadline(deadline)
 
 	var once sync.Once
@@ -403,9 +415,11 @@ func (g *Gateway) relayTunnel(conn *websocket.Conn, upstream net.Conn) (toDest, 
 				// the stream silently.
 				return
 			}
-			if toDest+int64(len(data)) > tunnelMaxBytes {
-				g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel closed: upload cap reached",
-					zap.Int64("bytes", toDest))
+			if toDest+int64(len(data)) > lim.maxBytes {
+				if !lim.quiet {
+					g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel closed: upload cap reached",
+						zap.Int64("bytes", toDest))
+				}
 				return
 			}
 			_ = upstream.SetWriteDeadline(time.Now().Add(tunnelWriteTimeout))
@@ -427,9 +441,11 @@ func (g *Gateway) relayTunnel(conn *websocket.Conn, upstream net.Conn) (toDest, 
 			_ = upstream.SetReadDeadline(minTime(time.Now().Add(tunnelIdleTimeout), deadline))
 			n, rerr := upstream.Read(buf)
 			if n > 0 {
-				if toClient+int64(n) > tunnelMaxBytes {
-					g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel closed: download cap reached",
-						zap.Int64("bytes", toClient))
+				if toClient+int64(n) > lim.maxBytes {
+					if !lim.quiet {
+						g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel closed: download cap reached",
+							zap.Int64("bytes", toClient))
+					}
 					return
 				}
 				_ = conn.SetWriteDeadline(time.Now().Add(tunnelWriteTimeout))

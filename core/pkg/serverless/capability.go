@@ -64,3 +64,22 @@ func capabilityOpens(fn *Function, req *InvokeRequest) bool {
 		fn.WSAuth == WSAuthCapability &&
 		!fn.IsInternal
 }
+
+// FetchCap is one fetch capability (bugboard #266): a token that lets whoever
+// holds it read one CID of the namespace without presenting an identity. Its id
+// is what the owner revokes it by, with the revoke key, the proof that the id
+// was issued: only the mint returns it, and revoking by id requires it.
+type FetchCap struct {
+	ID        string `json:"id"`
+	Token     string `json:"token"`
+	RevokeKey string `json:"revoke_key"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
+// FetchCapIssuer mints fetch capabilities. The gateway provides it; a function
+// reaches it through storage_fetch_cap_mint.
+type FetchCapIssuer interface {
+	// MintFetchCaps issues count capabilities to read cid of namespace, each its
+	// own token, issued by issuerDevice, for ttl.
+	MintFetchCaps(ctx context.Context, namespace, cid, issuerDevice string, count int, ttl time.Duration) ([]FetchCap, error)
+}

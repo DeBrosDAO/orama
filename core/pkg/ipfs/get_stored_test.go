@@ -1,6 +1,7 @@
 package ipfs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -161,5 +162,45 @@ func TestGetStored_callerDeadlineDuringLookupIsATimeout(t *testing.T) {
 	_, err := c.GetStored(ctx, storedCID, url)
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrPinsetUnavailable) {
 		t.Fatalf("err=%v; want DeadlineExceeded, not ErrPinsetUnavailable", err)
+	}
+}
+
+// lenReader is what the gateway sends as Content-Length without buffering the
+// object a second time; Get and GetStored promise it (bugboard #266).
+type lenReader interface{ Len() int }
+
+func TestGetAndGetStored_returnReadersWithLen(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plain := []byte("tenant-bytes-sealed-at-rest")
+	sealed, err := sealBlob(plain, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(sealed)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := NewClient(Config{ClusterAPIURL: srv.URL, WrapKey: key}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, get := range map[string]func() (io.ReadCloser, error){
+		"Get":       func() (io.ReadCloser, error) { return c.Get(context.Background(), storedCID, srv.URL) },
+		"GetStored": func() (io.ReadCloser, error) { return c.GetStored(context.Background(), storedCID, srv.URL) },
+	} {
+		r, err := get()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		l, ok := r.(lenReader)
+		if !ok {
+			t.Fatalf("%s returned %T, which has no Len", name, r)
+		}
+		if l.Len() != len(plain) {
+			t.Errorf("%s Len=%d, want the plaintext size %d", name, l.Len(), len(plain))
+		}
+		if got := read(t, r); got != string(plain) {
+			t.Errorf("%s body=%q", name, got)
+		}
 	}
 }

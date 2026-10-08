@@ -890,6 +890,71 @@ A recipient who issues one capability per correspondent has, by that choice,
 told the gateway which correspondent is sending. Unlinkable capabilities (blind
 signatures) are not implemented.
 
+### Fetch capabilities
+
+A fetch capability lets a client download one stored object without presenting
+an identity, so that the node serving it can be reached through a relay and
+never learn who asked ([SECURITY.md](SECURITY.md#relayed-fetch)). It is a
+capability in the sense above, for a different resource: "whoever holds this may
+read this CID of this namespace until T".
+
+```
+POST   /v1/storage/fetch-caps         {"cid","count","ttl_seconds"}  → 200 {"namespace","cid","caps":[{"id","token","revoke_key","expires_at"}]}
+DELETE /v1/storage/fetch-caps/{id}    X-Orama-Revoke-Key: <revoke_key> → 200 {"revoked":"<id>"}
+GET    /v1/storage/relayed/{cid}      X-Orama-Fetch-Cap: <token>      → the body of /v1/storage/get/{cid}
+```
+
+**Minting** needs the storage-read grant, a CID the namespace owns (and, for a
+grant narrowed to `storage:<prefix>`, one inside the prefix), and a
+device-bound session: a fetch capability is revoked with the device that issued
+it, so an API key or a workload token, which have none, are refused
+`403 FETCH_CAP_DEVICE_REQUIRED`. `count` is 1 to 64 and every token is distinct,
+with its own id, so a sender spends one per fetch and the serving node cannot
+join two fetches by the token; `ttl_seconds` is 3600 to 604800. The host
+function `storage_fetch_cap_mint` mints the same for a function
+([SERVERLESS.md](SERVERLESS.md#storage-fetch-capabilities)); it requires the
+canonical CID too, and does not check ownership or a storage selector, which the
+serving node's ownership check on every use and the function's own authority
+make unnecessary there. A CID that is not in canonical form is `400`.
+Each capability comes with a `revoke_key`: HMAC-SHA256 of its id under a key
+derived per namespace for that purpose, hex encoded. Keep it with the owner; it
+is not needed to fetch.
+
+**The token** is a payload and an HMAC-SHA256 over it, keyed per namespace by
+HKDF from the cluster secret under its own purpose string, so a WebSocket
+capability never verifies as a fetch capability or the reverse. It names the
+namespace, the exact canonical CID, a random id, the expiry, and a revocation
+tag `rt`. The tag is the issuing device sealed (AES-256-GCM, a key of its own, a
+fresh nonce per token): unlike a WebSocket capability's readable `iss`, two
+tokens of one device share nothing a reader can compare, yet a gateway can open
+the tag in memory to ask whether the device was revoked. Nothing is stored per
+token.
+
+**Using one** is a `GET` of exactly `/v1/storage/relayed/{cid}` with the token in
+`X-Orama-Fetch-Cap` and nothing else: a request that also carries an
+`Authorization` header, an API key or a session is `400 FETCH_CAP_NOT_ALONE`.
+The token is checked before any registry read or IPFS call (one HMAC for a
+stranger). A forged, expired, wrong-CID, wrong-namespace or wrong-kind token is
+one `403 FETCH_CAP_INVALID`; a revoked one is `403 FETCH_CAP_REVOKED`; no header
+is `401 FETCH_CAP_MISSING`. Then the namespace's ownership of the CID is checked
+and the object is served exactly as `/v1/storage/get/{cid}` serves it, with a
+`Content-Length` always. The namespace is the one the gateway serves, so the
+route works on `ns-<name>.<base>`; the index gateway answers `FETCH_CAP_INVALID`.
+One capability holds at most 4 downloads open on a gateway (`429 RATE_LIMITED`).
+Single use is not enforced: the serving gateways share no state, so a token is
+limited by its expiry, its CID and revocation.
+
+**Revoking** is by id (`DELETE`), by revoking the device (every token it issued,
+within the revocation list's staleness, 10 seconds), or both. `DELETE` takes the
+id and the `revoke_key` the mint returned for it in the `X-Orama-Revoke-Key`
+header, compared in constant time: an id is a string any caller can invent, and
+without the key a caller could write week-long rows into a table every gateway
+reloads. No header, or a key that is not the one issued for that id in this
+namespace, is `403 FETCH_CAP_REVOKE_KEY_INVALID` and writes nothing; an id that
+is not 32 hex characters is `400`. Revoking an id that is already revoked
+succeeds and writes no second row. The entry is kept for seven days, the longest
+a token lives.
+
 ---
 
 ## When a request is refused
@@ -911,6 +976,16 @@ about it — plus the fields that make it actionable.
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |
+| `RELAY_DESTINATION_NOT_ALLOWED` | the relay (`/v1/proxy/relay`) reaches only a host under its allowed suffixes, on port 443, never an IP literal (400) |
+| `RELAY_UNAVAILABLE` | the relay could not carry the stream: Tor is down on the node, or the destination was not reached through it (503); it never connects directly |
+| `RATE_LIMITED` | too many relay streams from this address (per minute, or open at once) or on this node (429, `Retry-After`) |
+| `FETCH_CAP_MISSING` | a relayed download carries no `X-Orama-Fetch-Cap` header (401) |
+| `FETCH_CAP_INVALID` | the fetch capability is forged, expired, for another CID or namespace, or not a fetch capability (403); one code for all of them |
+| `FETCH_CAP_REVOKED` | the fetch capability, or the device that issued it, was revoked (403) |
+| `FETCH_CAP_REVOKE_KEY_INVALID` | a revoke by id without the `revoke_key` the mint returned for that id, or with another one (403) |
+| `FETCH_CAP_NOT_ALONE` | a fetch capability arrived beside a credential (400) |
+| `FETCH_CAP_DEVICE_REQUIRED` | a fetch capability was minted from a session bound to no device (403) |
+| `FETCH_CAP_UNAVAILABLE` | the gateway could not check or revoke the capability right now (503, `Retry-After`) |
 
 Signing in has its own, because "your signature did not verify" and "you signed
 the wrong message" are different problems:

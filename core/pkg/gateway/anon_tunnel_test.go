@@ -496,7 +496,7 @@ func newRelayHarness(t *testing.T) *relayHarness {
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		h.sent, h.recvd = g.relayTunnel(conn, gwSide)
+		h.sent, h.recvd = g.relayTunnel(conn, gwSide, authenticatedTunnelLimits)
 		close(h.done)
 	}))
 	t.Cleanup(srv.Close)

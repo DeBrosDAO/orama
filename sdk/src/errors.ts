@@ -172,6 +172,13 @@ export const AuthCode = {
   DeviceKeyTaken: "DEVICE_KEY_TAKEN",
   /** The session policy is set, but revoking existing sign-in keys stopped partway. Repeat the request. */
   PolicySweepIncomplete: "POLICY_SWEEP_INCOMPLETE",
+  /**
+   * The wallet holds no grant in the namespace (never invited, or the grant was
+   * revoked, expired or disabled) and the namespace is not open to other
+   * wallets: its session was refused a refresh. Sign in again once it is open,
+   * or ask the namespace's owner for an invitation.
+   */
+  SignInClosed: "SIGN_IN_CLOSED",
 } as const;
 
 export type AuthCode = (typeof AuthCode)[keyof typeof AuthCode];
@@ -296,5 +303,86 @@ export class RevokedCredentialError extends AuthError {
   ) {
     super(message, httpStatus, code, details);
     this.name = "RevokedCredentialError";
+  }
+}
+
+/**
+ * The codes of the relayed-fetch path (`storage.fetchWith`).
+ *
+ * `FetchCap*` come from the storage node when it refuses a fetch capability;
+ * `Relay*` and `RateLimited` come from the relay, before or instead of a
+ * tunnel. None of them is ever answered by a direct fetch: a relay that fails
+ * surfaces the failure, because retrying direct would hand the storage node the
+ * caller's address.
+ */
+export const RelayCode = {
+  /** The capability is forged, expired, for another CID or another namespace. */
+  FetchCapInvalid: "FETCH_CAP_INVALID",
+  /** The capability was revoked by its owner. */
+  FetchCapRevoked: "FETCH_CAP_REVOKED",
+  /** The relayed route was reached without a capability header. */
+  FetchCapMissing: "FETCH_CAP_MISSING",
+  /** A revoke by id without the `revokeKey` the mint returned for it, or with another. */
+  FetchCapRevokeKeyInvalid: "FETCH_CAP_REVOKE_KEY_INVALID",
+  /** The relay refuses this destination (host or port not in its allowlist). */
+  DestinationNotAllowed: "RELAY_DESTINATION_NOT_ALLOWED",
+  /** The relay's per-address rate limit. `retryAfterSeconds` says when to try again. */
+  RateLimited: "RATE_LIMITED",
+  /** The relay cannot carry a stream now (for example its anonymity network is down). */
+  Unavailable: "RELAY_UNAVAILABLE",
+  /** The relay answered with a status this SDK does not know. */
+  Refused: "RELAY_REFUSED",
+  /** The relay could not be reached, or the tunnel failed (TLS, reset, closed early). */
+  ConnectFailed: "RELAY_CONNECT_FAILED",
+  /** The storage node's answer through the tunnel was not a well-formed HTTP/1.1 response. */
+  ProtocolError: "RELAY_PROTOCOL_ERROR",
+  /** The response body passed the size the caller allowed. */
+  TooLarge: "RELAY_RESPONSE_TOO_LARGE",
+  /** `RelayedFetch` needs Node.js (`node:tls`). */
+  UnsupportedRuntime: "RELAY_UNSUPPORTED_RUNTIME",
+  /** No relay in the configured set is usable for this namespace host. */
+  NoRelay: "RELAY_NONE_CONFIGURED",
+} as const;
+
+export type RelayCode = (typeof RelayCode)[keyof typeof RelayCode];
+
+/**
+ * A relayed fetch did not complete because of the relay or the tunnel, not
+ * because of the storage node's answer. Never retried direct.
+ *
+ * `httpStatus` is the relay's refusal status when it refused before upgrading
+ * the connection, and 0 when no HTTP answer was received.
+ */
+export class RelayError extends SDKError {
+  constructor(
+    message: string,
+    httpStatus: number = 0,
+    code: string = RelayCode.ConnectFailed,
+    details: Record<string, any> = {}
+  ) {
+    super(message, httpStatus, code, details);
+    this.name = "RelayError";
+  }
+
+  /** Seconds the relay asked the caller to wait (`Retry-After` on a 429). */
+  get retryAfterSeconds(): number | undefined {
+    const s = this.details?.retry_after_seconds;
+    return typeof s === "number" ? s : undefined;
+  }
+}
+
+/**
+ * The storage node refused the fetch capability. Minting a new one (or asking
+ * the owner for one) is the only fix: retrying the same token cannot succeed.
+ */
+export class FetchCapError extends SDKError {
+  constructor(
+    message: string,
+    httpStatus: number = 403,
+    code: string = RelayCode.FetchCapInvalid,
+    details: Record<string, any> = {}
+  ) {
+    super(message, httpStatus, code, details);
+    this.name = "FetchCapError";
   }
 }

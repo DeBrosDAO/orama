@@ -38,6 +38,10 @@ type Config struct {
 	// NodePeerID is this node's libp2p peer id: the audience an evict call must
 	// have been signed for to be accepted here.
 	NodePeerID string
+	// ServedNamespace is the namespace this gateway serves, set on a namespace
+	// gateway and empty on the index gateway. A relayed download carries no
+	// credential to name a namespace, so the one the gateway serves is it.
+	ServedNamespace string
 }
 
 // Handlers provides HTTP handlers for IPFS storage operations.
@@ -61,6 +65,11 @@ type Handlers struct {
 	// reference" from (cidrefs.go). It reads the registry, not this namespace's
 	// database.
 	refs *CIDRefs
+	// fetchCaps mints, checks and revokes fetch capabilities (bugboard #266);
+	// nil refuses them all, saying so. fetchStreams counts the downloads each
+	// capability has in flight.
+	fetchCaps    FetchCapGate
+	fetchStreams *fetchCounter
 }
 
 // CIDRefs is the reference index this handler set decides unpins from.
@@ -84,6 +93,8 @@ func New(ipfsClient IPFSClient, logger *logging.ColoredLogger, config Config, db
 		db:         db,
 		globalDB:   globalDB,
 		refs:       NewCIDRefs(globalDB),
+
+		fetchStreams: newFetchCounter(),
 	}
 }
 

@@ -55,3 +55,24 @@ func (e *Engine) hCapabilityRevoke(ctx context.Context, mod api.Module, tokenPtr
 func (e *Engine) hGetCallerCapability(ctx context.Context, mod api.Module) uint64 {
 	return e.executor.WriteToGuest(ctx, mod, []byte(e.hostServices.GetCallerCapability(ctx)))
 }
+
+// hStorageFetchCapMint mints fetch capabilities (bugboard #266) for a CID of the
+// calling namespace. Returns the packed ptr<<32|len of the JSON
+// {"namespace","cid","caps":[{"id","token","expires_at"}]}, or 0 on failure,
+// whose reason the gateway log records.
+func (e *Engine) hStorageFetchCapMint(ctx context.Context, mod api.Module, cidPtr, cidLen uint32, count int32, ttlSeconds int64) uint64 {
+	cid, ok := e.executor.ReadFromGuest(mod, cidPtr, cidLen)
+	if !ok {
+		return 0
+	}
+	if ttlSeconds <= 0 || ttlSeconds > maxCapabilityTTLSeconds {
+		e.logger.Warn("host function storage_fetch_cap_mint refused: ttl out of range", zap.Int64("ttl_seconds", ttlSeconds))
+		return 0
+	}
+	minted, err := e.hostServices.MintStorageFetchCaps(ctx, string(cid), int(count), time.Duration(ttlSeconds)*time.Second)
+	if err != nil {
+		e.logger.Warn("host function storage_fetch_cap_mint refused", zap.Int32("count", count), zap.Error(err))
+		return 0
+	}
+	return e.executor.WriteToGuest(ctx, mod, []byte(minted))
+}

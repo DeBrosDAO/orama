@@ -73,7 +73,7 @@ func (m *mockIPFSClient) Get(ctx context.Context, cid string, ipfsAPIURL string)
 	if m.getFunc != nil {
 		return m.getFunc(ctx, cid, ipfsAPIURL)
 	}
-	return io.NopCloser(strings.NewReader("test content")), nil
+	return sizedBody("test content"), nil
 }
 
 func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
@@ -82,6 +82,13 @@ func (m *mockIPFSClient) Unpin(ctx context.Context, cid string) error {
 	}
 	return nil
 }
+
+// sizedBody is the reader ipfs.Client.Get returns: fully buffered, with its size.
+type sizedReader struct{ *strings.Reader }
+
+func (sizedReader) Close() error { return nil }
+
+func sizedBody(s string) io.ReadCloser { return sizedReader{strings.NewReader(s)} }
 
 func (m *mockIPFSClient) GetStored(ctx context.Context, cid string, ipfsAPIURL string) (io.ReadCloser, error) {
 	return m.Get(ctx, cid, ipfsAPIURL)
@@ -474,7 +481,7 @@ func TestStorageGetHandler_Success(t *testing.T) {
 			if cid != expectedCID {
 				return nil, io.ErrUnexpectedEOF
 			}
-			return io.NopCloser(strings.NewReader(expectedContent)), nil
+			return sizedBody(expectedContent), nil
 		},
 	}
 

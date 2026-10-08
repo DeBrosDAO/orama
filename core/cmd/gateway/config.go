@@ -109,6 +109,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// StateDir: see GatewayYAMLConfig. Required — the gateway's private,
 		// writable directory for its signing keys and encryption-root cache.
 		StateDir string `yaml:"state_dir"`
+		// RelayAllowedSuffixes: see GatewayYAMLConfig. Optional; the anonymous
+		// relay's destination allowlist, the base domain when empty.
+		RelayAllowedSuffixes []string `yaml:"relay_allowed_suffixes"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -152,6 +155,11 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		cfg.ClientNamespace = v
 	}
 	cfg.StateDir = strings.TrimSpace(y.StateDir)
+	for _, suffix := range y.RelayAllowedSuffixes {
+		if v := strings.TrimSpace(suffix); v != "" {
+			cfg.RelayAllowedSuffixes = append(cfg.RelayAllowedSuffixes, v)
+		}
+	}
 	if v := strings.TrimSpace(y.RQLiteDSN); v != "" {
 		cfg.RQLiteDSN = v
 	}

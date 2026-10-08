@@ -193,6 +193,9 @@ func TestGatewayYAMLEqual_anyFieldChangeIsDrift(t *testing.T) {
 			if !f.IsExported() {
 				continue
 			}
+			if prefix == "" && f.Name == "RelayAllowedSuffixes" {
+				continue // index-gateway-only field; a namespace gateway's YAML never carries it
+			}
 			t.Run(prefix+f.Name, func(t *testing.T) {
 				mutated := base
 				mv := reflect.ValueOf(&mutated).Elem()

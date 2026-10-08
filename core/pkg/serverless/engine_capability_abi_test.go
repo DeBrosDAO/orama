@@ -26,6 +26,8 @@ func TestEngine_HostModule_CapabilityCallsExported(t *testing.T) {
 		"capability_revoke": {[]api.ValueType{i32, i32}, []api.ValueType{i32}},
 		// () -> ptr<<32|len of the JSON, empty for a credential caller
 		"get_caller_capability": {nil, []api.ValueType{i64}},
+		// (cid ptr, cid len, count, ttl seconds) -> ptr<<32|len of the JSON, 0 on failure
+		"storage_fetch_cap_mint": {[]api.ValueType{i32, i32, i32, i64}, []api.ValueType{i64}},
 	}
 	for _, module := range []string{"env", "host", "orama"} {
 		fns := engine.runtime.Module(module).ExportedFunctionDefinitions()

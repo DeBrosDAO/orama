@@ -1,33 +1,24 @@
 import { HttpClient } from "../core/http";
 import { SDKError } from "../errors";
+import {
+  type DirectFetch,
+  type FetchCapability,
+  type FetchOptions,
+  type FetchTransport,
+} from "./fetch-transport";
+import {
+  FetchCapsClient,
+  type MintFetchCapsOptions,
+  type MintFetchCapsResult,
+} from "./fetch-caps-client";
+import { PIN_PROPAGATION_ATTEMPTS, isNotFound, pinPropagationBackoff } from "./pin-propagation";
 
-/**
- * How long a read will keep re-asking while an upload's pin propagates across
- * the IPFS Cluster peers: 1s + 2s + 3s + 3s + 3s + 3s + 3s = 18s of waiting
- * over 8 attempts.
- */
-const PIN_PROPAGATION_ATTEMPTS = 8;
-const PIN_PROPAGATION_BACKOFF_STEP_MS = 1000;
-const PIN_PROPAGATION_BACKOFF_CAP_MS = 3000;
-
-/**
- * Whether a failure means "the cluster does not have this CID yet".
- *
- * `httpClient.getBinary` throws an `SDKError` carrying the HTTP status, which
- * is the reliable signal. A gateway that says whether a 404 is worth retrying
- * is believed: it marks a 404 retryable only while a fresh upload's pin is
- * still propagating, and final once the content is gone, so a read of a gone
- * object stops at once instead of retrying for eighteen seconds. An older
- * gateway says nothing, and every 404 is retried as before. The message check
- * covers a transport that reports the status only in text.
- */
-function isNotFound(error: unknown): boolean {
-  if (error instanceof SDKError) {
-    return error.httpStatus === 404 && error.retryable !== false;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("not found") || message.includes("404");
-}
+export {
+  FETCH_CAP_MAX_COUNT,
+  FETCH_CAP_MIN_TTL_SECONDS,
+  FETCH_CAP_MAX_TTL_SECONDS,
+} from "./fetch-caps-client";
+export type { MintFetchCapsOptions, MintFetchCapsResult } from "./fetch-caps-client";
 
 export interface StorageUploadResponse {
   cid: string;
@@ -58,9 +49,11 @@ export interface StorageStatus {
 
 export class StorageClient {
   private httpClient: HttpClient;
+  private fetchCaps: FetchCapsClient;
 
   constructor(httpClient: HttpClient) {
     this.httpClient = httpClient;
+    this.fetchCaps = new FetchCapsClient(httpClient);
   }
 
   /**
@@ -239,13 +232,51 @@ export class StorageClient {
         if (attempt >= PIN_PROPAGATION_ATTEMPTS || !isNotFound(error)) {
           throw error;
         }
-        const backoffMs = Math.min(
-          attempt * PIN_PROPAGATION_BACKOFF_STEP_MS,
-          PIN_PROPAGATION_BACKOFF_CAP_MS
-        );
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        await pinPropagationBackoff(attempt);
       }
     }
+  }
+
+  /**
+   * Mint fetch capabilities for a CID you own: tokens that let a holder
+   * download it through `fetchWith` without an identity. Needs a device-bound
+   * session.
+   *
+   * @example
+   * ```ts
+   * const { caps } = await client.storage.mintFetchCaps(cid, { count: 3, ttlSeconds: 86400 });
+   * ```
+   */
+  mintFetchCaps(cid: string, options: MintFetchCapsOptions): Promise<MintFetchCapsResult> {
+    return this.fetchCaps.mintFetchCaps(cid, options);
+  }
+
+  /**
+   * Revoke a fetch capability by its `id`, proving it was issued to you with the
+   * `revokeKey` the mint returned beside it. Takes effect for every later use of the
+   * token. An `id` with no matching key is refused (`FETCH_CAP_REVOKE_KEY_INVALID`).
+   */
+  revokeFetchCap(id: string, revokeKey: string): Promise<void> {
+    return this.fetchCaps.revokeFetchCap(id, revokeKey);
+  }
+
+  /** The non-private transport: downloads with this client's own credential. See `DirectFetch`. */
+  directTransport(): DirectFetch {
+    return this.fetchCaps.directTransport();
+  }
+
+  /**
+   * Download a CID with a fetch capability over the transport the caller chose,
+   * re-asking while the pin propagates exactly as `get` does. See
+   * `FetchCapsClient.fetchWith`.
+   */
+  fetchWith(
+    transport: FetchTransport,
+    cid: string,
+    cap: FetchCapability,
+    opts?: FetchOptions
+  ): Promise<Uint8Array> {
+    return this.fetchCaps.fetchWith(transport, cid, cap, opts);
   }
 
   /**

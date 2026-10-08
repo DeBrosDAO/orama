@@ -28,6 +28,8 @@ func TestAuthCodes_areAllInTheDocs(t *testing.T) {
 		"core/pkg/gateway/handlers/auth/errors.go",
 		"core/pkg/gateway/handlers/auth/signin_errors.go",
 		"core/pkg/gateway/handlers/auth/device_errors.go",
+		"core/pkg/gateway/handlers/storage/fetch_cap_errors.go",
+		"core/pkg/gateway/relay_errors.go",
 	} {
 		for name, code := range wireCodesIn(t, filepath.Join(repoRootFor(t), file)) {
 			if !strings.Contains(page, "`"+code+"`") {

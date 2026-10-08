@@ -55,6 +55,15 @@ describe('package.json', () => {
     expect(pkg.exports['./chain'].require.types).toBe('./dist/chain.d.cts');
   });
 
+  it('exposes the relayed-fetch transport as its own Node-only entry, so the core never imports node:tls', () => {
+    expect(pkg.exports['./relay'].import.default).toBe('./dist/relay.js');
+    expect(pkg.exports['./relay'].require.default).toBe('./dist/relay.cjs');
+    expect(pkg.exports['./relay'].import.types).toBe('./dist/relay.d.ts');
+    expect(pkg.exports['./relay'].require.types).toBe('./dist/relay.d.cts');
+    const core = readFileSync(join(root, 'src/index.ts'), 'utf8');
+    expect(core).not.toMatch(/relay-transport/);
+  });
+
   it('exposes package.json, which tooling reads', () => {
     expect(pkg.exports['./package.json']).toBe('./package.json');
   });

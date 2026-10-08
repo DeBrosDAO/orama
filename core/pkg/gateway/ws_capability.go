@@ -8,6 +8,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/capability"
 	serverlesshandlers "github.com/DeBrosOfficial/network/pkg/gateway/handlers/serverless"
+	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/storage"
 	"github.com/DeBrosOfficial/network/pkg/serverless/hostfunctions"
 	"go.uber.org/zap"
 )
@@ -59,5 +60,37 @@ func wireCapabilities(clusterSecret string, authService *auth.Service,
 	}
 	handlers.SetCapabilities(authority, authService)
 	hostFuncs.SetCapabilityIssuer(issuer)
+	hostFuncs.SetFetchCapIssuer(issuer)
 	return nil
+}
+
+// wireStorageFetchCaps gives the storage handlers what mints, checks and revokes
+// fetch capabilities (bugboard #266). Keyed from the cluster secret like the
+// WebSocket capabilities; a gateway without one refuses every fetch capability,
+// saying so at start and on every attempt.
+func wireStorageFetchCaps(clusterSecret string, authService *auth.Service, handlers *storage.Handlers, logger *zap.Logger) error {
+	if strings.TrimSpace(clusterSecret) == "" {
+		logger.Warn("no cluster secret: this gateway cannot mint or check fetch capabilities, " +
+			"and refuses every one with 503")
+		return nil
+	}
+	authority, err := capability.NewAuthority(clusterSecret)
+	if err != nil {
+		return fmt.Errorf("build the fetch capability authority: %w", err)
+	}
+	issuer, err := capability.NewIssuer(authority, authService.Revocations())
+	if err != nil {
+		return fmt.Errorf("build the fetch capability issuer: %w", err)
+	}
+	handlers.SetFetchCaps(issuer)
+	return nil
+}
+
+// servedNamespace is the namespace a namespace gateway serves, or "" on the
+// index gateway.
+func servedNamespace(cfg *Config) string {
+	if isNamespaceGateway(cfg) {
+		return cfg.ClientNamespace
+	}
+	return ""
 }

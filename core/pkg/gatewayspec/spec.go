@@ -94,6 +94,11 @@ type InstanceConfig struct {
 	TURNStealthDomain     string
 	SecretsEncryptionKey  string
 	NtfyBaseURL           string
+	// RelayAllowedSuffixes is the destination allowlist of the index gateway's
+	// anonymous relay; empty means the base domain. Only the index gateway's
+	// spawner (node.EnsureGateway) sets it: /v1/proxy/relay is a MainGateway
+	// route, so a namespace gateway never serves it and is never given it.
+	RelayAllowedSuffixes []string
 }
 
 // GatewayYAMLWebRTC is the webrtc section of the gateway YAML config.
@@ -132,6 +137,7 @@ type GatewayYAMLConfig struct {
 	ClusterSecretPath     string            `yaml:"cluster_secret_path,omitempty"`
 	APIKeyHMACSecret      string            `yaml:"api_key_hmac_secret,omitempty"`
 	StateDir              string            `yaml:"state_dir"`
+	RelayAllowedSuffixes  []string          `yaml:"relay_allowed_suffixes,omitempty"`
 }
 
 // IsHealthy checks if the Gateway instance answers /v1/health.

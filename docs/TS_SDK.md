@@ -400,6 +400,83 @@ A failed read carries an error `code`:
 | 400 | `VALIDATION_FAILED` | Not a valid CID in canonical form |
 | 500 | `INTERNAL` | The storage node failed to read the content |
 
+
+### Relayed fetch
+
+A relayed fetch downloads a CID without the storage node learning the caller's
+address. The owner mints capabilities; the downloader presents one through a
+relay.
+
+```typescript
+// Owner (device-bound session): mint one token per fetch, 3600..604800 s lifetime.
+const { caps } = await client.storage.mintFetchCaps(cid, { count: 3, ttlSeconds: 86400 });
+// Each capability carries `revokeKey`, the proof that you issued its id; keep it with the owner.
+await client.storage.revokeFetchCap(caps[0].id, caps[0].revokeKey);
+
+// Downloader, Node.js only:
+import { RelayedFetch } from "@debros/orama/relay";
+
+const transport = new RelayedFetch({
+  relays: ["https://node-1.example.com", "https://node-2.example.com"],
+  namespaceHost: "ns-myapp.example.com", // a plain hostname (letters, digits, hyphens); anything else throws
+  jitterMs: 2000,        // optional: random 0..2 s before the request is sent
+  circuit: "fresh",      // "session" reuses one Tor circuit across a batch
+});
+const bytes = await client.storage.fetchWith(transport, cid, caps[1], { signal });
+
+// The non-private baseline: the client's own credential, no relay.
+const direct = await client.storage.fetchWith(client.storage.directTransport(), cid, caps[2]);
+```
+
+For each fetch the SDK picks one relay uniformly at random (never the namespace
+host), opens `GET /v1/proxy/relay` on it with no credential, runs TLS to the
+namespace host inside that WebSocket's byte stream, and sends
+`GET /v1/storage/relayed/<cid>` with `X-Orama-Fetch-Cap`. The relay carries
+ciphertext.
+
+What it hides, and what it does not:
+
+| Party | Sees | Does not see |
+|---|---|---|
+| Relay | your IP address; the namespace host; the size and timing of the stream | the CID, the capability, the content |
+| Storage node | the CID and the capability; a Tor exit address | your IP address |
+| Anyone watching both ends | timing and size can correlate a fetch (`jitterMs` blunts this, it does not remove it) | |
+
+A relay run by the same operator as the storage node, or in the same cluster, is
+not a privacy boundary: together they hold both halves. Choose relays from a
+different operator than the namespace.
+
+- **Node.js only.** `RelayedFetch` needs `node:tls` and `ws`, so it lives in the
+  `@debros/orama/relay` entry and the core import stays bundleable for React
+  Native and browsers. Those apps need a native helper that runs TLS to the
+  namespace host over the relay stream.
+- **No direct fallback.** A relay or tunnel failure throws and is never retried
+  as a direct request, which would send your address to the storage node.
+  Falling back is the application's decision, made by calling `fetchWith` with
+  another transport.
+- **A response must say how long it is.** A `200` with neither `Content-Length`
+  nor chunked encoding is refused (`RELAY_PROTOCOL_ERROR`): a body that ends when
+  the connection does cannot be told from one a reset cut short.
+- **Pin propagation.** `fetchWith` re-asks on a retryable 404 exactly as `get`
+  does, through the same transport, choosing a relay afresh each time.
+- A fetch buffers the body (default limit 64 MiB, the relay's per-stream cap;
+  deadline 5 minutes: `maxBodyBytes`, `timeoutMs`). Pass `ca` to trust a private
+  CA for the namespace host.
+
+Errors:
+
+| Error | `code` | Meaning |
+|---|---|---|
+| `FetchCapError` | `FETCH_CAP_INVALID` (403) | Forged, expired, for another CID or namespace |
+| `FetchCapError` | `FETCH_CAP_REVOKED` (403) | The owner revoked it |
+| `FetchCapError` | `FETCH_CAP_MISSING` (401) | No capability header reached the storage node |
+| `ScopeError` | `FETCH_CAP_REVOKE_KEY_INVALID` (403) | `revokeFetchCap` was given a `revokeKey` that was not issued for that id (no key at all throws `VALIDATION_FAILED` before the call) |
+| `RelayError` | `RELAY_DESTINATION_NOT_ALLOWED` (400) | The relay does not serve this namespace host |
+| `RelayError` | `RATE_LIMITED` (429) | Relay limit; `retryAfterSeconds` says when |
+| `RelayError` | `RELAY_UNAVAILABLE` (503) | The relay cannot carry a stream now |
+| `RelayError` | `RELAY_CONNECT_FAILED` | Relay unreachable, TLS to the namespace host failed, or the stream closed early |
+| `RelayError` | `RELAY_PROTOCOL_ERROR`, `RELAY_RESPONSE_TOO_LARGE`, `RELAY_NONE_CONFIGURED`, `RELAY_UNSUPPORTED_RUNTIME` | Malformed answer; body over `maxBodyBytes`; no usable relay; not Node |
+
 ---
 
 ## Functions

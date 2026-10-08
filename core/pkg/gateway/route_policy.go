@@ -381,10 +381,27 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/storage/get/", "/v1/storage/status/")
 	t.Add(dataPlane(auth.DomainStorage, auth.ActionWrite, false, routepolicy.PrincipalToken),
 		"/v1/storage/upload", "/v1/storage/pin")
+	// Fetch capabilities (bugboard #266): minting and revoking are the owner's
+	// storage-read acts. Using one is not: the capability is the whole
+	// authorization of its download, checked by the handler before anything is
+	// read, and the route keeps no address in the request log, since the
+	// request reaches it through a relay.
+	t.Add(dataPlane(auth.DomainStorage, auth.ActionRead, false, routepolicy.PrincipalToken),
+		"/v1/storage/fetch-caps", "/v1/storage/fetch-caps/")
+	relayedDownload := policyHandlerAuth
+	relayedDownload.RequestLog = routepolicy.LogNoAddress
+	t.Add(relayedDownload, "/v1/storage/relayed/")
 	t.Add(dataPlane(auth.DomainWebRTC, auth.ActionRead, true, routepolicy.PrincipalToken),
 		"/v1/webrtc/turn/credentials", "/v1/webrtc/signal", "/v1/webrtc/rooms")
 	t.Add(dataPlane(auth.DomainProxy, auth.ActionWrite, true, routepolicy.WalletToken),
 		"/v1/proxy/anon", "/v1/proxy/tunnel")
+	// The relay (bugboard #266) is the one proxy route with no credential: a
+	// destination-pinned tunnel any client may open, rate-limited by address.
+	// MainGateway: the Tor client is the node's, whatever host was asked for.
+	relayTunnel := policyOpen
+	relayTunnel.MainGateway = true
+	relayTunnel.RequestLog = routepolicy.LogNone
+	t.Add(relayTunnel, "/v1/proxy/relay")
 	t.Add(dataPlane(auth.DomainPubsub, auth.ActionRead, true, routepolicy.AnyCredential),
 		"/v1/pubsub/ws", "/v1/pubsub/topics", "/v1/pubsub/presence")
 	t.Add(dataPlane(auth.DomainPubsub, auth.ActionWrite, true, routepolicy.AnyCredential),

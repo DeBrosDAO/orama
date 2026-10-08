@@ -437,3 +437,35 @@ func TestValidateConfig_NodePeerIDAccepted(t *testing.T) {
 		t.Fatalf("a config with a valid node peer id was refused: %v", errs)
 	}
 }
+
+func TestValidateConfig_relayAllowedSuffixes(t *testing.T) {
+	base := func(suffixes ...string) *Config {
+		return &Config{
+			ListenAddr: ":8080", ClientNamespace: "default", RQLiteDSN: "http://10.0.0.1:10100",
+			StateDir: "/opt/orama/.orama/data/namespaces/default/gateway", BaseDomain: "example.com",
+			NodePeerID: testNodePeerID, RelayAllowedSuffixes: suffixes,
+		}
+	}
+	if errs := base("partner.example", "other.example.org").ValidateConfig(); len(errs) != 0 {
+		t.Errorf("valid suffixes refused: %v", errs)
+	}
+	if errs := base().ValidateConfig(); len(errs) != 0 {
+		t.Errorf("no suffixes (the base domain) refused: %v", errs)
+	}
+	for _, publicSuffix := range []string{"co.uk", "github.io", "herokuapp.com", "com.au"} {
+		errs := base("partner.example", publicSuffix).ValidateConfig()
+		if len(errs) == 0 || !strings.Contains(errs[0].Error(), "relay_allowed_suffixes[1]") ||
+			!strings.Contains(errs[0].Error(), "public suffix") {
+			t.Errorf("public suffix %q: errs = %v", publicSuffix, errs)
+		}
+	}
+	if errs := base("sub.github.io", "dbrs.space", "example.co.uk").ValidateConfig(); len(errs) != 0 {
+		t.Errorf("a domain under a public suffix was refused: %v", errs)
+	}
+	for _, bad := range []string{"", "com", "Partner.Example", "1.2.3.4:443", "a b.example", "*.example.com"} {
+		errs := base("partner.example", bad).ValidateConfig()
+		if len(errs) == 0 || !strings.Contains(errs[0].Error(), "relay_allowed_suffixes[1]") {
+			t.Errorf("suffix %q: errs = %v", bad, errs)
+		}
+	}
+}

@@ -751,6 +751,10 @@ type HostServices interface {
 	// RevokeCapability refuses one capability of the calling namespace,
 	// named by its token.
 	RevokeCapability(ctx context.Context, token string) error
+	// MintStorageFetchCaps issues count fetch capabilities to read cid of the
+	// calling namespace and returns them as JSON
+	// {"namespace","cid","caps":[{"id","token","expires_at"}]}.
+	MintStorageFetchCaps(ctx context.Context, cid string, count int, ttl time.Duration) (string, error)
 
 	// WebRTCAdmit admits user to a WebRTC room of the calling namespace for ttl,
 	// from device (any device when empty), and returns the admission as JSON

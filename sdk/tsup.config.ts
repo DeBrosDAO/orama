@@ -4,7 +4,13 @@ export default defineConfig({
   // The chain module is its own entry (@debros/orama/chain): its generated
   // protobuf codecs are large, and a caller that only uses the database or
   // pubsub clients should not carry them.
-  entry: { index: "src/index.ts", chain: "src/chain/index.ts" },
+  entry: {
+    index: "src/index.ts",
+    chain: "src/chain/index.ts",
+    // Node-only (node:tls): its own entry so the core stays bundleable for
+    // React Native and browsers.
+    relay: "src/storage/relay-transport.ts",
+  },
 
   // Both module formats.
   //
@@ -20,6 +26,7 @@ export default defineConfig({
   dts: { compilerOptions: { ignoreDeprecations: "6.0" } },
   sourcemap: true,
   clean: true,
+  splitting: true,
 
   // shims injects the import.meta.url / __dirname equivalents each format
   // lacks, so one source builds to both without conditional code.

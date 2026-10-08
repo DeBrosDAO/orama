@@ -3,11 +3,13 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
 )
@@ -21,6 +23,25 @@ type requestLogEntry struct {
 	durationMs int64
 	ip         string
 	apiKey     string // raw API key (resolved to ID at flush time in batch)
+}
+
+// newRequestLogEntry is the row one request leaves. A route that declares
+// LogNoAddress leaves the address out: the row says a request happened, not
+// who from.
+func newRequestLogEntry(r *http.Request, policy routepolicy.Policy, status, bytesOut int, dur time.Duration, apiKey string) requestLogEntry {
+	ip := ""
+	if policy.RequestLog != routepolicy.LogNoAddress {
+		ip = getClientIP(r)
+	}
+	return requestLogEntry{
+		method:     r.Method,
+		path:       r.URL.Path,
+		statusCode: status,
+		bytesOut:   bytesOut,
+		durationMs: dur.Milliseconds(),
+		ip:         ip,
+		apiKey:     apiKey,
+	}
 }
 
 // requestLogBatcher aggregates request logs and flushes them to RQLite in bulk
@@ -72,6 +93,29 @@ func (b *requestLogBatcher) run() {
 			return
 		}
 	}
+}
+
+// buildRequestLogInsert is the batch INSERT of a flush and its arguments.
+func buildRequestLogInsert(batch []requestLogEntry, apiKeyIDs map[string]int64) (string, []interface{}) {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO request_logs (method, path, status_code, bytes_out, duration_ms, ip, api_key_id) VALUES ")
+
+	args := make([]interface{}, 0, len(batch)*7)
+	for i, e := range batch {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+
+		var apiKeyID interface{} = nil
+		if e.apiKey != "" {
+			if id, ok := apiKeyIDs[e.apiKey]; ok {
+				apiKeyID = id
+			}
+		}
+		args = append(args, e.method, e.path, e.statusCode, e.bytesOut, e.durationMs, e.ip, apiKeyID)
+	}
+	return sb.String(), args
 }
 
 // flush writes all buffered log entries to RQLite in a single batch.
@@ -139,26 +183,8 @@ func (b *requestLogBatcher) flush() {
 
 	// Build batch INSERT for request_logs
 	if len(batch) > 0 {
-		var sb strings.Builder
-		sb.WriteString("INSERT INTO request_logs (method, path, status_code, bytes_out, duration_ms, ip, api_key_id) VALUES ")
-
-		args := make([]interface{}, 0, len(batch)*7)
-		for i, e := range batch {
-			if i > 0 {
-				sb.WriteString(", ")
-			}
-			sb.WriteString("(?, ?, ?, ?, ?, ?, ?)")
-
-			var apiKeyID interface{} = nil
-			if e.apiKey != "" {
-				if id, ok := apiKeyIDs[e.apiKey]; ok {
-					apiKeyID = id
-				}
-			}
-			args = append(args, e.method, e.path, e.statusCode, e.bytesOut, e.durationMs, e.ip, apiKeyID)
-		}
-
-		if _, err := db.Query(client.WithInternalAuth(ctx), sb.String(), args...); err != nil && b.gw.logger != nil {
+		insert, args := buildRequestLogInsert(batch, apiKeyIDs)
+		if _, err := db.Query(client.WithInternalAuth(ctx), insert, args...); err != nil && b.gw.logger != nil {
 			b.gw.logger.ComponentWarn(logging.ComponentGeneral, "failed to flush request logs", zap.Error(err))
 		}
 		if _, err := db.Query(client.WithInternalAuth(ctx),

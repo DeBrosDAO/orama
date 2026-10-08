@@ -1767,6 +1767,28 @@ is disabled and `/v1/push/*` returns 503. To enable: set the cluster secret
 and restart. (This is the only operator-side restart still required, and
 it's a one-time action at gateway provisioning.)
 
+## Relay allowlist (relayed fetch)
+
+A node's gateway serves the anonymous relay `GET /v1/proxy/relay`
+([ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md#relayed-fetch)),
+which dials only hosts under an allowlist. By default that is the cluster's own
+`http_gateway.base_domain`. To let this node relay for another cluster, list that
+cluster's base domain:
+
+```yaml
+# node.yaml, nested under http_gateway. Strictly decoded, like the rest.
+http_gateway:
+  relay_allowed_suffixes:
+    - partner.example.org      # a host equal to or under it, on whole labels, port 443
+```
+
+Each entry is a lowercase domain of at least two labels and must not be a public
+suffix (`co.uk`, `github.io`): the gateway refuses to start otherwise, naming
+`gateway.relay_allowed_suffixes[<n>]`. A list replaces the default, so keep the
+cluster's own base domain in it if this node should still relay for it. Only the
+index gateway serves the relay, so only it is given the list; a change takes
+effect when the gateway restarts (`orama node restart`).
+
 ## Project Structure
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full architecture overview.

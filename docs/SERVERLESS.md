@@ -872,6 +872,16 @@ the same way. Neither takes `auth.refresh`, so either one is closed with `4401`
 two minutes after its token expires and has to reconnect with a fresh one. See
 [AUTH.md](AUTH.md#open-websockets).
 
+### Storage fetch capabilities
+
+A function running for a device-bound session can mint the tokens a
+correspondent downloads one stored object with, with no identity
+([AUTH.md](AUTH.md#fetch-capabilities)):
+
+| Function | Description |
+|----------|-------------|
+| `storage_fetch_cap_mint(cid, count, ttl_seconds)` → string | Mints `count` (1 to 64) fetch capabilities to read `cid` of **this** namespace, issued by the calling session's device, for 1 hour to 7 days. Returns JSON `{"namespace","cid","caps":[{"id","token","revoke_key","expires_at"}]}` (`expires_at` in Unix seconds), the body `POST /v1/storage/fetch-caps` answers, or empty on failure (the gateway log says why): no device-bound caller, a `cid` not in canonical form, a count or ttl out of range, or a gateway without a cluster secret. Keep `revoke_key` with the `id`: revoking by id takes it. Neither ownership of `cid` nor a storage selector is checked here: a function acts for its namespace and already reads and writes any CID through `storage_get` and `storage_put`, which check neither (the HTTP mint checks both because its caller is a credential that may be narrowed to `storage:avatars/*`). The serving gateway asks ownership on every use, so a token for a CID the namespace does not own opens nothing. Signature: `(cid_ptr, cid_len, count i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
+
 ### Capabilities
 
 A function that declares `ws_auth: capability` may also have its socket opened

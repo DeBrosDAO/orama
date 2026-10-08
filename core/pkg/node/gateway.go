@@ -76,6 +76,8 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		// provider at all.
 		NtfyBaseURL: n.config.HTTPGateway.NtfyBaseURL,
 		NodePeerID:  nodeID,
+
+		RelayAllowedSuffixes: n.config.HTTPGateway.RelayAllowedSuffixes,
 	})
 }
 

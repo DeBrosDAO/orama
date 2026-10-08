@@ -792,8 +792,15 @@ func (c *Client) unwrapGet(body io.ReadCloser) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(bytes.NewReader(plain)), nil
+	return bufferedContent{bytes.NewReader(plain)}, nil
 }
+
+// bufferedContent is an object read in full. Len is its size, which the
+// gateway sends as Content-Length without buffering it a second time; callers
+// of Get and GetStored may rely on it.
+type bufferedContent struct{ *bytes.Reader }
+
+func (bufferedContent) Close() error { return nil }
 
 // maxErrorBodyBytes bounds how much of an error response is read into an
 // error message.

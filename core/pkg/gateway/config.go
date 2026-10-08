@@ -46,6 +46,11 @@ type Config struct {
 	// http_gateway.base_domain.
 	BaseDomain string
 
+	// RelayAllowedSuffixes are the hosts the anonymous relay (/v1/proxy/relay)
+	// may reach: a host equal to or under one of them. Empty means this
+	// cluster's BaseDomain. Loaded from YAML relay_allowed_suffixes.
+	RelayAllowedSuffixes []string
+
 	// DataDir is the node's orama directory (/opt/orama/.orama). The gateway
 	// only READS under it (secrets/, identity, node config) and writes the
 	// shared trees under data/ (SQLite databases, deployments): secrets/ and

@@ -192,6 +192,12 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// The relay takes no credential, so the address is all it can limit.
+		if g.relayRateLimiter != nil && r.URL.Path == relayPath && !g.relayRateLimiter.Allow(ip) {
+			writeRelayRateLimited(w, "too many relay streams from this address")
+			return
+		}
+
 		if !g.rateLimiter.Allow(ip) {
 			w.Header().Set("Retry-After", "5")
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)

@@ -297,6 +297,8 @@ func (g *Gateway) Routes() http.Handler {
 	// destination and the gateway relays ciphertext. Same auth posture as
 	// /v1/proxy/anon — `proxy` grant plus a genuine wallet JWT.
 	mux.HandleFunc("/v1/proxy/tunnel", g.anonTunnelHandler)
+	// Anonymous destination-pinned tunnel of a relayed fetch (bugboard #266).
+	mux.HandleFunc("/v1/proxy/relay", g.relayTunnelHandler)
 
 	// cache endpoints (Olric) - always register, check handler dynamically
 	// This allows cache routes to work after background Olric reconnection
@@ -313,6 +315,9 @@ func (g *Gateway) Routes() http.Handler {
 		mux.HandleFunc("/v1/storage/pin", g.storageHandlers.PinHandler)
 		mux.HandleFunc("/v1/storage/status/", g.storageHandlers.StatusHandler)
 		mux.HandleFunc("/v1/storage/get/", g.storageHandlers.DownloadHandler)
+		mux.HandleFunc("/v1/storage/fetch-caps", g.storageHandlers.FetchCapsHandler)
+		mux.HandleFunc("/v1/storage/fetch-caps/", g.storageHandlers.FetchCapsHandler)
+		mux.HandleFunc("/v1/storage/relayed/", g.storageHandlers.RelayedDownloadHandler)
 		mux.HandleFunc("/v1/storage/unpin/", g.storageHandlers.UnpinHandler)
 		// Internal (WireGuard-only): per-node immediate block eviction for
 		// privacy-grade unpin fan-out (bugboard #153).

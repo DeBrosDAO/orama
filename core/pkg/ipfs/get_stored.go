@@ -31,6 +31,8 @@ var ErrPinsetUnavailable = errors.New("the cluster pinset could not be read")
 // Content this node holds is served without consulting the cluster at all,
 // so a local read does not depend on the cluster peer being up. cid must be a
 // bare CID, not an /ipfs/ path.
+//
+// The reader is fully buffered and has a Len() int method, the object's size.
 func (c *Client) GetStored(ctx context.Context, cid, ipfsAPIURL string) (io.ReadCloser, error) {
 	if ipfsAPIURL == "" {
 		ipfsAPIURL = c.ipfsAPIURL

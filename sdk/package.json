@@ -55,6 +55,16 @@
         "default": "./dist/chain.cjs"
       }
     },
+    "./relay": {
+      "import": {
+        "types": "./dist/relay.d.ts",
+        "default": "./dist/relay.js"
+      },
+      "require": {
+        "types": "./dist/relay.d.cts",
+        "default": "./dist/relay.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,

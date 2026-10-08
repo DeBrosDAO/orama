@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/ipfs"
 	"github.com/DeBrosOfficial/network/pkg/logging"
-	gocid "github.com/ipfs/go-cid"
 	"go.uber.org/zap"
 )
 
@@ -66,24 +66,42 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	// Only the canonical spelling is accepted: it is what an upload records,
 	// and a non-canonical one (an identity multihash can carry arbitrary
 	// bytes) is not safe to hand on to IPFS.
-	if parsed, err := gocid.Decode(cid); err != nil || parsed.String() != cid {
-		httputil.WriteRPCError(w, http.StatusBadRequest, httputil.ErrCodeValidationFailed,
-			fmt.Sprintf("%q is not a valid CID in canonical form", cid))
+	if err := ipfs.CanonicalCID(cid); err != nil {
+		httputil.WriteRPCError(w, http.StatusBadRequest, httputil.ErrCodeValidationFailed, err.Error())
 		return
 	}
 
 	if !h.authorizeDownload(w, r, cid, namespace) {
 		return
 	}
+	h.serveStored(w, r, cid, namespace)
+}
 
+// serveStored writes an owned, authorized CID's content as an octet-stream
+// attachment. It is the body of a download, shared by the credentialed route and
+// the relayed one so the two answer identically.
+func (h *Handlers) serveStored(w http.ResponseWriter, r *http.Request, cid, namespace string) {
 	reader, ok := h.fetchStored(r.Context(), w, cid, namespace)
 	if !ok {
 		return
 	}
 	defer reader.Close()
 
+	// GetStored hands back a fully buffered reader that knows its size, so the
+	// length is known before the first byte goes out. Content-Length is always
+	// sent: a client reading through a relayed TLS stream detects a truncated
+	// body by it.
+	sized, ok := reader.(interface{ Len() int })
+	if !ok {
+		h.logger.ComponentError(logging.ComponentGeneral, "the storage client returned content of unknown length",
+			zap.String("cid", cid))
+		httputil.WriteRPCError(w, http.StatusInternalServerError, httputil.ErrCodeInternal,
+			fmt.Sprintf("failed to read content %s from the storage node", cid))
+		return
+	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", cid))
+	w.Header().Set("Content-Length", strconv.Itoa(sized.Len()))
 
 	if _, err := io.Copy(w, reader); err != nil {
 		if r.Context().Err() != nil {
@@ -98,6 +116,18 @@ func (h *Handlers) DownloadHandler(w http.ResponseWriter, r *http.Request) {
 // the CID) and then the grant's storage selector inside it, before anything
 // asks IPFS about the CID. Writes the refusal itself.
 func (h *Handlers) authorizeDownload(w http.ResponseWriter, r *http.Request, cid, namespace string) bool {
+	if !h.requireOwnedCID(w, r, cid, namespace) {
+		return false
+	}
+	// Owning the CID is the namespace boundary; the selector is the one inside
+	// it. A grant narrowed to `storage:avatars/*` owns everything its namespace
+	// uploaded and may read only part of it.
+	return h.authorizeCID(w, r, cid, namespace, gwauth.ActionRead)
+}
+
+// requireOwnedCID refuses a CID the namespace did not upload. Writes the
+// refusal itself.
+func (h *Handlers) requireOwnedCID(w http.ResponseWriter, r *http.Request, cid, namespace string) bool {
 	hasAccess, err := h.checkCIDOwnership(r.Context(), cid, namespace)
 	if err != nil {
 		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
@@ -111,10 +141,7 @@ func (h *Handlers) authorizeDownload(w http.ResponseWriter, r *http.Request, cid
 		httputil.WriteRPCError(w, http.StatusForbidden, httputil.ErrCodeForbidden, "access denied: CID not owned by namespace")
 		return false
 	}
-	// Owning the CID is the namespace boundary; the selector is the one inside
-	// it. A grant narrowed to `storage:avatars/*` owns everything its namespace
-	// uploaded and may read only part of it.
-	return h.authorizeCID(w, r, cid, namespace, gwauth.ActionRead)
+	return true
 }
 
 // fetchStored retrieves an owned CID from IPFS, answering the client itself
@@ -205,87 +232,4 @@ func (h *Handlers) pinRequestedWithin(ctx context.Context, cid, namespace string
 		return false, fmt.Errorf("read pin-request time of %s in namespace %s: %w", cid, namespace, err)
 	}
 	return len(rows) > 0 && countFromRow(rows[0]["count"]) > 0, nil
-}
-
-// writePinNotFound is the one answer for a CID with no pin status to show,
-// whether nobody pinned it or the caller's namespace does not reference it.
-func writePinNotFound(w http.ResponseWriter, cid string) {
-	httputil.WriteError(w, http.StatusNotFound, fmt.Sprintf("pin not found: %s", cid))
-}
-
-// StatusHandler handles GET /v1/storage/status/:cid.
-// It retrieves the pin status of a CID from the IPFS cluster,
-// including replication information and peer distribution.
-func (h *Handlers) StatusHandler(w http.ResponseWriter, r *http.Request) {
-	if h.ipfsClient == nil {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "IPFS storage not available")
-		return
-	}
-
-	if !httputil.CheckMethod(w, r, http.MethodGet) {
-		return
-	}
-
-	// Extract CID from path
-	path := strings.TrimPrefix(r.URL.Path, "/v1/storage/status/")
-	if path == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "cid required")
-		return
-	}
-
-	ctx := r.Context()
-
-	namespace := h.getNamespaceFromContext(ctx)
-	if namespace == "" {
-		httputil.WriteError(w, http.StatusUnauthorized, "namespace required")
-		return
-	}
-	// The pin status carries the object's name and the peers holding it, and
-	// the cluster keeps one pin per CID for every namespace. A namespace is told
-	// about a CID only if it references it; for any other CID the answer is
-	// exactly the one for a CID nobody pinned, so the endpoint is no oracle for
-	// what other tenants store.
-	hasAccess, err := h.checkCIDOwnership(ctx, path, namespace)
-	if err != nil {
-		h.logger.ComponentError(logging.ComponentGeneral, "failed to check CID ownership",
-			zap.Error(err), zap.String("cid", path), zap.String("namespace", namespace))
-		writeStoreError(w, "failed to verify access", err)
-		return
-	}
-	if !hasAccess {
-		h.logger.ComponentDebug(logging.ComponentGeneral, "status asked for a CID the namespace does not reference",
-			zap.String("cid", path), zap.String("namespace", namespace))
-		writePinNotFound(w, path)
-		return
-	}
-	if !h.authorizeCID(w, r, path, namespace, gwauth.ActionRead) {
-		return
-	}
-
-	status, err := h.ipfsClient.PinStatus(ctx, path)
-	if err != nil {
-		h.logger.ComponentError(logging.ComponentGeneral, "failed to get pin status",
-			zap.Error(err), zap.String("cid", path))
-
-		errStr := strings.ToLower(err.Error())
-		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "404") || strings.Contains(errStr, "invalid") {
-			writePinNotFound(w, path)
-		} else {
-			httputil.WriteError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get status: %v", err))
-		}
-		return
-	}
-
-	response := StorageStatusResponse{
-		Cid:               status.Cid,
-		Name:              status.Name,
-		Status:            status.Status,
-		ReplicationMin:    status.ReplicationMin,
-		ReplicationMax:    status.ReplicationMax,
-		ReplicationFactor: status.ReplicationFactor,
-		Peers:             status.Peers,
-		Error:             status.Error,
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, response)
 }

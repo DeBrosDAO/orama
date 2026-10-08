@@ -222,6 +222,10 @@ func (m *mockHostServices) RevokeCapability(ctx context.Context, token string) e
 	return nil
 }
 
+func (m *mockHostServices) MintStorageFetchCaps(ctx context.Context, cid string, count int, ttl time.Duration) (string, error) {
+	return "", nil
+}
+
 func (m *mockHostServices) WebRTCAdmit(ctx context.Context, room, user, device string, ttl time.Duration) (string, error) {
 	return "", nil
 }

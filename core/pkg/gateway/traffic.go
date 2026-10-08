@@ -83,15 +83,29 @@ func (g *Gateway) recordTraffic(r *http.Request, a *trafficAttribution, status, 
 	if g.traffic == nil || trafficExcluded(r.URL.Path) {
 		return
 	}
-	ns := a.namespace
-	if ns == "" {
-		ns = g.cfg.ClientNamespace
-	}
+	ns := g.trafficNamespace(a)
 	if isWebSocketUpgrade(r) {
 		g.traffic.ObserveStream(ns, status, int64(bytes))
 		return
 	}
 	g.traffic.Observe(ns, status, int64(bytes), dur)
+}
+
+// countTraffic adds a request to the request metrics as a count and a status
+// only: no size and no latency sample. It is for the routes that keep no record
+// of a request's size or duration (routepolicy.LogNone).
+func (g *Gateway) countTraffic(r *http.Request, a *trafficAttribution, status int) {
+	if g.traffic == nil || trafficExcluded(r.URL.Path) {
+		return
+	}
+	g.traffic.ObserveStream(g.trafficNamespace(a), status, 0)
+}
+
+func (g *Gateway) trafficNamespace(a *trafficAttribution) string {
+	if a.namespace != "" {
+		return a.namespace
+	}
+	return g.cfg.ClientNamespace
 }
 
 // TrafficSnapshot reports what this gateway served over the last minute, or

@@ -127,6 +127,13 @@ func (m *mockIPFSClient) GetStored(ctx context.Context, cid, url string) (io.Rea
 	return m.Get(ctx, cid, url)
 }
 
+// sizedBody is the reader ipfs.Client.Get returns: fully buffered, with its size.
+type sizedReader struct{ *strings.Reader }
+
+func (sizedReader) Close() error { return nil }
+
+func sizedBody(s string) io.ReadCloser { return sizedReader{strings.NewReader(s)} }
+
 func (m *mockIPFSClient) Get(ctx context.Context, _ string, _ string) (io.ReadCloser, error) {
 	m.getDeadline, _ = ctx.Deadline()
 	return m.getReader, m.getErr
@@ -437,7 +444,7 @@ func TestDownloadHandler_MissingNamespace(t *testing.T) {
 
 func TestDownloadHandler_Success(t *testing.T) {
 	mock := &mockIPFSClient{
-		getReader: io.NopCloser(strings.NewReader("file contents")),
+		getReader: sizedBody("file contents"),
 	}
 	h := newTestHandlers(mock)
 
@@ -506,7 +513,7 @@ func TestDownloadHandler_clusterUnreachableIsRetryable(t *testing.T) {
 }
 
 func TestDownloadHandler_fetchIsBoundedBelowTheProxyBudget(t *testing.T) {
-	mock := &mockIPFSClient{getReader: io.NopCloser(strings.NewReader("x"))}
+	mock := &mockIPFSClient{getReader: sizedBody("x")}
 	start := time.Now()
 	if status, _ := download(t, mock); status != http.StatusOK {
 		t.Fatalf("status = %d", status)
@@ -520,7 +527,7 @@ func TestDownloadHandler_heldLocallyIsServedWithoutThePinset(t *testing.T) {
 	// A node that holds the content serves it even when the cluster peer is
 	// down, and whether or not it was ever pinned.
 	mock := &mockIPFSClient{heldLocally: true, pinsetErr: errors.New("cluster down"),
-		getReader: io.NopCloser(strings.NewReader("local"))}
+		getReader: sizedBody("local")}
 	if status, _ := download(t, mock); status != http.StatusOK || mock.pinsetCalls != 0 {
 		t.Fatalf("status = %d, pinset asked %d times; want 200 with no pinset lookup", status, mock.pinsetCalls)
 	}

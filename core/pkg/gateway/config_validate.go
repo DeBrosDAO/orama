@@ -11,6 +11,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	"golang.org/x/net/publicsuffix"
 )
 
 // ValidateConfig performs comprehensive validation of gateway configuration.
@@ -38,6 +39,12 @@ func (c *Config) ValidateConfig() []error {
 	// nothing and answered every TLS check for its real domain "not allowed".
 	if err := validateBaseDomain(c.BaseDomain); err != nil {
 		errs = append(errs, fmt.Errorf("gateway.domain_name: %w", err))
+	}
+
+	for i, suffix := range c.RelayAllowedSuffixes {
+		if err := validateRelaySuffix(suffix); err != nil {
+			errs = append(errs, fmt.Errorf("gateway.relay_allowed_suffixes[%d]: %w", i, err))
+		}
 	}
 
 	// state_dir is where this gateway's signing keys live. With none, it has
@@ -126,6 +133,19 @@ func validateBaseDomain(domain string) error {
 	}
 	if len(domain) > maxDomainLength || !baseDomainPattern.MatchString(domain) {
 		return fmt.Errorf("%q is not a lowercase domain name of at least two labels", domain)
+	}
+	return nil
+}
+
+// validateRelaySuffix is validateBaseDomain, and the suffix must not be a public
+// suffix ("co.uk", "github.io"): the relay would then reach every host under it,
+// none of them the operator's own.
+func validateRelaySuffix(suffix string) error {
+	if err := validateBaseDomain(suffix); err != nil {
+		return err
+	}
+	if public, _ := publicsuffix.PublicSuffix(suffix); public == suffix {
+		return fmt.Errorf("%q is a public suffix: the relay would reach every host under it; list a domain you operate", suffix)
 	}
 	return nil
 }

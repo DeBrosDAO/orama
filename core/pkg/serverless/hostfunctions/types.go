@@ -133,6 +133,11 @@ type HostFunctions struct {
 	// means capability_mint and capability_revoke fail and say why.
 	capabilityIssuer serverless.CapabilityIssuer
 
+	// fetchCapIssuer mints storage fetch capabilities (bugboard #266). Set
+	// once at gateway start via SetFetchCapIssuer; nil means
+	// storage_fetch_cap_mint fails and says why.
+	fetchCapIssuer serverless.FetchCapIssuer
+
 	// webrtc admits, kicks and mutes users in the namespace's rooms. Set once
 	// at gateway start via SetWebRTCController; nil means webrtc_admit,
 	// webrtc_kick and webrtc_mute fail and say why.

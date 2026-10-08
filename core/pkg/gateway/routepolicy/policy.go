@@ -120,7 +120,29 @@ type Policy struct {
 	// registry rather than proxying it to a namespace gateway. API keys live
 	// only in that registry, so a namespace gateway cannot answer for them.
 	MainGateway bool
+
+	// RequestLog is how much of a request the gateway records about itself. The
+	// zero value is everything; the routes of a relayed fetch (bugboard #266)
+	// declare less, since their whole point is that no node keeps a record
+	// pairing an address, a size or a duration with a CID or a destination.
+	RequestLog RequestLogLevel
 }
+
+// RequestLogLevel is what a route leaves in the request log and the access log.
+type RequestLogLevel int
+
+const (
+	// LogFull records the request: method, path, status, size, duration and the
+	// caller's address.
+	LogFull RequestLogLevel = iota
+	// LogNoAddress records the request without the caller's address:
+	// request_logs.ip is written empty.
+	LogNoAddress
+	// LogNone records nothing per request: no request_logs row and no access-log
+	// line, not even a size or a duration. The request is only counted, by status,
+	// in the request metrics.
+	LogNone
+)
 
 // Table is every route's policy.
 type Table struct {

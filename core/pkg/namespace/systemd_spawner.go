@@ -951,6 +951,8 @@ func stringSetEqual(a, b []string) bool {
 // gatewayYAMLEqual compares every spawn-written GatewayYAMLConfig field.
 // Olric server order is ignored (discovery can reshuffle). Empty / "0s"
 // timeouts compare equal so omitempty on-disk values match a zero duration.
+// RelayAllowedSuffixes is not compared: only the index gateway's spawner writes
+// it, a namespace gateway's YAML never carries it.
 func gatewayYAMLEqual(a, b gatewayspec.GatewayYAMLConfig) bool {
 	return a.ListenAddr == b.ListenAddr &&
 		a.ClientNamespace == b.ClientNamespace &&

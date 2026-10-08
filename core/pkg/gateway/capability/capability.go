@@ -104,7 +104,13 @@ func NewAuthority(clusterSecret string) (*Authority, error) {
 }
 
 func (a *Authority) key(namespace string) ([]byte, error) {
-	key, err := secrets.DeriveKey(a.clusterSecret, keyPurposePrefix+namespace)
+	return a.keyFor(keyPurposePrefix, namespace)
+}
+
+// keyFor derives the key of one kind of token in one namespace. Each kind has
+// its own purpose, so a token of one kind never verifies as another.
+func (a *Authority) keyFor(purposePrefix, namespace string) ([]byte, error) {
+	key, err := secrets.DeriveKey(a.clusterSecret, purposePrefix+namespace)
 	if err != nil {
 		return nil, fmt.Errorf("derive the capability key of %q: %w", namespace, err)
 	}
@@ -142,8 +148,7 @@ func (a *Authority) Mint(namespace, function, resource, issuerDevice string, ttl
 	if err != nil {
 		return "", nil, err
 	}
-	token := base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sign(key, payload))
-	return token, claims, nil
+	return sealToken(key, payload), claims, nil
 }
 
 // Verify checks a token for one function in one namespace, at now. It does
@@ -162,28 +167,14 @@ func (a *Authority) Verify(token, namespace, function string, now time.Time) (*C
 // Parse checks that a token is a capability this cluster minted in namespace,
 // whatever function it opens and whether or not it has expired.
 func (a *Authority) Parse(token, namespace string) (*Claims, error) {
-	if len(token) == 0 || len(token) > maxTokenLength {
-		return nil, ErrInvalid
-	}
-	encoded, sig, ok := strings.Cut(token, ".")
-	if !ok {
-		return nil, ErrInvalid
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, ErrInvalid
-	}
-	presented, err := base64.RawURLEncoding.DecodeString(sig)
-	if err != nil {
-		return nil, ErrInvalid
-	}
 	// The key is the namespace the caller is asking for, never the one the
 	// token claims: a token for another namespace fails the MAC here.
 	key, err := a.key(namespace)
 	if err != nil {
 		return nil, err
 	}
-	if !hmac.Equal(presented, sign(key, payload)) {
+	payload, ok := openToken(token, key)
+	if !ok {
 		return nil, ErrInvalid
 	}
 	var claims Claims
@@ -195,6 +186,34 @@ func (a *Authority) Parse(token, namespace string) (*Claims, error) {
 		return nil, ErrInvalid
 	}
 	return &claims, nil
+}
+
+// openToken returns the payload of a token whose MAC under key checks out.
+func openToken(token string, key []byte) ([]byte, bool) {
+	if len(token) == 0 || len(token) > maxTokenLength {
+		return nil, false
+	}
+	encoded, sig, ok := strings.Cut(token, ".")
+	if !ok {
+		return nil, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, false
+	}
+	presented, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil {
+		return nil, false
+	}
+	if !hmac.Equal(presented, sign(key, payload)) {
+		return nil, false
+	}
+	return payload, true
+}
+
+// sealToken renders a payload and its MAC as a token.
+func sealToken(key, payload []byte) string {
+	return base64.RawURLEncoding.EncodeToString(payload) + "." + base64.RawURLEncoding.EncodeToString(sign(key, payload))
 }
 
 func sign(key, payload []byte) []byte {

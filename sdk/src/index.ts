@@ -101,7 +101,12 @@ export {
   RevokedCredentialError,
   NamespaceError,
   AuthCode,
+  RelayError,
+  FetchCapError,
+  RelayCode,
 } from "./errors";
+export { DirectFetch } from "./storage/fetch-transport";
+export type { FetchCapability, FetchOptions, FetchTransport } from "./storage/fetch-transport";
 export { SCOPES, DATA_PLANE_SCOPES, KEY_PROFILES, PROFILE_SCOPES, ROLES, GRANTABLE_ROLES, isScope, satisfiesScope } from "./scopes";
 export type { Scope, KeyProfile, Role } from "./scopes";
 export type { RequestOptions, TokenRefresher, KeyExchanger } from "./core/http";
@@ -158,6 +163,8 @@ export type {
   StoragePinRequest,
   StoragePinResponse,
   StorageStatus,
+  MintFetchCapsOptions,
+  MintFetchCapsResult,
 } from "./storage/client";
 export type { FunctionsClientConfig } from "./functions/client";
 export type * from "./functions/types";

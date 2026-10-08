@@ -21,6 +21,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/deployments"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
 	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
+	"github.com/DeBrosOfficial/network/pkg/gateway/routepolicy"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"go.uber.org/zap"
@@ -730,6 +731,12 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(srw, r)
 		end := time.Now()
 		dur := end.Sub(start)
+		policy := g.policyFor(r)
+		if policy.RequestLog == routepolicy.LogNone {
+			// Counted by status, with no size and no duration, and written nowhere.
+			g.countTraffic(r, attribution, srw.status)
+			return
+		}
 		g.recordTraffic(r, attribution, srw.status, srw.bytes, dur)
 		g.logger.ComponentInfo(logging.ComponentGeneral, "request",
 			zap.String("method", r.Method),
@@ -754,15 +761,7 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 					apiKey = s
 				}
 			}
-			g.logBatcher.Add(requestLogEntry{
-				method:     r.Method,
-				path:       r.URL.Path,
-				statusCode: srw.status,
-				bytesOut:   srw.bytes,
-				durationMs: dur.Milliseconds(),
-				ip:         getClientIP(r),
-				apiKey:     apiKey,
-			})
+			g.logBatcher.Add(newRequestLogEntry(r, policy, srw.status, srw.bytes, dur, apiKey))
 		}
 	})
 }

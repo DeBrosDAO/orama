@@ -117,7 +117,11 @@ type Gateway struct {
 	// concurrent tunnels per user and per node; tunnelIsolationSecret keys the
 	// HMAC that turns a caller identity into an opaque per-user SOCKS circuit
 	// selector, so the anonymity client never receives a wallet address.
-	tunnelLimiter         *tunnelLimiter
+	tunnelLimiter *tunnelLimiter
+	// relay is the anonymous relay of a relayed fetch (bugboard #266);
+	// relayRateLimiter bounds the streams one client address opens on it.
+	relay                 *relayService
+	relayRateLimiter      *RateLimiter
 	tunnelIsolationSecret string
 
 	// Olric cache client
@@ -399,6 +403,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		nodePeerID:             cfg.NodePeerID,
 		startedAt:              time.Now(),
 		tunnelLimiter:          newTunnelLimiter(),
+		relay:                  newRelayService(relayAllowedSuffixes(cfg)),
 		ready:                  newReadiness(),
 		credentialDeprecations: newDeprecationLog(),
 		shutdownCtx:            shutdownCtx,
@@ -572,7 +577,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IPFSAPIURL:            cfg.IPFSAPIURL,
 			ClusterSecret:         cfg.ClusterSecret,
 			NodePeerID:            cfg.NodePeerID,
+			ServedNamespace:       servedNamespace(cfg),
 		}, deps.ORMClient, deps.GlobalORMClient)
+		if err := wireStorageFetchCaps(cfg.ClusterSecret, deps.AuthService, gw.storageHandlers, logger.Logger); err != nil {
+			return nil, err
+		}
 		gw.storageHandlers.HoldUntilCIDRefBackfill() // the backfill itself starts once the schema is ready (afterReadySteps)
 	}
 
@@ -1627,6 +1636,9 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.capabilityRateLimiter = NewRateLimiter(capabilityUpgradesPerMinute, capabilityUpgradeBurst)
 	gw.capabilityRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.relayRateLimiter = NewRateLimiter(relayStreamsPerMinute, relayStreamBurst)
+	gw.relayRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
 
 	gw.chainQueryRateLimiter = NewRateLimiter(chainQueriesPerMinute, chainQueryBurst)
 	gw.chainQueryRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)

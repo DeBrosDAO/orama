@@ -235,6 +235,7 @@ func (is *InstanceSpawner) generateConfig(configPath string, cfg InstanceConfig,
 		},
 		SecretsEncryptionKey: cfg.SecretsEncryptionKey,
 		NtfyBaseURL:          cfg.NtfyBaseURL,
+		RelayAllowedSuffixes: cfg.RelayAllowedSuffixes,
 	}
 	// Set Olric timeout if provided
 	if cfg.OlricTimeout > 0 {

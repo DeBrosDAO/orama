@@ -1294,6 +1294,7 @@ not a skip.
 - `pkg/anonproxy/socks.go` - SOCKS5 dialer and HTTP client; every connection goes through Tor
 - `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
 - `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
+- `pkg/gateway/relay_tunnel_handler.go` - Anonymous destination-pinned relay (bugboard #266)
 - `pkg/install/installers/tor.go`, `tor_installer.go`, `tor_keyring.go` - Tor repository, key pin, package, torrc
 - `pkg/install/installers/anyone_legacy.go` - Removal of the Anyone network
 - `systemd/orama-namespace-tor@.service` - The Tor client unit
@@ -1319,8 +1320,40 @@ was `anyone` before Tor replaced the Anyone network.
   relays ciphertext and sees only the destination host and port. See
   "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
 
-Both require the `proxy` grant **and** a genuine end-user (SIWE wallet) JWT — an
-app-runtime API key alone is refused.
+- `GET /v1/proxy/relay` (WebSocket, bugboard #266) - The relay of a relayed
+  fetch: the tunnel with the identity taken out and the destination pinned.
+  **Framing:** binary WebSocket messages carry raw TCP bytes in both directions,
+  with no framing of ours; a text frame ends the stream; when the destination
+  closes its side the relay closes the socket, and when the client closes the
+  socket the relay closes the destination. **No credential**; the only limit is
+  the client address (30 streams a minute, burst 10, and 4 streams open at once,
+  all in memory) and a pool of 128 streams of its own, apart from the tunnels.
+  **Destination** `?host=&port=`: port 443 only, and a plain ASCII hostname
+  (letters, digits, hyphens; lowercased, one trailing dot removed, and dialled
+  exactly as checked), never an IP literal, equal to or under one of
+  `relay_allowed_suffixes` (node.yaml `http_gateway.relay_allowed_suffixes`,
+  gateway YAML `relay_allowed_suffixes`; this cluster's base domain when empty;
+  an entry that is a public suffix is refused at start), compared on whole
+  labels. Only the index gateway serves the route (it is declared `MainGateway`,
+  so a namespace host is answered by the index gateway too) and only it is given
+  the list. **Circuits:** a random SOCKS isolation key per
+  stream, so two fetches of one client are not joined at the exit;
+  `?circuit=session` shares one circuit per client address for a batch. Caps:
+  64 MiB each way, 5 minutes, 2 minutes idle. Refused before the upgrade with
+  `{error, code, hint}`: `400 RELAY_DESTINATION_NOT_ALLOWED`, `429 RATE_LIMITED`
+  with `Retry-After` (too many streams from the address, open or per minute, or
+  a full pool), `503 RELAY_UNAVAILABLE` when Tor is down or the dial
+  through it fails. It never connects directly. It keeps no record of a stream:
+  route policy `LogNone` writes no `request_logs` row and no access-log line, and
+  the request metrics count it by status with no size and no latency. It is served by the gateway of the node
+  asked, whatever host the request names. The client runs TLS to the serving
+  node's `ns-<name>.<base>` through it and sends `GET /v1/storage/relayed/{cid}`
+  with a fetch capability inside ([AUTH.md](AUTH.md#fetch-capabilities),
+  [SECURITY.md](SECURITY.md#relayed-fetch)).
+
+`/v1/proxy/anon` and `/v1/proxy/tunnel` require the `proxy` grant **and** a
+genuine end-user (SIWE wallet) JWT — an app-runtime API key alone is refused.
+`/v1/proxy/relay` requires nothing.
 
 ### 7. Shared Utilities
 
