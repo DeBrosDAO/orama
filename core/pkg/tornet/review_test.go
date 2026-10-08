@@ -141,3 +141,20 @@ func TestReadNodeInfo_flagsThatAreNotWordsAreNotPrinted(t *testing.T) {
 		t.Errorf("flags = %v", info.Consensus.ListedFlags)
 	}
 }
+
+func TestReadLimited_refusesAFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("no FIFOs here: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := readLimited(path); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a FIFO was read")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reading a FIFO hung")
+	}
+}

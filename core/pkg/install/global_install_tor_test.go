@@ -782,3 +782,51 @@ func TestTorOptionsValidate_nodeIDIsForRelays(t *testing.T) {
 		t.Fatalf("a node id beside an authority: %v", err)
 	}
 }
+
+func TestDenyLoopback_failsWithoutItsAnchor(t *testing.T) {
+	if _, err := denyLoopback("[Service]\nUser=x\n"); err == nil {
+		t.Fatal("a unit with no IPAddressAllow=localhost line was rewritten")
+	}
+	if _, err := denyLoopback("IPAddressAllow=localhost\nIPAddressAllow=localhost\n"); err == nil {
+		t.Fatal("a unit with two anchors was rewritten")
+	}
+	out, err := denyLoopback(RenderGlobalTorRelayUnit())
+	if err != nil || strings.Contains(out, "IPAddressAllow") || !strings.Contains(out, "IPAddressDeny=127.0.0.0/8") {
+		t.Fatalf("relay unit: %v\n%s", err, out)
+	}
+}
+
+// The archive copies files and talks to nobody.
+func TestRenderGlobalTorArchiveUnit_touchesNoNetwork(t *testing.T) {
+	unit := RenderGlobalTorArchiveUnit()
+	if got := mustDirective(t, unit, "RestrictAddressFamilies"); got != "AF_UNIX" {
+		t.Errorf("RestrictAddressFamilies = %q", got)
+	}
+	if !strings.Contains(unit, "IPAddressDeny=any\nIPAddressAllow=localhost\n") {
+		t.Errorf("the archive may reach the network:\n%s", unit)
+	}
+}
+
+// A refused bundle leaves the installed network file as it was too.
+func TestInstallGlobal_aRefusedBundleDoesNotRewriteTheNetworkFile(t *testing.T) {
+	tf := newTorFixture(t)
+	opts := tf.options(GlobalServiceDirauth)
+	opts.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)}
+	if err := InstallGlobal(opts, tf.host); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tf.state(constants.GlobalTorAuthoritiesFile), []byte("installed earlier"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	next := tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)
+	if err := os.WriteFile(filepath.Join(next, "keys", tornet.KeyEd25519Master), []byte("another master"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts.Tor.DirauthKeysDir = next
+	if err := InstallGlobal(opts, tf.host); err == nil {
+		t.Fatal("a bundle with another master key was installed")
+	}
+	if got := readFile(t, tf.state(constants.GlobalTorAuthoritiesFile)); got != "installed earlier" {
+		t.Errorf("the network file was rewritten before the identity check refused: %q", got)
+	}
+}

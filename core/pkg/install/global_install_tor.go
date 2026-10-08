@@ -290,10 +290,6 @@ func readExitRejectList(h GlobalHost) ([]string, error) {
 // directory authority its keys. The identity keys of a host that already has
 // them are never replaced.
 func applyGlobalTor(h GlobalHost, plan *torPlan) error {
-	netPath := filepath.Join(h.StateDir, constants.GlobalTorAuthoritiesFile)
-	if err := h.StateRoot.WriteFile(netPath, plan.networkJSON, globalUnitMode); err != nil {
-		return fmt.Errorf("write %s: %w", netPath, err)
-	}
 	// Every identity check comes before the first write, so a refusal leaves the
 	// installed keys exactly as they were.
 	for _, inst := range plan.instances {
@@ -302,6 +298,10 @@ func applyGlobalTor(h GlobalHost, plan *torPlan) error {
 				return err
 			}
 		}
+	}
+	netPath := filepath.Join(h.StateDir, constants.GlobalTorAuthoritiesFile)
+	if err := h.StateRoot.WriteFile(netPath, plan.networkJSON, globalUnitMode); err != nil {
+		return fmt.Errorf("write %s: %w", netPath, err)
 	}
 	for _, inst := range plan.instances {
 		uid, gid, err := h.Lookup(inst.user)

@@ -42,7 +42,15 @@ func TestReadPassphrase(t *testing.T) {
 		}
 		return p
 	}
-	got, err := readPassphrase(write("ok", 0o600, "correct horse battery staple\n"))
+	good := write("ok", 0o600, "correct horse battery staple\n")
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPassphrase(link); err == nil {
+		t.Error("a link to the passphrase file was accepted")
+	}
+	got, err := readPassphrase(good)
 	if err != nil || string(got) != "correct horse battery staple" {
 		t.Fatalf("%q %v", got, err)
 	}
