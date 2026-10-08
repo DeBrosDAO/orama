@@ -15,13 +15,15 @@ import (
 )
 
 type fakeAdmitter struct {
-	err      error
-	admitted []string
-	released int
+	err        error
+	admitted   []string
+	clusterIDs []string
+	released   int
 }
 
-func (f *fakeAdmitter) AdmitSpawn(_ context.Context, namespace string) (func(), error) {
+func (f *fakeAdmitter) AdmitSpawn(_ context.Context, namespace, clusterID string) (func(), error) {
 	f.admitted = append(f.admitted, namespace)
+	f.clusterIDs = append(f.clusterIDs, clusterID)
 	if f.err != nil {
 		return nil, f.err
 	}

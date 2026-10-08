@@ -220,7 +220,7 @@ func (cm *ClusterManager) EnableWebRTC(ctx context.Context, namespaceName, enabl
 			RQLiteDSN:      rqliteDSN,
 		}
 
-		if err := cm.spawnSFUOnNode(ctx, node, namespaceName, sfuCfg); err != nil {
+		if err := cm.spawnSFUOnNode(ctx, cluster.ID, node, namespaceName, sfuCfg); err != nil {
 			cm.logger.Error("Failed to spawn SFU",
 				zap.String("namespace", namespaceName),
 				zap.String("node_id", node.NodeID),
@@ -585,17 +585,17 @@ func (cm *ClusterManager) selectTURNNodes(ctx context.Context, nodes []clusterNo
 }
 
 // spawnSFUOnNode spawns SFU on a node (local or remote)
-func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, node clusterNodeInfo, namespace string, cfg SFUInstanceConfig) error {
+func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, clusterID string, node clusterNodeInfo, namespace string, cfg SFUInstanceConfig) error {
 	if node.NodeID == cm.localNodeID {
-		return cm.spawnAdmitted(ctx, namespace, func() error {
+		return cm.spawnAdmitted(ctx, namespace, clusterID, func() error {
 			return cm.systemdSpawner.SpawnSFULocked(ctx, namespace, node.NodeID, cfg)
 		})
 	}
-	return cm.spawnSFURemote(ctx, node.InternalIP, cfg)
+	return cm.spawnSFURemote(ctx, clusterID, node.InternalIP, cfg)
 }
 
 // spawnSFURemote sends a spawn-sfu request to a remote node
-func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg SFUInstanceConfig) error {
+func (cm *ClusterManager) spawnSFURemote(ctx context.Context, clusterID, nodeIP string, cfg SFUInstanceConfig) error {
 	// Serialize TURN servers for transport
 	turnServers := make([]map[string]interface{}, len(cfg.TURNServers))
 	for i, ts := range cfg.TURNServers {
@@ -608,6 +608,7 @@ func (cm *ClusterManager) spawnSFURemote(ctx context.Context, nodeIP string, cfg
 
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":          "spawn-sfu",
+		"cluster_id":      clusterID,
 		"namespace":       cfg.Namespace,
 		"node_id":         cfg.NodeID,
 		"sfu_listen_addr": cfg.ListenAddr,
@@ -915,7 +916,9 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 		go func() {
 			defer wg.Done()
 			if node.NodeID == cm.localNodeID {
-				if err := cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg); err != nil {
+				if err := cm.spawnAdmitted(ctx, cluster.NamespaceName, cluster.ID, func() error {
+					return cm.systemdSpawner.RestartGateway(ctx, cluster.NamespaceName, node.NodeID, cfg)
+				}); err != nil {
 					cm.logger.Error("Failed to restart local gateway with WebRTC config",
 						zap.String("namespace", cluster.NamespaceName),
 						zap.String("node_id", node.NodeID),
@@ -927,14 +930,14 @@ func (cm *ClusterManager) restartGatewaysWithWebRTC(
 				}
 				return
 			}
-			cm.restartGatewayRemote(ctx, node.InternalIP, cfg)
+			cm.restartGatewayRemote(ctx, cluster.ID, node.InternalIP, cfg)
 		}()
 	}
 	wg.Wait()
 }
 
 // restartGatewayRemote sends a restart-gateway request to a remote node.
-func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP string, cfg gatewayspec.InstanceConfig) {
+func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, clusterID, nodeIP string, cfg gatewayspec.InstanceConfig) {
 	ipfsTimeout := ""
 	if cfg.IPFSTimeout > 0 {
 		ipfsTimeout = cfg.IPFSTimeout.String()
@@ -946,6 +949,7 @@ func (cm *ClusterManager) restartGatewayRemote(ctx context.Context, nodeIP strin
 
 	_, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":                      "restart-gateway",
+		"cluster_id":                  clusterID,
 		"namespace":                   cfg.Namespace,
 		"node_id":                     cfg.NodeID,
 		"gateway_http_port":           cfg.HTTPPort,

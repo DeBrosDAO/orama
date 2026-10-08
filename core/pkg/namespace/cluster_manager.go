@@ -604,7 +604,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
 		cm.logger.Info("Spawning RQLite leader locally", zap.String("node", nodes[0].NodeID))
-		err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnRQLiteWithSystemd(ctx, leaderCfg) })
+		err = cm.spawnAdmitted(ctx, cluster.NamespaceName, cluster.ID, func() error { return cm.spawnRQLiteWithSystemd(ctx, leaderCfg) })
 		if err == nil {
 			// Create Instance object for consistency with existing code
 			instances[0] = &rqlite.Instance{
@@ -613,7 +613,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		}
 	} else {
 		cm.logger.Info("Spawning RQLite leader remotely", zap.String("node", nodes[0].NodeID), zap.String("ip", nodes[0].InternalIP))
-		instances[0], err = cm.spawnRQLiteRemote(ctx, nodes[0].InternalIP, leaderCfg)
+		instances[0], err = cm.spawnRQLiteRemote(ctx, cluster.ID, nodes[0].InternalIP, leaderCfg)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to start RQLite leader: %w", err)
@@ -633,7 +633,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning RQLite follower locally", zap.String("node", nodes[i].NodeID))
-			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnRQLiteWithSystemd(ctx, followerCfg) })
+			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, cluster.ID, func() error { return cm.spawnRQLiteWithSystemd(ctx, followerCfg) })
 			if err == nil {
 				followerInstance = &rqlite.Instance{
 					Config: followerCfg,
@@ -641,7 +641,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 			}
 		} else {
 			cm.logger.Info("Spawning RQLite follower remotely", zap.String("node", nodes[i].NodeID), zap.String("ip", nodes[i].InternalIP))
-			followerInstance, err = cm.spawnRQLiteRemote(ctx, nodes[i].InternalIP, followerCfg)
+			followerInstance, err = cm.spawnRQLiteRemote(ctx, cluster.ID, nodes[i].InternalIP, followerCfg)
 		}
 		if err != nil {
 			// Stop previously started instances
@@ -700,7 +700,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			defer wg.Done()
 			if n.NodeID == cm.localNodeID {
 				cm.logger.Info("Spawning Olric locally", zap.String("node", n.NodeID))
-				errs[idx] = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnOlricWithSystemd(ctx, configs[idx]) })
+				errs[idx] = cm.spawnAdmitted(ctx, cluster.NamespaceName, cluster.ID, func() error { return cm.spawnOlricWithSystemd(ctx, configs[idx]) })
 				if errs[idx] == nil {
 					instances[idx] = &olric.OlricInstance{
 						Namespace:      configs[idx].Namespace,
@@ -716,7 +716,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 				}
 			} else {
 				cm.logger.Info("Spawning Olric remotely", zap.String("node", n.NodeID), zap.String("ip", n.InternalIP))
-				instances[idx], errs[idx] = cm.spawnOlricRemote(ctx, n.InternalIP, configs[idx])
+				instances[idx], errs[idx] = cm.spawnOlricRemote(ctx, cluster.ID, n.InternalIP, configs[idx])
 			}
 		}(i, node)
 	}
@@ -805,7 +805,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 		var err error
 		if node.NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning Gateway locally", zap.String("node", node.NodeID))
-			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnGatewayWithSystemd(ctx, cfg) })
+			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, cluster.ID, func() error { return cm.spawnGatewayWithSystemd(ctx, cfg) })
 			if err == nil {
 				instance = &gatewayspec.GatewayInstance{
 					Namespace:    cfg.Namespace,
@@ -820,7 +820,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 			}
 		} else {
 			cm.logger.Info("Spawning Gateway remotely", zap.String("node", node.NodeID), zap.String("ip", node.InternalIP))
-			instance, err = cm.spawnGatewayRemote(ctx, node.InternalIP, cfg)
+			instance, err = cm.spawnGatewayRemote(ctx, cluster.ID, node.InternalIP, cfg)
 		}
 		if err != nil {
 			// Stop previously started instances
@@ -842,9 +842,10 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 }
 
 // spawnRQLiteRemote sends a spawn-rqlite request to a remote node
-func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, cfg rqlite.InstanceConfig) (*rqlite.Instance, error) {
+func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, clusterID, nodeIP string, cfg rqlite.InstanceConfig) (*rqlite.Instance, error) {
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":               "spawn-rqlite",
+		"cluster_id":           clusterID,
 		"namespace":            cfg.Namespace,
 		"node_id":              cfg.NodeID,
 		"rqlite_http_port":     cfg.HTTPPort,
@@ -867,9 +868,10 @@ func (cm *ClusterManager) spawnRQLiteRemote(ctx context.Context, nodeIP string, 
 }
 
 // spawnOlricRemote sends a spawn-olric request to a remote node
-func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, cfg olric.InstanceConfig) (*olric.OlricInstance, error) {
+func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, clusterID, nodeIP string, cfg olric.InstanceConfig) (*olric.OlricInstance, error) {
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":                "spawn-olric",
+		"cluster_id":            clusterID,
 		"namespace":             cfg.Namespace,
 		"node_id":               cfg.NodeID,
 		"olric_http_port":       cfg.HTTPPort,
@@ -891,7 +893,7 @@ func (cm *ClusterManager) spawnOlricRemote(ctx context.Context, nodeIP string, c
 }
 
 // spawnGatewayRemote sends a spawn-gateway request to a remote node
-func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string, cfg gatewayspec.InstanceConfig) (*gatewayspec.GatewayInstance, error) {
+func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, clusterID, nodeIP string, cfg gatewayspec.InstanceConfig) (*gatewayspec.GatewayInstance, error) {
 	ipfsTimeout := ""
 	if cfg.IPFSTimeout > 0 {
 		ipfsTimeout = cfg.IPFSTimeout.String()
@@ -904,6 +906,7 @@ func (cm *ClusterManager) spawnGatewayRemote(ctx context.Context, nodeIP string,
 
 	resp, err := cm.sendSpawnRequest(ctx, nodeIP, map[string]interface{}{
 		"action":                      "spawn-gateway",
+		"cluster_id":                  clusterID,
 		"namespace":                   cfg.Namespace,
 		"node_id":                     cfg.NodeID,
 		"gateway_http_port":           cfg.HTTPPort,

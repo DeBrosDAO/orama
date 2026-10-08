@@ -595,7 +595,8 @@ olric unit with no env file.
 (`restoreClusterOnNode`), the boot-time restore from local state
 (`RestoreLocalClustersFromDisk`), the WebRTC sweeps, and every spawn: the `spawn-rqlite`,
 `spawn-olric`, `spawn-gateway`, `restart-gateway` and `spawn-sfu` actions of the spawn
-handler, and the provisioner's own local spawns. Each decides under the lock, not on what
+handler, the provisioner's own local spawns, and the spawns of node replacement and
+cluster repair (`recovery_spawn.go`). Each decides under the lock, not on what
 it read before waiting for it:
 
 - A spawn (`ClusterManager.AdmitSpawn`) reads the namespace's cluster from the registry
@@ -603,6 +604,18 @@ it read before waiting for it:
   answers **409**, wrapping `ErrNamespaceBeingDeleted`; a registry that cannot be read
   refuses too, with 500, and a lock not free in time answers 503). The first refused spawn
   fails the provisioning, which rolls itself back (it tears down what it started).
+- A spawn names its cluster: every `spawn-*` and `restart-gateway` request carries
+  `cluster_id`, and the spawn is refused (**409**, wrapping `ErrClusterMismatch`) when it is
+  not the id of the namespace's current cluster, read under the lock. That is what stops
+  the provisioner of an incarnation that was deleted and re-created from starting units
+  into the new cluster, which the status alone cannot tell apart. *Mixed versions:* a
+  request without `cluster_id` (a provisioner on the previous release) is accepted and
+  checked only for deletion; this is bounded to the rolling-upgrade window and is to be
+  refused as malformed once no node runs the release before this one. A node on the
+  previous release ignores the extra field. The same admission covers the local spawns
+  of provisioning, WebRTC enable and gateway restart, and the six spawns of node
+  replacement and cluster repair (`spawnRQLiteOnNode`, `spawnOlricOnNode`,
+  `spawnGatewayOnNode`), local or by request.
 - The boot-time restore needs no registry (it runs before rqlite has a leader), so it
   re-reads the namespace's `cluster-state.json` under the lock instead: a teardown removes
   it, and a state whose `cluster_id` is no longer the one that was read belongs to a
@@ -614,11 +627,7 @@ delete runs on whichever node took the request and the provisioner on another, s
 is nothing to cancel across nodes. The registry is the signal instead: `DeprovisionCluster`
 marks the cluster `deprovisioning` before it stops anything, every node's teardown holds
 the lock while it stops that node's units, and every later spawn is refused under the
-lock. A spawn that won the lock before a node's teardown is stopped by that teardown. The
-spawn requests do not carry the cluster id (a teardown's do), so a provisioner of an
-incarnation deleted and re-created within `provisioningTimeout` is not told apart from
-the new one. The spawn paths of node recovery and repair (`cluster_recovery.go`) take the
-lock only through the teardown they race with; they are not admitted.
+lock. A spawn that won the lock before a node's teardown is stopped by that teardown.
 
 The wait is bounded: `LockNamespace` returns after the caller's context ends, or after
 `NamespaceLockWaitTimeout` (3 minutes), with an error naming the namespace, so a holder
@@ -627,7 +636,10 @@ teardown that gives up is recorded as unconfirmed and replayed; a restore or swe
 retried by the next pass. The lock table keeps an entry only while a holder or waiter
 exists. During a rolling upgrade a node on the previous release neither checks nor
 refuses a spawn, and a provisioner on the previous release treats the 409 as any failed
-spawn.
+spawn. A node replacement or repair still sets the cluster `degraded` without regard to
+a `deprovisioning` mark (`updateClusterStatus` is unconditional), so a recovery that
+began before a delete can overwrite the mark; the lock and the cluster id do not cover
+that write.
 
 A create of a name that still has a row in
 `namespace_pending_cleanup` on an active node answers 409

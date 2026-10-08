@@ -550,11 +550,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		}
 
 		var spawnErr error
-		if replacement.NodeID == cm.localNodeID {
-			spawnErr = cm.spawnRQLiteWithSystemd(ctx, rqliteCfg)
-		} else {
-			_, spawnErr = cm.spawnRQLiteRemote(ctx, replacement.InternalIP, rqliteCfg)
-		}
+		spawnErr = cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn RQLite follower on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -586,11 +582,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		}
 
 		var spawnErr error
-		if replacement.NodeID == cm.localNodeID {
-			spawnErr = cm.spawnOlricWithSystemd(ctx, olricCfg)
-		} else {
-			_, spawnErr = cm.spawnOlricRemote(ctx, replacement.InternalIP, olricCfg)
-		}
+		spawnErr = cm.spawnOlricOnNode(ctx, cluster, replacement, olricCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn Olric on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -649,11 +641,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 		}
 
 		var spawnErr error
-		if replacement.NodeID == cm.localNodeID {
-			spawnErr = cm.spawnGatewayWithSystemd(ctx, gwCfg)
-		} else {
-			_, spawnErr = cm.spawnGatewayRemote(ctx, replacement.InternalIP, gwCfg)
-		}
+		spawnErr = cm.spawnGatewayOnNode(ctx, cluster, replacement, gwCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn Gateway on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -1559,11 +1547,7 @@ func (cm *ClusterManager) addNodeToCluster(
 	}
 
 	var spawnErr error
-	if replacement.NodeID == cm.localNodeID {
-		spawnErr = cm.spawnRQLiteWithSystemd(ctx, rqliteCfg)
-	} else {
-		_, spawnErr = cm.spawnRQLiteRemote(ctx, replacement.InternalIP, rqliteCfg)
-	}
+	spawnErr = cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
 	if spawnErr != nil {
 		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return nil, nil, fmt.Errorf("failed to spawn RQLite follower: %w", spawnErr)
@@ -1590,11 +1574,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		PeerAddresses:  olricPeers,
 	}
 
-	if replacement.NodeID == cm.localNodeID {
-		spawnErr = cm.spawnOlricWithSystemd(ctx, olricCfg)
-	} else {
-		_, spawnErr = cm.spawnOlricRemote(ctx, replacement.InternalIP, olricCfg)
-	}
+	spawnErr = cm.spawnOlricOnNode(ctx, cluster, replacement, olricCfg)
 	if spawnErr != nil {
 		cm.logger.Error("Failed to spawn Olric on new node (repair continues)",
 			zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -1644,11 +1624,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		}
 	}
 
-	if replacement.NodeID == cm.localNodeID {
-		spawnErr = cm.spawnGatewayWithSystemd(ctx, gwCfg)
-	} else {
-		_, spawnErr = cm.spawnGatewayRemote(ctx, replacement.InternalIP, gwCfg)
-	}
+	spawnErr = cm.spawnGatewayOnNode(ctx, cluster, replacement, gwCfg)
 	if spawnErr != nil {
 		cm.logger.Error("Failed to spawn Gateway on new node (repair continues)",
 			zap.String("node", replacement.NodeID), zap.Error(spawnErr))

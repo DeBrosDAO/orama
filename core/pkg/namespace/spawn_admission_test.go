@@ -19,12 +19,14 @@ import (
 type admissionRegistry struct {
 	status  atomic.Value // ClusterStatus; "" means no cluster
 	failure atomic.Value // string; non-empty is the error the registry returns
+	id      atomic.Value // string; the id of the cluster the registry holds
 }
 
 func newAdmissionCM(initial ClusterStatus) (*ClusterManager, *admissionRegistry) {
 	reg := &admissionRegistry{}
 	reg.status.Store(initial)
 	reg.failure.Store("")
+	reg.id.Store("c1")
 	db := &recoveryMockDB{}
 	db.queryFunc = func(dest any, _ string, _ ...any) error {
 		if msg := reg.failure.Load().(string); msg != "" {
@@ -32,7 +34,7 @@ func newAdmissionCM(initial ClusterStatus) (*ClusterManager, *admissionRegistry)
 		}
 		if d, ok := dest.(*[]NamespaceCluster); ok {
 			if st := reg.status.Load().(ClusterStatus); st != "" {
-				*d = []NamespaceCluster{{ID: "c1", NamespaceName: "acme", Status: st}}
+				*d = []NamespaceCluster{{ID: reg.id.Load().(string), NamespaceName: "acme", Status: st}}
 			}
 		}
 		return nil
@@ -49,7 +51,7 @@ func newAdmissionCM(initial ClusterStatus) (*ClusterManager, *admissionRegistry)
 func TestAdmitSpawn_admitsAClusterThatIsStillServedOrBeingProvisioned(t *testing.T) {
 	for _, st := range []ClusterStatus{ClusterStatusProvisioning, ClusterStatusReady, ClusterStatusDegraded} {
 		cm, _ := newAdmissionCM(st)
-		release, err := cm.AdmitSpawn(context.Background(), "acme")
+		release, err := cm.AdmitSpawn(context.Background(), "acme", "c1")
 		if err != nil {
 			t.Fatalf("status %s: %v; want the spawn admitted", st, err)
 		}
@@ -67,7 +69,7 @@ func TestAdmitSpawn_admitsAClusterThatIsStillServedOrBeingProvisioned(t *testing
 func TestAdmitSpawn_refusesANamespaceBeingDeletedOrGone(t *testing.T) {
 	for _, st := range []ClusterStatus{ClusterStatusDeprovisioning, ""} {
 		cm, _ := newAdmissionCM(st)
-		release, err := cm.AdmitSpawn(context.Background(), "acme")
+		release, err := cm.AdmitSpawn(context.Background(), "acme", "c1")
 		if release != nil || !errors.Is(err, ErrNamespaceBeingDeleted) {
 			t.Fatalf("status %q: release=%v err=%v; want ErrNamespaceBeingDeleted", st, release != nil, err)
 		}
@@ -93,7 +95,7 @@ func TestAdmitSpawn_readsTheStatusOnlyOnceTheTeardownHasLetGo(t *testing.T) {
 	spawned := false
 	done := make(chan error, 1)
 	go func() {
-		done <- cm.spawnAdmitted(context.Background(), "acme", func() error { spawned = true; return nil })
+		done <- cm.spawnAdmitted(context.Background(), "acme", "c1", func() error { spawned = true; return nil })
 	}()
 	select {
 	case err := <-done:
@@ -120,7 +122,7 @@ func TestAdmitSpawn_aRegistryThatCannotBeReadRefuses(t *testing.T) {
 	cm, reg := newAdmissionCM(ClusterStatusReady)
 	reg.failure.Store("no leader")
 	spawned := false
-	err := cm.spawnAdmitted(context.Background(), "acme", func() error { spawned = true; return nil })
+	err := cm.spawnAdmitted(context.Background(), "acme", "c1", func() error { spawned = true; return nil })
 	if err == nil || errors.Is(err, ErrNamespaceBeingDeleted) {
 		t.Fatalf("err = %v; want the registry's error, not a verdict on the namespace", err)
 	}
@@ -140,7 +142,7 @@ func TestAdmitSpawn_aWaiterWhoseContextEndsIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	spawned := false
-	err = cm.spawnAdmitted(ctx, "acme", func() error { spawned = true; return nil })
+	err = cm.spawnAdmitted(ctx, "acme", "c1", func() error { spawned = true; return nil })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v; want context.DeadlineExceeded wrapped", err)
 	}
@@ -152,7 +154,7 @@ func TestAdmitSpawn_aWaiterWhoseContextEndsIsRefused(t *testing.T) {
 func TestSpawnAdmitted_returnsTheSpawnsError(t *testing.T) {
 	cm, _ := newAdmissionCM(ClusterStatusProvisioning)
 	want := errors.New("systemctl start failed")
-	if err := cm.spawnAdmitted(context.Background(), "acme", func() error { return want }); !errors.Is(err, want) {
+	if err := cm.spawnAdmitted(context.Background(), "acme", "c1", func() error { return want }); !errors.Is(err, want) {
 		t.Fatalf("err = %v; want the spawn's error", err)
 	}
 }

@@ -37,7 +37,10 @@ type SpawnRequest struct {
 	// for. The node refuses it when its own state says the namespace here belongs
 	// to another cluster: the name was created again, and the teardown would
 	// delete the new namespace. Absent from a sender on the previous release,
-	// whose teardown is then carried out as before.
+	// whose teardown is then carried out as before. With spawn-* and
+	// restart-gateway it is the cluster the units are for: the node refuses a
+	// spawn for a cluster that is not the namespace's current one (a request
+	// without it is checked only for the namespace being deleted).
 	ClusterID string `json:"cluster_id,omitempty"`
 
 	// RQLite config (when action = "spawn-rqlite")

@@ -25,9 +25,20 @@ var ErrNamespaceBeingDeleted = errors.New("the namespace is being deleted")
 // then stops what it started) or wholly after it (refused here). The first
 // refused spawn fails the provisioning, which rolls itself back.
 //
+// A spawn names the cluster it is for (clusterID), and is refused with
+// ErrClusterMismatch when that is not the namespace's current cluster: a
+// provisioner of a deleted incarnation of a re-created name must not start units
+// into the new cluster. The cluster id is the registry's, read under the lock.
+//
+// An empty clusterID is a request from a provisioner on the release before
+// cluster ids were sent. It is accepted, checked only for the namespace being
+// deleted, for as long as such nodes may exist in the fleet (the same bounded
+// mixed-version window as a teardown without one, see TeardownNamespaceOfCluster);
+// once every node runs this release it is to be refused as malformed.
+//
 // A registry that cannot be read refuses too: starting units on a guess is
 // what this exists to stop.
-func (cm *ClusterManager) AdmitSpawn(ctx context.Context, namespace string) (release func(), err error) {
+func (cm *ClusterManager) AdmitSpawn(ctx context.Context, namespace, clusterID string) (release func(), err error) {
 	unlock, err := cm.systemdSpawner.LockNamespace(ctx, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("spawn refused for namespace %s: %w", namespace, err)
@@ -41,13 +52,18 @@ func (cm *ClusterManager) AdmitSpawn(ctx context.Context, namespace string) (rel
 		unlock()
 		return nil, fmt.Errorf("spawn refused for namespace %s: %w", namespace, ErrNamespaceBeingDeleted)
 	}
+	if clusterID != "" && cluster.ID != clusterID {
+		unlock()
+		return nil, fmt.Errorf("spawn refused for namespace %s: it is for cluster %s and the namespace's cluster is %s: %w",
+			namespace, clusterID, cluster.ID, ErrClusterMismatch)
+	}
 	return unlock, nil
 }
 
 // spawnAdmitted runs spawn, a start of one of namespace's units on this node
-// by the provisioner, under AdmitSpawn.
-func (cm *ClusterManager) spawnAdmitted(ctx context.Context, namespace string, spawn func() error) error {
-	release, err := cm.AdmitSpawn(ctx, namespace)
+// for cluster clusterID (provisioning, repair, WebRTC), under AdmitSpawn.
+func (cm *ClusterManager) spawnAdmitted(ctx context.Context, namespace, clusterID string, spawn func() error) error {
+	release, err := cm.AdmitSpawn(ctx, namespace, clusterID)
 	if err != nil {
 		return err
 	}
