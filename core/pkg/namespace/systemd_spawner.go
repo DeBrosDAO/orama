@@ -40,11 +40,10 @@ type SystemdSpawner struct {
 	clusterSecretPath string
 	logger            *zap.Logger
 
-	// caddyStorageDirOverride overrides the Caddy cert-storage dir used to
-	// locate the `*.<base>` wildcard cert. Empty means the production default
-	// (caddyServiceStorageDir). Only set in tests so resolveTURNSCert can be
-	// exercised without touching /var/lib.
-	caddyStorageDirOverride string
+	// oramaDirOverride replaces constants.ProductionOramaDir as the directory
+	// the exported `*.<base>` certificate is read under. Only set in tests, so
+	// resolveTURNSCert can be exercised without touching /opt/orama.
+	oramaDirOverride string
 
 	// teardownUnitsFn and deleteStateFn replace the two steps of
 	// TeardownNamespace. Nil in production; set in tests, which have no systemd
@@ -77,13 +76,17 @@ func (s *SystemdSpawner) LockNamespace(namespace string) (unlock func()) {
 	return mu.Unlock
 }
 
-// wildcardCertPaths returns the cert/key paths for the `*.<baseDomain>` wildcard
-// in Caddy's storage, honoring caddyStorageDirOverride when set (tests).
-func (s *SystemdSpawner) wildcardCertPaths(baseDomain string) (certPath, keyPath string) {
-	if s.caddyStorageDirOverride != "" {
-		return locateCaddyCert(s.caddyStorageDirOverride, "wildcard_."+baseDomain)
+// wildcardCertPaths returns where the cluster's `*.<base>` certificate and key
+// are exported: Caddy keeps its certificates in the cluster's shared store, not
+// on disk, and the index gateway writes this pair from it (tlsstore.Exporter).
+// The path does not depend on the CA that issued the certificate, so the TURN
+// server's reloader keeps watching the right file across a change of CA.
+func (s *SystemdSpawner) wildcardCertPaths() (certPath, keyPath string) {
+	dir := constants.ProductionOramaDir
+	if s.oramaDirOverride != "" {
+		dir = s.oramaDirOverride
 	}
-	return caddyWildcardCertPaths(baseDomain)
+	return constants.WildcardCertPath(dir), constants.WildcardKeyPath(dir)
 }
 
 // NewSystemdSpawner creates a new systemd-based spawner.
@@ -1276,41 +1279,35 @@ func (s *SystemdSpawner) StopSFU(ctx context.Context, namespace, nodeID string) 
 	return s.systemdMgr.StopService(namespace, systemd.ServiceTypeSFU)
 }
 
-// resolveTURNSCert returns the Caddy `*.<baseDomain>` wildcard certificate for
-// the shared TURN server's TURNS listener.
+// resolveTURNSCert returns the cluster's `*.<baseDomain>` certificate for the
+// shared TURN server's TURNS listener.
 //
 // The wildcard covers every host that listener answers for: each tenant's
 // single-label turn-<ns>.<base> (turn.TLSHostForNamespace) and cdn-<hash>.<base>
-// stealth host. It is the only source. Per-domain Let's Encrypt provisioning by
-// appending to the Caddyfile could never work from orama-node
-// (ProtectSystem=strict makes /etc/caddy read-only), and a self-signed pair is
-// what clients reject — for a stealth host, indistinguishable from being
-// blocked. With no wildcard on disk this is an error, and the caller leaves
-// TURNS off.
+// stealth host. It is the only source: a self-signed pair is what clients
+// reject — for a stealth host, indistinguishable from being blocked. With no
+// exported wildcard this is an error, and the caller leaves TURNS off.
 func (s *SystemdSpawner) resolveTURNSCert(baseDomain string) (string, string, error) {
 	if baseDomain == "" {
 		return "", "", fmt.Errorf("TURNS cert: no base domain configured, so there is no *.<base> wildcard cert to use")
 	}
-	certPath, keyPath := s.wildcardCertPaths(baseDomain)
-	if _, err := os.Stat(certPath); err != nil {
-		return "", "", fmt.Errorf("TURNS cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
+	certPath, keyPath, err := s.exportedWildcard(baseDomain)
+	if err != nil {
+		return "", "", fmt.Errorf("TURNS cert: %w", err)
 	}
-	if _, err := os.Stat(keyPath); err != nil {
-		return "", "", fmt.Errorf("TURNS cert: Caddy wildcard key for *.%s not found at %s: %w", baseDomain, keyPath, err)
-	}
-	s.logger.Info("Using Caddy wildcard cert for TURNS",
+	s.logger.Info("Using the cluster's wildcard cert for TURNS",
 		zap.String("base_domain", baseDomain),
 		zap.String("cert_path", certPath))
 	return certPath, keyPath, nil
 }
 
 // resolveStealthCert resolves the TLS cert/key for the stealth TURNS host by
-// reusing Caddy's existing `*.<baseDomain>` wildcard certificate (feat-124).
+// reusing the cluster's `*.<baseDomain>` wildcard certificate (feat-124).
 //
 // The stealth host is a single-label subdomain of the base domain
 // (cdn-<hash>.<baseDomain>), so the wildcard the gateway already provisions
-// for HTTPS covers it. Caddy renews the wildcard; the TURN cert reloader
-// hot-reloads it from storage.
+// for HTTPS covers it. Caddy renews the wildcard, the index gateway exports the
+// renewal, and the TURN cert reloader hot-reloads it.
 //
 // Hard error (never self-signed) when the wildcard is missing or the host is
 // not a single-label subdomain — a stealth endpoint with an unvalidatable
@@ -1322,16 +1319,27 @@ func (s *SystemdSpawner) resolveStealthCert(stealthDomain, baseDomain string) (s
 	if !isSingleLabelSubdomain(stealthDomain, baseDomain) {
 		return "", "", fmt.Errorf("stealth cert: %q is not a single-label subdomain of %q (the *.%s wildcard cert would not cover it)", stealthDomain, baseDomain, baseDomain)
 	}
-	certPath, keyPath := s.wildcardCertPaths(baseDomain)
-	if _, err := os.Stat(certPath); err != nil {
-		return "", "", fmt.Errorf("stealth cert: Caddy wildcard cert for *.%s not found at %s (is the gateway HTTPS wildcard provisioned on this node?): %w", baseDomain, certPath, err)
+	certPath, keyPath, err := s.exportedWildcard(baseDomain)
+	if err != nil {
+		return "", "", fmt.Errorf("stealth cert: %w", err)
 	}
-	if _, err := os.Stat(keyPath); err != nil {
-		return "", "", fmt.Errorf("stealth cert: Caddy wildcard key for *.%s not found at %s: %w", baseDomain, keyPath, err)
-	}
-	s.logger.Info("Using Caddy wildcard cert for stealth TURNS",
+	s.logger.Info("Using the cluster's wildcard cert for stealth TURNS",
 		zap.String("stealth_domain", stealthDomain),
 		zap.String("cert_path", certPath))
+	return certPath, keyPath, nil
+}
+
+// exportedWildcard returns the exported `*.<baseDomain>` pair, or why there is
+// none.
+func (s *SystemdSpawner) exportedWildcard(baseDomain string) (string, string, error) {
+	certPath, keyPath := s.wildcardCertPaths()
+	if _, err := os.Stat(certPath); err != nil {
+		return "", "", fmt.Errorf("the cluster's *.%s certificate is not exported at %s yet "+
+			"(the cluster gateway writes it from the shared certificate store once a node has obtained it): %w", baseDomain, certPath, err)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		return "", "", fmt.Errorf("the cluster's *.%s key is not exported at %s: %w", baseDomain, keyPath, err)
+	}
 	return certPath, keyPath, nil
 }
 

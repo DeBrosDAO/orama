@@ -19,6 +19,11 @@ core-lint:
 core-clean:
 	$(MAKE) -C core clean
 
+# === Caddy modules (built into the node's Caddy by `orama build`) ===
+.PHONY: caddy-test
+caddy-test:
+	cd caddy && go vet ./... && go test ./...
+
 # === Cluster guide e2e (executes docs/RUN_YOUR_OWN_CLUSTER.md on machines you provide) ===
 .PHONY: e2e-cluster
 e2e-cluster:
@@ -85,7 +90,7 @@ e2e-test-unit:
 
 # === Aggregate ===
 build: core-build
-test: core-test e2e-lint e2e-coverage e2e-test-unit
+test: core-test caddy-test e2e-lint e2e-coverage e2e-test-unit
 clean: core-clean
 
 help:

@@ -657,7 +657,7 @@ cause the script detected in the chain's state and is never used to hide a failu
 | `TX_GAS` | `600000` | gas limit of each `orama global` transaction. Its fee is read from the chain right before it is sent: gas × the current base fee, with no tip, because the operator pays from earnings and x/fees pays a tip only from a bank balance |
 | `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
 | `FAUCET_ENABLED` | `1` | `1` sets `app_state.emission.params.faucet_enabled` in genesis, which switches on the test-network faucet (`MsgFaucet`; fund an account with `orama chain faucet <addr> --env stagenet`). `0` leaves it off. A genesis-only switch: it cannot be changed on a running chain |
-| `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-staging-roots.pem` | CA bundle that signs the gateway's certificate |
+| `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-roots.pem` | CA bundle that signs the gateway's certificate (Let's Encrypt production's ISRG roots: stagenet serves production certificates) |
 | `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
 | `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |
 
@@ -1647,67 +1647,16 @@ Always follow the local-first approach:
 
 Never fix issues directly on the server — those fixes are lost on next deployment.
 
-## Trusting the Self-Signed TLS Certificate
+## When a node has no certificate
 
-When Let's Encrypt is rate-limited, Caddy falls back to its internal CA (self-signed certificates). Browsers will show security warnings unless you install the root CA certificate.
-
-### Downloading the Root CA Certificate
-
-From VPS 1 (or any node), copy the certificate:
-
-```bash
-# Copy the cert to an accessible location on the VPS
-ssh ubuntu@<VPS_IP> "sudo cp /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt /tmp/caddy-root-ca.crt && sudo chmod 644 /tmp/caddy-root-ca.crt"
-
-# Download to your local machine
-scp ubuntu@<VPS_IP>:/tmp/caddy-root-ca.crt ~/Downloads/caddy-root-ca.crt
-```
-
-### macOS
-
-```bash
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/Downloads/caddy-root-ca.crt
-```
-
-This adds the cert system-wide. All browsers (Safari, Chrome, Arc, etc.) will trust it immediately. Firefox uses its own certificate store — go to **Settings > Privacy & Security > Certificates > View Certificates > Import** and import the `.crt` file there.
-
-To remove it later:
-```bash
-sudo security remove-trusted-cert -d ~/Downloads/caddy-root-ca.crt
-```
-
-### iOS (iPhone/iPad)
-
-1. Transfer `caddy-root-ca.crt` to your device (AirDrop, email attachment, or host it on a URL)
-2. Open the file — iOS will show "Profile Downloaded"
-3. Go to **Settings > General > VPN & Device Management** (or "Profiles" on older iOS)
-4. Tap the "Caddy Local Authority" profile and tap **Install**
-5. Go to **Settings > General > About > Certificate Trust Settings**
-6. Enable **full trust** for "Caddy Local Authority - 2026 ECC Root"
-
-### Android
-
-1. Transfer `caddy-root-ca.crt` to your device
-2. Go to **Settings > Security > Encryption & Credentials > Install a certificate > CA certificate**
-3. Select the `caddy-root-ca.crt` file
-4. Confirm the installation
-
-Note: On Android 7+, user-installed CA certificates are only trusted by apps that explicitly opt in. Chrome will trust it, but some apps may not.
-
-### Windows
-
-```powershell
-certutil -addstore -f "ROOT" caddy-root-ca.crt
-```
-
-Or double-click the `.crt` file > **Install Certificate** > **Local Machine** > **Place in "Trusted Root Certification Authorities"**.
-
-### Linux
-
-```bash
-sudo cp caddy-root-ca.crt /usr/local/share/ca-certificates/caddy-root-ca.crt
-sudo update-ca-certificates
-```
+Caddy does not fall back to a self-signed certificate: a node that has none
+serves plain HTTP on :80 and refuses TLS on :443 for the names it lacks. Every
+node uses the cluster's shared certificate store (see
+[ARCHITECTURE.md](ARCHITECTURE.md#tlshttps)), so a node only lacks one while no
+node has obtained it yet — the CA refused (a rate limit, a delegation that is not
+in place yet) or the store is unreachable. `journalctl -u
+orama-namespace-caddy@index` on any node names the reason; a rate limit says when
+it lifts, and Caddy retries on its own.
 
 ## Push notifications
 

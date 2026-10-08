@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -95,9 +96,13 @@ type Gateway struct {
 	// used through a pointer, so the mutex inside is never copied.
 	ready readiness
 
-	sqlDB     *sql.DB
-	ormClient rqlite.Client
-	ormHTTP   *rqlite.HTTPGateway
+	sqlDB *sql.DB
+	// tlsStoreReady is set once this node's certificates from before the
+	// shared store are imported into it (tls_export.go); until then the store
+	// answers no call, so no Caddy finds it empty and orders new ones.
+	tlsStoreReady atomic.Bool
+	ormClient     rqlite.Client
+	ormHTTP       *rqlite.HTTPGateway
 
 	// encHolder is the process-wide encryption root. Stored-ciphertext
 	// keys are derived from it so a rotate takes effect without a restart.
@@ -1050,6 +1055,18 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		gw.startTelemetry()
 		logger.ComponentInfo(logging.ComponentGeneral, "Cluster telemetry started",
 			zap.String("node_id", cfg.NodePeerID))
+	}
+
+	// The cluster's certificate store: this node's certificates from before it
+	// imported, then the wildcard exported for the shared TURN server
+	// (tls_export.go). Cluster gateway only: the store is in the cluster
+	// registry.
+	if deps.SQLDB != nil && !isNamespaceGateway(cfg) {
+		go func() {
+			if gw.AwaitReady(context.Background()) {
+				gw.startTLSStore(context.Background())
+			}
+		}()
 	}
 
 	// Start namespace health monitoring loop (local probes every 30s, reconciliation every 1h)

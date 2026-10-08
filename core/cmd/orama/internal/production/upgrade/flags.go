@@ -1,5 +1,10 @@
 package upgrade
 
+import (
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
+)
+
 // Flags represents upgrade command flags
 type Flags struct {
 	Force           bool
@@ -10,6 +15,11 @@ type Flags struct {
 	// PublicIP is this node's public address, recorded as node.public_ip.
 	// Empty keeps the recorded one, or detects it (resolvePublicIP).
 	PublicIP string
+
+	// ACMECA is the ACME directory this node's Caddy issues from, recorded as
+	// node.yaml tls.acme_ca: an alias (letsencrypt, letsencrypt-staging) or an
+	// https URL, resolved by Resolve. Empty keeps the recorded one.
+	ACMECA string
 
 	// Remote upgrade flags
 	Env        string // Target environment for remote rolling upgrade
@@ -42,4 +52,18 @@ type Flags struct {
 	// Hidden flag — set programmatically by orchestrator.go via os.Args,
 	// not a documented user-facing option.
 	ReexecedAfterBinarySwap bool
+}
+
+// Resolve validates what the operator passed and puts it in the form the
+// orchestrator and a remote node take: --acme-ca becomes the URL it names.
+func (f *Flags) Resolve() error {
+	if f.ACMECA == "" {
+		return nil
+	}
+	url, err := oramainstall.ResolveACMECA(f.ACMECA)
+	if err != nil {
+		return clierr.Usage("--acme-ca: %v", err)
+	}
+	f.ACMECA = url
+	return nil
 }

@@ -106,7 +106,7 @@ PUBLIC_STORAGE_GB="${PUBLIC_STORAGE_GB:-10}"
 ARCHIVER_BOND_NORAMA="${ARCHIVER_BOND_NORAMA:-1000000000}"
 HOT_KEY_FUND_NORAMA="${HOT_KEY_FUND_NORAMA:-2000000000}"
 TX_GAS="${TX_GAS:-600000}"
-CA_FILE="${CA_FILE:-/Users/pen/orama-stagenet-handoff/le-staging-roots.pem}"
+CA_FILE="${CA_FILE:-/Users/pen/orama-stagenet-handoff/le-roots.pem}"
 GATEWAY_URL="${GATEWAY_URL:-https://stagenet.dbrsteting.bid}"
 SHIELDED_SCENARIO="${SHIELDED_SCENARIO:-}"
 # The true ASN of each node's provider: mew and mewtwo are OVH (AS16276), gengar, magicarp and froakie

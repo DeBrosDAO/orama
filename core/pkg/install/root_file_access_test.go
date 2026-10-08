@@ -88,6 +88,7 @@ var rootFileAccessAllowed = map[string]string{
 	"pkg/install/installers/caddy.go (*CaddyInstaller) Configure os.MkdirAll(configDir)":                                                    allowEtc,
 	"pkg/install/installers/caddy.go (*CaddyInstaller) Configure os.WriteFile(filepath.Join(configDir, \"Caddyfile\"))":                     allowEtc,
 	"pkg/install/installers/caddy.go writeCaddyACMEKey os.WriteFile(CaddyACMEKeyPath)":                                                      allowEtc,
+	"pkg/install/installers/caddy.go writeCaddyTLSStoreKey os.WriteFile(CaddyTLSStoreKeyPath)":                                              allowEtc,
 	"pkg/install/installers/coredns.go (*CoreDNSInstaller) Configure os.Chmod(corefilePath)":                                                allowEtc,
 	"pkg/install/installers/coredns.go (*CoreDNSInstaller) Configure os.MkdirAll(configDir)":                                                allowEtc,
 	"pkg/install/installers/coredns.go (*CoreDNSInstaller) Configure os.WriteFile(corefilePath)":                                            allowEtc,

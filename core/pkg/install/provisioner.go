@@ -45,6 +45,7 @@ func (fp *FilesystemProvisioner) EnsureDirectoryStructure() error {
 		// exist before a gateway starts: it can no longer create them.
 		constants.NamespacesDir(fp.oramaDir),
 		filepath.Dir(constants.HostTURNConfigPath(fp.oramaDir)),
+		filepath.Dir(constants.WildcardCertPath(fp.oramaDir)),
 		filepath.Join(fp.oramaDir, "logs"),
 		filepath.Join(fp.oramaDir, "tls-cache"),
 		filepath.Join(fp.oramaDir, "backups"),

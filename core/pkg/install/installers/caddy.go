@@ -10,6 +10,7 @@ import (
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/tlsstore"
 )
 
 // internalAuthHeaders are the request headers a gateway uses to tell another
@@ -116,6 +117,9 @@ func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint st
 	if err := writeCaddyACMEKey(clusterSecret); err != nil {
 		return err
 	}
+	if err := writeCaddyTLSStoreKey(clusterSecret); err != nil {
+		return err
+	}
 
 	// Create Caddyfile
 	caddyfile := ci.generateCaddyfile(domain, email, acmeEndpoint, baseDomain, acmeCA)
@@ -132,6 +136,16 @@ func (ci *CaddyInstaller) Configure(domain string, email string, acmeEndpoint st
 // runs under a user of its own, cannot. The gateway derives the same key from
 // the cluster secret (auth.ACMEChallengeKey).
 const CaddyACMEKeyPath = "/etc/caddy/orama-acme.key"
+
+// CaddyTLSStoreKeyPath holds the master key of the cluster's certificate
+// store, hex-encoded, for Caddy's caddy.storage.orama module: it signs the
+// module's /v1/internal/tls-store calls and seals what it stores. root:orama
+// 0640, like CaddyACMEKeyPath. The gateway derives the same key from the
+// cluster secret (tlsstore.MasterKey).
+const CaddyTLSStoreKeyPath = "/etc/caddy/orama-tls-store.key"
+
+// caddyTLSStorePath is the index gateway's route Caddy's storage module calls.
+const caddyTLSStorePath = "/v1/internal/tls-store"
 
 // CaddyAdminSocket is Caddy's admin API. It used to be the default,
 // localhost:2019: unauthenticated control of the process that terminates TLS
@@ -160,14 +174,41 @@ func writeCaddyACMEKey(clusterSecret string) error {
 	return restrictToGroup(CaddyACMEKeyPath, serviceUserName)
 }
 
+// writeCaddyTLSStoreKey writes the certificate store's master key derived from
+// clusterSecret to CaddyTLSStoreKeyPath, root:orama 0640, the way
+// writeCaddyACMEKey writes its key.
+func writeCaddyTLSStoreKey(clusterSecret string) error {
+	key, err := tlsstore.MasterKey(clusterSecret)
+	if err != nil {
+		return fmt.Errorf("derive the key Caddy reaches the cluster's certificate store with: %w", err)
+	}
+	if err := os.WriteFile(CaddyTLSStoreKeyPath, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", CaddyTLSStoreKeyPath, err)
+	}
+	return restrictToGroup(CaddyTLSStoreKeyPath, serviceUserName)
+}
+
+// isOneLabelUnder reports whether host is exactly one label below base, which
+// the `*.<base>` certificate covers.
+func isOneLabelUnder(host, base string) bool {
+	label, ok := strings.CutSuffix(host, "."+base)
+	return ok && label != "" && !strings.Contains(label, ".")
+}
+
 // generateCaddyfile creates the Caddyfile configuration.
-// If baseDomain is provided and different from domain, Caddy also serves
-// the base domain and its wildcard (e.g., *.example.com alongside *.node1.example.com).
-// acmeCA, when set, is the ACME directory every issuer uses: it is emitted as
-// the global acme_ca option, which Caddy applies to each `issuer acme` block
-// that names no directory of its own — including the TURN blocks appended at
-// runtime. Empty keeps the default (Let's Encrypt production) and a
-// byte-identical Caddyfile.
+//
+// Every node of a cluster serves the same certificates, kept in the cluster's
+// shared store (`storage orama`, bugboard #751): the first node to need one
+// obtains it under the store's lock, and the others load it. The names are the
+// base domain and its wildcard, which also covers every single-label host under
+// it — the node's own node-xxxxxx.<base>, ns-<name>, turn-<ns> and the stealth
+// cdn-<hash> hosts. A node domain that is not one label under the base gets a
+// site of its own; there is no wildcard under a node domain, since nothing
+// routes a name there. With no baseDomain the node domain is the base.
+//
+// acmeCA is the ACME directory every issuer uses, emitted as the global acme_ca
+// option. Empty is Let's Encrypt production, named explicitly rather than left
+// to Caddy's default.
 func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDomain, acmeCA string) string {
 	// Let's Encrypt via ACME DNS-01 challenge (no fallback to self-signed)
 	tlsBlock := fmt.Sprintf(`    tls {
@@ -205,39 +246,39 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
 	// listener off :443 to CaddyHTTPSPortBehindSNI via the `https_port` global
 	// option. The sni-router owns :443 and forwards TLS by SNI to either a
 	// namespace's TURNS listener or here (127.0.0.1:8443). Plain HTTP (:80) is
-	// unchanged. When behindSNIRouter is false, no `https_port` line is emitted
-	// and the Caddyfile is byte-identical to the pre-feature output.
+	// unchanged. When behindSNIRouter is false, no `https_port` line is emitted.
 	httpsPortOption := ""
 	if ci.behindSNIRouter {
 		httpsPortOption = fmt.Sprintf("    https_port %d\n", CaddyHTTPSPortBehindSNI)
 	}
-	acmeCAOption := ""
-	if acmeCA != "" {
-		acmeCAOption = fmt.Sprintf("    acme_ca %s\n", acmeCA)
+	if acmeCA == "" {
+		acmeCA = constants.LetsEncryptProductionACME
 	}
+	storageOption := fmt.Sprintf("    storage orama {\n        endpoint http://localhost:%d%s\n        key_file %s\n    }\n",
+		constants.GatewayAPIPort, caddyTLSStorePath, CaddyTLSStoreKeyPath)
 	adminOption := fmt.Sprintf("    admin unix/%s|%s\n", CaddyAdminSocket, caddyAdminSocketMode)
-	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s%s%s    servers {\n        protocols h1\n    }\n}\n", email, adminOption, acmeCAOption, httpsPortOption))
+	sb.WriteString(fmt.Sprintf("{\n    email %s\n%s    acme_ca %s\n%s%s    servers {\n        protocols h1\n    }\n}\n",
+		email, adminOption, acmeCA, storageOption, httpsPortOption))
 
 	gw := fmt.Sprintf("localhost:%d", constants.GatewayAPIPort)
 
-	// Node domain blocks (e.g., node1.example.com, *.node1.example.com)
-	sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
-	sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", domain, tlsBlock, proxyBlock(gw)))
-
-	// Base domain blocks (e.g., example.com, *.example.com) — for app routing
-	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\n*.%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))
-		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", baseDomain, tlsBlock, proxyBlock(gw)))
+	base := baseDomain
+	if base == "" {
+		base = domain
+	}
+	hosts := []string{"*." + base, base}
+	if domain != "" && domain != base && !isOneLabelUnder(domain, base) {
+		hosts = append(hosts, domain)
+	}
+	for _, h := range hosts {
+		sb.WriteString(fmt.Sprintf("\n%s {\n%s\n%s\n}\n", h, tlsBlock, proxyBlock(gw)))
 	}
 
 	// HTTP blocks — serve traffic over plain HTTP so the gateway is reachable
 	// even when TLS certificates are unavailable (e.g., Let's Encrypt rate limits).
 	// Without these, Caddy auto-redirects HTTP→HTTPS for the named domain blocks above.
-	sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n%s\n}\n", domain, proxyBlock(gw)))
-	sb.WriteString(fmt.Sprintf("\nhttp://%s {\n%s\n}\n", domain, proxyBlock(gw)))
-	if baseDomain != "" && baseDomain != domain {
-		sb.WriteString(fmt.Sprintf("\nhttp://*.%s {\n%s\n}\n", baseDomain, proxyBlock(gw)))
-		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n%s\n}\n", baseDomain, proxyBlock(gw)))
+	for _, h := range hosts {
+		sb.WriteString(fmt.Sprintf("\nhttp://%s {\n%s\n}\n", h, proxyBlock(gw)))
 	}
 
 	// Self-hosted ntfy reverse-proxy (feature #72). Emitted only when

@@ -125,7 +125,7 @@ echo "Node cleaned. Ready for fresh install."
 | **Firewall** | The UFW rules Orama added (comment `orama`); your own rules and the rules for the ports sshd listens on stay |
 | **User** | `orama` system user; `/etc/sudoers.d/orama-*` left by older releases (incl. `orama-namespaces`) |
 | **CoreDNS** | `/etc/coredns/Corefile` |
-| **Caddy** | `/etc/caddy/Caddyfile`, `/var/lib/caddy/` (TLS certs) |
+| **Caddy** | `/etc/caddy/` (Caddyfile and the keys derived from the cluster secret), `/var/lib/caddy/` (Caddy's state; the certificates are in the cluster's shared store) |
 | **Tor** | `orama-namespace-tor@index`, `/etc/orama/tor/torrc`, `/var/lib/orama-tor/` (the `tor` package and its apt source stay; see Nuclear Clean) |
 | **Anyone (removed)** | Any Anyone network leftovers on a node never upgraded past it: its units, the `anon` package, apt source and key, `/etc/anon`, `/var/lib/anon`, `/var/log/anon` |
 | **Temp files** | `/tmp/orama`, `/tmp/network-source.*`, build dirs |

@@ -53,7 +53,7 @@ func turnHostCM(t *testing.T, allocErr error) *ClusterManager {
 	}
 	logger := zap.NewNop()
 	spawner := NewSystemdSpawner(nsBase, "", logger)
-	spawner.caddyStorageDirOverride = t.TempDir() // no wildcard cert: TURNS stays off
+	spawner.oramaDirOverride = t.TempDir() // no wildcard cert: TURNS stays off
 	spawner.systemdMgr = systemd.NewManager(nsBase, logger)
 	return &ClusterManager{
 		db:                  db,

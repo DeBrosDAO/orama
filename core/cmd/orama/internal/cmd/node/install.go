@@ -57,7 +57,7 @@ func init() {
 	f.StringVar(&installFlags.Environment, "environment", "", "Environment name (devnet, testnet, etc.)")
 	f.StringVar(&installFlags.OperatorWallet, "operator-wallet", "", "Operator wallet address")
 	f.StringVar(&installFlags.JoinSNI, "join-sni", "", "Server name to present to --join; the invite carries it, so it is only needed to override it")
-	f.StringVar(&installFlags.ACMECA, "acme-ca", "", "ACME directory for TLS certificates: an https URL or letsencrypt-staging (test clusters that redeploy often); default Let's Encrypt production")
+	f.StringVar(&installFlags.ACMECA, "acme-ca", "", "ACME directory for TLS certificates: letsencrypt (production, the default), letsencrypt-staging (clusters rebuilt many times a week) or an https URL")
 
 	// Peering details the invite token now carries. Kept for the manual join
 	// path and for clusters mid-upgrade.

@@ -84,6 +84,8 @@ var tablePlacement = map[string]tableNote{
 	"api_keys":                 {PlacementCluster, TrustPlatform, "a key is validated against the registry (bug-162)"},
 	"wallet_api_keys":          {PlacementCluster, TrustPlatform, "which key belongs to which wallet, beside api_keys"},
 	"principals":               {PlacementCluster, TrustPlatform, "who the platform will authenticate"},
+	"tls_store":                {PlacementCluster, TrustPlatform, "the cluster's certificates and ACME account, sealed; read and written by the index gateway for Caddy (pkg/tlsstore)"},
+	"tls_locks":                {PlacementCluster, TrustPlatform, "which node is obtaining or renewing a certificate (pkg/tlsstore)"},
 	"grants":                   {PlacementCluster, TrustPlatform, "who may do what in a namespace"},
 	"status_uptime_hourly":     {PlacementCluster, TrustPlatform, "public uptime history; written and read only by pkg/telemetry/hub, which runs on the cluster gateway"},
 	"api_keys_expiry_cutoff":   {PlacementCluster, TrustPlatform, "the highest api_keys id migration 051 backfilled; the contract release revokes keys above it"},

@@ -2,11 +2,19 @@ package installers
 
 import (
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/gateway"
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/gateway"
 )
+
+// caddyStorageOption is the global `storage orama` block every node has.
+func caddyStorageOption() string {
+	return fmt.Sprintf("    storage orama {\n        endpoint http://localhost:%d/v1/internal/tls-store\n        key_file %s\n    }\n",
+		constants.GatewayAPIPort, CaddyTLSStoreKeyPath)
+}
 
 // newTestCaddyInstaller returns a CaddyInstaller suitable for unit tests —
 // no real filesystem or network dependencies.
@@ -68,20 +76,53 @@ func TestGenerateCaddyfile_ContainsCanonicalReverseProxy(t *testing.T) {
 	}
 }
 
-func TestGenerateCaddyfile_BaseDomainAddsSeparateBlocks(t *testing.T) {
+// A node's Caddy asks for the cluster's names only: the base and its
+// wildcard, which also covers the node's own node-xxxxxx.<base>. A wildcard
+// under the node domain is a certificate per node that nothing routes to, and
+// every per-node certificate spends the registered domain's weekly limit.
+func TestGenerateCaddyfile_servesTheClustersNamesOnly(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
 		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
 
-	// Both node-domain and base-domain blocks should be present.
-	for _, want := range []string{
-		"*.node1.dbrs.space",
-		"*.dbrs.space",
-		"dbrs.space {",
-	} {
+	for _, want := range []string{"\n*.dbrs.space {", "\ndbrs.space {", "\nhttp://*.dbrs.space {", "\nhttp://dbrs.space {"} {
 		if !strings.Contains(cf, want) {
-			t.Errorf("Caddyfile missing %q (base-domain block); got:\n%s", want, cf)
+			t.Errorf("Caddyfile missing %q; got:\n%s", want, cf)
 		}
+	}
+	for _, unwanted := range []string{"node1.dbrs.space {", "*.node1.dbrs.space"} {
+		if strings.Contains(cf, unwanted) {
+			t.Errorf("Caddyfile has a site for %q, which *.dbrs.space covers or nothing routes; got:\n%s", unwanted, cf)
+		}
+	}
+}
+
+// A node domain the base's wildcard does not cover keeps a site of its own.
+func TestGenerateCaddyfile_nodeDomainOutsideTheWildcard(t *testing.T) {
+	ci := newTestCaddyInstaller()
+	for _, domain := range []string{"a.node1.dbrs.space", "node1.other.example"} {
+		cf := ci.generateCaddyfile(domain, "admin@dbrs.space",
+			"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
+		if !strings.Contains(cf, "\n"+domain+" {") || !strings.Contains(cf, "\nhttp://"+domain+" {") {
+			t.Errorf("no site for %s, which *.dbrs.space does not cover; got:\n%s", domain, cf)
+		}
+		if strings.Contains(cf, "*."+domain) {
+			t.Errorf("a wildcard under the node domain %s; got:\n%s", domain, cf)
+		}
+	}
+}
+
+// Every node keeps its certificates in the cluster's shared store, so one
+// certificate is obtained per cluster rather than one per node (#751).
+func TestGenerateCaddyfile_usesTheClustersStore(t *testing.T) {
+	ci := newTestCaddyInstaller()
+	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
+		"http://localhost:10104/v1/internal/acme", "dbrs.space", "")
+	global := cf[:strings.Index(cf, "\n}\n")+3]
+	want := fmt.Sprintf("    storage orama {\n        endpoint http://localhost:%d/v1/internal/tls-store\n        key_file %s\n    }\n",
+		constants.GatewayAPIPort, CaddyTLSStoreKeyPath)
+	if !strings.Contains(global, want) {
+		t.Errorf("global options lack the shared store %q; got:\n%s", want, global)
 	}
 }
 
@@ -101,10 +142,9 @@ func TestGenerateCaddyfile_BaseDomainSameAsDomainOmitsDuplicates(t *testing.T) {
 }
 
 // TestGenerateCaddyfile_SNIRouterDisabledByteIdentical is the safety guard for
-// feat-124: when EnableSNIRouterMode has NOT been called, the generated
-// Caddyfile must be byte-identical to the pre-feature output (HTTPS stays on
-// :443, no `https_port` global option). This is the default for every existing
-// node — any drift here is a silent production change.
+// feat-124: when EnableSNIRouterMode has NOT been called, HTTPS stays on :443
+// and there is no `https_port` global option. This is the default for every
+// existing node — any drift here is a silent production change.
 func TestGenerateCaddyfile_SNIRouterDisabledByteIdentical(t *testing.T) {
 	ci := newTestCaddyInstaller()
 	cf := ci.generateCaddyfile("node1.dbrs.space", "admin@dbrs.space",
@@ -116,9 +156,9 @@ func TestGenerateCaddyfile_SNIRouterDisabledByteIdentical(t *testing.T) {
 	if strings.Contains(cf, "8443") {
 		t.Errorf("default Caddyfile must NOT reference :8443 (SNI router off); got:\n%s", cf)
 	}
-	// The global options block must be exactly the pre-feature shape, plus the
-	// private admin socket every node has.
-	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    admin unix/"+CaddyAdminSocket+"|0600\n    servers {\n        protocols h1\n    }\n}\n") {
+	// The global options block must be exactly this shape: the private admin
+	// socket, the named CA and the shared store every node has.
+	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    admin unix/"+CaddyAdminSocket+"|0600\n    acme_ca "+constants.LetsEncryptProductionACME+"\n"+caddyStorageOption()+"    servers {\n        protocols h1\n    }\n}\n") {
 		t.Errorf("default global options block drifted from pre-feature output; got:\n%s", cf)
 	}
 }
@@ -139,7 +179,7 @@ func TestGenerateCaddyfile_SNIRouterEnabledMovesHTTPSTo8443(t *testing.T) {
 	}
 	// The global option belongs inside the top-level options block, before the
 	// servers stanza.
-	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    admin unix/"+CaddyAdminSocket+"|0600\n    https_port 8443\n    servers {\n        protocols h1\n    }\n}\n") {
+	if !strings.Contains(cf, "{\n    email admin@dbrs.space\n    admin unix/"+CaddyAdminSocket+"|0600\n    acme_ca "+constants.LetsEncryptProductionACME+"\n"+caddyStorageOption()+"    https_port 8443\n    servers {\n        protocols h1\n    }\n}\n") {
 		t.Errorf("https_port not placed correctly in global options block; got:\n%s", cf)
 	}
 	// Plain HTTP :80 catch-all must be unchanged.

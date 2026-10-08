@@ -131,6 +131,9 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/join", "/v1/node/enroll",
 		// Cluster secret in the handler.
 		"/v1/internal/wg/peer", "/v1/internal/wg/peers", "/v1/internal/wg/peer/remove",
+		// This node's Caddy, by a coordination v2 stamp under the TLS store's
+		// MAC key, which install gives it (tls_store_handler.go).
+		"/v1/internal/tls-store",
 		// A node's health report, for a peer's cluster gateway: a
 		// coordination MAC over the request plus a WireGuard-peer source
 		// check, in the handler (internalTelemetryHandler).

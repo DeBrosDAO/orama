@@ -18,14 +18,28 @@ import (
 const (
 	handshakeBudget = 15 * time.Second
 	// stagingIssuerPrefix starts the common name of every Let's Encrypt
-	// staging intermediate ("(STAGING) Counterfeit Cashew R10", ...): the run
-	// uses staging (e2e/README.md), and a production chain here would mean
-	// the run spent real rate limits.
+	// staging intermediate ("(STAGING) Counterfeit Cashew R10", ...). A fleet
+	// the run provisioned uses staging (e2e/README.md), and a production chain
+	// there would mean the run spent real rate limits; stagenet serves
+	// production, and a staging chain there is one no client trusts.
 	stagingIssuerPrefix = "(STAGING)"
 	// freshCertMinLeft: a certificate issued for this run has most of its
 	// lifetime left.
 	freshCertMinLeft = 60 * 24 * time.Hour
+	// renewedCertMinLeft: a long-lived cluster's certificate is renewed with
+	// about a third of its lifetime left (Caddy's default renewal window, or
+	// earlier when the CA's renewal information says so), so it never gets
+	// near expiry.
+	renewedCertMinLeft = 10 * 24 * time.Hour
 )
+
+// certMinLeft is how much lifetime the run's certificates must have left.
+func certMinLeft(t *testing.T) time.Duration {
+	if harness.Fleet(t).State.StagingCerts() {
+		return freshCertMinLeft
+	}
+	return renewedCertMinLeft
+}
 
 // dialTLS handshakes with ip:443 presenting sni, with the run's pinned roots
 // unless edit changes the config.
@@ -50,13 +64,14 @@ func dialTLS(t *testing.T, ip, sni string, edit func(*tls.Config)) (*tls.Connect
 	return &st, nil
 }
 
-// TestTLS_everyNodeServesStagingCertsForBaseAndWildcard: every node's Caddy
-// serves, for the base name and for a name under it, a certificate that
-// chains to the pinned staging roots, covers the name (the wildcard one as
-// *.<base>), was issued by a staging intermediate and has most of its life
-// left (docs/ARCHITECTURE.md "TLS/HTTPS": ACME DNS-01 by the network's own
-// DNS; docs/NAMESERVER_SETUP.md "delegation before certificates").
-func TestTLS_everyNodeServesStagingCertsForBaseAndWildcard(t *testing.T) {
+// TestTLS_everyNodeServesCertsForBaseAndWildcard: every node's Caddy serves,
+// for the base name and for a name under it, a certificate that chains to the
+// pinned roots, covers the name (the wildcard one as *.<base>), was issued by
+// the CA the cluster uses — staging on a fleet the run provisioned, production
+// on stagenet — and is far from expiry (docs/ARCHITECTURE.md "TLS/HTTPS":
+// ACME DNS-01 by the network's own DNS; docs/NAMESERVER_SETUP.md "delegation
+// before certificates").
+func TestTLS_everyNodeServesCertsForBaseAndWildcard(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	base := f.State.BaseDomain
@@ -71,11 +86,11 @@ func TestTLS_everyNodeServesStagingCertsForBaseAndWildcard(t *testing.T) {
 			if err := leaf.VerifyHostname(sni); err != nil {
 				t.Errorf("%s: certificate does not cover %s: %v", n.Name, sni, err)
 			}
-			if !strings.HasPrefix(leaf.Issuer.CommonName, stagingIssuerPrefix) {
-				t.Errorf("%s: %s issued by %q, want a Let's Encrypt staging intermediate", n.Name, sni, leaf.Issuer.CommonName)
+			if staging := strings.HasPrefix(leaf.Issuer.CommonName, stagingIssuerPrefix); staging != f.State.StagingCerts() {
+				t.Errorf("%s: %s issued by %q; want a staging intermediate: %v", n.Name, sni, leaf.Issuer.CommonName, f.State.StagingCerts())
 			}
-			if left := time.Until(leaf.NotAfter); left < freshCertMinLeft {
-				t.Errorf("%s: %s expires in %s, want more than %s for a certificate issued for this run", n.Name, sni, left.Round(time.Hour), freshCertMinLeft)
+			if left, want := time.Until(leaf.NotAfter), certMinLeft(t); left < want {
+				t.Errorf("%s: %s expires in %s, want more than %s", n.Name, sni, left.Round(time.Hour), want)
 			}
 			if sni != base && !slices.Contains(leaf.DNSNames, "*."+base) {
 				t.Errorf("%s: the certificate for %s names %v, want the wildcard *.%s", n.Name, sni, leaf.DNSNames, base)

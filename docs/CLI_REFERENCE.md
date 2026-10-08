@@ -2984,7 +2984,7 @@ joining node takes it from the cluster in the join response. With --remote,
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--acme-ca` | — | ACME directory for TLS certificates: an https URL or letsencrypt-staging (test clusters that redeploy often); default Let's Encrypt production |
+| `--acme-ca` | — | ACME directory for TLS certificates: letsencrypt (production, the default), letsencrypt-staging (clusters rebuilt many times a week) or an https URL |
 | `--archive` | — | With --remote: the build archive to upload, verified here against --operator-wallet first |
 | `--base-domain` | — | Base domain for deployment routing (e.g., example.com) |
 | `--ca-fingerprint` | — | SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it |
@@ -3414,7 +3414,7 @@ Examples:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--acme-ca` | — | ACME directory for the node's TLS certificates (passed to node install): an https URL or letsencrypt-staging |
+| `--acme-ca` | — | ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL |
 | `--archive` | — | Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
 | `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
@@ -3553,6 +3553,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--acme-ca` | — | ACME directory this node's TLS certificates come from, recorded in node.yaml: letsencrypt (production), letsencrypt-staging or an https URL (default: the recorded one) |
 | `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
 | `--env` | — | Target environment for remote rolling upgrade (devnet, testnet) |
 | `--force` | `false` | Reconfigure all settings |

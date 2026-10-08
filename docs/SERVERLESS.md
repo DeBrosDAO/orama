@@ -258,7 +258,7 @@ The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `function_env_vars`, `revoked_tokens`, `audit_events`, `status_uptime_hourly`, `namespace_quotas`,
 `namespace_rate_limit_config`, `namespace_clusters`, `namespace_cluster_nodes`,
 `namespace_port_allocations`, `global_deployment_subdomains`, `dns_records`,
-`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`,
+`dns_nodes`, `dns_nameservers`, `raft_evicted_nodes`, `cluster_locks`, `tls_store`, `tls_locks`,
 `orama_schema_migrations`, `namespaces`, `ipfs_content_ownership`,
 `ipfs_cid_refs`, `deployments`, `deployment_domains`, `deployment_replicas`,
 `home_node_assignments`, `port_allocations`, `functions`,
@@ -880,7 +880,7 @@ correspondent downloads one stored object with, with no identity
 
 | Function | Description |
 |----------|-------------|
-| `storage_fetch_cap_mint(cid, count, ttl_seconds)` → string | Mints `count` (1 to 64) fetch capabilities to read `cid` of **this** namespace, issued by the calling session's device, for 1 hour to 7 days. Returns JSON `{"namespace","cid","caps":[{"id","token","revoke_key","expires_at"}]}` (`expires_at` in Unix seconds), the body `POST /v1/storage/fetch-caps` answers, or empty on failure (the gateway log says why): no device-bound caller, a `cid` not in canonical form, a count or ttl out of range, or a gateway without a cluster secret. Keep `revoke_key` with the `id`: revoking by id takes it. Neither ownership of `cid` nor a storage selector is checked here: a function acts for its namespace and already reads and writes any CID through `storage_get` and `storage_put`, which check neither (the HTTP mint checks both because its caller is a credential that may be narrowed to `storage:avatars/*`). The serving gateway asks ownership on every use, so a token for a CID the namespace does not own opens nothing. Signature: `(cid_ptr, cid_len, count i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
+| `storage_fetch_cap_mint(cid, count, ttl_seconds)` → string | Mints `count` (1 to 64) fetch capabilities to read `cid` of **this** namespace, issued by the calling session's device, for 1 hour to 7 days. Returns JSON `{"namespace","cid","caps":[{"id","token","revoke_key","expires_at"}]}` (`expires_at` in Unix seconds), the body `POST /v1/storage/fetch-caps` answers, or empty on failure (the gateway log says why): no device-bound caller, a `cid` not in canonical form, a count or ttl out of range, or a gateway without a cluster secret. Keep `revoke_key` with the `id`: revoking by id takes it. Neither ownership of `cid` nor a storage selector is checked here (the HTTP mint checks both because its caller is a credential that may be narrowed to `storage:avatars/*`): a function is the namespace's own code, and which of the namespace's objects a caller may read is the application's decision. This is the only storage access a function has — it cannot read or write IPFS itself (see [Storage](#storage-ipfs)) — and it reaches only the namespace's own objects: the serving gateway asks ownership on every use, so a token for a CID the namespace does not own opens nothing. Signature: `(cid_ptr, cid_len, count i32, ttl_seconds i64) → i64`, the packed `ptr<<32 \| len`. |
 
 ### Capabilities
 

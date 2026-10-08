@@ -102,6 +102,8 @@ var protectedTables = map[string]string{
 	"dns_nameservers":              "DNS",
 	"raft_evicted_nodes":           "cluster membership",
 	"cluster_locks":                "cluster coordination",
+	"tls_store":                    "the cluster's TLS certificates and keys",
+	"tls_locks":                    "certificate issuance coordination",
 	"orama_schema_migrations":      "the platform's own schema bookkeeping",
 
 	// Which namespace is which. API-key authentication resolves a key's

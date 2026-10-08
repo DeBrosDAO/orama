@@ -405,6 +405,19 @@ func (cg *ConfigGenerator) ACMECA() (string, error) {
 // own.
 const acmeCACaddyfileChars = " \t\r\n{}\""
 
+// ResolveACMECA turns an --acme-ca value into the ACME directory it names: an
+// alias (constants.ACMECAAliases) or an https directory URL. install and
+// upgrade both take it.
+func ResolveACMECA(value string) (string, error) {
+	if url, ok := constants.ACMECAAliases[value]; ok {
+		return url, nil
+	}
+	if err := ValidateACMECA(value); err != nil {
+		return "", fmt.Errorf("%w, or one of the aliases letsencrypt, letsencrypt-staging", err)
+	}
+	return value, nil
+}
+
 // ValidateACMECA accepts an https ACME directory URL — the check install
 // applies to --acme-ca (install.Flags.resolveACMECA).
 func ValidateACMECA(ca string) error {

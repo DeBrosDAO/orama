@@ -48,7 +48,10 @@ type State struct {
 	BaseDomain string `json:"base_domain"`
 	// GatewayURL is the public gateway, https://<BaseDomain>.
 	GatewayURL string `json:"gateway_url"`
-	// CAFile is a PEM bundle with the Let's Encrypt staging roots; every HTTP client pins it.
+	// CAFile is the PEM bundle of the roots the cluster's certificates chain
+	// to; every HTTP client pins it. A fleet the run provisioned is issued
+	// from Let's Encrypt staging (it is rebuilt every run); the stagenet
+	// target from production (StagingCerts).
 	CAFile string `json:"ca_file"`
 
 	// Nodes are the three core servers; Extras are on-demand servers (fourth
@@ -116,4 +119,13 @@ func (s *State) Save(path string) error {
 		return fmt.Errorf("failed to write fleet state %s: %w", path, err)
 	}
 	return nil
+}
+
+// StagingCerts reports whether the cluster's certificates come from Let's
+// Encrypt staging: a fleet the run provisioned installs with
+// --acme-ca letsencrypt-staging, since it is rebuilt every run and production
+// issues one name set five times a week; the long-lived stagenet cluster
+// serves production certificates, obtained once for the whole cluster.
+func (s *State) StagingCerts() bool {
+	return s.Target != config.TargetStagenet
 }

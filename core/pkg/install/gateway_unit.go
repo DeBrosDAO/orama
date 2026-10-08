@@ -15,7 +15,8 @@ import (
 // gateway write its own namespace's directory and read two secrets. The
 // cluster gateway, orama-namespace-gateway@index, is the one that does more:
 // its namespace cluster manager writes every namespace's directory on the host
-// (configs, env inputs) and the shared TURN server's config, and its join
+// (configs, env inputs) and the shared TURN server's config, it exports the
+// cluster's wildcard certificate for that server (data/tls), and its join
 // handler hands a joining node every secret the cluster holds. It gets that in
 // a drop-in for its instance only, so no tenant's gateway does.
 
@@ -30,7 +31,7 @@ const indexGatewayDropInName = "10-cluster-gateway.conf"
 // list setting, which is how the template's secrets view is taken back.
 const IndexGatewayDropIn = `# Written by the Orama installer on install and upgrade (pkg/install/gateway_unit.go).
 [Service]
-ReadWritePaths=/opt/orama/.orama/data/namespaces /opt/orama/.orama/data/turn
+ReadWritePaths=/opt/orama/.orama/data/namespaces /opt/orama/.orama/data/turn /opt/orama/.orama/data/tls
 TemporaryFileSystem=
 BindReadOnlyPaths=
 ReadOnlyPaths=/opt/orama/.orama/secrets

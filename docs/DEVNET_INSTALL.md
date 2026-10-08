@@ -83,18 +83,42 @@ joiner pins the fingerprint of the certificate it serves — delegate the domain
 to the cluster ([NAMESERVER_SETUP.md](NAMESERVER_SETUP.md)) before joining more
 nodes.
 
-**Test clusters that you redeploy from scratch:** pass
-`--acme-ca letsencrypt-staging` (or any https ACME directory URL) on the
-genesis node. Let's Encrypt issues at most five certificates per week for the
-same set of names, and every node of a cluster requests the same
-`*.<base-domain>` wildcard, so a second full redeploy in a week would
-otherwise be refused. Staging certificates are not browser-trusted. The CA is
-stored in `node.yaml` (`tls.acme_ca`) and kept across upgrades; Caddy uses it
-for every certificate on the node. A joiner that omits `--acme-ca` takes the
-directory from the join response, which is the minting node's `tls.acme_ca`.
-Pass the flag on a joiner only to override that.
+**Which CA.** Certificates come from Let's Encrypt production by default. A
+cluster obtains each certificate once, for all its nodes, and keeps it in its
+shared certificate store ([ARCHITECTURE.md](ARCHITECTURE.md#tlshttps)), so
+installing, joining, restarting or upgrading nodes issues nothing new, and a
+renewal Caddy makes through Let's Encrypt's renewal information (ARI) is exempt
+from its limits. A cluster you rebuild from scratch
+many times a week starts with an empty store every time, and Let's Encrypt
+issues one set of names at most five times a week: pass
+`--acme-ca letsencrypt-staging` (or any https ACME directory URL) on its genesis
+node. Staging certificates are trusted by no browser or system. The CA is stored
+in `node.yaml` (`tls.acme_ca`) and kept across upgrades. A joiner that omits
+`--acme-ca` takes the directory from the join response, which is the minting
+node's `tls.acme_ca`; pass the flag on a joiner only to override that.
 
-The CLI does not trust staging certificates either. Give the environment
+**Changing a running cluster's CA.** Upgrade every node with the new one:
+
+```bash
+orama node upgrade --env <env> --acme-ca letsencrypt --yes
+```
+
+`letsencrypt` is production, `letsencrypt-staging` staging. Each node records it
+in `node.yaml` and restarts Caddy one node at a time; the first node with the new
+CA obtains the certificates for the cluster and the others load them. The
+certificates of the previous CA stay in the store, under their own CA.
+
+**Upgrading a cluster from a release before the shared store.** On each node,
+the cluster gateway first imports the certificates and ACME account that node's
+Caddy kept on disk (`/var/lib/caddy/caddy`, once per node; each name is
+imported whole or not at all, a name the store already holds keeps the store's
+copy, and a file that is not Caddy's is left out and logged), and only then lets
+Caddy use the store. So
+the first node upgraded serves the certificates the cluster already had and
+orders nothing, and every later node loads the same ones. On each node Caddy
+restarts with the gateway and serves HTTPS again once the store is open.
+
+On a staging cluster, the CLI does not trust its certificates either. Give the environment
 Let's Encrypt's staging roots, trusted for that environment's domain only:
 
 ```bash

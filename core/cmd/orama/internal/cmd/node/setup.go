@@ -58,6 +58,6 @@ func init() {
 	setupCmd.Flags().StringVar(&setupOpts.BootstrapKey, "bootstrap-key", "", "SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored")
 	setupCmd.Flags().StringVar(&setupOpts.Archive, "archive", "", "Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded")
 	setupCmd.Flags().StringVar(&setupOpts.JoinVia, "join-via", "", "user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed)")
-	setupCmd.Flags().StringVar(&setupOpts.ACMECA, "acme-ca", "", "ACME directory for the node's TLS certificates (passed to node install): an https URL or letsencrypt-staging")
+	setupCmd.Flags().StringVar(&setupOpts.ACMECA, "acme-ca", "", "ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL")
 	setupCmd.MarkFlagRequired("ip")
 }

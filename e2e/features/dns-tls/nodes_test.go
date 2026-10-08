@@ -21,9 +21,6 @@ import (
 const (
 	corefilePath = "/etc/coredns/Corefile"
 	corednsUser  = "orama-coredns"
-	// stagingCADir is the directory Caddy names after the staging ACME
-	// directory it obtained the certificates from.
-	stagingCADir = "acme-staging-v02.api.letsencrypt.org-directory"
 	dnsPort      = 53
 )
 
@@ -86,21 +83,19 @@ func TestCoreDNS_port53OnlyOnNameservers(t *testing.T) {
 	}
 }
 
-// TestCaddy_certificateFilesAndKeys: every node keeps the staging-issued
-// base and wildcard certificates under Caddy's data dir, private keys 0600
-// owned by orama; the ACME challenge key is root:orama 0640 and the admin API
-// is a 0600 unix socket in a 0700 directory (docs/SECURITY.md "ACME DNS-01",
-// "Local control planes"; core/systemd/orama-namespace-caddy@.service).
+// TestCaddy_certificateFilesAndKeys: certificates are in the cluster's shared
+// store; the *.<base> pair the cluster gateway exports from it for TURN is
+// orama 0600 on every node; the ACME challenge key and the
+// store key are root:orama 0640, and the admin API is a 0600 unix socket in a
+// 0700 directory (docs/SECURITY.md "ACME DNS-01", "Certificates", "Local
+// control planes"; core/systemd/orama-namespace-caddy@.service).
 func TestCaddy_certificateFilesAndKeys(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	base := f.State.BaseDomain
 	for _, n := range f.State.Nodes {
-		dir := edge.CaddyDataDir + "/caddy/certificates/" + stagingCADir
-		for _, name := range []string{base, "wildcard_." + base} {
-			infra.RequireStat(t, f, n, dir+"/"+name+"/"+name+".crt", "orama", "orama", "600")
-			infra.RequireStat(t, f, n, dir+"/"+name+"/"+name+".key", "orama", "orama", "600")
-		}
+		infra.RequireStat(t, f, n, edge.WildcardCertPath, "orama", "orama", "600")
+		infra.RequireStat(t, f, n, edge.WildcardKeyPath, "orama", "orama", "600")
+		infra.RequireStat(t, f, n, edge.TLSStoreKeyPath, "root", "orama", "640")
 		infra.RequireStat(t, f, n, edge.ACMEKeyPath, "root", "orama", "640")
 		infra.RequireStat(t, f, n, "/run/orama-caddy", "orama", "orama", "700")
 		st, ok := infra.StatFile(t, f, n, edge.CaddyAdminSocket)

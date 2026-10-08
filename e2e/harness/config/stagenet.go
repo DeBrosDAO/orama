@@ -46,8 +46,10 @@ const (
 	StagenetRWReadyRel = "rwdev/ready.json"
 	// StagenetHomeRel is the CLI HOME (it holds ~/.orama/environments.json for the stagenet env).
 	StagenetHomeRel = "orama-stagenet-handoff/cli-home"
-	// StagenetCAFileRel is the Let's Encrypt staging roots bundle.
-	StagenetCAFileRel = "orama-stagenet-handoff/le-staging-roots.pem"
+	// StagenetCAFileRel is the Let's Encrypt production roots bundle (ISRG
+	// Root X1 and X2): stagenet serves production certificates, and the run
+	// pins the roots they chain to rather than the system store.
+	StagenetCAFileRel = "orama-stagenet-handoff/le-roots.pem"
 	// StagenetSSHKeyRel is the private key that reaches the stagenet nodes.
 	StagenetSSHKeyRel = ".ssh/debros-nodes"
 	// StagenetKnownHostsRel is the owner's known_hosts the pinned host keys are cross-checked against.

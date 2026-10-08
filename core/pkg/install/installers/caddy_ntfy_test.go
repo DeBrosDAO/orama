@@ -83,15 +83,22 @@ func TestGenerateCaddyfile_NtfyEmptyHostnameSkipped(t *testing.T) {
 	}
 }
 
-func TestGenerateCaddyfile_ACMECAIsAGlobalOptionOnlyWhenSet(t *testing.T) {
+// The CA is always named: production unless the node was set to another. A
+// Caddyfile that left it to Caddy's default would change CA with a Caddy
+// release.
+func TestGenerateCaddyfile_ACMECAIsAlwaysAGlobalOption(t *testing.T) {
 	ci := &CaddyInstaller{}
 	def := ci.generateCaddyfile("stagenet.example", "admin@stagenet.example", "http://localhost:6001/v1/internal/acme", "stagenet.example", "")
-	if strings.Contains(def, "acme_ca") {
-		t.Errorf("default Caddyfile must not name a CA:\n%s", def)
+	global := def[:strings.Index(def, "\n}\n")]
+	if !strings.Contains(global, "    acme_ca https://acme-v02.api.letsencrypt.org/directory\n") {
+		t.Errorf("the default Caddyfile must name Let's Encrypt production in the global block:\n%s", def)
 	}
 	staging := ci.generateCaddyfile("stagenet.example", "admin@stagenet.example", "http://localhost:6001/v1/internal/acme", "stagenet.example", "https://acme-staging-v02.api.letsencrypt.org/directory")
-	global := staging[:strings.Index(staging, "\n}\n")]
+	global = staging[:strings.Index(staging, "\n}\n")]
 	if !strings.Contains(global, "    acme_ca https://acme-staging-v02.api.letsencrypt.org/directory\n") {
 		t.Errorf("acme_ca must be in the global block:\n%s", staging)
+	}
+	if strings.Count(staging, "acme_ca") != 1 {
+		t.Errorf("exactly one acme_ca expected:\n%s", staging)
 	}
 }

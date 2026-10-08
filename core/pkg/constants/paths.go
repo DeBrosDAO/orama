@@ -39,6 +39,13 @@ const (
 	TURNSubdir = "turn"
 	// TURNConfigFileName is the shared host TURN server's config file.
 	TURNConfigFileName = "turn.yaml"
+	// TLSSubdir holds the cluster's `*.<base>` certificate, exported from the
+	// shared certificate store for the services that terminate TLS
+	// themselves (the shared TURN server).
+	TLSSubdir = "tls"
+	// WildcardCertFileName and WildcardKeyFileName are the exported pair.
+	WildcardCertFileName = "wildcard.crt"
+	WildcardKeyFileName  = "wildcard.key"
 
 	// GatewayStateDirMode is the state directory's mode: it holds private keys.
 	GatewayStateDirMode = 0o700
@@ -75,6 +82,19 @@ func SQLiteBaseDir(oramaDir string) string {
 // orama-deploy-{go,node,npm}@ templates run each deployment from.
 func DeploymentsBaseDir(oramaDir string) string {
 	return filepath.Join(DataDir(oramaDir), DeploymentsSubdir)
+}
+
+// WildcardCertPath is <oramaDir>/data/tls/wildcard.crt: the cluster's
+// `*.<base>` certificate, which the index gateway exports from the shared
+// store (pkg/tlsstore.Exporter) and the shared TURN server serves.
+func WildcardCertPath(oramaDir string) string {
+	return filepath.Join(DataDir(oramaDir), TLSSubdir, WildcardCertFileName)
+}
+
+// WildcardKeyPath is <oramaDir>/data/tls/wildcard.key, the key of
+// WildcardCertPath.
+func WildcardKeyPath(oramaDir string) string {
+	return filepath.Join(DataDir(oramaDir), TLSSubdir, WildcardKeyFileName)
 }
 
 // HostTURNConfigPath is <oramaDir>/data/turn/turn.yaml — the TURN_CONFIG that

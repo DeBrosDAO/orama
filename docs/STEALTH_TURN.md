@@ -126,11 +126,12 @@ This drives `POST /v1/namespace/webrtc/stealth/{enable|disable}`, which:
    namespace's TURN nodes.
 2. Flips `namespace_webrtc_config.stealth_enabled` (migration
    `030_webrtc_stealth.sql`).
-3. Re-spawns the namespace's TURN servers with the stealth domain, so
-   they carry a second Let's Encrypt certificate for the stealth
-   hostname (cert provisioning may take up to ~2 minutes). On failure
-   the enable is rolled back so the board never claims a stealth
-   endpoint that doesn't terminate TLS.
+3. Re-spawns the namespace's TURN servers with the stealth domain,
+   served with the cluster's `*.<base>` certificate: the stealth host is
+   one label under the base domain, so no certificate is obtained for it
+   (see [WEBRTC.md](WEBRTC.md#turns-tls-certificate)). On failure the
+   enable is rolled back so the board never claims a stealth endpoint
+   that doesn't terminate TLS.
 4. Refreshes the namespace gateways so `turn.credentials` advertises
    `turns:<stealth-host>:443` as the final rung of the ICE URI ladder.
 

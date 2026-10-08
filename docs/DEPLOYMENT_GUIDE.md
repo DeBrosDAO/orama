@@ -937,18 +937,6 @@ Format: {deployment-name}.orama.network
 Example: my-react-app.orama.network
 ```
 
-### Node-Specific Domains (Optional)
-
-For direct access to a specific node:
-
-```
-Format: {deployment-name}.node-{shortID}.orama.network
-Example: my-react-app.node-LL1Qvu.orama.network
-```
-
-The `shortID` is derived from the node's peer ID (characters 9-14 of the full peer ID).
-For example: `12D3KooWLL1QvumH...` → `LL1Qvu`
-
 ### DNS Resolution Flow
 
 1. **Client**: Browser requests `my-react-app.orama.network`

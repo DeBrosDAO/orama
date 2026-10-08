@@ -622,7 +622,7 @@ order: `node-1` mew `57.129.166.16` (WG `10.0.0.1`), `node-2` mewtwo `57.129.166
 (ASN 51167, Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK, login user `root`),
 so `SocketBindDeny` is enforced on the first two and only accepted on the other
 three; the SSH key `~/.ssh/debros-nodes`;
-the CA bundle `~/orama-stagenet-handoff/le-staging-roots.pem`; the CLI HOME
+the CA bundle `~/orama-stagenet-handoff/le-roots.pem` (Let's Encrypt production's ISRG Root X1 and X2: stagenet serves production certificates, a fleet the run provisions staging ones); the CLI HOME
 `~/orama-stagenet-handoff/cli-home` (its `.orama/environments.json` must hold the
 `stagenet` env); `core/bin/orama` as the CLI under test (build it first); the
 operator address from the dev RootWallet agent's `~/rwdev/ready.json` (that agent,

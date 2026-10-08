@@ -1,11 +1,11 @@
 package install
 
 import (
-	neturl "net/url"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
 )
 
 // Flags represents install command flags
@@ -74,27 +74,18 @@ type Flags struct {
 	Archive string
 }
 
-// acmeCAAliases name ACME directories an operator should not have to paste.
-var acmeCAAliases = map[string]string{
-	"letsencrypt-staging": "https://acme-staging-v02.api.letsencrypt.org/directory",
-}
-
 // resolveACMECA turns an alias into its URL and refuses anything that is not
-// an https URL. Test clusters that redeploy from scratch need staging: Let's
-// Encrypt allows five certificates per week for the same set of names, and
-// every node of a cluster requests the same wildcard.
+// an https URL (install.ResolveACMECA). Empty stays empty: the default, Let's
+// Encrypt production.
 func (f *Flags) resolveACMECA() error {
 	if f.ACMECA == "" {
 		return nil
 	}
-	if url, ok := acmeCAAliases[f.ACMECA]; ok {
-		f.ACMECA = url
-		return nil
+	url, err := oramainstall.ResolveACMECA(f.ACMECA)
+	if err != nil {
+		return clierr.Usage("--acme-ca: %v", err)
 	}
-	u, err := neturl.Parse(f.ACMECA)
-	if err != nil || u.Scheme != "https" || u.Host == "" || strings.ContainsAny(f.ACMECA, " \t\n{}\"") {
-		return clierr.Usage("--acme-ca %q is not an https ACME directory URL or a known alias (letsencrypt-staging)", f.ACMECA)
-	}
+	f.ACMECA = url
 	return nil
 }
 

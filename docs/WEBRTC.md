@@ -682,20 +682,21 @@ config and Caddy's wildcard certificate, and writes only `served-tenants.json`, 
 ## TURNS TLS Certificate
 
 TURNS (port 5349) uses TLS and the client connects to the single-label host
-`turn-{name}.{baseDomain}`. The shared TURN server presents Caddy's existing
-`*.{baseDomain}` wildcard cert (already provisioned for HTTPS), which covers
+`turn-{name}.{baseDomain}`. The shared TURN server presents the cluster's
+`*.{baseDomain}` wildcard cert (the one Caddy serves for HTTPS), which covers
 every tenant's single-label TURNS host and stealth host, so browsers validate
-it. `orama-node` reads the wildcard from Caddy's storage
-(`/var/lib/caddy/caddy/certificates/<issuer>/wildcard_.{baseDomain}/`).
+it. Caddy keeps it in the cluster's shared certificate store, and the cluster
+gateway exports it to `/opt/orama/.orama/data/tls/wildcard.{crt,key}`
+([ARCHITECTURE.md](ARCHITECTURE.md#tlshttps)), where TURN reads it.
 
-There is no other source. If the wildcard is not on disk, TURNS stays off and
+There is no other source. If the wildcard is not exported yet, TURNS stays off and
 the node logs why; clients keep plain TURN on 3478. A self-signed cert is never
 served — browsers reject it, and for a stealth host a rejected cert is
 indistinguishable from being blocked. The two-label host
 `turn.ns-{name}.{baseDomain}` is not covered by the wildcard, which is why
 TURNS uses the single-label host.
 
-Caddy auto-renews Let's Encrypt certs at ~60 days. TURN serves the cert through a hot-reloading `GetCertificate` callback that polls the cert file every 60 seconds, so renewed certs are picked up in-process without a restart (a restart would drop every active relay).
+Caddy renews the certificate once for the cluster, with about a third of its lifetime left; the cluster gateway exports the renewal within a minute. TURN serves the cert through a hot-reloading `GetCertificate` callback that polls the cert file every 60 seconds, so renewed certs are picked up in-process without a restart (a restart would drop every active relay).
 
 ## Role Reconciliation
 

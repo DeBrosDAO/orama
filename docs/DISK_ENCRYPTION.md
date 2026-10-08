@@ -41,13 +41,16 @@ helps against naive `tar` of `.orama`, not against `dd` of the whole disk.
 - `data/` (index + namespace RQLite, IPFS repo and cluster, vault shares,
   `identity.key`, JWT keys)
 - `configs/`, `logs/`, `tls-cache/`, `backups/`
-- Bind-mount **`/var/lib/caddy`** into the volume (LE private keys live
-  there today, outside `.orama`)
+- Bind-mount **`/var/lib/caddy`** into the volume (Caddy's own state; the
+  certificates and their keys are in the cluster's store, sealed, under
+  `data/`, and the `*.<base>` pair TURN serves is exported to `data/tls/`)
 
 **Outside (boot + SSH):**
 
 - Ubuntu rootfs, `/etc/ssh`, `authorized_keys`
-- `/opt/orama/bin`, systemd units, `/etc/caddy/Caddyfile` (no secrets)
+- `/opt/orama/bin`, systemd units, `/etc/caddy/Caddyfile` (no secrets).
+  `/etc/caddy/orama-acme.key` and `/etc/caddy/orama-tls-store.key` are derived
+  from the cluster secret and are rewritten from it on every upgrade
 
 **WireGuard, first cut:** keep `/etc/wireguard/wg0.conf` **outside** so
 the mesh is diagnosable before unlock. A snapshot still leaks the WG

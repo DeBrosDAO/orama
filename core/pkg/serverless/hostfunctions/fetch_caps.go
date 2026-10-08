@@ -33,11 +33,14 @@ func (h *HostFunctions) SetFetchCapIssuer(issuer serverless.FetchCapIssuer) {
 // Neither ownership nor a storage selector is asked here, and that is the
 // authority of a function rather than an omission: the HTTP mint applies them
 // because its caller is a credential that may be narrowed (`storage:avatars/*`),
-// whereas a function acts for its namespace and already reads and writes any
-// CID through storage_get and storage_put, which check neither. The invocation
-// context carries no caller grant to check a selector against. Ownership is
-// asked again by the gateway that serves a fetch, on every use, so a token for a
-// CID the namespace does not own opens nothing. A caller whose session is bound
+// whereas a function is the namespace's own code, and which of the namespace's
+// objects a caller may read is the application's decision, as it is for any
+// data a function hands back. A function has no other way to read storage —
+// no storage host function is exported to WASM — so this is the one grant of
+// read access it can make, and it can only name the namespace's own objects:
+// ownership is asked by the gateway that serves a fetch, on every use, so a
+// token for a CID the namespace does not own opens nothing. The invocation
+// context carries no caller grant to check a selector against. A caller whose session is bound
 // to no device cannot mint, because a fetch capability is revoked with the
 // device that issued it.
 func (h *HostFunctions) MintStorageFetchCaps(ctx context.Context, cid string, count int, ttl time.Duration) (string, error) {

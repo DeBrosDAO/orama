@@ -79,8 +79,9 @@ func publicIPs(nodes []fleet.Node) []string {
 }
 
 // TestVantage_tlsAndHTTP11WithPinnedRoots: from outside, every node serves
-// the base name over TLS that verifies against the pinned staging roots and
-// only them, speaking HTTP/1.1 (docs/ARCHITECTURE.md "TLS/HTTPS").
+// the base name over TLS that verifies against the pinned roots, speaking
+// HTTP/1.1 (docs/ARCHITECTURE.md "TLS/HTTPS"). A staging chain verifies
+// against those roots only; a production chain against every system store.
 func TestVantage_tlsAndHTTP11WithPinnedRoots(t *testing.T) {
 	t.Parallel()
 	f, ps := probes(t)
@@ -95,8 +96,8 @@ func TestVantage_tlsAndHTTP11WithPinnedRoots(t *testing.T) {
 				t.Errorf("%s -> %s: %q (exit %d %s), want HTTP/1.1 200 over pinned TLS", p.Name, n.Name, out.Stdout, out.Exit, out.Stderr)
 			}
 			sys := f.Exec(t, p, fmt.Sprintf("curl -sS --max-time 20 %s -o /dev/null https://%s/health", resolve, base))
-			if sys.Exit != curlCertError {
-				t.Errorf("%s -> %s with the system roots: exit %d, want %d (staging is trusted by no system store)", p.Name, n.Name, sys.Exit, curlCertError)
+			if want := sysRootsExit(f.State.StagingCerts()); sys.Exit != want {
+				t.Errorf("%s -> %s with the system roots: exit %d, want %d (staging is trusted by no system store, production by all)", p.Name, n.Name, sys.Exit, want)
 			}
 		}
 	}
@@ -127,4 +128,12 @@ func TestVantage_latencyBaseline(t *testing.T) {
 			t.Logf("%s (%s) -> %s (%s): connect/tls/total %s", p.Name, p.Location, n.Name, n.Location, strings.ReplaceAll(strings.TrimSpace(out), "\n", " | "))
 		}
 	}
+}
+
+// sysRootsExit is curl's exit verifying the cluster with the system roots.
+func sysRootsExit(staging bool) int {
+	if staging {
+		return curlCertError
+	}
+	return 0
 }

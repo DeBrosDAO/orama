@@ -30,6 +30,9 @@ Uses rolling restart with quorum safety to ensure zero downtime.`,
 			}
 			upgradeFlags.Nameserver = &v
 		}
+		if err := upgradeFlags.Resolve(); err != nil {
+			return err
+		}
 		return upgrade.Run(&upgradeFlags)
 	},
 }
@@ -48,6 +51,9 @@ func init() {
 	f.Bool("nameserver", false, "Make this node a nameserver (uses saved preference if not specified)")
 	f.StringVar(&upgradeFlags.PublicIP, "public-ip", "",
 		"This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route)")
+
+	f.StringVar(&upgradeFlags.ACMECA, "acme-ca", "",
+		"ACME directory this node's TLS certificates come from, recorded in node.yaml: letsencrypt (production), letsencrypt-staging or an https URL (default: the recorded one)")
 
 	// Set by the orchestrator when it re-execs itself after swapping the
 	// binary; not something an operator ever passes.

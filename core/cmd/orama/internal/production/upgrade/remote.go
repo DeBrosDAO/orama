@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/noderesolver"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	oramainstall "github.com/DeBrosOfficial/network/pkg/install"
@@ -194,6 +195,10 @@ func upgradeArgs(flags *Flags) string {
 	}
 	if flags.SkipChecks {
 		args += " --skip-checks"
+	}
+	// Resolved and validated locally (Flags.Resolve): an https URL.
+	if flags.ACMECA != "" {
+		args += " --acme-ca " + clusterops.ShellQuote(flags.ACMECA)
 	}
 	return args
 }

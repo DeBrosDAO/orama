@@ -78,6 +78,9 @@ func NewOrchestrator(flags *Flags) *Orchestrator {
 
 	setup := oramainstall.NewProductionSetup(oramaHome, os.Stdout, flags.Force, flags.SkipChecks)
 	setup.SetNameserver(isNameserver)
+	if flags.ACMECA != "" {
+		setup.SetACMECA(flags.ACMECA)
+	}
 
 	o := &Orchestrator{
 		oramaHome: oramaHome,

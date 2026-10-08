@@ -375,6 +375,17 @@ sites, custom domains) are not touched and keep whatever their own handler sets.
 - TURN shared secrets encrypted at rest in RQLite using AES-256-GCM
 - Encryption key derived via HKDF from the cluster secret with purpose string `"turn-encryption"`
 
+### Certificates
+
+The cluster's certificates and their private keys are in one shared store, the cluster registry's `tls_store` (`core/pkg/tlsstore`), which every node's Caddy uses through the index gateway's `/v1/internal/tls-store`.
+
+- **Sealed at rest.** Caddy seals every value before it leaves the process: AES-256-GCM under a key derived from the store's master key (`HKDF(cluster secret, "caddy-tls-store")`, then `orama-tls-store-seal-v1`), with the storage key path as associated data, so a value moved to another key does not open. The gateway refuses a value that is not sealed. The registry's rows, its snapshots and backups never hold a private key in the clear; opening one takes the cluster secret
+- **Only Caddy.** A call needs a coordination v2 stamp (method, path, body hash and a single-use nonce) under the store's MAC key (`orama-tls-store-mac-v1`), for the audience `caddy-tls-store`, from loopback: Caddy is on the same host, and the key is the whole cluster's, so a stamp captured on one node is refused by every other. Install writes the master key to `/etc/caddy/orama-tls-store.key` (root:orama `0640`), beside the ACME key; it is not the coordination key and not the ACME key. Anything unstamped, stamped under another key, or replayed is `404`. Only the cluster gateway answers; a namespace gateway's database is its tenant's
+- **"Not there" is an answer.** A load of a key the store does not hold is `200` with `exists: false`. A refusal or a failure is an error status, which Caddy never reads as "no certificate yet" — so a broken store cannot make a node obtain a certificate it already has
+- **Locks** are leases: a holder (a random id per lock) and an expiry it renews every 20 seconds while it works. A holder that dies stops renewing and the lock is taken over a minute later. Only the holder renews or releases. Each node's gateway sets and compares the expiry with its own clock, so the nodes' clocks must agree within the 40 seconds between a renewal and the lease running out (every node runs NTP); a larger skew lets two nodes obtain the same certificate at once, which costs one extra issuance and nothing else
+- **The exported wildcard.** The shared TURN server terminates TLS itself, so the cluster gateway writes the `*.<base>` pair to `/opt/orama/.orama/data/tls/` (orama `0600`, key written before certificate) after checking the key matches, the certificate covers the base and has not expired
+- **What sharing does not change.** Every node already held a key valid for `*.<base>`; one key shared by every node lets a compromised node impersonate the cluster's hosts exactly as its own key did. Anyone holding the cluster secret can open the store — the same trust a joining node is given for the swarm key and the RQLite password
+
 ### TLS & Transport
 
 **InsecureSkipVerify Fix (Step 1.10)**

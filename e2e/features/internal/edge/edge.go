@@ -32,8 +32,15 @@ const (
 	NtfyUnit = "orama-namespace-ntfy@index.service"
 	// ACMEKeyPath is the key Caddy signs DNS-01 calls with, root:orama 0640.
 	ACMEKeyPath = "/etc/caddy/orama-acme.key"
-	// CaddyDataDir is Caddy's XDG_DATA_HOME (core/systemd/orama-namespace-caddy@.service).
-	CaddyDataDir = "/var/lib/caddy"
+	// TLSStoreKeyPath is the master key of the cluster's certificate store,
+	// which Caddy's storage module reaches /v1/internal/tls-store with,
+	// root:orama 0640 (core/pkg/install/installers/caddy.go).
+	TLSStoreKeyPath = "/etc/caddy/orama-tls-store.key"
+	// WildcardCertPath and WildcardKeyPath are the cluster's *.<base> pair the
+	// cluster gateway exports from the store for TURN, orama 0600
+	// (core/pkg/constants/paths.go).
+	WildcardCertPath = "/opt/orama/.orama/data/tls/wildcard.crt"
+	WildcardKeyPath  = "/opt/orama/.orama/data/tls/wildcard.key"
 	// CaddyAdminSocket is Caddy's admin API, 0600 in a 0700 runtime directory.
 	CaddyAdminSocket = "/run/orama-caddy/admin.sock"
 	// PrivhelperBin and PrivhelperSock are the privileged helper's client and
