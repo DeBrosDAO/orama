@@ -91,9 +91,15 @@ func setupWithCLI(t *testing.T) *fixture {
 	t.Helper()
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{Via: ns.ViaOperator})
-	user := gw.NewUser(t, f, "", gw.WithDevice(wallet.AlgEd25519))
-	n.CLI.MustOK(t, "members", "add", user.Wallet.Address(), "--role", tenancy.RoleRuntime)
-	sess, err := user.Client.SignIn(t.Context(), user.Wallet, n.Name, user.Device)
+	// The wallet is made a member before it signs in at all: a device binds
+	// only to a namespace session, and the lobby refuses one.
+	w, err := wallet.NewEVM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := gw.NewDevice(t, wallet.AlgEd25519)
+	n.CLI.MustOK(t, "members", "add", w.Address(), "--role", tenancy.RoleRuntime)
+	sess, err := gw.ForFleet(t, f).SignIn(t.Context(), w, n.Name, device)
 	if err != nil {
 		t.Fatal(err)
 	}

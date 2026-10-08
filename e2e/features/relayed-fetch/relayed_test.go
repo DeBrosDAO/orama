@@ -146,11 +146,13 @@ func TestRelay_refusesDestinationsAndNeedsNoCredential(t *testing.T) {
 	r := harness.GW(t)
 	nsHost := tenancy.NamespaceHost(f, "anything")
 	for name, target := range map[string][2]string{
-		"a public site":  {"example.com", "443"},
-		"another port":   {nsHost, "80"},
-		"an IP literal":  {"1.1.1.1", "443"},
-		"loopback":       {"127.0.0.1", "443"},
-		"a lookalike":    {"evil-" + nsHost, "443"},
+		"a public site": {"example.com", "443"},
+		"another port":  {nsHost, "80"},
+		"an IP literal": {"1.1.1.1", "443"},
+		"loopback":      {"127.0.0.1", "443"},
+		// A name that only ends like the cluster's domain, not a subdomain of
+		// it: every name under the base domain is the cluster's own and allowed.
+		"a lookalike":    {"evil" + f.State.BaseDomain, "443"},
 		"a suffix trick": {nsHost + ".example.com", "443"},
 		"a kelvin sign":  {"\u212A" + nsHost, "443"}, // lowercases to an ASCII "k" under the allowed suffix
 	} {
