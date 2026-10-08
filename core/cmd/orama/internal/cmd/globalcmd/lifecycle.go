@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const lifecycleServices = "chain, ipfs, provider, archiver, indexer or repair"
+const lifecycleServices = "chain, ipfs, provider, archiver, indexer, repair, dirauth, relay or onion"
 
 var startCmd = &cobra.Command{
 	Use:   "start [service...]",

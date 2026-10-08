@@ -31,7 +31,11 @@ func TestParseServiceArgs_knownAndUnknown(t *testing.T) {
 	if none, err := parseServiceArgs(nil); err != nil || none != nil {
 		t.Fatalf("no argument should mean every installed service: %v %v", none, err)
 	}
-	_, err = parseServiceArgs([]string{"relay"})
+	if tor, err := parseServiceArgs([]string{"dirauth", "relay", "onion"}); err != nil || len(tor) != 3 {
+		t.Fatalf("the Tor roles are services: %v %v", tor, err)
+	}
+	// exit is a policy of the relay, not a unit of its own.
+	_, err = parseServiceArgs([]string{"exit"})
 	if err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
 		t.Fatalf("err = %v, want a usage error", err)
 	}

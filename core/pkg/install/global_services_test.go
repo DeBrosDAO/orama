@@ -23,7 +23,9 @@ func TestParseGlobalServices_ordersAndDeduplicates(t *testing.T) {
 func TestParseGlobalServices_refusals(t *testing.T) {
 	cases := map[string][]string{
 		"empty":                 nil,
-		"unknown":               {"chain", "relay"},
+		"unknown":               {"chain", "bogus"},
+		"exit is not a service": {"chain", "exit"},
+		"dirauth and relay":     {"dirauth", "relay"},
 		"no chain":              {"provider"},
 		"provider + repair":     {"chain", "ipfs", "provider", "repair"},
 		"provider without ipfs": {"chain", "provider"},
@@ -49,17 +51,61 @@ func TestParseGlobalServices_ipfsStartsAfterTheChainAndBeforeTheProvider(t *test
 	}
 }
 
-func TestGlobalServiceTimers_onlyThePublicKuboHasOne(t *testing.T) {
+func TestGlobalServiceCompanions(t *testing.T) {
+	want := map[GlobalService][]string{
+		GlobalServiceIPFS:    {"orama-global-ipfs-gc.timer"},
+		GlobalServiceDirauth: {constants.GlobalTorArchiveTimer},
+		GlobalServiceOnion:   {constants.GlobalTxGateUnit},
+	}
 	for _, s := range GlobalServiceOrder {
-		timers := GlobalServiceTimers(s)
-		if s == GlobalServiceIPFS {
-			if !slices.Equal(timers, []string{"orama-global-ipfs-gc.timer"}) {
-				t.Errorf("ipfs timers = %v", timers)
-			}
-			continue
+		if got := GlobalServiceCompanions(s); !slices.Equal(got, want[s]) {
+			t.Errorf("%s companions = %v, want %v", s, got, want[s])
 		}
-		if len(timers) != 0 {
-			t.Errorf("%s has timers %v", s, timers)
+	}
+}
+
+func TestParseGlobalServices_torRolesNeedNoChain(t *testing.T) {
+	for _, in := range [][]string{{"relay"}, {"dirauth"}, {"chain", "relay"}, {"chain", "onion", "relay"}, {"onion"}} {
+		if _, err := ParseGlobalServices(in); err != nil {
+			t.Errorf("%v refused: %v", in, err)
+		}
+	}
+	got, err := ParseGlobalServices([]string{"onion", "relay", "chain", "indexer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []GlobalService{GlobalServiceChain, GlobalServiceIndexer, GlobalServiceRelay, GlobalServiceOnion}
+	if !slices.Equal(got, want) {
+		t.Fatalf("services = %v, want %v", got, want)
+	}
+}
+
+func TestParseGlobalRoles_exitIsARelayWithAPolicy(t *testing.T) {
+	services, exit, err := ParseGlobalRoles([]string{"relay", "exit"})
+	if err != nil || !exit || !slices.Equal(services, []GlobalService{GlobalServiceRelay}) {
+		t.Fatalf("relay,exit = %v %v %v", services, exit, err)
+	}
+	if _, exit, err := ParseGlobalRoles([]string{"relay"}); err != nil || exit {
+		t.Fatalf("relay alone = exit %v err %v", exit, err)
+	}
+	for name, in := range map[string][]string{
+		"exit alone":       {"exit"},
+		"exit and chain":   {"chain", "exit"},
+		"exit + dirauth":   {"dirauth", "exit"},
+		"nothing":          nil,
+		"exit and unknown": {"relay", "exit", "bogus"},
+	} {
+		if _, _, err := ParseGlobalRoles(in); err == nil {
+			t.Errorf("%s: %v was accepted", name, in)
+		}
+	}
+}
+
+func TestGlobalServiceNeedsChain(t *testing.T) {
+	for _, s := range GlobalServiceOrder {
+		want := s != GlobalServiceChain && s != GlobalServiceRelay && s != GlobalServiceDirauth
+		if GlobalServiceNeedsChain(s) != want {
+			t.Errorf("%s needs the chain: %v, want %v", s, GlobalServiceNeedsChain(s), want)
 		}
 	}
 }

@@ -1720,12 +1720,18 @@ their units; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) is the operator guide.
 | indexer (`orama-global indexer`, optional) | `orama-global-indexer.service` | `orama-indexer` | none |
 | archiver (`orama-global archiver`) | `orama-global-archiver.service` | `orama-archiver` | none |
 | repair (`orama-global repair`) | `orama-global-repair.service` | `orama-repair` | none |
+| Tor directory authority (`tor`, no chain needed) + archive timer | `orama-global-tor-dirauth.service`, `orama-global-tor-archive.timer` | `orama-tor-dirauth` | 31020 tcp, 31021 tcp |
+| Tor relay or exit (`tor`, no chain needed) | `orama-global-tor-relay.service` | `orama-tor-relay` | 31020 tcp |
+| validator onion service (`tor` + `orama global txgate`) | `orama-global-tor-onion.service`, `orama-global-txgate.service` | `orama-tor-onion`, `orama-txgate` | none |
 
 Binaries live in `/usr/lib/orama-global/bin` (root, 0755); state in
 `/var/lib/orama-global/<service>` (the unit's own account, 0700). Every unit
 hides `/opt/orama`, denies private address ranges, and is not part of
 `orama-node.service`. The chain is started first and stopped last: the other
-services reach it only through its RPC on `127.0.0.1:31001`.
+services reach it only through its RPC on `127.0.0.1:31001`. The Tor roles are
+the exception: a relay or an authority never reaches the chain, so a chain
+restart leaves it serving. They run the Orama Tor network, a separate network
+from the node's own Tor client above: [TOR_NETWORK.md](TOR_NETWORK.md).
 
 Trust points:
 

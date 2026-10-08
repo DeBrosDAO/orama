@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/user"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
+	"github.com/DeBrosOfficial/network/pkg/install/installers"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
@@ -57,6 +59,9 @@ type GlobalHost struct {
 	// Netns is the co-located layout's host; the zero value is a global-only
 	// machine and is never consulted without opts.Colocated.
 	Netns NetnsHost
+	// InstallTor installs or upgrades the Tor package from the Tor Project's
+	// repository and masks the distro's own units. It needs the network.
+	InstallTor func() error
 }
 
 // DefaultGlobalHost is this machine. The anchors are directories only root
@@ -79,6 +84,9 @@ func DefaultGlobalHost(logf func(format string, args ...any)) GlobalHost {
 		Chown:          func(r rootfs.Root, path string, uid, gid int) error { return r.Chown(path, uid, gid) },
 		Logf:           logf,
 		Netns:          DefaultNetnsHost(runCommand),
+		InstallTor: func() error {
+			return installers.NewTorInstaller(runtime.GOARCH, logfWriter{logf}).EnsureInstalled()
+		},
 	}
 }
 
@@ -88,6 +96,13 @@ func DefaultGlobalHost(logf func(format string, args ...any)) GlobalHost {
 // options and nothing changes but the binaries' bytes.
 func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := opts.validate(); err != nil {
+		return err
+	}
+	torPlan, err := planGlobalTor(h, opts)
+	if err != nil {
+		return err
+	}
+	if err := requireChainForOnion(h, opts); err != nil {
 		return err
 	}
 	plan, err := planColocation(h, opts)
@@ -102,6 +117,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if slices.Contains(opts.Services, GlobalServiceChain) {
 		if cosmovisorBinary, err = preflightChain(h, opts); err != nil {
 			return err
+		}
+	}
+	if torPlan != nil {
+		if err := h.InstallTor(); err != nil {
+			return fmt.Errorf("install the Tor package: %w", err)
 		}
 	}
 	if err := ensureGlobalAccounts(h.Run, opts.Services); err != nil {
@@ -136,6 +156,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	}
 	if slices.Contains(opts.Services, GlobalServiceIPFS) {
 		if err := installPublicKubo(h, opts.PublicStorageBytes, opts.Colocated); err != nil {
+			return err
+		}
+	}
+	if torPlan != nil {
+		if err := applyGlobalTor(h, torPlan); err != nil {
 			return err
 		}
 	}
@@ -176,8 +201,10 @@ func planColocation(h GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error)
 func ensureGlobalAccounts(run commandRunner, services []GlobalService) error {
 	for _, s := range services {
 		spec := globalServiceSpecs[s]
-		if err := ensureServiceAccount(run, spec.user); err != nil {
-			return err
+		for _, user := range append([]string{spec.user}, spec.users...) {
+			if err := ensureServiceAccount(run, user); err != nil {
+				return err
+			}
 		}
 		for _, group := range spec.groups {
 			if err := ensureSystemGroup(run, group); err != nil {
@@ -293,4 +320,18 @@ func lookupGroupID(name string) (int, error) {
 		return 0, fmt.Errorf("the %s group has a non-numeric gid %q: %w", name, g.Gid, err)
 	}
 	return gid, nil
+}
+
+// requireChainForOnion refuses an onion service on a machine with no chain: the
+// tx gate behind it forwards to this host's chain REST API. The chain may be in
+// this install or already installed.
+func requireChainForOnion(h GlobalHost, opts GlobalInstallOptions) error {
+	if !slices.Contains(opts.Services, GlobalServiceOnion) || slices.Contains(opts.Services, GlobalServiceChain) {
+		return nil
+	}
+	path := filepath.Join(h.UnitDir, constants.ChainServiceUnit)
+	if _, err := os.Lstat(path); err != nil {
+		return fmt.Errorf("the onion service forwards to this host's chain, and %s is not installed: add chain to --services (%w)", path, err)
+	}
+	return nil
 }

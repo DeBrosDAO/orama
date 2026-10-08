@@ -116,6 +116,8 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
 		"onion":    RenderGlobalTorOnionUnit(),
+		"txgate":   RenderGlobalTxGateUnit(),
+		"archive":  RenderGlobalTorArchiveUnit(),
 		"sbws":     RenderGlobalSBWSUnit(),
 		"reporter": RenderGlobalReporterUnit(),
 		"archiver": RenderGlobalArchiverUnit(),

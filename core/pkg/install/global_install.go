@@ -21,13 +21,26 @@ const (
 	GlobalServiceArchiver GlobalService = "archiver"
 	GlobalServiceIndexer  GlobalService = "indexer"
 	GlobalServiceRepair   GlobalService = "repair"
+	// The Orama Tor network's roles (docs/TOR_NETWORK.md). A directory
+	// authority is also a relay, so dirauth and relay are never installed
+	// together; the exit role is relay with a policy, parsed by
+	// ParseGlobalRoles.
+	GlobalServiceDirauth GlobalService = "dirauth"
+	GlobalServiceRelay   GlobalService = "relay"
+	// GlobalServiceOnion is the validator's onion service: tor, and the tx
+	// gate it forwards to.
+	GlobalServiceOnion GlobalService = "onion"
 )
+
+// globalExitRole is the --services word that makes the relay an exit.
+const globalExitRole = "exit"
 
 // GlobalServiceOrder is the start order. The chain is first: every other
 // service reaches it only through its loopback RPC. The public Kubo comes
 // before the provider, which pins through it. Stop runs it backwards.
 var GlobalServiceOrder = []GlobalService{
 	GlobalServiceChain, GlobalServiceIPFS, GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceIndexer, GlobalServiceRepair,
+	GlobalServiceDirauth, GlobalServiceRelay, GlobalServiceOnion,
 }
 
 // Binaries the global units run, by their name in GlobalBinDir and in the
@@ -53,9 +66,17 @@ type globalServiceSpec struct {
 	binaries []string
 	// groups are system groups the unit names besides its user's own.
 	groups []string
-	// timers are the units a timer-driven companion of the service needs
-	// started, enabled and stopped with it.
-	timers []string
+	// users are accounts of the service's companion units besides user.
+	users []string
+	// companions are the units that run with the service (a timer that fires
+	// a oneshot, the tx gate behind the onion service): started after it,
+	// stopped before it.
+	companions []string
+	// standalone says the service never reaches the chain: a Tor relay or
+	// directory authority runs without one, and a chain restart leaves it alone.
+	// Every other service uses the chain's loopback RPC or REST API, so it
+	// starts after the chain and the chain must be installed.
+	standalone bool
 }
 
 // globalIPFSGCUnit and globalIPFSGCTimer are the public Kubo's GC oneshot and its timer.
@@ -66,44 +87,67 @@ const (
 
 var globalServiceSpecs = map[GlobalService]globalServiceSpec{
 	GlobalServiceChain:    {unit: constants.ChainServiceUnit, user: globalChainUser, binaries: []string{globalOramadBinary, globalOramaCLI}},
-	GlobalServiceIPFS:     {unit: constants.GlobalIPFSUnit, user: globalIPFSUser, binaries: []string{globalKuboBinary}, groups: []string{globalIPFSRPCGroup}, timers: []string{globalIPFSGCTimer}},
+	GlobalServiceIPFS:     {unit: constants.GlobalIPFSUnit, user: globalIPFSUser, binaries: []string{globalKuboBinary}, groups: []string{globalIPFSRPCGroup}, companions: []string{globalIPFSGCTimer}},
 	GlobalServiceProvider: {unit: constants.GlobalProviderUnit, user: globalProviderUser, binaries: []string{globalServiceBin}, groups: []string{globalIPFSRPCGroup}},
 	GlobalServiceArchiver: {unit: constants.GlobalArchiverUnit, user: globalArchiverUser, binaries: []string{globalServiceBin}},
 	GlobalServiceIndexer:  {unit: constants.GlobalIndexerUnit, user: globalIndexerUser, binaries: []string{globalServiceBin}},
 	GlobalServiceRepair:   {unit: constants.GlobalRepairUnit, user: globalRepairUser, binaries: []string{globalServiceBin}},
+	// The Tor roles run the distro tor binary. The dirauth's archive timer and the
+	// onion service's gate run the orama CLI.
+	GlobalServiceDirauth: {unit: constants.GlobalTorDirauthUnit, user: globalTorDirauthUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorArchiveTimer}, standalone: true},
+	GlobalServiceRelay:   {unit: constants.GlobalTorRelayUnit, user: globalTorRelayUser, standalone: true},
+	GlobalServiceOnion:   {unit: constants.GlobalTorOnionUnit, user: globalTorOnionUser, binaries: []string{globalOramaCLI}, users: []string{globalTxGateUser}, companions: []string{constants.GlobalTxGateUnit}},
 }
 
 // GlobalServiceUnit is the systemd unit of s.
 func GlobalServiceUnit(s GlobalService) string { return globalServiceSpecs[s].unit }
 
-// GlobalServiceTimers are the timer units that run with s: started after it,
-// stopped before it. Only the public Kubo has one (its GC).
-func GlobalServiceTimers(s GlobalService) []string { return globalServiceSpecs[s].timers }
+// GlobalServiceCompanions are the units that run with s: started after it,
+// stopped before it. The public Kubo has its GC timer, a directory authority
+// its archive timer, and the onion service its tx gate.
+func GlobalServiceCompanions(s GlobalService) []string { return globalServiceSpecs[s].companions }
+
+// GlobalServiceNeedsChain reports whether s uses the local chain: every service
+// but the chain itself and the standalone Tor roles.
+func GlobalServiceNeedsChain(s GlobalService) bool {
+	return s != GlobalServiceChain && !globalServiceSpecs[s].standalone
+}
 
 // ParseGlobalServices turns --services into a set in GlobalServiceOrder. The
-// chain must be in it: the other services have no RPC but the local chain's.
+// chain must be in it unless every service is a standalone Tor role (relay,
+// dirauth) or the onion service, which InstallGlobal lets join a machine whose
+// chain is installed: the others reach the chain only on this host's loopback
+// RPC. A directory-authority host runs dirauth alone.
 // A provider pins through this host's public Kubo, so it needs ipfs beside it.
-// A repair delegate holds repair seeds and never runs beside a provider.
+// A repair delegate holds repair seeds and never runs beside a provider. A
+// directory authority is a relay already, so it and relay never go together.
 func ParseGlobalServices(names []string) ([]GlobalService, error) {
 	seen := map[GlobalService]bool{}
 	for _, raw := range names {
 		s := GlobalService(strings.TrimSpace(raw))
 		if _, ok := globalServiceSpecs[s]; !ok {
-			return nil, fmt.Errorf("unknown global service %q (known: chain, ipfs, provider, archiver, indexer, repair)", raw)
+			return nil, fmt.Errorf("unknown global service %q (known: chain, ipfs, provider, archiver, indexer, repair, dirauth, relay, onion; exit goes beside relay)", raw)
 		}
 		seen[s] = true
 	}
 	if len(seen) == 0 {
-		return nil, fmt.Errorf("no global service named; --services takes chain[,ipfs,provider,archiver,indexer,repair]")
+		return nil, fmt.Errorf("no global service named; --services takes chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,onion]")
 	}
-	if !seen[GlobalServiceChain] {
-		return nil, fmt.Errorf("the other global services reach the chain only on this host's loopback RPC; add chain to --services")
+	for _, s := range GlobalServiceOrder {
+		// The onion service is added to a machine whose chain is already installed;
+		// InstallGlobal checks that.
+		if seen[s] && GlobalServiceNeedsChain(s) && s != GlobalServiceOnion && !seen[GlobalServiceChain] {
+			return nil, fmt.Errorf("%s reaches the chain only on this host's loopback RPC; add chain to --services", s)
+		}
 	}
 	if seen[GlobalServiceProvider] && !seen[GlobalServiceIPFS] {
 		return nil, fmt.Errorf("the provider pins public deals through this host's public Kubo; add ipfs to --services")
 	}
 	if seen[GlobalServiceProvider] && seen[GlobalServiceRepair] {
 		return nil, fmt.Errorf("a repair delegate holds repair seeds and must not run beside a storage provider; install them on different hosts")
+	}
+	if seen[GlobalServiceDirauth] && seen[GlobalServiceRelay] {
+		return nil, fmt.Errorf("a directory authority is a relay: install dirauth or relay on a host, not both")
 	}
 	var out []GlobalService
 	for _, s := range GlobalServiceOrder {
@@ -112,6 +156,27 @@ func ParseGlobalServices(names []string) ([]GlobalService, error) {
 		}
 	}
 	return out, nil
+}
+
+// ParseGlobalRoles is ParseGlobalServices plus the exit role. "exit" is not a
+// service of its own: it makes the relay an exit, so it needs relay beside it
+// and cannot go with dirauth.
+func ParseGlobalRoles(names []string) (services []GlobalService, exit bool, err error) {
+	var rest []string
+	for _, raw := range names {
+		if strings.TrimSpace(raw) == globalExitRole {
+			exit = true
+			continue
+		}
+		rest = append(rest, raw)
+	}
+	if services, err = ParseGlobalServices(rest); err != nil {
+		return nil, false, err
+	}
+	if exit && !slices.Contains(services, GlobalServiceRelay) {
+		return nil, false, fmt.Errorf("exit is a relay with an exit policy: use --services relay,exit")
+	}
+	return services, exit, nil
 }
 
 // ChainInit asks the installer to create the chain home. It is never done
@@ -143,6 +208,8 @@ type GlobalInstallOptions struct {
 	// unknown one refuses the install, and the set is kept in the state directory so a re-install
 	// without the flag keeps it.
 	ChainClientUsers []string
+	// Tor is what the Tor roles (dirauth, relay, onion) need beyond the service names.
+	Tor TorOptions
 }
 
 var (
@@ -174,6 +241,9 @@ func (o GlobalInstallOptions) validate() error {
 		return fmt.Errorf("the staged binary directory is required")
 	}
 	if err := ValidatePersistentPeers(o.PersistentPeers); err != nil {
+		return err
+	}
+	if err := o.Tor.validate(o.Services); err != nil {
 		return err
 	}
 	if slices.Contains(o.Services, GlobalServiceIPFS) && o.PublicStorageBytes == 0 {
@@ -217,6 +287,8 @@ func (o GlobalInstallOptions) firewall() GlobalFirewall {
 		ChainP2P:      slices.Contains(o.Services, GlobalServiceChain),
 		PublicStorage: slices.Contains(o.Services, GlobalServiceIPFS),
 		Provider:      slices.Contains(o.Services, GlobalServiceProvider),
+		TorRelay:      slices.Contains(o.Services, GlobalServiceRelay),
+		Dirauth:       slices.Contains(o.Services, GlobalServiceDirauth),
 		Netns:         o.Colocated,
 	}
 }
@@ -250,6 +322,18 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 		main.body = RenderGlobalArchiverUnit()
 	case GlobalServiceIndexer:
 		main.body = RenderGlobalIndexerUnit()
+	case GlobalServiceDirauth:
+		main.body = RenderGlobalTorDirauthUnit()
+		return []globalUnitFile{
+			main,
+			{name: constants.GlobalTorArchiveUnit, body: RenderGlobalTorArchiveUnit()},
+			{name: constants.GlobalTorArchiveTimer, body: RenderGlobalTorArchiveTimer(), enable: true},
+		}
+	case GlobalServiceRelay:
+		main.body = RenderGlobalTorRelayUnit()
+	case GlobalServiceOnion:
+		main.body = RenderGlobalTorOnionUnit()
+		return []globalUnitFile{main, {name: constants.GlobalTxGateUnit, body: RenderGlobalTxGateUnit(), enable: true}}
 	default:
 		main.body = RenderGlobalRepairUnit()
 	}
@@ -272,8 +356,15 @@ func (o GlobalInstallOptions) unitFilesFor(s GlobalService) ([]globalUnitFile, e
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", files[i].name, err)
 		}
-		if i == 0 {
-			// The service's own unit; the GC oneshot has no listener to move.
+		if s == GlobalServiceRelay || s == GlobalServiceDirauth {
+			// Not the archive oneshot: it is the authority's own CLI on its own files.
+			if i == 0 {
+				body = denyLoopback(body)
+			}
+		}
+		if i == 0 || files[i].name == constants.GlobalTxGateUnit {
+			// The service's own unit (the tx gate is the onion service's listener);
+			// the GC oneshot and the archive oneshot have no listener to move.
 			if body, err = colocatedListeners(s, body); err != nil {
 				return nil, fmt.Errorf("render %s: %w", files[i].name, err)
 			}

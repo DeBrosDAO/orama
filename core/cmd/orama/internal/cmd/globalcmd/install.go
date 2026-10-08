@@ -28,14 +28,22 @@ var installFlags struct {
 	sshPort          int
 	colocated        bool
 	chainClientUsers []string
+	torAddress       string
+	torContact       string
+	torNodeID        string
+	torBandwidthMbit uint
+	torFamily        []string
+	torAuthorityKeys string
 }
 
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install the global services on this node (run as root)",
 	Long: `Install global services on this machine: chain, and optionally ipfs,
-provider, archiver, indexer or repair. The chain is required: the other
-services reach it only on this host's loopback RPC. provider needs ipfs beside
+provider, archiver, indexer, repair, and the roles of the Orama Tor network
+(dirauth, relay, relay,exit, onion). The chain is required unless the machine
+only runs dirauth or relay: the other services reach it only on this host's
+loopback RPC. provider needs ipfs beside
 it (it pins public deals through the public Kubo). provider and repair are
 never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
@@ -74,6 +82,27 @@ denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
 command again with the same flags changes nothing but the binaries' bytes.
 
+The roles of the Orama Tor network (docs/TOR_NETWORK.md) run the distro's tor,
+installed from the Tor Project's repository, with a torrc this command writes
+from the network's tor-network.json, staged beside the binaries; the network file
+is checked before anything on the host changes.
+  relay           a relay (ORPort 31020/tcp). --tor-address, --tor-contact and
+                  --tor-node-id are required; the nickname is derived from the
+                  node id.
+  relay,exit      the same relay as an exit, under a reduced exit policy. Opt-in:
+                  the network file must say allow_exit. Destinations in
+                  /var/lib/orama-global/tor-exit-reject (one CIDR or address, with
+                  an optional :port, per line) are refused first.
+  dirauth         a directory authority (ORPort 31020/tcp, DirPort 31021/tcp). It
+                  is a relay already, so it never goes beside relay. It needs
+                  --tor-address to be one of the network's authorities and
+                  --tor-authority-keys, its bundle from 'orama global tor
+                  ceremony'; a bundle that is not this authority's is refused.
+                  A dirauth or relay host needs no chain.
+  onion           the validator's onion service, forwarding to a tx gate on
+                  loopback that serves only account read, broadcast and tx lookup.
+                  It publishes no port and needs the chain.
+
 --colocated installs the services on a machine that already runs a cluster node
 (orama node setup first). The global units run in their own network namespace,
 orama-global, joined to the root namespace by a veth pair (198.18.0.0/30): they
@@ -96,7 +125,7 @@ refuses the install, and the set is kept by later installs.`,
 
 func init() {
 	f := installCmd.Flags()
-	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair] [required]")
+	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required]")
 	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required]")
 	f.Uint64Var(&installFlags.publicStorageGB, "public-storage-gb", 0, "Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs)")
 	f.StringVar(&installFlags.peers, "persistent-peers", "", "Chain peers, id@host:port,... (written into the chain unit)")
@@ -107,12 +136,18 @@ func init() {
 	f.BoolVar(&installFlags.enableFirewall, "enable-firewall", false, "Enable an inactive ufw (deny incoming, allow --ssh-port)")
 	f.IntVar(&installFlags.sshPort, "ssh-port", defaultSSHPort, "SSH port --enable-firewall allows")
 	f.StringSliceVar(&installFlags.chainClientUsers, "chain-client-user", nil, "With --colocated: a local account, besides root and the cluster node's, allowed to connect to the chain's RPC and REST ports on the namespace address (repeatable; kept by later installs)")
+	f.StringVar(&installFlags.torAddress, "tor-address", "", "dirauth, relay: the public IPv4 address the relay publishes")
+	f.StringVar(&installFlags.torContact, "tor-contact", "", "dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes)")
+	f.StringVar(&installFlags.torNodeID, "tor-node-id", "", "relay: the on-chain node id the relay's nickname is derived from")
+	f.UintVar(&installFlags.torBandwidthMbit, "tor-bandwidth-mbit", 0, "dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited)")
+	f.StringSliceVar(&installFlags.torFamily, "tor-family", nil, "dirauth, relay: the RSA fingerprints of the operator's other relays")
+	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>)")
 	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
 }
 
 func runInstall(cmd *cobra.Command, _ []string) error {
-	services, err := install.ParseGlobalServices(installFlags.services)
+	services, exit, err := install.ParseGlobalRoles(installFlags.services)
 	if err != nil {
 		return clierr.Usage("%v", err)
 	}
@@ -121,6 +156,10 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		EnableFirewall: installFlags.enableFirewall, SSHPort: installFlags.sshPort, Colocated: installFlags.colocated,
 		PublicStorageBytes: installFlags.publicStorageGB * bytesPerGB,
 		ChainClientUsers:   installFlags.chainClientUsers,
+		Tor: install.TorOptions{
+			Exit: exit, Address: installFlags.torAddress, Contact: installFlags.torContact, NodeID: installFlags.torNodeID,
+			BandwidthMbit: installFlags.torBandwidthMbit, Family: installFlags.torFamily, DirauthKeysDir: installFlags.torAuthorityKeys,
+		},
 	}
 	if err := checkChainClientUsers(opts.ChainClientUsers, opts.Colocated); err != nil {
 		return err
