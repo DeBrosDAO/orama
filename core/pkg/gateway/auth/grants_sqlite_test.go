@@ -396,7 +396,7 @@ func TestTransferOwnership_againstTheRealSchema(t *testing.T) {
 	ctx := context.Background()
 
 	giveOwner(t, s, db, nsID, "0xcreator")
-	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xnext"); err != nil {
+	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xnext", testWalletCap); err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
 
@@ -643,10 +643,10 @@ func TestTransferOwnership_toAMemberAndBackAgainstTheRealSchema(t *testing.T) {
 	if err := s.Grant(ctx, GrantRequest{Namespace: "anchat", PrincipalType: PrincipalWallet, Identifier: "0xheir", Role: RoleAdmin}); err != nil {
 		t.Fatalf("add the heir: %v", err)
 	}
-	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xheir"); err != nil {
+	if err := s.TransferOwnership(ctx, "anchat", "0xcreator", "0xheir", testWalletCap); err != nil {
 		t.Fatalf("transfer to the heir: %v", err)
 	}
-	if err := s.TransferOwnership(ctx, "anchat", "0xheir", "0xcreator"); err != nil {
+	if err := s.TransferOwnership(ctx, "anchat", "0xheir", "0xcreator", testWalletCap); err != nil {
 		t.Fatalf("transfer back: %v", err)
 	}
 

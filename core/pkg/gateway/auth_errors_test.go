@@ -78,7 +78,7 @@ func TestAuthHints_coverEveryCode(t *testing.T) {
 	for _, code := range []string{
 		CodeAuthMissing, CodeAuthInvalidKey, CodeAuthRevoked, CodeAuthExpired, CodeAuthUnavailable,
 		CodeAuthUserJWTRequired, CodeScopeMissing, CodeNamespaceMismatch,
-		CodeOwnershipRequired, CodeOperatorRequired, CodeDestinationNotAllowed,
+		CodeOwnershipRequired, CodeOperatorRequired, CodeDestinationNotAllowed, CodeNamespaceQuota,
 	} {
 		if authHints[code] == "" {
 			t.Errorf("%s has no hint", code)
@@ -101,6 +101,7 @@ func TestAuthCodes_areDistinct(t *testing.T) {
 		"CodeOwnershipRequired":     CodeOwnershipRequired,
 		"CodeOperatorRequired":      CodeOperatorRequired,
 		"CodeDestinationNotAllowed": CodeDestinationNotAllowed,
+		"CodeNamespaceQuota":        CodeNamespaceQuota,
 	}
 	seen := map[string]string{}
 	for name, value := range codes {

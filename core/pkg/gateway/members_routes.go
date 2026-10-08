@@ -235,8 +235,13 @@ func (g *Gateway) transferNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := g.authService.TransferOwnership(r.Context(), ns, grant.Identifier, body.Wallet); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	walletCap, err := g.walletNamespaceCap(r.Context())
+	if err != nil {
+		g.refuseUnreadableCap(w, err)
+		return
+	}
+	if err := g.authService.TransferOwnership(r.Context(), ns, grant.Identifier, body.Wallet, walletCap); err != nil {
+		g.refuseTransfer(w, err)
 		return
 	}
 
