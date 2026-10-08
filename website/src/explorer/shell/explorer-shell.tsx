@@ -20,11 +20,7 @@ export function ExplorerShell({ children }: { children: ReactNode }) {
       <TrailBar />
       <main>{children}</main>
       <footer className="mx-auto max-w-[1140px] px-4 py-10 text-center text-xs text-muted sm:px-6">
-        {origin.kind === "demo" ? (
-          <p>This explorer is showing demo data. It is not a real chain, and none of these wallets or transactions exist.</p>
-        ) : (
-          <p>Live data from {origin.label}.</p>
-        )}
+        <p>Live data from {origin.label}.</p>
         <p className="mt-1">
           <Link to="/" className="underline underline-offset-4 hover:text-fg">
             orama.network

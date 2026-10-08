@@ -1,4 +1,4 @@
-import type { UptimeDay, Validator, ValidatorSet } from "../../model/types";
+import type { Validator, ValidatorSet } from "../../model/types";
 
 export interface ValidatorsSummary {
   /** Share of voting power held by the founding committee, 0 to 1. */
@@ -26,12 +26,6 @@ export function rankValidators(validators: readonly Validator[]): Validator[] {
     if (b.power !== a.power) return b.power - a.power;
     return a.ref.moniker.localeCompare(b.ref.moniker);
   });
-}
-
-/** "27 of 30 days fully up, 2 partial, 1 missed": the strip's text alternative. */
-export function uptimeLabel(days: readonly UptimeDay[]): string {
-  const count = (kind: UptimeDay) => days.filter((d) => d === kind).length;
-  return `${count("ok")} of ${days.length} days fully up, ${count("partial")} partial, ${count("missed")} missed`;
 }
 
 /** The plain sentence above the hand-over track. */

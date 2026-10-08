@@ -1,30 +1,15 @@
 import { Link } from "react-router";
 import { explorerPaths } from "../../model/routes";
-import type { UptimeDay, Validator } from "../../model/types";
+import type { Validator } from "../../model/types";
 import { Badge } from "../../ui/badge";
 import { Card } from "../../ui/card";
 import { Identicon } from "../../ui/identicon";
 import { cn } from "../../../lib/utils";
 import { formatPct } from "../../model/units";
-import { rankValidators, uptimeLabel } from "./summary";
+import { rankValidators } from "./summary";
 
-const STRIP_CLASS: Record<UptimeDay, string> = {
-  ok: "bg-gain/40",
-  partial: "bg-signal/60",
-  missed: "bg-loss/70",
-};
 const HEAD_CELL = "pb-2 pr-3 font-medium";
 const CELL = "py-3 pr-3 align-middle";
-
-function UptimeStrip({ days }: { days: readonly UptimeDay[] }) {
-  return (
-    <div role="img" aria-label={uptimeLabel(days)} className="flex h-[18px] items-end gap-[2px]">
-      {days.map((d, i) => (
-        <i key={i} className={cn("h-full w-1 rounded-[1px]", STRIP_CLASS[d])} />
-      ))}
-    </div>
-  );
-}
 
 function Row({ v, rank }: { v: Validator; rank: number }) {
   return (
@@ -51,10 +36,6 @@ function Row({ v, rank }: { v: Validator; rank: number }) {
           <span className="block h-full bg-fg/60" style={{ width: `${Math.min(100, v.power * 100)}%` }} />
         </span>
       </td>
-      <td className={cn(CELL, "hidden md:table-cell")}>
-        <UptimeStrip days={v.uptimeDays} />
-      </td>
-      <td className={cn(CELL, "pr-2 text-right font-mono text-sm tabular-nums")}>{v.uptimePct.toFixed(2)}%</td>
     </tr>
   );
 }
@@ -69,8 +50,6 @@ export function ValidatorTable({ validators }: { validators: readonly Validator[
             <th scope="col" className={HEAD_CELL}>Validator</th>
             <th scope="col" className={cn(HEAD_CELL, "hidden md:table-cell")}>Type</th>
             <th scope="col" className={HEAD_CELL}>Voting power</th>
-            <th scope="col" className={cn(HEAD_CELL, "hidden md:table-cell")}>Uptime · 30 days</th>
-            <th scope="col" className={cn(HEAD_CELL, "pr-2 text-right")}>Uptime</th>
           </tr>
         </thead>
         <tbody>

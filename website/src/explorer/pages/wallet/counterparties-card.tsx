@@ -8,7 +8,8 @@ import { Query, Skeleton } from "../../ui/query-states";
 import { cn } from "../../../lib/utils";
 import { COUNTERPARTY_LIMIT } from "./constants";
 
-const TIP = "The wallets this account sends to or receives from most. Click one to see only your history with them.";
+const TIP =
+  "The wallets this account sends to or receives from most, among its 100 most recent transactions. Click one to see only your history with them.";
 const PERCENT = 100n;
 const ROW_SKELETON_CLASS = "h-12 w-full";
 

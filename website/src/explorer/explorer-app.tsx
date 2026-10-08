@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Route, Routes } from "react-router";
 import { ExplorerProvider } from "./data/provider";
 import type { ExplorerDataSource } from "./data/source";
-import { createDemoSource } from "./data/demo/source";
+import { createChainSource } from "./data/chain/source";
 import { ExplorerShell } from "./shell/explorer-shell";
 import { PaletteProvider } from "./shell/palette";
 import { PeekProvider } from "./shell/peek";
@@ -17,12 +17,12 @@ import { ValidatorsPage } from "./pages/validators";
 import { WalletPage } from "./pages/wallet";
 
 export interface ExplorerAppProps {
-  /** Where the data comes from. Defaults to the built-in demo chain. */
+  /** Where the data comes from. Defaults to the chain the site is served with. */
   source?: ExplorerDataSource;
 }
 
 export function ExplorerApp({ source }: ExplorerAppProps) {
-  const active = useMemo(() => source ?? createDemoSource({ live: true }), [source]);
+  const active = useMemo(() => source ?? createChainSource(), [source]);
   return (
     <ExplorerProvider source={active}>
       <TrailProvider>

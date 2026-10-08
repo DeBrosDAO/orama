@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useSource } from "../../data/provider";
 import { activityToCsv, csvFilename } from "./csv";
 import { BUTTON_CLASS } from "./constants";
 import type { ActivityItem, WalletProfile } from "../../model/types";
@@ -29,8 +28,7 @@ export interface WalletHeaderProps {
 
 export function WalletHeader({ profile, loaded }: WalletHeaderProps) {
   const { ref, roles } = profile;
-  const demo = useSource().origin.kind === "demo";
-  const csv = useMemo(() => (loaded.length > 0 ? activityToCsv(loaded, { demo }) : ""), [loaded, demo]);
+  const csv = useMemo(() => (loaded.length > 0 ? activityToCsv(loaded) : ""), [loaded]);
   const count = loaded.length;
   return (
     <header className="flex flex-wrap items-start gap-4">
@@ -60,7 +58,7 @@ export function WalletHeader({ profile, loaded }: WalletHeaderProps) {
           className={BUTTON_CLASS}
           disabled={count === 0}
           title={count === 0 ? "No activity to export" : `Downloads the ${count} activity rows loaded so far`}
-          onClick={() => saveCsv(csvFilename(ref.address, { demo }), csv)}
+          onClick={() => saveCsv(csvFilename(ref.address), csv)}
         >
           Export CSV
         </button>

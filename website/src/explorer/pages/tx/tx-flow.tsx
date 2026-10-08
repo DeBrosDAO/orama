@@ -88,7 +88,7 @@ export function FlowCard({ message, fee, failed }: { message: TxMessage | null; 
   return (
     <Card title="Where the money went">
       <div className={cn("my-3 grid items-center", to && "md:grid-cols-[1fr_1.1fr_1fr]")}>
-        <FlowNode party={from} />
+        {from && <FlowNode party={from} />}
         {to && amount !== null && <Pipe amount={amount} failed={failed} />}
         {to && <FlowNode party={to} />}
       </div>

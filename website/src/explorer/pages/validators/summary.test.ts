@@ -1,22 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { Validator, ValidatorSet } from "../../model/types";
-import { handoverSentence, rankValidators, summarize, uptimeLabel } from "./summary";
+import { handoverSentence, rankValidators, summarize } from "./summary";
 
 const v = (moniker: string, type: Validator["type"], power: number, jailed = false): Validator => ({
   ref: { moniker, operator: `orama1${moniker}` },
   type,
   power,
   jailed,
-  uptimeDays: [],
-  uptimePct: 100,
 });
 
 const set = (validators: Validator[], lambda: number): ValidatorSet => ({
   lambda,
   nakamoto: 1,
   totalStaked: "0",
-  delegators: 0,
-  jailedLast30d: 0,
+  jailed: 0,
   validators,
 });
 
@@ -51,16 +48,6 @@ describe("rankValidators", () => {
     const input = [v("b", "committee", 0.1), v("a", "committee", 0.9)];
     rankValidators(input);
     expect(input.map((x) => x.ref.moniker)).toEqual(["b", "a"]);
-  });
-});
-
-describe("uptimeLabel", () => {
-  it("TestUptimeLabel_counts_each_kind", () => {
-    expect(uptimeLabel(["ok", "ok", "partial", "missed"])).toBe("2 of 4 days fully up, 1 partial, 1 missed");
-  });
-
-  it("TestUptimeLabel_empty", () => {
-    expect(uptimeLabel([])).toBe("0 of 0 days fully up, 0 partial, 0 missed");
   });
 });
 

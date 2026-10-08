@@ -18,8 +18,7 @@ export const MIN_SEGMENT_WIDTH = 1.5;
 const PERCENT_SCALE = 10_000n;
 
 /**
- * The three parts of a balance with their share of the total. Claimable
- * rewards are not part of the total and are not in the split.
+ * The three parts of a balance with their share of the total.
  */
 export function splitSegments(balance: WalletBalance): SplitSegment[] {
   const parts: { id: SplitId; label: string; norama: string }[] = [

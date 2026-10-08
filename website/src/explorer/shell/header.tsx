@@ -1,6 +1,6 @@
 import { Link, NavLink } from "react-router";
 import { Search } from "lucide-react";
-import { useHead, useHeadError, useSource } from "../data/provider";
+import { useHead, useHeadError } from "../data/provider";
 import { explorerPaths } from "../model/routes";
 import { formatInt } from "../model/units";
 import { cn } from "../../lib/utils";
@@ -35,7 +35,6 @@ export function ExplorerHeader() {
   const { open } = usePalette();
   const head = useHead();
   const headError = useHeadError();
-  const origin = useSource().origin;
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-surface/90 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-[1140px] items-center gap-3 px-4 sm:gap-5 sm:px-6">
@@ -53,9 +52,6 @@ export function ExplorerHeader() {
           <span className="min-w-0 flex-1 truncate">Search address, transaction, block…</span>
           <kbd className="hidden rounded border border-border bg-surface-2 px-1.5 font-mono text-[11px] sm:block">⌘K</kbd>
         </button>
-        {origin.kind === "demo" && (
-          <span className="shrink-0 rounded-full border border-signal/40 px-2 py-0.5 text-xs text-signal">{origin.label}</span>
-        )}
         <div className="hidden shrink-0 items-center gap-2 text-xs text-muted lg:flex">
           <span className="inline-flex items-center gap-2 tabular-nums">
             <span className="h-1.5 w-1.5 animate-pulse-dot rounded-full bg-gain text-gain" aria-hidden="true" />

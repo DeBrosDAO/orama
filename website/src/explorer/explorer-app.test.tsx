@@ -26,9 +26,11 @@ describe("explorer routes render on the server", () => {
     expect(html).not.toContain("<!--$?-->");
   }, 20_000);
 
-  it("TestExplorerRender_the_demo_is_labelled_on_every_page", async () => {
+  it("TestExplorerRender_says_it_shows_live_data_and_never_demo_data", async () => {
     for (const path of ["/explorer", "/explorer/validators", "/explorer/block/1"]) {
-      expect(await render(path)).toContain("showing demo data");
+      const html = await render(path);
+      expect(html).toContain("Live data from");
+      expect(html).not.toContain("demo");
     }
   });
 });

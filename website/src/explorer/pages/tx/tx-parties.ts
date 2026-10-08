@@ -7,9 +7,9 @@ export interface FlowParty {
   wallet: WalletRef;
 }
 
-/** Who the money went from and to. `to` is null when a message has one actor and no movement. */
+/** Who the money went from and to. A party is null when the message has none to name: one actor and no movement, or a signer-less transaction. */
 export interface Flow {
-  from: FlowParty;
+  from: FlowParty | null;
   to: FlowParty | null;
 }
 
@@ -39,10 +39,10 @@ export function flowOf(message: TxMessage): Flow {
     case "storage_deal":
       return {
         from: { role: "From (owner)", wallet: message.owner },
-        to: { role: "To (provider)", wallet: message.provider },
+        to: message.provider ? { role: "To (provider)", wallet: message.provider } : null,
       };
     case "unknown":
-      return { from: { role: "Signer", wallet: message.signer }, to: null };
+      return { from: message.signer ? { role: "Signer", wallet: message.signer } : null, to: null };
   }
 }
 

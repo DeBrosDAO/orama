@@ -34,7 +34,7 @@ function useHeadFeed(source: ExplorerDataSource): HeadState {
       setError(null);
     };
     source.getHead().then(accept, (err: unknown) => live && setError(toError(err)));
-    const stop = source.subscribeHead(accept);
+    const stop = source.subscribeHead(accept, (err) => live && setError(err));
     return () => {
       live = false;
       stop();

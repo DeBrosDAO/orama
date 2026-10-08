@@ -1,7 +1,7 @@
 /**
  * The explorer's domain model. Everything the UI knows about the chain is one
- * of these types, and every data source (the demo world today, an indexer
- * adapter later) produces exactly these. Nothing here mentions CometBFT,
+ * of these types, and every data source produces exactly these. A figure the
+ * chain cannot give is null (or absent), never a made-up value. Nothing here mentions CometBFT,
  * protobuf or the gateway.
  *
  * Amounts are base-unit integers in strings (1 ORAMA = 10^9 norama): they do
@@ -41,13 +41,15 @@ export type TxMessage =
   | {
       type: "storage_deal";
       owner: WalletRef;
-      provider: WalletRef;
+      /** Null: a deal's providers are assigned after the transaction. */
+      provider: WalletRef | null;
+      /** The escrow: price per epoch times replicas times epochs. */
       amount: Norama;
       replicas: number;
       visibility: StorageVisibility;
     }
   /** Any message the explorer has no decoder for. Never a blank row. */
-  | { type: "unknown"; typeUrl: string; signer: WalletRef };
+  | { type: "unknown"; typeUrl: string; signer: WalletRef | null };
 
 export type TxMessageType = TxMessage["type"];
 
@@ -66,7 +68,8 @@ export interface TxSummary {
   height: number;
   time: string;
   status: TxStatus;
-  signer: WalletRef;
+  /** Null for a transaction with no signature (a shielded one). */
+  signer: WalletRef | null;
   messages: TxMessage[];
   fee: Fee;
 }
@@ -91,9 +94,9 @@ export interface TxEvent {
 
 /** What a reader needs to judge whether a transaction is unusual. */
 export interface TxContext {
-  /** Share (0-100) of this week's successful transfers this one is larger than. Null for non-transfers. */
+  /** Share (0-100) of this week's successful transfers this one is larger than. Null when the source cannot tell. */
   amountPercentile: number | null;
-  /** How many times the signer paid this receiver before. Null for non-transfers. */
+  /** How many times the signer paid this receiver before. Null when the source cannot tell. */
   priorBetweenParties: number | null;
   previousFromSigner: TxSummary | null;
   otherInBlock: number;
@@ -112,14 +115,17 @@ export interface BlockSummary {
   height: number;
   hash: string;
   time: string;
-  proposer: ValidatorRef;
+  /** Null when the proposer is not in the validator list (it left the set). */
+  proposer: ValidatorRef | null;
   txCount: number;
 }
 
 export interface Block extends BlockSummary {
   gasUsed: number;
   burned: Norama;
-  signatures: { signed: number; total: number };
+  /** Who signed this block. Null for the head: its signatures arrive in the next block. */
+  signatures: { signed: number; total: number } | null;
+  /** The transactions, in block order. At most `txs.length` of `txCount` when a source shows a prefix. */
   txs: TxSummary[];
 }
 
@@ -145,8 +151,8 @@ export interface NetworkSnapshot {
   transactionsChangePct: number | null;
   /** Hourly counts, oldest first. */
   transactionsSeries: number[];
-  activeWallets24h: number;
-  newWallets24h: number;
+  /** Transactions the chain refused (after their fee was settled) in the last 24 hours. */
+  failed24h: number;
   burned24h: Norama;
 }
 
@@ -158,20 +164,16 @@ export interface WalletBalance {
   available: Norama;
   staked: Norama;
   unbonding: Norama;
-  /** Rewards accrued and not yet claimed. Not part of the total. */
-  claimableRewards: Norama;
   /** available + staked + unbonding. */
   total: Norama;
 }
 
 /** Facts the wallet page turns into its plain-words summary. */
 export interface WalletFacts {
-  firstSeen: string;
-  lastActive: string;
+  /** Null for a wallet that holds funds and has no transaction yet. */
+  firstSeen: string | null;
+  lastActive: string | null;
   txCount: number;
-  failedLast7d: number;
-  topSender: WalletRef | null;
-  topDelegate: ValidatorRef | null;
 }
 
 export interface WalletProfile {
@@ -219,24 +221,12 @@ export interface Counterparty {
   volume: Norama;
 }
 
-export type BalanceRange = "7d" | "30d" | "all";
-
-export interface BalancePoint {
-  time: string;
-  total: Norama;
-}
-
-export type UptimeDay = "ok" | "partial" | "missed";
-
 export interface Validator {
   ref: ValidatorRef;
   type: "committee" | "community";
   /** Share of voting power, 0 to 1. */
   power: number;
   jailed: boolean;
-  /** Last 30 days, oldest first. */
-  uptimeDays: UptimeDay[];
-  uptimePct: number;
 }
 
 export interface ValidatorSet {
@@ -245,8 +235,7 @@ export interface ValidatorSet {
   /** The smallest number of validators that together hold a third of the power. */
   nakamoto: number;
   totalStaked: Norama;
-  delegators: number;
-  jailedLast30d: number;
+  jailed: number;
   validators: Validator[];
 }
 

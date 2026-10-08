@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityToCsv, csvFilename, CSV_HEADER, DEMO_COMMENT } from "./csv";
+import { activityToCsv, csvFilename, CSV_HEADER } from "./csv";
 import type { ActivityItem } from "../../model/types";
 import { ALICE, BOB, sendItem } from "./fixtures";
 
@@ -73,20 +73,11 @@ describe("activityToCsv", () => {
     expect(lines(activityToCsv([item]))[1]).toContain(",'=x,");
   });
 
-  it("TestActivityToCsv_demo_adds_a_comment_row_before_the_header", () => {
-    const out = lines(activityToCsv([sendItem()], { demo: true }));
-    expect(out[0]).toBe("# Demo data: not a real chain");
-    expect(DEMO_COMMENT).toBe(out[0]);
-    expect(out[1]).toBe(CSV_HEADER.join(","));
-    expect(out).toHaveLength(4);
-  });
-
-  it("TestActivityToCsv_demo_with_no_rows_is_comment_and_header", () => {
-    expect(activityToCsv([], { demo: true })).toBe(`${DEMO_COMMENT}\r\n${CSV_HEADER.join(",")}\r\n`);
-  });
-
-  it("TestActivityToCsv_chain_data_has_no_comment_row", () => {
-    expect(activityToCsv([sendItem()], { demo: false })).not.toContain("#");
+  it("TestActivityToCsv_has_no_comment_row", () => {
+    const out = lines(activityToCsv([sendItem()]));
+    expect(out[0]).toBe(CSV_HEADER.join(","));
+    expect(out).toHaveLength(3);
+    expect(activityToCsv([sendItem()])).not.toContain("#");
   });
 
   it("TestActivityToCsv_amount_has_no_digit_grouping", () => {
@@ -109,12 +100,7 @@ describe("activityToCsv", () => {
 });
 
 describe("csvFilename", () => {
-  it("TestCsvFilename_plain_for_a_chain", () => {
+  it("TestCsvFilename_is_the_address_and_a_suffix", () => {
     expect(csvFilename("orama1abc")).toBe("orama1abc-activity.csv");
-    expect(csvFilename("orama1abc", { demo: false })).toBe("orama1abc-activity.csv");
-  });
-
-  it("TestCsvFilename_demo_is_prefixed", () => {
-    expect(csvFilename("orama1abc", { demo: true })).toBe("DEMO-orama1abc-activity.csv");
   });
 });

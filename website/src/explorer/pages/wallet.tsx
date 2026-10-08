@@ -43,7 +43,7 @@ function WalletView({ profile }: { profile: WalletProfile }) {
       <Insight profile={profile} />
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="space-y-4">
-          <BalanceCard address={address} balance={profile.balance} />
+          <BalanceCard balance={profile.balance} />
           <ActivityCard
             activity={activity}
             filter={filter}
