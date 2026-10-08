@@ -17,8 +17,8 @@ import (
 
 // Module queries: GET /v1/chain/query/<package.Service>/<Method> runs one gRPC query of an Orama
 // module through the local node's CometBFT abci_query and answers the decoded response as JSON,
-// with the proto field names. Orama modules carry no REST annotations, so this is the only HTTP
-// route to x/nodes, x/storage, x/fees and the rest.
+// with the proto field names. The gateway reaches x/nodes, x/storage, x/fees and the rest only
+// through this route; a node also serves them on its own REST API.
 //
 // Only the Query services embedded in core/pkg/chainread are served, so a Msg, a transaction or
 // any other ABCI path is unreachable. The request is one of

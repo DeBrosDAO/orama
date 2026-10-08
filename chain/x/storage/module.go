@@ -52,8 +52,13 @@ func (AppModuleBasic) RegisterInterfaces(reg cdctypes.InterfaceRegistry) {
 	types.RegisterInterfaces(reg)
 }
 
-// RegisterGRPCGatewayRoutes is a no-op: queries are gRPC and CLI, not REST.
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(client.Context, *gwruntime.ServeMux) {}
+// RegisterGRPCGatewayRoutes serves x/storage's queries over REST (the paths are the google.api.http
+// annotations of proto/orama/storage/v1/query.proto).
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(fmt.Errorf("failed to register the storage REST routes: %w", err))
+	}
+}
 
 // DefaultGenesis returns default genesis state as raw JSON.
 func (AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {

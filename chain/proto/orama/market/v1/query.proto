@@ -3,14 +3,21 @@ package orama.market.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/market/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/market/v1/market.proto";
 
 // Query is x/market's gRPC query service.
 service Query {
-  rpc Listing(QueryListingRequest) returns (QueryListingResponse);
-  rpc Bid(QueryBidRequest) returns (QueryBidResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Listing(QueryListingRequest) returns (QueryListingResponse) {
+    option (google.api.http).get = "/orama/market/v1/listing/{id}";
+  }
+  rpc Bid(QueryBidRequest) returns (QueryBidResponse) {
+    option (google.api.http).get = "/orama/market/v1/bid/{listing_id}/{bid_id}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/market/v1/invariants";
+  }
 }
 
 message QueryListingRequest {

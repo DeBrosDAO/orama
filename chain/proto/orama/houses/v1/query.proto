@@ -3,18 +3,33 @@ package orama.houses.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/houses/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/houses/v1/houses.proto";
 
 // Query is the gRPC querier for x/houses.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Proposal(QueryProposalRequest) returns (QueryProposalResponse);
-  rpc Vote(QueryVoteRequest) returns (QueryVoteResponse);
-  rpc HouseBond(QueryHouseBondRequest) returns (QueryHouseBondResponse);
-  rpc Tiers(QueryTiersRequest) returns (QueryTiersResponse);
-  rpc Enacted(QueryEnactedRequest) returns (QueryEnactedResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/houses/v1/params";
+  }
+  rpc Proposal(QueryProposalRequest) returns (QueryProposalResponse) {
+    option (google.api.http).get = "/orama/houses/v1/proposal/{proposal_id}";
+  }
+  rpc Vote(QueryVoteRequest) returns (QueryVoteResponse) {
+    option (google.api.http).get = "/orama/houses/v1/vote/{proposal_id}/{voter}";
+  }
+  rpc HouseBond(QueryHouseBondRequest) returns (QueryHouseBondResponse) {
+    option (google.api.http).get = "/orama/houses/v1/house-bond/{address}";
+  }
+  rpc Tiers(QueryTiersRequest) returns (QueryTiersResponse) {
+    option (google.api.http).get = "/orama/houses/v1/tiers";
+  }
+  rpc Enacted(QueryEnactedRequest) returns (QueryEnactedResponse) {
+    option (google.api.http).get = "/orama/houses/v1/enacted";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/houses/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

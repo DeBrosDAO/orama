@@ -16,8 +16,10 @@ mod_dir() { (cd "$chain_dir" && go list -m -f '{{.Dir}}' "$1"); }
 sdk_mod="$(mod_dir github.com/cosmos/cosmos-sdk)"
 gogo_mod="$(mod_dir github.com/cosmos/gogoproto)"
 cproto_mod="$(mod_dir github.com/cosmos/cosmos-proto)"
+# google/api/annotations.proto, which the queries import for their REST paths.
+gateway_mod="$(mod_dir github.com/grpc-ecosystem/grpc-gateway)"
 
 protoc \
-  -I "$chain_dir/proto" -I "$sdk_mod/proto" -I "$gogo_mod" -I "$cproto_mod/proto" \
+  -I "$chain_dir/proto" -I "$sdk_mod/proto" -I "$gogo_mod" -I "$cproto_mod/proto" -I "$gateway_mod/third_party/googleapis" \
   --include_imports --descriptor_set_out="${OUT:-$here/queries.binpb}" \
   "$chain_dir"/proto/orama/*/v1/query.proto

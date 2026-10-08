@@ -51,8 +51,13 @@ func (AppModuleBasic) RegisterInterfaces(reg cdctypes.InterfaceRegistry) {
 	types.RegisterInterfaces(reg)
 }
 
-// RegisterGRPCGatewayRoutes is a no-op: x/houses does not generate a gRPC-gateway handler.
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(client.Context, *gwruntime.ServeMux) {}
+// RegisterGRPCGatewayRoutes serves x/houses's queries over REST (the paths are the google.api.http
+// annotations of proto/orama/houses/v1/query.proto).
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(fmt.Errorf("failed to register the houses REST routes: %w", err))
+	}
+}
 
 // DefaultGenesis returns x/houses' default genesis state as raw JSON.
 func (b AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {

@@ -3,6 +3,7 @@ package orama.fees.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/fees/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/fees/v1/fees.proto";
 
@@ -11,12 +12,24 @@ import "orama/fees/v1/fees.proto";
 // credited by other modules' keepers, and deposits are locked/released by
 // their owning module's keeper - never by a user-signed x/fees message.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc BaseFee(QueryBaseFeeRequest) returns (QueryBaseFeeResponse);
-  rpc Earnings(QueryEarningsRequest) returns (QueryEarningsResponse);
-  rpc FeeBalance(QueryFeeBalanceRequest) returns (QueryFeeBalanceResponse);
-  rpc Deposit(QueryDepositRequest) returns (QueryDepositResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/params";
+  }
+  rpc BaseFee(QueryBaseFeeRequest) returns (QueryBaseFeeResponse) {
+    option (google.api.http).get = "/orama/fees/v1/base-fee";
+  }
+  rpc Earnings(QueryEarningsRequest) returns (QueryEarningsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/earnings/{address}";
+  }
+  rpc FeeBalance(QueryFeeBalanceRequest) returns (QueryFeeBalanceResponse) {
+    option (google.api.http).get = "/orama/fees/v1/fee-balance/{address}";
+  }
+  rpc Deposit(QueryDepositRequest) returns (QueryDepositResponse) {
+    option (google.api.http).get = "/orama/fees/v1/deposit";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/fees/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

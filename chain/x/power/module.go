@@ -49,8 +49,13 @@ func (AppModuleBasic) RegisterLegacyAminoCodec(*codec.LegacyAmino) {}
 // RegisterInterfaces is a no-op: x/power has no Any-packed types.
 func (AppModuleBasic) RegisterInterfaces(cdctypes.InterfaceRegistry) {}
 
-// RegisterGRPCGatewayRoutes is a no-op: x/power does not generate a gRPC-gateway (REST) handler.
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(client.Context, *gwruntime.ServeMux) {}
+// RegisterGRPCGatewayRoutes serves x/power's queries over REST (the paths are the google.api.http
+// annotations of proto/orama/power/v1/query.proto).
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(fmt.Errorf("failed to register the power REST routes: %w", err))
+	}
+}
 
 // DefaultGenesis returns x/power's default genesis state as raw JSON.
 func (b AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {

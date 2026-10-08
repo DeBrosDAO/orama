@@ -2,6 +2,7 @@
 package market
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -48,8 +49,13 @@ func (AppModuleBasic) RegisterInterfaces(r cdctypes.InterfaceRegistry) {
 	types.RegisterInterfaces(r)
 }
 
-// RegisterGRPCGatewayRoutes is a no-op: queries are served over gRPC.
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(client.Context, *gwruntime.ServeMux) {}
+// RegisterGRPCGatewayRoutes serves x/market's queries over REST (the paths are the google.api.http
+// annotations of proto/orama/market/v1/query.proto).
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(fmt.Errorf("failed to register the market REST routes: %w", err))
+	}
+}
 
 // DefaultGenesis returns x/market's default genesis state as raw JSON.
 func (AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {

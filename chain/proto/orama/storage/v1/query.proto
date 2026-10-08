@@ -3,20 +3,39 @@ package orama.storage.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/storage/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/storage/v1/storage.proto";
 
 // Query is x/storage's gRPC query service.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Deal(QueryDealRequest) returns (QueryDealResponse);
-  rpc Slot(QuerySlotRequest) returns (QuerySlotResponse);
-  rpc Authorization(QueryAuthorizationRequest) returns (QueryAuthorizationResponse);
-  rpc Challenges(QueryChallengesRequest) returns (QueryChallengesResponse);
-  rpc EpochMint(QueryEpochMintRequest) returns (QueryEpochMintResponse);
-  rpc Queue(QueryQueueRequest) returns (QueryQueueResponse);
-  rpc NodeFailures(QueryNodeFailuresRequest) returns (QueryNodeFailuresResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/storage/v1/params";
+  }
+  rpc Deal(QueryDealRequest) returns (QueryDealResponse) {
+    option (google.api.http).get = "/orama/storage/v1/deal/{deal_id}";
+  }
+  rpc Slot(QuerySlotRequest) returns (QuerySlotResponse) {
+    option (google.api.http).get = "/orama/storage/v1/slot/{deal_id}/{slot}";
+  }
+  rpc Authorization(QueryAuthorizationRequest) returns (QueryAuthorizationResponse) {
+    option (google.api.http).get = "/orama/storage/v1/authorization/{granter}/{grantee}";
+  }
+  rpc Challenges(QueryChallengesRequest) returns (QueryChallengesResponse) {
+    option (google.api.http).get = "/orama/storage/v1/challenges/{epoch}/{node_id}";
+  }
+  rpc EpochMint(QueryEpochMintRequest) returns (QueryEpochMintResponse) {
+    option (google.api.http).get = "/orama/storage/v1/epoch-mint/{epoch}";
+  }
+  rpc Queue(QueryQueueRequest) returns (QueryQueueResponse) {
+    option (google.api.http).get = "/orama/storage/v1/queue";
+  }
+  rpc NodeFailures(QueryNodeFailuresRequest) returns (QueryNodeFailuresResponse) {
+    option (google.api.http).get = "/orama/storage/v1/node-failures/{node_id}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/storage/v1/invariants";
+  }
 }
 
 message QueryNodeFailuresRequest {

@@ -3,15 +3,24 @@ package orama.token.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/token/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/token/v1/token.proto";
 
 // Query defines the gRPC querier service for x/token.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Token(QueryTokenRequest) returns (QueryTokenResponse);
-  rpc Frozen(QueryFrozenRequest) returns (QueryFrozenResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/token/v1/params";
+  }
+  rpc Token(QueryTokenRequest) returns (QueryTokenResponse) {
+    option (google.api.http).get = "/orama/token/v1/token";
+  }
+  rpc Frozen(QueryFrozenRequest) returns (QueryFrozenResponse) {
+    option (google.api.http).get = "/orama/token/v1/frozen";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/token/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

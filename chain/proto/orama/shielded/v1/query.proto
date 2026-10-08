@@ -3,16 +3,27 @@ package orama.shielded.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/shielded/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/shielded/v1/shielded.proto";
 
 // Query is the gRPC querier for x/shielded.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Pools(QueryPoolsRequest) returns (QueryPoolsResponse);
-  rpc TreeState(QueryTreeStateRequest) returns (QueryTreeStateResponse);
-  rpc NullifierSpent(QueryNullifierSpentRequest) returns (QueryNullifierSpentResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/params";
+  }
+  rpc Pools(QueryPoolsRequest) returns (QueryPoolsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/pools";
+  }
+  rpc TreeState(QueryTreeStateRequest) returns (QueryTreeStateResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/tree-state";
+  }
+  rpc NullifierSpent(QueryNullifierSpentRequest) returns (QueryNullifierSpentResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/nullifier-spent";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/shielded/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}
