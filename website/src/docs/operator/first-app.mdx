@@ -1,0 +1,77 @@
+# First namespace and app
+
+A cluster that answers `orama status` is up. This page proves it works end to end by creating a namespace and deploying a site, and shows what to look at.
+
+## Create a namespace
+
+A namespace is your own small cluster inside the cluster: a database, a cache and a gateway on three nodes. See [Namespaces](/docs/developer/namespaces).
+
+A new cluster lets **only its operators** create namespaces. The operator is the wallet that set the cluster up, so run this signed in as that wallet:
+
+```bash
+orama env use mycluster
+orama auth login
+orama namespace create myapp
+```
+
+Creation takes a moment: the cluster picks three nodes, reserves ports on each, starts RQLite, Olric and the gateway for `myapp`, and publishes DNS for `ns-myapp.<base-domain>`.
+
+Creating a namespace does not sign you in to it. Sign in again for the namespace:
+
+```bash
+orama auth login --namespace myapp
+orama namespace list
+```
+
+**If you have fewer than three nodes with a free slot** creation is refused (`NAMESPACE_CAPACITY`) and nothing is created. One node gives a one-node namespace for evaluation, and two is refused ([One-VPS evaluation](/docs/operator/one-vps)).
+
+To let other wallets create namespaces, see [Cluster administration](/docs/operator/cluster-admin#who-may-create-namespaces).
+
+## Deploy a site
+
+```bash
+mkdir site && echo '<h1>It works</h1>' > site/index.html
+orama deploy static ./site --name www
+orama app list
+orama app get www
+```
+
+`orama deploy static` publishes a directory (any directory with an `index.html`) as the deployment `www` and prints its URL, a name under your base domain with a random suffix. Open it.
+
+## Check what happened
+
+```bash
+orama status                    # all nodes healthy
+orama monitor namespaces        # myapp is healthy on all three nodes
+orama monitor dns               # nameservers, certificate expiry, resolution
+orama namespace webrtc-status   # only if you enabled WebRTC
+```
+
+- `orama monitor namespaces` shows the namespace's three services on each node it runs on.
+- The URL resolves through your own nameservers, so `dig <url host> @ns1.<base-domain>` returns node addresses.
+- If you used `letsencrypt-staging`, the browser warns about the certificate and `curl` needs `-k`. See [TLS and certificates](/docs/operator/tls-certificates).
+
+## Add a database
+
+```bash
+orama db create appdb
+orama db query appdb "CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)"
+orama db query appdb "INSERT INTO notes (text) VALUES ('hello')"
+orama db query appdb "SELECT * FROM notes"
+```
+
+See [Databases](/docs/developer/databases) for the two database kinds.
+
+## Clean up
+
+```bash
+orama app delete www
+orama namespace delete        # the signed-in namespace, and everything in it
+```
+
+## What to do next
+
+- [Monitoring](/docs/operator/monitoring): learn what healthy looks like so you notice when it is not
+- [Upgrades](/docs/operator/upgrades)
+- [Backups](/docs/developer/backups)
+- Build something: [Quickstart](/docs/developer/getting-started)

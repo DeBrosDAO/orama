@@ -1,156 +1,137 @@
 # Upgrades
 
-Orama nodes must be kept up to date with the latest releases to maintain compatibility with the network and benefit from performance improvements and security patches. This guide covers the upgrade process, rolling upgrades, and health verification.
+A new Orama version is a new **signed archive** and a **rolling restart**. Extract can happen on every node at once. Restarts happen **one node at a time**, with a health check between each. This page is the protocol, the commands, and the traps.
 
-## Upgrade Command
+> **Never restart all nodes at once.** The registry database (index RQLite) is a Raft group and needs a majority of its voters. Stopping two of three loses quorum and takes the cluster down.
 
-The `orama node upgrade` command handles downloading, extracting, and optionally restarting services. It supports both local (on-VPS) and remote (from your machine) execution.
-
-### Local Upgrade (on VPS)
-
-Run directly on a VPS node with root privileges:
+## The short version
 
 ```bash
-# Upgrade binary only (does not restart services)
-sudo orama node upgrade
-
-# Upgrade and automatically restart services
-sudo orama node upgrade --restart
-
-# Reconfigure all settings during upgrade
-sudo orama node upgrade --force
-
-# Skip minimum resource checks (RAM/CPU)
-sudo orama node upgrade --skip-checks
+cd orama/core
+git pull                                   # the version you want to roll out
+orama rollout --env mycluster              # build, push, and PRINT the plan
+orama rollout --env mycluster --yes        # do it
 ```
 
-### Remote Rolling Upgrade
+`orama rollout` (the same as `orama node rollout`) builds a signed archive, pushes it to every node, prints the restart plan, and stops unless `--yes` is given. It never reuses an older archive on its own; to roll out a specific one use `--no-build --archive <path>`.
 
-Run from your local machine to upgrade all nodes in an environment sequentially:
+Step by step, with more control:
 
 ```bash
-# Print the plan, then restart only when --yes is passed
-orama node upgrade --env testnet --yes
-
-# Upgrade a single node only
-orama node upgrade --env testnet --node 1.2.3.4
-
-# How long a node has to rejoin before the upgrade stops (default: 300 seconds)
-orama node upgrade --env testnet --delay 60 --yes
-
-# Upgrade with automatic restart
-orama node upgrade --env testnet --restart
+orama build                                                   # signed with your RootWallet
+orama push --env mycluster --archive $ARCHIVE                 # upload and verify on every node
+orama node upgrade --env mycluster                            # read every node, print the plan
+orama node upgrade --env mycluster --yes                      # execute it
+orama node upgrade --env mycluster --node 203.0.113.11 --yes  # one node only
+orama node upgrade --env mycluster --delay 600 --yes          # allow 10 minutes per node to rejoin
 ```
 
-### All Upgrade Flags
+You need RootWallet unlocked for the whole run. The CLI touches the agent every five minutes while it holds keys, so one unlock covers a long rollout.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--force` | `false` | Reconfigure all settings during upgrade |
-| `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
-| `--env` | | Target environment for remote rolling upgrade (`devnet`, `testnet`, `mainnet`) |
-| `--node` | | Upgrade a single node IP only (requires `--env`) |
-| `--delay` | `300` | Seconds a node has to rejoin before the rollout stops |
-| `--nameserver` | `false` | Make this node a nameserver |
+## What `push` does
 
----
+`orama push` uploads the archive once to a hub node, which fans it out to the others (`--direct` uploads from your machine to each node in turn). On each node it runs the node's **installed** CLI, which, under a lock on `/opt/orama`:
 
-## Rolling Upgrade Process
+1. extracts into a private directory (regular files and directories only; at most 1024 entries, 512 MiB per file, 4 GiB total)
+2. verifies the signature against `/etc/orama/archive-signers`, every file against the signed manifest, and the architecture
+3. only then swaps `manifest.json`, `manifest.sig`, `bin/`, `systemd/` and `packages/` into place, and puts everything back if any step fails
 
-Orama uses a rolling upgrade strategy — nodes are upgraded one at a time to maintain cluster availability. RQLite requires a majority of voter nodes (quorum) to function, so upgrading multiple nodes simultaneously risks losing quorum and causing a cluster outage.
+A refused archive leaves `/opt/orama` exactly as it was. `push` reaches only installed nodes; a fresh machine gets its first archive from `orama node setup`.
 
-### Upgrade Order
+## What the rolling upgrade does
 
-1. **Upgrade followers first** — Start with RQLite follower nodes
-2. **Upgrade the leader last** — This triggers a leader election, which is normal
-3. **Never upgrade more than one node at a time** — Wait for full verification between each
+1. **Reads every node's Raft state** over SSH before touching anything.
+2. **Prints a plan**: followers first, the leader last, nameservers spaced apart so the zone always has one answering. The order is deterministic, so the plan you approve is the plan that runs.
+3. **Refuses to start** if the state does not permit it: no node reports itself leader, two do (an election), or any node's state could not be read. An unreachable node is never assumed healthy.
+4. **Requires `--yes`.** Without it nothing restarts.
+5. **Runs the staged build's own CLI** on each node (`/opt/orama/bin/orama node upgrade --restart`), never the node's old `/usr/local/bin/orama`, so every step is the new release's code.
+6. **Hands over before it stops anything.** While the node still serves, it records the node's Raft identity, checks quorum, sets the maintenance flag, transfers leadership on the index and each namespace RQLite, and confirms another voter leads. If this node is still the leader afterwards, the upgrade aborts and the node keeps serving.
+7. **Stops** `orama-node` (the supervisor) first, then every loaded namespace unit.
+8. **Gates on the node rejoining** before touching the next: Raft state `Leader` or `Follower`, a leader known to exist, an applied index caught up to the leader's commit index, and the gateway answering `/health`. `--delay` (default 300 seconds) is the budget for this gate, not a sleep between nodes.
+9. **Stops the rollout** the moment a node fails the gate, leaving the remaining voters untouched.
 
-### Per-Node Process
+Then the node restarts its other units in order: namespace RQLite, Olric, gateway, everything else. Sample plan:
 
-1. Verify cluster health before starting
-2. Download the new binary to the node
-3. Stop services in reverse dependency order (Gateway → Olric → RQLite → WireGuard)
-4. Replace the binary with the new version
-5. Start services in correct dependency order (WireGuard → RQLite → Olric → Gateway)
-6. Verify node health after restart
-7. Verify cluster health before proceeding to the next node
+```text
+Rolling upgrade plan (3 nodes, 3 nameservers):
 
----
+  1. 10.0.0.1   nameserver-ns1   follower (nameserver, spaced so the zone keeps answering)
+  2. 10.0.0.3   nameserver-ns3   follower (nameserver, spaced so the zone keeps answering)
+  3. 10.0.0.2   nameserver-ns2   leader, last, after leadership transfer
+```
 
-## Health Verification
+### The quorum guard
 
-After upgrading each node, always verify health before moving to the next:
+`stop`, `restart` and the pre-upgrade step refuse to run when stopping this node would cost the registry its quorum, and print the arithmetic: `Quorum check: 3/3 voters reachable, 2 would remain (need 2).` Quorum is a majority of the **configured** voters. Stopping a node does not remove it from the Raft configuration, so on three voters you may stop one, and on two voters you may stop neither. The guard fails closed: if it cannot read the status, it refuses. `--force` skips it. Use it only when you have confirmed the remaining voters can still form a quorum.
+
+## During a rolling upgrade
+
+- **Pause namespace and deployment create and delete.** Coordination between nodes needs a message authentication code signed for the receiving node, and a node on the old build cannot coordinate spawns, teardowns or replica operations with a node on the new one until every node is upgraded. Such requests are refused with 401 or 403. Network status, telemetry and `orama monitor` keep working across versions. After the last node is upgraded, check that `namespace_pending_cleanup` drains: a teardown refused in the window is recorded there and replayed.
+- **Do not add a node** until every cluster you are upgrading is on the same version (see RQLite below).
+- **Do not upgrade voters in parallel by hand.** Never `systemctl stop orama-node` on several nodes at once.
+
+## Schema migrations
+
+The gateway embeds SQL migrations. The highest-numbered one is the schema version that gateway **requires**: it refuses to start if that schema is not applied. Migrations take a cluster-wide lock (`cluster_locks('schema-migrations')`), so gateways starting together do not each run the pending list. Check and apply:
 
 ```bash
-# Check the upgraded node
-orama monitor report --env <environment> --node <node-ip>
-
-# Check the full cluster
-orama monitor report --env <environment>
+sudo orama node schema status      # required vs applied version, and pending migrations
+sudo orama node schema apply       # apply pending migrations to the local RQLite
 ```
 
-What to verify:
+A namespace owner can check drift without SSH with `GET /v1/schema-status`.
 
-| Check | Expected State |
-|-------|---------------|
-| All services | `active (running)` |
-| RQLite state | `Leader` or `Follower` |
-| Raft log index | In sync with other nodes |
-| WireGuard peers | All connected, recent handshakes |
+## Bundled service versions
 
-Do not proceed to the next node until all checks pass. If a node shows issues after upgrade, investigate before continuing.
+The archive bundles RQLite 10.4.0, IPFS Kubo v0.43.1, IPFS Cluster v1.1.6, Olric v0.7.4 and Caddy 2.11.4; ntfy 2.28.0 is pinned in its installer; Node.js 24.21.0 LTS (for Node.js, Next.js SSR and npm deployments) is downloaded at install and upgrade and verified against a pinned digest. The build refuses a Kubo or RQLite tarball whose SHA-256 differs from the pinned digest.
 
----
+**The RQLite v10 upgrade is one way.** On its first start a v10 `rqlited` converts the node's snapshots into its own format and deletes the old ones. A v10 node cannot join a v9-or-older cluster, and a node that has started under v10 cannot go back; a downgrade is a restore from backup into a new cluster. Take a backup first. Roll it node by node and finish **every** cluster before adding a node: the index cluster, then each namespace cluster. During the roll the cluster is mixed v9 and v10 and that works.
 
-## Rollout Command (Recommended)
+## Back up the registry first
 
-`orama rollout` builds an archive, pushes it, prints the restart plan, and stops unless `--yes` is passed. Followers restart before the leader. After each node it waits for that node to rejoin.
+The index RQLite is backed up hourly by the leader, to the leader's local disk and encrypted and pinned into IPFS, with its CID, SHA-256 and size recorded in `rqlite_backups`. Retention is 24 hourly plus one a day for 7 days. A backup on the leader's own disk protects against little; the pinned copy is the one that matters. **A backup is only as good as the last time someone restored it:** exercise a restore on a scratch cluster, not for the first time during an incident.
+
+## Changing the certificate authority
+
+`orama node upgrade --env mycluster --acme-ca letsencrypt --yes` upgrades every node and records the new CA. See [TLS and certificates](/docs/operator/tls-certificates#changing-a-running-cluster-s-ca).
+
+## A node that boots without quorum
+
+A node that cannot reach a Raft leader does not exit. It starts everything that needs only the local machine (WireGuard, IPFS, the local RQLite replica, CoreDNS, the gateway, Caddy, tenants), reports its lifecycle state as `degraded`, and keeps retrying the cluster half in the background. When quorum returns it goes `active` with no restart. So a `degraded` node is serving. Check which components have not converged before reaching for a recovery command:
 
 ```bash
-orama rollout --env devnet --yes
-
-orama rollout --env devnet --no-build --archive /tmp/orama-<version>-linux-amd64.tar.gz --yes
+sudo orama node logs node -n 100 | grep "Boot component"
 ```
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | | Target environment |
-| `--yes` | `false` | Execute the plan. Without it, nothing restarts. |
-| `--no-build` | `false` | Skip the build. Requires `--archive`. |
-| `--archive` | | The archive to roll out. Only with `--no-build`. |
-| `--delay` | `300` | Seconds a node has to rejoin before the rollout stops |
+Only escalate to `recover-raft` when the **whole cluster** is leaderless.
 
-`orama node rollout` is the same command.
+## Checking health between nodes
 
----
-
-## Push Command (Recommended)
-
-The `orama push` command uploads the binary archive to nodes without restarting services. Useful for pre-staging a binary before a maintenance window. Uses RootWallet for SSH authentication.
+After every node (the rollout does this for you, but when you do it by hand):
 
 ```bash
-orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
-
-orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 1.2.3.4
+orama monitor report --env mycluster --node 203.0.113.11    # that node: services, RQLite state, WireGuard peers
+orama monitor report --env mycluster                         # the cluster: leader stable, quorum, mesh, indices in sync
 ```
 
-`--archive` is required. Each node is uploaded from this computer. `--fanout` and `--direct` are ignored. `orama node push` is the same command.
+Carry on only when both pass. If a node shows problems, investigate; do not skip it and hope.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | *(required)* | Target environment |
-| `--node` | | Push to a single node IP only |
-| `--direct` | `false` | Upload directly to each node |
+## Recovering a split cluster
 
----
+If nodes are stuck in `Candidate` or report "leader not found":
 
-## Version Compatibility
+```bash
+orama node recover-raft --env mycluster
+```
 
-The Orama network requires all nodes in an environment to run compatible versions. When a new version is released:
+**One node's data is kept. Every other node's Raft log and database are deleted. Nothing is backed up.** The command reads every node's applied index, keeps the one furthest ahead, prints what each reported and asks you to confirm. `--leader <ip>` names the node whose data to keep; `--leader-raft-addr <wg-ip>:10101` is for when RQLite is not answering anywhere. It resets the kept node to a single-member cluster, confirms it comes back as Leader before touching any other node, wipes the others, and starts them one at a time, each pulling a full snapshot. Take a backup yourself first if the surviving node might not be the right one.
 
-- Operators receive a notification with the target upgrade window
-- All nodes should be upgraded within the specified window
-- Nodes running incompatible versions may be temporarily excluded from the mesh
+## Automatic updates
 
-Use `orama monitor alerts --env <env>` to check for binary version mismatch warnings across the cluster.
+`orama node autoupdate --current <ver> --candidate <ver>` reports whether a newer release should be installed. The cluster default is `notify`: it prints `notify` and does not change binaries. `auto` prints `upgrade` only if the cluster is not degraded, a majority of voters are up, the candidate is newer on the cluster's channel, and any `--window` allows it. A validator may be `off` or `notify`, never `auto`. **Nothing in the CLI installs through it yet**: there is no timer and no command that acts on the decision. Roll out by hand.
+
+## Versions and first upgrades
+
+- The first upgrade from a 0.122.x cluster needs `orama push --trust-signers <your address>` because those nodes have no trust anchor, and must run this release's code from your checkout, not the old CLI. The index Raft port moves from 7001 to 10101; one node's address may change at a time with every other voter up, which the one-node-at-a-time rollout guarantees. A cluster of one reforms with `orama node recover-raft --leader-raft-addr <wg-ip>:10101`.
+- After upgrading from 0.122.x, run `orama operator rotate-signing-key` once on each node's index gateway, one node at a time, after the whole fleet is upgraded. The index gateway's signing keys are now systemd credentials (`/var/lib/orama-gateway-keys/index`, root `0400`), but the key carried over from the old layout was readable by every tenant gateway, and the index key signs for any namespace. Nobody is signed out.
+- Access tokens issued before a node's upgrade stop verifying on that node; clients get a 401 and refresh (refresh tokens are registry rows, so they survive), or log in again.

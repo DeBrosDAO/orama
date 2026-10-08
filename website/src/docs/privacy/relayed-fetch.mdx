@@ -86,4 +86,4 @@ const bytes = await owner.storage.fetchWith(transport, cid, caps[0]);
 
 ## Operator setting
 
-`relay_allowed_suffixes` in the gateway config (YAML) lists the base domains a relay on this gateway may reach. Empty means this cluster's base domain. See [Gateway settings](/docs/operator/cluster-admin#gateway-settings).
+`relay_allowed_suffixes`, nested under `http_gateway` in the node's `node.yaml`, lists the base domains the relay on that node may reach. Empty means this cluster's base domain. A list replaces that default. A change takes effect when the gateway restarts (`orama node restart`). See [Gateway settings](/docs/operator/cluster-admin#gateway-settings).

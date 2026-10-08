@@ -1,0 +1,57 @@
+# One-VPS evaluation
+
+A single server can run Orama end to end: the index plane on that machine, then a tenant namespace on the same machine, then an app with a database. This is **evaluation, not production**. There is no second machine to fail over to, and losing the disk loses the namespace.
+
+## What a namespace does with 1, 2 or more nodes
+
+The index plane runs on every node, so one machine is the whole index. When you create a namespace, the cluster counts its members (every registered, non-retired node, whether or not it is currently heartbeating) and decides:
+
+| Members | Namespace size | Notes |
+|---|---|---|
+| 1 | One node | Same units (`orama-namespace-{rqlite,olric,gateway}@<name>`), replica count 1. RQLite is the leader with no join |
+| 3 or more | Three nodes | The production default. A ten-node fleet still creates namespaces at three |
+| 3 or more, fewer than 3 with a free slot | Refused | `503 NAMESPACE_CAPACITY`; nothing is created and the name is not taken |
+| 2 | Refused | Neither evaluation nor HA. An even-sized Raft group is a split brain. Add a third node |
+| 0 | Refused | Nobody to run on |
+
+There is no "dev mode" that skips systemd, and no `--replicas` flag. The create call is the same.
+
+## Limits of one machine
+
+- **Vault.** The vault is an index service with one guardian per node. On one machine Shamir cannot split: the secret is stored as a local key on that disk (`K=1`, `W=1`) and the gateway logs it. That is not secret sharing. Lose the disk, lose the secret. With three or more nodes the threshold is `max(2, floor(N/3))`.
+- **WebRTC** stays unavailable: it needs at least three nodes for the SFU and TURN. Do not enable it.
+- **A reboot of the one node** is a local restore. Disk loss is namespace loss.
+
+## Install
+
+From your computer with RootWallet unlocked and the archive built ([Build and sign](/docs/operator/build-and-sign)):
+
+```bash
+orama build
+orama node setup --ip 203.0.113.10 --password --env eval --archive $ARCHIVE \
+  --base-domain eval.example.com --role nameserver --genesis \
+  --acme-ca letsencrypt-staging
+```
+
+Then delegate the domain ([DNS and nameservers](/docs/operator/nameserver)): one nameserver publishes only `ns1`. Or by hand on the machine:
+
+```bash
+sudo orama node install --vps-ip 203.0.113.10 --domain eval.example.com \
+  --base-domain eval.example.com --operator-wallet 0xYourWallet --nameserver
+```
+
+## Use it
+
+```bash
+orama env use eval
+orama auth login
+orama namespace create myapp
+orama auth login --namespace myapp
+orama deploy static ./site --name www
+```
+
+`namespace create` on a one-node cluster does not fail with "insufficient nodes available for cluster". The cluster row records replica counts 1/1/1, so repair does not try to grow it to three.
+
+## Moving to a real cluster
+
+Evaluation data does not move by adding nodes to the one-node namespace. Add two more nodes ([Joining nodes](/docs/operator/joining-nodes)), then create new namespaces, which are three nodes, and move the data with a [sealed backup and restore](/docs/developer/backups). For the three-nameserver path from the start, see [Install a cluster from scratch](/docs/operator/install-from-scratch).

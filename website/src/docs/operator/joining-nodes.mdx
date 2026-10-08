@@ -1,0 +1,116 @@
+# Joining nodes
+
+Adding a node to a running cluster is one command from your computer, using a single-use **invite**. This page covers the invite, the three kinds of node, servers that have only an SSH key, and how a node is removed.
+
+## The invite
+
+An invite is one string. It names **one node** of the cluster: its public address, the domain to present to it, and the SHA-256 fingerprint of the TLS certificate it serves. The joining node connects to exactly that node and pins exactly that certificate. It does not resolve the cluster's domain (which reaches any nameserver, each with a certificate of its own) and it does not trust whatever certificate it is first shown.
+
+- **Single use.** Mint one per join.
+- **Short lived.** The default is one hour, and the gateway caps it at one hour. `sudo orama node invite --expiry 24h` on a node can mint a longer one.
+- **Needs the named node's certificate.** The certificate is issued only after the domain is delegated ([DNS and nameservers](/docs/operator/nameserver)). That is why you delegate before you join.
+
+`orama node setup` mints and uses the invite for you. To mint one yourself:
+
+```bash
+orama invite --env mycluster                  # names the lowest address the domain resolves to
+orama invite --env mycluster --node 203.0.113.11   # name a specific node
+sudo orama node invite --expiry 24h           # on a node already in the cluster
+sudo orama node invite --raw                  # print only the string, for scripts
+```
+
+## Join with `orama node setup`
+
+```bash
+orama node setup \
+  --ip 203.0.113.11 \
+  --password \
+  --env mycluster \
+  --archive $ARCHIVE \
+  --base-domain cluster.example.com \
+  --role nameserver \
+  --join-via root@203.0.113.10
+```
+
+`--join-via <user>@<ip>` mints the invite over SSH on a node already in the cluster, with your RootWallet key. Your computer does not need to resolve the cluster name, and you do not need to be signed in. That node's SSH host key must already be in `~/.orama/known_hosts` (setup writes it there when it first pins the node).
+
+Without `--join-via`, setup asks the environment's gateway for an invite, which needs `orama auth login` first. `--gateway <url>` overrides which gateway.
+
+If a node is already running this exact build, setup does not upload the archive again.
+
+### Setup flags
+
+| Flag | Meaning |
+|---|---|
+| `--ip` | Public IPv4 of the machine. Required |
+| `--archive` | Path `orama build` printed. Required |
+| `--env` | Environment to join. Default: the active one |
+| `--base-domain` | The cluster's base domain |
+| `--role` | `node` (default) or `nameserver` |
+| `--genesis` | Create a new cluster. First node only |
+| `--join-via` | `user@ip` of a node already in the cluster |
+| `--gateway` | Gateway of the cluster to join (default: the environment's) |
+| `--password` | Switch. Use the RootWallet vault login for the IP |
+| `--bootstrap-key` | An SSH private key that opens a key-only server today (not with `--password`) |
+| `--user` | SSH user. Default `root`. With `--password` it must be the username stored by `rw vault add` |
+| `--host-key` | Expected SSH host-key fingerprint `SHA256:…`. Omit to confirm interactively |
+| `--acme-ca` | ACME directory. A joiner defaults to the cluster's |
+
+## The kinds of node
+
+| Kind | Flags | What it runs in addition |
+|---|---|---|
+| **Nameserver** | `--role nameserver` | CoreDNS (port 53) and Caddy for DNS and TLS. Claims a slot `nsN`. Update the delegation after joining |
+| **Worker** | no `--role` | The index and tenant services. Gets a generated public name `node-xxxxxx.<base>` |
+
+Every node, of either kind, runs the registry (RQLite voter), Olric, IPFS and IPFS Cluster, the vault guardian, the gateway and the Tor client. Put the first three machines in as nameservers.
+
+Install joiners one at a time, waiting for each to finish. After each, run `orama status --env mycluster` and carry on only when every node is healthy.
+
+## A server with only a key
+
+Many images (OVH, most clouds) have no password login and open with a key you already own, often for user `ubuntu`. Do not pass `--password`. Pass that key once so setup can install the RootWallet key:
+
+```bash
+orama node setup \
+  --ip 203.0.113.11 \
+  --user ubuntu \
+  --bootstrap-key ~/.ssh/id_ed25519 \
+  --env mycluster --archive $ARCHIVE \
+  --base-domain cluster.example.com --role nameserver \
+  --join-via root@203.0.113.10
+```
+
+The bootstrap key is used once to install the RootWallet key and is never stored. The user needs passwordless `sudo`; setup checks that before installing. `--password` and `--bootstrap-key` are alternatives, and the command rejects both together. If you pass neither, setup assumes the RootWallet key is already on the server.
+
+## What a join does
+
+1. Pins the server's SSH host key and installs the RootWallet key.
+2. Verifies the archive on your computer, uploads it, and runs `orama node install --token <invite>` on the server.
+3. The node validates the invite and the pinned certificate, receives the cluster's join response over HTTPS (archive trust list, secrets, mesh peers, nameserver information), and sets up WireGuard to every peer.
+4. It starts RQLite as a voter, joins the Raft group, and starts the remaining services in dependency order.
+5. It registers itself with the cluster and claims a slot if it is a nameserver.
+
+A node installed without a token creates a **new** cluster. Never do that on a machine meant to join.
+
+## Removing a node
+
+```bash
+orama node remove --env mycluster --node 203.0.113.12 --dry-run   # print the plan, change nothing
+orama node remove --env mycluster --node 203.0.113.12
+orama node remove --env mycluster --node 203.0.113.12 --offline   # the machine is already gone
+```
+
+It runs from a survivor. It first prints what removal costs every Raft group the node votes in (the registry and each namespace it serves) and **refuses if any would lose quorum**. Then it takes the node out of the Raft configuration, writes an eviction tombstone so nothing re-adds it, releases its mesh address, nameserver slot, namespace memberships, port blocks and TURN and SFU allocations, marks it retired so DNS purges its records, and wipes it (unless `--offline`). Every step is safe to repeat. Afterwards run `orama node dns delegation` and update the parent zone.
+
+To swap a nameserver for a new machine without losing quorum, follow [Replace a node](/docs/operator/node-replacement).
+
+## If a join fails
+
+| Symptom | Cause |
+|---|---|
+| Certificate mismatch or connection error to the named node | The node's certificate is not issued yet. Finish the delegation |
+| `409 this cluster trusts archive signers …` | The cluster trusts other signers than you expected. Use `--join-via`; the invite was not used |
+| Invite expired or already used | Mint a new one |
+| `AGENT_LOCKED`, "agent not reachable" | Unlock the RootWallet app |
+| A node comes up but RQLite never becomes a follower | See [Troubleshooting](/docs/operator/troubleshooting) |

@@ -1,274 +1,117 @@
-# Getting Started as a Node Operator
+# What you need to run a cluster
 
-Node operators are the backbone of the Orama Network. By running a node, you contribute compute, storage, and bandwidth to the decentralized infrastructure. This guide covers what operators do, what you need, and how to join the network.
+This page lists everything to have in place before you install. The next page, [Install a cluster from scratch](/docs/operator/install-from-scratch), is the exact sequence. If you only want to try Orama on a single machine, read [One-VPS evaluation](/docs/operator/one-vps).
 
-## What Operators Do
+## What a cluster is
 
-As a node operator, your server becomes part of the Orama mesh network. Your node will:
+A cluster is three or more Linux machines (*nodes*) that share one replicated registry, one DNS zone and one WireGuard mesh. Everything you deploy lives inside it. Each node runs the same software; nameserver nodes also answer DNS.
 
-- **Route traffic** through the API gateway for applications deployed on the network
-- **Store data** in distributed databases (RQLite) and cache layers (Olric)
-- **Host files** on IPFS with cluster-level replication
-- **Execute functions** in the WASM serverless runtime
-- **Relay messages** through the PubSub system
-- **Serve DNS** if configured as a nameserver node (CoreDNS)
-- **Route outbound requests anonymously** through a local Tor client (SOCKS5 proxy)
+You need **three nodes** for a real cluster: the registry database (RQLite) is a Raft group, and Raft needs a majority to keep working. With two nodes, losing either one stops the cluster, so Orama refuses to create namespaces on two. With one node it works for evaluation but is not highly available.
 
-All inter-node communication happens over an encrypted WireGuard mesh network on the `10.0.0.0/24` subnet.
+## 1. Machines
 
-## Hardware Requirements
+Three VPSes (or more). For each:
 
-| Resource | Recommended |
-|----------|-------------|
-| CPU | 4 vCPUs |
-| RAM | 8 GB |
-| Storage | 160 GB SSD |
-| Network | 1 Gbps, unmetered or high bandwidth cap |
-| OS | Ubuntu 22.04 LTS |
+| Requirement | Value | Where it is enforced |
+|---|---|---|
+| Operating system | Debian 12 or 13, Ubuntu 22.04, 24.04 or 26.04 | Installer refuses anything else |
+| Architecture | amd64, arm64 or arm. The archive you install must match | Installer |
+| CPU | at least 2 cores | Installer (`--skip-checks` bypasses, not recommended) |
+| Memory | at least 2 GB | Installer |
+| Free disk | at least 10 GB | Installer |
+| Network | A public IPv4 address, static | You |
 
-The installer enforces a hard minimum of 2 vCPUs, 2 GB RAM, and 10 GB free disk (`orama node install --skip-checks` bypasses this, but is not recommended). A stable network connection with low latency is important for Raft consensus and mesh connectivity.
+Those are floors. A comfortable node is 4 vCPUs, 8 GB of RAM and a 160 GB SSD, because IPFS storage is sized to half of a node's disk and every namespace adds processes.
 
-## On your computer
+Interim Ubuntu releases (24.10, 25.04, 25.10) are not supported, because the Tor Project does not publish packages for them and every node installs a Tor client.
 
-`orama node setup` runs on your computer, not on the VPS. Install these before you rent one.
+How you get the machines does not matter: any provider that gives you root over SSH or a sudo user with a key. `orama sandbox create` can rent five on Hetzner for tests ([Sandbox](/docs/contributor/sandbox)).
 
-**The `orama` CLI.** Homebrew installs the latest stable release:
+### Ports
+
+The installer opens these on the machine with `ufw`. If your provider has a firewall in front of the VPS, you must open the same ports there; `ufw` on the machine cannot open it.
+
+| Port | Protocol | Nodes | What |
+|---|---|---|---|
+| 22 | TCP | all | SSH |
+| 51820 | UDP | all | WireGuard mesh |
+| 80, 443 | TCP | all | HTTP and HTTPS |
+| 53 | TCP and UDP | nameserver nodes | DNS |
+| 3478 (UDP and TCP), 5349 (TCP), 49152 to 65535 (UDP) | UDP and TCP | nodes serving WebRTC | TURN, opened when a namespace enables WebRTC |
+
+Nothing else is public. Services other than these listen on the WireGuard overlay only.
+
+## 2. A domain
+
+The cluster is reached by name. You need a domain whose DNS you can change. The cluster becomes the authoritative nameserver for it, so every deployment, namespace and certificate name under it is answered by your own nodes.
+
+Two ways:
+
+- **A subdomain of a domain you already have** (recommended). For example `cluster.example.com`, delegated from the `example.com` zone wherever it is hosted. You add NS and glue records in the parent zone. The only choice if the domain is registered with Cloudflare Registrar.
+- **A whole registered domain.** The records live at the registry and you set them at your registrar.
+
+The exact records and registrar steps are in [DNS and nameservers](/docs/operator/nameserver). Pick the name now. It is called the *base domain* in every command (`--base-domain`).
+
+## 3. Your own computer
+
+Everything is driven from your computer. Nothing is typed on the servers.
+
+**The `orama` CLI.**
 
 ```bash
 brew install DeBrosDAO/tap/orama
 orama version
 ```
 
-Debian and Ubuntu packages, and prebuilt tarballs for macOS and Linux, are on the [releases page](https://github.com/DeBrosDAO/orama/releases). From a checkout of this repo, `make build` writes `./core/bin/orama`. The same install notes are in the [CLI reference](/docs/developer/cli-reference).
+Debian and Ubuntu packages and tarballs for macOS and Linux are on the [releases page](https://github.com/DeBrosDAO/orama/releases).
 
-**RootWallet, unlocked.** Download the desktop app from the [RootWallet releases](https://github.com/DeBrosDAO/rootwallet/releases): a universal `.dmg` on macOS, or a `.deb` or AppImage on Linux. The `rw` command uses the same vault as the app. Orama asks that app for SSH keys and signatures. It does not ask you to paste them into the terminal.
+**RootWallet, open and unlocked.** The desktop app holds the keys. Orama asks it for SSH keys and signatures; there is no SSH key on disk and no password flag. Install it from [RootWallet install](/docs/rootwallet/install). On macOS and Linux only; Windows has no desktop app.
 
-**The VPS login, if the machine has a password.** Store it once. The command asks for the username and the password:
+**A checkout of the Orama repository and a build toolchain.** The signed archive that goes onto the nodes is built from source, on your computer. No prebuilt archive is published, so the first install needs:
 
-```bash
-rw vault add <VPS_IP>
-```
-
-Use the SSH username you will pass to setup. That is `root` unless you pass `--user`. `--password` on `orama node setup` is a switch. It does not take the password. It reads this vault entry for that IP and username.
-
-**The build archive.** On your computer:
-
-```bash
-orama build
-```
-
-The command prints `Archive: /tmp/orama-<version>-linux-<arch>.tar.gz`. Pass that path as `--archive`. Setup stops if the flag is missing. The archive must be signed; an unsigned build will not install.
-
-The VPS itself gets its `orama` binary from that archive. You do not copy a binary onto the server by hand.
-
-## Joining the Network
-
-You also need a VPS that meets the hardware requirements above.
-
-### Setting Up Your First Node (Genesis)
-
-The first node creates a new cluster. Run this from your **local machine** (not the VPS):
+| Tool | Version |
+|---|---|
+| Go | 1.27.1 or newer |
+| Zig | 0.15.x (the vault is built with exactly the minor release `vault/build.zig.zon` names; set `ORAMA_ZIG` to point at a specific binary) |
+| xcaddy | any recent (`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`) |
+| git | for the version and commit stamp |
+| Internet access | to fetch Go modules and download pinned IPFS Kubo and RQLite releases |
 
 ```bash
-orama node setup \
-  --ip <VPS_IP> \
-  --password \
-  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet \
-  --base-domain <BASE_DOMAIN> \
-  --role nameserver \
-  --genesis
+git clone https://github.com/DeBrosDAO/orama.git
+cd orama/core
 ```
 
-`--password` only works after `rw vault add <VPS_IP>` with username `root`. If you omit `--env`, setup uses the active environment and does not ask which one. `orama env list` and `orama env current` show that choice. `orama env use <name>` changes it.
+Details are in [Build and sign](/docs/operator/build-and-sign).
 
-This single command:
-1. Creates an SSH key in your RootWallet vault
-2. Installs the SSH key on the VPS, using the vault password once
-3. Uploads the binary archive
-4. Installs and starts all services
-5. Records the environment for this cluster. It does not switch the active environment.
-
-After genesis, the new environment is recorded and the active one is left as it was. Point the CLI at the new cluster, then sign in:
+**The VPS login, stored once per machine.** If a VPS has a root password, store it in your RootWallet vault. The CLI never takes a password on the command line:
 
 ```bash
-orama env use devnet
-orama auth login
+rw vault add 203.0.113.10
 ```
 
-`orama auth login` follows the active environment. If `--env` named an environment that was already active, its gateway URL was updated in place and `orama env use` is unnecessary.
+It asks for the username (use `root`, or whatever you pass as `--user`) and the password. Then `--password` on `orama node setup` is only a switch that reads that entry. Some images have no password login and open with a key you already own; see [Joining nodes](/docs/operator/joining-nodes#a-server-with-only-a-key).
 
-### Adding More Nodes
+## Pre-install checklist
 
-Once the genesis node is running and you're authenticated, add more nodes with one command:
+Before the installer runs on a server:
 
-```bash
-# Add a nameserver node
-orama node setup \
-  --ip <VPS_IP> \
-  --password \
-  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet \
-  --base-domain <BASE_DOMAIN> \
-  --role nameserver
+1. **Stop Docker if it is running.** Docker commonly binds ports 4001 and 8080, which conflict with IPFS. The installer checks for port conflicts and shows which process holds each, but it is easier to stop it first: `sudo systemctl stop docker docker.socket` and disable them.
+2. **Stop any existing IPFS instance.**
+3. **Stop any other service on port 53** on nameserver nodes. The installer handles `systemd-resolved` automatically, but `bind9`, `dnsmasq` and the like must be stopped by hand.
+4. Be sure the machine is a fresh one. A node that was part of another cluster must be wiped first ([Wipe a node](/docs/operator/clean-node)).
 
-# Add a regular node
-orama node setup \
-  --ip <VPS_IP> \
-  --password \
-  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet \
-  --base-domain <BASE_DOMAIN>
-```
+## 4. A plan for the first signer
 
-### A key-only server
+The first archive you install must be signed by the wallet that creates the cluster. That wallet becomes the cluster's **operator** and the only trusted archive signer. Use the same RootWallet account for `orama build`, `orama node setup` and `orama auth login`. Write down which account it is. Losing it is how people lock themselves out of upgrading their own cluster.
 
-Some images have no password login. They open with a key you already have, often as user `ubuntu`. Do not pass `--password`. Pass that key once so setup can install the RootWallet key:
+## Checklist
 
-```bash
-orama node setup \
-  --ip <VPS_IP> \
-  --user ubuntu \
-  --bootstrap-key ~/.ssh/id_ed25519 \
-  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet \
-  --base-domain <BASE_DOMAIN>
-```
+- [ ] Three machines on a supported OS, with root or sudo, and a public IPv4 each
+- [ ] Their firewall allows 22, 51820/udp, 80, 443 and, for nameservers, 53
+- [ ] A base domain you can add NS and glue records for
+- [ ] `orama` installed locally; RootWallet unlocked
+- [ ] A repository checkout with Go, Zig, xcaddy and git
+- [ ] `rw vault add <ip>` done for each password-login machine
 
-`--password` and `--bootstrap-key` are alternatives. The command rejects both at once. If you pass neither, setup assumes the RootWallet key is already on the server.
-
-The setup command automatically:
-- Creates a unique SSH key for the node in RootWallet
-- Installs that key on the VPS, once, using the vault password or `--bootstrap-key`
-- Requests an invite token from the cluster (using your wallet authentication)
-- Uploads the archive and runs the full installation
-- Joins the node to the cluster
-
-After that first connection, SSH uses the RootWallet key. The vault password and the bootstrap key are not used again.
-
-### Setup Flags
-
-| Flag | Required | Description |
-|------|----------|-------------|
-| `--ip` | Yes | Public IP address of the VPS |
-| `--archive` | Yes | Path printed by `orama build`. Setup stops without it. |
-| `--password` | No | Switch. Read the VPS login from the RootWallet vault (`rw vault add <ip>`). Do not put the password after this flag. |
-| `--bootstrap-key` | No | Private key that already opens a key-only VPS. Used once, not stored. Not together with `--password`. |
-| `--user` | No | SSH user (default: `root`). With `--password`, this must be the username stored by `rw vault add`. |
-| `--env` | No | Target environment. Omitted, setup uses the active environment and does not ask. |
-| `--base-domain` | For genesis | Base domain for the network (e.g., `orama-devnet.network`). A genesis node needs it. |
-| `--role` | No | `node` (default) or `nameserver` |
-| `--gateway` | No | Gateway URL override for invite tokens |
-| `--genesis` | No | Create a new cluster (first node only) |
-
-## What the Installer Does
-
-The `orama node install` command configures the entire node automatically:
-
-1. Validates system requirements (RAM, CPU, disk)
-2. Generates a WireGuard keypair and establishes mesh tunnels to all peers
-3. Configures and starts RQLite (distributed SQL)
-4. Configures and starts Olric (distributed cache)
-5. Configures and starts IPFS + IPFS Cluster (distributed storage)
-6. Configures and starts the API gateway
-7. If `--nameserver`: configures CoreDNS and Caddy for DNS and TLS
-8. Installs the Tor client from `deb.torproject.org` (client only; SOCKS5 on `127.0.0.1:9050`, used for `/v1/proxy/anon`), removing the Anyone network first if an older install left it
-9. Sets up systemd services with dependency ordering
-10. Configures the UFW firewall (unless `--skip-firewall`)
-11. Registers the node with the cluster
-
-## Node Management
-
-After installation, your node is automatically registered with your wallet. Use these unified commands from your local machine:
-
-```bash
-# List all your nodes
-orama nodes --env devnet
-
-# Check health of all your nodes
-orama status --env devnet
-
-# SSH into any node
-orama ssh <IP>
-
-# Rolling upgrade all your nodes. Nothing restarts without --yes.
-orama rollout --env devnet --yes
-```
-
-See [Node Management](/docs/operator/node-management) for the full guide.
-
-### On-Node Commands
-
-These commands run directly on a VPS with `sudo`:
-
-```bash
-# Check service status
-sudo orama node status
-
-# Start/stop/restart all services
-sudo orama node start
-sudo orama node stop
-sudo orama node restart
-
-# Run diagnostic checks
-sudo orama node doctor
-
-# View service logs
-sudo orama node logs <service>
-
-# Output node health data as JSON
-sudo orama node report --json
-```
-
-## Upgrading
-
-Deploy new code to all your nodes with one command:
-
-```bash
-orama rollout --env devnet --yes
-```
-
-`orama rollout` builds an archive, pushes it, prints the restart plan, and stops unless `--yes` is passed. It does not use an archive you built earlier. To roll out a specific archive, pass `--no-build --archive <path> --yes`. After each node restarts, the command waits for that node to rejoin before it touches the next one. `--delay` is that wait, in seconds. The default is 300. It is not a pause between nodes.
-
-Or upgrade a single node directly on the VPS:
-
-```bash
-sudo orama node upgrade --restart
-```
-
-See [Upgrades](/docs/operator/upgrades) for the full rolling upgrade procedure.
-
-## Monitoring
-
-Quick health check of all your nodes:
-
-```bash
-orama status --env devnet
-```
-
-For detailed monitoring with cross-node analysis and alerts:
-
-```bash
-# Interactive TUI
-orama monitor --env devnet
-
-# Full cluster report (JSON)
-orama monitor report --env devnet
-
-# Active alerts only
-orama monitor alerts --env devnet
-```
-
-All monitor subcommands support `--json` for machine-readable output and `--node <IP>` to filter to a specific node.
-
-See [Monitoring](/docs/operator/monitoring) for the full monitoring guide.
-
-## Next Steps
-
-- [Node Management](/docs/operator/node-management) -- Unified commands: `orama nodes`, `ssh`, `status`, `rollout`
-- [Node Setup](/docs/operator/node-setup) -- Detailed VPS installation instructions
-- [WireGuard](/docs/operator/wireguard) -- Mesh network documentation
-- [Nameserver](/docs/operator/nameserver) -- CoreDNS nameserver setup
-- [Monitoring](/docs/operator/monitoring) -- Health monitoring and alerting
-- [Upgrades](/docs/operator/upgrades) -- Rolling upgrade procedures
-- [Troubleshooting](/docs/operator/troubleshooting) -- Common issues and fixes
+Next: [Install a cluster from scratch](/docs/operator/install-from-scratch).

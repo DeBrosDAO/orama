@@ -1,156 +1,106 @@
-# Node Management
+# Node management
 
-The Orama CLI provides unified commands for managing all your nodes across environments. Your wallet identity (via RootWallet) links you to your nodes — the network tracks which nodes belong to which operator.
+These commands run from your computer and manage every node you operate. Your wallet identity (through RootWallet) links you to your nodes: `orama node setup` records the nodes on your environment, and the cluster records which wallet is the operator.
 
 ## Prerequisites
 
-- **RootWallet** desktop app running and unlocked
-- **Authenticated** with the network: `orama auth login`
-- **Environment set**: `orama env switch devnet` (or your target environment)
+- The RootWallet desktop app running and **unlocked**
+- Signed in as an operator: `orama auth login`
+- The environment set: `orama env use mycluster`, or pass `--env mycluster` to each command
 
-## Listing Your Nodes
-
-View all nodes registered to your wallet:
+## List your nodes
 
 ```bash
-# List nodes in the active environment
-orama nodes
-
-# List nodes in a specific environment
-orama nodes --env devnet
+orama nodes                    # nodes in the active environment
+orama nodes --env mycluster
 ```
 
-Output:
-
-```
+```text
 IP              ROLE         USER   ENVIRONMENT
-1.2.3.4         nameserver   root   devnet
-5.6.7.8         node         root   devnet
-9.10.11.12      node         root   devnet
-
-3 node(s) in devnet
+203.0.113.10    nameserver   root   mycluster
+203.0.113.11    nameserver   root   mycluster
+203.0.113.12    nameserver   root   mycluster
 ```
 
-## SSH into a Node
+`orama nodes` asks the network for the nodes owned by your wallet and falls back to the machines recorded by `orama node setup` (and, for older setups, a local `nodes.conf`; see below).
 
-Connect to any of your nodes by IP:
+## SSH into a node
 
 ```bash
-# SSH into a node (resolves key from RootWallet automatically)
-orama ssh 1.2.3.4
-
-# Specify environment if needed
-orama ssh 5.6.7.8 --env devnet
+orama ssh 203.0.113.10
+orama ssh 203.0.113.11 --env mycluster
 ```
 
-No manual SSH key management required — RootWallet provides the key.
+RootWallet provides the key. No SSH key management on your side.
 
-## Rolling Upgrades
-
-Deploy new code to all your nodes with a single command:
+## Health
 
 ```bash
-orama rollout --env devnet --yes
+orama status                   # table: IP, role, status, details
+orama status --json            # for automation
+orama status --ssh             # break-glass: read every node over SSH when no gateway answers
 ```
 
-`orama rollout` builds an archive, pushes it, and prints the restart plan. Nothing restarts unless `--yes` is passed. Followers go before the leader. `--delay` defaults to 300 seconds and is how long a node has to rejoin before the rollout stops. To roll out an archive you already built, pass `--no-build --archive <path> --yes`.
+A node is healthy when its gateway answers and its RQLite has settled into `Leader` or `Follower`. The data comes from the gateway's operator telemetry API, so it needs a sign-in as an operator. For the numbers behind the verdict use `orama monitor cluster`; for one machine you are logged into, `sudo orama node status`. See [Monitoring](/docs/operator/monitoring).
 
-## Health Status
-
-Check the health of all your nodes:
+## Push and roll out new versions
 
 ```bash
-# Quick status table
-orama status --env devnet
-
-# JSON output (for automation)
-orama status --env devnet --json
+orama build                                          # signed archive, prints its path
+orama push --env mycluster --archive $ARCHIVE        # upload and verify on every node, restart nothing
+orama push --env mycluster --archive $ARCHIVE --node 203.0.113.11
+orama rollout --env mycluster --yes                  # build + push + rolling upgrade
 ```
 
-Output:
+`--archive` is required for `push`. See [Upgrades](/docs/operator/upgrades) for the whole protocol.
 
-```
-Checking 3 node(s) in devnet...
-
-IP              ROLE         STATUS    DETAILS
-1.2.3.4         nameserver   healthy
-5.6.7.8         node         healthy
-9.10.11.12      node         healthy
-
-3/3 nodes healthy
-```
-
-For detailed monitoring with alerts, use the full monitor:
+## Add a node
 
 ```bash
-orama monitor report --env devnet
+orama node setup --ip 203.0.113.13 --password --env mycluster --archive $ARCHIVE \
+  --base-domain cluster.example.com --join-via root@203.0.113.10
 ```
 
-## Pushing Binary Updates
+See [Joining nodes](/docs/operator/joining-nodes).
 
-Push a new binary archive to nodes without reinstalling:
+## Remove a node
 
 ```bash
-orama build
-
-# The path the build printed
-orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
-
-# One node
-orama push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 1.2.3.4
+orama node remove --env mycluster --node 203.0.113.13 --dry-run
+orama node remove --env mycluster --node 203.0.113.13
 ```
 
-`--archive` is required. The upload goes from this computer to each node. `--fanout` and `--direct` are accepted and ignored. `--ip` is a deprecated alias of `--host`.
+It refuses if any Raft group the node votes in would lose quorum. See [Joining nodes](/docs/operator/joining-nodes#removing-a-node). To swap a nameserver for a new machine, follow [Replace a node](/docs/operator/node-replacement).
 
-## Adding New Nodes
+## On the node itself
 
-Add a new VPS to your cluster with one command:
+These run on a node over SSH, with `sudo`. Use them instead of raw `systemctl`: the CLI handles dependency ordering, quorum checks, port availability and health verification.
+
+| Command | What it does |
+|---|---|
+| `sudo orama node status` | Service status for the node on this machine |
+| `sudo orama node start` | Start all services in dependency order |
+| `sudo orama node stop` | Stop all services (refuses if quorum would be lost, unless `--force`) |
+| `sudo orama node restart` | Restart all services in order (same quorum check) |
+| `sudo orama node doctor` | Diagnose common problems: services, ports, connectivity, Raft state |
+| `sudo orama node logs <service> [-f] [-n 50] [--since -30min]` | Service logs. Aliases: `caddy`, `cluster`, `coredns`, `gateway`, `ipfs`, `ipfs-cluster`, `node`, `olric`, `rqlite`, `turn`; or a full unit name such as `orama-namespace-olric@myapp` |
+| `sudo orama node report` | All health data as JSON, the collector `orama monitor` reads |
+| `sudo orama node schema status` / `apply` | Gateway schema migrations against the local RQLite |
+| `sudo orama node invite [--expiry 24h] [--raw]` | Mint an invite for a joining node |
+| `sudo orama node uninstall` | Remove the production services |
+
+A restart of the node holding Raft leadership hands leadership over first and aborts if it cannot. Never stop or restart several nodes at the same time.
+
+## How node ownership works
+
+When you set up a node with `orama node setup`, the CLI authenticates with your wallet, the new node joins with an invite minted for that cluster, and the cluster records your wallet as the operator. `orama nodes` can then ask the network for "all nodes owned by my wallet". No local file to maintain.
+
+### Migrating from `nodes.conf`
+
+If you have older nodes listed in `scripts/nodes.conf`, register them with your wallet:
 
 ```bash
-orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet --base-domain orama-devnet.network
+orama node migrate-conf --env mycluster
 ```
 
-This creates an SSH key in RootWallet, installs it on the VPS, uploads the archive from `orama build`, requests an invite token, and joins the node to the cluster. `--password` is a switch. The password is the RootWallet vault login for that IP (`rw vault add <IP>`), used once. After that, RootWallet's own key handles SSH. A key-only server uses `--user ubuntu --bootstrap-key ~/.ssh/id_ed25519` instead of `--password`.
-
-For the first node in a new cluster, add `--genesis`:
-
-```bash
-orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet --base-domain orama-devnet.network --role nameserver --genesis
-```
-
-## How Node Ownership Works
-
-When you set up a node via `orama node setup`, the CLI:
-
-1. Authenticates with the cluster using your wallet (via RootWallet)
-2. Requests an invite token tagged with your wallet address
-3. The new node joins using that token
-4. The network records your wallet as the node's operator
-
-This means `orama nodes` can query the network for "all nodes owned by my wallet" — no local files to maintain.
-
-## Migrating from nodes.conf
-
-If you have existing nodes configured in `scripts/nodes.conf`, migrate them to the wallet-based system:
-
-```bash
-orama node migrate-conf --env devnet
-```
-
-This reads your nodes.conf, then registers each node with your wallet via the gateway API. After migration, nodes appear in `orama nodes` output.
-
-The legacy `nodes.conf` continues to work as a fallback — you can migrate at your own pace.
-
-## Command Reference
-
-| Command | Description |
-|---------|-------------|
-| `orama node setup --ip <ip>` | Set up a new node (SSH key + install + join) |
-| `orama nodes [--env]` | List your nodes |
-| `orama ssh <ip> [--env]` | SSH into a node |
-| `orama status [--env] [--json]` | Health check all nodes |
-| `orama push --archive <path> [--env] [--node <ip>]` | Upload that archive from this computer |
-| `orama rollout --env <name> --yes` | Build, push, and rolling upgrade. Without `--yes`, only the plan is printed. |
-| `orama node migrate-conf [--env]` | Migrate nodes.conf to wallet-based tracking |
+`nodes.conf` keeps working as a fallback, so you can migrate at your own pace.
