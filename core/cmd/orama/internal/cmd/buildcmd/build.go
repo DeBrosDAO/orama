@@ -14,7 +14,8 @@ var Cmd = &cobra.Command{
 	Long: `Cross-compile all Orama binaries and dependencies for Linux,
 then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
-  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy
+  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy (built from
+    checked-in, checksum-pinned modules; Kubo and RQLite by pinned digest)
   - Systemd namespace templates
   - manifest.json with checksums of every file, and manifest.sig
 
@@ -27,6 +28,10 @@ their trust anchor, /etc/orama/archive-signers, so signing is the default;
 their list with the given addresses. The build must be signed by a signer the
 nodes trust now, and the list must include that signer; retiring a key takes
 two builds (the old key adds the new one, the new key then drops the old).
+
+The build is reproducible: with SOURCE_DATE_EPOCH set (a release build sets it to
+the commit's time) two builds of one commit produce the same archive, byte for
+byte. See docs/DEV_DEPLOY.md, "Reproducible builds".
 
 The resulting archive can be pushed to nodes with 'orama node push'.
 

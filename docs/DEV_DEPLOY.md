@@ -292,6 +292,50 @@ still accept v1 during the upgrade, so `orama monitor` keeps working. After the 
 check that `namespace_pending_cleanup` drains: a teardown refused in the window
 is recorded there and replayed by the tenant reconciler.
 
+### Reproducible builds
+
+Two `orama build` runs of one commit produce the same archive, byte for byte, so
+the people who sign a release can each rebuild it and compare hashes before they
+sign. What fixes that:
+
+- **The build date** is `SOURCE_DATE_EPOCH` (seconds since the epoch) when it is
+  set, else the time of the build. A release build sets it to the commit's time,
+  `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. A value that is not a
+  count of seconds fails the build. The date goes into the manifest and the
+  binaries' version strings.
+- **Go binaries** are built with `-trimpath -buildvcs=false -ldflags "-s -w
+  -buildid="` and `-mod=readonly`. The vault is built with `zig build-exe
+  -fstrip`; unstripped, it holds the path of zig's per-build cache directory.
+- **The archive** lists its entries in a fixed order, each with the build date as
+  its time, root as owner, and mode 0755 (executable files and directories) or
+  0644; its gzip header names nothing and carries no time.
+- **Third-party programs** are built from modules checked in to the repository,
+  each with a `go.sum`: Olric in `core/thirdparty/olric`, IPFS Cluster in
+  `core/thirdparty/ipfs-cluster`, and Caddy from `caddy/cmd/caddy` (Caddy's
+  standard modules plus the Orama DNS provider and certificate storage; xcaddy is
+  no longer used). `go build -mod=readonly` refuses a module the `go.sum` does not
+  list or whose hash differs. The version each module requires is the constant in
+  `core/pkg/constants/versions.go`, and a test holds the two together. CoreDNS is
+  cloned at its tag and refused unless the checkout is the commit pinned in
+  `constants.CoreDNSCommit`; its own `go.sum` and `go.mod` decide its
+  dependencies, so nothing is upgraded to `@latest`. Kubo and RQLite are
+  downloaded and refused unless their SHA-256 equals the digest in
+  `constants/release_digests.go`.
+- **The environment cannot switch verification off.** `GOFLAGS`, `GOSUMDB`,
+  `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`, `GONOPROXY` and `GOINSECURE` are
+  removed from the environment of every `go` command the build runs.
+
+To bump a third-party program, change its constant, then in its module directory
+run `go get -tool <package>@<version>` (in `caddy/`, `go get
+github.com/caddyserver/caddy/v2@v<version>`) and commit the `go.mod` and `go.sum`.
+IPFS Cluster v1.1.6 requires a `cockroachdb/swiss` that does not compile with
+Go 1.27; its module pins a newer one, which is why
+`core/thirdparty/ipfs-cluster/go.mod` lists it.
+
+`.github/workflows/release-archive.yml` builds the archive for each published
+release twice per architecture, fails if the two differ, and attaches the archive
+and its SHA-256 to the release. It holds no signing key.
+
 ### Signed archives
 
 Nodes install only build archives signed by an address they trust. The list of

@@ -64,15 +64,15 @@ func (b *Builder) buildEnvFor(bin oramaBinary) ([]string, error) {
 	if !bin.CGO {
 		return b.crossEnv(), nil
 	}
-	return cgoEnv(os.Environ(), b.flags.Arch, b.zig)
+	return cgoEnv(hermeticGoEnv(os.Environ()), b.flags.Arch, b.zig)
 }
 
 // goBuildArgs returns the `go` arguments that build bin into output.
 func goBuildArgs(bin oramaBinary, ldflags, output string) []string {
-	args := []string{"build"}
-	if bin.CGO {
-		args = append(args, "-tags", cgoBuildTags)
-		ldflags += " " + cgoLinkFlags
+	if !bin.CGO {
+		return goBuildCommandArgs(ldflags, output, bin.Package)
 	}
-	return append(args, "-ldflags", ldflags, "-trimpath", "-o", output, bin.Package)
+	args := goBuildCommandArgs(ldflags+" "+cgoLinkFlags, output, bin.Package)
+	// -tags is a build flag like the others; it goes before the package.
+	return append([]string{args[0], "-tags", cgoBuildTags}, args[1:]...)
 }
