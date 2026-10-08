@@ -643,7 +643,7 @@ pnpm add @bufbuild/protobuf @noble/curves @noble/hashes @scure/base
 import { LocalSigner, MSG, OramaChainClient, describeTx } from "@debros/orama/chain";
 
 const chain = new OramaChainClient({
-  gatewayURL: "https://gateway.example",   // the read-only /v1/chain/ proxy
+  gatewayURL: "https://gateway.example",   // the /v1/chain/ proxy: reads, simulate, broadcast
   restURL: "http://127.0.0.1:31003",       // a node's REST API: accounts, balances, broadcast
 });
 
@@ -670,6 +670,19 @@ reads for x/nodes (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbond
 strings); a key that is not on chain is an `SDKError` with `httpStatus` 404. x/houses and the other
 modules are reachable through `moduleQuery`. A read that needs a base URL the config does not have fails and
 names it.
+
+**A wallet with only a gateway.** Everything a wallet needs to show an address and send from it goes through
+`gatewayURL`, with no node, tunnel or `restURL`: `bankBalance`, `bankAllBalances`, `bankSpendableBalances`,
+`authAccount`, `authAccountInfo`, `stakingDelegation`, `stakingDelegatorDelegations`,
+`stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`,
+`distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`
+(`false` on the gateway's typed 404 for an address that is not a contract), then `simulateTx(txBytes)`
+(`{ gasWanted, gasUsed, fee, baseFee }`) and `broadcastTx(txBytes)` (`{ txHash }`), with `tx(hash)` to poll until the
+transaction is in a block (a 404 `NotFoundError` until then). The listings take `{ limit, key }` (limit 1 to 100,
+key the previous page's `pagination.next_key`). A transaction the chain refuses, on either call, is a
+`ChainTxRefusedError` (an `SDKError` with `code` `CHAIN_TX_REJECTED`, `httpStatus` 422, and `chainCode`,
+`codespace`, `log` and, for a broadcast, `txHash`); the `log` is the gateway's sanitised copy of the reason.
+`signAndBroadcast` still uses `restURL`.
 
 **Building.** `buildSignDoc` produces the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one
 signer; `signTx` has an `OramaSigner` sign it and checks the signature before it is used;

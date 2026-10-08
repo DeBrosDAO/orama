@@ -114,10 +114,15 @@ func buildRoutePolicies() *routepolicy.Table {
 		"/v1/internal/acme/present", "/v1/internal/acme/cleanup", "/v1/internal/tls/check",
 		// Peer health probing. Returns the node id and nothing else.
 		"/v1/internal/ping",
-		// Read-only chain proxy for the explorer. The handler allowlists
+		// Chain proxy for the explorer and for wallets. The handler allowlists
 		// Comet and bank/staking reads, the chain indexer's routes under
-		// /v1/chain/index/ and the Orama modules' Query services under
-		// /v1/chain/query/. It does not forward an arbitrary path.
+		// /v1/chain/index/, the Orama modules' Query services and the bounded
+		// cosmos-sdk and wasmd ones a wallet reads under /v1/chain/query/, and
+		// two POST routes, /v1/chain/simulate and /v1/chain/broadcast, which
+		// take a signed transaction. A wallet has no credential to present: the
+		// chain charges the sender a fee for a transaction, and the gateway
+		// bounds the load (chain_tx_limit.go). It does not forward an arbitrary
+		// path.
 		"/v1/chain/",
 	)
 	// The invoker decides whether the caller may run the function, and a

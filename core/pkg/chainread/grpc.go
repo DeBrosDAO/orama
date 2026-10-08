@@ -50,9 +50,27 @@ func queryFiles() (*protoregistry.Files, error) {
 // baseapp returns for a gRPC NotFound status.
 var ErrNotFound = errors.New("not found on chain")
 
+// ErrInvalidRequest is a query the node refused as malformed: the SDK's ErrInvalidRequest, which
+// baseapp returns for a gRPC InvalidArgument status or an error that is not a status at all (a
+// bad bech32 address, for one).
+var ErrInvalidRequest = errors.New("invalid chain query")
+
 const (
-	sdkCodespace   = "sdk"
-	sdkKeyNotFound = 22
+	sdkCodespace      = "sdk"
+	sdkKeyNotFound    = 22
+	sdkInvalidRequest = 18
+	sdkUnknownRequest = 6
+
+	// contractInfoPath is wasmd's ContractInfo query. For an address that is not a contract wasmd
+	// returns its ErrNoSuchContract, and baseapp turns any error that is not a gRPC status into an
+	// SDK unknown-request error (code 6, codespace sdk), which drops the wasm code; the only thing
+	// left to tell it from another failure is the message wasmd gives that error.
+	contractInfoPath     = "/cosmwasm.wasm.v1.Query/ContractInfo"
+	noSuchContractPhrase = "no such contract"
+
+	// paginationField and limitField name the cosmos-sdk PageRequest of a paginated query.
+	paginationField = "pagination"
+	limitField      = "limit"
 )
 
 // Method is one gRPC query method, resolved from the embedded descriptors.
@@ -61,30 +79,6 @@ type Method struct {
 	Path   string
 	input  protoreflect.MessageDescriptor
 	output protoreflect.MessageDescriptor
-}
-
-// Methods lists every query method the embedded descriptors carry, as
-// "orama.nodes.v1.Query/Node".
-func Methods() ([]string, error) {
-	fs, err := queryFiles()
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	fs.RangeFiles(func(f protoreflect.FileDescriptor) bool {
-		if !strings.HasPrefix(string(f.Package()), "orama.") {
-			return true
-		}
-		services := f.Services()
-		for i := 0; i < services.Len(); i++ {
-			svc := services.Get(i)
-			for j := 0; j < svc.Methods().Len(); j++ {
-				out = append(out, string(svc.FullName())+"/"+string(svc.Methods().Get(j).Name()))
-			}
-		}
-		return true
-	})
-	return out, nil
 }
 
 // Lookup resolves "orama.nodes.v1.Query/Node".
@@ -212,6 +206,25 @@ func (m *Method) CheckRequest(data []byte) error {
 	return nil
 }
 
+// PageLimit returns the pagination.limit of an encoded request: 0 when the method takes no
+// pagination or the request leaves the limit unset, which a cosmos-sdk query reads as its default.
+func (m *Method) PageLimit(data []byte) (uint64, error) {
+	msg := dynamicpb.NewMessage(m.input)
+	if err := proto.Unmarshal(data, msg); err != nil {
+		return 0, fmt.Errorf("request for %s: %w", m.Path, err)
+	}
+	page := m.input.Fields().ByName(paginationField)
+	if page == nil || page.Message() == nil || !msg.Has(page) {
+		return 0, nil
+	}
+	pm := msg.Get(page).Message()
+	limit := page.Message().Fields().ByName(limitField)
+	if limit == nil {
+		return 0, nil
+	}
+	return pm.Get(limit).Uint(), nil
+}
+
 // DecodeRPC decodes the body of a CometBFT abci_query answer, in its JSON-RPC envelope, into the
 // method's response as JSON.
 func (m *Method) DecodeRPC(body []byte) (json.RawMessage, error) {
@@ -236,6 +249,13 @@ func (m *Method) abciResponse(result json.RawMessage) (json.RawMessage, error) {
 		return nil, fmt.Errorf("abci_query result: %w", err)
 	}
 	if res.Response.Code == sdkKeyNotFound && res.Response.Codespace == sdkCodespace {
+		return nil, fmt.Errorf("%w: %s: %s", ErrNotFound, m.Path, truncate(res.Response.Log))
+	}
+	if res.Response.Code == sdkInvalidRequest && res.Response.Codespace == sdkCodespace {
+		return nil, fmt.Errorf("%w: %s: %s", ErrInvalidRequest, m.Path, truncate(res.Response.Log))
+	}
+	if m.Path == contractInfoPath && res.Response.Code == sdkUnknownRequest && res.Response.Codespace == sdkCodespace &&
+		strings.Contains(res.Response.Log, noSuchContractPhrase) {
 		return nil, fmt.Errorf("%w: %s: %s", ErrNotFound, m.Path, truncate(res.Response.Log))
 	}
 	if res.Response.Code != 0 {

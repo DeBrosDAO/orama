@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LocalSigner, MSG, OramaChainClient, verifyTx } from "../../../src/chain";
+import { ChainTxRefusedError, LocalSigner, MSG, OramaChainClient, verifyTx } from "../../../src/chain";
 import { NetworkError, SDKError } from "../../../src/errors";
 
 const ADDRESS = "orama19rl4cm2hmr8afy4kldpxz3fka4jguq0a5tup0s";
@@ -224,5 +224,104 @@ describe("module queries through /v1/chain/query/", () => {
     const { fn } = fakeFetch(() => ({ status: 404, body: { error: "not found on chain" } }));
     const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
     await expect(chain.node("nope")).rejects.toMatchObject({ httpStatus: 404 });
+  });
+});
+
+describe("wallet reads and transactions through the gateway", () => {
+  const VALOPER = "oramavaloper19rl4cm2hmr8afy4kldpxz3fka4jguq0a2yqwhn";
+  const run = async (call: (chain: OramaChainClient) => Promise<unknown>, body: unknown = { ok: true }) => {
+    const { fn, calls } = fakeFetch(() => ({ body }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    const result = await call(chain);
+    return { result, url: new URL(calls[0]!.url), calls };
+  };
+
+  it("maps every wallet read to its service, method and request", async () => {
+    const cases: Array<[(c: OramaChainClient) => Promise<unknown>, string, unknown]> = [
+      [(c) => c.bankBalance(ADDRESS), "cosmos.bank.v1beta1.Query/Balance", { address: ADDRESS, denom: "norama" }],
+      [(c) => c.bankAllBalances(ADDRESS, { limit: 100 }), "cosmos.bank.v1beta1.Query/AllBalances", { address: ADDRESS, pagination: { limit: 100 } }],
+      [(c) => c.bankAllBalances(ADDRESS), "cosmos.bank.v1beta1.Query/AllBalances", { address: ADDRESS }],
+      [(c) => c.bankSpendableBalances(ADDRESS, { key: "AQID" }), "cosmos.bank.v1beta1.Query/SpendableBalances", { address: ADDRESS, pagination: { key: "AQID" } }],
+      [(c) => c.authAccount(ADDRESS), "cosmos.auth.v1beta1.Query/Account", { address: ADDRESS }],
+      [(c) => c.authAccountInfo(ADDRESS), "cosmos.auth.v1beta1.Query/AccountInfo", { address: ADDRESS }],
+      [(c) => c.stakingDelegation(ADDRESS, VALOPER), "cosmos.staking.v1beta1.Query/Delegation", { delegator_addr: ADDRESS, validator_addr: VALOPER }],
+      [(c) => c.stakingDelegatorDelegations(ADDRESS, { limit: 5 }), "cosmos.staking.v1beta1.Query/DelegatorDelegations", { delegator_addr: ADDRESS, pagination: { limit: 5 } }],
+      [(c) => c.stakingUnbondingDelegation(ADDRESS, VALOPER), "cosmos.staking.v1beta1.Query/UnbondingDelegation", { delegator_addr: ADDRESS, validator_addr: VALOPER }],
+      [(c) => c.stakingDelegatorUnbondingDelegations(ADDRESS), "cosmos.staking.v1beta1.Query/DelegatorUnbondingDelegations", { delegator_addr: ADDRESS }],
+      [(c) => c.stakingValidator(VALOPER), "cosmos.staking.v1beta1.Query/Validator", { validator_addr: VALOPER }],
+      [(c) => c.stakingParams(), "cosmos.staking.v1beta1.Query/Params", undefined],
+      [(c) => c.distributionDelegationRewards(ADDRESS, VALOPER), "cosmos.distribution.v1beta1.Query/DelegationRewards", { delegator_address: ADDRESS, validator_address: VALOPER }],
+      [(c) => c.distributionDelegationTotalRewards(ADDRESS), "cosmos.distribution.v1beta1.Query/DelegationTotalRewards", { delegator_address: ADDRESS }],
+      [(c) => c.contractInfo(ADDRESS), "cosmwasm.wasm.v1.Query/ContractInfo", { address: ADDRESS }],
+    ];
+    for (const [call, name, request] of cases) {
+      const { url } = await run(call);
+      expect(url.pathname).toBe(`/v1/chain/query/${name}`);
+      const json = url.searchParams.get("json");
+      expect(json === null ? undefined : JSON.parse(json)).toEqual(request);
+    }
+  });
+
+  it("refuses bad input before any request", async () => {
+    const { fn, calls } = fakeFetch(() => ({}));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    await expect(chain.bankAllBalances(ADDRESS, { limit: 101 })).rejects.toThrow(/1 to 100/);
+    await expect(chain.bankAllBalances(ADDRESS, { limit: 0 })).rejects.toThrow(/1 to 100/);
+    await expect(chain.bankAllBalances(ADDRESS, { key: "not base64 !" })).rejects.toThrow(/next_key/);
+    await expect(chain.bankBalance(ADDRESS, "no spaces")).rejects.toThrow(/denomination/);
+    await expect(chain.stakingValidator(ADDRESS)).rejects.toThrow(/oramavaloper/);
+    await expect(chain.stakingDelegation(VALOPER, VALOPER)).rejects.toThrow(/orama address/);
+    await expect(chain.contractInfo("cosmos1abc")).rejects.toThrow(/orama address/);
+    await expect(chain.simulateTx(new Uint8Array())).rejects.toThrow(/bytes/);
+    await expect(chain.broadcastTx(new Uint8Array((1 << 20) + 1))).rejects.toThrow(/bytes/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("says an address is not a contract on the typed 404, and not on any other failure", async () => {
+    const notFound = fakeFetch(() => ({ status: 404, text: "not found on chain\n" }));
+    expect(await new OramaChainClient({ gatewayURL: gw, fetch: notFound.fn }).isContract(ADDRESS)).toBe(false);
+    const found = fakeFetch(() => ({ body: { address: ADDRESS, contract_info: {} } }));
+    expect(await new OramaChainClient({ gatewayURL: gw, fetch: found.fn }).isContract(ADDRESS)).toBe(true);
+    const down = fakeFetch(() => ({ status: 502, text: "chain query failed\n" }));
+    await expect(new OramaChainClient({ gatewayURL: gw, fetch: down.fn }).isContract(ADDRESS)).rejects.toMatchObject({ httpStatus: 502 });
+  });
+
+  it("simulates a transaction through POST /v1/chain/simulate", async () => {
+    const { fn, calls } = fakeFetch(() => ({
+      body: { gas_wanted: 200000, gas_used: 123456, fee: { denom: "norama", amount: "246912" }, base_fee: "2" },
+    }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    const result = await chain.simulateTx(new Uint8Array([1, 2, 3]));
+    expect(result).toEqual({ gasWanted: 200000n, gasUsed: 123456n, fee: { denom: "norama", amount: "246912" }, baseFee: "2" });
+    expect(calls[0]!.url).toBe("https://gw.example/v1/chain/simulate");
+    expect(calls[0]!.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ tx_bytes: "AQID" });
+  });
+
+  it("broadcasts through POST /v1/chain/broadcast and returns the hash", async () => {
+    const { fn, calls } = fakeFetch(() => ({ body: { code: 0, codespace: "", log: "", tx_hash: HASH.toUpperCase() } }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    expect(await chain.broadcastTx(new Uint8Array([1, 2, 3]))).toEqual({ txHash: HASH.toUpperCase(), code: 0, log: "" });
+    expect(calls[0]!.url).toBe("https://gw.example/v1/chain/broadcast");
+  });
+
+  it("raises a ChainTxRefusedError with the chain's code, codespace and log", async () => {
+    const { fn } = fakeFetch(() => ({ status: 422, body: { code: 32, codespace: "sdk", log: "account sequence mismatch", tx_hash: "AB" } }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    for (const call of [() => chain.broadcastTx(new Uint8Array([1])), () => chain.simulateTx(new Uint8Array([1]))]) {
+      const err = await call().catch((e) => e);
+      expect(err).toBeInstanceOf(ChainTxRefusedError);
+      expect(err).toBeInstanceOf(SDKError);
+      expect(err).toMatchObject({ chainCode: 32, codespace: "sdk", log: "account sequence mismatch", txHash: "AB", code: "CHAIN_TX_REJECTED", httpStatus: 422 });
+    }
+  });
+
+  it("keeps other failures of the transaction routes as plain SDK errors", async () => {
+    const { fn } = fakeFetch(() => ({ status: 429, text: "slow down" }));
+    const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
+    const err = await chain.broadcastTx(new Uint8Array([1])).catch((e) => e);
+    expect(err).not.toBeInstanceOf(ChainTxRefusedError);
+    expect(err).toMatchObject({ httpStatus: 429 });
+    await expect(new OramaChainClient({}).simulateTx(new Uint8Array([1]))).rejects.toThrow(/gatewayURL/);
   });
 });

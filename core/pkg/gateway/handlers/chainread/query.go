@@ -44,6 +44,9 @@ const (
 	// queryMaxConcurrent is how many module queries this proxy has in flight at once. The rest
 	// are answered 503 with Retry-After, so a burst cannot queue up work on the chain process.
 	queryMaxConcurrent = 16
+	// queryMaxPageLimit is the most entries a paginated wallet query may ask for in one page. The
+	// SDK's own default, for a request that sets none, is 100.
+	queryMaxPageLimit = 100
 	// heightCacheTTL is how long the latest height read for the window check is reused.
 	heightCacheTTL = time.Second
 )
@@ -107,17 +110,28 @@ var (
 )
 
 // queryAllowed is the set of "<service>/<method>" names the public route serves: the embedded
-// Query methods that publicQuery lists.
+// Orama Query methods that publicQuery lists, and the embedded cosmos-sdk and wasmd ones that
+// walletQuery lists.
 func queryAllowed() (map[string]struct{}, error) {
 	queryOnce.Do(func() {
-		names, err := chainread.Methods()
+		orama, err := chainread.Methods()
 		if err != nil {
 			queryErr = err
 			return
 		}
-		queryMethods = make(map[string]struct{}, len(names))
-		for _, n := range names {
+		sdk, err := chainread.SDKMethods()
+		if err != nil {
+			queryErr = err
+			return
+		}
+		queryMethods = make(map[string]struct{}, len(orama)+len(walletQuery))
+		for _, n := range orama {
 			if _, ok := publicQuery[n]; ok {
+				queryMethods[n] = struct{}{}
+			}
+		}
+		for _, n := range sdk {
+			if _, ok := walletQuery[n]; ok {
 				queryMethods[n] = struct{}{}
 			}
 		}
@@ -193,6 +207,9 @@ func queryUpstream(r *http.Request, m *chainread.Method) (url.Values, bool) {
 	if !ok {
 		return nil, false
 	}
+	if limit, err := m.PageLimit(req); err != nil || limit > queryMaxPageLimit {
+		return nil, false
+	}
 	up := url.Values{}
 	up.Set("path", strconv.Quote(m.Path))
 	up.Set("prove", "false")
@@ -237,6 +254,10 @@ func queryRequestBytes(q url.Values, m *chainread.Method) ([]byte, bool) {
 func writeQueryFailure(w http.ResponseWriter, err error) {
 	if errors.Is(err, chainread.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not found on chain")
+		return
+	}
+	if errors.Is(err, chainread.ErrInvalidRequest) {
+		writeErr(w, http.StatusBadRequest, "the chain refused the request")
 		return
 	}
 	writeErr(w, http.StatusBadGateway, "chain query failed")

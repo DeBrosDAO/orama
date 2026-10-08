@@ -1,4 +1,5 @@
-import { NetworkError, SDKError } from "../errors";
+import { NetworkError, NotFoundError, SDKError } from "../errors";
+import { BASE_DENOM } from "./format";
 import type { AnyMsg } from "./msg";
 import type { OramaSigner } from "./signer";
 import { signTx, type SignedTx } from "./tx";
@@ -34,6 +35,58 @@ export interface BroadcastResult {
   rawLog: string;
 }
 
+/** What POST /v1/chain/simulate answers for a transaction the chain would run. */
+export interface SimulateResult {
+  gasWanted: bigint;
+  gasUsed: bigint;
+  /** The fee at the chain's current base fee for the gas used. */
+  fee: { denom: string; amount: string };
+  /** Norama per unit of gas, so a caller that pads the gas limit can price the padded limit. */
+  baseFee: string;
+}
+
+/** What POST /v1/chain/broadcast answers for a transaction the chain's mempool took. */
+export interface GatewayBroadcastResult {
+  /** Upper-case hex SHA-256 of the transaction; read it with `tx(hash)` until it is in a block. */
+  txHash: string;
+  code: 0;
+  log: string;
+}
+
+/**
+ * A transaction the chain refused on simulate or broadcast. `chainCode` and `codespace` are the
+ * chain's; `log` is the gateway's sanitised copy of its reason. `txHash` is set on a broadcast.
+ */
+export class ChainTxRefusedError extends SDKError {
+  readonly chainCode: number;
+  readonly codespace: string;
+  readonly log: string;
+  readonly txHash?: string;
+
+  constructor(body: { code: number; codespace?: string; log?: string; tx_hash?: string }) {
+    const log = body.log ?? "";
+    super(
+      `the chain rejected the transaction (code ${body.code}): ${log.slice(0, 200)}`,
+      422,
+      "CHAIN_TX_REJECTED",
+      { code: body.code, codespace: body.codespace ?? "", log, txHash: body.tx_hash },
+    );
+    this.name = "ChainTxRefusedError";
+    this.chainCode = body.code;
+    this.codespace = body.codespace ?? "";
+    this.log = log;
+    this.txHash = body.tx_hash || undefined;
+  }
+}
+
+/** A page of a listing: how many entries, and where to continue from. */
+export interface WalletPageOptions {
+  /** Entries per page, 1 to 100. Absent is the chain's default of 100. */
+  limit?: number;
+  /** The `pagination.next_key` of the previous page (base64). */
+  key?: string;
+}
+
 export interface SignAndBroadcastOptions {
   chainId: string;
   gasLimit: bigint | number | string;
@@ -64,7 +117,19 @@ const STORAGE = "orama.storage.v1.Query";
 const FEES = "orama.fees.v1.Query";
 const ARCHIVE = "orama.archive.v1.Query";
 const RELAY = "orama.relay.v1.Query";
+const BANK = "cosmos.bank.v1beta1.Query";
+const AUTH = "cosmos.auth.v1beta1.Query";
+const STAKING = "cosmos.staking.v1beta1.Query";
+const DISTRIBUTION = "cosmos.distribution.v1beta1.Query";
+const WASM = "cosmwasm.wasm.v1.Query";
 const ORAMA_ADDRESS = /^orama1[02-9ac-hj-np-z]{6,90}$/;
+const VALOPER_ADDRESS = /^oramavaloper1[02-9ac-hj-np-z]{6,90}$/;
+const DENOM = /^[a-zA-Z][a-zA-Z0-9/:._-]{2,127}$/;
+const BASE64 = /^[A-Za-z0-9+/_-]*={0,2}$/;
+/** The most entries the gateway serves in one page of a wallet listing. */
+const WALLET_MAX_PAGE_LIMIT = 100;
+/** The largest transaction the gateway takes: CometBFT's default mempool max_tx_bytes. */
+const TX_MAX_BYTES = 1 << 20;
 
 function requireBase(base: string | undefined, name: string, use: string): string {
   if (!base) throw new Error(`${use} needs ${name} in the chain client config`);
@@ -74,6 +139,36 @@ function requireBase(base: string | undefined, name: string, use: string): strin
 function assertAddress(address: string): string {
   if (!ORAMA_ADDRESS.test(address)) throw new Error(`"${address}" is not an orama address`);
   return address;
+}
+
+function assertValoper(address: string): string {
+  if (!VALOPER_ADDRESS.test(address)) throw new Error(`"${address}" is not an oramavaloper address`);
+  return address;
+}
+
+function assertDenom(denom: string): string {
+  if (!DENOM.test(denom)) throw new Error(`"${denom}" is not a denomination`);
+  return denom;
+}
+
+function pagination(options: WalletPageOptions): Record<string, unknown> {
+  const page: Record<string, unknown> = {};
+  if (options.limit !== undefined) {
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > WALLET_MAX_PAGE_LIMIT) {
+      throw new Error(`limit must be an integer from 1 to ${WALLET_MAX_PAGE_LIMIT}`);
+    }
+    page.limit = options.limit;
+  }
+  if (options.key !== undefined) {
+    if (!options.key || options.key.length > 1024 || !BASE64.test(options.key)) throw new Error("key must be a pagination next_key (base64)");
+    page.key = options.key;
+  }
+  return Object.keys(page).length === 0 ? {} : { pagination: page };
+}
+
+function assertTxBytes(txBytes: Uint8Array): Uint8Array {
+  if (txBytes.length === 0 || txBytes.length > TX_MAX_BYTES) throw new Error(`a transaction is 1 to ${TX_MAX_BYTES} bytes`);
+  return txBytes;
 }
 
 function assertHash(hash: string): string {
@@ -214,10 +309,130 @@ export class OramaChainClient {
     options: QueryOptions = {},
   ): Promise<ChainQueryResult> {
     if (!/^orama\.[a-z0-9_]+\.v[0-9]+\.Query$/.test(service)) throw new Error(`"${service}" is not an Orama Query service`);
+    return this.runQuery(service, method, request, options);
+  }
+
+  private async runQuery(
+    service: string,
+    method: string,
+    request: Record<string, unknown>,
+    options: QueryOptions,
+  ): Promise<ChainQueryResult> {
     if (!/^[A-Za-z][A-Za-z0-9]*$/.test(method)) throw new Error(`"${method}" is not a query method`);
     const json = Object.keys(request).length === 0 ? undefined : JSON.stringify(request);
     const height = options.height === undefined ? undefined : assertUint(options.height, "height");
     return (await this.gateway(`query/${service}/${method}${query({ json, height })}`)) as ChainQueryResult;
+  }
+
+  // ---- what a wallet reads, through /v1/chain/query/ (no node, no tunnel) ----
+
+  /** One bank balance of an address. Default denomination norama. Earnings are a separate account. */
+  async bankBalance(address: string, denom: string = BASE_DENOM, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(BANK, "Balance", { address: assertAddress(address), denom: assertDenom(denom) }, options);
+  }
+
+  /** Every bank balance of an address, a page at a time. */
+  async bankAllBalances(address: string, page: WalletPageOptions = {}, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(BANK, "AllBalances", { address: assertAddress(address), ...pagination(page) }, options);
+  }
+
+  /** The balances of an address that are not locked, a page at a time. */
+  async bankSpendableBalances(address: string, page: WalletPageOptions = {}, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(BANK, "SpendableBalances", { address: assertAddress(address), ...pagination(page) }, options);
+  }
+
+  /** An auth account. An address the chain has never seen is an SDKError with httpStatus 404. */
+  async authAccount(address: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(AUTH, "Account", { address: assertAddress(address) }, options);
+  }
+
+  /** An auth account's address, public key, number and sequence. A new address is a 404. */
+  async authAccountInfo(address: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(AUTH, "AccountInfo", { address: assertAddress(address) }, options);
+  }
+
+  /** What a delegator has staked with one validator. None is a 404. */
+  async stakingDelegation(delegator: string, validator: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "Delegation", { delegator_addr: assertAddress(delegator), validator_addr: assertValoper(validator) }, options);
+  }
+
+  /** Every delegation of a delegator, a page at a time. */
+  async stakingDelegatorDelegations(delegator: string, page: WalletPageOptions = {}, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "DelegatorDelegations", { delegator_addr: assertAddress(delegator), ...pagination(page) }, options);
+  }
+
+  /** A delegator's unbonding from one validator. None is a 404. */
+  async stakingUnbondingDelegation(delegator: string, validator: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "UnbondingDelegation", { delegator_addr: assertAddress(delegator), validator_addr: assertValoper(validator) }, options);
+  }
+
+  /** Every unbonding of a delegator, a page at a time. */
+  async stakingDelegatorUnbondingDelegations(delegator: string, page: WalletPageOptions = {}, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "DelegatorUnbondingDelegations", { delegator_addr: assertAddress(delegator), ...pagination(page) }, options);
+  }
+
+  /** One validator by its oramavaloper address. */
+  async stakingValidator(validator: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "Validator", { validator_addr: assertValoper(validator) }, options);
+  }
+
+  /** The staking parameters. Also the way to tell that the gateway serves wallet queries. */
+  async stakingParams(options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(STAKING, "Params", {}, options);
+  }
+
+  /** The rewards a delegator has accrued with one validator. */
+  async distributionDelegationRewards(delegator: string, validator: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(DISTRIBUTION, "DelegationRewards", { delegator_address: assertAddress(delegator), validator_address: assertValoper(validator) }, options);
+  }
+
+  /** The rewards a delegator has accrued with every validator it delegates to. */
+  async distributionDelegationTotalRewards(delegator: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(DISTRIBUTION, "DelegationTotalRewards", { delegator_address: assertAddress(delegator) }, options);
+  }
+
+  /** A contract's record. An address that is not a contract is an SDKError with httpStatus 404. */
+  async contractInfo(address: string, options: QueryOptions = {}): Promise<ChainQueryResult> {
+    return this.runQuery(WASM, "ContractInfo", { address: assertAddress(address) }, options);
+  }
+
+  /** Whether an address is a contract, so a wallet can refuse a user-to-user send to one before signing. */
+  async isContract(address: string, options: QueryOptions = {}): Promise<boolean> {
+    try {
+      await this.contractInfo(address, options);
+      return true;
+    } catch (err) {
+      if (err instanceof NotFoundError) return false;
+      throw err;
+    }
+  }
+
+  // ---- simulate and broadcast through the gateway ----
+
+  /**
+   * Runs a signed transaction (TxRaw bytes) without keeping anything, and returns the gas it needs
+   * and the fee at the current base fee. A transaction the chain would refuse is a
+   * ChainTxRefusedError.
+   */
+  async simulateTx(txBytes: Uint8Array): Promise<SimulateResult> {
+    const body = (await this.post("simulate", assertTxBytes(txBytes))) as {
+      gas_wanted: number | string;
+      gas_used: number | string;
+      fee: { denom: string; amount: string };
+      base_fee: string;
+    };
+    return { gasWanted: BigInt(body.gas_wanted), gasUsed: BigInt(body.gas_used), fee: body.fee, baseFee: body.base_fee };
+  }
+
+  /**
+   * Submits a signed transaction (TxRaw bytes) through the gateway. It answers when the chain has
+   * checked it, not when it is in a block: read `tx(hash)` until it is. A transaction the chain
+   * refuses is a ChainTxRefusedError; sending the same bytes again is one too (code 19), with the
+   * hash to read.
+   */
+  async broadcastTx(txBytes: Uint8Array): Promise<GatewayBroadcastResult> {
+    const body = (await this.post("broadcast", assertTxBytes(txBytes))) as { tx_hash: string; log: string };
+    return { txHash: body.tx_hash, code: 0, log: body.log };
   }
 
   /** x/nodes parameters. */
@@ -437,6 +652,11 @@ export class OramaChainClient {
     return this.request(`${base}/v1/chain/${path}`);
   }
 
+  private async post(route: string, txBytes: Uint8Array): Promise<unknown> {
+    const base = requireBase(this.config.gatewayURL, "gatewayURL", "this call");
+    return this.request(`${base}/v1/chain/${route}`, { method: "POST", body: JSON.stringify({ tx_bytes: bytesToBase64(txBytes) }) });
+  }
+
   private async rest(path: string, init: RequestInit = {}): Promise<unknown> {
     const base = requireBase(this.config.restURL, "restURL", "this call");
     return this.request(`${base}${path}`, init);
@@ -464,9 +684,14 @@ export class OramaChainClient {
     } catch {
       if (response.ok) throw new SDKError(`${new URL(url).host} did not answer JSON`, 502, "CHAIN_BAD_RESPONSE");
     }
+    if (response.status === 422 && isTxRefusal(body)) throw new ChainTxRefusedError(body);
     if (!response.ok) throw SDKError.fromResponse(response.status, body);
     return body;
   }
+}
+
+function isTxRefusal(body: unknown): body is { code: number; codespace?: string; log?: string; tx_hash?: string } {
+  return typeof body === "object" && body !== null && typeof (body as { code?: unknown }).code === "number";
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
