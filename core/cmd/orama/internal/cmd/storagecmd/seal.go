@@ -1,10 +1,8 @@
 package storagecmd
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/storagefile"
@@ -74,17 +72,7 @@ func runSeal(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outDir, 0o700); err != nil {
-		return err
-	}
-	for _, slot := range slots {
-		path := filepath.Join(outDir, fmt.Sprintf("slot-%d", slot.Index))
-		if err := os.WriteFile(path, slot.Bytes, 0o600); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "slot %d root %s\n", slot.Index, hex.EncodeToString(slot.Root))
-	}
-	return nil
+	return WriteSlots(outDir, slots, cmd.OutOrStdout())
 }
 
 func runOpen(cmd *cobra.Command, _ []string) error {

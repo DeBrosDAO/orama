@@ -134,7 +134,12 @@ func ownerAndRepairKeys(cmd *cobra.Command) (storageKey, repair []byte, err erro
 
 // secretFile reads a hex repair seed from the file named by flag.
 func secretFile(cmd *cobra.Command, flag, what string) ([]byte, error) {
-	secret, path, err := readHexSecret(cmd, flag)
+	path, _ := cmd.Flags().GetString(flag)
+	return secretAt(flag, path, what)
+}
+
+func secretAt(flag, path, what string) ([]byte, error) {
+	secret, err := readHexSecret(flag, path)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +154,12 @@ func secretFile(cmd *cobra.Command, flag, what string) ([]byte, error) {
 // wallet seed, which never belongs on this side, so it is refused.
 func storageKeyFile(cmd *cobra.Command) ([]byte, error) {
 	const flag = "storage-key-file"
-	key, path, err := readHexSecret(cmd, flag)
+	path, _ := cmd.Flags().GetString(flag)
+	return storageKeyAt(flag, path)
+}
+
+func storageKeyAt(flag, path string) ([]byte, error) {
+	key, err := readHexSecret(flag, path)
 	if err != nil {
 		return nil, err
 	}
@@ -160,28 +170,27 @@ func storageKeyFile(cmd *cobra.Command) ([]byte, error) {
 	return key, nil
 }
 
-// readHexSecret reads a hex secret from the file named by flag. Secrets are
-// not taken on the command line, where ps and shell history would keep them,
-// and a file other users can read is refused.
-func readHexSecret(cmd *cobra.Command, flag string) (secret []byte, path string, err error) {
-	path, _ = cmd.Flags().GetString(flag)
+// readHexSecret reads a hex secret from the file at path, which the flag named
+// by flag gave. Secrets are not taken on the command line, where ps and shell
+// history would keep them, and a file other users can read is refused.
+func readHexSecret(flag, path string) ([]byte, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, path, fmt.Errorf("--%s: %w", flag, err)
+		return nil, fmt.Errorf("--%s: %w", flag, err)
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return nil, path, fmt.Errorf("--%s %s is mode %o; chmod 600 it", flag, path, info.Mode().Perm())
+		return nil, fmt.Errorf("--%s %s is mode %o; chmod 600 it", flag, path, info.Mode().Perm())
 	}
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return nil, path, fmt.Errorf("--%s: %w", flag, err)
+		return nil, fmt.Errorf("--%s: %w", flag, err)
 	}
-	secret, err = hex.DecodeString(strings.TrimSpace(string(body)))
+	secret, err := hex.DecodeString(strings.TrimSpace(string(body)))
 	if err != nil {
 		// The decode error quotes the offending byte, which is key material.
-		return nil, path, fmt.Errorf("--%s %s is not valid hex", flag, path)
+		return nil, fmt.Errorf("--%s %s is not valid hex", flag, path)
 	}
-	return secret, path, nil
+	return secret, nil
 }
 
 // minSeedLen is storagefile's minimum repair-seed length.

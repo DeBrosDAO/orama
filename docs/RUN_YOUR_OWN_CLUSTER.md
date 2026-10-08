@@ -220,8 +220,45 @@ would be re-sent without its body) and reports one as an error instead.
 What it does not do: create the namespace, redeploy deployments or functions
 onto the new cluster's nodes, or copy the pinned content. IPFS Cluster
 accepts each pin; the content only arrives if it is still reachable on IPFS.
-Backups are taken when you run the command; there is no schedule and no
-storage deal.
+Backups are taken when you run the command; the cluster does not take, store
+or schedule them, and holds no key that could pay for a storage deal.
+
+### A backup in a storage deal
+
+A backup survives its cluster only if a copy lives elsewhere. A private
+storage deal on the Orama chain keeps it with providers, under your own keys.
+The backup stays sealed to your X25519 key; the deal adds its own slot layer
+under your `orama-storage-v1` key and repair seed (both read from `0600` files,
+never from the command line).
+
+```
+orama namespace backup --key <public key hex> --deal-dir ./slots \
+    --deal-nonce <32 bytes hex> --deal-replicas 3 \
+    --storage-key-file ./storage.key --repair-seed-file ./repair.seed
+```
+
+This writes `slot-0` ... `slot-2`, one distinct ciphertext per replica, and
+prints each slot's piece root and the `orama storage create --class private`
+command that opens the deal for exactly those pieces (the same nonce and
+replica count). Run that command, then `orama storage put --deal-id <id> --dir
+./slots --rpc <oramad RPC>`. `--out` can be given as well, to keep the sealed
+file.
+
+On the new cluster, restore from the deal:
+
+```
+orama namespace restore --from-deal <id> --rpc <oramad RPC> \
+    --storage-key-file ./storage.key --repair-seed-file ./repair.seed \
+    --key-file ./backup.key --namespace myapp --dest-key <restore key>
+```
+
+The first slot a provider serves with the on-chain root is fetched and opened,
+then restored as above. A wrong storage key or repair seed, a truncated slot,
+or the wrong backup key stops before anything is sent to the gateway. The deal
+runs for the epochs you bought; extend it with `orama storage extend`. Each
+backup is a new deal, and the deal's price comes from your account. Keeping
+several (daily, weekly) is your choice of how often you run the command and
+which deals you extend.
 
 `orama namespace backup-seal` and `backup-open` seal and open any file with
 the same keys.
