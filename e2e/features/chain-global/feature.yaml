@@ -84,5 +84,6 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-global-validator-check-sign-floor: with no sign floor recorded it passes"
     - "docs/CLI_REFERENCE.md#orama-global-validator-export-key: the key is sealed to an X25519 public key the node never holds the private half of; --to must not exist"
     - "docs/CLI_REFERENCE.md#orama-global-validator-reseal: the identity file must be mode 0600 and the bundle carries no sign state"
+    - "docs/ARCHITECTURE.md#boot-components-not-a-sequence: a machine that already has preferences (a cluster node) keeps them when the global services are installed beside it"
     - "docs/CLI_REFERENCE.md#orama-global-install: every refusal happens before the machine changes"
     - "docs/CLI_REFERENCE.md#orama-global-install: REFUSAL PATHS ONLY: the install itself needs a staged release and a machine the deploy script did not install (trigger: the harness installs the chain through orama global install)"

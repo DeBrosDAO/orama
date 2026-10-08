@@ -287,6 +287,50 @@ func TestInstallGlobal_globalOnlyInstallIgnoresAMachineWithNoPreferences(t *test
 	}
 }
 
+func TestInstallGlobal_globalOnlyInstallRecordsTheGlobalRole(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := os.Remove(filepath.Join(f.oramaDir, "preferences.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(f.globalFixture.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.prefsOrEmpty(); !strings.Contains(got, "role: global") {
+		t.Fatalf("preferences.yaml = %q, want role: global", got)
+	}
+}
+
+func TestInstallGlobal_globalOnlyInstallKeepsAClusterNodesPreferences(t *testing.T) {
+	f := newColocatedFixture(t)
+	const cluster = "branch: main\nnameserver: true\n"
+	f.writePrefs(t, cluster)
+	if err := InstallGlobal(f.globalFixture.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.prefsOrEmpty(); got != cluster {
+		t.Fatalf("a cluster node's preferences were rewritten to %q", got)
+	}
+}
+
+func TestRecordGlobalRole_unreadablePreferencesIsAnError(t *testing.T) {
+	f := newColocatedFixture(t)
+	if err := os.Remove(filepath.Join(f.oramaDir, "preferences.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(f.oramaDir, "preferences.yaml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordGlobalRole(f.host.Netns); err == nil {
+		t.Fatal("an unreadable preferences.yaml was overwritten as if it were absent")
+	}
+}
+
+func TestRecordGlobalRole_noOramaDirIsANoOp(t *testing.T) {
+	if err := recordGlobalRole(NetnsHost{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGlobalFirewallPorts(t *testing.T) {
 	got := GlobalFirewall{ChainP2P: true, Provider: true}.Ports()
 	want := []globalnetns.Port{{Proto: "tcp", Number: 31000}, {Proto: "udp", Number: 31000}, {Proto: "tcp", Number: 31013}}

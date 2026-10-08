@@ -5,6 +5,22 @@ import (
 	"time"
 )
 
+func TestMonitorProvider_carriesTheDealSlots(t *testing.T) {
+	r := monitorProvider(`{"hot_key_balance_norama":5,"held_slots":4,"pending_slots":2}`)
+	if r.Error != "" || r.HeldSlots == nil || *r.HeldSlots != 4 || r.PendingSlots == nil || *r.PendingSlots != 2 {
+		t.Fatalf("provider %+v", r)
+	}
+}
+
+func TestMonitorProvider_emptyAndInvalidFiles(t *testing.T) {
+	if r := monitorProvider(""); r.HeldSlots != nil || r.Error != "" {
+		t.Fatalf("an empty file read as %+v", r)
+	}
+	if r := monitorProvider(`{"held_slots":-3}`); r.Error == "" {
+		t.Fatal("a negative slot count was accepted")
+	}
+}
+
 func TestParseGlobalCollect_peersAndHotKey(t *testing.T) {
 	const stdout = `
 ===ORAMA_GLOBAL chain_load===

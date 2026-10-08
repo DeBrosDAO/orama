@@ -361,7 +361,8 @@ node. It refuses, before changing anything, when:
 
 - the machine has no cluster node (`/opt/orama/.orama/preferences.yaml` is
   missing; `orama node setup` would overwrite the co-located role if it ran
-  later) or its role is `global`;
+  later) or its role is `global` (a plain `orama global install` records that
+  role on a machine with no preferences file);
 - it is not Linux, its kernel has no network namespaces or veth, or systemd is
   older than 242 (`NetworkNamespacePath=`). A missing `ip` (iproute2), `nft`
   (nftables) or `sysctl` (procps) is installed with `apt-get` first, the one

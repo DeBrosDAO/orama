@@ -1,12 +1,16 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/stretchr/testify/require"
+
+	"cosmossdk.io/math"
 
 	"github.com/DeBrosOfficial/network/chain/piece"
 )
@@ -115,6 +119,51 @@ func TestRelease_keepsAPieceAnotherSlotStillBinds(t *testing.T) {
 	used, err := s.UsedBytes()
 	require.NoError(t, err)
 	require.Zero(t, used)
+}
+
+// feeChain answers FeeFunds only, which is all writeMonitor asks of the chain.
+type feeChain struct {
+	Chain
+	funds math.Int
+}
+
+func (c feeChain) FeeFunds(context.Context, string) (math.Int, error) { return c.funds, nil }
+
+func TestWriteMonitor_reportsHeldAndPendingDealSlots(t *testing.T) {
+	s, err := Open(t.TempDir(), nil, nil)
+	require.NoError(t, err)
+	data := make([]byte, 3000)
+	dec, err := s.Ingest("c1", data, commitRoot(t, data))
+	require.NoError(t, err)
+	require.True(t, dec.Accept)
+	require.NoError(t, s.Bind("c1", 1, 0))
+	require.NoError(t, s.Bind("c1", 2, 1))
+
+	path := filepath.Join(t.TempDir(), "monitor.json")
+	r := &Runner{store: s, chain: feeChain{funds: math.NewInt(900)}, signer: "orama1x", monitorPath: path}
+	r.state.addPending(3, 0)
+	require.NoError(t, r.writeMonitor(context.Background(), 2))
+
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var got map[string]int64
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.Equal(t, int64(2), got["held_slots"])
+	require.Equal(t, int64(1), got["pending_slots"])
+	require.Equal(t, int64(2), got["proof_misses"])
+	require.Equal(t, int64(900), got["hot_key_balance_norama"])
+}
+
+func TestWriteMonitor_noSlotsWritesZeros(t *testing.T) {
+	s, err := Open(t.TempDir(), nil, nil)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "monitor.json")
+	r := &Runner{store: s, chain: feeChain{funds: math.ZeroInt()}, signer: "orama1x", monitorPath: path}
+	require.NoError(t, r.writeMonitor(context.Background(), 0))
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"held_slots":0`)
+	require.Contains(t, string(body), `"pending_slots":0`)
 }
 
 func commitRoot(t *testing.T, data []byte) []byte {

@@ -73,7 +73,7 @@ func TestCollectGlobal_providerMonitor(t *testing.T) {
 	t.Cleanup(func() { providerMonitorPath = old })
 	dir := t.TempDir()
 	providerMonitorPath = filepath.Join(dir, "monitor.json")
-	body := []byte(`{"hot_key_balance_norama":0,"proof_misses":2,"disk_bytes":5,"storage_max_bytes":4}`)
+	body := []byte(`{"hot_key_balance_norama":0,"proof_misses":2,"disk_bytes":5,"storage_max_bytes":4,"held_slots":7,"pending_slots":1}`)
 	if err := os.WriteFile(providerMonitorPath, body, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +86,27 @@ func TestCollectGlobal_providerMonitor(t *testing.T) {
 	}
 	if g.Provider.ProofMisses == nil || *g.Provider.ProofMisses != 2 {
 		t.Fatalf("misses %+v", g.Provider)
+	}
+	if g.Provider.HeldSlots == nil || *g.Provider.HeldSlots != 7 || g.Provider.PendingSlots == nil || *g.Provider.PendingSlots != 1 {
+		t.Fatalf("deal slots %+v", g.Provider)
+	}
+}
+
+func TestParseMonitor_rejectsANegativeSlotCount(t *testing.T) {
+	for _, body := range []string{`{"held_slots":-1}`, `{"pending_slots":-1}`} {
+		if _, err := parseMonitor([]byte(body)); err == nil {
+			t.Fatalf("%s was accepted", body)
+		}
+	}
+}
+
+func TestParseMonitor_slotCountsAreOptional(t *testing.T) {
+	mon, err := parseMonitor([]byte(`{"proof_misses":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mon.HeldSlots != nil || mon.PendingSlots != nil {
+		t.Fatalf("absent slot counts read as %+v", mon)
 	}
 }
 

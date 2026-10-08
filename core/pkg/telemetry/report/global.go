@@ -150,6 +150,8 @@ func readProviderMonitor() *ProviderReport {
 	r.ProofMisses = mon.ProofMisses
 	r.DiskBytes = mon.DiskBytes
 	r.StorageMaxBytes = mon.StorageMaxBytes
+	r.HeldSlots = mon.HeldSlots
+	r.PendingSlots = mon.PendingSlots
 	return r
 }
 
@@ -168,13 +170,15 @@ func readRelayMonitor() *RelayReport {
 }
 
 // MonitorFile is /var/lib/orama-global/{provider,relay}/monitor.json.
-// Absent fields stay nil. No process in this repo writes the file; the
-// provider and relay are not installed by the cluster installer.
+// Absent fields stay nil. The storage provider writes its file; no process
+// writes the relay's yet, so a relay's fields stay absent.
 type MonitorFile struct {
 	HotKeyBalanceNorama *int64 `json:"hot_key_balance_norama"`
 	ProofMisses         *int   `json:"proof_misses"`
 	DiskBytes           *int64 `json:"disk_bytes"`
 	StorageMaxBytes     *int64 `json:"storage_max_bytes"`
+	HeldSlots           *int   `json:"held_slots"`
+	PendingSlots        *int   `json:"pending_slots"`
 	InConsensus         *bool  `json:"in_consensus"`
 }
 
@@ -218,6 +222,12 @@ func parseMonitor(data []byte) (MonitorFile, error) {
 	}
 	if mon.StorageMaxBytes != nil && *mon.StorageMaxBytes < 0 {
 		return mon, fmt.Errorf("monitor file has a negative storage maximum")
+	}
+	if mon.HeldSlots != nil && *mon.HeldSlots < 0 {
+		return mon, fmt.Errorf("monitor file has a negative held-slot count")
+	}
+	if mon.PendingSlots != nil && *mon.PendingSlots < 0 {
+		return mon, fmt.Errorf("monitor file has a negative pending-slot count")
 	}
 	return mon, nil
 }

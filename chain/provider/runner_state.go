@@ -178,6 +178,10 @@ type monitorFile struct {
 	HotKeyBalanceNorama int64 `json:"hot_key_balance_norama"`
 	ProofMisses         int   `json:"proof_misses"`
 	DiskBytes           int64 `json:"disk_bytes"`
+	// HeldSlots counts the deal slots whose piece this node stores and has bound.
+	HeldSlots int `json:"held_slots"`
+	// PendingSlots counts the slots assigned to this node that are still waiting for their piece.
+	PendingSlots int `json:"pending_slots"`
 }
 
 func (r *Runner) writeMonitor(ctx context.Context, misses int) error {
@@ -196,7 +200,14 @@ func (r *Runner) writeMonitor(ctx context.Context, misses int) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.Marshal(monitorFile{HotKeyBalanceNorama: bal.Int64(), ProofMisses: misses, DiskBytes: used})
+	held, err := r.store.Assignments()
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(monitorFile{
+		HotKeyBalanceNorama: bal.Int64(), ProofMisses: misses, DiskBytes: used,
+		HeldSlots: len(held), PendingSlots: len(r.pendingCopy()),
+	})
 	if err != nil {
 		return err
 	}

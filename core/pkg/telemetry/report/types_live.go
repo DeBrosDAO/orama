@@ -80,12 +80,16 @@ type PublicIPFSReport struct {
 }
 
 // ProviderReport is the storage provider's own status file, when that file exists.
-// Hot-key balance, proof misses, and disk are nil when the file omits them.
+// Hot-key balance, proof misses, disk and the deal slot counts are nil when
+// the file omits them. HeldSlots is the deal slots whose piece the provider
+// stores; PendingSlots is the slots assigned to it that still wait for a piece.
 type ProviderReport struct {
 	HotKeyBalanceNorama *int64 `json:"hot_key_balance_norama,omitempty"`
 	ProofMisses         *int   `json:"proof_misses,omitempty"`
 	DiskBytes           *int64 `json:"disk_bytes,omitempty"`
 	StorageMaxBytes     *int64 `json:"storage_max_bytes,omitempty"`
+	HeldSlots           *int   `json:"held_slots,omitempty"`
+	PendingSlots        *int   `json:"pending_slots,omitempty"`
 	Error               string `json:"error,omitempty"`
 }
 

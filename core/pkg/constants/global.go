@@ -75,7 +75,7 @@ const (
 	// GlobalIPFSAPITokenFile is the public Kubo RPC bearer, mode 0640, in GlobalIPFSHome.
 	GlobalIPFSAPITokenFile = "api-token"
 	// GlobalMonitorFile is the status file a provider or relay writes in its home.
-	// The node report reads it. No process in this repo writes it yet.
+	// The node report reads it. The provider writes its file; nothing writes the relay's yet.
 	GlobalMonitorFile = "monitor.json"
 )
 
