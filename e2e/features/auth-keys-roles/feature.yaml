@@ -57,5 +57,6 @@ covers:
     - "docs/AUTH.md#how-long-a-change-takes-to-land: narrowing a wallet's grant lands on its next request"
     - "docs/AUTH.md#roles: ownership is transferred in one step and the outgoing owner keeps admin"
     - "docs/AUTH.md#a-workloads-identity: a deployment cannot be granted the control plane; /v1/auth/renew refuses a user session, an exchanged key token, a bare key and no credential (a workload renewing itself is asserted by reference-apps)"
+    - "docs/AUTH.md#a-workloads-identity: a grant for a name with / or : is 400 and for a deployment that does not exist is 404, and neither is recorded (the grants that succeed are asserted by deployments)"
     - "docs/AUTH.md#the-record: keys, grants and policies are recorded; a key actor is a fingerprint, never the key"
     - "docs/API_SURFACE.md#authentication: /v1/audit takes action, principal, since and limit (200 max); the namespace comes from the credential"

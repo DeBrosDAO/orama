@@ -175,6 +175,7 @@ type Gateway struct {
 
 	// Deployment system
 	deploymentService   *deploymentshandlers.DeploymentService
+	deploymentQuerier   deploymentQuerier
 	staticHandler       *deploymentshandlers.StaticDeploymentHandler
 	nextjsHandler       *deploymentshandlers.NextJSHandler
 	goHandler           *deploymentshandlers.GoHandler
@@ -731,6 +732,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// credential it gets is short-lived and renews itself.
 		gw.processManager.SetWorkloadTokenMinter(workloadTokenMinter(deps.AuthService, deploymentDB))
 		gw.processManager.SetWorkloadTokenRefresher(workloadTokenRefresher(deps.AuthService))
+		gw.deploymentQuerier = deploymentDB
 
 		gw.deploymentService = deploymentshandlers.NewDeploymentService(
 			deploymentDB,

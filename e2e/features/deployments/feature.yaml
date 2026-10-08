@@ -84,4 +84,5 @@ covers:
     - "docs/DEPLOYMENT_GUIDE.md#what-your-app-runs-as: each deployment runs as its own unprivileged user, sees only its own directory read-only, and cannot reach the cluster network"
     - "docs/SECURITY.md: a deployment binds its own port and nothing else"
     - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: the app renews its workload token at /v1/auth/renew; it cannot be granted the control plane"
+    - "docs/AUTH.md#a-workloads-identity: a grant names a deployment that exists in the caller's namespace; a name with / or : is 400, a deployment that does not exist is 404"
     - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: every node serves every app by name"

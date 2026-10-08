@@ -1177,9 +1177,12 @@ needs from its first request — and a selector on it (`"resource":
 wallet. An app the grant does not cover is refused `403 FORBIDDEN` when it invokes a
 function; `401` is for a caller with no identity. An app can only be granted
 `runtime` or `reader`, so it is never an admin on invoke (the admin-only
-`internal` functions stay closed to it). Its token is also good in its own namespace
-only: naming another namespace's function on the cluster gateway is refused `403`
-before anything is run. An app nobody has granted
+`internal` functions stay closed to it) — its admin answer is its grant now, not
+the scopes claim of a token minted before the grant changed. Its token is also good in
+its own namespace only: naming another namespace's function on the cluster gateway
+is refused `403` before anything is run, and a token whose subject names one
+namespace while its claim names another is refused wherever it is verified, not only
+when it asks to renew. An app nobody has granted
 anything to holds a token that reaches nothing, which is the only safe default —
 the alternative is every app starting with the namespace's whole data plane,
 which is the permanent key this replaces wearing a different hat.
@@ -1189,6 +1192,12 @@ runtime key pulled out of a client reaches neither. They accept an app's own
 workload token as they accept a logged-in user's, and the app's grant then decides
 what it reaches. Two things stay a person's: the anonymity proxy and tunnel, which
 are an end user's anonymity, and creating or listing namespaces.
+
+`POST /v1/deployments/grants` names a deployment that exists in the caller's
+namespace and has a name a deployment can have: a name containing `/` or `:` is
+refused `400`, a deployment that does not exist `404` (deploy it first, then grant
+it), and neither is recorded. A grant written for a name nobody had deployed would
+otherwise wait unused and apply to whatever was later deployed under it.
 
 A deployment cannot be granted the control plane. Only a workload token may be
 renewed; a user session is renewed by its refresh token, which rotates and can be
