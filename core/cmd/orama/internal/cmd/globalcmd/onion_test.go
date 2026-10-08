@@ -40,8 +40,9 @@ func deadSOCKS(t *testing.T) string {
 
 func TestChainTarget_withoutOnionIsUnchanged(t *testing.T) {
 	t.Setenv(OnionEnv, "")
+	t.Setenv(OnionNetworkEnv, "")
 	ctx := context.Background()
-	got, node, err := chainTarget(onionCmd(t), ctx, "http://127.0.0.1:31003")
+	got, node, _, err := chainTarget(onionCmd(t), ctx, "http://127.0.0.1:31003")
 	if err != nil || node != "http://127.0.0.1:31003" || got != ctx {
 		t.Fatalf("got node %q, err %v, ctx changed %v", node, err, got != ctx)
 	}
@@ -49,7 +50,8 @@ func TestChainTarget_withoutOnionIsUnchanged(t *testing.T) {
 
 func TestChainTarget_onionReplacesNode(t *testing.T) {
 	t.Setenv(OnionEnv, "")
-	_, node, err := chainTarget(onionCmd(t, "--onion", testOnion+":31003"), context.Background(), "")
+	t.Setenv(OnionNetworkEnv, "")
+	_, node, _, err := chainTarget(onionCmd(t, "--onion", testOnion+":31003"), context.Background(), "")
 	if err != nil || node != "http://"+testOnion+":31003" {
 		t.Fatalf("node = %q, err = %v", node, err)
 	}
@@ -57,7 +59,7 @@ func TestChainTarget_onionReplacesNode(t *testing.T) {
 
 func TestChainTarget_environmentSuppliesOnion(t *testing.T) {
 	t.Setenv(OnionEnv, testOnion)
-	_, node, err := chainTarget(onionCmd(t), context.Background(), "")
+	_, node, _, err := chainTarget(onionCmd(t), context.Background(), "")
 	if err != nil || node != "http://"+testOnion+":80" {
 		t.Fatalf("node = %q, err = %v", node, err)
 	}
@@ -65,7 +67,8 @@ func TestChainTarget_environmentSuppliesOnion(t *testing.T) {
 
 func TestChainTarget_nodeAndOnionTogetherIsAUsageError(t *testing.T) {
 	t.Setenv(OnionEnv, "")
-	_, _, err := chainTarget(onionCmd(t, "--onion", testOnion), context.Background(), "http://127.0.0.1:31003")
+	t.Setenv(OnionNetworkEnv, "")
+	_, _, _, err := chainTarget(onionCmd(t, "--onion", testOnion), context.Background(), "http://127.0.0.1:31003")
 	if err == nil || !strings.Contains(err.Error(), "pass one") {
 		t.Fatalf("err = %v, want a two-routes usage error", err)
 	}
@@ -73,7 +76,8 @@ func TestChainTarget_nodeAndOnionTogetherIsAUsageError(t *testing.T) {
 
 func TestChainTarget_clearnetHostIsRefusedAsOnion(t *testing.T) {
 	t.Setenv(OnionEnv, "")
-	_, _, err := chainTarget(onionCmd(t, "--onion", "chain.example.com"), context.Background(), "")
+	t.Setenv(OnionNetworkEnv, "")
+	_, _, _, err := chainTarget(onionCmd(t, "--onion", "chain.example.com"), context.Background(), "")
 	if err == nil || !strings.Contains(err.Error(), "onion") {
 		t.Fatalf("err = %v, want a refused address", err)
 	}
@@ -83,19 +87,20 @@ func TestChainTarget_clearnetHostIsRefusedAsOnion(t *testing.T) {
 // or named proxy would carry the transaction and its circuit credential to another host.
 func TestChainTarget_socksMustBeALoopbackHostAndNumericPort(t *testing.T) {
 	t.Setenv(OnionEnv, "")
+	t.Setenv(OnionNetworkEnv, "")
 	t.Setenv(OnionSOCKSEnv, "")
 	for _, socks := range []string{"10.0.0.1:9050", "tor.example.com:9050", "127.0.0.1:tor", "127.0.0.1", "8.8.8.8:9050"} {
-		_, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", socks), context.Background(), "")
+		_, _, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", socks), context.Background(), "")
 		if err == nil || !strings.Contains(err.Error(), "--onion-socks") {
 			t.Errorf("--onion-socks %q: err = %v, want a usage error naming the flag", socks, err)
 		}
 	}
 	t.Setenv(OnionSOCKSEnv, "192.168.1.9:9050")
-	if _, _, err := chainTarget(onionCmd(t, "--onion", testOnion), context.Background(), ""); err == nil {
+	if _, _, _, err := chainTarget(onionCmd(t, "--onion", testOnion), context.Background(), ""); err == nil {
 		t.Error("the variable form is held to the same rule")
 	}
 	t.Setenv(OnionSOCKSEnv, "")
-	if _, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", "127.0.0.1:9150"), context.Background(), ""); err != nil {
+	if _, _, _, err := chainTarget(onionCmd(t, "--onion", testOnion, "--onion-socks", "127.0.0.1:9150"), context.Background(), ""); err != nil {
 		t.Errorf("a loopback proxy is refused: %v", err)
 	}
 }
@@ -104,6 +109,7 @@ func TestChainTarget_socksMustBeALoopbackHostAndNumericPort(t *testing.T) {
 // on the clearnet: the default transport is trapped and no --node exists.
 func TestSubmitDirect_onionWithTorDownFailsWithoutClearnet(t *testing.T) {
 	t.Setenv(OnionEnv, "")
+	t.Setenv(OnionNetworkEnv, "")
 	old := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		t.Errorf("clearnet request: %s", r.URL)

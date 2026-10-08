@@ -36,6 +36,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/vpncmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/domain"
 )
 
@@ -112,6 +113,7 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(clustercmd.Cmd)
 	rootCmd.AddCommand(globalcmd.Cmd)
 	rootCmd.AddCommand(storagecmd.Cmd)
+	rootCmd.AddCommand(vpncmd.Cmd)
 
 	// Read the chain
 	rootCmd.AddCommand(chaincmd.Cmd)
