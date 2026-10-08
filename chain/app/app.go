@@ -639,6 +639,7 @@ func NewOramaApp(
 		nodestypes.ModuleName,
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
+		relaytypes.ModuleName,
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
 		powertypes.ModuleName,

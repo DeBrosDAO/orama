@@ -24,6 +24,11 @@ func (k Keeper) registerRelay(ctx sdk.Context, msg *types.MsgRegisterRelay) erro
 	if err != nil {
 		return fmt.Errorf("register relay: invalid operator: %w", err)
 	}
+	if reporter, err := k.isReporter(ctx, operator.String()); err != nil {
+		return err
+	} else if reporter {
+		return fmt.Errorf("register relay: operator %s: %w", operator, types.ErrReporterOperatesRelay)
+	}
 	pub, boundOperator, network, err := k.nodes.RelayBinding(ctx, msg.NodeId)
 	if err != nil {
 		return fmt.Errorf("register relay: node %s: %w", msg.NodeId, err)

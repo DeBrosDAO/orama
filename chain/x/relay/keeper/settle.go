@@ -31,6 +31,11 @@ func (k Keeper) SettleEpoch(ctx sdk.Context, epoch uint64) (types.EpochResult, e
 	}
 	existing, err := k.EpochResults.Get(ctx, epoch)
 	if err == nil {
+		// Reports left behind for a settled epoch (an imported genesis can carry
+		// them) are dropped here so they cannot hold back the epochs after it.
+		if err := k.finishSettle(ctx, existing); err != nil {
+			return types.EpochResult{}, err
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, collections.ErrNotFound) {

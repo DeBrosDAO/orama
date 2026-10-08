@@ -3,6 +3,7 @@
 package relay
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -26,10 +27,11 @@ import (
 const ConsensusVersion = 1
 
 var (
-	_ module.AppModuleBasic = AppModuleBasic{}
-	_ module.HasGenesis     = AppModule{}
-	_ module.HasName        = AppModule{}
-	_ module.HasServices    = AppModule{}
+	_ module.AppModuleBasic   = AppModuleBasic{}
+	_ module.HasGenesis       = AppModule{}
+	_ module.HasName          = AppModule{}
+	_ module.HasServices      = AppModule{}
+	_ appmodule.HasEndBlocker = AppModule{}
 
 	_ appmodule.AppModule = AppModule{}
 )
@@ -114,6 +116,11 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 
 // ConsensusVersion implements AppModule/ConsensusVersion.
 func (AppModule) ConsensusVersion() uint64 { return ConsensusVersion }
+
+// EndBlock settles the oldest reported epoch whose report window has passed.
+func (am AppModule) EndBlock(ctx context.Context) error {
+	return am.keeper.EndBlock(sdk.UnwrapSDKContext(ctx))
+}
 
 // GetQueryCmd returns x/relay's CLI query commands.
 func (AppModule) GetQueryCmd() *cobra.Command {

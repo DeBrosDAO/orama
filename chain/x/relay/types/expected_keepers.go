@@ -21,8 +21,10 @@ type NodeView interface {
 // EmissionKeeper is the subset of x/emission x/relay mints against. RelayCeiling
 // is that epoch's relay ceiling in norama. MintRelayReward must refuse an amount
 // that would exceed the ceiling and must never mint more than the ceiling.
-// x/relay does not import x/emission.
+// CurrentEpoch is the epoch in progress: every epoch below it is closed and has
+// a ceiling. x/relay does not import x/emission.
 type EmissionKeeper interface {
+	CurrentEpoch(ctx context.Context) (uint64, error)
 	RelayCeiling(ctx context.Context, epoch uint64) (math.Int, error)
 	MintRelayReward(ctx context.Context, epoch uint64, amt math.Int) error
 }

@@ -71,6 +71,7 @@ type errNotFound string
 func (e errNotFound) Error() string { return "node " + string(e) + " not found" }
 
 type fakeEmission struct {
+	current uint64
 	ceiling map[uint64]math.Int
 	minted  map[uint64]math.Int
 	calls   int
@@ -89,6 +90,10 @@ func (e *fakeEmission) mintedOf(epoch uint64) math.Int {
 		return v
 	}
 	return math.ZeroInt()
+}
+
+func (e *fakeEmission) CurrentEpoch(_ context.Context) (uint64, error) {
+	return e.current, nil
 }
 
 func (e *fakeEmission) RelayCeiling(_ context.Context, epoch uint64) (math.Int, error) {
@@ -246,6 +251,23 @@ func obs(rk relayKey, weight int64, uptime string, exit bool) types.RelayObserva
 }
 
 func (f *testFixture) submit(t *testing.T, reporter sdk.AccAddress, epoch uint64, entries []types.RelayObservation) error {
+	t.Helper()
+	// Reports are sent for the epoch that just closed: the chain is in the next one.
+	f.closeEpoch(epoch)
+	return f.submitAt(t, reporter, epoch, entries)
+}
+
+// closeEpoch puts the chain in the epoch after epoch, with a ceiling recorded
+// for epoch unless the test already set one.
+func (f *testFixture) closeEpoch(epoch uint64) {
+	f.Emission.current = epoch + 1
+	if _, ok := f.Emission.ceiling[epoch]; !ok {
+		f.Emission.setCeiling(epoch, math.ZeroInt())
+	}
+}
+
+// submitAt sends a report without moving the chain's current epoch.
+func (f *testFixture) submitAt(t *testing.T, reporter sdk.AccAddress, epoch uint64, entries []types.RelayObservation) error {
 	t.Helper()
 	root, err := types.InputsRoot(entries)
 	require.NoError(t, err)

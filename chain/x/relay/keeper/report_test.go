@@ -45,6 +45,7 @@ func TestChunkedReportsReassembleInIndexOrder(t *testing.T) {
 	root, err := types.InputsRoot(entries)
 	require.NoError(t, err)
 
+	f.closeEpoch(1)
 	// Chunk 1 arrives before chunk 0. Reassembly must follow chunk_index,
 	// because inputs_root is over that order.
 	_, err = f.Msg.ReportEpoch(f.Ctx, &types.MsgReportEpoch{
@@ -115,6 +116,7 @@ func TestInputsRootRecomputesAndRejectsAMutatedEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, bytes.Equal(root, bad))
 
+	f.closeEpoch(1)
 	_, err = f.Msg.ReportEpoch(f.Ctx, &types.MsgReportEpoch{
 		Reporter:   reporter.String(),
 		Epoch:      1,
@@ -188,6 +190,7 @@ func TestRepeatedChunkIsIdempotentUntilComplete(t *testing.T) {
 		Entries:    []types.RelayObservation{entry},
 		InputsRoot: root,
 	}
+	f.closeEpoch(4)
 	first, err := f.Msg.ReportEpoch(f.Ctx, msg)
 	require.NoError(t, err)
 	require.False(t, first.Complete)
@@ -210,6 +213,7 @@ func TestPayUsesReassembledChunks(t *testing.T) {
 	entries := []types.RelayObservation{obs(r1, 15, "1", false), obs(r2, 25, "1", false)}
 	root, err := types.InputsRoot(entries)
 	require.NoError(t, err)
+	f.closeEpoch(2)
 	_, err = f.Msg.ReportEpoch(f.Ctx, &types.MsgReportEpoch{
 		Reporter: reporter.String(), Epoch: 2, ChunkIndex: 1, ChunkCount: 2,
 		Entries: []types.RelayObservation{entries[1]}, InputsRoot: root,

@@ -374,6 +374,27 @@ reports a `/32` network) has no IPv4 /16, so its relay also goes into the `unide
 |---|---|---|
 | `upload_sunset_height` | `3162240` | P6: 183 days of 5-second blocks; D11 |
 
+### Relay reports and settlement (C8)
+
+Epoch `e` is reported on while the chain is in epoch `e+1`
+(`ReportWindowEpochs = 1`, a constant, not a parameter): `MsgReportEpoch` for the epoch in progress, for a
+future epoch, for an epoch whose window has passed, or for an epoch `x/emission` holds no relay ceiling for is
+refused (`epoch is not open for reports`), so every stored report has a relay ceiling to be paid from. A
+consensus weight above 2^62 is refused, which keeps the median and the pro rata sums far from `math.Int`
+overflow. Settlement is not a message. `x/relay`'s end block (which
+runs before `x/emission`'s) settles the oldest epoch that has a stored report or report chunk once the chain is
+in epoch `e+2` or later, one epoch per block; an epoch nobody reported on is never written. Settling takes the
+per-relay median over the reporters (at least `min_reporters_quorum`), applies the per-relay cap, the uptime
+minimum, the exit multiplier on the median Exit flag and the per-operator and per-/16 caps, mints the total
+pro rata against the epoch's relay ceiling and credits each operator's earnings account (not the bank
+balance). The first epoch with quorum only activates rewards and mints nothing; payment starts with the
+next. An unfinished chunked report is deleted when its epoch settles, and so is any report an imported genesis
+left behind for an epoch that already has a result. A genesis that carries a report for an epoch older than
+`x/emission`'s ceiling window would stop the chain at settlement; a genesis exported by this binary cannot. The relay payout is the emission
+subsidy, so the 90/5/5 service-payment split does not apply to it. The operator of a registered relay cannot
+be a reporter: `MsgRegisterRelay` refuses a reporter's address, `MsgUpdateReporters` (and so a reporter
+proposal) refuses a set naming a relay operator, and genesis validation rejects both together. The relay
+bond is not escrowed by `x/relay`; it belongs to `x/nodes`.
 
 ## `x/emission`: the halving-with-tail schedule
 
