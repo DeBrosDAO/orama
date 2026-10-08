@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // Options say where a client tor keeps its state and listens.
@@ -21,7 +22,7 @@ type Options struct {
 // canon validates the options and returns the data directory and the listen
 // addresses in the form written into the torrc.
 func (o Options) canon() (dir, socks, dns string, err error) {
-	if !filepath.IsAbs(o.DataDir) || strings.ContainsAny(o.DataDir, " \t\r\n\"\\#") {
+	if !filepath.IsAbs(o.DataDir) || strings.ContainsAny(o.DataDir, " \"\\#") || strings.IndexFunc(o.DataDir, unicode.IsControl) >= 0 {
 		return "", "", "", fmt.Errorf("tor data directory %q must be an absolute path without spaces or special characters", o.DataDir)
 	}
 	if socks, err = canonLoopback(o.SocksAddr); err != nil {

@@ -42,8 +42,8 @@ Relays that belong to this reporter's operator are left out.
 in x/relay's reporter set. <home>/operator holds the operator address and
 <home>/authority-id the authority's 40-hex v3 identity (the dir-source line of its votes).
 <home>/state.json and <home>/monitor.json report what the last pass did.
-Another party recomputes a report's inputs_root from the same votes with reporter.LoadVotes,
-Observe and Messages.`,
+Another party recomputes the observations from the same votes with reporter.LoadVotes and
+Observe; the entries sent are those narrowed by the registry as it stood when they were chosen.`,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runReporter(cmd.Context(), fl) },
 	}
 	f := cmd.Flags()

@@ -144,7 +144,7 @@ func observe(st State, cur Epoch) (State, error) {
 	switch {
 	case st.Seen == 0:
 	case cur.Number < st.Seen:
-		return st, fmt.Errorf("the chain is at epoch %d, behind the epoch %d this reporter saw: is it the same chain? After a chain reset, remove the reporter's state.json", cur.Number, st.Seen)
+		return st, fmt.Errorf("the chain is at epoch %d, behind the epoch %d this reporter saw: is it the same chain? After a chain reset, remove the reporter's state.json and report-*.json", cur.Number, st.Seen)
 	case cur.Number == st.Seen:
 		return st, nil
 	case cur.Number == st.Seen+1:

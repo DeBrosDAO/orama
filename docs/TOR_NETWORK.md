@@ -146,7 +146,7 @@ the span between two passes that saw its boundaries. The reporter saves each bou
 it sees it, before it tries any report. The first pass on a new home only records the epoch. If
 more than one epoch closes between passes, the epochs in between cannot be bounded and are
 skipped with an error (`epochs closed between two passes`). After a chain reset, remove
-`state.json`.
+`state.json` and `report-*.json`.
 
 The entries of an epoch are fixed when its first chunk is sent and saved in
 `report-<epoch>.json`; a retry sends exactly those, because the registry can change in between

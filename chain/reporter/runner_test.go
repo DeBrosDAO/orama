@@ -388,6 +388,8 @@ func TestNewRunner_validation(t *testing.T) {
 		"no reporter":      func(c *Config) { c.Reporter = "" },
 		"no authority":     func(c *Config) { c.Authority = [fingerprintLen]byte{} },
 		"no vote interval": func(c *Config) { c.VoteInterval = 0 },
+		"negative chunk":   func(c *Config) { c.ChunkEntries = -1 },
+		"oversized chunk":  func(c *Config) { c.ChunkEntries = relaytypes.MaxEntriesPerChunk + 1 },
 	} {
 		c := good
 		mutate(&c)
