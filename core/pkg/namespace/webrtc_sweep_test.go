@@ -141,7 +141,7 @@ func TestSpawnSFU_waitsForTheNamespaceLock(t *testing.T) {
 	s := NewSystemdSpawner(nsBase, "", zap.NewNop())
 	configs := filepath.Join(nsBase, "acme", "configs")
 
-	unlock := s.LockNamespace("acme")
+	unlock := mustLockNamespace(t, s, "acme")
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

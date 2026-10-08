@@ -97,10 +97,14 @@ func (s *SystemdSpawner) TeardownNamespaceOfCluster(ctx context.Context, namespa
 	if isPlatformNamespace(namespace) {
 		return fmt.Errorf("refusing to tear down %q: it is not a tenant namespace", namespace)
 	}
-	defer s.LockNamespace(namespace)()
 	// The lock is where this waits longest (another holder may be draining an
 	// SFU for up to 45s); a teardown whose caller has given up by the time it is
 	// free is not begun, so the caller's record of it as unconfirmed is true.
+	unlock, err := s.LockNamespace(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("teardown of namespace %s not begun: %w", namespace, err)
+	}
+	defer unlock()
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("teardown of namespace %s not begun, its caller gave up while it waited for the namespace's lock: %w", namespace, err)
 	}
@@ -291,7 +295,11 @@ func (s *SystemdSpawner) TeardownSFUOfCluster(ctx context.Context, namespace, no
 	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeSFU); err != nil {
 		return err
 	}
-	defer s.LockNamespace(namespace)()
+	unlock, err := s.LockNamespace(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("teardown of the SFU of namespace %s not begun: %w", namespace, err)
+	}
+	defer unlock()
 	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
 		return err
 	}
@@ -335,7 +343,11 @@ func (s *SystemdSpawner) TeardownTURNOfCluster(ctx context.Context, namespace, n
 	if err := refuseWebRTCTeardownOfPlatform(namespace, systemd.ServiceTypeTURN); err != nil {
 		return err
 	}
-	defer s.LockNamespace(namespace)()
+	unlock, err := s.LockNamespace(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("teardown of the TURN unit of namespace %s not begun: %w", namespace, err)
+	}
+	defer unlock()
 	if err := s.refuseOtherCluster(namespace, clusterID); err != nil {
 		return err
 	}

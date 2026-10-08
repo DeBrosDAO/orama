@@ -333,17 +333,17 @@ func TestSendSpawnRequest_refusesATargetOutsideTheOverlay(t *testing.T) {
 func TestStopServiceIfStillUnallocated_decidesUnderTheNamespaceLock(t *testing.T) {
 	s := &SystemdSpawner{}
 	cm := &ClusterManager{systemdSpawner: s}
-	unlock := s.LockNamespace("acme")
+	unlock := mustLockNamespace(t, s, "acme")
 
 	var heldDuringRead bool
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		cm.stopServiceIfStillUnallocated("acme", "sfu", func() bool {
-			m, _ := s.namespaceLocks.Load("acme")
-			mu := m.(*sync.Mutex)
-			if mu.TryLock() {
-				mu.Unlock()
+		cm.stopServiceIfStillUnallocated(context.Background(), "acme", "sfu", func() bool {
+			probe, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			if release, err := s.namespaceLocks.acquire(probe, "acme"); err == nil {
+				release()
 			} else {
 				heldDuringRead = true
 			}

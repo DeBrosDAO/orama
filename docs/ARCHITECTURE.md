@@ -589,6 +589,46 @@ confirmed, so a start queued behind a teardown would otherwise run when the tear
 go, start the SFU into a deleted namespace and, through the unit's dependency, pull up an
 olric unit with no env file.
 
+**One lock per namespace per node, taken by every path that starts or stops its units.**
+`SystemdSpawner.LockNamespace(ctx, namespace)` serialises, on one node, a teardown
+(`teardown-namespace`, `teardown-sfu`, `teardown-turn`), the tenant reconciler's restore
+(`restoreClusterOnNode`), the boot-time restore from local state
+(`RestoreLocalClustersFromDisk`), the WebRTC sweeps, and every spawn: the `spawn-rqlite`,
+`spawn-olric`, `spawn-gateway`, `restart-gateway` and `spawn-sfu` actions of the spawn
+handler, and the provisioner's own local spawns. Each decides under the lock, not on what
+it read before waiting for it:
+
+- A spawn (`ClusterManager.AdmitSpawn`) reads the namespace's cluster from the registry
+  under the lock and is refused when it is `deprovisioning` or gone (the spawn handler
+  answers **409**, wrapping `ErrNamespaceBeingDeleted`; a registry that cannot be read
+  refuses too, with 500, and a lock not free in time answers 503). The first refused spawn
+  fails the provisioning, which rolls itself back (it tears down what it started).
+- The boot-time restore needs no registry (it runs before rqlite has a leader), so it
+  re-reads the namespace's `cluster-state.json` under the lock instead: a teardown removes
+  it, and a state whose `cluster_id` is no longer the one that was read belongs to a
+  re-created namespace. Either skips the restore.
+- `restoreClusterOnNode` and `spawnSFUIfDown` re-read the cluster's status, as above.
+
+*Deleting a namespace that is still provisioning does not cancel the provisioning.* The
+delete runs on whichever node took the request and the provisioner on another, so there
+is nothing to cancel across nodes. The registry is the signal instead: `DeprovisionCluster`
+marks the cluster `deprovisioning` before it stops anything, every node's teardown holds
+the lock while it stops that node's units, and every later spawn is refused under the
+lock. A spawn that won the lock before a node's teardown is stopped by that teardown. The
+spawn requests do not carry the cluster id (a teardown's do), so a provisioner of an
+incarnation deleted and re-created within `provisioningTimeout` is not told apart from
+the new one. The spawn paths of node recovery and repair (`cluster_recovery.go`) take the
+lock only through the teardown they race with; they are not admitted.
+
+The wait is bounded: `LockNamespace` returns after the caller's context ends, or after
+`NamespaceLockWaitTimeout` (3 minutes), with an error naming the namespace, so a holder
+wedged on a hung `systemctl` call cannot stall every operation on the namespace. A
+teardown that gives up is recorded as unconfirmed and replayed; a restore or sweep is
+retried by the next pass. The lock table keeps an entry only while a holder or waiter
+exists. During a rolling upgrade a node on the previous release neither checks nor
+refuses a spawn, and a provisioner on the previous release treats the 409 as any failed
+spawn.
+
 A create of a name that still has a row in
 `namespace_pending_cleanup` on an active node answers 409
 `NAMESPACE_TEARDOWN_PENDING` (`retryable`, `Retry-After`; the nodes are logged,

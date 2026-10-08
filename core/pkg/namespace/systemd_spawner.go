@@ -14,7 +14,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
@@ -58,22 +57,10 @@ type SystemdSpawner struct {
 	// unit (TeardownSFU/TeardownTURN). Nil in production; set in tests.
 	teardownServiceFn func(namespace string, svc systemd.ServiceType) error
 
-	// namespaceLocks holds one *sync.Mutex per namespace: a teardown and a
-	// restore of the same namespace on this node take it, so a restore cannot
-	// start units a teardown is stopping (LockNamespace).
-	namespaceLocks sync.Map
-}
-
-// LockNamespace takes this node's lock on namespace and returns its release.
-// A teardown holds it from the first unit stopped to the last file removed. A
-// restore that decided from a registry read made before the namespace's delete
-// began used to start its units again between those two, after which they
-// held ports the registry had handed to the next namespace.
-func (s *SystemdSpawner) LockNamespace(namespace string) (unlock func()) {
-	m, _ := s.namespaceLocks.LoadOrStore(namespace, &sync.Mutex{})
-	mu := m.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	// namespaceLocks holds one lock per namespace: a teardown, a restore and
+	// every spawn of the same namespace on this node take it, so none of them
+	// can start units a teardown is stopping (LockNamespace).
+	namespaceLocks namespaceLockTable
 }
 
 // wildcardCertPaths returns where the cluster's `*.<base>` certificate and key
@@ -1204,14 +1191,18 @@ func writeSFUConfig(configPath string, cfg SFUInstanceConfig, gid int) error {
 // commits its allocation before it spawns, so a sweep that gets the lock after
 // this call reads the allocation and leaves the unit alone, and one that got it
 // before is finished by the time the files are written. Callers that already
-// hold the lock use spawnSFULocked.
+// hold the lock use SpawnSFULocked.
 func (s *SystemdSpawner) SpawnSFU(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
-	defer s.LockNamespace(namespace)()
-	return s.spawnSFULocked(ctx, namespace, nodeID, cfg)
+	unlock, err := s.LockNamespace(ctx, namespace)
+	if err != nil {
+		return fmt.Errorf("spawn the SFU of namespace %s: %w", namespace, err)
+	}
+	defer unlock()
+	return s.SpawnSFULocked(ctx, namespace, nodeID, cfg)
 }
 
-// spawnSFULocked is SpawnSFU for a caller that holds the namespace's lock.
-func (s *SystemdSpawner) spawnSFULocked(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
+// SpawnSFULocked is SpawnSFU for a caller that holds the namespace's lock.
+func (s *SystemdSpawner) SpawnSFULocked(ctx context.Context, namespace, nodeID string, cfg SFUInstanceConfig) error {
 	s.logger.Info("Spawning SFU via systemd",
 		zap.String("namespace", namespace),
 		zap.String("node_id", nodeID),

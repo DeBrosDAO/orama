@@ -253,7 +253,7 @@ func TestSpawnAllocatedWebRTCServices_waitsForATeardownOfTheNamespace(t *testing
 	r, state := newSpawnRig(t)
 	presentUnitState(t, systemd.ActiveStateInactive, nil)
 
-	unlock := r.cm.systemdSpawner.LockNamespace("acme")
+	unlock := mustLockNamespace(t, r.cm.systemdSpawner, "acme")
 	done := make(chan struct{})
 	go func() {
 		r.cm.spawnAllocatedWebRTCServices(context.Background(), state)
@@ -288,7 +288,7 @@ func TestTeardownSFU_holdsTheNamespaceLock(t *testing.T) {
 
 	got := make(chan struct{})
 	go func() {
-		s.LockNamespace("acme")()
+		mustLockNamespace(t, s, "acme")()
 		close(got)
 	}()
 	select {
