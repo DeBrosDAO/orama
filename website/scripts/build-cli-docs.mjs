@@ -118,7 +118,7 @@ function renderBody(lines) {
     }
     if (line.startsWith("|")) {
       flush();
-      out.push(line.startsWith("|--") ? line : "| " + line.slice(1, -1).split("|").map((c) => escapeCell(c.trim())).join(" | ") + " |");
+      out.push(line.startsWith("|--") ? line : "| " + line.slice(1, -1).split(/(?<!\\)\|/).map((c) => escapeCell(c.trim())).join(" | ") + " |");
       continue;
     }
     const indented = /^ {2,}\S/.test(line);

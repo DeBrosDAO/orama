@@ -1,0 +1,154 @@
+# Global nodes
+
+A global node runs the public Orama chain (`oramad`) and, optionally, the services beside it: the storage provider, the history archiver, the chain indexer and the repair delegate. It needs no domain, no WireGuard and no cluster. Every command on the node runs as root. None needs raw `systemctl`.
+
+A machine can also be a cluster node and a global node at once ([Sharing a machine](#sharing-a-machine-with-a-cluster-node)).
+
+The chain itself is described in [What the chain is](/docs/blockchain/what-it-is) and [Running a chain node](/docs/blockchain/running). Remember the status: devnet, stagenet and localnet only.
+
+## Hardware
+
+The code does not check hardware. These sizes come from the plan:
+
+| Service | Size |
+|---|---|
+| Chain (validator) | 4 vCPU, 16 GB RAM, NVMe. State in `/var/lib/orama-global/chain` |
+| Chain (non-validator) | Same disk class |
+| Provider | Disk at least the capacity you declare. Piece store `/var/lib/orama-global/provider/store` |
+| Public Kubo | Disk for its `StorageMax`: the declared capacity plus 10%. Every pinned public piece is stored twice on the host, once in the provider's store and once in Kubo |
+| Archiver | Disk for `bundles/` (one file per archived range) |
+| Repair | Small |
+
+## Install
+
+Stage these in a directory that root owns and nobody else may write (for example `/root/orama-global-release`): the release's `oramad`, `orama-global` and `orama`, Kubo's `ipfs` (v0.43.1, when you install the `ipfs` service) and the official cosmovisor tarball `cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz`. The installer refuses a symlink or a directory another account could change.
+
+**You are trusting these binaries.** The installer verifies the cosmovisor tarball against a pinned SHA-256 and runs `ipfs --version` as an unprivileged account to require v0.43.1. It does **not** verify `oramad`, `orama`, `orama-global` or `ipfs` against any signature: the release archive does not carry `oramad` or `orama-global` yet, so there is nothing to check them against. The chain unit runs the staged `orama` as root before every start, `oramad` holds the validator key, and `orama-global` holds hot keys and repair seeds. Put in the directory only binaries you built or verified yourself.
+
+```bash
+sudo orama global install \
+  --services chain,ipfs,provider \
+  --public-storage-gb 500 \
+  --staged-dir /root/orama-global-release \
+  --persistent-peers <node-id>@<host>:31000,<node-id>@<host>:31000 \
+  --init-chain --chain-id <chain-id> --moniker <name> --genesis /root/genesis.json \
+  --enable-firewall --ssh-port 22
+```
+
+- `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`, `repair`. The chain is required: the others reach it only through its RPC on `127.0.0.1:31001`. `provider` needs `ipfs` beside it, since it pins public deals through this host's public Kubo. **`provider` and `repair` are never on the same host:** a repair delegate holds repair seeds and a provider must not. `indexer` is optional (loopback 31015, proxied by a gateway).
+- Each service gets its own system account (`orama-chain`, `orama-ipfs-pub`, `orama-provider`, `orama-archiver`, `orama-indexer`, `orama-repair`). Binaries go to `/usr/lib/orama-global/bin`, root-owned, 0755.
+- Units are written to `/etc/systemd/system/orama-global-*.service` and enabled, not started. None is part of `orama-node.service`. They start after the chain unit and want it.
+- The chain unit runs **cosmovisor v1.7.3** with downloads disabled. The chain home must already have a genesis, so use `--init-chain` on the first install. A second install with the same `oramad` changes nothing; different bytes are refused. To change the chain binary use `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the plan's height.
+- The public Kubo is a second daemon, never the private cluster's: its own repo in `/var/lib/orama-global/ipfs` (`ipfs init --profile=server`), no swarm key, the swarm on 31010 tcp and udp, private address ranges filtered and not announced, only pinned content announced. Its RPC is `127.0.0.1:31011` behind a bearer token that allows only `add`, `cat`, `pin/add`, `pin/rm`, `repo/gc` and the read-only `repo/stat`. `--public-storage-gb` is the capacity you will declare; Kubo's `StorageMax` is that plus 10%, and a garbage-collection timer runs 20 minutes after start and then every 6 hours.
+- With `provider` installed, `PUBLIC_PIN` and `ARCHIVE` deals are pinned in the public Kubo before the slot is accepted. `PRIVATE` deals never touch it.
+- `--init-chain` runs `oramad init` as `orama-chain` and puts `--genesis` in place (its `chain_id` must equal `--chain-id`). The flag is refused when the home already has a genesis.
+- `ufw`: the chain's 31000 tcp and udp, Kubo's 31010 tcp and udp and the provider's 31013 tcp are allowed with the comment `orama-global`. An inactive `ufw` is refused unless `--enable-firewall` is given; then incoming is denied by default, the SSH port allowed and `ufw` enabled. `--ssh-port` must be a port `sshd -T` says sshd listens on. Loopback listeners (31001 to 31004) are not opened.
+- `oramad start` refuses `query-gas-limit = "0"` on any non-localnet chain id. `--init-chain` writes `"2000000"`; a home from an earlier build must be edited by hand, and this release is state-breaking, so such a home cannot be carried over at all: the chain restarts from a new genesis.
+- Running the command again with the same flags changes nothing but the binaries' bytes. A service left out of `--services` is not removed.
+
+## Start, stop, status
+
+```bash
+sudo orama global start            # chain, wait for its RPC, then the rest
+sudo orama global start provider   # needs the chain running
+sudo orama global stop chain       # stops the provider, archiver and repair first
+sudo orama global restart chain    # restarts everything installed, in order
+sudo orama global status
+```
+
+The chain always starts first and stops last, and the double-sign guard runs before it starts. The other services start only after `http://127.0.0.1:31001/status` answers (up to five minutes); otherwise they are left stopped and the command fails.
+
+## Register and bond
+
+The operator's wallet never touches the node. On your own machine:
+
+1. `orama global bind` signs each service key's binding.
+2. `orama global register` builds `MsgRegisterNode`: roles, hot key, bindings, endpoints, and `--asn`, the autonomous system number this node declares (reserved, documentation and private-use numbers are refused; the chain cannot verify the number, and protocol deals go to distinct ASNs, so declare the real one). With `--node` the RootWallet agent signs and it is broadcast.
+3. `orama global bond --role <role> --amount <norama>` bonds each role.
+4. `orama global capacity` declares storage bytes for a provider.
+
+Every command that signs a transaction returns only once it is in a block, and prints its hash and height. A transaction the block refuses is reported as a failure with the chain's log, and one that is not in a block within two minutes is reported with its hash so it can be looked up. A role is active only while its bond is at least `min_bond`: 1 ORAMA for every role, `bond_per_gib` 1 ORAMA, unbonding 21 days. See [Nodes, roles and bonds](/docs/blockchain/nodes).
+
+`MsgRegisterOperator` has no `orama` command: `register` needs the operator registered first, and today the stagenet deploy sends it with its own helper.
+
+## Validators
+
+### The bootstrap committee
+
+The first validators are a *bootstrap committee* named in genesis (`oramad genesis add-bootstrap-validator`). A member needs no stake and has an equal share of voting power while lambda is below 1. There is no application or scoring for a seat. Anyone else becomes a validator with a normal `MsgCreateValidator`, bonded from earnings if needed; the `orama` CLI does not build that message. See [Validators and staking](/docs/blockchain/validators).
+
+### Faults
+
+| Fault | Penalty |
+|---|---|
+| Downtime: fewer than 50% of the last 10,000 blocks signed | 0.01% slash, jailed 10 minutes |
+| Double sign | 5% slash, jailed, **tombstoned** |
+
+A tombstoned validator can never unjail, and `x/power` gives it no power. Storage: `x/storage` slashes 10% of a replica's epoch price after two consecutive proof misses.
+
+### Unjail and edit
+
+```bash
+orama global validator unjail --chain-id <id> --operator orama1... --fee <n> --gas <n> [--node http://127.0.0.1:31003]
+orama global validator edit   --chain-id <id> --operator orama1... --moniker <name> --commission-rate 0.05 --fee <n> --gas <n>
+```
+
+Without `--node` they print the sign document; with it the RootWallet agent signs and the transaction is broadcast. Unjail is refused while the jail runs, without a self-delegation at least the validator's minimum, and for a tombstoned validator. `edit` sends every field you do not give as `[do-not-modify]`; one commission change is allowed per 24 hours.
+
+### The hot key
+
+The provider and archiver create their own signing key (`hot-key`, 0600) on first start and log its address. Registering a node needs a binding signed by this key (`orama global bind --service hot-key`). It pays fees from its own balance, or from a fee-only balance the operator gives it with `MsgFundHotKey`, which can pay base fees and nothing else.
+
+### Back up the consensus key
+
+```bash
+sudo orama global validator export-key --recipient <your X25519 public key, hex> --to /root/validator-key.orbk
+```
+
+Seals `priv_validator_key.json` to your public key. The node never holds the private half. Keep the file off the node.
+
+### Move a validator without double signing
+
+Never run two copies of one key. The guard is the **sign floor**: a per-key record of the last state in `/var/lib/orama-global/validator-sign-floor.json`. The chain unit runs `orama global validator check-sign-floor` as root before every start, so it applies at boot, on automatic restart and on any manual start. With any floor recorded the chain starts only when a key is present and, when the key has a floor, only when `priv_validator_state.json` is not behind it.
+
+1. **New host:** `sudo orama global validator migrate prepare` prints a one-time key. The private half stays in `/var/lib/orama-global/migrate-recipient.key` until an import uses it, or `migrate cancel` removes it.
+2. **Old host:** `sudo orama global validator migrate export --recipient <key> --to /root/move.orbk` (the `--to` file must not exist). It stops the chain and its dependent services, disables the chain unit, writes an in-progress marker that makes the check refuse any start, seals the key and state, records the state as the old host's floor, moves the key out of the chain home, removes the marker and finally writes the bundle. From then on the old host's chain cannot start, and `oramad` cannot generate a fresh key beside it.
+3. Copy the bundle to the new host.
+4. **New host:** `sudo orama global validator migrate import --from /root/move.orbk`. It refuses while the chain runs, records the old state as the floor first, then installs the key last.
+5. **New host:** `sudo orama global start`.
+
+This does not cover a copy of the key made any other way (a disk image, a manual copy). The floor exists only on hosts that ran these commands. To abandon a migration on the old host, put both files back owned by `orama-chain`, mode 0600 (the key as `config/priv_validator_key.json`, the state as `data/priv_validator_state.json` under `/var/lib/orama-global/chain`) and `sudo orama global start`; do this only if the new host never started the chain with the key. A killed export can leave the marker behind; the chain then refuses to start until root removes it, after checking whether the key is still in the chain home.
+
+The floor, the migration key and the copies are trusted only while `/var/lib/orama-global` is root's and not writable by its group or others.
+
+### Restore from a backup
+
+Only when the old host is gone for good.
+
+1. New host: `sudo orama global validator migrate prepare`.
+2. Your machine: `orama global validator reseal --from validator-key.orbk --identity-file <private key file, 0600> --recipient <key> --to restore.orbk`.
+3. New host: `sudo orama global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's latest committed height>`.
+
+A backup carries no sign state, so the import refuses it without both flags. Give the network's latest committed height H, read from a node you trust right before the import: the floor becomes H+1, round 0, and the restored key signs nothing at or below H. If the old host can still start with its copy of the key, the two will double sign; the flag is your statement that it cannot.
+
+## Sharing a machine with a cluster node
+
+A machine can be a cluster node and a global node (`role: both`). The global services run in their own Linux network namespace, `orama-global` (address `198.18.0.2`); the cluster node stays in the root namespace. The two have separate loopbacks and port spaces, separate users and separate state directories.
+
+```bash
+sudo orama global install --colocated --services chain,ipfs,provider \
+  --public-storage-gb 500 --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
+```
+
+Run it on a machine where `orama node setup` has already installed the cluster node. The namespace cannot reach the WireGuard mesh, so chain peers use public addresses. Removing the layout means restoring `net.ipv4.ip_forward` from `/var/lib/orama-global/netns-prior-ip-forward` before deleting `/var/lib/orama-global`.
+
+## Not built yet
+
+- `orama node setup --role global` from your machine; install runs on the node.
+- Signature verification of the staged binaries by the installer; an installed update path for a chain patch that changes no consensus behaviour.
+- An `orama global` command for `MsgUpdateNode`: an ASN is set at registration only.
+- An `orama` command for `MsgRegisterOperator`.
+- Staging the shielded verifier: `orama global install` does not place `orama-orchard-verifier`; a node without it accepts no shielded bundle.
+- Removing a service, or its firewall rule, that a later install leaves out.
+- The relay and Tor units.
+- A remote signer (TMKMS, Horcrux) or a sentry topology.

@@ -160,7 +160,7 @@ orama namespace keys create [flags]
 | `--expires-in-days` | `0` | How long the key lives, in days (default 90, max 365). A key that never expires is not on offer |
 | `--label` | — | Human label for the key |
 | `--namespace` | — | Namespace name |
-| `--scope` | — | Profile (invoke-only\ | app-runtime\ | admin) or a comma-separated grant list (admin, cache, invoke, proxy, pubsub, push, storage, webrtc) |
+| `--scope` | — | Profile (invoke-only\|app-runtime\|admin) or a comma-separated grant list (admin, cache, invoke, proxy, pubsub, push, storage, webrtc) |
 
 ## orama namespace keys list
 
@@ -390,9 +390,9 @@ orama namespace session-policy --namespace myapp --sign-in open
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--device-policy` | — | What an end user's sign-in must bind: optional \ | required \ | approval |
+| `--device-policy` | — | What an end user's sign-in must bind: optional \| required \| approval |
 | `--namespace` | — | Namespace name |
-| `--sign-in` | — | Who may sign in: members \ | open |
+| `--sign-in` | — | Who may sign in: members \| open |
 
 ## orama namespace webrtc-status
 
