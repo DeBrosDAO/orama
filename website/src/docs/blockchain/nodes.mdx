@@ -1,0 +1,77 @@
+# Nodes, roles and bonds
+
+`x/nodes` is the chain's registry of who runs what. An *operator* registers *nodes*, gives each node *roles*, and locks a *bond* per role. Other modules read this registry: `x/storage` assigns deal slots to nodes with an active STORAGE role, `x/relay` pays registered relays, and `x/houses` counts an operator's service days.
+
+## The records
+
+**Roles:** `VALIDATOR`, `STORAGE`, `RELAY`, `EXIT`, `DIRAUTH`, `ARCHIVER`. The `VALIDATOR` role is a registry role. The CometBFT validator set comes from `x/power` and staking, not from this role.
+
+**Node status:** registered, active, jailed, retired, tombstoned.
+
+**Cluster:** an optional public row that names a platform cluster (its public name) on the chain. It does not join any node to anything. Created with `orama cluster register-onchain` and removed with `retire-onchain`.
+
+## Messages
+
+All are signed by the owning operator. None needs an authority.
+
+| Message | What it does |
+|---|---|
+| `RegisterOperator` | Creates the operator record. No `orama` command sends it; the stagenet helper does |
+| `RegisterNode` | Creates a node: roles, hot key, service-key bindings, endpoints, region hint, ASN |
+| `UpdateNode` | Rotates the hot key and bindings, changes endpoints, region hint, ASN |
+| `RetireNode` | Retires a node |
+| `BondNode` / `UnbondNode` | Lock or start unbonding a role bond |
+| `DeclareCapacity` | A STORAGE node says how many bytes it will hold |
+| `FundHotKey` | Moves earnings into the hot key's fee-only balance |
+| `RegisterCluster`, `UpdateCluster`, `RetireCluster` | Manage the optional public cluster row |
+
+**Bindings.** A node proves control of each service key by signing `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)` with that key (secp256k1 or ed25519). Exactly one `hot-key` binding is required. The hot key must differ from the operator key and from any other live node's hot key. `orama global bind` produces a binding.
+
+## Parameters (production genesis values)
+
+| Parameter | Value |
+|---|---|
+| `min_bond` | 1 ORAMA for every role |
+| `bond_per_gib` | 1 ORAMA, so one ORAMA of STORAGE bond backs exactly 1 GiB |
+| `unbonding_seconds` | 1,814,400 (21 days) |
+| `deposit_per_byte` | 68,359 norama |
+| `probation_capacity_bytes` | 1 GiB |
+| `max_endpoints`, `max_bindings` | 8 each |
+| Network identity lock | 14 days (code default) |
+
+A node counts as *active for a role* only while the node is active and that role's bond is at least `min_bond`. A pending unbonding stops counting immediately.
+
+## Network identity
+
+For protocol deals and for house eligibility the chain needs to know where a node really is.
+
+- The node's /16 is derived from its first literal public IPv4 endpoint (IPv6 uses a /32). Private, reserved and ambiguous hosts are rejected by one shared classifier.
+- The ASN is declared by the operator and is not verified.
+- Both count only after the identity lock has passed.
+- One literal IP belongs to one live node.
+
+A node with no literal-IP endpoint or no declared ASN cannot take a protocol-deal slot, and an operator without both cannot be eligible for the operator house.
+
+## What happens every block
+
+The end block pays matured unbondings and records at most one *service day* per operator per UTC day (an active role counts even without service volume). Service days are what the operator house requires. Slashing burns the same fraction of the role bond and its pending unbondings and clamps declared capacity.
+
+## Using it from the CLI
+
+| Command | Does |
+|---|---|
+| `orama global bind` | Sign `orama-global-bind-v1` for one service key |
+| `orama global register` | Register a global node from signed bindings |
+| `orama global bond` / `unbond` | Bond or start unbonding norama for one role |
+| `orama global capacity` | Declare storage capacity |
+| `orama global retire` | Retire a node |
+
+With `--node` these sign through the RootWallet agent and broadcast. Without it they print the sign document. `--onion` sends the transaction through Tor ([Tor](/docs/privacy/tor)). Full flags: [`orama global`](/docs/developer/cli/global).
+
+## Not built
+
+The fee-free registration quota planned for registering nodes is not in the code.
+
+## Queries
+
+`params`, `operator`, `node`, `cluster`, `unbondings` and `invariants`.

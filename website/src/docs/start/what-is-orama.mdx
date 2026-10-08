@@ -1,0 +1,59 @@
+# What is Orama
+
+Orama Network is an open-source cloud platform that runs on many independently operated servers instead of one company's data centres. You use it through a command-line tool (`orama`), a TypeScript SDK (`@debros/orama`), a Go client, or plain HTTPS. You get the building blocks an application needs:
+
+- hosting for static sites, Next.js apps, Node.js and Go backends
+- a replicated SQL database and per-app SQLite databases
+- a cache
+- file storage
+- pub/sub messaging with presence
+- serverless functions (WebAssembly)
+- domains with automatic HTTPS
+- voice and video (WebRTC with TURN and an SFU)
+- push notifications
+- a secrets vault
+- outbound anonymity through Tor
+
+Sign-in is a wallet signature. Orama never asks for an email address, a password or a phone number.
+
+This site documents the whole thing: how to build on it, how to install and run a cluster from nothing, how it works inside, how it stays secure, the Orama blockchain, the privacy network, and the RootWallet apps that sign you in.
+
+## Three ideas explain most of the design
+
+1. **Every tenant gets its own small cluster.** A tenant is called a *namespace*. Creating one starts a database, a cache and a gateway on three nodes, just for that namespace. There is no shared table with a tenant column, so there is no cross-tenant query to get wrong.
+2. **No internal traffic crosses the public internet.** Nodes talk to each other only inside a WireGuard mesh (`10.0.0.0/24`). Services that are not meant to be public listen only on the mesh.
+3. **Identity starts with a wallet signature.** Everything else (sessions, API keys, roles) is derived from it. The platform learns a public address and nothing more.
+
+## Built from known parts
+
+| Job | Component |
+|---|---|
+| Replicated SQL | RQLite (SQLite replicated with Raft) |
+| Cache | Olric |
+| File storage | IPFS and IPFS Cluster |
+| Messaging | libp2p GossipSub |
+| Functions | wazero (WebAssembly runtime), functions written in Go and compiled with TinyGo |
+| Voice and video | Pion (WebRTC, SFU, TURN) |
+| DNS | CoreDNS, backed by a table in the replicated database |
+| TLS | Caddy |
+| Mesh | WireGuard |
+| Anonymity | Tor (client only) |
+| Ledger | Cosmos SDK and CometBFT (`oramad`) |
+
+A Go control layer ties these together into a multi-tenant platform. The same software runs on every node. Nodes differ only in configuration and in which tenants have been placed on them.
+
+## What Orama is not
+
+- **Not a chain in the request path.** A database query, a deploy or a function call goes to a gateway, not to the ledger. The Orama chain is a separate process with its own token. The node installer does not start it. See [What the chain is](/docs/blockchain/what-it-is).
+- **Not censorship-proof.** Nodes are ordinary servers at ordinary hosting providers. Losing one node does not take an application down. That is resilience, not immunity.
+- **Not a defence against a hostile hypervisor.** Anyone who can read the memory of a running server can read what it is processing. See the [security model](/docs/architecture/security-model).
+- **Not a hosted product with a dashboard.** The CLI and SDK are the whole interface. There is no web dashboard and no Orama MCP server. See [How you talk to the network](/docs/developer/client-surface).
+
+## Where Orama stands today
+
+Orama is alpha software. Node operation is by invitation, because on an ordinary Ubuntu node the operator has root access. You can still run your own private cluster today: that is what [Install a cluster from scratch](/docs/operator/install-from-scratch) is for. [What works today](/docs/start/status) lists what is live, partial, and not built.
+
+## Where to go next
+
+- [Choose your path](/docs/start/journeys): developer, operator, security reader, chain reader, wallet user.
+- [Glossary](/docs/start/glossary): namespace, gateway, index plane, grant, norama and the rest.

@@ -1,0 +1,80 @@
+# The agent
+
+The RootWallet desktop app runs a small local server, the *agent*, on a Unix socket. External tools such as the `orama` CLI ask it for an SSH key, a password, an address or a signature, one approved capability at a time. The tool never sees your seed, your recovery phrase or your vault key. It gets only the single item it asked for.
+
+The agent is why `orama node setup` has no `--ssh-key` flag and why you never paste a key into a terminal.
+
+## Requirements
+
+- The desktop app must be **running and unlocked** for anything that needs a key. If the agent cannot start, the app refuses to start, so another process cannot bind the socket and phish your vault password.
+- macOS and Linux only (it uses `SO_PEERCRED`-style peer credentials). No Windows.
+- The socket is `~/.rootwallet/agent.sock`, or the absolute path in `RW_AGENT_SOCK`.
+
+## How a program gets approved
+
+1. A tool connects. The agent identifies the caller from the kernel: the peer PID, bound to the process start time, and the SHA-256 of the caller's binary.
+2. The first time an unknown binary asks for a capability, a native approval window opens showing the program name, path, hash and the capability. You have 120 seconds.
+3. Approval is stored per binary hash and capability in `~/.rootwallet/agent-permissions.json` (mode 0600) and survives locks and restarts. A rebuilt binary has a new hash and asks again.
+4. If the vault is locked, vault requests wait up to 120 seconds for you to unlock. Signing requests fail at once with `AGENT_LOCKED`. Clients should allow at least 240 seconds.
+
+Unlock attempts are throttled after 5 failures, with lockouts of 30 seconds doubling to 15 minutes.
+
+## Capabilities
+
+| Capability | What it allows |
+|---|---|
+| `vault:ssh` | Read, create or delete an SSH key entry |
+| `vault:password` | Read a stored password for a site and user |
+| `wallet:address` | Read your address for a chain |
+| `wallet:sign` | Sign an EVM message (EIP-191), HD accounts only |
+| `wallet:sign:orama-archive` | Sign an Orama build archive manifest |
+| `wallet:sign:orama-release` | Sign Orama release metadata. Asked per signature, desktop only |
+| `wallet:sign:orama-tx` | Sign an ORAMA chain transaction. Asked per request, never remembered |
+
+## Endpoints for external tools
+
+| Method and path | Needs | Notes |
+|---|---|---|
+| `GET /v1/status` | nothing | Does not reset the auto-lock |
+| `POST /v1/touch` | approved | Keepalive during long jobs such as a rollout |
+| `GET /v1/wallet/address?chain=…` (evm, solana, bitcoin or orama) | `wallet:address` | |
+| `POST /v1/wallet/sign` | `wallet:sign` | Body `{message, chain?, purpose?}`. EVM only |
+| `POST /v1/orama/tx/sign` | `wallet:sign:orama-tx` | Body `{signDoc}`. Approved per request |
+| `GET /v1/orama/account`, `GET /v1/orama/release/key` | | ORAMA account and the release public key |
+| `GET /v1/vault/ssh/:host/:user?format=…` (priv, pub or both) | `vault:ssh` | |
+| `POST` and `DELETE /v1/vault/ssh` | `vault:ssh` | Create or delete an SSH entry |
+| `GET /v1/vault/password/:domain/:user` | `vault:password` | |
+
+Responses are `{"ok":true,"data":…}` or `{"ok":false,"error":"…","code":"…"}`. Branch on `code`: `AGENT_LOCKED`, `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `NOT_APPROVED`, `PERMISSION_DENIED`, `SIGN_PURPOSE_REQUIRED`, `ORAMA_TX_REFUSED`, `UNSUPPORTED_ACCOUNT`, `TOO_MANY_ATTEMPTS`, `NOT_FOUND`, `INVALID_REQUEST`, `PEER_UNIDENTIFIED`. Vault endpoints return stored entries; they never derive keys, and a missing entry is `NOT_FOUND`.
+
+Other endpoints (`/v1/unlock`, `/v1/lock`, `/v1/events`, `/v1/apps*`, `/v1/approvals/*`, `/v1/vault-sync`, vault entry editing) are for the desktop UI only: the caller's PID must be the agent's own.
+
+## Signing for Orama: domain separation
+
+The agent will not let a plain `wallet:sign` request sign a message in a reserved format. This stops a program from turning a harmless-looking signature into a build approval or a transaction.
+
+- **`orama-archive`:** the 7-line "Orama build archive v1" message (version, commit, architecture, date, signers, manifest SHA-256), signed as EIP-191 with your EVM key. Each signature is audit-logged and announced. A signers list in it rotates every node's trusted archive signers.
+- **`orama-release`:** canonical TUF 1.0 JSON that opens with `{"_type":"`, signed with a dedicated ed25519 key at SLIP-0010 path `m/1330790733'/1'/0'`. The approval window shows every field of the metadata.
+- **ORAMA transactions:** the agent decodes the SignDoc itself (Cosmos SDK 0.50) and re-encodes every level to confirm it. Before any prompt it refuses: a chain id other than `orama-stagenet-1`, a signer that is not the active HD account's single secp256k1 key, undecodable message types, extension options or a tip, a non-norama fee, and unusual memo characters. It decodes bank sends, staking, withdraw rewards and 48 messages from the Orama modules (houses, nodes, storage, token, cNFT, market), with warnings on sensitive ones. It refuses shielded messages.
+
+Anything reserved sent to `wallet:sign` gets `403 SIGN_PURPOSE_REQUIRED`.
+
+## What the Orama CLI asks it for
+
+Address and signature for gateway sign-in; SSH keys and passwords for node IPs; `orama-archive` and `orama-release` signatures when you build and release; ORAMA transaction signatures for `orama global`, `orama storage` and `orama cluster`; and status and keepalive calls during rollouts.
+
+## Revoking an approval
+
+There is no screen for it. Quit the desktop app and edit or delete `~/.rootwallet/agent-permissions.json`. (The protocol has a delete endpoint for the desktop UI, but no screen calls it.)
+
+## Security properties and their limits
+
+- The requester never sees the seed, mnemonic or vault key. The agent holds them in memory, zeroed afterwards, for the unlock period, and writes no session file.
+- `agent.pid` is honoured only if it names a live process running the same executable.
+- Listing approved binaries is closed to other processes.
+
+What the design openly does not stop: any process running as **your user** can run an already-approved binary, use `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES` or `ptrace` against one, or read `keystore.json` for an offline attack. "Approved tool" really means "any code running as you via that tool". The agent's own interface bypasses approvals (same PID) unless `RW_AGENT_STRICT_PEER_CHECK=1`.
+
+## The headless development agent
+
+For tests and CI, `rw-agent-headless` runs the agent without the desktop app. It serves **only a throwaway test wallet**: a marker written by `rw init --test-wallet`, a keystore address check against real wallets, and a refusal to run on a real home directory enforce that. The password comes from `--password-file` or `--password-fd`. Approvals are pinned at start with `--approve BINARY=CAP,…`; a rebuilt binary needs an agent restart. It signs Orama transactions unattended only with `--allow-chain-id` (the id must contain `-devnet-`, `-stagenet-` or `-e2e-`), `--max-amount` and a calling binary named exactly `orama`. It never signs `orama-release`. `rw test-agent start|stop` wraps it.

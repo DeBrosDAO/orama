@@ -1,0 +1,34 @@
+# History archive
+
+A validator that keeps every block forever needs ever more disk. `x/archive` lets the network agree that a range of old blocks has been stored safely elsewhere, so validators may prune them.
+
+## How a range is archived
+
+Block history is cut into ranges of 1,000 blocks (a canonical range starts at `k x 1000 + 1`). Archiver nodes (nodes with the `ARCHIVER` role) bundle a range into an `.orbh` file and attest to it.
+
+1. **Attest.** Each archiver sends `MsgAttest` with the range's bundle CID, content hash, Merkle root of the block hashes and piece commitment. It is signed by the archiver node's hot key.
+2. **Decide.** A range is *decided* when one identical tuple is attested by 3 distinct operators. Up to 4 competing candidates per range are tracked.
+3. **Store.** Archiving a decided range needs 3 live `ARCHIVE` storage deals. Each runs for 3,650 epochs (about ten years at one epoch a day) at the protocol price, paid from the storage ceiling and topped up from the archive fund. `MsgCreateArchiveDeal` opens them and `MsgAttachReplicas` records where the replicas are.
+
+| Parameter | Value |
+|---|---|
+| `range_blocks` | 1,000 |
+| `max_piece_bytes` | 4 GiB |
+| `max_candidates_per_range` | 4 |
+| `retention_window_blocks` | 201,600 (14 days at 6 s blocks) |
+
+## Pruning
+
+The app lowers CometBFT's retain height to `min(tip - retention_window, last archived height)`. It returns 0 (keep everything) while nothing is archived. A node prunes only if `min-retain-blocks` is set in its `app.toml`, so pruning is an operator choice.
+
+## Limits
+
+The Merkle root of block hashes is not verified on chain, and nothing slashes a wrong attestation. The security of an archived range rests on three independent operators agreeing and on the storage deals. A client that fetches history verifies the bundle itself.
+
+## The tooling
+
+`orama-global archiver` writes the bundles, attests, opens deals, uploads and attaches replicas. `orama-global history get --height H` fetches a bundle, verifies it and extracts a block. Both are part of the [global node](/docs/operator/global-nodes) toolset.
+
+## Queries
+
+`Params`, `Range`, `LastArchivedHeight` and `RetainHeight` are public. `Invariants` is withheld from the gateway.

@@ -1,0 +1,66 @@
+# Send, receive, swap and ORAMA
+
+## Send and receive
+
+- **Send** native coins and tokens (ERC-20, SPL) on desktop, mobile and the CLI. Mobile asks for your password on each send.
+- **Receive** shows your address and a QR code. The QR payload is a bare address on EVM mainnet, `ethereum:<addr>@<chainId>` on other EVM networks, `solana:<addr>` on Solana and a bare address on Bitcoin.
+- **History:** the dashboard on desktop, history screens on mobile, `rw history` and `rw tx <hash>` on the CLI.
+- **Tokens:** the desktop and mobile apps have token pages with charts and custom tokens; the CLI has `rw tokens`.
+
+```bash
+rw balance --chain solana
+rw send 0xRecipient 0.1
+rw send <to> <amount> --chain solana --token <mint>
+rw history --limit 20
+```
+
+## Swap and bridge
+
+Desktop and mobile can swap and bridge through LI.FI. The CLI does not.
+
+- Sources: Ethereum, Optimism, BNB Chain, Polygon, Base, Arbitrum and Solana mainnet. Bitcoin and testnets are not supported.
+- The wallet treats the quote as untrusted and checks it before signing: route, tokens, decimals, amount, receiver and sender must match what you asked for; the quote expires after 40 seconds; slippage is capped at 5%; the output must be within 5% of the wallet's own price from DexScreener pairs with at least $50,000 liquidity (an unpriced quote needs your explicit consent); and EVM calldata and Solana simulations are inspected.
+- The swap fee is 0 basis points today (`SWAP_FEE_BPS = 0`). A fee is planned.
+- DexScreener sees the token addresses you look at.
+
+## NFTs
+
+Desktop: view, hide and transfer. Mobile: view and hide. CLI: `rw nft list|show|send` on EVM and Solana.
+
+## Bitcoin
+
+Bitcoin accounts are full BIP-84 HD wallets: a receive chain and a change chain, scanned with a gap limit of 20. An imported Electrum, Sparrow or Ledger seed shows and spends every funded address, and change goes to a fresh address each time.
+
+```bash
+rw btc rescan          # discover every address this seed uses
+rw btc addresses       # list receive and change addresses
+rw balance --chain bitcoin
+```
+
+Balances come from the local ledger with no network request; a partial scan shows "at least x" and a never-scanned ledger shows a dash. Fee tiers (slow, standard, fast) map to mempool.space estimates. Known limits: no automatic discovery of further BIP-44 accounts (create them with `rw account create` and rescan each), a payment to an old emptied address is invisible until a full rescan, and two devices can hand out the same address. The CLI keeps its ledger in plaintext inside `keystore.json`; the apps keep it encrypted. Custom Bitcoin testnet endpoints are refused unless trusted, because they can cause mainnet signing.
+
+## Sign and verify messages
+
+Desktop (Sign and Verify page: EVM, Solana, Bitcoin) and the CLI (`rw sign` and `rw verify`, EVM and Solana). Mobile has no message-signing screen. The CLI refuses the reserved Orama message formats (archive, release, Cosmos transactions) so a plain message signature cannot be abused as an Orama approval.
+
+## ORAMA
+
+ORAMA features are off by default and available on the stagenet only. Switch the ORAMA network on to see the ORAMA page.
+
+- Address (`orama1…`), balance and history, 9 decimals ("norama").
+- Staking: delegate, undelegate, redelegate and withdraw rewards.
+- Governance votes in the token house or the operator house.
+- Desktop has a settings card for the read proxy URL, an optional node RPC and a CA file for your own proxy.
+
+```bash
+rw stake delegate <validator> 10 --chain orama
+rw vote <proposal> yes --chain orama --house token
+```
+
+**Public ORAMA sends are blocked**, because the chain refuses user-to-user public transfers. The wallet stops them before signing. Shielded transfers are not built in the wallet, and the agent refuses shielded messages. In release builds, balance and sends wait on the read proxy's wallet routes, and the apps say "ORAMA wallet routes are not available on this network yet" until then. Address and history still show.
+
+Signing: desktop signs through the agent after an approval window decodes the transaction; mobile signs locally after a password and a decoded confirmation; the CLI prompts for the password and a decoded review. See [The agent](/docs/rootwallet/agent).
+
+## Network and RPC
+
+The apps and CLI read chains through functions on the RootWallet Orama namespace, so no provider key ships in a build. On the CLI you can override one network with `RW_RPC_URL_<NETWORK>` or `rpc.urls` in `~/.rootwallet/config.json`; a custom endpoint must prove it is the right chain (`eth_chainId`, genesis hash or genesis block), must be https unless it is loopback, and must not embed credentials.

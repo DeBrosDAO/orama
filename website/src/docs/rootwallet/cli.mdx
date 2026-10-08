@@ -1,0 +1,93 @@
+# CLI reference (`rw`)
+
+`rw` is RootWallet in the terminal (package `@debros/root-cli`). Run `rw <command> --help` for anything not listed. Many read commands accept `--json`.
+
+## Wallet and session
+
+| Command | What it does |
+|---|---|
+| `rw init [--force] [--mnemonic-file <path>] [--test-wallet [--adopt] [--mnemonic-out <path>]]` | Create a wallet |
+| `rw import [--force]` | Import a recovery phrase |
+| `rw unlock [--ttl <minutes>]` | Start a session (1 to 1440 minutes, default 30) |
+| `rw lock` | End the session |
+| `rw change-password` | Change the wallet password |
+| `rw export` | Print the recovery phrase. Refuses a non-terminal unless `RW_ALLOW_INSECURE_EXPORT=1` |
+
+## Accounts
+
+| Command | What it does |
+|---|---|
+| `rw accounts [--json] [--archived]` | List accounts |
+| `rw address [--chain evm / solana / bitcoin / orama] [--anchor] [--json]` | Show an address |
+| `rw account create`, `switch <index>`, `rename <index> <name>`, `delete <index>`, `restore` | Manage accounts (delete archives) |
+| `rw account import [--chain evm / solana / bitcoin]` | Import a single private key |
+| `rw account export <index or name> --chain <c> [--xprv]` | Export a private key |
+
+## Chains and money
+
+| Command | What it does |
+|---|---|
+| `rw network`, `rw network list`, `rw network set <id>` | Show or change the network |
+| `rw balance [--chain] [--strict] [--json]` | Balance. `--strict` exits non-zero when a Bitcoin balance is only a lower bound |
+| `rw tokens [--chain] [--token <addr>] [--json]` | Token balances |
+| `rw send <to> <amount> [--chain evm / solana / bitcoin / orama] [--token <addr>] [--allow-off-curve] [--memo <text>] [--tip <norama>]` | Send |
+| `rw tx <hash> [--chain] [--json]` | Look up a transaction |
+| `rw history [--chain] [--limit n] [--json]` | History |
+| `rw airdrop [--amount <sol>]` | Test SOL on devnet or testnet |
+| `rw btc rescan [--mode rescan / resume / refresh] [--max-index n] [--json]` | Discover Bitcoin addresses |
+| `rw btc addresses [--branch receive / change / all] [--used] [--json]` | List Bitcoin addresses |
+
+## Signing, NFTs, ORAMA
+
+| Command | What it does |
+|---|---|
+| `rw sign <message> [--chain evm / solana] [--account <index>]` | Sign a message. Refuses reserved Orama formats |
+| `rw verify <message> <signature> [--address <addr>] [--chain]` | Verify |
+| `rw nft list [--chain] [--contract <addr>]`, `show <address> [tokenId]`, `send <address> <tokenId> <to>` | NFTs |
+| `rw stake delegate`, `undelegate <validator> <amt>`, `redelegate <from> <to> <amt>`, `withdraw-rewards <validator>` | Staking (add `--chain orama`, `--memo`, `--tip`) |
+| `rw vote <proposal> yes / no / abstain --chain orama [--house token / operator]` | Governance vote |
+
+## Vault
+
+| Command | What it does |
+|---|---|
+| `rw vault add <site> [--template pin]`, `get`, `list`, `rotate`, `rm` | Logins |
+| `rw vault import-csv <file>` | Import a Bitwarden CSV |
+| `rw vault export [--output <file>]`, `rw vault import <file>` | Encrypted export and import |
+| `rw vault ssh add <host[:port]/user> [--label]`, `get [--pub] [--priv]`, `list`, `connect`, `exec <target> -- <cmd>`, `provision`, `agent-load [targets] [--all] [--ttl]`, `rotate`, `rm [-y]`, `import <pem>` | SSH keys |
+| `rw vault note add`, `get <title>`, `list`, `rm <title>` | Secure notes |
+| `rw vault card add`, `get <label>`, `list`, `rm <label>` | Payment cards |
+| `rw vault totp list`, `get <label>`, `add <label>`, `rm <label> [--yes]` | Authenticator codes |
+| `rw vault sync enable`, `now`, `status`, `disable` | Development builds only |
+
+## Utilities
+
+| Command | What it does |
+|---|---|
+| `rw test-agent start --dir <dir> --approve-orama <path>`, `stop --dir <dir> [--purge]` | Run the headless development agent |
+| `rw completion bash / zsh / fish` | Shell completion |
+| `rw --version` | Version |
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 1 | User or other error |
+| 2 | Transient failure (RPC, unfinished scan, vault busy) |
+| 3 | Authentication failure |
+| 4 | Not found |
+
+`RW_DEBUG=1` prints stack traces.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `ROOTWALLET_PASSWORD` | Non-interactive wallet password for unlock and init |
+| `RW_RPC_URL_<NETWORK>` | Custom endpoint for one network |
+| `RW_ORAMA_NS_URL` | Loopback-only namespace override |
+| `RW_ORAMA_READ_URL`, `RW_ORAMA_CA_FILE` | ORAMA read proxy and a CA bundle for your own proxy |
+| `RW_ALLOW_INSECURE_EXPORT` | Allow `rw export` to a non-terminal |
+| `RW_AGENT_SOCK` | Agent socket path (used by clients of the agent) |
+
+`~/.rootwallet/config.json` holds `rpc.urls`, the network selection and ORAMA options. The old `rpc.heliusApiKey` and `rpc.alchemyApiKey` keys are refused. The CLI itself never connects to the agent socket.

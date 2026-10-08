@@ -1,0 +1,37 @@
+# Token factory
+
+`x/token` lets anyone create a token without writing a contract. A token is a bank denom named `factory/<creator address>/<subdenom>` and its balances live in the normal bank module.
+
+## Creating a token
+
+`CreateToken` takes:
+
+- `subdenom`, 2 to 44 characters
+- `name` (up to 64), `symbol` (up to 16), `description` (up to 256)
+- capability flags: `mint`, `freeze`, `permanent_delegate`, `transfer_fee_bps` (0 to 10,000), `non_transferable`, `pause`, `transfer_hook`
+
+It burns a **10 ORAMA** creation fee and locks a **metadata deposit** of 68,359 norama per byte of the text fields (about 0.07 ORAMA per KiB). Deleting the token returns 99% of the deposit to earnings and burns 1%.
+
+## What the creator can do
+
+| Message | Rule |
+|---|---|
+| `Mint` | The creator, while it still holds the mint capability |
+| `Burn` | Burns from the signer's own bank balance |
+| `Transfer` | A bank send with the pause, non-transferable, freeze and transfer-fee checks. `from` must be the signer unless the signer is the permanent delegate |
+| `SetFrozen`, `SetPaused` | The creator, while it holds those capabilities |
+| `Renounce` | Gives a capability up for good. The permanent delegate alone renounces its own |
+| `SetShieldable` | A one-way flag. Refused while freeze, permanent delegate or pause is held. The shielded pool moves ORAMA only, so this does not shield tokens |
+| `DeleteToken` | Only when supply is zero |
+
+Capabilities can only be dropped, never added or reassigned. There is no module-level admin key.
+
+## What it cannot do
+
+- A token cannot mint `norama`. Only `x/emission` can, and a mint of a `norama`-named denom here is refused.
+- The transfer hook is a Go interface limited to 100,000 gas. The hook wired in the binary does nothing.
+- A contract can create, mint and burn tokens through the `token` binding, again never `norama`. See [Contracts](/docs/blockchain/contracts).
+
+## Queries
+
+`Params`, `Token` and `Frozen` are public. The invariants tie each token's `issued` to the bank supply and each deposit to its `token/{denom}` entry.

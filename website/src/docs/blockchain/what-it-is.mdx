@@ -1,38 +1,53 @@
 # What the chain is
 
-Orama has a ledger. The binary is `oramad`. It is a Cosmos SDK 0.54 application on CometBFT 0.39, in its own Go module at `chain/`. The node software in `core/` does not import it. It only reads the chain's local RPC when it wants a height.
+Orama has a ledger. The binary is `oramad`. It is a Cosmos SDK 0.54 application on CometBFT 0.39, in its own Go module at `chain/`. The node software in `core/` does not import it. It talks to the chain only through the chain's RPC and REST endpoints.
 
-Application traffic does not go through this ledger. A database query, a deploy, a function call, and a wallet login still hit the gateway. The chain is a separate process with its own token, its own peers, and its own ports.
+Application traffic does not go through this ledger. A database query, a deploy, a function call and a wallet sign-in all hit a gateway. The chain is a separate process with its own token, its own peers and its own ports. You can run an Orama cluster for years and never start it.
+
+**Status: devnet, stagenet and localnet only.** The code is complete enough to run those networks. Nothing here has run on a public network, and no ORAMA has value outside a test. This release is state-breaking: a chain running an older build cannot load its state, so a running test chain restarts from a new genesis.
+
+## What it is for
+
+The chain is the place where things that must not depend on one operator are recorded:
+
+- **Who is a node, and what it promised.** Operators register nodes, take roles (validator, storage, relay, exit, directory authority, archiver) and lock a bond. See [Nodes, roles and bonds](/docs/blockchain/nodes).
+- **Storage deals.** A user pays escrow, providers hold encrypted pieces and prove they still have them every epoch. See [Storage deals](/docs/blockchain/storage-deals).
+- **Rewards.** New ORAMA is minted on a fixed schedule and paid to validators, with ceilings reserved for storage, relay and development. See [Supply and emission](/docs/blockchain/supply).
+- **Governance.** Two houses vote on the few things that may change. See [Governance](/docs/blockchain/governance).
+- **Assets.** Tokens, compressed NFTs, a marketplace, a shielded pool and CosmWasm contracts.
 
 ## What is wired
 
-Auth, bank, staking, slashing, distribution, consensus parameters, upgrade, genesis utilities, evidence, and feegrant. Three Orama modules sit on top of those:
+Standard Cosmos modules: `auth`, `bank`, `staking`, `slashing`, `distribution`, `consensus`, `upgrade`, `genutil`, `evidence`, `feegrant`.
 
-- `x/emission` mints new coins, once per epoch.
-- `x/fees` charges a base fee, burns it, and keeps earnings accounts.
-- `x/power` decides the voting power CometBFT actually uses.
+Orama modules: `emission`, `power`, `fees`, `token`, `archive`, `nodes`, `cnft`, `market`, `houses`, `storage`, `relay`, `shielded`, and `wasmpolicy`. CosmWasm (`wasm`) is wired in builds made with cgo and libwasmvm. Inclusion lists (`inclusion`) are wired but off until a genesis sets a vote-extension height.
 
-`x/staking` still holds bonds, delegations, unbonding, and jailing. It does not publish the validator set. `x/power` does.
+[The modules](/docs/blockchain/modules) says what each one does and links to its page.
 
 ## What is not wired
 
-There is no governance module. Nothing on the chain can vote to change the emission table. The code treats that change as a hard fork.
+- No stock `x/gov`. Governance is `x/houses`. Every authority-gated message of a stock module (software upgrade, parameter updates) names an authority address nobody can sign for, so those messages are unreachable until a release deliberately hands the authority to the houses.
+- No IBC, no EVM, no `x/mint` (replaced by `x/emission`), no `x/authz`, no `x/group`, no stock `x/nft`.
+- `x/confidential` (confidential-compute attestation) exists as a package that refuses every attestation. It is not wired.
+- `x/vpnlaunch` is a launch-gate predicate, not a module.
 
-There is no IBC, no EVM, no CosmWasm, no NFT module, no group module, and no authz. The stock mint module is not wired. `x/emission` replaces it.
+## Two rules to know before reading further
 
-Shielded transfers are not implemented. Fee comments refer to a shielding design. No module in this binary hides a transfer.
+**You cannot pay another user directly.** A bank send of `norama` from one user account to another is refused, and so is a send from a contract to a user. Modules can pay anyone, and a user can pay a contract. Protocol payouts (emission, tips, sale proceeds, royalties) land in a restricted *earnings account*, which can pay fees, bonds and deals but cannot be sent to someone else. The private way to move value between users is the [shielded pool](/docs/blockchain/shielded). On a node that does not have both shielded verifiers, a user cannot pay another user at all.
 
-The distribution module is wired, and its community tax is set to zero, because there is no governance module that could spend a community pool. Epoch rewards are not paid through that module. `x/power` pays them.
+**Nothing changes by admin key.** There is no admin, no pause, no freeze, no multisig. The only ways the chain's behaviour changes are a passed governance proposal inside the bounds the code allows, or a coordinated hard fork.
 
 ## Addresses and the unit
 
-Accounts use the `orama` prefix. A normal account looks like `orama1…`. A validator operator looks like `oramavaloper1…`.
+Accounts use the `orama` prefix: `orama1…`. A validator operator is `oramavaloper1…` and a consensus address is `oramavalcons1…`. Keys are secp256k1, signed with `SIGN_MODE_DIRECT`.
 
-The base unit is `norama`. One ORAMA is 1,000,000,000 norama. The bond denomination is `norama`. Key derivation currently uses BIP-44 coin type 118, the Cosmos default. The code marks that coin type as temporary.
+The base unit is `norama`. One ORAMA is 1,000,000,000 norama (9 decimals). BIP-44 coin type is 118 (the Cosmos default), a placeholder that lives in exactly one place in the code so changing it later touches one line.
 
 ## Where to go next
 
-- [Supply](/docs/blockchain/supply)
+- [The modules](/docs/blockchain/modules)
+- [Supply and emission](/docs/blockchain/supply)
 - [Fees](/docs/blockchain/fees)
-- [Validators](/docs/blockchain/validators)
+- [Validators and staking](/docs/blockchain/validators)
+- [Reading the chain](/docs/blockchain/reading-the-chain)
 - [Running a chain node](/docs/blockchain/running)

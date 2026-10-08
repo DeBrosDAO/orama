@@ -1,0 +1,35 @@
+# NFTs and the market
+
+Two modules handle NFTs on the chain. `x/cnft` stores *compressed* NFTs, millions of them for the price of one small tree. `x/market` lets owners sell them at a fixed price or to a bidder, with the creator's royalty paid automatically. A separate, fully on-contract path exists too: the CW721 standard contract (see [Contracts](/docs/blockchain/contracts)).
+
+## Compressed NFTs (`x/cnft`)
+
+A compressed NFT is a leaf in a concurrent Merkle tree. The chain stores only the tree's root and a small change log. Leaves are not stored: each is rebuilt from the transactions that created it, and a proof of the leaf's path proves ownership. The leaf hash is a SHA-256 over `asset_id`, owner, delegate, metadata CID, creator hash, nonce and hash id.
+
+**Tree shape.** Depth 1 to 30, buffer 1 to 2,048 (how many changes can race before a proof goes stale), canopy under the depth and at most 14. A mint batch is up to 64 leaves. A metadata CID is at most 128 bytes.
+
+| Message | What it does |
+|---|---|
+| `CreateCollection` | A named collection with a royalty (up to 10,000 bps) that is fixed at creation |
+| `CreateTree` | Makes a tree for a collection. Locks a deposit of 1 norama per modelled byte of tree state |
+| `Mint` | The creator mints leaves. The `root` it names must still be in the change buffer |
+| `Transfer` | The owner or delegate moves a leaf, with a Merkle proof |
+| `Burn`, `UpdateMetadata` | As named |
+| `Decompress` / `Compress` | Turn a leaf into a handle stored on chain, and back |
+| `RecordSnapshot` | Records a content id for a tree. Opens no storage deal |
+
+There is no admin key and no parameter that can be changed. There are no events: the indexer replays the messages to rebuild ownership. `GET /v1/chain/index/cnft/assets/{id}` and `…/cnft/owners/{addr}/assets` serve that index.
+
+## The market (`x/market`)
+
+| Message | What it does |
+|---|---|
+| `List` | The seller lists a leaf at a price. Nothing is locked or escrowed: the NFT stays with the seller and ownership is proven again at settlement |
+| `CancelListing` | Removes a listing |
+| `Bid` | Escrows the bid amount from the bidder's bank balance in the market module account. A seller cannot bid on their own listing |
+| `CancelBid` | Returns a bid |
+| `Settle` | With `bid_id` 0 the signer buys at the list price from their bank balance. Otherwise the seller accepts a bid and the other bids are refunded |
+
+At settlement the royalty (`price x royalty_bps / 10000`, rounded down) goes to the collection creator's earnings and the rest goes to the seller's earnings. There is no market fee and no burn. A direct bank send between users is refused, but this payment is made by the market module, and modules can pay anyone.
+
+Queries: `Listing` and `Bid` are public. An invariant checks that the market module account holds exactly the open bids.

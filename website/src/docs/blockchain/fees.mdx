@@ -1,22 +1,69 @@
 # Fees
 
-Every transaction pays a base fee. The base fee behaves like EIP-1559.
+Every transaction pays a base fee. The base fee behaves like EIP-1559, with integer arithmetic in `norama` per unit of gas.
 
-- The target is a block that is half full.
+- The target is a block that is half full (`target_block_gas_fraction` = 0.5).
 - The base fee can move by at most 12.5% from one block to the next.
-- The floor is 1 norama per unit of gas. Genesis starts the base fee at that floor.
+- The floor is 1 norama per unit of gas, and genesis starts the base fee there. That floor is a placeholder with no dollar peg.
 - 100% of the base fee is burned.
+- Fee adjustment needs the consensus `max_gas` to be set. The localnet and stagenet scripts set it to 100,000,000. If it is unset the base fee stays where it is.
 
-A tip, if the sender adds one, is credited to the block proposer's earnings account. The tip must be paid from the sender's public bank balance. It cannot be paid from earnings. A fee granter can sponsor the base fee from their own bank balance only. A granter cannot draw on earnings.
+A transaction must declare at least `base fee x gas limit`. Anything above that is a tip, and the tip goes to the block proposer's earnings account. If the proposer cannot be resolved the whole fee is burned.
 
-## Earnings
+## Who pays, in what order
 
-Rewards and tips are credited to an earnings account, not to the normal bank balance. Earnings can pay a base fee, and they can be bonded. They cannot be sent as an ordinary payment. That restriction is what stops a reward from becoming a transfer to an arbitrary address.
+| Part | Paid from |
+|---|---|
+| Tip | The payer's public bank balance only |
+| Base fee | Bank balance first, then the hot key's fee-only balance, then the payer's earnings |
+| Base fee with a fee granter (`feegrant`) | The granter's bank balance only. A granter cannot draw on earnings |
+
+There is also a local, per-validator policy: `minimum-gas-prices = 0.000001norama` in `app.toml`. It applies to a node's mempool on CheckTx only and never during simulation. It sits on top of the chain-wide base fee, not instead of it.
+
+## Earnings accounts
+
+Rewards, tips, sale proceeds, royalties and relay pay are credited to an *earnings account* in `x/fees`, not to the ordinary bank balance. This is how the chain pays people without letting a reward become a transfer to an arbitrary address.
+
+Earnings can pay:
+
+- base fees
+- the signer's own bonds: staking, node bonds
+- the signer's own storage deals and token-creation fees
+- deposits
+- a move into the shielded pool (`MsgShieldEarnings`)
+- funding a node's hot key (`MsgFundHotKey`)
+
+Earnings cannot pay a tip and cannot be sent to another user. Bonding and deal messages top up a shortfall in the signer's bank balance from the signer's own earnings inside the same message, all or nothing.
+
+## Hot-key fee balances
+
+A node signs with a *hot key* that holds no ORAMA of its own beyond a fee-only balance. That balance can pay base fees and nothing else. It is funded by `MsgFundHotKey` or by a shielded `FEE_TOPUP` unshield.
 
 ## State deposits
 
-Some state is paid for with a deposit. When that state is released, 99% of the deposit is refunded to the owner's earnings account and 1% is burned.
+Some state is paid for with a deposit that is locked as long as the state exists. When the state is released, 99% of the deposit is refunded to the owner's earnings account and 1% is burned (`deposit_refund_fraction` 0.99, `deposit_burn_fraction` 0.01).
+
+| State | Deposit |
+|---|---|
+| Token metadata | 68,359 norama per byte of text (about 0.07 ORAMA per KiB) |
+| Node registration | 68,359 norama per byte (`deposit_per_byte`) |
+| cNFT tree | 1 norama per modelled byte of tree state |
+| Contract storage | 68,359 norama per byte, one chunk per payer per contract |
+
+## Other fees you will meet
+
+| Fee | Amount | Where it goes |
+|---|---|---|
+| Create a token | 10 ORAMA | Burned |
+| Open a storage deal | 1,000 norama (`deal_fee`) plus the escrow | Fee burned, escrow held until settled |
+| Storage service payment | 90% provider, 5% burn, 5% archive fund | See [Storage deals](/docs/blockchain/storage-deals) |
+| Shielded nullifier | 0.001 ORAMA per nullifier | Burned |
+| Shielded gas | `action_gas` 250,000 per action at the base fee | Burned, remainder to the proposer as a tip |
+
+## Queries
+
+`params`, `base-fee`, `earnings [address]`, `deposit [id]` and `invariants`. The invariants check that earnings plus fee-only balances equal the `fees` module balance, that open deposits equal the deposits module balance, and that burned plus distributed equals collected.
 
 ## What fees are not
 
-App hosting, databases, functions, and storage on the Orama gateway are not metered by this chain. Nothing in the gateway charges `norama` for a request. The business-model sentence in the whitepaper still holds for the platform: there is no billing there yet. Chain fees apply only to transactions on `oramad`.
+App hosting, databases, functions and storage on the Orama gateway are not metered by this chain. Nothing in a gateway charges `norama` for a request, and there is no billing in the platform yet. Chain fees apply only to transactions on `oramad`.
