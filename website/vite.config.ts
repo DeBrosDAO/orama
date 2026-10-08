@@ -77,10 +77,8 @@ function docsSearchIndexPlugin(): Plugin {
             const slug = relative.replace(/\.mdx$/, "");
             const raw = fs.readFileSync(fullPath, "utf-8");
 
-            let persona = "developer";
-            if (slug.startsWith("operator/")) persona = "operator";
-            else if (slug.startsWith("contributor/")) persona = "contributor";
-            else if (slug.startsWith("blockchain/")) persona = "blockchain";
+            // The first folder is the section: start, developer, operator, ...
+            const persona = slug.split("/")[0];
 
             const titleMatch = raw.match(/^#\s+(.+)$/m);
             const pageTitle = titleMatch?.[1] ?? slug;

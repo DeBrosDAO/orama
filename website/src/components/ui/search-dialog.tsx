@@ -9,17 +9,25 @@ import type { Persona } from "../../types/persona";
 import { cn } from "../../lib/utils";
 
 const PERSONA_LABELS: Record<Persona, string> = {
+  start: "Start",
   developer: "Dev",
   operator: "Ops",
-  contributor: "Contrib",
+  architecture: "Arch",
   blockchain: "Chain",
+  privacy: "Privacy",
+  rootwallet: "Wallet",
+  contributor: "Contrib",
 };
 
 const PERSONA_COLORS: Record<Persona, string> = {
+  start: "text-accent bg-accent/10",
   developer: "text-accent bg-accent/10",
   operator: "text-accent-2 bg-accent-2/10",
-  contributor: "text-muted bg-surface-2",
+  architecture: "text-accent-2 bg-accent-2/10",
   blockchain: "text-accent bg-accent/10",
+  privacy: "text-accent-2 bg-accent-2/10",
+  rootwallet: "text-accent bg-accent/10",
+  contributor: "text-muted bg-surface-2",
 };
 
 type SearchResult =

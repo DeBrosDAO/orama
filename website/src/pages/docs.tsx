@@ -8,7 +8,7 @@ import { MDXProvider } from "@mdx-js/react";
 import { LoadingSpinner } from "../components/ui/loading-spinner";
 import { DOCS_SECTIONS } from "../data/docs-navigation";
 
-const DEFAULT_SLUG = "developer/getting-started";
+const DEFAULT_SLUG = "start/what-is-orama";
 
 /** All known doc slugs for resolving titles */
 const SLUG_TITLE_MAP = new Map(

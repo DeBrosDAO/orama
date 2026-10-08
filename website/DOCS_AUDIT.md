@@ -49,10 +49,11 @@ pages say so plainly.
    grouping, no place for security/architecture, privacy, or RootWallet. The sidebar,
    search dialog, search-index plugin (`vite.config.ts`) and `build-llms.mjs` all
    hard-code the persona set and the five chain page file names.
-7. **There is no diagram support.** The renderer is plain MDX + GFM. Pages contain
-   ` ```mermaid ` fences (for example `developer/domains.mdx`) that render as raw code.
-   Diagrams must be text diagrams in code blocks, or the site needs a renderer. This
-   rewrite uses text diagrams.
+7. **Diagrams are supported and under-used.** The code-block renderer turns a
+   ` ```mermaid ` fence into a diagram (`src/components/ui/mermaid.tsx`); code in other
+   languages is highlighted by shiki (typescript, javascript, bash, json, go, yaml, html,
+   css, sql, toml, ini). Only a handful of pages use diagrams. The rewrite uses mermaid for
+   flows and sequences, and plain text blocks for layouts.
 
 ## 2. Page-by-page verdicts (existing pages)
 
@@ -71,7 +72,7 @@ REWRITE, REPLACE (generate from source), MOVE (re-home in the new tree).
 | cache | UPDATE | Missing namespace quotas and scopes; accurate otherwise. |
 | storage | REWRITE | No relayed fetch, no fetch capabilities (`/v1/storage/fetch-caps`, `X-Orama-Fetch-Cap`), no storage deals on-chain, no quota/GC behaviour, `/v1/storage/get` now always sends `Content-Length`. |
 | functions | UPDATE | Needs `function triggers`, `versions`, `enable/disable`, `logs`, host-function table from `SERVERLESS.md` (`anon_fetch`, `storage_fetch_cap_mint`, push), secrets, limits. |
-| domains | UPDATE | Mermaid block does not render. Hard-codes `orama-devnet.network` / `orama-testnet.network` as "the" environments. Needs custom-domain TXT flow checked against `orama domain`. |
+| domains | UPDATE | Hard-codes `orama-devnet.network` / `orama-testnet.network` as "the" environments. Needs custom-domain TXT flow checked against `orama domain`. |
 | webrtc | REWRITE | Uses `?api_key=` on the signalling URL; current model is identity, admission, join tickets, kicks with a generation (`WEBRTC.md`, "Identity, admission and moderation"; migration 075). No stealth TURN, no room placement, no TURN multi-tenancy. |
 | sdk-reference | REWRITE | See headline 5. |
 | cli-reference | REPLACE | See headline 4. |
@@ -218,6 +219,6 @@ Confirmed against the tree on this branch:
   `docs/CLI_REFERENCE.md` into `website/src/docs/developer/cli/*.mdx`.
 - Every prose page is written from the code and engineering doc named above. Commands
   and flags are checked against `docs/CLI_REFERENCE.md`.
-- Text diagrams only (no mermaid renderer).
+- Mermaid for flows and sequences (the renderer supports it); text blocks for layouts.
 - Hosts in examples use `example.com`, `203.0.113.x` (documentation range) and
   `<node-ip>` placeholders. No production IPs, secrets or credentials.
