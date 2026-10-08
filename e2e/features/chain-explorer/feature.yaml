@@ -1,0 +1,32 @@
+# Stage 8: the gateway's /v1/chain/ account and validator reads that the website
+# explorer (website/src/explorer/data/chain) calls: bank balances, staking
+# validators, delegations and unbonding by address, each answered by the node's
+# SDK REST API through the proxy with a fixed page size and no caller query, and
+# the indexer routes added for it (the newest transactions, hourly statistics,
+# an account's summary). The REST routes are checked against the run's own
+# validators (the bank balance equals `orama chain balance`'s answer, the
+# validator set holds the run's validators bonded) and every refusal (a
+# malformed address, a caller query, another method) is checked for its status.
+# The run chain has no indexer service (e2e/scripts/chain-deploy.sh installs
+# none), so the index tests run on a target whose /v1/chain/index/status
+# answers and are reported not covered otherwise.
+id: chain-explorer
+title: Explorer reads through the gateway - balances, validators, index
+area: chain
+subtasks: [2776]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/chain/
+  claims:
+    - "docs/CHAIN.md#the-gateways-chain-proxy: GET /v1/chain/bank/balances/{address} is the node's REST bank balances of the address, at most 100 denoms"
+    - "docs/CHAIN.md#the-gateways-chain-proxy: GET /v1/chain/staking/validators is the node's REST staking validators, at most 200"
+    - "docs/CHAIN.md#the-gateways-chain-proxy: GET /v1/chain/staking/delegations/{address} and /v1/chain/staking/unbonding/{address} are the address's delegations and unbonding delegations"
+    - "docs/CHAIN.md#the-gateways-chain-proxy: the account and validator routes take no query and answer 404 for a malformed address"
+    - "docs/CHAIN.md#module-queries-over-rest: every Orama module serves its queries over the node's REST API at the google.api.http paths of its query.proto"
+    - "docs/CHAIN.md#chain-indexer-orama-global-indexer: GET /index/v1/txs, /index/v1/stats and /index/v1/accounts/{address} answer the newest transactions, 48 hourly buckets and an account's transaction count and dates"

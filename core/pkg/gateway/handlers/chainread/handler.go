@@ -250,6 +250,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.serveQuery(w, r, name)
 		return
 	}
+	if p.serveREST(w, r, rest) {
+		return
+	}
 	if !knownRoute(rest) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return

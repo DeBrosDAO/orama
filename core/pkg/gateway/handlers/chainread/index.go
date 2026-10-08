@@ -30,7 +30,7 @@ var (
 // serveIndex matches one indexer route. Each route builds its own upstream
 // path from values it has validated; the caller's path is never forwarded.
 func (p *Proxy) serveIndex(w http.ResponseWriter, r *http.Request, rest string) {
-	upstream, paged, ok := indexRoute(strings.Split(rest, "/"))
+	upstream, kind, ok := indexRoute(strings.Split(rest, "/"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
@@ -45,39 +45,72 @@ func (p *Proxy) serveIndex(w http.ResponseWriter, r *http.Request, rest string) 
 		return
 	}
 	var q url.Values
-	if paged {
-		if q, ok = pageQuery(r); !ok {
-			writeErr(w, http.StatusBadRequest, "bad query")
-			return
-		}
-	} else if r.URL.RawQuery != "" {
+	switch kind {
+	case queryPaged:
+		q, ok = pageQuery(r)
+	case queryLimit:
+		q, ok = limitQuery(r)
+	default:
+		ok = r.URL.RawQuery == ""
+	}
+	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad query")
 		return
 	}
 	p.forward(w, r, p.index, upstreamIndexBase+upstream, q)
 }
 
-// indexRoute returns the upstream path after /index/v1/ and whether the
-// route takes page and limit. A segment that fails validation is no route.
-func indexRoute(segs []string) (string, bool, bool) {
+// What query an index route takes: none, page and limit, or limit alone.
+const (
+	queryNone = iota
+	queryPaged
+	queryLimit
+)
+
+// indexRoute returns the upstream path after /index/v1/ and the query the route
+// takes. A segment that fails validation is no route.
+func indexRoute(segs []string) (string, int, bool) {
 	switch {
 	case len(segs) == 1 && segs[0] == "status":
-		return "status", false, true
+		return "status", queryNone, true
+	case len(segs) == 1 && segs[0] == "stats":
+		return "stats", queryNone, true
+	case len(segs) == 1 && segs[0] == "txs":
+		return "txs", queryLimit, true
 	case len(segs) == 2 && segs[0] == "blocks":
 		h, ok := parsePositive(segs[1])
-		return "blocks/" + strconv.FormatInt(h, 10), false, ok
+		return "blocks/" + strconv.FormatInt(h, 10), queryNone, ok
 	case len(segs) == 2 && segs[0] == "txs":
 		hash, ok := parseTxHash(segs[1])
-		return "txs/" + hash, false, ok
+		return "txs/" + hash, queryNone, ok
+	case len(segs) == 2 && segs[0] == "accounts":
+		return "accounts/" + segs[1], queryNone, accountPattern.MatchString(segs[1])
 	case len(segs) == 3 && segs[0] == "accounts" && segs[2] == "txs":
-		return "accounts/" + segs[1] + "/txs", true, accountPattern.MatchString(segs[1])
+		return "accounts/" + segs[1] + "/txs", queryPaged, accountPattern.MatchString(segs[1])
 	case len(segs) == 3 && segs[0] == "cnft" && segs[1] == "assets":
-		return "cnft/assets/" + strings.ToLower(segs[2]), false, hash32Pattern.MatchString(segs[2])
+		return "cnft/assets/" + strings.ToLower(segs[2]), queryNone, hash32Pattern.MatchString(segs[2])
 	case len(segs) == 4 && segs[0] == "cnft" && segs[1] == "owners" && segs[3] == "assets":
-		return "cnft/owners/" + segs[2] + "/assets", true, accountPattern.MatchString(segs[2])
+		return "cnft/owners/" + segs[2] + "/assets", queryPaged, accountPattern.MatchString(segs[2])
 	default:
-		return "", false, false
+		return "", queryNone, false
 	}
+}
+
+// limitQuery accepts limit (1 to indexMaxLimit), at most once, and nothing else.
+func limitQuery(r *http.Request) (url.Values, bool) {
+	q, ok := singleQuery(r, "limit")
+	if !ok {
+		return nil, false
+	}
+	out := url.Values{}
+	if raw := q.Get("limit"); raw != "" {
+		n, good := parsePositive(raw)
+		if !good || n > indexMaxLimit {
+			return nil, false
+		}
+		out.Set("limit", strconv.FormatInt(n, 10))
+	}
+	return out, true
 }
 
 // pageQuery accepts page (1 to indexMaxPage) and limit (1 to indexMaxLimit),

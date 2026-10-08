@@ -60,8 +60,14 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.serveStatus(w, r)
 	case len(segs) == 2 && segs[0] == "blocks":
 		a.serveBlock(w, r, segs[1])
+	case len(segs) == 1 && segs[0] == "txs":
+		a.serveLatestTxs(w, r)
+	case len(segs) == 1 && segs[0] == "stats":
+		a.serveStats(w, r)
 	case len(segs) == 2 && segs[0] == "txs":
 		a.serveTx(w, r, segs[1])
+	case len(segs) == 2 && segs[0] == "accounts":
+		a.serveAccount(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == "accounts" && segs[2] == "txs":
 		a.serveAccountTxs(w, r, segs[1])
 	case len(segs) == 3 && segs[0] == "cnft" && segs[1] == "assets":
@@ -134,6 +140,50 @@ func (a *API) serveTx(w http.ResponseWriter, r *http.Request, raw string) {
 	}
 	t, found, err := a.store.Tx(hash)
 	answer(w, t, found, err)
+}
+
+// serveLatestTxs answers the newest transactions. It takes limit only: there is
+// no page, because the newest are what move.
+func (a *API) serveLatestTxs(w http.ResponseWriter, r *http.Request) {
+	limit, ok := limitQuery(w, r)
+	if !ok {
+		return
+	}
+	txs, err := a.store.LatestTxs(limit)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"limit": limit, "txs": txs})
+}
+
+func (a *API) serveStats(w http.ResponseWriter, r *http.Request) {
+	if !noQuery(w, r) {
+		return
+	}
+	hours, err := a.store.Stats()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	st, err := a.store.Status()
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	writeJSON(w, map[string]any{"start_height": st.StartHeight, "hours": hours})
+}
+
+func (a *API) serveAccount(w http.ResponseWriter, r *http.Request, addr string) {
+	if !noQuery(w, r) {
+		return
+	}
+	if !IsAccountAddress(addr) {
+		writeError(w, http.StatusBadRequest, "address must be a lowercase orama account address")
+		return
+	}
+	sum, found, err := a.store.Account(addr)
+	answer(w, sum, found, err)
 }
 
 func (a *API) serveAccountTxs(w http.ResponseWriter, r *http.Request, addr string) {
@@ -234,6 +284,36 @@ func pageQuery(w http.ResponseWriter, r *http.Request) (int, int, bool) {
 		}
 	}
 	return page, limit, true
+}
+
+// limitQuery accepts only limit, at most once, 1 to MaxLimit.
+func limitQuery(w http.ResponseWriter, r *http.Request) (int, bool) {
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "bad query")
+		return 0, false
+	}
+	limit := DefaultLimit
+	for k, vs := range q {
+		if k != "limit" {
+			writeError(w, http.StatusBadRequest, "unknown query parameter")
+			return 0, false
+		}
+		n, good := boundedInt(firstOf(vs), MaxLimit)
+		if len(vs) != 1 || !good {
+			writeError(w, http.StatusBadRequest, "limit is out of range")
+			return 0, false
+		}
+		limit = n
+	}
+	return limit, true
+}
+
+func firstOf(vs []string) string {
+	if len(vs) == 0 {
+		return ""
+	}
+	return vs[0]
 }
 
 var pageBounds = map[string]int{"page": MaxPage, "limit": MaxLimit}
