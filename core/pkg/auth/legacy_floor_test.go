@@ -10,65 +10,36 @@ import (
 	"time"
 )
 
-func TestVersionAtLeast(t *testing.T) {
-	for _, tc := range []struct {
-		have, min string
-		want      bool
-	}{
-		{"0.3.1", "0.3.1", true},
-		{"0.3.2", "0.3.1", true},
-		{"0.4.0", "0.3.1", true},
-		{"1.0.0", "0.3.1", true},
-		{"v0.3.1", "0.3.1", true},
-		{"0.3.1-rc1", "0.3.1", true},
-		{"0.3.1+build5", "0.3.1", true},
-		{"0.4.0.20261008", "0.3.1", true},
-		{"0.3.1.1", "0.3.1", true},
-		{"0.3.0", "0.3.1", false},
-		{"0.3", "0.3.1", false},
-		{"0.2.9", "0.3.1", false},
-		{"0.122.116", "0.3.1", true},
-		{"", "0.3.1", false},
-		{"dev", "0.3.1", false},
-		{"0.x.1", "0.3.1", false},
-		{"-1.0.0", "0.3.1", false},
-	} {
-		if got := versionAtLeast(tc.have, tc.min); got != tc.want {
-			t.Errorf("versionAtLeast(%q, %q) = %v, want %v", tc.have, tc.min, got, tc.want)
-		}
-	}
-}
-
-// floorOf is a LegacyFloor over the versions in *versions, counting reads.
-func floorOf(versions *[]string, clock *time.Time, reads *atomic.Int32) *LegacyFloor {
+// floorOf is a LegacyFloor over the stamp levels in *levels, counting reads.
+func floorOf(levels *[]int, clock *time.Time, reads *atomic.Int32) *LegacyFloor {
 	return &LegacyFloor{
 		Now: func() time.Time { return *clock },
-		Read: func(context.Context) ([]string, error) {
+		Read: func(context.Context) ([]int, error) {
 			reads.Add(1)
-			return *versions, nil
+			return *levels, nil
 		},
 	}
 }
 
-func TestLegacyFloor_acceptsWhileSomeNodeIsOlderThanTheNoncedRelease(t *testing.T) {
+func TestLegacyFloor_acceptsWhileSomeNodeDoesNotSignTheNoncedStamps(t *testing.T) {
 	clock := time.Now()
 	var reads atomic.Int32
 	for name, tc := range map[string]struct {
-		versions []string
-		accepts  bool
+		levels  []int
+		accepts bool
 	}{
-		"every node older":                  {[]string{"0.3.0", "0.3.0"}, true},
-		"one node older among new ones":     {[]string{NoncedStampsRelease, "0.3.0", "0.4.0"}, true},
-		"a node that has not said":          {[]string{NoncedStampsRelease, ""}, true},
-		"a node whose version is no number": {[]string{NoncedStampsRelease, "dev"}, true},
-		"every node at the release":         {[]string{NoncedStampsRelease, NoncedStampsRelease}, false},
-		"every node at or past it":          {[]string{NoncedStampsRelease, "0.4.0", "1.0.0"}, false},
-		"one node alone, at the release":    {[]string{NoncedStampsRelease}, false},
-		"a cluster with no node recorded":   {nil, false},
+		"every node legacy":                           {[]int{StampLevelLegacy, StampLevelLegacy}, true},
+		"a 0.122.x build (level 0) among nonced ones": {[]int{StampLevelNonced, StampLevelLegacy, StampLevelNonced}, true},
+		"a node that never reported (default 0)":      {[]int{StampLevelNonced, 0}, true},
+		"a level no build reports":                    {[]int{StampLevelNonced, -1}, true},
+		"every node nonced":                           {[]int{StampLevelNonced, StampLevelNonced}, false},
+		"a level past the nonced one":                 {[]int{StampLevelNonced, StampLevelNonced + 1}, false},
+		"one node alone, nonced":                      {[]int{StampLevelNonced}, false},
+		"a cluster with no node recorded":             {nil, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			versions := tc.versions
-			f := floorOf(&versions, &clock, &reads)
+			levels := tc.levels
+			f := floorOf(&levels, &clock, &reads)
 			if got := f.Accepts(); got != tc.accepts {
 				t.Fatalf("Accepts() = %v, want %v", got, tc.accepts)
 			}
@@ -79,13 +50,13 @@ func TestLegacyFloor_acceptsWhileSomeNodeIsOlderThanTheNoncedRelease(t *testing.
 func TestLegacyFloor_readsTheRegistryOncePerTTLAndFollowsAnUpgrade(t *testing.T) {
 	clock := time.Now()
 	var reads atomic.Int32
-	versions := []string{"0.3.0", NoncedStampsRelease}
-	f := floorOf(&versions, &clock, &reads)
+	levels := []int{StampLevelLegacy, StampLevelNonced}
+	f := floorOf(&levels, &clock, &reads)
 
 	if !f.Accepts() {
-		t.Fatal("the older stamps were refused with a node still on 0.3.0")
+		t.Fatal("the older stamps were refused with a node still on the legacy stamps")
 	}
-	versions = []string{NoncedStampsRelease, NoncedStampsRelease}
+	levels = []int{StampLevelNonced, StampLevelNonced}
 	for i := 0; i < 5; i++ {
 		clock = clock.Add(time.Second)
 		if !f.Accepts() {
@@ -110,14 +81,14 @@ func TestLegacyFloor_aRegistryThatCannotBeReadKeepsTheLastAnswerAndSaysSo(t *tes
 	clock := time.Now()
 	var logs []string
 	fail := errors.New("no leader")
-	versions := []string{NoncedStampsRelease}
+	levels := []int{StampLevelNonced}
 	f := &LegacyFloor{
 		Now: func() time.Time { return clock },
-		Read: func(context.Context) ([]string, error) {
+		Read: func(context.Context) ([]int, error) {
 			if fail != nil {
 				return nil, fail
 			}
-			return versions, nil
+			return levels, nil
 		},
 		Logf: func(format string, args ...any) { logs = append(logs, format) },
 	}
@@ -131,7 +102,7 @@ func TestLegacyFloor_aRegistryThatCannotBeReadKeepsTheLastAnswerAndSaysSo(t *tes
 	fail = nil
 	clock = clock.Add(legacyFloorTTL)
 	if f.Accepts() {
-		t.Fatal("every node is at the release and the registry answered, but the older stamps are accepted")
+		t.Fatal("every node is nonced and the registry answered, but the older stamps are accepted")
 	}
 	fail = errors.New("no leader")
 	clock = clock.Add(legacyFloorTTL)
@@ -144,16 +115,17 @@ func TestLegacyFloor_aRegistryThatCannotBeReadKeepsTheLastAnswerAndSaysSo(t *tes
 }
 
 // installFloor makes the verifiers and signers of this process follow a floor
-// over versions, for the test.
-func installFloor(t *testing.T, versions ...string) {
+// over stamp levels, for the test.
+func installFloor(t *testing.T, levels ...int) {
 	t.Helper()
 	clock := time.Now()
 	var reads atomic.Int32
-	InstallLegacyFloor(floorOf(&versions, &clock, &reads))
+	InstallLegacyFloor(floorOf(&levels, &clock, &reads))
 	t.Cleanup(func() { InstallLegacyFloor(nil) })
 }
 
-// Below the floor the older forms verify (a rolling upgrade); at it, a request
+// With a legacy node in the cluster the older forms verify (a rolling
+// upgrade); once every node is nonced, a request
 // whose nonced stamp was stripped is refused, and so is every older form.
 func TestCheckCoordination_theOlderStampsFollowTheFleetFloor(t *testing.T) {
 	key, now := v2Key(t), time.Now()
@@ -170,8 +142,8 @@ func TestCheckCoordination_theOlderStampsFollowTheFleetFloor(t *testing.T) {
 		return r
 	}
 
-	t.Run("below the floor", func(t *testing.T) {
-		installFloor(t, "0.3.0", NoncedStampsRelease)
+	t.Run("a legacy node in the cluster", func(t *testing.T) {
+		installFloor(t, StampLevelLegacy, StampLevelNonced)
 		if v, ok := CheckCoordination(key, strippedToV2(), now, testAudience); !ok || v != CoordinationV2 {
 			t.Fatalf("a v2 stamp from an older node: version %d ok=%v", v, ok)
 		}
@@ -179,8 +151,8 @@ func TestCheckCoordination_theOlderStampsFollowTheFleetFloor(t *testing.T) {
 			t.Fatalf("a v1 stamp from an older node: version %d ok=%v", v, ok)
 		}
 	})
-	t.Run("at the floor", func(t *testing.T) {
-		installFloor(t, NoncedStampsRelease, "0.4.0")
+	t.Run("every node nonced", func(t *testing.T) {
+		installFloor(t, StampLevelNonced, StampLevelNonced)
 		if _, ok := CheckCoordination(key, strippedToV2(), now, testAudience); ok {
 			t.Fatal("a request with its v3 stamp stripped verified on v2")
 		}
@@ -203,21 +175,21 @@ func TestCheckCoordination_theOlderStampsFollowTheFleetFloor(t *testing.T) {
 // be replayed on.
 func TestSignCoordination_writesTheOlderStampsOnlyWhileTheFloorIsBelowTheNoncedRelease(t *testing.T) {
 	key := v2Key(t)
-	installFloor(t, "0.3.0")
+	installFloor(t, StampLevelLegacy)
 	below := signedForPort(t, key, "http://10.0.0.1:10104/x")
 	for _, h := range []string{CoordinationMACV3Header, CoordinationMACV2Header, CoordinationMACHeader, CoordinationNonceHeader} {
 		if below.Header.Get(h) == "" {
-			t.Errorf("below the floor, %s was not written", h)
+			t.Errorf("with a legacy node, %s was not written", h)
 		}
 	}
-	installFloor(t, NoncedStampsRelease)
+	installFloor(t, StampLevelNonced)
 	at := signedForPort(t, key, "http://10.0.0.1:10104/x")
 	if at.Header.Get(CoordinationMACV3Header) == "" || at.Header.Get(CoordinationNonceHeader) == "" {
-		t.Error("at the floor, the v3 stamp was not written")
+		t.Error("with every node nonced, the v3 stamp was not written")
 	}
 	for _, h := range []string{CoordinationMACV2Header, CoordinationMACHeader} {
 		if at.Header.Get(h) != "" {
-			t.Errorf("at the floor, %s was still written", h)
+			t.Errorf("with every node nonced, %s was still written", h)
 		}
 	}
 }
@@ -230,8 +202,8 @@ func TestACME_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 		r.Header.Del(ACMENonceHeader)
 		return r
 	}
-	t.Run("below the floor", func(t *testing.T) {
-		installFloor(t, "0.3.0")
+	t.Run("a legacy node in the cluster", func(t *testing.T) {
+		installFloor(t, StampLevelLegacy)
 		if !VerifyACME(key, stripped(), body, now) {
 			t.Fatal("an older Caddy's stamp was refused with an older node in the cluster")
 		}
@@ -239,8 +211,8 @@ func TestACME_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 			t.Fatal("the unnonced stamp was not written")
 		}
 	})
-	t.Run("at the floor", func(t *testing.T) {
-		installFloor(t, NoncedStampsRelease)
+	t.Run("every node nonced", func(t *testing.T) {
+		installFloor(t, StampLevelNonced)
 		if VerifyACME(key, stripped(), body, now) {
 			t.Fatal("a captured call with its nonce stripped verified")
 		}
@@ -256,8 +228,8 @@ func TestACME_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 
 func TestNodeAPI_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 	now, body := time.Now(), []byte(`{}`)
-	t.Run("below the floor", func(t *testing.T) {
-		installFloor(t, "0.3.0")
+	t.Run("a legacy node in the cluster", func(t *testing.T) {
+		installFloor(t, StampLevelLegacy)
 		r := signedRequest(t, http.MethodPost, nodeRegisterPath, "node-a", body, now)
 		if r.Header.Get(NodeStampHeader) == "" {
 			t.Fatal("the unnonced stamp was not written")
@@ -268,8 +240,8 @@ func TestNodeAPI_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 			t.Fatalf("an old node's stamp was refused: %q %v", id, ok)
 		}
 	})
-	t.Run("at the floor", func(t *testing.T) {
-		installFloor(t, NoncedStampsRelease)
+	t.Run("every node nonced", func(t *testing.T) {
+		installFloor(t, StampLevelNonced)
 		r := signedRequest(t, http.MethodPost, nodeRegisterPath, "node-a", body, now)
 		if r.Header.Get(NodeStampHeader) != "" {
 			t.Fatal("the unnonced stamp was still written")
@@ -277,9 +249,9 @@ func TestNodeAPI_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 		// A captured request, stripped of its nonced stamp and given the
 		// unnonced one a replayer made from an older capture.
 		old := signedRequest(t, http.MethodPost, nodeRegisterPath, "node-a", body, now)
-		installFloor(t, "0.3.0")
+		installFloor(t, StampLevelLegacy)
 		legacy := signedRequest(t, http.MethodPost, nodeRegisterPath, "node-a", body, now)
-		installFloor(t, NoncedStampsRelease)
+		installFloor(t, StampLevelNonced)
 		old.Header.Set(NodeStampHeader, legacy.Header.Get(NodeStampHeader))
 		old.Header.Del(NodeStampV2Header)
 		old.Header.Del(NodeNonceHeader)
@@ -293,36 +265,59 @@ func TestNodeAPI_theUnnoncedStampFollowsTheFleetFloor(t *testing.T) {
 	})
 }
 
-func TestRegistryLegacyFloor_readsTheVersionsOfTheRegisteredNodes(t *testing.T) {
+func TestRegistryLegacyFloor_readsTheStampLevelsOfTheRegisteredNodes(t *testing.T) {
 	var gotQuery string
 	var gotArgs []any
-	f := RegistryLegacyFloor(versionQuerier(func(_ context.Context, dest any, query string, args ...any) error {
+	f := RegistryLegacyFloor(levelQuerier(func(_ context.Context, dest any, query string, args ...any) error {
 		gotQuery, gotArgs = query, args
 		rows := dest.(*[]struct {
-			Version string `db:"node_version"`
+			Level int `db:"stamp_level"`
 		})
 		*rows = append(*rows, struct {
-			Version string `db:"node_version"`
-		}{NoncedStampsRelease}, struct {
-			Version string `db:"node_version"`
-		}{"0.3.0"})
+			Level int `db:"stamp_level"`
+		}{StampLevelNonced}, struct {
+			Level int `db:"stamp_level"`
+		}{StampLevelLegacy})
 		return nil
 	}), nil)
-	versions, err := f.Read(context.Background())
-	if err != nil || len(versions) != 2 || versions[1] != "0.3.0" {
-		t.Fatalf("versions %v, %v", versions, err)
+	levels, err := f.Read(context.Background())
+	if err != nil || len(levels) != 2 || levels[0] != StampLevelNonced || levels[1] != StampLevelLegacy {
+		t.Fatalf("levels %v, %v", levels, err)
 	}
 	if !strings.Contains(gotQuery, "FROM dns_nodes") || len(gotArgs) != 1 {
 		t.Fatalf("query %q args %v: retired nodes must be left out", gotQuery, gotArgs)
 	}
-	f = RegistryLegacyFloor(versionQuerier(func(context.Context, any, string, ...any) error { return errors.New("no such column: node_version") }), nil)
-	if _, err := f.Read(context.Background()); err == nil || !strings.Contains(err.Error(), "node_version") {
+	f = RegistryLegacyFloor(levelQuerier(func(context.Context, any, string, ...any) error { return errors.New("no such column: stamp_level") }), nil)
+	if _, err := f.Read(context.Background()); err == nil || !strings.Contains(err.Error(), "stamp_level") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-type versionQuerier func(ctx context.Context, dest any, query string, args ...any) error
+type levelQuerier func(ctx context.Context, dest any, query string, args ...any) error
 
-func (q versionQuerier) Query(ctx context.Context, dest any, query string, args ...any) error {
+func (q levelQuerier) Query(ctx context.Context, dest any, query string, args ...any) error {
 	return q(ctx, dest, query, args...)
+}
+
+func TestHasCoordinationStamp(t *testing.T) {
+	for name, tc := range map[string]struct {
+		header string
+		want   bool
+	}{
+		"none":                         {"", false},
+		"v1":                           {CoordinationMACHeader, true},
+		"v2":                           {CoordinationMACV2Header, true},
+		"v3 alone":                     {CoordinationMACV3Header, true},
+		"a header that is not a stamp": {"X-Orama-Nonce", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, _ := http.NewRequest(http.MethodGet, "http://10.0.0.1/x", nil)
+			if tc.header != "" {
+				r.Header.Set(tc.header, "1.00")
+			}
+			if got := HasCoordinationStamp(r); got != tc.want {
+				t.Fatalf("HasCoordinationStamp = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }

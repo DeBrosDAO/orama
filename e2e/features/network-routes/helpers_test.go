@@ -25,11 +25,15 @@ const (
 	pathConnect    = "/v1/network/connect"
 	pathDisconnect = "/v1/network/disconnect"
 
-	// coordinationHeader switches the detail routes to the node-to-node
-	// path, which the handler answers 404 unless the MAC verifies and the
-	// caller is on the overlay (core/pkg/auth/coordination.go
-	// CoordinationMACHeader, core/pkg/gateway/network_detail_auth.go).
-	coordinationHeader = "X-Orama-Coordination-MAC"
+	// The coordination headers, one per stamp generation. Any of them switches
+	// the detail routes to the node-to-node path, which the handler answers 404
+	// unless the MAC verifies and the caller is on the overlay
+	// (core/pkg/auth HasCoordinationStamp, core/pkg/gateway/network_detail_auth.go).
+	// The v3 stamp is the one a node signs once every node is nonced, when the
+	// older two are no longer written (the legacy floor); the v1 header is the
+	// one a mixed fleet still carries.
+	coordinationHeader   = "X-Orama-Coordination-MAC"
+	coordinationV3Header = "X-Orama-Coordination-MAC-V3"
 	// macHexLen is the hex length of the HMAC-SHA256 the stamp carries.
 	macHexLen = 64
 

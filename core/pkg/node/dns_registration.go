@@ -16,7 +16,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
-	"github.com/DeBrosOfficial/network/pkg/version"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
 )
@@ -68,7 +67,7 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 		Environment:    n.config.Node.Environment,
 		OperatorWallet: n.config.Node.OperatorWallet,
 		Role:           n.installedRole(),
-		Version:        version.Current,
+		StampLevel:     auth.CurrentStampLevel,
 	}); err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}
@@ -121,7 +120,7 @@ func (n *Node) installLegacyFloor() {
 	adapter := n.getRQLiteAdapter()
 	if adapter == nil {
 		n.logger.ComponentWarn(logging.ComponentNode,
-			"No registry handle yet to read the nodes' versions from, so this node keeps writing the older inter-node stamps")
+			"No registry handle yet to read the nodes' stamp levels from, so this node keeps writing the older inter-node stamps")
 		return
 	}
 	auth.InstallLegacyFloor(auth.RegistryLegacyFloor(rqlite.NewClient(adapter.GetSQLDB()), func(format string, args ...any) {
@@ -219,7 +218,7 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 	registered, err := client.Heartbeat(ctx, nodeapi.HeartbeatRequest{
 		Role:        n.installedRole(),
 		Environment: n.config.Node.Environment,
-		Version:     version.Current,
+		StampLevel:  auth.CurrentStampLevel,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)

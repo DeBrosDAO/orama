@@ -93,14 +93,18 @@ func networkRoutesOtherNamespaceCredentialRefused(t *testing.T, opNS *ns.Namespa
 // forgedStamp is a coordination MAC of the right shape that no key made.
 // Set canonicalizes the name, so Get finds it again (a literal map key
 // spelled "...-MAC" would not be found by Get's "...-Mac").
-func forgedStamp() http.Header {
+func forgedStamp(header string) http.Header {
 	h := http.Header{}
-	h.Set(coordinationHeader, fmt.Sprintf("%d.%s", time.Now().Unix(), strings.Repeat("0", macHexLen)))
+	h.Set(header, fmt.Sprintf("%d.%s", time.Now().Unix(), strings.Repeat("0", macHexLen)))
 	return h
 }
 
+// stampHeaders are the stamp generations a node can carry: v1, which a mixed
+// fleet still writes, and v3, the only one written once every node is nonced.
+var stampHeaders = []string{coordinationHeader, coordinationV3Header}
+
 // TestNetworkDetail_forgedCoordinationStampIs404: a request carrying a
-// coordination stamp is judged by the stamp alone, and one that does not
+// coordination stamp (v1 or v3) is judged by the stamp alone, and one that does not
 // verify is 404 — from the internet (not the overlay) with or without a
 // valid session beside it, and from a node on the overlay (network_detail_auth.go).
 func TestNetworkDetail_forgedCoordinationStampIs404(t *testing.T) {
@@ -108,19 +112,23 @@ func TestNetworkDetail_forgedCoordinationStampIs404(t *testing.T) {
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{})
 	c := harness.GW(t)
-	for _, path := range detail {
-		for what, who := range map[string]tenancy.Cred{"no credential": {}, "owner session": tenancy.Owner(n)} {
-			if r := call(t, c, path, who, nil, forgedStamp()); r.Status != http.StatusNotFound {
-				t.Errorf("%s with a forged stamp and %s: HTTP %d, want 404: %.300s", path, what, r.Status, r.Body)
+	for _, header := range stampHeaders {
+		for _, path := range detail {
+			for what, who := range map[string]tenancy.Cred{"no credential": {}, "owner session": tenancy.Owner(n)} {
+				if r := call(t, c, path, who, nil, forgedStamp(header)); r.Status != http.StatusNotFound {
+					t.Errorf("%s with a forged %s and %s: HTTP %d, want 404: %.300s", path, header, what, r.Status, r.Body)
+				}
 			}
 		}
 	}
 	from, to := f.State.Nodes[0], f.State.Nodes[1]
 	for _, path := range detail {
-		stamp := coordinationHeader + ": " + forgedStamp().Get(coordinationHeader)
-		forged := edge.NodeCurl{URL: edge.OverlayGateway(to, path), Headers: []string{stamp}}.Run(t, f, from)
-		if forged.Status != http.StatusNotFound {
-			t.Errorf("%s over the overlay with a forged stamp: HTTP %d, want 404: %.300s", path, forged.Status, forged.Body)
+		for _, header := range stampHeaders {
+			stamp := header + ": " + forgedStamp(header).Get(header)
+			forged := edge.NodeCurl{URL: edge.OverlayGateway(to, path), Headers: []string{stamp}}.Run(t, f, from)
+			if forged.Status != http.StatusNotFound {
+				t.Errorf("%s over the overlay with a forged %s: HTTP %d, want 404: %.300s", path, header, forged.Status, forged.Body)
+			}
 		}
 		bare := edge.NodeCurl{URL: edge.OverlayGateway(to, path)}.Run(t, f, from)
 		if bare.Status != http.StatusUnauthorized {
