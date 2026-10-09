@@ -1,0 +1,42 @@
+direction: right
+
+client: "Client (internet)" {shape: person}
+caddy: "Caddy :443\n(appends the peer to X-Forwarded-For)"
+peer: "Another node's gateway\n(overlay 10.0.0.x)"
+local: "Process on the node\n(loopback, nothing forwarded)"
+
+gw: "Gateway process (index or namespace)" {
+  conn: "http.Server\nread 60 s, write 120 s, header 1 MiB\nno connection cap"
+  rl: "rateLimitMiddleware\nclientkey.Resolve + BucketKey\nauth, chain query, chain tx,\ncapability, relay, general"
+  auth: "auth, authorization, scope"
+  nsrl: "namespaceRateLimitMiddleware\nratelimit.Manager (LRU 1024, TTL 30 s)"
+  h: "Handlers with their own limits" {
+    wallet: "challenge per wallet 10/min\n10 outstanding nonces"
+    webrtc: "WebRTC join 60/min per identity"
+    tunnel: "anon tunnel 24 per user, 512 per node\nrelay 128 streams, 4 per address"
+    fetch: "fetch capability: 4 streams"
+    chain: "chain tx: 8 / 16 in flight"
+    vault: "vault proxy per IP and per identity"
+    fn: "serverless MultiTierLimiter\nper wallet, per IP, per namespace"
+  }
+  conn -> rl -> auth -> nsrl -> h
+}
+
+eg: "Egress guards: netguard.Reserved at the dial" {
+  push: "push base URL (ntfy)"
+  fnhttp: "function outbound HTTP"
+  anon: "anon tunnel + anon proxy"
+  store: "storageclient public fetch"
+  tor: "Tor exit policy"
+}
+
+nsdb: "namespace_rate_limit_config" {shape: cylinder}
+chain: "chain/netclass\n(kept in step by a test)"
+
+client -> caddy: "HTTPS"
+caddy -> gw.conn: "127.0.0.1 + X-Forwarded-For"
+peer -> gw.conn: "overlay: exempt from address buckets"
+local -> gw.conn: "loopback: exempt"
+gw.nsrl -> nsdb: "Get on miss / expiry"
+gw.h -> eg: "tenant-controlled destinations"
+eg -> chain: "same ranges"

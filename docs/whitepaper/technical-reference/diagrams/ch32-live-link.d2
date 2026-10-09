@@ -1,0 +1,16 @@
+direction: right
+
+connecting: "connecting"
+live: "live"
+reconnecting: "reconnecting\nbackoff 1 s doubling to 30 s,\n+/- 20 % jitter"
+failed: "stopped\n(401/403, 400, or 404 before\nthe first snapshot)"
+stale: "snapshot marked STALE\nolder than 3 intervals\n(+30 s over --ssh)\nor source stopped"
+
+connecting -> live: "first snapshot"
+connecting -> failed: "401, 403, 400, 404"
+live -> live: "gateway ends stream (100 s):\nreopen after 1 s, no state change"
+live -> reconnecting: "stream broke, or silent for\nmax(30 s, 3 x interval)"
+reconnecting -> live: "snapshot arrives"
+reconnecting -> failed: "401, 403"
+live -> stale: "no new snapshot"
+stale -> live: "snapshot arrives"

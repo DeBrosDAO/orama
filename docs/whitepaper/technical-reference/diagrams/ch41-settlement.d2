@@ -1,0 +1,31 @@
+direction: down
+
+esc: "Deal escrow\n(storage_escrow)" {shape: cylinder}
+ceil: "Epoch storage ceiling\n(x/emission)" {shape: cylinder}
+fund: "Archive fund\n(storage_archive)" {shape: cylinder}
+
+claims: "Epoch close: one claim per proved slot" {
+  priv: "PRIVATE: s x price (subsidy)\nper-operator cap = ceiling / s_min"
+  prot: "protocol PUBLIC_PIN: full price"
+  arch: "protocol ARCHIVE: full price,\nshortfall topped up from the fund"
+}
+
+plan: "ComputeMintPlan\ncap per operator, then scale all claims\nto the ceiling" {shape: hexagon}
+ceil -> plan
+claims.priv -> plan
+claims.prot -> plan
+claims.arch -> plan
+plan -> mint: "MintStorageService (total, once)"
+mint: "storage module account\n(reserve for queued rows)" {shape: cylinder}
+
+pay: "payService: 90 / 5 / 5"  {shape: hexagon}
+esc -> pay: "price per proved slot (user deals)"
+mint -> pay: "mint_pay"
+fund -> pay: "archive_top_up (ARCHIVE only)"
+pay -> op: "90%: CreditEarnings(operator)"
+pay -> burn: "5%: BurnCoins"
+pay -> fund: "5%: FundArchive"
+op: "Operator earnings (x/fees)" {shape: person}
+burn: "Burned" {shape: oval}
+esc -> client: "unpaid remainder at expiry:\nCreditEarnings(client)"
+client: "Deal client" {shape: person}

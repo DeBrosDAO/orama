@@ -1,0 +1,15 @@
+direction: right
+
+none: "no row"
+live: "registered\nexpires_at = now + 7 d, rounded up to a UTC day"
+gone: "expired\n(Get treats as absent)"
+removed: "row deleted"
+
+none -> live: "POST /v1/push/topics\nsecret -> topic id = sha256(secret)"
+live -> live: "POST again, same secret:\nexpiry moves, token may change"
+live -> removed: "DELETE with the secret"
+live -> removed: "same token registered under\na new secret (rotation):\nsame atomic batch"
+live -> gone: "no refresh for 7 to 8 days"
+gone -> removed: "next registration in the namespace\nprunes expired rows"
+gone -> live: "register again"
+removed -> none

@@ -1,0 +1,24 @@
+shape: sequence_diagram
+
+joiner: Joining node
+caddy: Caddy (minting node)
+gw: Index gateway
+db: Index RQLite
+helper: orama-privhelper
+
+joiner -> joiner: "peer id + WG keypair"
+joiner -> caddy: "POST /v1/internal/join, TLS pinned to invite fingerprint"
+caddy -> gw: "proxy to loopback"
+gw -> gw: "validate fields, key, peer id, signer count"
+gw -> db: "token live? (hash, used_at, expires_at)"
+gw -> db: "refuseIfClaimed (ip, key, peer id)"
+gw -> gw: "read secrets, trust anchor, own WG identity"
+gw -> db: "list wireguard_peers"
+gw -> db: "UPDATE invite_tokens SET used_at (single use)"
+gw -> db: "DELETE unfinished rows at this IP; DELETE node_credentials"
+gw -> db: "INSERT wireguard_peers (confirmed_at NULL), retry on wg_ip conflict;\nrelease the token if that fails for another reason"
+gw -> helper: "add-peer"
+gw -> gw: "ask local Kubo and IPFS Cluster for peer ids (5 s each)"
+gw -> joiner: "wg_ip, peers, secrets, bootstrap, archive signers"
+joiner -> joiner: "write wg0.conf, wg-quick up"
+joiner -> gw: "ping join node over the tunnel (30 s)"

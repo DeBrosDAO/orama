@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+app: "application (Node)"
+rf: "RelayedFetch"
+relay: "relay gateway\n/v1/proxy/relay"
+tor: "Tor exit"
+ns: "namespace host (storage)"
+
+app -> rf: "storage.fetchWith(transport, cid, cap)"
+rf -> rf: "validate cid and token;\npick relay at random, never the namespace host"
+rf -> relay: "WSS ?host=ns&port=443[&circuit=session]\nno credential"
+relay -> tor: "TCP stream"
+tor -> ns
+rf -> ns: "TLS handshake inside the WebSocket bytes\n(SNI = namespace host)"
+rf -> rf: "optional jitter 0..jitterMs"
+rf -> ns: "GET /v1/storage/relayed/cid\nX-Orama-Fetch-Cap: token"
+ns -> rf: "HTTP/1.1 200, Content-Length or chunked"
+rf -> rf: "parse, cap 64 MiB, deadline 5 min"
+rf -> app: "Uint8Array"
+app -> rf: "404 while the pin propagates:\nre-ask up to 8 attempts, relay chosen again"

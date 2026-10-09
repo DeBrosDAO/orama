@@ -1,12 +1,11 @@
 /**
- * Every public page: its path, its label in the navigation, and the title and
- * description used for the browser tab, search results and link previews.
- * The router, the prerenderer and the sitemap all read this list.
+ * The site's hand-written pages: path, and the title and description used for
+ * the browser tab, search results and link previews. The router reads this
+ * list; src/content/pages.ts adds the docs, the blog and the explorer to it
+ * for the prerenderer and the sitemap.
  */
 export interface RouteMeta {
   path: string;
-  /** Label in the top navigation; omitted pages are reached from elsewhere. */
-  nav?: string;
   /** Short name, used in menus and links. */
   title: string;
   /**
@@ -26,7 +25,6 @@ export const ROUTES = {
   },
   platform: {
     path: "/platform",
-    nav: "Platform",
     title: "Platform",
     headTitle: "Hosting, database, storage & serverless",
     description:
@@ -34,7 +32,6 @@ export const ROUTES = {
   },
   howItWorks: {
     path: "/how-it-works",
-    nav: "How it works",
     title: "How it works",
     headTitle: "How a decentralized cloud works",
     description:
@@ -42,7 +39,6 @@ export const ROUTES = {
   },
   useCases: {
     path: "/use-cases",
-    nav: "Use cases",
     title: "Use cases",
     headTitle: "Use cases for a decentralized cloud",
     description:
@@ -50,7 +46,6 @@ export const ROUTES = {
   },
   apps: {
     path: "/apps",
-    nav: "Apps",
     title: "Apps",
     headTitle: "Apps: AnChat & RootWallet",
     description:
@@ -58,7 +53,6 @@ export const ROUTES = {
   },
   roadmap: {
     path: "/roadmap",
-    nav: "Roadmap",
     title: "Roadmap",
     headTitle: "Roadmap: stable network, OramaOS, Orama One",
     description:
@@ -91,8 +85,6 @@ export type RouteKey = keyof typeof ROUTES;
 
 export const ROUTE_LIST: RouteMeta[] = Object.values(ROUTES);
 
-export const NAV_ROUTES: RouteMeta[] = ROUTE_LIST.filter((r) => "nav" in r);
-
 /**
  * "/platform/" and "/platform" are the same page. Self-contained on purpose:
  * scripts/prerender.mjs inlines this function's source into every page, so
@@ -101,9 +93,6 @@ export const NAV_ROUTES: RouteMeta[] = ROUTE_LIST.filter((r) => "nav" in r);
 export function normalizePath(p: string): string {
   return p.length > 1 ? p.replace(/\/+$/, "") || "/" : p;
 }
-
-/** The docs are kept but unlisted: reachable from the footer only. */
-export const DOCS_PATH = "/docs";
 
 export function documentTitle(route: RouteMeta): string {
   const name = route.headTitle ?? route.title;

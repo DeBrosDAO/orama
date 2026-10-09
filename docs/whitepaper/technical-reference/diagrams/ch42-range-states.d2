@@ -1,0 +1,13 @@
+direction: right
+
+none: "No record" {shape: oval}
+cand: "Undecided\nup to 4 candidate tuples,\neach short of 3 operators"
+dec: "Decided\nwinning tuple fixed,\ncandidates dropped,\n3 or more attesting operators"
+arc: "Archived\n3 operators and 3 live recorded deals\n(permanent flag)"
+
+none -> cand: "first MsgAttest"
+cand -> cand: "more attestations; a candidate whose\nattesters all lost the ARCHIVER role is freed"
+cand -> dec: "one tuple reaches 3 distinct operators"
+dec -> dec: "MsgCreateArchiveDeal (at most 3 live),\nMsgAttachReplicas, more attesters (to 64)"
+dec -> arc: "3 attesters and 3 active ARCHIVE deals recorded"
+arc -> arc: "last archived height extends\nover the contiguous archived prefix"

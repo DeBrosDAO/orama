@@ -1,0 +1,47 @@
+direction: right
+
+client: "Client (SDK, CLI, browser)" {shape: person}
+
+node: "One node" {
+  caddy: "Caddy\nTLS, DNS-01 certificates\nproxies to loopback"
+
+  idx: "Index gateway\norama-namespace-gateway@index\nWG address :10104 + 127.0.0.1:10104" {
+    stack: "withMiddleware stack"
+    mux: "routepolicy.Mux\nno route without a declared policy"
+    prox: "Namespace proxy\ntargets, circuit breaker, hop MAC"
+    host: "Deployment host routing"
+    mon: "Ring monitor, telemetry,\nTLS store, namespace health loop,\npubsub mesh"
+    stack -> mux
+    stack -> prox
+    stack -> host
+  }
+
+  ns: "Namespace gateway\norama-namespace-gateway@NS\nWG address :tenant port" {
+    stack2: "same stack,\ntrusts only signed hop headers"
+    mux2: "same mux, tenant handlers"
+    peers: "peer discovery,\nfunctions run here"
+    stack2 -> mux2
+  }
+
+  reg: "Index RQLite\ncluster registry" {shape: cylinder}
+  tdb: "Namespace RQLite\ntenant database" {shape: cylinder}
+  olric: "Olric"
+  ipfs: "IPFS + Cluster"
+  deploy: "Deployment process\n127.0.0.1:port"
+}
+
+peer: "Other nodes' gateways\n(WireGuard overlay)"
+
+client -> node.caddy: "HTTPS"
+node.caddy -> node.idx.stack: "HTTP, loopback"
+node.idx.prox -> node.ns.stack2: "HTTP over WireGuard,\nX-Internal-Auth-* + MAC"
+node.idx.host -> node.deploy: "HTTP, loopback"
+node.idx.host -> peer: "home node / replicas\nX-Orama-Proxy-Node"
+node.idx.mux -> node.reg: "keys, grants, nodes,\nnamespace placement"
+node.idx.mon -> peer: "ping, telemetry (MAC)"
+node.ns.mux2 -> node.tdb: "tenant SQL"
+node.ns.mux2 -> node.reg: "API keys, grants, DNS rows\n(global_rqlite_dsn)"
+node.ns.mux2 -> node.olric
+node.ns.mux2 -> node.ipfs
+node.idx.mux -> node.olric
+node.idx.mux -> node.ipfs

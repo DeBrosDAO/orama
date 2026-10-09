@@ -2,13 +2,38 @@ import { StrictMode } from "react";
 import { prerender } from "react-dom/static";
 import { StaticRouter } from "react-router";
 import { App } from "./app";
-import { ROUTE_LIST, documentTitle, normalizePath } from "./content/routes";
-import type { RouteMeta } from "./content/routes";
+import { normalizePath } from "./content/routes";
+import { PAGES, knownLastModified } from "./content/pages";
+import type { PageMeta } from "./content/pages";
 import { INVESTOR_PDF, SITE_URL } from "./content/site";
-import { structuredData } from "./content/seo";
+import { ROBOTS_INDEX, ROBOTS_NOINDEX, absoluteUrl, extraHeadTags, structuredData } from "./content/seo";
+import { SITEMAP_GROUPS, sitemapIndexXml, sitemapPath, sitemapXml } from "./content/sitemap";
+import { BLOG_FEED_PATH, POSTS } from "./blog/posts";
+import { rssFeed } from "./blog/feed";
 
-export { INVESTOR_PDF, ROUTE_LIST, SITE_URL, documentTitle, normalizePath, structuredData };
-export type { RouteMeta };
+export {
+  BLOG_FEED_PATH,
+  INVESTOR_PDF,
+  PAGES,
+  POSTS,
+  ROBOTS_INDEX,
+  ROBOTS_NOINDEX,
+  SITEMAP_GROUPS,
+  SITE_URL,
+  absoluteUrl,
+  extraHeadTags,
+  knownLastModified,
+  normalizePath,
+  rssFeed,
+  sitemapIndexXml,
+  sitemapPath,
+  sitemapXml,
+  structuredData,
+};
+export type { PageMeta };
+
+/** Any address no page owns: rendering it gives the 404 page. */
+export const NOT_FOUND_PROBE = "/404";
 
 /**
  * Render one page to HTML at build time. prerender (unlike renderToString)

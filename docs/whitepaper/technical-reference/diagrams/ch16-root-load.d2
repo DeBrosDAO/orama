@@ -1,0 +1,40 @@
+direction: down
+
+start: "gateway boot:\nLoadOrMaterialize(store, cacheDir, seedDir, clusterSecret)"
+reg: "Query encryption_roots"
+regok: "current row found?"
+nocur: "no current row,\nor no such table"
+regerr: "any other error"
+fail1: "return error:\ngateway refuses to start"
+writecache: "write cache files (0700 dir, 0600 files)"
+cachefail: "cache write fails"
+fail2: "return error"
+files: "first of cacheDir, seedDir\nwith an encryption-root file"
+fileok: "file found?"
+empty: "file empty or unreadable"
+fail3: "return error:\nnever regenerate"
+cs: "clusterSecret empty?"
+fail4: "return error: no root anywhere"
+mat: "Root = generation 1,\nIKM = copy of cluster-secret"
+save: "best-effort INSERT into encryption_roots\n(table may not exist yet)"
+done: "Root returned to secrets.Holder"
+
+start -> reg
+reg -> regok
+regok -> writecache: "yes: registry is the truth"
+writecache -> done
+writecache -> cachefail: "error"
+cachefail -> fail2
+regok -> nocur: "no"
+reg -> regerr
+regerr -> fail1
+nocur -> files
+files -> fileok
+fileok -> save: "yes (cache it if it came from the seed)"
+save -> done
+fileok -> empty: "present but bad"
+empty -> fail3
+fileok -> cs: "not found"
+cs -> fail4: "yes"
+cs -> mat: "no"
+mat -> save

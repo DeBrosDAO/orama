@@ -65,10 +65,7 @@ export default function Roadmap() {
 
       <CtaBand title="Want to speed it up?" line="Funding turns this roadmap into a timeline.">
         <Button asChild size="lg">
-          <Link to={ROUTES.investors.path}>For investors<ArrowRight className="w-3.5 h-3.5 ml-2" /></Link>
-        </Button>
-        <Button asChild variant="ghost" size="lg">
-          <Link to={ROUTES.donate.path}>Donate</Link>
+          <Link to={ROUTES.donate.path}>Support<ArrowRight className="w-3.5 h-3.5 ml-2" /></Link>
         </Button>
       </CtaBand>
     </Page>

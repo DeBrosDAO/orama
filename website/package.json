@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-server && node scripts/prerender.mjs && node scripts/build-llms.mjs && node scripts/build-pdf.mjs",
+    "build": "tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-server && node scripts/prerender.mjs && node scripts/build-og.mjs && node scripts/build-llms.mjs && node scripts/build-pdf.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -b"
@@ -40,11 +40,15 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "github-slugger": "2.0.0",
+    "image-size": "2.0.2",
     "puppeteer-core": "25.12.0",
+    "remark-frontmatter": "5.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "vite": "^8.3.1",
-    "vitest": "5.0.2"
+    "vitest": "5.0.2",
+    "yaml": "2.8.1"
   },
   "pnpm": {
     "overrides": {

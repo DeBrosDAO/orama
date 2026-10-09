@@ -47,7 +47,7 @@ records who owns each route.
 
 These are not Orama clients and are not being built as one:
 
-- **No Orama dashboard.** The website is a landing page and docs. Tenant web
+- **No Orama dashboard.** The website is a landing page, docs, a blog and the chain explorer. Tenant web
   and mobile apps are applications you deploy; they call the SDK, they are not
   an Orama control plane.
 - **No Orama MCP** for tenants or operators. Agents read the docs (`llms.txt`

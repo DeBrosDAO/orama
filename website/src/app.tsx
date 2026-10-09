@@ -3,7 +3,9 @@ import type { ComponentType, LazyExoticComponent } from "react";
 import { Routes, Route } from "react-router";
 import { Shell } from "./components/layout/shell";
 import { LoadingSpinner } from "./components/ui/loading-spinner";
-import { DOCS_PATH, ROUTES } from "./content/routes";
+import { ROUTES } from "./content/routes";
+import { DOCS_PATH } from "./content/pages";
+import { BLOG_PATH } from "./blog/posts";
 import type { RouteKey } from "./content/routes";
 
 /**
@@ -24,6 +26,10 @@ const PAGES: Record<RouteKey, LazyExoticComponent<ComponentType>> = {
 };
 
 const Docs = lazy(() => import("./pages/docs"));
+const DocsHome = lazy(() => import("./pages/docs-home"));
+const Blog = lazy(() => import("./pages/blog"));
+const BlogTag = lazy(() => import("./pages/blog-tag"));
+const BlogPost = lazy(() => import("./pages/blog-post"));
 const Explorer = lazy(() => import("./pages/explorer"));
 const NotFound = lazy(() => import("./pages/not-found"));
 
@@ -52,7 +58,13 @@ export function App() {
               <Route key={key} path={rel(path)} element={<PageComponent />} />
             );
           })}
+          <Route path={rel(DOCS_PATH)} element={<DocsHome />} />
           <Route path={`${rel(DOCS_PATH)}/*`} element={<Docs />} />
+          <Route path={rel(BLOG_PATH)} element={<Blog />} />
+          <Route path={`${rel(BLOG_PATH)}/page/:page`} element={<Blog />} />
+          <Route path={`${rel(BLOG_PATH)}/tag/:tag`} element={<BlogTag />} />
+          <Route path={`${rel(BLOG_PATH)}/tag/:tag/page/:page`} element={<BlogTag />} />
+          <Route path={`${rel(BLOG_PATH)}/:slug`} element={<BlogPost />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

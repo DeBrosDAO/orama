@@ -1,0 +1,22 @@
+direction: down
+
+req: "Engine.Execute\nnamespace, function, wallet, caller IP"
+t1: "Tier 1 per_function_wallet\nnamespace/function/wallet\nonly when Override is set" {shape: diamond}
+dead: "Override is never set by the engine:\nthis tier does not run today"
+t2w: "Tier 2 per_wallet\nnamespace/wallet\n600/min burst 60" {shape: diamond}
+t2i: "Tier 2 per_ip (no wallet)\nnamespace/ip\n120/min burst 30" {shape: diamond}
+t3: "Tier 3 per_namespace\nnamespace\n250,000/min burst 6,000" {shape: diamond}
+run: "Instantiate and run the module"
+rl: "RateLimitedError(scope, retry_after)\n429 RATE_LIMITED + Retry-After"
+
+req -> t1
+t1 -> dead: "Override nil"
+dead -> t2w: "wallet present"
+dead -> t2i: "wallet empty"
+t2w -> t3: "allowed"
+t2i -> t3: "allowed"
+t3 -> run: "allowed"
+t1 -> rl: "refused"
+t2w -> rl: "refused"
+t2i -> rl: "refused"
+t3 -> rl: "refused"

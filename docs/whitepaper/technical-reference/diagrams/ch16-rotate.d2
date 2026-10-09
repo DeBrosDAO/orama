@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+op: "Operator (wallet on operator list)"
+gwa: "Index gateway on node A"
+reg: "Index RQLite\nencryption_roots"
+nsg: "Namespace gateways\n(from namespace_port_allocations)"
+gwb: "Index gateways on nodes B, C"
+
+op -> gwa: "POST /v1/operator/rotate-secrets {rotate: true}"
+gwa -> gwa: "Authorize (admin grant + operator list)"
+gwa -> gwa: "root = holder.Get() (process memory)"
+gwa -> gwa: "Rotate: id n+1, 32 random bytes,\ncurrent becomes previous, WriteVersioned"
+gwa -> gwa: "write cache files in state dir"
+gwa -> reg: "upsert slots current and previous"
+gwa -> gwa: "holder.Swap(root)"
+gwa -> reg: "Walk index and tenant columns:\nSELECT, decrypt, seal enc:v1:n, UPDATE per row"
+gwa -> nsg: "for each gateway URL, one at a time, 60 s timeout:\nPOST /v1/internal/secrets/reencrypt\ncoordination v2 stamp, body = Root"
+nsg -> nsg: "CheckSuccessor, Persist cache,\nholder.Swap, Walk tenant columns"
+nsg -> gwa: "WalkResult"
+gwa -> op: "200 {key_id, previous_id, index, namespaces}"
+gwb -> gwb: "nothing: holder keeps generation n"

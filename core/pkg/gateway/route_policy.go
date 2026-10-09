@@ -84,6 +84,10 @@ func dataPlane(domain auth.Domain, action auth.Action, ownership bool, token rou
 // every request.
 var gatewayRoutes = buildRoutePolicies()
 
+// RoutePolicies is the policy table of every route the gateway serves. The
+// whitepaper generator renders Appendix C from it.
+func RoutePolicies() *routepolicy.Table { return gatewayRoutes }
+
 func buildRoutePolicies() *routepolicy.Table {
 	t := routepolicy.NewTable()
 

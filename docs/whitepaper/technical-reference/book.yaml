@@ -1,0 +1,526 @@
+# Orama Whitepaper — Technical Reference: the manifest.
+#
+# This file drives the build (`make whitepaper`) and the gates
+# (`make whitepaper-check`, part of `make test`). See README.md.
+#
+# version   must equal /VERSION. Every chapter's `verified` must equal it too:
+#           a release is not done until each chapter has been re-verified
+#           against the code at that version and re-stamped.
+# owns      path prefixes (directories or files) of tracked code a chapter
+#           explains. Every tracked file outside `exclude` must fall under
+#           some chapter's `owns`; a new package without an owner fails the
+#           gate. Ownership is by the longest matching prefix.
+# template  `subsystem` chapters must carry the full section set from
+#           STYLE.md; `narrative` chapters only the At-a-glance block.
+
+title: Orama Whitepaper
+subtitle: Technical Reference
+version: 0.3.0
+
+# Tracked paths that no chapter explains: OramaOS is experimental and out of
+# scope, the website and docs are the documentation itself, plans are designs
+# that are not code yet.
+exclude:
+  - os/
+  - website/
+  - docs/
+  - plans/
+  - secrets/
+  - .omc/
+  - core/testdata/
+  - .gitignore
+  - .gitleaks.toml
+  - .nvmrc
+  - .rules.lock
+  - renovate.json
+  - CLAUDE.md
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - LICENSE
+  - README.md
+  - vault/.gitignore
+  - chain/.gitignore
+  - vault/README.md
+
+volumes:
+  - number: 1
+    title: The Platform
+    parts:
+      - title: Foundations
+        chapters:
+          - file: vol1/01-what-orama-is.md
+            title: What Orama is
+            template: narrative
+            verified: "0.3.0"
+            owns: []
+          - file: vol1/02-system-shape.md
+            title: System shape
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/constants/
+              - core/pkg/errors/
+              - core/pkg/httputil/
+          - file: vol1/03-one-request-end-to-end.md
+            title: One request, end to end
+            template: narrative
+            verified: "0.3.0"
+            owns: []
+
+      - title: The Node
+        chapters:
+          - file: vol1/04-the-node-as-a-supervisor.md
+            title: The node as a supervisor
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/node/
+              - core/pkg/nodehealth/
+              - core/pkg/oramaunit/
+              - core/pkg/systemd/
+              - core/pkg/config/
+              - core/cmd/node/
+              - core/systemd/
+          - file: vol1/05-privilege-and-filesystem-trust.md
+            title: Privilege and filesystem trust
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/privhelper/
+              - core/pkg/rootfs/
+              - core/pkg/unitenv/
+              - core/pkg/hardening/
+              - core/pkg/durablefile/
+              - core/cmd/privhelper/
+          - file: vol1/06-the-wireguard-mesh.md
+            title: The WireGuard mesh
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/wireguard/
+              - core/pkg/overlay/
+              - core/pkg/invite/
+              - core/pkg/discovery/
+              - core/pkg/gateway/handlers/join/
+              - core/pkg/gateway/handlers/wireguard/
+              - core/pkg/gateway/handlers/enroll/
+          - file: vol1/07-cluster-state.md
+            title: Cluster state
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/rqlite/
+              - core/migrations/
+          - file: vol1/08-membership-and-failure-detection.md
+            title: Membership and failure detection
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/peerhealth/
+              - core/pkg/node/membership/
+
+      - title: Tenancy and Orchestration
+        chapters:
+          - file: vol1/09-namespaces.md
+            title: Namespaces
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/namespace/
+              - core/pkg/gateway/handlers/namespace/
+          - file: vol1/10-reconciliation-and-recovery.md
+            title: Reconciliation and recovery
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/namespace/tenant_reconciler.go
+              - core/pkg/namespace/cluster_recovery.go
+              - core/pkg/namespace/raft_restore.go
+              - core/pkg/namespace/orphan_teardown.go
+              - core/pkg/namespace/orphan_restore.go
+              - core/pkg/namespace/pending_cleanup.go
+              - core/pkg/namespace/stale_provisioning.go
+              - core/pkg/namespace/stale_deprovisioning.go
+              - core/pkg/namespace/leader_locality.go
+          - file: vol1/11-app-deployments.md
+            title: App deployments
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/deployments/
+              - core/pkg/deploysecrets/
+              - core/pkg/gateway/handlers/deployments/
+
+      - title: Gateway and Identity
+        chapters:
+          - file: vol1/12-gateway-architecture.md
+            title: Gateway architecture
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/gateway/
+              - core/pkg/gatewayspec/
+              - core/pkg/gateway/handlers/operator/
+              - core/cmd/gateway/
+          - file: vol1/13-identity.md
+            title: Identity
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/auth/
+              - core/pkg/gateway/auth/
+              - core/pkg/gateway/wssession/
+              - core/pkg/gateway/handlers/auth/
+              - core/pkg/gatewaykeys/
+          - file: vol1/14-authorization.md
+            title: Authorization
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/gateway/auth/grants.go
+              - core/pkg/gateway/auth/permission.go
+              - core/pkg/gateway/auth/scoped_keys.go
+              - core/pkg/gateway/auth/keyformat.go
+              - core/pkg/gateway/auth/workload.go
+              - core/pkg/gateway/routepolicy/
+          - file: vol1/15-inter-node-trust.md
+            title: Inter-node trust
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/nodeapi/
+              - core/pkg/encryption/
+              - core/pkg/gateway/handlers/nodeapi/
+              - core/cmd/identity/
+          - file: vol1/16-secrets-and-keys.md
+            title: Secrets and keys
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/secrets/
+
+      - title: Tenant Services
+        chapters:
+          - file: vol1/17-database.md
+            title: Database
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/sqlguard/
+              - core/pkg/nsbackup/
+              - core/pkg/gateway/handlers/sqlite/
+              - core/pkg/gateway/handlers/backup/
+          - file: vol1/18-cache.md
+            title: Cache
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/olric/
+              - core/pkg/gateway/handlers/cache/
+          - file: vol1/19-storage.md
+            title: Storage
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/ipfs/
+              - core/pkg/gateway/handlers/storage/
+              - core/pkg/gateway/capability/
+          - file: vol1/20-pubsub.md
+            title: Pub/sub
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/pubsub/
+              - core/pkg/gateway/handlers/pubsub/
+              - core/cmd/pubsub/
+          - file: vol1/21-serverless.md
+            title: Serverless functions
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/serverless/
+              - core/pkg/gateway/handlers/serverless/
+              - core/sdk/
+          - file: vol1/22-push-notifications.md
+            title: Push notifications
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/push/
+              - core/pkg/gateway/handlers/push/
+          - file: vol1/23-webrtc.md
+            title: WebRTC
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/sfu/
+              - core/pkg/turn/
+              - core/pkg/gateway/handlers/webrtc/
+              - core/cmd/sfu/
+              - core/cmd/turn/
+
+      - title: The Edge
+        chapters:
+          - file: vol1/24-dns-and-nameservers.md
+            title: DNS and nameservers
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/coredns/
+          - file: vol1/25-tls-and-certificates.md
+            title: TLS and certificates
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/tlsstore/
+              - core/pkg/tlsutil/
+              - core/pkg/certutil/
+              - caddy/
+          - file: vol1/26-sni-routing-and-stealth-turn.md
+            title: SNI routing and stealth TURN
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/sniproxy/
+              - core/cmd/sni-router/
+          - file: vol1/27-rate-limits-and-egress-controls.md
+            title: Rate limits and egress controls
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/ratelimit/
+              - core/pkg/netguard/
+              - core/pkg/gateway/clientkey/
+              - core/pkg/gateway/handlers/ratelimit/
+
+      - title: Vault
+        chapters:
+          - file: vol1/28-vault.md
+            title: Vault
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - vault/
+              - sdk-vault/
+              - core/pkg/shamir/
+              - core/pkg/gateway/handlers/vault/
+
+      - title: Shipping and Operating
+        chapters:
+          - file: vol1/29-build-signing-and-release.md
+            title: Build, signing and release
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/archivetrust/
+              - core/pkg/releasesign/
+              - core/pkg/releaseverify/
+              - core/pkg/version/
+              - core/cmd/orama/internal/build/
+              - core/debian/
+              - core/scripts/
+              - core/Makefile
+              - core/go.mod
+              - core/go.sum
+              - core/.env.example
+              - core/.githooks/
+              - .github/
+              - .goreleaser.yaml
+              - Makefile
+              - VERSION
+          - file: vol1/30-install-and-upgrade.md
+            title: Install and upgrade
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/install/
+              - core/pkg/autoupdate/
+              - core/pkg/legacylayout/
+              - core/cmd/orama/internal/production/
+          - file: vol1/31-rolling-upgrades.md
+            title: Rolling upgrades
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/rollout/
+          - file: vol1/32-observability.md
+            title: Observability
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/telemetry/
+              - core/pkg/inspector/
+              - core/pkg/logging/
+              - core/cmd/orama/internal/monitor/
+          - file: vol1/33-recovery.md
+            title: Recovery
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/cmd/orama/internal/production/recover/
+              - core/cmd/orama/internal/production/raftid/
+              - core/cmd/orama/internal/production/decommission/
+          - file: vol1/34-testing.md
+            title: Testing
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - e2e/
+              - core/e2e/
+              - contracts/
+              - core/pkg/contracttest/
+              - core/pkg/srcscan/
+
+      - title: Client Surfaces
+        chapters:
+          - file: vol1/35-the-cli.md
+            title: The CLI
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/cmd/orama/
+              - core/pkg/rwagent/
+              - core/pkg/remotessh/
+          - file: vol1/36-sdks.md
+            title: SDKs
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - sdk/
+              - core/pkg/client/
+
+  - number: 2
+    title: The Global Layer
+    parts:
+      - title: The Global Layer
+        chapters:
+          - file: vol2/37-global-nodes.md
+            title: Global nodes
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/globalnode/
+              - core/pkg/globalnetns/
+              - core/pkg/globalbind/
+              - core/pkg/cosmovisor/
+              - chain/x/nodes/
+          - file: vol2/38-anonymity-and-tor.md
+            title: Anonymity and Tor
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - core/pkg/anonproxy/
+              - core/pkg/tornet/
+              - core/pkg/onionnet/
+              - core/pkg/chainonion/
+              - core/pkg/txgate/
+              - chain/x/vpnlaunch/
+
+      - title: The Chain
+        chapters:
+          - file: vol2/39-chain-architecture.md
+            title: Chain architecture
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/app/
+              - chain/x/power/
+              - chain/x/inclusion/
+              - chain/x/confidential/
+              - chain/client/
+              - chain/cmd/
+              - chain/native/
+              - chain/proto/
+              - chain/scripts/
+              - chain/spikes/
+              - chain/Makefile
+              - chain/go.mod
+              - chain/go.sum
+              - core/pkg/chainread/
+              - core/pkg/clusterreg/
+              - core/pkg/gateway/handlers/chainread/
+          - file: vol2/40-economics.md
+            title: Economics
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/emission/
+              - chain/x/fees/
+              - chain/x/token/
+          - file: vol2/41-storage-deals.md
+            title: Storage deals
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/storage/
+              - chain/provider/
+              - chain/repair/
+              - chain/piece/
+              - chain/storagekey/
+              - chain/netclass/
+              - core/pkg/storageclient/
+              - core/pkg/storagefile/
+              - core/pkg/pieceroot/
+          - file: vol2/42-archive-and-indexer.md
+            title: Archive and indexer
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/archive/
+              - chain/archiver/
+              - chain/indexer/
+          - file: vol2/43-the-shielded-pool.md
+            title: The shielded pool
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/shielded/
+          - file: vol2/44-governance-and-contracts.md
+            title: Governance and contracts
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/houses/
+              - chain/x/wasmpolicy/
+              - chain/x/wasmbindings/
+              - chain/contracts/
+          - file: vol2/45-nfts-and-the-market.md
+            title: NFTs and the market
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/cnft/
+              - chain/x/market/
+          - file: vol2/46-relay-rewards.md
+            title: Relay rewards
+            template: subsystem
+            verified: "0.3.0"
+            owns:
+              - chain/x/relay/
+              - chain/reporter/
+
+appendices:
+  - file: appendices/a-port-map.md
+    title: Port map
+    generated: true
+  - file: appendices/b-schema.md
+    title: Database schema
+    generated: true
+  - file: appendices/c-gateway-routes.md
+    title: Gateway routes
+    generated: true
+  - file: appendices/d-cli-reference.md
+    title: CLI reference
+    generated: true
+  - file: appendices/e-chain-messages-and-queries.md
+    title: Chain messages and queries
+    generated: true
+  - file: appendices/f-configuration.md
+    title: Configuration
+    generated: true
+  - file: appendices/g-glossary.md
+    title: Glossary
+    generated: false
+  - file: appendices/h-known-gaps.md
+    title: Known gaps
+    generated: true

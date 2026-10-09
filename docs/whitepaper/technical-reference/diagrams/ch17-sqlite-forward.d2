@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+c: "client"
+a: "namespace gateway A\n(any member)"
+r: "namespace RQLite"
+g: "registry\n(namespace_port_allocations,\ndns_nodes)"
+b: "namespace gateway B\n(home node)"
+f: "tenant.db on B"
+
+c -> a: "POST /v1/db/sqlite/query\n(database_name, query, params)"
+a -> r: "SELECT * FROM namespace_sqlite_databases"
+r -> a: "home_node_id = B"
+a -> g: "overlay IP + gateway port of B,\nactive, private address only"
+a -> b: "same body + Authorization / X-API-Key\nX-Orama-Forwarded: 1 (60 s)"
+b -> b: "re-authenticate, home is self"
+b -> b: "CheckTenantSQLite"
+b -> f: "open, Exec or Query, close"
+b -> a: "JSON columns / rows / rows_affected"
+a -> c: "same status and body\nX-Orama-Home-Node: B"
+b -> r: "async: UPDATE size_bytes"

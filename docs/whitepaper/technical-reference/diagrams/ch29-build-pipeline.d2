@@ -1,0 +1,27 @@
+shape: sequence_diagram
+
+op: Operator
+cli: orama build
+agent: RootWallet agent
+tools: "go, zig, xcaddy, git, network"
+disk: archive on disk
+node: "node: stage-archive"
+
+op -> cli: "orama build"
+cli -> cli: "validate --arch and signing flags"
+cli -> agent: "GetAddress(evm), 10 s"
+agent -> cli: "active account"
+cli -> cli: "resolve zig (minimum_zig_version)"
+cli -> cli: "read VERSION and git rev-parse --short HEAD"
+cli -> tools: "9 Go binaries, vault-guardian,\nolric, ipfs-cluster, coredns, caddy"
+cli -> tools: "download kubo and rqlite,\ncheck pinned SHA-256"
+cli -> cli: "copy systemd/*.service and *.timer"
+cli -> cli: "manifest: SHA-256 of every file"
+cli -> agent: "SignForPurpose(orama-archive)\nup to 150 s"
+agent -> op: "approval prompt (first use)"
+op -> agent: "approve"
+agent -> cli: "65-byte signature"
+cli -> cli: "RecoverSigner must equal the account"
+cli -> disk: "tar.gz: bin, systemd, manifest.json, manifest.sig"
+op -> node: "orama push / rollout"
+node -> node: "Extract, VerifyTree, swap in"

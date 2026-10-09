@@ -1,0 +1,15 @@
+shape: sequence_diagram
+
+s: "signer (node A)"
+r: "receiver (node B, peer id = audience)"
+c: "replay cache (B, per process)"
+
+s -> s: "key = HKDF(secret, internal-coordination)\nnonce = 16 random bytes"
+s -> s: "mac2 = HMAC(method, audience=B, path, query,\nSHA-256(body), nonce, ts)\nmac1 = HMAC(method, path, query, ts)"
+s -> r: "HTTP over the overlay\nX-Orama-Coordination-MAC-V2: ts.mac2\nX-Orama-Coordination-Nonce\nX-Orama-Coordination-MAC: ts.mac1"
+r -> r: "source address in 10.0.0.0/24?"
+r -> r: "V2 header present: judged as V2 only\n|skew| at most 60 s, ts not before process start"
+r -> r: "read body (max 1 MiB), recompute with its own id as audience, restore body"
+r -> c: "MAC right: first use of nonce?"
+c -> r: "yes (remembered 120 s, 65,536 slots)"
+r -> s: "handler runs; V1-only request accepted only on routes whose parameters are in path or query"

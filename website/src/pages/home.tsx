@@ -14,6 +14,7 @@ import { CloudCompare } from "../components/visuals/cloud-compare";
 import { ClusterDiagram, MeshDiagram, WalletLoginDiagram } from "../components/visuals/how-diagrams";
 import { RoadmapTrack } from "../components/visuals/roadmap-track";
 import { APPS } from "../content/apps";
+import { DOCS_PATH } from "../content/pages";
 import { ROUTES } from "../content/routes";
 import { GITHUB_URL } from "../content/site";
 import { PILLARS } from "../content/why";
@@ -38,13 +39,13 @@ function Hero() {
         </p>
         <div className="flex flex-col sm:flex-row w-full sm:w-auto gap-3 justify-center pt-2">
           <Button asChild size="lg">
-            <Link to={ROUTES.howItWorks.path}>
-              See how it works
+            <Link to={DOCS_PATH}>
+              Docs
               <ArrowRight className="w-3.5 h-3.5 ml-2" />
             </Link>
           </Button>
           <Button asChild variant="ghost" size="lg">
-            <Link to={ROUTES.investors.path}>Back the network</Link>
+            <Link to={ROUTES.donate.path}>Support</Link>
           </Button>
         </div>
       </div>
@@ -170,10 +171,7 @@ export default function Home() {
 
       <CtaBand title="Help build the people's cloud." line="Orama is open source. Back it, fund it, or read the code.">
         <Button asChild size="lg">
-          <Link to={ROUTES.investors.path}>Investors<ArrowRight className="w-3.5 h-3.5 ml-2" /></Link>
-        </Button>
-        <Button asChild variant="ghost" size="lg">
-          <Link to={ROUTES.donate.path}>Donate</Link>
+          <Link to={ROUTES.donate.path}>Support<ArrowRight className="w-3.5 h-3.5 ml-2" /></Link>
         </Button>
         <Button asChild variant="ghost" size="lg">
           <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">GitHub</a>

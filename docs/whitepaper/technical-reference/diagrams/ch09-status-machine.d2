@@ -1,0 +1,21 @@
+direction: down
+
+provisioning: "provisioning\ninserted by ProvisionNamespaceCluster"
+ready: "ready\nready_at set, error_message cleared"
+degraded: "degraded\nerror_message names the cause"
+failed: "failed\nerror_message holds the reason"
+deprov: "deprovisioning\ndeprovisioning_at = registry clock"
+gone: "row deleted"
+
+provisioning -> ready: "all probes pass,\nstatus write succeeds"
+provisioning -> failed: "placement, spawn, readiness, DNS or unrecorded ready:\nrollbackProvisioning"
+provisioning -> failed: "final health verification:\nDNS and membership withdrawn,\nunits left running"
+provisioning -> failed: "stale sweep: older than 11 min\n(chapter 10)"
+ready -> degraded: "rqlite unit down 3 sweeps\nor dead member (chapter 10)"
+degraded -> ready: "settleClusterStatus"
+ready -> deprov: "BeginDeprovision"
+degraded -> deprov: "BeginDeprovision"
+failed -> deprov: "BeginDeprovision"
+provisioning -> deprov: "BeginDeprovision"
+deprov -> gone: "DeprovisionCluster step 7"
+deprov -> deprov: "claim aged out:\nresumed by another node (chapter 10)"

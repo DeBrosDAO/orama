@@ -9,12 +9,14 @@
 
 import { mkdirSync, copyFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DOCS = resolve(HERE, "../../docs");
 const CHAIN_DOCS = resolve(HERE, "../src/docs/blockchain");
 const DIST = resolve(HERE, "../dist");
+const BLOG = resolve(HERE, "../blog");
+const SERVER_ENTRY = resolve(HERE, "../dist-server/entry-server.js");
 const BASE = "https://orama.network";
 
 const PROJECT = "Orama Network";
@@ -45,7 +47,21 @@ const MANIFEST = {
   ],
 };
 
-function build() {
+/** The published blog posts, newest first, as raw Markdown next to the docs. */
+async function blogLines(llmsDir) {
+  const { POSTS } = await import(pathToFileURL(SERVER_ENTRY).href);
+  if (POSTS.length === 0) return { lines: [], count: 0 };
+  mkdirSync(join(llmsDir, "blog"), { recursive: true });
+  const lines = ["## Blog", ""];
+  for (const post of POSTS) {
+    copyFileSync(join(BLOG, `${post.slug}.md`), join(llmsDir, "blog", `${post.slug}.md`));
+    lines.push(`- [${post.title}](${BASE}/llms/blog/${post.slug}.md): ${post.description}`);
+  }
+  lines.push("");
+  return { lines, count: POSTS.length };
+}
+
+async function build() {
   const llmsDir = join(DIST, "llms");
   mkdirSync(llmsDir, { recursive: true });
 
@@ -82,9 +98,15 @@ function build() {
   }
   lines.push("");
 
+  const blog = await blogLines(llmsDir);
+  lines.push(...blog.lines);
+
   writeFileSync(join(DIST, "llms.txt"), lines.join("\n"));
   const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0) + chainPages.length;
-  console.log(`build-llms: wrote llms.txt + ${count} docs to ${llmsDir}`);
+  console.log(`build-llms: wrote llms.txt + ${count} docs + ${blog.count} posts to ${llmsDir}`);
 }
 
-build();
+build().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

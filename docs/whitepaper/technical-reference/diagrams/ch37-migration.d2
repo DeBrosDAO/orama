@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+new: "new host (root)"
+old: "old host (root)"
+opm: "operator's machine"
+
+new -> new: "migrate prepare: X25519 key pair;\nprivate half to migrate-recipient.key (0600);\nprint public half"
+new -> old: "public key (hex), by hand"
+old -> old: "migrate export: stop chain + dependents,\ncheck stopped, disable unit"
+old -> old: "sentinel validator-export-in-progress (O_EXCL)"
+old -> old: "read key and priv_validator_state.json;\nchain still stopped? state unchanged?"
+old -> old: "seal bundle in memory (ORBK, key + state)"
+old -> old: "record state as the key's floor (never lowered)"
+old -> old: "copy state to validator-state-migrated-...json;\nmove key to validator-key-migrated-...json;\nremove sentinel"
+old -> old: "write the bundle file (--to must not exist)"
+old -> new: "bundle, by hand"
+new -> new: "migrate import: chain stopped?\nopen with migration key"
+new -> new: "1. record the floor  2. write state (unless ahead)\n3. install key last (other key quarantined)\n4. CheckSignFloor  5. remove migration key"
+new -> new: "orama global start (sign floor check, then chain)"
+opm -> new: "restore path: export-key backup -> reseal ->\nimport --old-host-destroyed --floor-height H\n(floor and state = height H+1, round 0, step 0)"

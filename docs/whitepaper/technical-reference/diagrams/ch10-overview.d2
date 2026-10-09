@@ -1,0 +1,61 @@
+direction: right
+
+triggers: "Triggers" {
+  boot: "node boot\nRestoreLocalClustersFromDisk (once)"
+  tick60: "every 60 s, every node\nreconcileTenantsOnce"
+  tick90: "every 90 s, every node\nreconcileLeaderLocality"
+  tick300: "every 5 min, index rqlite leader\nreconcileNamespaces"
+  edge: "ring monitor edges\nsuspect / dead / recovered"
+}
+
+actions: "pkg/namespace actions" {
+  restore: "restore + drift\n(per-node leg)"
+  orphan: "orphan sweep\nreapOrphanedTenants"
+  replay: "replayPendingCleanups"
+  stale: "failStaleProvisioning\nresumeStaleDeprovisioning"
+  member: "reconcileClusterMembership\n(coordinator leg)"
+  locality: "leader handoff"
+  repair: "RepairCluster"
+  dead: "HandleDeadNode\nReplaceClusterNode"
+  suspect: "HandleSuspectNode\nHandleSuspectRecovery\nHandleRecoveredNode"
+}
+
+registry: "index RQLite (registry)" {
+  shape: cylinder
+}
+nodes: "member nodes\nspawn endpoint + systemd units" 
+raft: "namespace RQLite raft" {
+  shape: cylinder
+}
+
+triggers.boot -> actions.restore: "cluster-state.json"
+triggers.tick60 -> actions.restore
+triggers.tick60 -> actions.orphan
+triggers.tick60 -> actions.replay
+triggers.tick60 -> actions.stale
+triggers.tick60 -> actions.member
+triggers.tick90 -> actions.locality
+triggers.tick300 -> actions.repair
+triggers.edge -> actions.dead
+triggers.edge -> actions.suspect
+triggers.edge -> actions.repair: "HandleRecoveredNode"
+
+actions.restore -> registry: "read assignments" 
+actions.orphan -> registry: "read assignments"
+actions.replay -> registry: "claim + settle rows"
+actions.stale -> registry: "guarded UPDATE"
+actions.member -> registry: "prune + evict"
+actions.repair -> registry
+actions.dead -> registry
+actions.suspect -> registry: "DNS records, member status"
+
+actions.restore -> nodes: "start units, rewrite config"
+actions.orphan -> nodes: "teardown (local)"
+actions.replay -> nodes: "POST /v1/internal/namespace/spawn (signed)"
+actions.stale -> nodes: "teardown"
+actions.dead -> nodes: "spawn on replacement"
+actions.repair -> nodes: "spawn on new member"
+actions.member -> raft: "remove voter"
+actions.repair -> raft: "remove voter (prune step)"
+actions.dead -> raft: "remove voter"
+actions.locality -> raft: "transfer leadership"

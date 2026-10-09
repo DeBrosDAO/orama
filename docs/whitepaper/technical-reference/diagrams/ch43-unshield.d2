@@ -1,0 +1,28 @@
+direction: down
+
+msg: "MsgUnshield admitted\nnotes spent, pool debited, nullifier fees burned"
+target: "target?" {shape: diamond}
+topup: "fee top-up:\nnet at most max_fee_topup?" {shape: diamond}
+fail: "whole tx fails\nnothing is queued"
+waiting: "queue non-empty and target is a bond?" {shape: diamond}
+cap: "applyCap\nLimiter.Apply: counted + net at most\nmax(2% of pool, unshield_floor)?" {shape: diamond}
+pay: "pay now\nmodule account to owner, then delegate or bond or credit fee balance"
+queue: "enqueue QueuedUnshield\ncoins stay in the module account"
+window: "EndBlock: serveQueue\nonce per 24 h window"
+grant: "pool.Serve\npro rata by amount, per address cap,\nat most 1000 requests"
+paid: "payQueued in a cache context\nrefusal keeps the request and emits an event"
+
+msg -> target
+target -> topup: "FEE_TOPUP"
+target -> waiting: "BOND, NODE_BOND"
+target -> fail: "DEPOSIT, CONTRACT\n(refused in ValidateBasic)"
+topup -> cap: "yes"
+topup -> fail: "no"
+cap -> pay: "fits"
+cap -> queue: "bond: does not fit"
+cap -> fail: "top-up: does not fit"
+waiting -> queue: "yes, takes no cap"
+waiting -> cap: "no"
+queue -> window
+window -> grant
+grant -> paid

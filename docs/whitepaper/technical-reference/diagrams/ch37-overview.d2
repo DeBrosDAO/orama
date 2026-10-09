@@ -1,0 +1,40 @@
+direction: right
+
+op: "Operator's machine" {
+  rw: "RootWallet agent\n(operator account key)" {shape: person}
+  cli: "orama global\nbind / register / bond /\nunbond / capacity / retire"
+  keys: "service key files\n(secp256k1, ed25519,\nTor expanded secret)" {shape: cylinder}
+  keys -> cli: "bind: sign\norama-global-bind-v1"
+  cli -> rw: "sign document\n(SIGN_MODE_DIRECT)"
+}
+
+node: "Global node (root-owned units, no WireGuard, no cluster)" {
+  root: "root, on the node" {
+    inst: "orama global install\n(InstallGlobal)"
+    life: "orama global\nstart / stop / restart / status\n(globalnode.Lifecycle)"
+    floor: "sign floor + key migration\n(globalnode.Host)"
+    stage: "orama global stage-oramad\n(cosmovisor.Layout)"
+  }
+  units: "orama-global-*.service" {
+    chain: "chain\ncosmovisor -> oramad"
+    svc: "ipfs, provider, archiver,\nindexer, repair"
+    tor: "Tor roles\ndirauth, relay, onion"
+  }
+  state: "/var/lib/orama-global" {shape: cylinder}
+  root.inst -> units: "accounts, binaries,\nunits, ufw"
+  root.life -> units: "ordered start / stop"
+  root.floor -> state: "validator-sign-floor.json"
+  root.stage -> state: "chain/cosmovisor/..."
+  units.chain -> state
+  units.svc -> units.chain: "loopback RPC 31001"
+}
+
+chain: "Orama L1 (chain/)" {
+  nodesmod: "x/nodes\noperators, nodes, bonds,\nunbonding queue, clusters" {shape: cylinder}
+  users: "x/storage, x/archive,\nx/relay, x/houses"
+  users -> nodesmod: "role / hot key / identity reads"
+}
+
+op.cli -> node.units.chain: "broadcast via REST 31003\n(or Tor onion)"
+node.units.chain -> chain.nodesmod: "blocks"
+node.units.svc -> chain.nodesmod: "txs signed by\nthe node hot key"

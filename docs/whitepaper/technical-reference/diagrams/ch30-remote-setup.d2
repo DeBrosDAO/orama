@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+op: "Operator machine"
+agent: "RootWallet agent"
+vps: "New VPS"
+mint: "Cluster node"
+
+op -> agent: "status, wallet address"
+op -> vps: "ssh-keyscan: host keys"
+op -> op: "pin: --host-key match or confirm;\nwrite pinned known_hosts"
+op -> agent: "vault: node SSH key, VPS password"
+op -> vps: "install public key\n(sshpass env, or --bootstrap-key)"
+op -> op: "PrepareUpload: verify archive here,\nre-pack canonical copy"
+op -> vps: "uname -m; compare manifest + CLI checksum"
+op -> vps: "mktemp, upload archive"
+op -> vps: "extract only bin/orama, check sha256,\nnode stage-archive"
+op -> mint: "(join) mint invite: orama node invite --raw"
+op -> vps: "sudo /opt/orama/bin/orama node install\ninvite on stdin"
+vps -> vps: "Phases 1 to 8"
+op -> op: "record environment and node"

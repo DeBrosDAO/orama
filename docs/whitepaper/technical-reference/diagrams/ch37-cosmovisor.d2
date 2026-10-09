@@ -1,0 +1,21 @@
+direction: down
+
+home: "/var/lib/orama-global/chain  (chain home; owner root or orama-chain; ancestors root-only)" {
+  cv: "cosmovisor/\nroot:orama-chain, mode 1775 (sticky)" {
+    gen: "genesis/bin/oramad\nroot 0755, read-only in the unit"
+    up: "upgrades/NAME/bin/oramad\nroot 0755, read-only in the unit"
+    info: "upgrades/NAME/upgrade-info.json\nsymlink, root-owned"
+    cur: "current -> genesis or upgrades/NAME\nowned by orama-chain"
+    stg: ".staging-RANDOM/\nroot 0700, removed after linking"
+  }
+  target: "cosmovisor-upgrade-info-NAME.json\nwritten by cosmovisor (orama-chain)"
+  cfg: "config/, data/\norama-chain 0700"
+}
+
+stage: "orama global stage-oramad\n(root, TUF check on the open descriptor)"
+stage -> home.cv.stg: "1. copy, fsync, chmod 0755"
+home.cv.stg -> home.cv.up: "2. verify descriptor,\nthen linkat (fails if present)"
+stage -> home.cv.info: "3. symlink ../../../cosmovisor-upgrade-info-NAME.json"
+home.cv.info -> home.target: "cosmovisor's write lands here"
+home.cv.cur -> home.cv.gen: "until an upgrade plan's height"
+home.cv.cur -> home.cv.up: "cosmovisor repoints at the height"

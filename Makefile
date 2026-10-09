@@ -90,7 +90,26 @@ e2e-test-unit:
 
 # === Aggregate ===
 build: core-build
-test: core-test caddy-test e2e-lint e2e-coverage e2e-test-unit
+# === Whitepaper — Technical Reference (docs/whitepaper/technical-reference) ===
+# whitepaper-check runs the book's gates (ownership, anchors, structure,
+# diagrams, generated appendices, version stamps) and is part of `make test`.
+# whitepaper-gen regenerates the appendices built from code, including the CLI
+# reference. whitepaper typesets the volumes to PDF (needs pandoc, typst, d2).
+.PHONY: whitepaper whitepaper-check whitepaper-gen whitepaper-diagrams
+whitepaper-check:
+	cd core && go run ./tools/whitepaper check
+
+whitepaper-gen:
+	$(MAKE) -C core docs
+	cd core && go run ./tools/whitepaper gen
+
+whitepaper-diagrams:
+	cd core && go run ./tools/whitepaper diagrams
+
+whitepaper: whitepaper-diagrams whitepaper-gen whitepaper-check
+	cd core && go run ./tools/whitepaper build
+
+test: core-test caddy-test e2e-lint e2e-coverage e2e-test-unit whitepaper-check
 clean: core-clean
 
 help:

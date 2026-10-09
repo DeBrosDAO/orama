@@ -1,0 +1,37 @@
+direction: down
+
+tenant: "tenant client\n(API key or wallet JWT)" {shape: person}
+
+ns: "namespace ring (one per tenant namespace, 3 members)" {
+  n1: "node 1" {
+    gw1: "namespace gateway\n/v1/cache/*"
+    ol1: "olric-server\nclient port (block+2)\nmemberlist (block+3)"
+    gw1 -> ol1: "RESP, smart client\n10 s I/O deadline"
+  }
+  n2: "node 2" {
+    gw2: "namespace gateway"
+    ol2: "olric-server"
+    gw2 -> ol2: "RESP"
+  }
+  n3: "node 3" {
+    gw3: "namespace gateway"
+    ol3: "olric-server"
+    gw3 -> ol3: "RESP"
+  }
+  n1.ol1 <-> n2.ol2: "memberlist gossip\nWireGuard overlay"
+  n2.ol2 <-> n3.ol3: "memberlist gossip"
+  n1.ol1 <-> n3.ol3: "memberlist gossip"
+}
+
+idx: "index ring (one per fleet, every node is a member)" {
+  ia: "node A: index gateway\n+ olric-server 10102/10103"
+  ib: "node B: index gateway\n+ olric-server 10102/10103"
+  ic: "node ...: index gateway\n+ olric-server 10102/10103"
+  ia <-> ib: "memberlist gossip"
+  ib <-> ic: "memberlist gossip"
+  ia <-> ic: "memberlist gossip"
+}
+
+tenant -> ns.n1.gw1: "POST /v1/cache/put|get|mget|delete|scan"
+tenant -> ns.n2.gw2: "any member's gateway"
+ns.n1.gw1 -> ns.n2.ol2: "smart client goes to the\nowner of the key's partition"

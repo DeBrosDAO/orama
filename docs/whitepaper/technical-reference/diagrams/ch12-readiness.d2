@@ -1,0 +1,13 @@
+direction: right
+
+starting: "starting\n503 {status, reason, since}\nrefuses everything off the passthrough list"
+ready: "ready\n200, serves; closes readyCh once"
+blocked: "blocked\n503, reason schema-version\nstays up, never retries"
+
+start: "process start" {shape: circle}
+start -> starting: "newReadiness()\nreason initializing"
+starting -> starting: "attempt failed:\nno leader, apply error, gating step error\nreason schema or post-schema\nbackoff 5 s doubling to 60 s"
+starting -> ready: "prepareSchema + gating steps succeed"
+starting -> blocked: "leader answered, applied version\nbelow migrations.RequiredVersion()\n(errSchemaContract)"
+ready -> after: "runAfterReady wakes: housekeeping,\ntrigger dispatcher, cron, CID backfill"
+after: "after-ready steps\neach retried alone until success"

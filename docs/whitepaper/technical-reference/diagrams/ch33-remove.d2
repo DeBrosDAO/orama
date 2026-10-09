@@ -1,0 +1,15 @@
+shape: sequence_diagram
+
+cli: "operator\norama node remove"
+s: "survivor\n(first other node)"
+t: "target node"
+
+cli -> s: "SELECT id, internal_ip FROM dns_nodes\nWHERE ip_address = target"
+cli -> s: "GET /nodes?nonvoters&ver=2 (platform voters)\nnamespace_cluster_nodes rqlite roles (tenant voters)"
+cli -> cli: "PlanRemoval: voters before and after, quorum,\nreachable; any refusal aborts (Conflict)"
+cli -> cli: "--dry-run stops here; else ask 'yes' (unless --force)"
+cli -> s: "DELETE /remove {id} (id looked up by raft address)"
+cli -> s: "INSERT raft_evicted_nodes (reason operator)"
+cli -> s: "retire: delete wireguard_peers, mark dns_nodes inactive\nand last_seen 1970, delete system A records,\nnameserver slot, namespace_cluster_nodes,\nnamespace_port_allocations, webrtc_port_allocations;\nrevoke node_credentials"
+cli -> t: "unless --offline: wipeScript (stop units, wg0, ufw,\nrm /opt/orama, Caddy store, trust anchor)"
+cli -> cli: "delete the node's SSH key from the RootWallet vault"

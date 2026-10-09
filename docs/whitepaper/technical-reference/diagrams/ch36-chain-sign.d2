@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+app: "application"
+cc: "OramaChainClient"
+signer: "OramaSigner\n(RootWallet or LocalSigner)"
+node: "chain node REST (restURL)"
+gw: "gateway /v1/chain/"
+
+app -> cc: "signAndBroadcast(msgs, signer, opts)"
+cc -> node: "GET /cosmos/auth/v1beta1/accounts/addr"
+node -> cc: "account_number, sequence, pub_key"
+cc -> cc: "compare chain pub_key with signer.publicKey"
+cc -> cc: "buildSignDoc: TxBody, AuthInfo (DIRECT, norama fee), SignDoc"
+cc -> signer: "signDirect(signDoc bytes)"
+signer -> cc: "64-byte r||s, low s"
+cc -> cc: "verify signature against signer.publicKey"
+cc -> node: "POST /cosmos/tx/v1beta1/txs BROADCAST_MODE_SYNC"
+node -> cc: "txhash, code"
+cc -> app: "txHash, or SDKError CHAIN_TX_REJECTED"
+app -> gw: "alternative: simulateTx / broadcastTx(txBytes)\nPOST /v1/chain/simulate, /broadcast"
+gw -> app: "gas and fee, or 422 ChainTxRefusedError"

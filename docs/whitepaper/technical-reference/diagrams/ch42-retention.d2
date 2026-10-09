@@ -1,0 +1,14 @@
+direction: right
+
+base: "BaseApp retain height\n(min-retain-blocks, evidence age,\nsnapshot interval; 0 if pruning is off)"
+win: "tip - retention_window_blocks\n(default 201,600 = 14 days at 6 s)"
+last: "last archived height\n(contiguous from height 1)"
+arch: "x/archive retain =\nmin(window floor, last archived)"
+gate: "gateRetainHeight:\n0 if either is 0 or less,\nelse min" {shape: hexagon}
+out: "CometBFT prunes blocks\nstrictly below the result" {shape: oval}
+
+win -> arch
+last -> arch
+base -> gate
+arch -> gate
+gate -> out

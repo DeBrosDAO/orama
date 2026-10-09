@@ -131,3 +131,16 @@ func TestAccess_anonymous(t *testing.T) {
 		t.Error("the zero access must require a credential; a route nobody decided about is not open")
 	}
 }
+
+func TestTable_staticReturnsOnlyStaticPolicies(t *testing.T) {
+	table := testTable()
+	if p, ok := table.Static("/health"); !ok || p.Access != Open {
+		t.Errorf("Static(/health) = %+v, %v; want the open policy", p, ok)
+	}
+	if _, ok := table.Static("/v1/storage/unpin/"); ok {
+		t.Error("Static reported a dynamic pattern as static")
+	}
+	if _, ok := table.Static("/undeclared"); ok {
+		t.Error("Static reported an undeclared pattern")
+	}
+}

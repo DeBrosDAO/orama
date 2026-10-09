@@ -1,0 +1,43 @@
+direction: right
+
+node: One node (orama-node process) {
+  boot: boot graph\ncluster-discovery, rqlite-local,\nrqlite-cluster, membership-record
+  mgr: RQLiteManager (core/pkg/rqlite)\nStartLocal, JoinCluster, 4 loops
+  disc: ClusterDiscoveryService\nlibp2p peer metadata
+  sup: IndexSupervisor\n(core/pkg/namespace)
+  boot -> mgr: StartLocal / JoinCluster
+  boot -> disc: Start
+  boot -> sup: EnsureRQLite
+  mgr -> disc: peers, log index
+}
+
+units: systemd units on the node {
+  idx: orama-namespace-rqlite@index\nrqlited, ports 10100 / 10101
+  ns: orama-namespace-rqlite@NAMESPACE\nrqlited per tenant, 5-port blocks
+}
+
+files: Beside raft.db on disk {
+  markers: raft-node-id, raft-adv-addr,\nraft-suffrage
+  record: cluster-membership.json
+  backups: backups/rqlite/*.db
+}
+
+wg: WireGuard overlay 10.0.0.x
+
+registry: Registry placement\n(index rqlite, up to 5 voters) {
+  shape: cylinder
+}
+tenant: Tenant placement\n(namespace rqlite, 3 members) {
+  shape: cylinder
+}
+
+node.sup -> units.idx: writes env file, starts unit
+node.mgr -> units.idx: admin HTTP + SQL (Basic auth)
+node.mgr -> files.markers: read / write
+node.sup -> files.record: read; first record if absent
+node.mgr -> files.record: write (RecordClusterMembership)
+node.mgr -> files.backups: leader-only snapshot
+units.idx <-> wg: raft + HTTP, WG IP only
+units.ns <-> wg: raft + HTTP, WG IP only
+units.idx -> registry: serves
+units.ns -> tenant: serves

@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+r: Reporter (per authority)
+x: x/relay
+e: x/emission
+
+r -> r: "epoch e closes: window from the two boundary observations"
+r -> r: "select this authority's votes in the window; need 4/5 of expected votes"
+r -> r: "per relay: median Measured x 1,000,000, exit/guard/stable/fast flags, share of votes Running"
+r -> x: "Relay(fingerprint) for each relay"
+r -> r: "drop unregistered, key mismatch, own operator; save report-E.json"
+r -> x: "MsgReportEpoch chunk 0 of N (1000 relays, inputs_root of all entries)"
+x -> e: "CurrentEpoch, RelayCeiling(e): epoch closed and inside window?"
+x -> x: "validate entries, store chunk"
+r -> x: "MsgReportEpoch chunk N-1"
+x -> x: "reassemble, recompute inputs_root, store CompleteReport"
+e -> x: "epoch e+2 begins"
+x -> x: "EndBlock: settle oldest reported epoch"
