@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,7 +13,9 @@ import (
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/logging"
+	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/secrets"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestEnsureStateDir_createsItPrivate(t *testing.T) {
@@ -166,5 +169,57 @@ func TestHandleInternalReencrypt_refusesARootItCannotPersist(t *testing.T) {
 	}
 	if got := g.encHolder.Get().CurrentIKM; got != previous.CurrentIKM {
 		t.Errorf("the gateway switched to a root it could not persist (%q)", got)
+	}
+}
+
+// A gateway that missed one rotation's fan-out sees every later push one
+// generation too far ahead. It takes the registry's root, the source of truth,
+// instead of refusing until it is restarted.
+func TestHandleInternalReencrypt_aGatewayThatMissedAFanOutAdoptsTheRegistrysRoot(t *testing.T) {
+	const clusterSecret = "a cluster secret"
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(`CREATE TABLE encryption_roots (slot TEXT PRIMARY KEY, key_id TEXT NOT NULL, ikm TEXT NOT NULL,
+		write_versioned INTEGER NOT NULL DEFAULT 0, updated_at TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO encryption_roots (slot, key_id, ikm, write_versioned) VALUES ('current', '3', 'root-3', 2)`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	g := &Gateway{
+		cfg:       &Config{ClusterSecret: clusterSecret, NodePeerID: coordinationTestNode, StateDir: dir},
+		ormClient: rqlite.NewClient(db),
+		encHolder: secrets.NewHolder(secrets.Root{CurrentID: "1", CurrentIKM: "root-1"}),
+	}
+
+	// Generation 2 was never delivered here; the push is for 3.
+	body := `{"root":{"CurrentID":"3","CurrentIKM":"root-3","PreviousID":"2","PreviousIKM":"root-2","WriteVersioned":true,"WriteBound":true}}`
+	w := httptest.NewRecorder()
+	g.handleInternalReencrypt(w, signedReencrypt(t, clusterSecret, coordinationTestNode, body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if got := g.encHolder.Get(); got.CurrentID != "3" || got.CurrentIKM != "root-3" {
+		t.Fatalf("the gateway holds %+v, want the registry's generation 3", got)
+	}
+	cached, err := os.ReadFile(filepath.Join(dir, secrets.FileName))
+	if err != nil || string(cached) != "root-3" {
+		t.Fatalf("cached root %q, %v", cached, err)
+	}
+
+	// A push the registry does not back is still refused.
+	g.encHolder.Swap(secrets.Root{CurrentID: "1", CurrentIKM: "root-1"})
+	forged := `{"root":{"CurrentID":"9","CurrentIKM":"attacker","PreviousID":"8","PreviousIKM":"x"}}`
+	w = httptest.NewRecorder()
+	g.handleInternalReencrypt(w, signedReencrypt(t, clusterSecret, coordinationTestNode, forged))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status %d for a root the registry does not have: %s", w.Code, w.Body.String())
+	}
+	if got := g.encHolder.Get().CurrentIKM; got != "root-1" {
+		t.Fatalf("the gateway adopted %q", got)
 	}
 }
