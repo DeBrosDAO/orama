@@ -1,6 +1,7 @@
 # Release-quality scanners run on the runner against the checkout the run was
 # built from and the archive it built: govulncheck, staticcheck and gosec
-# (high severity, high confidence) on the core, chain and e2e modules; pnpm
+# (high severity, high confidence) on the core, chain, e2e and caddy modules
+# (govulncheck also on the pinned ipfs-cluster and olric programs); pnpm
 # audit of the SDKs' production dependencies; a secret scan (gitleaks, else
 # infisical scan) of the committed tree and of the built release archive;
 # every Fuzz target of core/pkg for a short run; and the race detector over the

@@ -16,3 +16,28 @@ accepted:
       names on their own machine; no network peer or transaction supplies input
       to it.
     review_by: 2026-12-29
+  - module: core/thirdparty/ipfs-cluster
+    id: GO-2024-3218
+    reason: >-
+      github.com/libp2p/go-libp2p-kad-dht has no fixed version: the database
+      lists every release as affected (the paper behind it, arXiv 2307.12212,
+      is a protocol-level eclipse and censorship attack on a public Kademlia
+      DHT, in which an attacker places Sybil peers near a key to hide its
+      provider records). The advisory names no function, so govulncheck
+      reports the whole package as reached: ipfs-cluster-service builds a
+      dual DHT in clusterhost.go (newDHT) and refreshes and closes it. The
+      attack needs attacker-controlled peers inside that DHT, and there are
+      none to be had: the cluster host is created with
+      libp2p.PrivateNetwork(cfg.Secret) (clusterhost.go baseOpts), the
+      CLUSTER_SECRET every Orama node's installer generates and refuses to
+      leave empty (core/pkg/install/installers/ipfs_cluster.go), so only the
+      namespace's own cluster peers can complete a connection to join the
+      routing table. The cluster uses the DHT to find its own peers, never to
+      resolve content: pins are placed by the cluster's CRDT, and content is
+      fetched by Kubo, not by this DHT. The module is otherwise current
+      (v0.39.2) and the other four advisories of this binary are fixed by
+      upgrade (pion/dtls v3.1.4, quic-go v0.60.0, webtransport-go v0.11.1).
+      Revisit when go-libp2p-kad-dht publishes a release outside the
+      advisory's range, or when the cluster host stops using a private
+      swarm key.
+    review_by: 2026-12-29

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-var scanned = []string{"chain", "core"}
+var scanned = []string{"chain", "core", "caddy", "core/thirdparty/ipfs-cluster", "core/thirdparty/olric"}
 
 var now = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 

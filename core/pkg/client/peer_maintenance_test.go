@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const maintenanceTestWait = 30 * time.Second
@@ -183,5 +185,106 @@ func TestPeerMaintenance_backoffDoesNotDelayAReturningPeer(t *testing.T) {
 	waitConnected(t, c, p.id)
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("connected %s after the peer came back; the swarm's dial backoff delayed it", took)
+	}
+}
+
+// Connect already warned about a peer it could not reach, so the loop's first
+// failed redial of it stays quiet; the loop speaks again when the peer is back.
+func TestPeerMaintenance_doesNotWarnAgainForAPeerConnectMissed(t *testing.T) {
+	old := peerRedialInterval
+	peerRedialInterval = 20 * time.Millisecond
+	t.Cleanup(func() { peerRedialInterval = old })
+	h, err := libp2p.New(libp2p.NoListenAddrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	p := newLaterPeer(t)
+	info, err := peer.AddrInfoFromString(p.addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	c := &Client{logger: zap.New(core)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.maintainPeers(ctx, h, []peer.AddrInfo{*info})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	time.Sleep(500 * time.Millisecond) // ~25 failed rounds
+	if n := logs.FilterMessage("Bootstrap peer is not connected, redialing until it answers").Len(); n != 0 {
+		t.Fatalf("the loop warned %d times about a peer Connect had already reported", n)
+	}
+	p.start(t)
+	deadline := time.Now().Add(maintenanceTestWait)
+	for logs.FilterMessage("Bootstrap peer connected again").Len() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop never reported the peer back")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A peer that was connected when the loop started is not down; losing it is
+// the loop's own transition and is logged once.
+func TestPeerMaintenance_warnsOnceWhenAConnectedPeerIsLost(t *testing.T) {
+	old := peerRedialInterval
+	peerRedialInterval = 20 * time.Millisecond
+	t.Cleanup(func() { peerRedialInterval = old })
+	p := newLaterPeer(t)
+	ph := p.start(t)
+	h, err := libp2p.New(libp2p.NoListenAddrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	info, err := peer.AddrInfoFromString(p.addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Connect(context.Background(), *info); err != nil {
+		t.Fatal(err)
+	}
+	if down := unconnectedPeers(h, []peer.AddrInfo{*info}); len(down) != 0 {
+		t.Fatalf("a connected peer is reported down: %v", down)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	c := &Client{logger: zap.New(core)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.maintainPeers(ctx, h, []peer.AddrInfo{*info})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+
+	if err := ph.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(maintenanceTestWait)
+	for logs.FilterMessage("Bootstrap peer is not connected, redialing until it answers").Len() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop never warned that the peer was lost")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := logs.FilterMessage("Bootstrap peer is not connected, redialing until it answers").Len(); n != 1 {
+		t.Fatalf("the loop warned %d times for one lost peer, want 1", n)
+	}
+}
+
+func TestUnconnectedPeers_emptyTargets(t *testing.T) {
+	h, err := libp2p.New(libp2p.NoListenAddrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	if down := unconnectedPeers(h, nil); len(down) != 0 {
+		t.Fatalf("down = %v for no targets", down)
 	}
 }

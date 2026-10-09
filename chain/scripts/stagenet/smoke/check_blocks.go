@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -15,6 +14,7 @@ import (
 	gogoproto "github.com/cosmos/gogoproto/proto"
 
 	"github.com/DeBrosOfficial/network/chain/client/node"
+	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 
 	// The modules' Query services must be registered for the invariants check to find them.
 	_ "github.com/DeBrosOfficial/network/chain/x/emission/types"
@@ -30,10 +30,6 @@ import (
 )
 
 const (
-	// inclusionCommitMagic starts the injected extended-commit transaction that C13 puts first in
-	// every block after the vote-extension enable height (chain/app/inclusion_commit.go,
-	// injectedCommitMagic; the constant is unexported there).
-	inclusionCommitMagic = "ORAMA-INCLUSION-EXTENDED-COMMIT-V1:"
 	// blocksToWatch is how many new blocks the liveness check waits for.
 	blocksToWatch = 3
 	blocksWait    = 90 * time.Second
@@ -44,9 +40,10 @@ const (
 // (docs/SECURITY_PLAYBOOKS.md); the same list deploy.sh's `invariants` command runs.
 var invariantModules = []string{"emission", "fees", "storage", "nodes", "relay", "houses", "token", "market", "power", "shielded"}
 
-// hasInclusionCommit reports whether a block's first transaction is the injected extended commit.
+// hasInclusionCommit reports whether a block's first transaction is the injected extended commit
+// that C13 puts first in every block after the vote-extension enable height.
 func hasInclusionCommit(txs [][]byte) bool {
-	return len(txs) > 0 && bytes.HasPrefix(txs[0], []byte(inclusionCommitMagic))
+	return len(txs) > 0 && inclusion.IsInjectedCommit(txs[0])
 }
 
 // advanced reports whether the chain moved at least want blocks from first to last.

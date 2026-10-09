@@ -9,10 +9,12 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 
 	gogoproto "github.com/cosmos/gogoproto/proto"
+
+	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
 
 func TestHasInclusionCommit(t *testing.T) {
-	commit := []byte(inclusionCommitMagic + "\x0a\x00")
+	commit := []byte(inclusion.InjectedCommitMagic + "\x0a\x00")
 	require.True(t, hasInclusionCommit([][]byte{commit, []byte("tx")}))
 	require.False(t, hasInclusionCommit(nil), "an empty block has no injected commit")
 	require.False(t, hasInclusionCommit([][]byte{[]byte("tx"), commit}), "the commit must be first")

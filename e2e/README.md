@@ -828,7 +828,11 @@ could not prevent, as above.
 ## Scanners
 
 `features/scanners` runs govulncheck, staticcheck and gosec on the `core`,
-`chain` and `e2e` modules, plus the secret, audit, fuzz and race scans. A
+`chain`, `e2e` and `caddy` modules, govulncheck also on the pinned third-party
+programs that ship in the archive (`core/thirdparty/ipfs-cluster` and
+`core/thirdparty/olric`, each on its program's main package: those modules hold
+no code of ours, so staticcheck and gosec skip them), plus the secret, audit,
+fuzz and race scans. A
 scanner that is not installed is not covered, never a pass. govulncheck
 (`golang.org/x/vuln/cmd/govulncheck`) and staticcheck are not taken from the
 runner: both are pinned and run with `go run`, so the Go toolchain that builds
@@ -849,7 +853,8 @@ newer ("package requires newer Go version").
 vulnerabilities whose function the code reaches (a finding with a function in
 its trace; an imported package or a required module alone does not count) are
 compared with `features/scanners/govulncheck-accepted.yaml`, embedded in the
-test. Each entry names a `module` (`core`, `chain` or `e2e`), an `id`
+test. Each entry names a `module` (the directory scanned: `core`, `chain`, `e2e`,
+`caddy`, `core/thirdparty/ipfs-cluster` or `core/thirdparty/olric`), an `id`
 (`GO-YYYY-NNNN`), a `reason` (why it is unfixable or not exploitable here: the
 call path and the mitigation, specifically) and a `review_by` date no more than
 90 days away. The test fails on:

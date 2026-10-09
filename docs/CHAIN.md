@@ -1894,7 +1894,10 @@ What is indexed:
   transaction by design, so the index skips it, and the count, the hashes and
   the transaction list leave it out. The other transactions keep the index
   CometBFT gives them in the block, so the first one of such a block is at
-  index 1.
+  index 1. In a block that carries the injected commit, position `i` of the
+  block's `tx_hashes` is therefore not CometBFT index `i`; each stored
+  transaction keeps its real index, and `tx_hashes[i]` is the transaction
+  stored at index `i + 1`.
 - **Transactions** (failed ones too): hash (SHA-256 of the bytes, lowercase
   hex), height, index in the block, the block's time, code, codespace, log, gas
   wanted and used, the type URL of each message, the events of the

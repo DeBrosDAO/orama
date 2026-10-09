@@ -32,11 +32,37 @@ const (
 type module struct {
 	dir  string
 	tags string
+	// pkg is the package pattern govulncheck scans; "" means ./... . A module
+	// that only pins a third-party program (a go.mod with a tool directive and
+	// no packages of its own) names that program's main package.
+	pkg string
 }
 
 // goModules are the repository's Go modules. The e2e module's feature files
 // only build with the e2e_fleet tag.
-var goModules = []module{{dir: "core"}, {dir: "chain"}, {dir: "e2e", tags: "e2e_fleet"}}
+var goModules = []module{{dir: "core"}, {dir: "chain"}, {dir: "e2e", tags: "e2e_fleet"}, {dir: "caddy"}}
+
+// pinnedModules pin a third-party program that ships in the release archive
+// (core/pkg/constants/versions.go names the versions). They hold no code of
+// ours, so only govulncheck covers them, on the program's main package: the
+// binary's dependencies are what an attacker reaches.
+var pinnedModules = []module{
+	{dir: "core/thirdparty/ipfs-cluster", pkg: "github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service"},
+	{dir: "core/thirdparty/olric", pkg: "github.com/olric-data/olric/cmd/olric-server"},
+}
+
+// vulnModules are every module govulncheck scans.
+func vulnModules() []module {
+	return append(append([]module{}, goModules...), pinnedModules...)
+}
+
+// scanPattern is the package pattern govulncheck scans in m.
+func (m module) scanPattern() string {
+	if m.pkg == "" {
+		return "./..."
+	}
+	return m.pkg
+}
 
 // scan is what every scanner test starts from: the run (for the artifact dir
 // and the evidence) and the checkout.

@@ -73,10 +73,10 @@ func TestGovulncheck_modulesUnaffected(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newScan(t)
-	for _, m := range goModules {
+	for _, m := range vulnModules() {
 		t.Run(m.dir, func(t *testing.T) {
 			t.Parallel()
-			args := append(append([]string{"run", govulncheckPackage, "-format", "json"}, tagArgs(m)...), "./...")
+			args := append(append([]string{"run", govulncheckPackage, "-format", "json"}, tagArgs(m)...), m.scanPattern())
 			res := s.run(t, m.dir, vulnBudget, "go", args...)
 			if res.Exit != 0 {
 				t.Fatalf("govulncheck could not scan %s (exit %d):\n%s", m.dir, res.Exit, realistic.Tail(res.Output()))
@@ -154,10 +154,11 @@ func TestGosec_noHighSeverityFindings(t *testing.T) {
 	}
 }
 
-// moduleDirs are the directories of the modules the scanners cover.
+// moduleDirs are the directories of the modules govulncheck covers, the
+// accepted list's module names.
 func moduleDirs() []string {
-	dirs := make([]string, 0, len(goModules))
-	for _, m := range goModules {
+	var dirs []string
+	for _, m := range vulnModules() {
 		dirs = append(dirs, m.dir)
 	}
 	return dirs

@@ -2,6 +2,7 @@ package tornet
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -46,7 +47,10 @@ func checkExitSummary(policy []string) error {
 		if ports != "*" {
 			var err error
 			if lo, hi, err = portRange(ports); err != nil {
-				continue
+				return fmt.Errorf("exit policy line %q: %w", line, err)
+			}
+			if lo < 1 || hi > maxPort || lo > hi {
+				return fmt.Errorf("exit policy line %q: ports %d-%d are not within 1-%d", line, lo, hi, maxPort)
 			}
 		}
 		switch verb {

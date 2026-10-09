@@ -345,7 +345,14 @@ run `go get -tool <package>@<version>` (in `caddy/`, `go get
 github.com/caddyserver/caddy/v2@v<version>`) and commit the `go.mod` and `go.sum`.
 IPFS Cluster v1.1.6 requires a `cockroachdb/swiss` that does not compile with
 Go 1.27; its module pins a newer one, which is why
-`core/thirdparty/ipfs-cluster/go.mod` lists it.
+`core/thirdparty/ipfs-cluster/go.mod` lists it. Beyond the pinned program, a
+module lists the fixed versions of the libraries that `govulncheck` reports
+reached (`pion/dtls`, `quic-go`, `webtransport-go` in IPFS Cluster's;
+`golang.org/x/net`, `grpc`, OpenTelemetry in Caddy's): the e2e `scanners` test
+runs `govulncheck` over `caddy/` and over each pinned program's main package, so
+a new advisory fails the gate until the module is bumped or the advisory is
+accepted with a reason (`docs/SECURITY.md`, "Shipped third-party program
+advisories").
 
 `.github/workflows/release-archive.yml` builds the archive for each published
 release twice per architecture, fails if the two differ, and attaches the archive

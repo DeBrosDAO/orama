@@ -94,3 +94,31 @@ func TestRelayTorrc_exitWhoseRejectListLeavesNoPortIsRefused(t *testing.T) {
 		t.Fatalf("a relay that is not an exit has no exit policy to summarise: %v", err)
 	}
 }
+
+// The function indexes per-port tables by the port numbers of its input, so it
+// refuses a port outside 1-65535 itself instead of relying on its caller.
+func TestCheckExitSummary_portOutsideTheRangeIsAnError(t *testing.T) {
+	for _, line := range []string{
+		"ExitPolicy accept *:0",
+		"ExitPolicy accept *:65536",
+		"ExitPolicy accept *:1-70000",
+		"ExitPolicy reject 10.0.0.0/8:99999",
+		"ExitPolicy reject 1.2.3.4:100-50",
+		"ExitPolicy accept *:-1",
+		"ExitPolicy accept *:http",
+	} {
+		t.Run(line, func(t *testing.T) {
+			policy := append(ExitPolicyLines(nil), line)
+			err := checkExitSummary(policy)
+			if err == nil || errors.Is(err, errNoSummaryPort) {
+				t.Fatalf("checkExitSummary with %q = %v, want a port error", line, err)
+			}
+		})
+	}
+}
+
+func TestCheckExitSummary_emptyPolicyAcceptsNoPort(t *testing.T) {
+	if err := checkExitSummary(nil); !errors.Is(err, errNoSummaryPort) {
+		t.Fatalf("checkExitSummary(nil) = %v, want errNoSummaryPort", err)
+	}
+}

@@ -693,6 +693,14 @@ One advisory is reported as reached in `chain/` and has no fix a `go get` can ta
 
 `govulncheck ./...` in `core/` reported two advisories in `github.com/coredns/coredns v1.14.4` (GO-2026-6506, GO-2026-6507), fixed in `v1.14.7`. `core/go.mod` and `constants.CoreDNSVersion` (the CoreDNS the installer and `orama build` build the nodes' binary from) are both `1.14.7` now.
 
+### Shipped third-party program advisories (`caddy/`, `core/thirdparty/ipfs-cluster`, `core/thirdparty/olric`)
+
+The modules that build the binaries of the release archive are scanned like `core/` and `chain/`: the e2e `scanners` test runs `govulncheck` in `caddy/` (`./...`) and on the main package of each pinned program (`ipfs-cluster-service`, `olric-server`; those two modules hold no code of ours, only a `go.mod` with a `tool` directive and its `go.sum`), and runs staticcheck over `caddy/`. The versions below are what `go.mod` requires; `constants.CaddyVersion` (`2.11.4`), `IPFSClusterVersion` (`v1.1.6`) and `OlricVersion` (`v0.7.4`) did not change.
+
+- **`caddy/`.** Twelve advisories were reached with `golang.org/x/net` v0.56.0 (GO-2026-6603, 6610, 6611, 6612, 6617), `google.golang.org/grpc` v1.81.0 (GO-2026-6061, 6348), the OpenTelemetry modules at v1.43.0 / v0.19.0 (GO-2026-5158, 6505, 6508, 6615) and `golang.org/x/text` v0.39.0 (GO-2026-6629). `caddy/go.mod` now requires `golang.org/x/net` v0.60.0, `golang.org/x/text` v0.42.0 (the release `x/net` v0.60.0 requires; the fix is in v0.41.0), `google.golang.org/grpc` v1.83.1, the OpenTelemetry modules at v1.45.0 and the log modules at v0.21.0. None is reached now and nothing is accepted.
+- **`core/thirdparty/olric`.** No advisory is reached.
+- **`core/thirdparty/ipfs-cluster`.** Four were reached besides the one below: `github.com/pion/dtls/v3` v3.1.2 (GO-2026-6165), `github.com/quic-go/webtransport-go` v0.10.0 (GO-2026-6099) and `github.com/quic-go/quic-go` v0.59.0 (GO-2026-5676). They are v3.1.4, v0.11.1 and v0.60.0 now (webtransport-go v0.11.1 requires quic-go v0.60.0), and `ipfs-cluster-service` v1.1.6 builds and links with them. **GO-2024-3218, `github.com/libp2p/go-libp2p-kad-dht`, is accepted** in `govulncheck-accepted.yaml`, until 2026-12-29: no release is outside the advisory's range, it names no function (so `govulncheck` reports the package as reached), and the attack it describes, hiding provider records by placing Sybil peers near a key in a public DHT, needs peers inside the DHT. The cluster host is a libp2p private network keyed by the cluster secret (`libp2p.PrivateNetwork`), which the installer generates and refuses to leave empty, so only the cluster's own peers join; the cluster uses the DHT to find its peers and never to resolve content. Revisit when kad-dht publishes a release outside the range or the cluster host stops using a private swarm key.
+
 ## Phase 2: OramaOS
 
 These measures apply only to OramaOS nodes (mainnet, devnet, testnet).

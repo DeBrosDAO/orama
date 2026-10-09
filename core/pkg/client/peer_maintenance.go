@@ -75,9 +75,11 @@ func bootstrapTargets(addrs []string, self peer.ID, logger *zap.Logger) []peer.A
 
 // maintainPeers redials every target that is not connected, every
 // peerRedialInterval, until ctx ends. It logs a peer when it is lost and when
-// it is back, not on every failed attempt.
+// it is back, not on every failed attempt. A peer Connect did not reach is
+// already down: Connect warned about it, so the loop does not warn again on
+// its first failed redial.
 func (c *Client) maintainPeers(ctx context.Context, h host.Host, targets []peer.AddrInfo) {
-	down := make(map[peer.ID]bool, len(targets))
+	down := unconnectedPeers(h, targets)
 	ticker := time.NewTicker(peerRedialInterval)
 	defer ticker.Stop()
 	for {
@@ -90,6 +92,17 @@ func (c *Client) maintainPeers(ctx context.Context, h host.Host, targets []peer.
 			c.redial(ctx, h, t, down)
 		}
 	}
+}
+
+// unconnectedPeers is the set of targets h has no connection to.
+func unconnectedPeers(h host.Host, targets []peer.AddrInfo) map[peer.ID]bool {
+	down := make(map[peer.ID]bool, len(targets))
+	for _, t := range targets {
+		if h.Network().Connectedness(t.ID) != network.Connected {
+			down[t.ID] = true
+		}
+	}
+	return down
 }
 
 // redial connects h to t if it is not connected and records the transition in
