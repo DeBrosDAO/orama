@@ -303,7 +303,8 @@ check that `namespace_pending_cleanup` drains: a teardown refused in the window
 is recorded there and replayed by the tenant reconciler.
 
 The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes are gone. A node
-not yet upgraded still serves them, and an upgraded one answers 404; nothing
+not yet upgraded still serves them, and an upgraded one answers them as it answers any path it never had
+(404 to a valid credential, 401 to none); nothing
 calls them, so a mixed fleet needs no handling.
 
 ### Reproducible builds

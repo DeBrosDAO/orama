@@ -1,6 +1,7 @@
 package rqlite
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -166,5 +167,137 @@ func TestCache_clear(t *testing.T) {
 	c.Clear()
 	if _, _, size := c.Stats(); size != 0 {
 		t.Fatalf("size = %d after Clear", size)
+	}
+}
+
+// queueLens are the lengths of the eviction queues; with the entries map they
+// must always describe the same set.
+func queueLens(c *Cache) int {
+	n := 0
+	for _, q := range c.queues {
+		n += q.Len()
+	}
+	return n
+}
+
+// A wildcard-synthesised answer is evicted before a real one, and stays
+// usable stale for the short window only.
+func TestCache_wildcardAnswersAreEvictedFirstAndDoNotOutliveTheirWindow(t *testing.T) {
+	c := NewCache(3, time.Minute)
+	c.Set("real1.example.", dns.TypeA, answerMsg("real1.example.", "10.0.0.1"))
+	c.SetWildcard("wild.example.", dns.TypeA, answerMsg("wild.example.", "10.0.0.2"))
+	c.Set("real2.example.", dns.TypeA, answerMsg("real2.example.", "10.0.0.3"))
+	c.Set("real3.example.", dns.TypeA, answerMsg("real3.example.", "10.0.0.4"))
+
+	if c.GetEntry("wild.example.", dns.TypeA) != nil {
+		t.Fatal("the wildcard answer outlived a real one at the size limit")
+	}
+	for _, name := range []string{"real1.example.", "real2.example.", "real3.example."} {
+		if c.GetEntry(name, dns.TypeA) == nil {
+			t.Errorf("%s was evicted", name)
+		}
+	}
+
+	c.SetWildcard("w2.example.", dns.TypeA, answerMsg("w2.example.", "10.0.0.5"))
+	entry := c.GetEntry("w2.example.", dns.TypeA)
+	if window := entry.staleUntil.Sub(entry.expiresAt); window > WildcardStaleWindow || window <= 0 {
+		t.Fatalf("a wildcard answer is stale-usable for %s past its TTL, want at most %s", window, WildcardStaleWindow)
+	}
+	if real := c.GetEntry("real2.example.", dns.TypeA); real.staleUntil.Sub(real.expiresAt) < StaleWindow-time.Minute {
+		t.Fatal("a real answer lost its serve-stale window")
+	}
+}
+
+// A flood of distinct wildcard-covered names does not displace the real
+// entries: the cache the platform's own names depend on during an outage.
+func TestCache_aFloodOfWildcardNamesDoesNotDisplaceRealEntries(t *testing.T) {
+	const real = 50
+	c := NewCache(100, time.Minute)
+	for i := 0; i < real; i++ {
+		name := fmt.Sprintf("real%d.example.", i)
+		c.Set(name, dns.TypeA, answerMsg(name, "10.0.0.1"))
+	}
+	for i := 0; i < 5000; i++ {
+		name := fmt.Sprintf("flood%d.example.", i)
+		c.SetWildcard(name, dns.TypeA, answerMsg(name, "10.0.0.2"))
+	}
+	for i := 0; i < real; i++ {
+		if c.GetEntry(fmt.Sprintf("real%d.example.", i), dns.TypeA) == nil {
+			t.Fatalf("real%d.example. was displaced by the flood", i)
+		}
+	}
+	if _, _, size := c.Stats(); size != 100 {
+		t.Fatalf("size = %d, want the cache full at 100", size)
+	}
+}
+
+// Eviction takes the entry closest to being unusable across the classes, and
+// overwriting a key at the limit evicts nothing else and leaves one queue
+// entry per cache entry.
+func TestCache_evictionOrderAndQueueConsistency(t *testing.T) {
+	c := NewCache(2, time.Minute)
+	c.SetNegative("neg.example.", dns.TypeA, answerMsg("neg.example.", "10.0.0.1"))
+	c.Set("real.example.", dns.TypeA, answerMsg("real.example.", "10.0.0.2"))
+
+	// Overwrite at the limit: nothing is evicted.
+	c.Set("real.example.", dns.TypeA, answerMsg("real.example.", "10.0.0.3"))
+	if _, _, size := c.Stats(); size != 2 || queueLens(c) != 2 {
+		t.Fatalf("after an overwrite: %d entries, %d queued, want 2 and 2", size, queueLens(c))
+	}
+
+	// A new key evicts the negative answer (30 s from unusable), not the 24 h one.
+	c.Set("new.example.", dns.TypeA, answerMsg("new.example.", "10.0.0.4"))
+	if c.GetEntry("neg.example.", dns.TypeA) != nil || c.GetEntry("real.example.", dns.TypeA) == nil {
+		t.Fatal("the entry closest to being unusable was not the one evicted")
+	}
+	if _, _, size := c.Stats(); size != 2 || queueLens(c) != 2 {
+		t.Fatalf("after an eviction: %d entries, %d queued, want 2 and 2", size, queueLens(c))
+	}
+
+	c.Clear()
+	if _, _, size := c.Stats(); size != 0 || queueLens(c) != 0 {
+		t.Fatalf("after Clear: %d entries, %d queued", size, queueLens(c))
+	}
+	c.Set("a.example.", dns.TypeA, answerMsg("a.example.", "10.0.0.5"))
+	if queueLens(c) != 1 {
+		t.Fatal("the cache does not queue after Clear")
+	}
+}
+
+// Inserting into a full cache is constant time. A scan per insert made 50k
+// inserts into a 50k cache 2.5 billion map visits, tens of seconds under the
+// write lock; the bound here is generous against that and against a slow CI.
+func TestCache_insertIntoAFullCacheIsNotLinear(t *testing.T) {
+	const size = 50000
+	c := NewCache(size, time.Minute)
+	msg := answerMsg("x.example.", "10.0.0.1")
+	for i := 0; i < size; i++ {
+		c.Set(fmt.Sprintf("n%d.example.", i), dns.TypeA, msg)
+	}
+	start := time.Now()
+	for i := size; i < 2*size; i++ {
+		c.Set(fmt.Sprintf("n%d.example.", i), dns.TypeA, msg)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("%d inserts into a full cache took %s; eviction is not constant time", size, took)
+	}
+	if _, _, got := c.Stats(); got != size || queueLens(c) != size {
+		t.Fatalf("%d entries, %d queued, want %d", got, queueLens(c), size)
+	}
+}
+
+func BenchmarkCache_insertIntoAFullCache(b *testing.B) {
+	for _, size := range []int{1000, 100000} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			c := NewCache(size, time.Minute)
+			msg := answerMsg("x.example.", "10.0.0.1")
+			for i := 0; i < size; i++ {
+				c.Set(fmt.Sprintf("n%d.example.", i), dns.TypeA, msg)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				c.Set(fmt.Sprintf("m%d.example.", i), dns.TypeA, msg)
+			}
+		})
 	}
 }

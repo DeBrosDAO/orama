@@ -62,16 +62,48 @@ A negative answer carries the zone's own SOA from `dns_records` in its
 authority section — the one naming the lowest glued slot. A zone with no SOA
 yet (no slot glued) answers SERVFAIL rather than inventing one.
 
-The negative answer is NXDOMAIN only for a name that does not exist. A name that
-owns a record of some other type, or that a wildcard covers (the nearest
-wildcard decides, and a name that owns any record is never covered by one), is
-answered NOERROR with an empty answer section and the SOA (NODATA) for a type it
-lacks — an AAAA query for a name that has only A records is the common case.
-The two are not interchangeable: a resolver that gets NXDOMAIN for one type
-concludes the name does not exist at all and caches that for every type (RFC
-8020), so the next A lookup of a name that is being served fails with "no such
-host". Because the base zone carries `*.<base>`, every name under it exists, and
-a type the wildcard lacks is NODATA there.
+The negative answer is NXDOMAIN only for a name that does not exist. Every other
+name that lacks the type asked is answered NOERROR with an empty answer section
+and the SOA (NODATA) — an AAAA query for a name that has only A records is the
+common case. A name exists when:
+
+| The name | Type it has | Type it lacks |
+|----------|-------------|---------------|
+| owns records | its records | NODATA |
+| has names below it but no record of its own (empty non-terminal; a `*.<name>` row counts) | — | NODATA |
+| the zone apex (always owns SOA and NS) | its records | NODATA |
+| owns nothing and has nothing below it, and the nearest wildcard that owns any record covers it | the wildcard's records, owned by the queried name | NODATA |
+| none of the above | — | NXDOMAIN |
+
+A name that owns a record, or has names below it, is never covered by a
+wildcard (RFC 4592): `_acme-challenge.<host>`, which owns only a TXT row, is
+NODATA for A, not answered from `*.<base>`. The nearest wildcard that owns any
+record decides; a farther one is not consulted. Because the base zone carries
+`*.<base>`, a name under it that nothing else owns exists, and a type the
+wildcard lacks is NODATA there.
+
+The two answers are not interchangeable: a resolver that gets NXDOMAIN for one
+type concludes the name does not exist at all and caches that for every type
+(RFC 8020), so the next A lookup of a name that is being served fails with "no
+such host". The rcode is cached with the answer, for 30 seconds, and never
+served stale. Whatever the depth of the name, a negative answer costs three
+indexed queries on the index rqlite (the typed read, one read of what the name
+and its in-zone wildcard candidates own, and the zone SOA); an answer from the
+name's own records costs one, from a wildcard two, and concurrent identical
+misses share one resolution. Whether a name has names below it (the empty
+non-terminal row of the table) is not asked of the database: it is a suffix
+match with no index, and the query comes from the internet, so it is answered
+from a set of ancestor names in the plugin's memory. The set is rebuilt from
+the table every `refresh` period (5 s in the generated Corefile; one read of
+the distinct active names per period, whatever the query rate) and extended
+at once by every record a lookup finds. An empty non-terminal is therefore
+NODATA as of the last refresh: a name whose only descendants are new is
+NXDOMAIN on a node that has not served one of them until the next refresh, and
+one whose descendants are gone stays NODATA until then. The set holds one entry
+per distinct ancestor name, about one per record (tens of MB at 10x the
+platform's records). If a query fails the answer is SERVFAIL (or a stale
+entry), never a guessed NXDOMAIN; a failure is logged once per 10 seconds with
+a count of those it suppressed.
 
 ### Seeing which address holds which slot
 

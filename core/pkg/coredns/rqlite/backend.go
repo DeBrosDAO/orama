@@ -12,6 +12,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// refreshTimeout bounds one rebuild of the ancestor set.
+const refreshTimeout = 30 * time.Second
+
 // DNSRecord represents a DNS record from RQLite
 type DNSRecord struct {
 	FQDN        string
@@ -29,6 +32,7 @@ type Backend struct {
 	refreshRate time.Duration
 	mu          sync.RWMutex
 	healthy     bool
+	below       ancestorSet
 }
 
 // NewBackend creates a new RQLite backend.
@@ -50,6 +54,9 @@ func NewBackend(dsn string, refreshRate time.Duration, logger *zap.Logger, usern
 	// Test connection
 	if err := b.ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping RQLite: %w", err)
+	}
+	if err := b.refreshAncestors(context.Background()); err != nil {
+		return nil, err
 	}
 
 	b.healthy = true
@@ -87,6 +94,7 @@ func (b *Backend) Query(ctx context.Context, fqdn string, qtype uint16) ([]*DNSR
 	for _, row := range rows {
 		if record := b.recordFromRow(row); record != nil {
 			records = append(records, record)
+			b.below.learn(strings.ToLower(record.FQDN))
 		}
 	}
 
@@ -126,15 +134,23 @@ func (b *Backend) recordFromRow(row []interface{}) *DNSRecord {
 	}
 }
 
-// Owners reads, in one query, what each of fqdns owns: the active records of
-// qtype it holds (by lower-cased name) and which of them hold an active record
-// of any type. A name that owns a record of another type is not NXDOMAIN for
-// qtype: that answer is NODATA. One query for the whole list keeps the cost of
-// a miss constant however many wildcard candidates the name has.
-func (b *Backend) Owners(ctx context.Context, fqdns []string, qtype uint16) (records map[string][]*DNSRecord, owned map[string]bool, err error) {
-	records, owned = map[string][]*DNSRecord{}, map[string]bool{}
+// Ownership is what a set of names owns in the zone, as Owners reads it.
+type Ownership struct {
+	// Records are the active records of the type asked that each name holds
+	// (keyed by lower-cased name).
+	Records map[string][]*DNSRecord
+	// Owned are the names that hold an active record of any type.
+	Owned map[string]bool
+}
+
+// Owners reads, in ONE indexed query, what each of fqdns owns. A name that owns
+// a record of another type is NODATA for qtype, not NXDOMAIN, and is not
+// answered from a wildcard (RFC 4592). One query for the whole list keeps the
+// cost of a miss constant however many wildcard candidates the name has.
+func (b *Backend) Owners(ctx context.Context, fqdns []string, qtype uint16) (Ownership, error) {
+	own := Ownership{Records: map[string][]*DNSRecord{}, Owned: map[string]bool{}}
 	if len(fqdns) == 0 {
-		return records, owned, nil
+		return own, nil
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -147,7 +163,7 @@ func (b *Backend) Owners(ctx context.Context, fqdns []string, qtype uint16) (rec
 		strings.Repeat(",?", len(fqdns)-1) + `) AND is_active = TRUE`
 	rows, err := b.client.Query(ctx, query, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query failed: %w", err)
+		return Ownership{}, fmt.Errorf("query failed: %w", err)
 	}
 
 	wantType := qTypeToString(qtype)
@@ -158,14 +174,15 @@ func (b *Backend) Owners(ctx context.Context, fqdns []string, qtype uint16) (rec
 		fqdn, _ := row[0].(string)
 		typeVal, _ := row[1].(string)
 		fqdn = strings.ToLower(fqdn)
-		owned[fqdn] = true
+		own.Owned[fqdn] = true
+		b.below.learn(fqdn)
 		if typeVal == wantType {
 			if record := b.recordFromRow(row); record != nil {
-				records[fqdn] = append(records[fqdn], record)
+				own.Records[fqdn] = append(own.Records[fqdn], record)
 			}
 		}
 	}
-	return records, owned, nil
+	return own, nil
 }
 
 // parseValue parses a DNS record value based on its type
@@ -267,7 +284,13 @@ func (b *Backend) healthCheck() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if err := b.ping(); err != nil {
+		err := b.ping()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+			err = b.refreshAncestors(ctx)
+			cancel()
+		}
+		if err != nil {
 			b.mu.Lock()
 			b.healthy = false
 			b.mu.Unlock()

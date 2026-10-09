@@ -29,6 +29,7 @@ const (
 // (docs/AUTH.md#roles: a transfer is held to the per-wallet cap).
 func TestWalletCap_transferIsHeldToTheCap(t *testing.T) {
 	f := harness.Fleet(t)
+	ns.Hold(t, f, 2)
 	giver := ns.New(t, f, ns.Options{})
 	holder := ns.New(t, f, ns.Options{})
 	cli := harness.CLI(t)

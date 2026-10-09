@@ -28,7 +28,7 @@ const staleBudget = edge.PluginCacheTTL + 30*time.Second
 // TestStale_backendUnreachableServesCachedAnswers: when a nameserver's
 // CoreDNS cannot reach its index rqlite, every name it answered before keeps
 // resolving — the same addresses, re-served with a 30s TTL so resolvers come
-// back soon — while a name it never answered, and a name it only knew as
+// back soon (a name a wildcard stood in for, for WildcardStaleWindow, 5 minutes) — while a name it never answered, and a name it only knew as
 // a negative answer, is SERVFAIL rather than an invented or stale negative. Other
 // nameservers are unaffected, and the node recovers its normal TTLs once the
 // backend is back (core/pkg/coredns/rqlite plugin.go serveStaleOrFail,

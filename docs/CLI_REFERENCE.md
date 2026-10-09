@@ -749,6 +749,7 @@ signs.
 |------|---------|-------------|
 | `--amount` | `100000000000` | Amount of norama to send (1 ORAMA = 1000000000 norama) |
 | `--env` | — | Environment whose node signs (default: the active environment) |
+| `--node` | — | SSH host (IP) of the node that signs (default: the environment's first node) |
 
 ### orama chain node
 

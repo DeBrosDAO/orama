@@ -11,7 +11,9 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/edge"
+	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
 // TestZone_soaAndNSFromEveryNameserver: every nameserver answers the base
@@ -124,25 +126,39 @@ func TestZone_wildcardWalksOutward(t *testing.T) {
 	}
 }
 
-// TestZone_missingTypeIsNoDataNotNXDOMAIN: a name that is served has no AAAA
-// (or TXT) record, and every nameserver says so with NOERROR, no answer and
-// the apex SOA, over UDP and TCP, for the apex, a glue name and a name only
-// the wildcard covers. NXDOMAIN there made the resolvers that apply RFC 8020
-// cache the whole name as nonexistent after one AAAA query, and the next A
-// lookup of a served host failed with "no such host"
-// (core/pkg/coredns/rqlite plugin.go handleNegative).
+// TestZone_missingTypeIsNoDataNotNXDOMAIN: a name that is served has no AAAA,
+// NS, MX or TXT record, and every nameserver says so with NOERROR, no answer
+// and the apex SOA, over UDP and TCP, for the apex, a glue name, a namespace's
+// ns-<ns>.<base>, and names only a wildcard covers (the base's, and the
+// namespace's), and the namespace's A record still resolves afterwards. NXDOMAIN
+// there said the name did not exist, so the resolvers that apply RFC 8020 (or
+// minimise the name, RFC 9156) cached the whole name as nonexistent after one
+// AAAA or NS query and the next A lookup of a served host failed with "no such
+// host" (docs/NAMESERVER_SETUP.md "A negative answer"; core/pkg/coredns/rqlite
+// plugin.go lookup and handleNegative).
 func TestZone_missingTypeIsNoDataNotNXDOMAIN(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
+	n := tenancy.Namespace(t, f, ns.Options{})
 	base := f.State.BaseDomain
-	names := []string{base, "ns1." + base, under(t, base), under(t, base, "a", "b")}
-	for _, n := range edge.Nameservers(f) {
+	host := tenancy.NamespaceHost(f, n.Name)
+	want := publicIPs(hosting(t, f, n.Name))
+	names := []string{base, "ns1." + base, host, "app." + host, under(t, base), under(t, base, "a", "b")}
+	for _, srv := range edge.Nameservers(f) {
 		for _, network := range []string{"udp", "tcp"} {
 			for _, name := range names {
-				for _, typ := range []dnsmessage.Type{dnsmessage.TypeAAAA, dnsmessage.TypeTXT} {
-					requireNegative(t, n.Name, fmt.Sprintf("%s %s over %s", typ, name, network), base, askOver(t, network, n.PublicIP, name, typ))
+				for _, typ := range []dnsmessage.Type{dnsmessage.TypeAAAA, dnsmessage.TypeNS, dnsmessage.TypeMX, dnsmessage.TypeTXT} {
+					if name == base && (typ == dnsmessage.TypeNS) {
+						continue // the apex owns its NS records
+					}
+					requireNegative(t, srv.Name, fmt.Sprintf("%s %s over %s", typ, name, network), base, askOver(t, network, srv.PublicIP, name, typ))
 				}
 			}
+		}
+		a := ask(t, srv.PublicIP, host, dnsmessage.TypeA)
+		requireAuthoritative(t, srv.Name, host, a)
+		if got := sorted(a.Values(dnsmessage.TypeA)); !slices.Equal(got, want) {
+			t.Errorf("%s: %s -> %v after the NODATA answers, want the namespace's nodes %v", srv.Name, host, got, want)
 		}
 	}
 }
