@@ -6,11 +6,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"net"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -98,9 +96,9 @@ func TestTLS_untrustedWithoutPinnedRoots(t *testing.T) {
 	host, addr := gatewayHost(t)
 	requireReachable(t, host, addr)
 	_, err := handshake(t, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}, addr)
-	if pinnedRootsArePublic(t) {
+	if !harness.Fleet(t).State.StagingCerts() {
 		if err != nil {
-			t.Fatalf("the pinned roots are public roots, so the system roots must accept the certificate: %v", err)
+			t.Fatalf("this target serves production Let's Encrypt certificates, so the system roots must accept the certificate: %v", err)
 		}
 		return
 	}
@@ -109,40 +107,6 @@ func TestTLS_untrustedWithoutPinnedRoots(t *testing.T) {
 	if !errors.As(err, &verr) || !errors.As(err, &unknown) {
 		t.Fatalf("with the system roots, want x509.UnknownAuthorityError, got %v", err)
 	}
-}
-
-// pinnedRootsArePublic reports whether every root in the run's CA bundle is a
-// root the system trust store holds.
-func pinnedRootsArePublic(t *testing.T) bool {
-	t.Helper()
-	body, err := os.ReadFile(harness.Fleet(t).State.CAFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	system, err := x509.SystemCertPool()
-	if err != nil {
-		t.Fatalf("load the system roots: %v", err)
-	}
-	found := 0
-	for rest := body; ; {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			t.Fatalf("parse a certificate of the run's CA bundle: %v", err)
-		}
-		found++
-		if _, err := cert.Verify(x509.VerifyOptions{Roots: system, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
-			return false
-		}
-	}
-	if found == 0 {
-		t.Fatal("the run's CA bundle holds no certificate")
-	}
-	return true
 }
 
 // alertProtocolVersion is TLS alert 70, protocol_version (RFC 8446 6.2).
