@@ -26,6 +26,7 @@ requires:
 covers:
   claims:
     - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: the reporter refuses to start without its operator and authority identity"
-    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, during the epoch after it (x/relay's report window), and x/relay takes the report (needs a reporter key in x/relay's set)"
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, during the epoch after it (x/relay's report window), and x/relay takes the report (needs a reporter key in x/relay's set and epochs at least one voting interval long; without them the test says not applicable)"
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: orama-global reporter --print-address prints the address of the hot key without creating it"
     - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: the authority's archive oneshot exports its own vote to a directory its account writes and the reporter's group reads, and the reporter's account cannot read the authority's home nor the authority's the reporter's"
     - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: orama global install prepares the reporter's home: its account owns it, the operator is an account address and the authority-id is the v3_ident of an authority in the installed network file and the vote-interval is the network file's voting interval"

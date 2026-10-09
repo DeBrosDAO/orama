@@ -106,3 +106,46 @@ func TestReporterConfig_voteInterval(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, time.Hour, cfg.VoteInterval)
 }
+
+func TestPrintReporterAddress(t *testing.T) {
+	home := t.TempDir()
+	want, created, err := loadOrCreateHotKey(filepath.Join(home, "hot-key"))
+	require.NoError(t, err)
+	require.True(t, created)
+
+	var out bytes.Buffer
+	require.NoError(t, printReporterAddress(&out, home))
+	require.Equal(t, want.Address+"\n", out.String(), "it prints the address the reporter signs with, and only that")
+}
+
+func TestPrintReporterAddress_neverCreatesTheKey(t *testing.T) {
+	home := t.TempDir()
+	var out bytes.Buffer
+	require.ErrorContains(t, printReporterAddress(&out, home), "start the reporter once")
+	require.Empty(t, out.String())
+	_, err := os.Stat(filepath.Join(home, "hot-key"))
+	require.ErrorIs(t, err, os.ErrNotExist, "a command that only reads must not make a key")
+}
+
+func TestPrintReporterAddress_refusesAKeyOthersCanRead(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "hot-key")
+	_, _, err := loadOrCreateHotKey(path)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o644))
+	var out bytes.Buffer
+	require.ErrorContains(t, printReporterAddress(&out, home), "must be 0600")
+	require.Empty(t, out.String())
+}
+
+func TestReporterCmd_printAddressNeedsNoChainOrIdentity(t *testing.T) {
+	home := t.TempDir()
+	want, _, err := loadOrCreateHotKey(filepath.Join(home, "hot-key"))
+	require.NoError(t, err)
+	cmd := reporterCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--print-address", "--home", home, "--rpc", "tcp://127.0.0.1:1"})
+	require.NoError(t, cmd.Execute(), "no operator file, no authority and no chain: the address is the key's alone")
+	require.Equal(t, want.Address+"\n", out.String())
+}

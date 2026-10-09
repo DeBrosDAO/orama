@@ -18,30 +18,37 @@ const hotKeyLen = 32
 // writes a new one with mode 0600 when the file does not exist. A key file
 // any other user can read is refused: the hot key pays this node's fees.
 func loadOrCreateHotKey(path string) (tx.Account, bool, error) {
-	body, err := os.ReadFile(path)
+	acct, err := readHotKey(path)
 	if errors.Is(err, os.ErrNotExist) {
 		acct, err := createHotKey(path)
 		return acct, true, err
 	}
+	return acct, false, err
+}
+
+// readHotKey reads the service's hex secp256k1 key from path and refuses a
+// file any other user can read. An absent file is os.ErrNotExist.
+func readHotKey(path string) (tx.Account, error) {
+	body, err := os.ReadFile(path)
 	if err != nil {
-		return tx.Account{}, false, fmt.Errorf("read hot key %s: %w", path, err)
+		return tx.Account{}, fmt.Errorf("read hot key %s: %w", path, err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return tx.Account{}, false, fmt.Errorf("stat hot key %s: %w", path, err)
+		return tx.Account{}, fmt.Errorf("stat hot key %s: %w", path, err)
 	}
 	if info.Mode().Perm()&0o077 != 0 {
-		return tx.Account{}, false, fmt.Errorf("hot key %s is mode %o; it must be 0600", path, info.Mode().Perm())
+		return tx.Account{}, fmt.Errorf("hot key %s is mode %o; it must be 0600", path, info.Mode().Perm())
 	}
 	key, err := hex.DecodeString(strings.TrimSpace(string(body)))
 	if err != nil || len(key) != hotKeyLen {
-		return tx.Account{}, false, fmt.Errorf("hot key %s is not %d hex bytes", path, hotKeyLen)
+		return tx.Account{}, fmt.Errorf("hot key %s is not %d hex bytes", path, hotKeyLen)
 	}
 	acct, err := tx.DeriveAccount(key)
 	if err != nil {
-		return tx.Account{}, false, fmt.Errorf("hot key %s: %w", path, err)
+		return tx.Account{}, fmt.Errorf("hot key %s: %w", path, err)
 	}
-	return acct, false, nil
+	return acct, nil
 }
 
 func createHotKey(path string) (tx.Account, error) {
