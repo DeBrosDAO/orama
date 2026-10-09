@@ -110,7 +110,7 @@ export const MSG = {
     if (m.freeze) powers.push("the creator can freeze any holder");
     if (m.pause) powers.push("the creator can pause all transfers");
     if (m.permanentDelegate) powers.push(`${m.permanentDelegate} can move any holder's tokens`);
-    if (m.transferHook) powers.push("every transfer runs a hook");
+    if (m.transferHook) powers.push(`every transfer runs the contract ${m.transferHook}`);
     if (m.transferFeeBps > 0) powers.push(`every transfer pays a ${formatBps(m.transferFeeBps)} fee`);
     if (m.nonTransferable) powers.push("holders cannot transfer it");
     return desc(

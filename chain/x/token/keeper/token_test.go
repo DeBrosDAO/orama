@@ -331,7 +331,7 @@ func TestExtensions_eachCanBeUsedAndOnlyRenounced(t *testing.T) {
 
 	t.Run("transfer hook", func(t *testing.T) {
 		var calls int
-		f := newTestFixture(t, hookFunc(func(ctx context.Context, _ string, _, _ sdk.AccAddress, _ math.Int) error {
+		f := newTestFixture(t, hookFunc(func(ctx context.Context, _ sdk.AccAddress, _ string, _, _ sdk.AccAddress, _ math.Int) error {
 			calls++
 			sdk.UnwrapSDKContext(ctx).GasMeter().ConsumeGas(types.TransferHookGasCap, "within cap")
 			return nil
@@ -339,7 +339,7 @@ func TestExtensions_eachCanBeUsedAndOnlyRenounced(t *testing.T) {
 		f.initGenesis(t, nil)
 		token := f.create(t, creator, "cash", func(m *types.MsgCreateToken) {
 			m.Mint = true
-			m.TransferHook = true
+			m.TransferHook = hookContract.String()
 		})
 		f.mint(t, creator, token.Denom, holder, 3)
 		require.NoError(t, f.Keeper.Transfer(f.Ctx, &types.MsgTransfer{
@@ -357,7 +357,7 @@ func TestExtensions_eachCanBeUsedAndOnlyRenounced(t *testing.T) {
 }
 
 func TestTransferHook_gasCapFailsTheTransfer(t *testing.T) {
-	f := newTestFixture(t, hookFunc(func(ctx context.Context, _ string, _, _ sdk.AccAddress, _ math.Int) error {
+	f := newTestFixture(t, hookFunc(func(ctx context.Context, _ sdk.AccAddress, _ string, _, _ sdk.AccAddress, _ math.Int) error {
 		sdk.UnwrapSDKContext(ctx).GasMeter().ConsumeGas(types.TransferHookGasCap+1, "over cap")
 		return nil
 	}))
@@ -367,7 +367,7 @@ func TestTransferHook_gasCapFailsTheTransfer(t *testing.T) {
 	other := addr(3)
 	token := f.create(t, creator, "cash", func(m *types.MsgCreateToken) {
 		m.Mint = true
-		m.TransferHook = true
+		m.TransferHook = hookContract.String()
 	})
 	f.mint(t, creator, token.Denom, holder, 8)
 	before := f.Ctx.GasMeter().GasConsumed()

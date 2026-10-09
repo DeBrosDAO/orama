@@ -52,11 +52,11 @@ func TestSendRestriction_powersHoldOnABankSend(t *testing.T) {
 		}, "paused"},
 		{"non-transferable", func(m *types.MsgCreateToken) { m.NonTransferable = true }, nil, "non-transferable"},
 		{"transfer fee", func(m *types.MsgCreateToken) { m.TransferFeeBps = 100 }, nil, "MsgTransfer"},
-		{"transfer hook", func(m *types.MsgCreateToken) { m.TransferHook = true }, nil, "MsgTransfer"},
+		{"transfer hook", func(m *types.MsgCreateToken) { m.TransferHook = hookContract.String() }, nil, "MsgTransfer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newTestFixture(t, nil)
+			f := newTestFixture(t, hookFunc(nil))
 			f.initGenesis(t, nil)
 			token := f.create(t, creator, "cash", tc.mutate)
 			if tc.arm != nil {

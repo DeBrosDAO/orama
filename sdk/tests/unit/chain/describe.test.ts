@@ -72,7 +72,7 @@ describe("approval details", () => {
     const d = describeMessage(
       MSG.tokenCreate.create({
         creator: alice, subdenom: "gold", name: "Gold", symbol: "GLD",
-        mint: true, freeze: true, pause: true, permanentDelegate: bob, transferFeeBps: 250, transferHook: true,
+        mint: true, freeze: true, pause: true, permanentDelegate: bob, transferFeeBps: 250, transferHook: bob,
       }),
     );
     const powers = d.notes[0];
@@ -81,6 +81,7 @@ describe("approval details", () => {
     expect(powers).toContain("pause all transfers");
     expect(powers).toContain(`${bob} can move any holder's tokens`);
     expect(powers).toContain("2.5% fee");
+    expect(powers).toContain(`every transfer runs the contract ${bob}`);
     expect(d.sensitive).toBe(true);
   });
 

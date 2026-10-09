@@ -357,11 +357,23 @@ func (f *testFixture) requireInvariants(t *testing.T) {
 	require.True(t, got.DepositsMatch, got.Detail)
 }
 
-type hookFunc func(ctx context.Context, denom string, from, to sdk.AccAddress, amount math.Int) error
+// hookContract is the contract address the tests name as a token's transfer hook.
+var hookContract = addr(9)
 
-func (h hookFunc) OnTransfer(ctx context.Context, denom string, from, to sdk.AccAddress, amount math.Int) error {
+// hookFunc is a transfer hook for tests: it accepts hookContract as an existing contract and runs
+// itself for every transfer.
+type hookFunc func(ctx context.Context, contract sdk.AccAddress, denom string, from, to sdk.AccAddress, amount math.Int) error
+
+func (h hookFunc) ValidateHook(_ context.Context, contract sdk.AccAddress) error {
+	if !contract.Equals(hookContract) {
+		return fmt.Errorf("there is no contract at %s", contract)
+	}
+	return nil
+}
+
+func (h hookFunc) OnTransfer(ctx context.Context, contract sdk.AccAddress, denom string, from, to sdk.AccAddress, amount math.Int) error {
 	if h == nil {
 		return nil
 	}
-	return h(ctx, denom, from, to, amount)
+	return h(ctx, contract, denom, from, to, amount)
 }

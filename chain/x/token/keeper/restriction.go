@@ -68,7 +68,7 @@ func (k Keeper) checkPlainSend(ctx context.Context, denom string, from, to sdk.A
 	if token.Extensions.NonTransferable {
 		return fmt.Errorf("token %s is non-transferable", denom)
 	}
-	if token.Extensions.TransferFeeBps > 0 || token.Extensions.TransferHook {
+	if token.Extensions.TransferFeeBps > 0 || token.Extensions.TransferHook != "" {
 		return fmt.Errorf("token %s has a transfer fee or hook and moves only by x/token MsgTransfer", denom)
 	}
 	for _, account := range []sdk.AccAddress{from, to} {

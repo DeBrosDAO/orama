@@ -27,7 +27,7 @@ func tokenMsg(typ string, fields map[string]any) chain.Msg {
 func createTokenMsg(creator, sub, name, symbol, desc string, fee uint32) chain.Msg {
 	return tokenMsg("MsgCreateToken", map[string]any{"creator": creator, "subdenom": sub, "name": name, "symbol": symbol,
 		"description": desc, "mint": true, "freeze": true, "permanent_delegate": "", "transfer_fee_bps": fee,
-		"non_transferable": false, "pause": true, "transfer_hook": false})
+		"non_transferable": false, "pause": true, "transfer_hook": ""})
 }
 
 // TestToken_createNeedsBankBalance: a well-formed MsgCreateToken needs the
@@ -84,6 +84,24 @@ func TestToken_createSucceedsWithFaucetFunds(t *testing.T) {
 		t.Errorf("balance %s norama after the create, want at most %s (the creation fee is burned)", left.String(), max.String())
 	}
 	c.RequireInvariants(t, "a funded token create")
+}
+
+// TestToken_createRefusesATransferHookThatIsNoContract: a token's transfer hook names a contract
+// (docs/CHAIN.md "x/token"): an account that is no contract is refused at creation, and so is a
+// string that is no address.
+func TestToken_createRefusesATransferHookThatIsNoContract(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.NewFundedKey(t, c.Node(t, 1), "e2e-token-hook", chain.Orama(30))
+	for hook, want := range map[string]string{
+		k.Address:            "there is no contract at",
+		"orama1notanaddress": "invalid transfer hook contract",
+	} {
+		m := createTokenMsg(k.Address, chain.UniqueID(t, "e2e"), "E2E Hook", "EHK", "fleet e2e", 0)
+		m["transfer_hook"] = hook
+		chain.RequireRefused(t, "hook "+hook, c.Submit(t, k, chain.TxOptions{}, m), want)
+	}
+	c.RequireInvariants(t, "refused hook creations")
 }
 
 // TestToken_createShapeRefusals: subdenom, name, symbol, description and
@@ -192,4 +210,3 @@ func TestToken_bankSendHoldsTokenPowers(t *testing.T) {
 	chain.RequireOK(t, "bank send after the unpause", c.Submit(t, k, chain.TxOptions{}, send))
 	c.RequireInvariants(t, "a bank send of a factory token")
 }
-

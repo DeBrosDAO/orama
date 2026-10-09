@@ -41,8 +41,8 @@ enum Extension {
 }
 
 // Extensions is the set of capabilities still held. A false flag, an empty
-// permanent_delegate, or a zero transfer_fee_bps means that capability is
-// absent (never set, or already renounced).
+// permanent_delegate or transfer_hook, or a zero transfer_fee_bps means that
+// capability is absent (never set, or already renounced).
 message Extensions {
   bool mint = 1;
   bool freeze = 2;
@@ -55,7 +55,11 @@ message Extensions {
   uint32 transfer_fee_bps = 4;
   bool non_transferable = 5;
   bool pause = 6;
-  bool transfer_hook = 7;
+  // transfer_hook is the bech32 address of the CosmWasm contract the chain calls
+  // (sudo) on every x/token MsgTransfer of this token, under a gas cap. It is
+  // fixed at creation and can only be renounced. Empty means the capability is
+  // absent.
+  string transfer_hook = 7;
 }
 
 // Token is one factory denom. Balances are not stored here; they live in

@@ -137,6 +137,11 @@ func ValidateExtensions(e Extensions) error {
 			return fmt.Errorf("invalid permanent delegate %q: %w", e.PermanentDelegate, err)
 		}
 	}
+	if e.TransferHook != "" {
+		if _, err := sdk.AccAddressFromBech32(e.TransferHook); err != nil {
+			return fmt.Errorf("invalid transfer hook contract %q: %w", e.TransferHook, err)
+		}
+	}
 	return nil
 }
 
@@ -161,7 +166,7 @@ func (e Extensions) Holds(ext Extension) bool {
 	case EXTENSION_PAUSE:
 		return e.Pause
 	case EXTENSION_TRANSFER_HOOK:
-		return e.TransferHook
+		return e.TransferHook != ""
 	default:
 		return false
 	}
@@ -186,7 +191,7 @@ func (e Extensions) Renounce(ext Extension) (Extensions, error) {
 	case EXTENSION_PAUSE:
 		e.Pause = false
 	case EXTENSION_TRANSFER_HOOK:
-		e.TransferHook = false
+		e.TransferHook = ""
 	default:
 		return Extensions{}, fmt.Errorf("unknown extension %s", ext)
 	}

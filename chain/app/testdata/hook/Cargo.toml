@@ -1,0 +1,19 @@
+# Orama-authored token transfer-hook contract for the cgo hook test. Build like ../echo:
+#   rustup target add wasm32-unknown-unknown
+#   RUSTFLAGS='-C target-feature=-bulk-memory -C target-feature=-reference-types -C target-feature=-multivalue -C target-feature=-simd128 -C target-feature=-nontrapping-fptoint -C target-feature=-sign-ext -C link-arg=--allow-undefined' \
+#     cargo build --release --target wasm32-unknown-unknown -Z build-std=std,panic_abort,core,alloc
+#   wasm-opt --llvm-memory-copy-fill-lowering --enable-bulk-memory --enable-sign-ext \
+#     --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue --enable-simd \
+#     target/wasm32-unknown-unknown/release/orama_hook.wasm -o ../hook.wasm
+[package]
+name = "orama-hook"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cosmwasm-std = "=2.2.2"
+serde = { version = "1", default-features = false, features = ["derive"] }

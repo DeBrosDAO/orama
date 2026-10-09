@@ -135,7 +135,7 @@ func vectorMessages(signer string) []struct {
 		{"slashing_unjail", &slashingtypes.MsgUnjail{ValidatorAddr: valoper}, ""},
 		{"distribution_withdraw_reward", &distrtypes.MsgWithdrawDelegatorReward{DelegatorAddress: signer, ValidatorAddress: otherVal}, ""},
 		{"wasm_execute", &wasmtypes.MsgExecuteContract{Sender: signer, Contract: addrOf(0x60, 32).String(), Msg: []byte(`{"ping":{}}`), Funds: norama(12)}, ""},
-		{"token_create", &tokentypes.MsgCreateToken{Creator: signer, Subdenom: "gold", Name: "Gold", Symbol: "GLD", Description: "a token", Mint: true, Freeze: true, PermanentDelegate: other, TransferFeeBps: 25, NonTransferable: false, Pause: true, TransferHook: false}, ""},
+		{"token_create", &tokentypes.MsgCreateToken{Creator: signer, Subdenom: "gold", Name: "Gold", Symbol: "GLD", Description: "a token", Mint: true, Freeze: true, PermanentDelegate: other, TransferFeeBps: 25, NonTransferable: false, Pause: true, TransferHook: addrOf(0x41, 20).String()}, ""},
 		{"token_mint", &tokentypes.MsgMint{Sender: signer, Denom: "factory/" + signer + "/gold", Recipient: other, Amount: math.NewInt(123456789012345)}, ""},
 		{"nodes_register_node", &nodestypes.MsgRegisterNode{
 			Operator: signer, NodeId: "node-1", Roles: []nodestypes.Role{nodestypes.RoleValidator, nodestypes.RoleStorage},
