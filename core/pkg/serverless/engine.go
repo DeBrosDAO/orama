@@ -16,6 +16,8 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 	"go.uber.org/zap"
 
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"github.com/DeBrosOfficial/network/pkg/serverless/cache"
 	"github.com/DeBrosOfficial/network/pkg/serverless/execution"
@@ -1205,7 +1207,9 @@ func (e *Engine) hHTTPFetch(ctx context.Context, mod api.Module, methodPtr, meth
 
 	resp, err := e.hostServices.HTTPFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
-		e.logger.Error("host function http_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		// The client's error quotes the whole URL, and a credential may be in its query.
+		e.logger.Error("host function http_fetch failed",
+			zap.String("error", httputil.FailureReason(err)), zap.String("url", httputil.WithoutQuery(string(u))))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
@@ -1288,7 +1292,10 @@ func (e *Engine) hAnonFetch(ctx context.Context, mod api.Module, methodPtr, meth
 
 	resp, err := e.hostServices.AnonFetch(ctx, string(method), string(u), headers, body)
 	if err != nil {
-		e.logger.Error("host function anon_fetch failed", zap.Error(err), zap.String("url", string(u)))
+		// An anon_fetch caller chose Tor so the node could not say where the
+		// function went: neither the URL nor the error text, which names the
+		// destination, is logged.
+		e.logger.Error("host function anon_fetch failed", zap.String("error_class", anonproxy.ErrorClass(err)))
 		return 0
 	}
 	return e.executor.WriteToGuest(ctx, mod, resp)
