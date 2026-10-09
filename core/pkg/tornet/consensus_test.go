@@ -89,3 +89,25 @@ func TestParseConsensus_fullDocumentHasNoMicrodescFlavor(t *testing.T) {
 		t.Errorf("flavor = %q", c.Flavor)
 	}
 }
+
+func TestConsensus_exitsWithoutPorts(t *testing.T) {
+	doc := strings.Join([]string{
+		"network-status-version 3", "vote-status consensus", "valid-after 2026-10-09 17:30:00",
+		"fresh-until 2026-10-09 18:00:00", "valid-until 2026-10-09 19:00:00", "known-flags Exit Running",
+		"r ExitA AAAAAAAAAAAAAAAAAAAAAAAAALA yrThRCjxnDUQ/pst/UHbtFpjl4c 2026-10-09 11:49:00 192.5.5.241 31020 0", "s Exit Running", "p reject 1-65535",
+		"r ExitB AAAAAAAAAAAAAAAAAAAAAAAAALE yrThRCjxnDUQ/pst/UHbtFpjl4d 2026-10-09 11:49:00 192.5.5.242 31020 0", "s Exit Running", "p reject 25,119",
+		"r Relay AAAAAAAAAAAAAAAAAAAAAAAAAMA yrThRCjxnDUQ/pst/UHbtFpjl4e 2026-10-09 11:49:00 192.5.5.243 31020 0", "s Running", "p reject 1-65535",
+		"r NoSummary AAAAAAAAAAAAAAAAAAAAAAAAAME yrThRCjxnDUQ/pst/UHbtFpjl4f 2026-10-09 11:49:00 192.5.5.244 31020 0", "s Exit Running",
+		"directory-footer", "",
+	}, "\n")
+	c, err := ParseConsensus(strings.NewReader(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Exits() != 3 || c.ExitsWithoutPorts() != 1 {
+		t.Errorf("exits %d, without ports %d, want 3 and 1: a relay that is not an exit and an entry with no summary are not counted", c.Exits(), c.ExitsWithoutPorts())
+	}
+	if got := c.Relays[0].Policy; got != "reject 1-65535" {
+		t.Errorf("policy = %q", got)
+	}
+}

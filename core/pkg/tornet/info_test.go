@@ -66,3 +66,25 @@ func TestReadNodeInfo_aBrokenFileIsAnErrorNotAnEmptyField(t *testing.T) {
 		}
 	}
 }
+
+func TestReadNodeInfo_countsExitsThatAcceptNoPort(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, DataDirConsensus), readFixture(t, "consensus-ns.txt"))
+	info, err := ReadNodeInfo(home, time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := info.Consensus
+	if c == nil || c.Flavor != "ns" || c.ExitsWithoutPorts != 0 {
+		t.Fatalf("consensus = %+v: the fixture's only exit accepts ports", c)
+	}
+	exitless := strings.Replace(string(readFixture(t, "consensus-ns.txt")), "p accept 1-65535", "p reject 1-65535", 1)
+	write(t, filepath.Join(home, DataDirConsensus), []byte(exitless))
+	info, err = ReadNodeInfo(home, time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := info.Consensus; c.Exits != 1 || c.ExitsWithoutPorts != 1 {
+		t.Fatalf("exits %d without ports %d, want 1 and 1", c.Exits, c.ExitsWithoutPorts)
+	}
+}

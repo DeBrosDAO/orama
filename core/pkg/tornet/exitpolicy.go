@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,21 +20,34 @@ var exitRejectPorts = []string{
 	"4661-4666", "6346-6429", "6699", "6881-6999",
 }
 
+// exitPolicyUnroutable are the reserved IPv4 ranges no TCP connection can
+// reach: multicast, and the reserved class E block with the limited broadcast.
+// They are left out of the exit policy on purpose. The authorities summarise
+// an exit's policy into the `p` line clients choose exits by, and Tor lists a
+// port as refused there when the refusals for it cover more than two /8 blocks
+// of addresses (see exitSummaryAccepts). These two are sixteen /8 blocks each:
+// listed, they made every port "refused", the authorities published
+// "reject 1-65535" for the exit and no client would build a path through it.
+// Tor's own default policy does not list them either.
+var exitPolicyUnroutable = []string{"224.0.0.0/4", "240.0.0.0/4"}
+
 // ExitPolicyLines is the whole exit policy of an exit relay, in torrc order:
 // the operator's own refusals first (Tor takes the first rule that matches),
-// then every reserved IPv4 range, then the refused ports, then accept the
-// rest. IPv6 is not exited (IPv6Exit 0 is set beside it).
+// then every reserved IPv4 range an exit can be asked to reach, then the
+// refused ports, then accept the rest. IPv6 is not exited (IPv6Exit 0 is set
+// beside it).
 //
 // The reserved ranges are the shared netguard list, which holds the ones Tor
 // does not reject by default and an exit must: 100.64.0.0/10 and the
-// 198.18.0.0/15 range the co-located namespace's host end lives in.
+// 198.18.0.0/15 range the co-located namespace's host end lives in. The
+// unroutable ones (exitPolicyUnroutable) are not in it.
 func ExitPolicyLines(operatorReject []string) []string {
 	var lines []string
 	for _, r := range operatorReject {
 		lines = append(lines, "ExitPolicy reject "+r)
 	}
 	for _, cidr := range netguard.Ranges {
-		if p := netip.MustParsePrefix(cidr); p.Addr().Is4() {
+		if p := netip.MustParsePrefix(cidr); p.Addr().Is4() && !slices.Contains(exitPolicyUnroutable, cidr) {
 			lines = append(lines, "ExitPolicy reject "+cidr+":*")
 		}
 	}

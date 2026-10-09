@@ -175,6 +175,11 @@ func (c RelayConfig) validate() error {
 			return fmt.Errorf("exit reject rule %q: %w", r, err)
 		}
 	}
+	if c.Exit {
+		if err := checkExitSummary(ExitPolicyLines(c.ExitReject)); err != nil {
+			return fmt.Errorf("exit policy: %w", err)
+		}
+	}
 	for _, f := range c.Family {
 		if err := checkFingerprint("family member", f); err != nil {
 			return err
