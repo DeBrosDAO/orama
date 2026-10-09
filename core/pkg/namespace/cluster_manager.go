@@ -604,7 +604,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 	var err error
 	if nodes[0].NodeID == cm.localNodeID {
 		cm.logger.Info("Spawning RQLite leader locally", zap.String("node", nodes[0].NodeID))
-		err = cm.spawnRQLiteWithSystemd(ctx, leaderCfg)
+		err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnRQLiteWithSystemd(ctx, leaderCfg) })
 		if err == nil {
 			// Create Instance object for consistency with existing code
 			instances[0] = &rqlite.Instance{
@@ -633,7 +633,7 @@ func (cm *ClusterManager) startRQLiteCluster(ctx context.Context, cluster *Names
 		var followerInstance *rqlite.Instance
 		if nodes[i].NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning RQLite follower locally", zap.String("node", nodes[i].NodeID))
-			err = cm.spawnRQLiteWithSystemd(ctx, followerCfg)
+			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnRQLiteWithSystemd(ctx, followerCfg) })
 			if err == nil {
 				followerInstance = &rqlite.Instance{
 					Config: followerCfg,
@@ -700,7 +700,7 @@ func (cm *ClusterManager) startOlricCluster(ctx context.Context, cluster *Namesp
 			defer wg.Done()
 			if n.NodeID == cm.localNodeID {
 				cm.logger.Info("Spawning Olric locally", zap.String("node", n.NodeID))
-				errs[idx] = cm.spawnOlricWithSystemd(ctx, configs[idx])
+				errs[idx] = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnOlricWithSystemd(ctx, configs[idx]) })
 				if errs[idx] == nil {
 					instances[idx] = &olric.OlricInstance{
 						Namespace:      configs[idx].Namespace,
@@ -805,7 +805,7 @@ func (cm *ClusterManager) startGatewayCluster(ctx context.Context, cluster *Name
 		var err error
 		if node.NodeID == cm.localNodeID {
 			cm.logger.Info("Spawning Gateway locally", zap.String("node", node.NodeID))
-			err = cm.spawnGatewayWithSystemd(ctx, cfg)
+			err = cm.spawnAdmitted(ctx, cluster.NamespaceName, func() error { return cm.spawnGatewayWithSystemd(ctx, cfg) })
 			if err == nil {
 				instance = &gatewayspec.GatewayInstance{
 					Namespace:    cfg.Namespace,
@@ -1856,7 +1856,11 @@ func (cm *ClusterManager) restoreClusterOnNode(ctx context.Context, clusterID, n
 	// the namespace may have begun its delete since. Under the namespace's lock
 	// a teardown is either done or not yet started; reading the status again
 	// here decides which.
-	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+	unlock, err := cm.systemdSpawner.LockNamespace(ctx, namespaceName)
+	if err != nil {
+		return fmt.Errorf("restore cluster %s: %w", clusterID, err)
+	}
+	defer unlock()
 	cluster, err := cm.GetCluster(ctx, clusterID)
 	if err != nil {
 		return fmt.Errorf("re-read cluster %s before restoring it: %w", clusterID, err)
@@ -2544,6 +2548,35 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 		}
 	}
 
+	// The state was read, and the registry asked, before this namespace's lock
+	// was taken, and a delete of the namespace may have run its teardown on this
+	// node since: that removes the state file under the lock. This restore needs
+	// no registry (it exists to bring tenants up before rqlite has a leader), so
+	// the file is what it decides on, read again under the lock.
+	unlock, err := cm.systemdSpawner.LockNamespace(ctx, state.NamespaceName)
+	if err != nil {
+		return fmt.Errorf("restore namespace %s from local state: %w", state.NamespaceName, err)
+	}
+	defer unlock()
+	current, err := loadLocalState(filepath.Join(cm.baseDataDir, state.NamespaceName, "cluster-state.json"))
+	switch {
+	case os.IsNotExist(err):
+		cm.logger.Info("Not restoring a namespace from local state: its state was removed while the restore waited, so it was torn down",
+			zap.String("namespace", state.NamespaceName), zap.String("cluster_id", state.ClusterID))
+		return nil
+	case err != nil:
+		return fmt.Errorf("re-read the local state of namespace %s before restoring it: %w", state.NamespaceName, err)
+	case current.ClusterID != state.ClusterID:
+		cm.logger.Info("Not restoring a namespace from local state: the namespace was re-created while the restore waited",
+			zap.String("namespace", state.NamespaceName), zap.String("cluster_id", state.ClusterID), zap.String("current_cluster_id", current.ClusterID))
+		return nil
+	}
+	return cm.restoreUnitsFromState(ctx, current)
+}
+
+// restoreUnitsFromState starts the units a namespace's local state describes.
+// The caller holds the namespace's lock and has just read the state under it.
+func (cm *ClusterManager) restoreUnitsFromState(ctx context.Context, state *ClusterLocalState) error {
 	pb := &state.LocalPorts
 	localIP := state.LocalIP
 
@@ -2971,7 +3004,7 @@ func (cm *ClusterManager) restoreClusterFromState(ctx context.Context, state *Cl
 						TURNCredTTL: webrtcCfg.TURNCredentialTTL,
 						RQLiteDSN:   tenantRQLiteURL(localIP, pb.RQLiteHTTPPort),
 					}
-					if err := cm.systemdSpawner.SpawnSFU(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
+					if err := cm.systemdSpawner.SpawnSFULocked(ctx, state.NamespaceName, cm.localNodeID, sfuCfg); err != nil {
 						cm.logger.Error("Failed to restore SFU", zap.String("namespace", state.NamespaceName), zap.Error(err))
 					} else {
 						cm.logger.Info("Restored SFU instance from DB port allocation",

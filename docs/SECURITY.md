@@ -54,9 +54,7 @@ These measures apply to all nodes (Ubuntu and OramaOS).
 ### Authentication
 
 **Internal Endpoint Auth (Step 1.3)**
-- Every `/v1/internal/wg/*` endpoint requires both an overlay source address and the cluster secret
-- Peer *registration* (`POST /v1/internal/wg/peer`) enforces the same pair. It previously checked neither: there was no overlay check at all, and the secret check was written `if configured != "" && supplied != configured`, so a gateway with no cluster secret accepted a peer insertion from anyone who could reach it
-- A gateway with no cluster secret configured now refuses these endpoints (`503`) instead of allowing them, since there is no way to authenticate the caller
+- **The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` endpoints were removed** (#727) rather than re-authenticated. They took the cluster secret itself as a bearer credential (in the body, or in `X-Cluster-Secret`), with no audience, nonce or body binding; nothing in the repository called them, and registration through them added a peer without an invite. A node's peer row is written only by the invite-gated join and the OramaOS enrolment, both through `pkg/overlay`. The paths now answer like any path that does not exist. A node still on the previous build serves them until it is upgraded; because nothing calls them there is no compatibility window
 - `node_id` and `public_key` on peer registration are parsed (libp2p peer id; base64 32-byte Curve25519, control characters rejected) before they are stored, because both are rendered into `wg0.conf` on every node
 
 **Open sign-in (`sign_in: open`)**

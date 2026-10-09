@@ -78,7 +78,7 @@ func TestRestoreLocalClusters_listsDegradedClustersToo(t *testing.T) {
 // the cluster's status only once the teardown is done.
 func TestRestoreClusterOnNode_waitsForATeardownOfTheNamespace(t *testing.T) {
 	cm := restoreWith(ClusterStatusDeprovisioning)
-	unlock := cm.systemdSpawner.LockNamespace("acme")
+	unlock := mustLockNamespace(t, cm.systemdSpawner, "acme")
 
 	done := make(chan error, 1)
 	go func() { done <- cm.restoreClusterOnNode(context.Background(), "c1", "acme", "10.0.0.1") }()
@@ -102,10 +102,10 @@ func TestRestoreClusterOnNode_waitsForATeardownOfTheNamespace(t *testing.T) {
 // another's restore.
 func TestLockNamespace_isPerNamespace(t *testing.T) {
 	s := NewSystemdSpawner("/nonexistent", "", zap.NewNop())
-	unlockA := s.LockNamespace("a")
+	unlockA := mustLockNamespace(t, s, "a")
 	defer unlockA()
 	got := make(chan struct{})
-	go func() { s.LockNamespace("b")(); close(got) }()
+	go func() { mustLockNamespace(t, s, "b")(); close(got) }()
 	select {
 	case <-got:
 	case <-time.After(5 * time.Second):
@@ -127,7 +127,7 @@ func TestTeardownNamespace_holdsTheNamespaceLock(t *testing.T) {
 	go func() { _ = s.TeardownNamespace(context.Background(), "acme") }()
 	<-inTeardown
 	locked := make(chan struct{})
-	go func() { s.LockNamespace("acme")(); close(locked) }()
+	go func() { mustLockNamespace(t, s, "acme")(); close(locked) }()
 	select {
 	case <-locked:
 		t.Fatal("the namespace's lock was free while its teardown was stopping units")

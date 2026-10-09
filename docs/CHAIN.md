@@ -1663,6 +1663,8 @@ the provider root is rebuilt from the endpoint's scheme, host and path only (a q
 userinfo it carries is dropped). `<home>/deals/<id>.json`
 (mode 0600) holds `{"deal_id": N, "repair_seed": "<hex>"}`. The delegate's
 operator installs these files; no network path hands a seed to the delegate.
+A file that is readable by others, malformed, short or named for another deal is logged as an
+error every pass and its deal is not repaired; the other deals are repaired in the same pass.
 
 Each pass, for every such deal:
 - A slot that is assigned but not accepted, while another slot is active, is
@@ -1673,6 +1675,10 @@ Each pass, for every such deal:
 - The result is uploaded to the new provider.
 - A new deal with no accepted replica is left alone.
 - The delegate never recovers plaintext.
+- Each restored slot is logged (`replica restored`) with `blocks_since_assigned`: the blocks between
+  the chain assigning the replacement slot (the eviction) and the delegate's upload. That is the
+  delegate's part of the time to restore the full replica count; the new provider's acceptance
+  follows in a later block. There is no metrics endpoint and no SLO threshold is enforced.
 
 `TestRepairChaos_killedProviderIsEvictedAndTheDelegateRestoresTheReplica`
 runs the whole path against the x/storage keeper: a provider stops, misses
@@ -2001,6 +2007,14 @@ The storage commands:
 - `orama storage seal` writes one ciphertext per slot and prints each piece
   root. `orama storage open` reads one of those files.
 - `orama storage rewrap` rebuilds one slot from another with the repair seed.
+- `orama storage repair --deal-id N --repair-seed-file F --rpc <oramad RPC>` is the owner's own repair,
+  for a deal that names no repair delegate. For every slot the chain assigned to a new provider that
+  has not accepted, it fetches an accepted replica from another provider (checked against that
+  slot's root), rewraps it with the repair seed, checks the result against the new slot's root and
+  uploads it. A repair seed that is not the deal's misses the root and uploads nothing. A deal with no
+  accepted replica is refused (`orama storage put` makes the first upload). A deal that names a
+  delegate is repaired by the delegate while the owner is away; without one, the deal runs with
+  fewer replicas until the owner runs this command.
 - `orama storage put --deal-id N --dir <seal output> --rpc <oramad RPC>` checks
   every slot file's root against the chain before sending anything. It waits
   for each slot's assignment and uploads to the node's first http(s) endpoint

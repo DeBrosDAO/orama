@@ -587,7 +587,9 @@ func (cm *ClusterManager) selectTURNNodes(ctx context.Context, nodes []clusterNo
 // spawnSFUOnNode spawns SFU on a node (local or remote)
 func (cm *ClusterManager) spawnSFUOnNode(ctx context.Context, node clusterNodeInfo, namespace string, cfg SFUInstanceConfig) error {
 	if node.NodeID == cm.localNodeID {
-		return cm.systemdSpawner.SpawnSFU(ctx, namespace, node.NodeID, cfg)
+		return cm.spawnAdmitted(ctx, namespace, func() error {
+			return cm.systemdSpawner.SpawnSFULocked(ctx, namespace, node.NodeID, cfg)
+		})
 	}
 	return cm.spawnSFURemote(ctx, node.InternalIP, cfg)
 }
@@ -1819,7 +1821,7 @@ func (cm *ClusterManager) stopUnallocatedWebRTCServices(ctx context.Context, clu
 		if !needs || !svc.gone() {
 			continue
 		}
-		cm.stopServiceIfStillUnallocated(namespaceName, svc.typ, svc.gone)
+		cm.stopServiceIfStillUnallocated(ctx, namespaceName, svc.typ, svc.gone)
 	}
 }
 
@@ -1845,8 +1847,14 @@ func (cm *ClusterManager) unitNeedsRetiring(namespaceName string, typ systemd.Se
 // retiring on the earlier read would remove the unit it just started. The
 // spawn takes the same lock (SpawnSFU), so an enable is either wholly before
 // this check or wholly after the retirement.
-func (cm *ClusterManager) stopServiceIfStillUnallocated(namespaceName string, typ systemd.ServiceType, gone func() bool) {
-	defer cm.systemdSpawner.LockNamespace(namespaceName)()
+func (cm *ClusterManager) stopServiceIfStillUnallocated(ctx context.Context, namespaceName string, typ systemd.ServiceType, gone func() bool) {
+	unlock, lerr := cm.systemdSpawner.LockNamespace(ctx, namespaceName)
+	if lerr != nil {
+		cm.logger.Warn("Not retiring the WebRTC service this pass: the namespace's lock was not free; the next sweep decides again",
+			zap.String("namespace", namespaceName), zap.String("service", string(typ)), zap.Error(lerr))
+		return
+	}
+	defer unlock()
 
 	retired, err := retireIfUnallocated(gone,
 		func() (bool, error) { return cm.unitNeedsRetiring(namespaceName, typ) },
@@ -2011,7 +2019,13 @@ var serviceActiveState = func(m *systemd.Manager, namespace string, serviceType 
 // job in flight is a teardown being carried out, and `systemctl start` would
 // cancel it. An unreadable state starts nothing for the same reason.
 func (cm *ClusterManager) spawnSFUIfDown(ctx context.Context, state *ClusterLocalState, turnDomain string) {
-	defer cm.systemdSpawner.LockNamespace(state.NamespaceName)()
+	unlock, lerr := cm.systemdSpawner.LockNamespace(ctx, state.NamespaceName)
+	if lerr != nil {
+		cm.logger.Warn("Not starting the SFU this pass: the namespace's lock was not free; the next sweep decides again",
+			zap.String("namespace", state.NamespaceName), zap.Error(lerr))
+		return
+	}
+	defer unlock()
 
 	// The sweep chose this namespace before the lock was free, and a delete of
 	// the namespace holds the lock for the whole of its teardown on this node (an
@@ -2042,7 +2056,7 @@ func (cm *ClusterManager) spawnSFUIfDown(ctx context.Context, state *ClusterLoca
 	if unit.Running() || unit.Transitional() {
 		return
 	}
-	if serr := cm.systemdSpawner.spawnSFULocked(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
+	if serr := cm.systemdSpawner.SpawnSFULocked(ctx, state.NamespaceName, cm.localNodeID, SFUInstanceConfig{
 		Namespace:      state.NamespaceName,
 		NodeID:         cm.localNodeID,
 		ListenAddr:     fmt.Sprintf("%s:%d", state.LocalIP, blk.SFUSignalingPort),

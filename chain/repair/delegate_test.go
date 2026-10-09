@@ -29,6 +29,11 @@ func (c stubChain) ProviderURL(_ context.Context, id string) (string, error) {
 	return "http://" + id, nil
 }
 
+// stubHeight is the chain height every stubChain reports.
+const stubHeight = 150
+
+func (c stubChain) Height(context.Context) (int64, error) { return stubHeight, nil }
+
 type memNet struct {
 	pieces   map[string][]byte
 	uploaded map[string][]byte
@@ -75,6 +80,7 @@ func TestRepairDeal_rebuildsTheMissingSlotFromASurvivor(t *testing.T) {
 	seed := bytes.Repeat([]byte{5}, 32)
 	c, net := fixture(t, seed)
 	delete(net.pieces, "http://n0")
+	c.slots[2].AssignHeight = 100
 	d, err := New(c, net, "delegate")
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +88,9 @@ func TestRepairDeal_rebuildsTheMissingSlotFromASurvivor(t *testing.T) {
 	done, err := d.RepairDeal(context.Background(), 1, seed)
 	if err != nil || len(done) != 1 || done[0].From != 1 {
 		t.Fatalf("done %+v err %v", done, err)
+	}
+	if done[0].BlocksSinceAssigned != stubHeight-100 {
+		t.Fatalf("restore latency %d blocks, want %d", done[0].BlocksSinceAssigned, stubHeight-100)
 	}
 	got, _ := piece.Commit(net.uploaded["http://n2"])
 	if !bytes.Equal(got.Root, c.slots[2].PieceRoot) {
@@ -158,6 +167,24 @@ func TestLoadSeeds_refusesReadableMismatchedAndShortSeeds(t *testing.T) {
 	}
 	if _, err := LoadSeeds(dir); err == nil {
 		t.Fatal("a readable seed was accepted")
+	}
+}
+
+func TestLoadSeeds_oneBadFileDoesNotHideTheOthers(t *testing.T) {
+	dir := t.TempDir()
+	good := `{"deal_id":4,"repair_seed":"` + string(bytes.Repeat([]byte("ab"), 32)) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "4.json"), []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "9.json"), []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seeds, err := LoadSeeds(dir)
+	if err == nil {
+		t.Fatal("the malformed seed file was not reported")
+	}
+	if len(seeds[4]) != 32 || len(seeds) != 1 {
+		t.Fatalf("deal 4's seed must be served and deal 9 left out, got %d seeds", len(seeds))
 	}
 }
 

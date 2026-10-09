@@ -292,6 +292,10 @@ still accept v1 during the upgrade, so `orama monitor` keeps working. After the 
 check that `namespace_pending_cleanup` drains: a teardown refused in the window
 is recorded there and replayed by the tenant reconciler.
 
+The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes are gone. A node
+not yet upgraded still serves them, and an upgraded one answers 404; nothing
+calls them, so a mixed fleet needs no handling.
+
 ### Signed archives
 
 Nodes install only build archives signed by an address they trust. The list of

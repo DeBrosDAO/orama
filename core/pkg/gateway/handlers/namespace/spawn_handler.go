@@ -134,6 +134,8 @@ type SpawnHandler struct {
 	// rqlite, and a gateway reading the registry through another node stops
 	// working the moment that node is cut off.
 	registryDSN string
+	// admitter is what an action that starts a unit asks first (spawn_admission.go).
+	admitter SpawnAdmitter
 }
 
 // hostTURNRequestTimeout bounds a reconcile-host-turn request. It runs under its
@@ -251,6 +253,17 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Use a background context for spawn operations so processes outlive the HTTP request.
 	// Stop operations can use request context since they're short-lived.
 	ctx := context.Background()
+
+	// A start is admitted under the namespace's lock, which it holds until the
+	// unit is started; a teardown of the namespace on this node holds it for
+	// the whole of the teardown.
+	if startsUnits[req.Action] {
+		release, ok := h.admit(w, r, req)
+		if !ok {
+			return
+		}
+		defer release()
+	}
 
 	switch req.Action {
 	case "spawn-rqlite":
@@ -477,7 +490,7 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TURNCredTTL:    req.TURNCredTTL,
 			RQLiteDSN:      req.RQLiteDSN,
 		}
-		if err := h.systemdSpawner.SpawnSFU(ctx, req.Namespace, req.NodeID, cfg); err != nil {
+		if err := h.systemdSpawner.SpawnSFULocked(ctx, req.Namespace, req.NodeID, cfg); err != nil {
 			h.logger.Error("Failed to spawn SFU instance", zap.Error(err))
 			writeSpawnResponse(w, http.StatusInternalServerError, SpawnResponse{Error: err.Error()})
 			return

@@ -241,6 +241,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage open`](#orama-storage-open) — Open one sealed storage slot
   - [`orama storage prove`](#orama-storage-prove) — Submit storage challenge proofs
   - [`orama storage put`](#orama-storage-put) — Upload sealed slots to the providers a deal assigned
+  - [`orama storage repair`](#orama-storage-repair) — Restore the replicas a deal lost, from the providers that still hold them
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
   - [`orama storage rewrap`](#orama-storage-rewrap) — Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
@@ -4198,7 +4199,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `get`, `grant`, `open`, `prove`, `put`, `revoke`, `rewrap`, `seal`
+Subcommands: `accept`, `create`, `decline`, `extend`, `get`, `grant`, `open`, `prove`, `put`, `repair`, `revoke`, `rewrap`, `seal`
 
 ### orama storage accept
 
@@ -4455,6 +4456,34 @@ provider endpoint is the node's first http(s) endpoint in x/nodes.
 | `--dir` | — | Directory holding slot-N files from seal |
 | `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
 | `--wait` | `5m0s` | How long to wait for assignment and acceptance |
+
+### orama storage repair
+
+Restore the replicas a deal lost, from the providers that still hold them
+
+```
+orama storage repair [flags]
+```
+
+Rebuild every slot of a deal that the chain assigned to a new provider but that
+no provider has accepted yet, using the repair seed.
+
+For each such slot the command fetches an accepted replica from another
+provider, checks it against its on-chain piece root, strips that slot's outer
+layer, applies the new slot's layer, checks the result against the new slot's
+on-chain root, and uploads it to the new provider. The plaintext is never
+recovered. A repair seed that is not the deal's makes the result miss the
+root, and nothing is uploaded.
+
+A deal that names a repair delegate is repaired by the delegate while you are
+away. Without one, the deal runs with fewer replicas until you run this.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--deal-id` | `0` | Deal id |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
+| `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
+| `--wait` | `5m0s` | How long to wait for each new provider to read its assignment |
 
 ### orama storage revoke
 

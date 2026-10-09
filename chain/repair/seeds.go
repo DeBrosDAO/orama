@@ -22,7 +22,9 @@ type Seed struct {
 
 // LoadSeeds reads every deal file in dir. A file other users can read, a
 // file whose name does not match its deal id, or a short seed is an error:
-// the seed can rebuild any replica of that deal.
+// the seed can rebuild any replica of that deal. Such a file is reported in
+// the returned error and its deal is left out; every other deal's seed is
+// still returned, so one bad file does not stop the repair of the rest.
 func LoadSeeds(dir string) (map[uint64][]byte, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -32,17 +34,19 @@ func LoadSeeds(dir string) (map[uint64][]byte, error) {
 		return nil, fmt.Errorf("list repair seeds in %s: %w", dir, err)
 	}
 	out := map[uint64][]byte{}
+	var bad []error
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		id, seed, err := loadSeed(filepath.Join(dir, e.Name()))
 		if err != nil {
-			return nil, err
+			bad = append(bad, err)
+			continue
 		}
 		out[id] = seed
 	}
-	return out, nil
+	return out, errors.Join(bad...)
 }
 
 func loadSeed(path string) (uint64, []byte, error) {

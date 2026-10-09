@@ -32,6 +32,9 @@ func (c NodeChain) Slot(ctx context.Context, dealID uint64, slot uint32) (types.
 	return resp.Slot, nil
 }
 
+// Height is the latest block height of the oramad this client reads.
+func (c NodeChain) Height(ctx context.Context) (int64, error) { return c.LatestHeight(ctx) }
+
 // ProviderURL is the node's first http(s) endpoint in x/nodes.
 func (c NodeChain) ProviderURL(ctx context.Context, nodeID string) (string, error) {
 	var resp nodestypes.QueryNodeResponse
