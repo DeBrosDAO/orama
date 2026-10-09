@@ -126,7 +126,14 @@ func (g *registry) levels() []int {
 	if err != nil {
 		g.t.Fatalf("read the floor: %v", err)
 	}
-	return got
+	levels := make([]int, len(got))
+	for i, node := range got {
+		if node.ID == "" {
+			g.t.Fatalf("the floor read a node with no id: %+v", got)
+		}
+		levels[i] = node.Level
+	}
+	return levels
 }
 
 func (g *registry) storedLevel(nodeID string) int {

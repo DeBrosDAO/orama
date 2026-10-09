@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -56,8 +57,9 @@ type LegacyFloor struct {
 	// Read returns the stamp level every non-retired node of the cluster
 	// currently reports: StampLevelLegacy for a node that has not said or whose
 	// report is not current.
-	Read func(ctx context.Context) ([]int, error)
-	// Logf records a reading that failed. It may be nil.
+	Read func(ctx context.Context) ([]NodeStampLevel, error)
+	// Logf records a reading that failed, and the nodes that hold the floor
+	// open. It may be nil.
 	Logf func(format string, args ...any)
 	// Now is time.Now unless a test sets it.
 	Now func() time.Time
@@ -66,27 +68,68 @@ type LegacyFloor struct {
 	at      time.Time
 	known   bool
 	accepts bool
+	// refresh is closed when the reading in flight finishes; nil when none is.
+	refresh chan struct{}
+}
+
+// NodeStampLevel is the stamp level one node of the cluster reports.
+type NodeStampLevel struct {
+	ID    string
+	Level int
 }
 
 // Accepts reports whether the older stamps are still accepted. The answer is the
-// last reading for legacyFloorTTL. When the registry cannot be read the last
-// answer stands, and with none the older forms stay accepted (a rolling upgrade
-// must not stop its own nodes from talking because the registry blinked); the
-// failure is logged every time it is tried.
+// last reading for legacyFloorTTL. Past that the last answer is still served
+// while one goroutine reads the registry again, so a slow registry never holds
+// a request: only the first call, which has no answer yet, waits for the
+// reading. When the registry cannot be read the last answer stands, and with
+// none the older forms stay accepted (a rolling upgrade must not stop its own
+// nodes from talking because the registry blinked); the failure is logged every
+// time it is tried.
 func (f *LegacyFloor) Accepts() bool {
 	f.mu.Lock()
+	if f.known && f.now().Sub(f.at) < legacyFloorTTL {
+		accepts := f.accepts
+		f.mu.Unlock()
+		return accepts
+	}
+	if f.refresh == nil {
+		f.refresh = make(chan struct{})
+		go f.reload(f.refresh)
+	}
+	done, known, accepts := f.refresh, f.known, f.accepts
+	f.mu.Unlock()
+	if known {
+		return accepts
+	}
+	<-done
+	f.mu.Lock()
 	defer f.mu.Unlock()
-	now := time.Now
+	return f.accepts
+}
+
+func (f *LegacyFloor) now() time.Time {
 	if f.Now != nil {
-		now = f.Now
+		return f.Now()
 	}
-	if f.known && now().Sub(f.at) < legacyFloorTTL {
-		return f.accepts
-	}
+	return time.Now()
+}
+
+// reload reads the registry, swaps the answer in, and releases the calls
+// waiting for the first one. The mutex is held only for the swap.
+func (f *LegacyFloor) reload(done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), legacyFloorReadBudget)
-	defer cancel()
 	levels, err := f.Read(ctx)
-	f.at = now()
+	cancel()
+	at := f.now()
+
+	f.mu.Lock()
+	defer func() {
+		f.refresh = nil
+		f.mu.Unlock()
+		close(done)
+	}()
+	f.at = at
 	if err != nil {
 		if f.Logf != nil {
 			f.Logf("could not read the nodes' stamp levels to decide whether the older inter-node stamps are still accepted; keeping the last answer (%v, none yet means accepted): %v", f.accepts, err)
@@ -95,21 +138,25 @@ func (f *LegacyFloor) Accepts() bool {
 			f.accepts = true
 		}
 		f.known = true
-		return f.accepts
+		return
 	}
-	f.accepts, f.known = anyBelow(levels, StampLevelNonced), true
-	return f.accepts
+	holding := below(levels, StampLevelNonced)
+	f.accepts, f.known = len(holding) > 0, true
+	if f.accepts && f.Logf != nil {
+		f.Logf("the older inter-node stamps are still accepted: these nodes report a stamp level below %d: %s", StampLevelNonced, strings.Join(holding, ", "))
+	}
 }
 
-// anyBelow reports whether some level is lower than min. No level at all is a
-// cluster with nothing old in it.
-func anyBelow(levels []int, min int) bool {
+// below lists the nodes whose level is lower than min, as id (level n). No
+// node at all is a cluster with nothing old in it.
+func below(levels []NodeStampLevel, min int) []string {
+	var out []string
 	for _, l := range levels {
-		if l < min {
-			return true
+		if l.Level < min {
+			out = append(out, fmt.Sprintf("%s (level %d)", l.ID, l.Level))
 		}
 	}
-	return false
+	return out
 }
 
 // LevelQuerier is the part of the cluster registry the floor reads: the
@@ -128,7 +175,7 @@ type LevelQuerier interface {
 // rollback last_seen moves on and stamp_level_at stays behind: the node then
 // counts as StampLevelLegacy, whatever level it last reported. ” (never
 // reported) sorts before every timestamp, which gives the same answer.
-var nodeLevelsSQL = fmt.Sprintf(`SELECT CASE WHEN stamp_level_at >= last_seen THEN stamp_level ELSE %d END AS stamp_level
+var nodeLevelsSQL = fmt.Sprintf(`SELECT id, CASE WHEN stamp_level_at >= last_seen THEN stamp_level ELSE %d END AS stamp_level
 	FROM dns_nodes WHERE last_seen <> ?`, StampLevelLegacy)
 
 // RegistryLegacyFloor is the floor over the stamp levels the registry's
@@ -136,16 +183,17 @@ var nodeLevelsSQL = fmt.Sprintf(`SELECT CASE WHEN stamp_level_at >= last_seen TH
 func RegistryLegacyFloor(db LevelQuerier, logf func(format string, args ...any)) *LegacyFloor {
 	return &LegacyFloor{
 		Logf: logf,
-		Read: func(ctx context.Context) ([]int, error) {
+		Read: func(ctx context.Context) ([]NodeStampLevel, error) {
 			var rows []struct {
-				Level int `db:"stamp_level"`
+				ID    string `db:"id"`
+				Level int    `db:"stamp_level"`
 			}
 			if err := db.Query(ctx, &rows, nodeLevelsSQL, constants.RetiredNodeLastSeen); err != nil {
 				return nil, fmt.Errorf("read the nodes' stamp levels: %w", err)
 			}
-			out := make([]int, len(rows))
+			out := make([]NodeStampLevel, len(rows))
 			for i, row := range rows {
-				out[i] = row.Level
+				out[i] = NodeStampLevel{ID: row.ID, Level: row.Level}
 			}
 			return out, nil
 		},

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -14,11 +15,38 @@ import (
 func floorOf(levels *[]int, clock *time.Time, reads *atomic.Int32) *LegacyFloor {
 	return &LegacyFloor{
 		Now: func() time.Time { return *clock },
-		Read: func(context.Context) ([]int, error) {
+		Read: func(context.Context) ([]NodeStampLevel, error) {
 			reads.Add(1)
-			return *levels, nil
+			return nodeLevels(*levels), nil
 		},
 	}
+}
+
+// nodeLevels names the nodes node-0, node-1, ... for levels.
+func nodeLevels(levels []int) []NodeStampLevel {
+	out := make([]NodeStampLevel, len(levels))
+	for i, l := range levels {
+		out[i] = NodeStampLevel{ID: fmt.Sprintf("node-%d", i), Level: l}
+	}
+	return out
+}
+
+// settle waits for the reading in flight, if any.
+func settle(f *LegacyFloor) {
+	f.mu.Lock()
+	done := f.refresh
+	f.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+}
+
+// refreshed is Accepts once the call has had its reading: a stale answer is
+// served while the registry is read again, so the new one is the next call's.
+func refreshed(f *LegacyFloor) bool {
+	f.Accepts()
+	settle(f)
+	return f.Accepts()
 }
 
 func TestLegacyFloor_acceptsWhileSomeNodeDoesNotSignTheNoncedStamps(t *testing.T) {
@@ -67,7 +95,7 @@ func TestLegacyFloor_readsTheRegistryOncePerTTLAndFollowsAnUpgrade(t *testing.T)
 		t.Fatalf("%d reads inside the TTL, want 1", reads.Load())
 	}
 	clock = clock.Add(legacyFloorTTL)
-	if f.Accepts() {
+	if refreshed(f) {
 		t.Fatal("the older stamps are still accepted once every node is upgraded")
 	}
 	if reads.Load() != 2 {
@@ -84,11 +112,11 @@ func TestLegacyFloor_aRegistryThatCannotBeReadKeepsTheLastAnswerAndSaysSo(t *tes
 	levels := []int{StampLevelNonced}
 	f := &LegacyFloor{
 		Now: func() time.Time { return clock },
-		Read: func(context.Context) ([]int, error) {
+		Read: func(context.Context) ([]NodeStampLevel, error) {
 			if fail != nil {
 				return nil, fail
 			}
-			return levels, nil
+			return nodeLevels(levels), nil
 		},
 		Logf: func(format string, args ...any) { logs = append(logs, format) },
 	}
@@ -101,16 +129,92 @@ func TestLegacyFloor_aRegistryThatCannotBeReadKeepsTheLastAnswerAndSaysSo(t *tes
 	}
 	fail = nil
 	clock = clock.Add(legacyFloorTTL)
-	if f.Accepts() {
+	if refreshed(f) {
 		t.Fatal("every node is nonced and the registry answered, but the older stamps are accepted")
 	}
 	fail = errors.New("no leader")
 	clock = clock.Add(legacyFloorTTL)
-	if f.Accepts() {
+	if refreshed(f) {
 		t.Fatal("a failed read turned the older stamps back on")
 	}
 	if len(logs) != 2 || !strings.Contains(logs[1], "keeping the last answer") {
 		t.Fatalf("logs = %v", logs)
+	}
+}
+
+// Once there is an answer, a slow registry holds no request: the answer is
+// served while one goroutine reads again, and only one read is started.
+func TestLegacyFloor_aSlowReadDoesNotBlockAcceptsOnceThereIsAnAnswer(t *testing.T) {
+	clock := time.Now()
+	var reads atomic.Int32
+	release := make(chan struct{})
+	var slow atomic.Bool
+	levels := []NodeStampLevel{{"node-a", StampLevelNonced}, {"node-b", StampLevelLegacy}}
+	f := &LegacyFloor{
+		Now: func() time.Time { return clock },
+		Read: func(context.Context) ([]NodeStampLevel, error) {
+			reads.Add(1)
+			if slow.Load() {
+				<-release
+			}
+			return levels, nil
+		},
+	}
+	if !f.Accepts() {
+		t.Fatal("a legacy node is in the cluster")
+	}
+	slow.Store(true)
+	levels = []NodeStampLevel{{"node-a", StampLevelNonced}, {"node-b", StampLevelNonced}}
+	clock = clock.Add(legacyFloorTTL)
+
+	answered := make(chan bool, 20)
+	for i := 0; i < 20; i++ {
+		go func() { answered <- f.Accepts() }()
+	}
+	for i := 0; i < 20; i++ {
+		select {
+		case got := <-answered:
+			if !got {
+				t.Fatal("the stale answer changed before the reading finished")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Accepts blocked on a registry read that has not finished")
+		}
+	}
+	close(release)
+	settle(f)
+	if f.Accepts() {
+		t.Fatal("the older stamps are still accepted after the reading found every node nonced")
+	}
+	if reads.Load() != 2 {
+		t.Fatalf("%d reads, want 1 at the start and 1 shared by every call after the TTL", reads.Load())
+	}
+}
+
+// The nodes that hold the floor open are named, once per reading, so an
+// operator can see which one to upgrade; nothing is said when none does.
+func TestLegacyFloor_namesTheNodesBelowTheNoncedLevelOncePerReading(t *testing.T) {
+	clock := time.Now()
+	var logs []string
+	levels := []NodeStampLevel{{"node-a", StampLevelNonced}, {"node-b", StampLevelLegacy}, {"node-c", StampLevelLegacy}}
+	f := &LegacyFloor{
+		Now:  func() time.Time { return clock },
+		Read: func(context.Context) ([]NodeStampLevel, error) { return levels, nil },
+		Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+	}
+	for i := 0; i < 5; i++ {
+		f.Accepts()
+	}
+	if len(logs) != 1 || !strings.Contains(logs[0], "node-b") || !strings.Contains(logs[0], "node-c") || strings.Contains(logs[0], "node-a") {
+		t.Fatalf("logs = %q", logs)
+	}
+	levels = []NodeStampLevel{{"node-a", StampLevelNonced}, {"node-b", StampLevelNonced}}
+	clock = clock.Add(legacyFloorTTL)
+	if refreshed(f) {
+		t.Fatal("every node is nonced")
+	}
+	if len(logs) != 1 {
+		t.Fatalf("a floor nobody holds open was reported: %q", logs)
 	}
 }
 
@@ -271,17 +375,21 @@ func TestRegistryLegacyFloor_readsTheStampLevelsOfTheRegisteredNodes(t *testing.
 	f := RegistryLegacyFloor(levelQuerier(func(_ context.Context, dest any, query string, args ...any) error {
 		gotQuery, gotArgs = query, args
 		rows := dest.(*[]struct {
-			Level int `db:"stamp_level"`
+			ID    string `db:"id"`
+			Level int    `db:"stamp_level"`
 		})
 		*rows = append(*rows, struct {
-			Level int `db:"stamp_level"`
-		}{StampLevelNonced}, struct {
-			Level int `db:"stamp_level"`
-		}{StampLevelLegacy})
+			ID    string `db:"id"`
+			Level int    `db:"stamp_level"`
+		}{"node-a", StampLevelNonced}, struct {
+			ID    string `db:"id"`
+			Level int    `db:"stamp_level"`
+		}{"node-b", StampLevelLegacy})
 		return nil
 	}), nil)
 	levels, err := f.Read(context.Background())
-	if err != nil || len(levels) != 2 || levels[0] != StampLevelNonced || levels[1] != StampLevelLegacy {
+	want := []NodeStampLevel{{"node-a", StampLevelNonced}, {"node-b", StampLevelLegacy}}
+	if err != nil || len(levels) != 2 || levels[0] != want[0] || levels[1] != want[1] {
 		t.Fatalf("levels %v, %v", levels, err)
 	}
 	if !strings.Contains(gotQuery, "FROM dns_nodes") || len(gotArgs) != 1 {

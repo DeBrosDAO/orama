@@ -190,8 +190,8 @@ func TestNetworkDetail_admitsANodeThatSignsOnlyTheNoncedStamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	nodeauth.InstallLegacyFloor(&nodeauth.LegacyFloor{Read: func(context.Context) ([]int, error) {
-		return []int{nodeauth.StampLevelNonced}, nil
+	nodeauth.InstallLegacyFloor(&nodeauth.LegacyFloor{Read: func(context.Context) ([]nodeauth.NodeStampLevel, error) {
+		return []nodeauth.NodeStampLevel{{ID: "node-a", Level: nodeauth.StampLevelNonced}}, nil
 	}})
 	t.Cleanup(func() { nodeauth.InstallLegacyFloor(nil) })
 
