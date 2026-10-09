@@ -2026,12 +2026,17 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 
 	// Check if this deployment is on the current node (primary)
 	if g.nodePeerID != "" && deployment.HomeNodeID != "" &&
-		deployment.HomeNodeID != g.nodePeerID && proxyNode == "" {
+		deployment.HomeNodeID != g.nodePeerID {
 
-		// Check if this node is a replica and can serve locally
+		// Check if this node is a replica and can serve locally. This holds for
+		// a request another node forwarded here as well: a replica's port is
+		// allocated on its own node and is not the home node's, which is the
+		// one the deployments row carries.
+		var replicaErr error
 		if g.replicaManager != nil {
-			replicaPort, err := g.replicaManager.GetReplicaPort(r.Context(), deployment.ID, g.nodePeerID)
-			if err == nil && replicaPort > 0 {
+			var replicaPort int
+			replicaPort, replicaErr = g.replicaManager.GetReplicaPort(r.Context(), deployment.ID, g.nodePeerID)
+			if replicaErr == nil && replicaPort > 0 {
 				// This node is a replica — serve locally using the replica's port
 				g.logger.Debug("Serving from local replica",
 					zap.String("deployment", deployment.Name),
@@ -2041,6 +2046,21 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 				// Fall through to local proxy below
 				goto serveLocal
 			}
+		}
+
+		// Forwarded here, yet this node runs no active replica of it: the
+		// forwarding node's replica list is stale. The home node's port is
+		// whatever else this machine allocated that number to, so it is not
+		// dialed; the unmarked 503 tells the forwarder to try its next replica.
+		if proxyNode != "" {
+			g.logger.Error("Forwarded request for a deployment this node has no active replica of",
+				zap.String("deployment", deployment.Name),
+				zap.String("home_node", deployment.HomeNodeID),
+				zap.String("proxy_node", proxyNode),
+				zap.Error(replicaErr),
+			)
+			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
+			return
 		}
 
 		// Not a replica on this node — proxy to the home node. localhost:port
