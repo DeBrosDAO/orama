@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -586,5 +587,21 @@ func TestHasVisibleContent(t *testing.T) {
 				t.Errorf("hasVisibleContent(%+v) = %v; want %v", tc.msg, got, tc.want)
 			}
 		})
+	}
+}
+
+// A transport error is a *url.Error whose text is the request URL, and an APNs
+// URL ends in the device token. The error the provider returns keeps the cause
+// and drops the URL.
+func TestSend_TransportErrorDropsTheDeviceTokenURL(t *testing.T) {
+	const token = "DEVICE-TOKEN-VALUE"
+	fake := &fakePushClient{err: &url.Error{Op: "Post", URL: "https://api.push.apple.com/3/device/" + token, Err: context.DeadlineExceeded}}
+	p := newTestProvider(t, "com.example.app", fake)
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: token, Title: "x"})
+	if err == nil || strings.Contains(err.Error(), token) {
+		t.Fatalf("error = %v, want one without the device token", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("cause lost: %v", err)
 	}
 }

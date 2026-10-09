@@ -69,17 +69,3 @@ func TestRedactFailureText_emptyTokenLeavesTextAlone(t *testing.T) {
 		t.Errorf("redactFailureText with no token = %q", got)
 	}
 }
-
-func TestRedactRequestURL_keepsTheCauseAndDropsTheURL(t *testing.T) {
-	err := RedactRequestURL(&url.Error{Op: "Post", URL: "https://h/" + redactTestToken, Err: context.DeadlineExceeded})
-	if strings.Contains(err.Error(), redactTestToken) {
-		t.Errorf("URL survived: %v", err)
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("cause lost: %v", err)
-	}
-	plain := errors.New("not a transport error")
-	if RedactRequestURL(plain) != plain {
-		t.Error("a non-transport error was rewritten")
-	}
-}

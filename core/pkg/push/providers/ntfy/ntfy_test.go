@@ -552,3 +552,23 @@ func TestSend_fanout_withoutSigner_returnsError(t *testing.T) {
 		t.Errorf("an unsigned request was sent to a node (%d)", rec.count())
 	}
 }
+
+// The ntfy topic is in the request URL and the client's error quotes the URL.
+// The error the provider returns keeps the cause and drops the URL.
+func TestSend_TransportErrorDropsTheTopicURL(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	base := dead.URL
+	dead.Close()
+	p := New(Config{BaseURL: base}, nil)
+
+	err := p.Send(context.Background(), push.PushMessage{DeviceToken: "SECRET-TOPIC", Body: "x"})
+	if err == nil {
+		t.Fatal("Send to a closed server succeeded")
+	}
+	if strings.Contains(err.Error(), "SECRET-TOPIC") {
+		t.Errorf("error repeats the topic URL: %v", err)
+	}
+	if !strings.Contains(err.Error(), "refused") {
+		t.Errorf("cause lost: %v", err)
+	}
+}

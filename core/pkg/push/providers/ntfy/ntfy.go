@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/netguard"
 	"github.com/DeBrosOfficial/network/pkg/push"
 	"go.uber.org/zap"
@@ -273,7 +274,7 @@ func (p *Provider) postOne(ctx context.Context, endpointURL string, sign func(*h
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ntfy: post: %w", push.RedactRequestURL(err))
+		return fmt.Errorf("ntfy: post: %w", httputil.WithoutURL(err))
 	}
 	defer resp.Body.Close()
 
