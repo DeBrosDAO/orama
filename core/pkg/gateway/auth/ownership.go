@@ -171,9 +171,18 @@ func (s *Service) OwnerOf(ctx context.Context, namespace string) (string, error)
 // unowned namespace is claimable by whoever signs in next. The old owner keeps
 // a place in the namespace as an admin, because the alternative is that
 // handing over a project locks you out of it in the same instant.
-func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to string) error {
+//
+// A wallet at walletCap (the cluster's max_namespaces_per_wallet) cannot be
+// handed another: the cap is the limit on what one wallet owns, however the
+// namespace reached it. The statement that moves the owner row carries the
+// count, so two transfers racing to one wallet cannot both find room; the
+// refusal is an *ErrNamespaceQuota and nothing is left written.
+func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to string, walletCap int) error {
 	if s.db == nil {
 		return fmt.Errorf("transferring ownership requires the rqlite client (SetRqliteClient): without an affected-row count a transfer that changed nothing looks like one that worked")
+	}
+	if walletCap < 1 {
+		return fmt.Errorf("transferring ownership needs the cluster's per-wallet namespace cap, and %d is not one", walletCap)
 	}
 	fromWallet, toWallet := NormalizeWallet(from), NormalizeWallet(to)
 	if toWallet == "" {
@@ -200,6 +209,9 @@ func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to str
 		return &ErrNamespaceOwnedByAnother{Namespace: namespace}
 	}
 
+	if err := s.requireRoomUnderCap(ctx, toWallet, walletCap); err != nil {
+		return err
+	}
 	newOwnerID, err := s.ensurePrincipal(ctx, db, PrincipalWallet, toWallet, "", fromWallet)
 	if err != nil {
 		return err
@@ -220,19 +232,12 @@ func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to str
 
 	// One statement, so the namespace is never ownerless: the partial unique
 	// index allows exactly one live owner, and this row is it.
-	res, err := s.db.Exec(client.WithInternalAuth(ctx),
-		`UPDATE grants SET principal_id = ?, created_by = ?, created_at = datetime('now')
-		  WHERE namespace_id = ? AND role = 'owner' AND revoked_at IS NULL`,
-		newOwnerID, fromWallet, nsID)
+	moved, err := s.moveOwnerGrant(ctx, namespace, nsID, newOwnerID, fromWallet, toWallet, walletCap)
 	if err != nil {
-		return fmt.Errorf("failed to transfer namespace %q: %w", namespace, err)
+		return err
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to confirm the transfer of namespace %q: %w", namespace, err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("namespace %q has no owner to transfer", namespace)
+	if !moved {
+		return s.explainUnmovedOwner(ctx, namespace, nsID, fromWallet, toWallet, walletCap)
 	}
 	// Ownership replaces whatever the new owner held before. A member's admin
 	// row left live beside it was what made handing the namespace back fail.
@@ -255,11 +260,7 @@ func (s *Service) CountNamespacesOwnedBy(ctx context.Context, wallet string) (in
 	if s.keyORM() == nil {
 		return 0, fmt.Errorf("client not initialized")
 	}
-	res, err := s.keyORM().Database().Query(client.WithInternalAuth(ctx),
-		`SELECT COUNT(*) FROM grants AS g
-		   JOIN principals AS p ON p.id = g.principal_id
-		  WHERE p.type = 'wallet' AND p.identifier = ?
-		    AND g.role = 'owner' AND g.revoked_at IS NULL`,
+	res, err := s.keyORM().Database().Query(client.WithInternalAuth(ctx), ownedByWalletSQL,
 		NormalizeWallet(wallet))
 	if err != nil {
 		return 0, fmt.Errorf("failed to count the namespaces owned by %s: %w", wallet, err)

@@ -225,6 +225,16 @@ func (d *grantsDB) Query(_ context.Context, query string, args ...interface{}) (
 		out.Count = int64(len(out.Rows))
 		return out, nil
 
+	case strings.Contains(query, "SELECT COUNT(*) FROM grants AS g"):
+		owned := 0
+		for _, row := range d.rows {
+			if !row.revoked && row.role == string(RoleOwner) &&
+				d.types[row.principalID] == string(PrincipalWallet) && d.principals[row.principalID] == getStringVal(args[0]) {
+				owned++
+			}
+		}
+		return rows(owned), nil
+
 	case strings.Contains(query, "SELECT p.identifier FROM grants"):
 		nsID := getStringVal(args[0])
 		for _, row := range d.rows {
@@ -552,7 +562,7 @@ func TestTransferOwnership(t *testing.T) {
 	s := grantsService(t, db)
 	seedOwner(t, s, db, "0xowner")
 
-	if err := s.TransferOwnership(context.Background(), "anchat", "0xOwner", "0xNext"); err != nil {
+	if err := s.TransferOwnership(context.Background(), "anchat", "0xOwner", "0xNext", testWalletCap); err != nil {
 		t.Fatalf("transfer: %v", err)
 	}
 
@@ -577,13 +587,13 @@ func TestTransferOwnership_refusals(t *testing.T) {
 	seedOwner(t, s, db, "0xowner")
 
 	var owned *ErrNamespaceOwnedByAnother
-	if err := s.TransferOwnership(context.Background(), "anchat", "0xsomebodyelse", "0xnext"); !errors.As(err, &owned) {
+	if err := s.TransferOwnership(context.Background(), "anchat", "0xsomebodyelse", "0xnext", testWalletCap); !errors.As(err, &owned) {
 		t.Errorf("a wallet that does not own the namespace transferred it: %v", err)
 	}
-	if err := s.TransferOwnership(context.Background(), "anchat", "0xowner", "0xOWNER"); err == nil {
+	if err := s.TransferOwnership(context.Background(), "anchat", "0xowner", "0xOWNER", testWalletCap); err == nil {
 		t.Error("a namespace was transferred to the wallet that already owns it")
 	}
-	if err := s.TransferOwnership(context.Background(), "anchat", "0xowner", "  "); err == nil {
+	if err := s.TransferOwnership(context.Background(), "anchat", "0xowner", "  ", testWalletCap); err == nil {
 		t.Error("a namespace was transferred to nobody")
 	}
 }

@@ -1,13 +1,72 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/deployments/process"
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
 )
+
+// deploymentQuerier is the part of the cluster registry a grant needs to know a
+// deployment exists. The registry client satisfies it.
+type deploymentQuerier interface {
+	Query(ctx context.Context, dest any, query string, args ...any) error
+}
+
+var (
+	// errInvalidGrantName marks a name no deployment can have: a 400.
+	errInvalidGrantName = errors.New("invalid deployment name")
+	// errNoSuchDeployment marks a grant for a name that is no deployment of the
+	// namespace: a 404. Such a grant would sit unused until a deployment of that
+	// name appeared, and then apply to it.
+	errNoSuchDeployment = errors.New("no such deployment")
+)
+
+// checkGrantTarget validates the deployment a grant names: the name has to be
+// one a deployment can have (no '/' or ':', which would let the subject
+// app:<namespace>/<name> read as another namespace's), and the deployment has
+// to exist in this namespace.
+func (g *Gateway) checkGrantTarget(ctx context.Context, namespace, name string) error {
+	if err := process.ValidateInstance(namespace, name); err != nil {
+		return fmt.Errorf("%w: %w", errInvalidGrantName, err)
+	}
+	if g.deploymentQuerier == nil {
+		return fmt.Errorf("the deployment registry is not available on this gateway")
+	}
+	var rows []struct {
+		ID string `db:"id"`
+	}
+	if err := g.deploymentQuerier.Query(ctx, &rows,
+		"SELECT id FROM deployments WHERE namespace = ? AND name = ? LIMIT 1", namespace, name); err != nil {
+		return fmt.Errorf("check that deployment %s/%s exists: %w", namespace, name, err)
+	}
+	if len(rows) == 0 {
+		return fmt.Errorf("%s/%s: %w", namespace, name, errNoSuchDeployment)
+	}
+	return nil
+}
+
+// refuseGrantTarget answers a grant whose deployment could not be vouched for:
+// a name no deployment can have is the caller's mistake, a missing deployment
+// is a 404, and an unreadable registry is a retryable 503.
+func (g *Gateway) refuseGrantTarget(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errInvalidGrantName):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, errNoSuchDeployment):
+		writeError(w, http.StatusNotFound, err.Error()+": deploy it first, then grant it")
+	default:
+		g.logger.ComponentError(logging.ComponentGeneral, "could not check the deployment a grant names", zap.Error(err))
+		writeError(w, http.StatusServiceUnavailable, "the deployment could not be looked up right now; retry shortly")
+	}
+}
 
 // What a deployment is allowed to do.
 //
@@ -82,7 +141,8 @@ func (g *Gateway) setAppGrant(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid body: expected JSON {name, role}")
 		return
 	}
-	if strings.TrimSpace(body.Name) == "" {
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" {
 		writeError(w, http.StatusBadRequest, "name is required: which deployment is being granted")
 		return
 	}
@@ -103,6 +163,10 @@ func (g *Gateway) setAppGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := g.checkGrantTarget(r.Context(), ns, body.Name); err != nil {
+		g.refuseGrantTarget(w, err)
+		return
+	}
 	if err := g.authService.EnsureWorkloadPrincipal(r.Context(), ns, body.Name); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

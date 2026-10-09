@@ -133,14 +133,28 @@ func (s *Service) RenewWorkloadToken(ctx context.Context, claims *JWTClaims) (st
 	if claims == nil || !IsWorkloadSubject(claims.Sub) {
 		return "", time.Time{}, fmt.Errorf("only a workload's own token can be renewed")
 	}
-	namespace, name, ok := ParseWorkloadSubject(claims.Sub)
+	if err := checkWorkloadNamespace(claims); err != nil {
+		return "", time.Time{}, err
+	}
+	namespace, name, _ := ParseWorkloadSubject(claims.Sub)
+	return s.MintWorkloadToken(ctx, namespace, name)
+}
+
+// checkWorkloadNamespace refuses a workload token whose subject does not name a
+// deployment, or names one in a namespace other than the token's own. A token
+// that is not a workload's passes: this checks one shape, not every token.
+func checkWorkloadNamespace(claims *JWTClaims) error {
+	if claims == nil || !IsWorkloadSubject(claims.Sub) {
+		return nil
+	}
+	namespace, _, ok := ParseWorkloadSubject(claims.Sub)
 	if !ok {
-		return "", time.Time{}, fmt.Errorf("the token's subject %q does not name a deployment", claims.Sub)
+		return fmt.Errorf("the token's subject %q does not name a deployment", claims.Sub)
 	}
 	if !strings.EqualFold(namespace, claims.Namespace) {
-		return "", time.Time{}, fmt.Errorf("the token's subject names %q and its claim names %q", namespace, claims.Namespace)
+		return fmt.Errorf("the token's subject names %q and its claim names %q", namespace, claims.Namespace)
 	}
-	return s.MintWorkloadToken(ctx, namespace, name)
+	return nil
 }
 
 // ParseWorkloadSubject splits a workload subject back into its namespace and

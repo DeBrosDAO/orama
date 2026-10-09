@@ -3,6 +3,7 @@
 package deployments
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -48,6 +49,53 @@ func TestDeployGrants_runtimeYesControlPlaneNo(t *testing.T) {
 	tn.api(t, http.MethodGet, pathGrants, nil).Expect(t, http.StatusOK)
 	if help := tn.cli.MustOK(t, "app", "grants", "--help").Stdout; !strings.Contains(help, "list") || !strings.Contains(help, "set") {
 		t.Errorf("orama app grants --help: %q", help)
+	}
+}
+
+// TestDeployGrants_nameIsADeploymentOfTheNamespace: a grant names a deployment
+// that exists in the caller's namespace and has a name a deployment can have; a
+// name with '/' or ':' is 400 and one that is no deployment is 404, and neither
+// leaves a grant behind (docs/AUTH.md#a-workloads-identity). A granted app
+// lists with its role and selector, in the CLI's --json too.
+func TestDeployGrants_nameIsADeploymentOfTheNamespace(t *testing.T) {
+	t.Parallel()
+	tn := newTenant(t)
+	tn.deploy(t, "static", staticSite(t, "gn"), "named")
+	out := tn.cli.MustOK(t, "app", "grants", "set", "named", "runtime", "--resource", "pubsub:topic=orders.*").Stdout
+	if !strings.Contains(out, "named may now act as 'runtime'") {
+		t.Errorf("grants set printed:\n%s", out)
+	}
+	var listed struct {
+		Grants []struct {
+			Deployment string `json:"deployment"`
+			Role       string `json:"role"`
+			Resource   string `json:"resource"`
+		} `json:"grants"`
+	}
+	if err := json.Unmarshal([]byte(tn.cli.MustOK(t, "app", "grants", "list", "named", "--json").Stdout), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Grants) != 1 || listed.Grants[0].Role != "runtime" || listed.Grants[0].Resource != "pubsub:topic=orders.*" {
+		t.Errorf("grants list --json: %+v", listed.Grants)
+	}
+	for _, name := range []string{"named/x", "other/named", "named:admin", "named/../x"} {
+		tn.api(t, http.MethodPost, pathGrants, map[string]string{"name": name, "role": "runtime"}).Expect(t, http.StatusBadRequest)
+	}
+	tn.api(t, http.MethodPost, pathGrants, map[string]string{"name": "never-deployed", "role": "runtime"}).Expect(t, http.StatusNotFound)
+	res, err := tn.cli.Run(t.Context(), "app", "grants", "set", "never-deployed", "runtime")
+	if err != nil || res.Exit == 0 || !strings.Contains(strings.ToLower(res.Stdout+res.Stderr), "no such deployment") {
+		t.Errorf("granting a deployment that does not exist: %v %+v", err, res)
+	}
+	var after struct {
+		Grants []struct {
+			Deployment string `json:"deployment"`
+		} `json:"grants"`
+	}
+	if err := tn.api(t, http.MethodGet, pathGrants, nil).Expect(t, http.StatusOK).Decode(&after); err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Grants) != 1 || after.Grants[0].Deployment != "named" {
+		t.Errorf("a refused grant was recorded: %+v", after.Grants)
 	}
 }
 

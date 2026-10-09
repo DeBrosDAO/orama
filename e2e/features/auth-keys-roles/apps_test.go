@@ -20,32 +20,19 @@ type appGrant struct {
 	Resource   string `json:"resource"`
 }
 
-// TestAppGrants_dataPlaneOnly: a deployment may be granted runtime or reader,
-// narrowed or not; it may never be granted the control plane — admin, owner
-// or developer (docs/AUTH.md#a-workloads-identity: "A deployment cannot be
-// granted the control plane"). Every refusal is a client error.
-func TestAppGrants_dataPlaneOnly(t *testing.T) {
+// TestAppGrants_refusals: a deployment may never be granted the control plane
+// (admin, owner or developer), a selector the role cannot carry, an unknown
+// role or no name (docs/AUTH.md#a-workloads-identity: "A deployment cannot be
+// granted the control plane"), and the name has to be a deployment of the
+// caller's namespace: a name with '/' or ':' is 400, one that is no deployment
+// is 404. Every refusal is a client error. The grants that succeed need a
+// deployed app and are asserted by features/deployments.
+func TestAppGrants_refusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{})
 	c := harness.GW(t)
 	owner := n.Owner.Token()
-	for _, g := range []map[string]string{
-		{"name": "e2e-api", "role": roleRuntime},
-		{"name": "e2e-worker", "role": roleRuntime, "resource": "pubsub:topic=jobs.*"},
-		{"name": "e2e-static", "role": roleReader},
-	} {
-		send(t, c, http.MethodPost, pathGrants, owner, g).Expect(t, http.StatusOK)
-	}
-	var listed struct {
-		Grants []appGrant `json:"grants"`
-	}
-	if err := send(t, c, http.MethodGet, pathGrants, owner, nil).Expect(t, http.StatusOK).Decode(&listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Grants) < 3 {
-		t.Errorf("grants list: %+v", listed.Grants)
-	}
 	for _, g := range []map[string]string{
 		{"name": "e2e-api", "role": roleAdmin},
 		{"name": "e2e-api", "role": roleOwner},
@@ -59,31 +46,41 @@ func TestAppGrants_dataPlaneOnly(t *testing.T) {
 			t.Errorf("granting %v: want a 4xx refusal, got %d %s", g, r.Status, r.Body)
 		}
 	}
+	for _, name := range []string{"web/api", "other-ns/web", "web:admin", "web/../x"} {
+		if r := send(t, c, http.MethodPost, pathGrants, owner, map[string]string{"name": name, "role": roleRuntime}); r.Status != http.StatusBadRequest {
+			t.Errorf("granting the name %q: want 400, got %d %s", name, r.Status, r.Body)
+		}
+	}
+	if r := send(t, c, http.MethodPost, pathGrants, owner, map[string]string{"name": "e2e-ghost", "role": roleRuntime}); r.Status != http.StatusNotFound {
+		t.Errorf("granting a deployment that does not exist: want 404, got %d %s", r.Status, r.Body)
+	}
+	var listed struct {
+		Grants []appGrant `json:"grants"`
+	}
+	if err := send(t, c, http.MethodGet, pathGrants, owner, nil).Expect(t, http.StatusOK).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Grants) != 0 {
+		t.Errorf("a refused grant was recorded: %+v", listed.Grants)
+	}
 	if r := send(t, c, http.MethodPut, pathGrants, owner, map[string]string{"name": "x", "role": roleRuntime}); r.Status != http.StatusMethodNotAllowed {
 		t.Errorf("PUT grants: want 405, got %d", r.Status)
 	}
 }
 
-// TestAppGrants_cli: `orama app grants set/list` as the operator, with --json.
+// TestAppGrants_cli: `orama app grants set` as the operator refuses the control
+// plane and a deployment that does not exist, and its help lists the
+// subcommands. The positive set/list is asserted by features/deployments.
 func TestAppGrants_cli(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{Via: ns.ViaOperator})
-	out := n.CLI.MustOK(t, "app", "grants", "set", "e2e-cli-app", roleRuntime, "--resource", "pubsub:topic=orders.*").Stdout
-	if !strings.Contains(out, "e2e-cli-app may now act as 'runtime'") {
-		t.Errorf("grants set printed:\n%s", out)
-	}
-	var listed struct {
-		Grants []appGrant `json:"grants"`
-	}
-	if err := decodeJSON(n.CLI.MustOK(t, "app", "grants", "list", "e2e-cli-app", "--json").Stdout, &listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Grants) != 1 || listed.Grants[0].Role != roleRuntime || listed.Grants[0].Resource != "pubsub:topic=orders.*" {
-		t.Errorf("grants list --json: %+v", listed.Grants)
-	}
 	if res := runCLI(t, n.CLI, "app", "grants", "set", "e2e-cli-app", roleAdmin); res.Exit == 0 {
 		t.Error("the CLI granted a deployment admin")
+	}
+	res := runCLI(t, n.CLI, "app", "grants", "set", "e2e-cli-app", roleRuntime)
+	if res.Exit == 0 || !containsFold(res.Stdout+res.Stderr, "no such deployment") {
+		t.Errorf("granting a deployment that does not exist: exit %d\n%s%s", res.Exit, res.Stdout, res.Stderr)
 	}
 	for _, args := range [][]string{{"app", "grants"}, {"app"}} {
 		if out := n.CLI.MustOK(t, args...).Stdout; !strings.Contains(out, "grants") && !strings.Contains(out, "list") {

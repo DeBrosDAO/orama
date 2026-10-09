@@ -251,10 +251,13 @@ func (h *ServerlessHandlers) getCallerIsAdminFromRequest(r *http.Request) bool {
 	// ctxkeys.Scopes — so an admin key used via exchange would otherwise be
 	// wrongly denied. Mirror Gateway.callerScopes: trust custom["scopes"] ONLY
 	// for an ak_ subject; a SIWE wallet JWT must never self-assert admin here.
+	// A workload is not a key: its token's scopes are the grant of the moment
+	// its unit started, so its admin answer is the grant resolved below, which
+	// a narrowed or revoked grant changes at once rather than at renewal.
 	if v := ctx.Value(ctxkeys.JWT); v != nil {
 		if claims, ok := v.(*auth.JWTClaims); ok && claims != nil {
 			sub := strings.TrimSpace(claims.Sub)
-			if auth.IsAPIKeySubject(sub) && claims.Custom != nil {
+			if auth.IsAPIKeySubject(sub) && !auth.IsWorkloadSubject(sub) && claims.Custom != nil {
 				if raw := strings.TrimSpace(claims.Custom["scopes"]); raw != "" && auth.ParseScopes(raw).IsAdmin() {
 					return true
 				}

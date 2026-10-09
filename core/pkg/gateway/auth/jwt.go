@@ -250,6 +250,11 @@ func (s *Service) ParseAndVerifyJWT(token string) (*JWTClaims, error) {
 	if claims.Aud != "gateway" {
 		return nil, errors.New("invalid audience")
 	}
+	// A workload's subject names the namespace it belongs to. A token whose
+	// claim says another is a token no gateway mints.
+	if err := checkWorkloadNamespace(&claims); err != nil {
+		return nil, err
+	}
 	return &claims, nil
 }
 
