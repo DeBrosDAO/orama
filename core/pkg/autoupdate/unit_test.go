@@ -29,7 +29,6 @@ func TestUnit_isConfinedAndStillCanDoWhatTheUpgradeDoes(t *testing.T) {
 		"ProtectHome":             "yes",
 		"ProtectControlGroups":    "yes",
 		"LockPersonality":         "yes",
-		"RestrictSUIDSGID":        "yes",
 		"RestrictAddressFamilies": "AF_INET AF_INET6 AF_UNIX AF_NETLINK",
 	} {
 		if got := settings[key]; got != want {
@@ -42,5 +41,10 @@ func TestUnit_isConfinedAndStillCanDoWhatTheUpgradeDoes(t *testing.T) {
 		if v, ok := settings[key]; ok {
 			t.Errorf("%s=%s is set: `orama node upgrade --restart` (sysctl -w, writes under /usr and /etc) cannot run under it", key, v)
 		}
+	}
+	// apt-get and dpkg set the setuid and setgid bits of the packages that carry
+	// them; the setting denies exactly that.
+	if v, ok := settings["RestrictSUIDSGID"]; ok {
+		t.Errorf("RestrictSUIDSGID=%s is set: dpkg, run by `orama node upgrade --restart`, could not set the setuid and setgid bits of a package's files", v)
 	}
 }

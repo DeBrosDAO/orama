@@ -27,10 +27,18 @@ PrivateTmp=yes
 # writes /etc/orama and /var/lib/orama-autoupdate, runs `orama node upgrade
 # --restart` (systemctl over D-Bus, apt, ufw, wg and iptables) and reads the
 # registry over the overlay.
+# ProtectHome hides /home, /root and /run/user. The upgrade reads nothing there:
+# it works under /opt/orama, /etc, /var/lib and /usr, and the service accounts
+# it runs tools as have their homes under /opt/orama (installers/runas.go), not
+# in /home. The operator's ~/.orama (environments.json, credentials.json) and
+# their ssh keys belong to the CLI run from a workstation, not to this node.
 ProtectHome=yes
 ProtectControlGroups=yes
 LockPersonality=yes
-RestrictSUIDSGID=yes
+# Deliberately not RestrictSUIDSGID: `orama node upgrade --restart` runs apt-get
+# and dpkg, and dpkg sets the setuid and setgid bits of the files of the
+# packages that carry them (passwd and mount, for example). The setting denies
+# exactly that, so an upgrade that updates such a package would fail half way.
 # AF_NETLINK is for ufw, iptables and wg, which the upgrade runs to reconcile
 # the firewall and the WireGuard mesh.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
