@@ -14,10 +14,12 @@ Cache data is organized into **distributed maps** (dmaps). A dmap is a named key
 import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_your_key:namespace",
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
 });
 ```
+
+The key needs the `cache` grant (`orama namespace keys create --scope invoke,cache --label worker`); the `app-runtime` profile does not include it. A signed-in user's session holds it. See [Access control](/docs/developer/access-control#api-keys).
 
 ## Basic Operations
 

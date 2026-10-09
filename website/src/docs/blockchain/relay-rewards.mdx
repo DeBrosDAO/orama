@@ -2,7 +2,7 @@
 
 `x/relay` is the chain's registry of Tor relays and exits, and the rule for paying them from the relay share of emission (10% of each epoch's maximum).
 
-**State today: the registry and the epoch report work. The step that actually pays relays is built and tested but nothing calls it.** No relay is running on any network, and no relay reward can be earned on a running chain until that step is wired. This page describes what the code does, so you know what will happen once it is.
+**State today: the registry, the epoch report and the payout are all wired.** `x/relay`'s end block settles each reported epoch, with no message needed. What is still missing is on the operator side: no `orama` command registers a relay, bandwidth measurement (`sbws`) is not installed, and nothing in the repository has run against a real Tor network yet. This page describes what the code does.
 
 ## Messages
 
@@ -12,7 +12,9 @@
 | `ReportEpoch` | A reporter | Sends one chunk of a per-epoch report: observations per relay (consensus weight, flags, uptime fraction) and an `inputs_root`. Up to 32 chunks of 4,096 entries |
 | `UpdateReporters` | Nobody directly | Accepted only inside a passed governance proposal that changes the reporter set |
 
-Reporters are the directory authorities' measurement software. A report from anyone not in the reporter set fails with `ErrNotReporter`. At most 128 reporters exist. A relay is bucketed by the /16 of its operator's node, or into a shared "unidentified" bucket when the /16 is not known.
+Reporters are the directory authorities' measurement software. A report from anyone not in the reporter set fails with `ErrNotReporter`. At most 128 reporters exist. The operator of a registered relay cannot be a reporter: `RegisterRelay` refuses a reporter's address and a reporter-set change that names a relay operator is refused.
+
+**The report window.** Epoch `e` is reported on while the chain is in epoch `e+1`. A report for the epoch in progress, a future epoch, an epoch whose window has passed, or an epoch with no relay ceiling is refused. The end block then settles the oldest reported epoch once the chain is in epoch `e+2`, one epoch per block. An epoch nobody reported is never settled and takes no later report. A relay is bucketed by the /16 of its operator's node, or into a shared "unidentified" bucket when the /16 is not known.
 
 ## How a reward is computed
 
@@ -24,9 +26,11 @@ amount = min(median weight, per_relay_cap)       x 2 if the relay is an exit
          then scaled down to the epoch's relay ceiling
 ```
 
+The weight comes from the authority's *measured* bandwidth. A relay no authority measured weighs 0 and earns nothing, and the measurement software is not installed anywhere yet (see below).
+
 | Parameter | Value |
 |---|---|
-| `min_reporters_quorum` | 2 |
+| `min_reporters_quorum` | 3 |
 | `min_uptime_fraction` | 0.9 |
 | `exit_multiplier` | 2 |
 | `per_relay_cap` | 100 ORAMA |
@@ -35,16 +39,26 @@ amount = min(median weight, per_relay_cap)       x 2 if the relay is an exit
 
 The first epoch that reaches quorum only *activates* rewards and mints nothing. Later epochs mint at most that epoch's relay ceiling through `x/emission` and credit the operator's earnings. A failed quorum mints nothing, and calling settlement twice for the same epoch has no extra effect.
 
-These values are plan launch defaults, not tuned numbers. Pay is not split 90/5/5 like storage pay: there is no burn or archive path here.
+These values are plan launch defaults, not tuned numbers, and nothing can change them after genesis. The quorum of 3 is one reporter per initial directory authority, so one lying reporter cannot move the median.
+
+## How a payout is split
+
+Relay pay goes through the same 90/5/5 service split as storage pay (`SplitServicePayment` in `x/storage`). Each operator's total for the epoch, after the caps, is split once:
+
+| Share | Where it goes |
+|---|---|
+| 90% | The operator's earnings account. The operator also gets the rounding remainder, so the three parts sum exactly to the total |
+| 5% | Burned from the `relay` module account |
+| 5% | The `storage_archive` module account, and `x/storage`'s `archive_fund` counter rises by the same amount (see [Storage deals](/docs/blockchain/storage-deals) and [History archive](/docs/blockchain/archive)) |
+
+The payout rows and the epoch's minted amount stay gross, before the split.
 
 ## What is missing
 
-- Nothing calls the settlement step. `x/relay` has no end block and the app does not invoke it.
-- There is no `orama` command to register a relay or send a report.
-- No relay software exists: the installer's relay unit points at a binary that is not in the repository.
-- A relay that is also a directory authority needs measurement software (`sbws`) that nothing installs.
-
-See [Tor](/docs/privacy/tor) for what exists on the network side.
+- There is no `orama` command to register a relay (`MsgRegisterRelay` is in the SDK) or to send a report by hand.
+- The reporter, `orama-global reporter`, is built: on a directory-authority host it reads that authority's archived votes and sends each closed epoch to `x/relay` in chunks. It drops an epoch whose report window has passed or that is already settled (`ErrWindowClosed`, `ErrEpochSettled`) instead of retrying it. `orama global install` does not set it up, so the operator prepares its home.
+- Bandwidth measurement (`sbws`) has no installer. Without a bandwidth file the authorities weight relays by what they claim, which a relay can inflate, and that is the reason consensus weight is not yet a trustworthy reward basis.
+- The relay itself is the Tor package installed by `orama global install --services relay` ([Tor](/docs/privacy/tor)). The older `orama-relay` unit in the installer points at a binary that is not in the repository.
 
 ## Queries
 

@@ -30,7 +30,7 @@ A contract returns `CosmosMsg::Custom` with one of these.
 
 | Binding | Calls |
 |---|---|
-| `token.{create,mint,burn}` | [Token factory](/docs/blockchain/token-factory), never for `norama`-named denoms |
+| `token.{create,mint,burn}` | [Token factory](/docs/blockchain/token-factory), never for `norama`-named denoms. `create` takes the same `transfer_hook` (a contract address) as the message |
 | `cnft.{create_collection,create_tree,mint}` | [NFTs](/docs/blockchain/nfts-and-market) |
 | `market.{list,cancel_listing,bid,cancel_bid,settle}` | The market |
 | `storage.create_deal` | A deal paid from the contract's own funds. Protocol classes are refused |
@@ -38,6 +38,10 @@ A contract returns `CosmosMsg::Custom` with one of these.
 | `shielded` | Returns `NOT_LINKED` |
 
 Queries a contract may make: `token.info`, `cnft.tree`, `cnft.verify_proof` (20,000 gas plus 3,000 per sibling) and `market.listing`. Staking messages, stargate (`Any`) messages and distribution `SetWithdrawAddress` are refused.
+
+## A contract as a token's transfer hook
+
+A token created with a `transfer_hook` has the named contract called (`sudo`, message `{"transfer_hook":{"denom","from","to","amount"}}`) on every `Transfer`, under a gas cap of 100,000. A contract that returns an error refuses the transfer; one that runs past the cap fails it. Only a build with the contract VM can create such a token. See [Token factory](/docs/blockchain/token-factory#the-transfer-hook).
 
 ## State deposits
 

@@ -27,8 +27,8 @@ Three read paths exist, and each command uses one:
 --node     a node's Cosmos REST API, for example http://127.0.0.1:31003.
            Accounts, bank balances, staking validators.
 --rpc      a node's CometBFT RPC, for example http://127.0.0.1:31001. The
-           Orama modules answer gRPC only and abci_query is their one node
-           HTTP route; with --rpc set, earnings, node, deal and query read
+           Orama modules are on a node's REST API too, but the CLI reads them
+           through abci_query; with --rpc set, earnings, node, deal and query read
            it directly instead of through the gateway.
 ```
 

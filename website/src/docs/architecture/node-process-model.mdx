@@ -63,6 +63,10 @@ The node's namespace-health probe asks each local gateway's `/v1/health` on the 
 
 A tenant reconciler on every node converges that node's namespace services every 60 seconds: it restarts missing services, rewrites configurations that no longer match cluster membership (Olric peers, gateway `olric_servers`), and one elected member per namespace prunes departed members. See [Replace a node](/docs/operator/node-replacement) and [Monitoring](/docs/operator/monitoring#in-cluster-failure-detection).
 
+### One lock per namespace
+
+On one node, every path that starts or stops a namespace's units takes that namespace's lock and decides under it: a teardown, the reconciler's restore, the boot-time restore from local state, the WebRTC sweeps and every spawn. A spawn reads the namespace's cluster from the registry under the lock and is refused with 409 when the namespace is being deleted or gone, so a delete that races a slow provisioning cannot be followed by units started into the teardown. A spawn also names its cluster (`cluster_id`) and is refused with 409 (`ErrClusterMismatch`) when that is not the namespace's current cluster, which stops the provisioner of a deleted and re-created namespace from starting units into the new one. The wait for the lock is bounded at three minutes, so a holder stuck on a hung `systemctl` call cannot stall every operation on the namespace. During a rolling upgrade a spawn request without `cluster_id` is checked for deletion only.
+
 ## DNS degrades rather than failing
 
 The CoreDNS RQLite plugin serves stale answers when the backend is unreachable: an entry stays usable for 24 hours past its TTL and is returned with a 30-second TTL so a resolver comes back promptly. NXDOMAIN is cached for 30 seconds and never served stale. Without this, an index RQLite with no leader would take every name in the fleet offline, including the names an operator needs to reach the machines and fix it.

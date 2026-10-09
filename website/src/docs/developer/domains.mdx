@@ -20,6 +20,8 @@ The random suffix ensures uniqueness across all namespaces. You can also specify
 
 A deployment name is 1 to 56 characters of letters, digits, `-` and `_`, starting with a letter or digit. It becomes one DNS label and part of the unit that runs it, so anything else is refused with `400`. See [Deployments](/docs/developer/deployments#names-and-limits).
 
+The bare `<app-name>.<base-domain>` is only the address of a deployment created before subdomains existed, which has none. A deployment that has a subdomain is not served at its bare name, because names are unique per namespace and not across namespaces, so the bare host would not say whose deployment it is. If two namespaces still hold a subdomain-less deployment of the same name, the bare host answers `404` for both until one of them is deleted.
+
 The domain is live as soon as the deployment completes. No additional configuration is required.
 
 ---
@@ -34,7 +36,7 @@ From the client's perspective, there is no difference between hitting the home n
 
 1. The client resolves the app's domain via DNS (round-robin across nameservers)
 2. The request arrives at whichever node the DNS resolved to
-3. The gateway on that node extracts the app name from the subdomain
+3. The gateway on that node resolves the deployment from the host (its subdomain, or a verified custom domain)
 4. It looks up which node hosts the app
 5. If the app's home node is **this node**, the gateway serves the request directly
 6. If the app's home node is a **different node**, the gateway proxies the request over the WireGuard mesh to the home node

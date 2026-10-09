@@ -30,15 +30,14 @@ This section covers every privacy feature in Orama, who each one hides informati
 | Tor client on every node, anonymity proxy, tunnel, `anon_fetch` | Built, live |
 | Relayed fetch | Built, live. Node.js clients only |
 | Stealth TURN | Built. Per-node opt-in |
-| Submitting chain transactions to an onion address (client side) | Built |
-| The server side of that (an onion service on validators) | Unit text exists. Nothing installs it |
-| A private Orama Tor network: directory authorities, relays, exits | **Not built.** There is parameter validation and unit text only. The code refuses to start an exit on purpose |
-| Relay rewards on chain | Registry and reports built. Nothing calls the payout |
-| VPN | **Not built** |
+| Submitting chain transactions to a validator's onion address | Built. Client with `--onion` or `--onion-network`; server side with `orama global install --services onion` |
+| A private Orama Tor network: directory authorities, relays, opt-in exits, `tor-network.json`, the `orama vpn` proxy client | Code and installer built. **Never run against a real network**, and Orama runs every authority |
+| Relay rewards on chain | Registry, reports and payout built (90/5/5 split). Bandwidth measurement and relay registration tooling missing |
+| Public VPN | **Not built.** The launch gate is off in every build |
 | Mixnet, paid relay admission, cross-operator relay selection | Not built |
 | Browser and React Native transport for relayed fetch | Not built |
 
-When this page says "Tor" it means the public Tor network, reached by the Tor client on each node. An Orama-run Tor network is a stated goal of the Open Network plan and is not in the code.
+When this page says "Tor" it means the public Tor network, reached by the Tor client on each node. Orama's own Tor network is a separate, private network ([Tor](/docs/privacy/tor#orama-s-own-tor-network)); the anonymity proxy and relayed fetch do not use it.
 
 ## Pages
 

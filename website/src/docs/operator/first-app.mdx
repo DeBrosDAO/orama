@@ -42,12 +42,12 @@ orama app get www
 
 ```bash
 orama status                    # all nodes healthy
-orama monitor namespaces        # myapp is healthy on all three nodes
-orama monitor dns               # nameservers, certificate expiry, resolution
+orama monitor namespaces --env mycluster   # myapp is healthy on all three nodes
+orama monitor dns --env mycluster          # nameservers, certificate expiry, resolution
 orama namespace webrtc-status   # only if you enabled WebRTC
 ```
 
-- `orama monitor namespaces` shows the namespace's three services on each node it runs on.
+- `orama monitor namespaces --env mycluster` shows the namespace's three services on each node it runs on.
 - The URL resolves through your own nameservers, so `dig <url host> @ns1.<base-domain>` returns node addresses.
 - If you used `letsencrypt-staging`, the browser warns about the certificate and `curl` needs `-k`. See [TLS and certificates](/docs/operator/tls-certificates).
 

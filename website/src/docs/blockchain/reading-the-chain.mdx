@@ -10,18 +10,34 @@ Every gateway can serve a read-only proxy to a chain node. It is an open route (
 |---|---|
 | `status` | CometBFT status: network id, latest block, sync state |
 | `block`, `blocks` | A block, or up to 20 |
-| `tx` | A transaction |
+| `tx` | A transaction (404 with `Retry-After: 2` until it is in a block and indexed) |
 | `validators` | The CometBFT validator set |
 | `supply/norama` | Total supply |
 | `staking/pool` | Staking pool |
-| `index/status`, `index/blocks/{h}`, `index/txs/{hash}` | The chain indexer |
-| `index/accounts/{addr}/txs` | Transactions by address |
+| `staking/validators` | The staking validator list (REST, fixed page size, no query) |
+| `index/status`, `index/stats`, `index/blocks/{h}`, `index/txs`, `index/txs/{hash}` | The chain indexer |
+| `index/accounts/{addr}`, `index/accounts/{addr}/txs` | An address's summary and its transactions |
 | `index/cnft/assets/{id}`, `index/cnft/owners/{addr}/assets` | Compressed NFT ownership |
-| `query/{package.Service}/{Method}` | Any allowed module query |
+| `query/{package.Service}/{Method}` | Any allowed module query, and the wallet queries below |
+| `simulate`, `broadcast` (POST) | Price and submit a signed transaction for a wallet with no node of its own |
 
-Limits that protect the node: a `data` or `json` parameter of at most 4 KiB, `height` only within the last 100 blocks, 120 requests per minute with a burst of 30 per address (IPv6 per /64), at most 16 at once, responses up to 4 MiB. The node's `query-gas-limit` (2,000,000) bounds the cost of a single query.
+Limits that protect the node differ by route. The other routes copy a healthy upstream body unchanged up to 8 MiB (the largest is one block), and `blocks` spans at most 20 blocks (a `max_height` at most 19 above `min_height`). The `query/…` route adds its own: a `data` or `json` parameter of at most 4 KiB, `height` only within the last 100 blocks, at most 16 queries at once (the rest get 503 with `Retry-After`), responses up to 4 MiB, and a separate bucket of 120 requests per minute with a burst of 30 per address (IPv6 per /64). The node's `query-gas-limit` (2,000,000) bounds the cost of a single query. `simulate` and `broadcast` take a signed `TxRaw` of at most 1 MiB and have their own in-flight and rate limits.
 
 `query/…` serves an allow-list of query methods. Every module's `Invariants` query, the houses `Tiers` query and the shielded `Pools` query are withheld.
+
+### Wallet queries
+
+A wallet with no node of its own reads one address through the same `query/…` route. It serves 15 cosmos-sdk and wasmd methods and refuses the rest (so bank's whole-chain supply and staking's validator list are not reachable this way):
+
+| Service | Methods |
+|---|---|
+| `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
+| `cosmos.auth.v1beta1.Query` | `Account`, `AccountInfo` |
+| `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
+| `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
+| `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a 404) |
+
+The list methods take `pagination.limit` up to 100. The explorer's wallet page uses `AllBalances`, `DelegatorDelegations` and `DelegatorUnbondingDelegations` here; the duplicate REST routes for them are gone, and only the staking validator list stays REST.
 
 ## `orama chain`
 
@@ -36,7 +52,7 @@ orama chain query orama.nodes.v1.Query/Node '{"node_id":"node-1"}'
 orama chain query --list
 ```
 
-Three read paths exist and each command uses one: `--gateway` (default: the active environment's gateway), `--node` (a node's Cosmos REST API, for accounts, bank balances and staking validators) and `--rpc` (a node's CometBFT RPC, which also reaches the Orama modules, which answer gRPC only, through `abci_query`). `orama chain balance` needs `--node` because the gateway route does not serve public bank balances.
+Three read paths exist and each command uses one: `--gateway` (default: the active environment's gateway), `--node` (a node's Cosmos REST API, for accounts, bank balances and staking validators) and `--rpc` (a node's CometBFT RPC, which also reaches the Orama modules, which answer gRPC only, through `abci_query`). `orama chain balance` still reads through `--node`'s REST API; the gateway's wallet queries serve the same balance to a wallet that has no node.
 
 `orama chain faucet <recipient>` funds an account on a test network. It signs on a node over SSH with that node's test operator key and refuses any chain id that does not contain `-stagenet-`, `-devnet-` or `-localnet-`. Full flags: [`orama chain`](/docs/developer/cli/chain).
 
@@ -64,8 +80,8 @@ Every module has an `invariants` query. They return false if the module's accoun
 
 ## The explorer
 
-The site has an explorer page at `/explorer` (Home, Block, Transaction, Wallet and Validators views). **It currently runs on seeded demo data and says so in a banner.** It reads through an `ExplorerDataSource` interface and no adapter to the gateway routes above has been written yet. Use `orama chain` for real data.
+The site has an explorer page at `/explorer` (Home, Block, Transaction, Wallet and Validators views). It reads the chain only through the gateway routes above, on the origin it is served from, and has no demo data: when the proxy or the indexer is down a page shows an error box and nothing else. The transaction, block and wallet pages need the chain indexer on the node the gateway reads.
 
 ## Wallet clients and transactions
 
-Transactions are signed with `SIGN_MODE_DIRECT` using the RootWallet agent: `orama global`, `orama storage` and `orama cluster` ask the agent's `/v1/orama/tx/sign` endpoint, which decodes the transaction itself, shows it in an approval window, and refuses anything it cannot decode. See [The agent](/docs/rootwallet/agent). Add `--onion <addr.onion>` to submit through Tor ([Tor](/docs/privacy/tor)). Reads do not go through Tor yet.
+Transactions are signed with `SIGN_MODE_DIRECT` using the RootWallet agent: `orama global`, `orama storage` and `orama cluster` ask the agent's `/v1/orama/tx/sign` endpoint, which decodes the transaction itself, shows it in an approval window, and refuses anything it cannot decode. See [The agent](/docs/rootwallet/agent). Add `--onion <addr.onion>` to submit through Tor ([Tor](/docs/privacy/tor)). Reads do not go through Tor yet. A wallet that cannot use Tor or reach a validator submits through the gateway's `POST /v1/chain/broadcast` instead.

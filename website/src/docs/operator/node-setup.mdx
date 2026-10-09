@@ -4,22 +4,22 @@
 
 ## What `orama node install` does
 
-On the machine itself (or from your computer with `--remote`), it:
+On the machine itself (or from your computer with `--remote`), it does these in order:
 
-1. Checks the machine: root, Linux, a supported OS (Debian 12/13, Ubuntu 22.04/24.04/26.04), architecture (amd64, arm64, arm), at least 2 CPU cores, 2 GB RAM, 10 GB free disk.
-2. Verifies the build archive extracted at `/opt/orama` against the node's trust anchor.
-3. Generates a WireGuard key and sets up the mesh to every peer.
-4. Configures and starts RQLite, Olric, IPFS and IPFS Cluster, the vault guardian and the gateway.
-5. With `--nameserver`: CoreDNS and Caddy.
-6. Installs the Tor client from the Tor Project's apt repository (client only).
-7. Writes the systemd units, which the supervisor `orama-node` runs in dependency order.
-8. Configures the `ufw` firewall (unless `--skip-firewall`) and system hardening.
-9. Registers the node with the cluster.
+1. Checks the machine: root, Linux, a supported OS (Debian 12/13, Ubuntu 22.04/24.04/26.04), architecture (amd64, arm64, arm), the tools it needs (missing ones are installed with apt), that dynamic users resolve (nss-systemd), and at least 2 CPU cores, 2 GB RAM and 10 GB free disk.
+2. Creates the directory layout and the `orama` user.
+3. Installs the Tor client from the Tor Project's apt repository (client only). This is before a join, so a failure here does not spend the invite.
+4. Settles who may sign the archive. A genesis node writes `--operator-wallet` into `/etc/orama/archive-signers`. A joining node checks the archive as far as it can, requests the join from the node the invite names (creating its identity and WireGuard keypair first), and takes the cluster's signers from the response.
+5. Verifies the build archive extracted at `/opt/orama` against that trust anchor, and installs its binaries.
+6. A genesis node generates the cluster secrets and sets up WireGuard (it takes `10.0.0.1`). A joining node sets up WireGuard with the address and peers the cluster assigned it, verifies the tunnel, and saves the secrets from the join response.
+7. Configures the `ufw` firewall (unless `--skip-firewall`) and system hardening.
+8. Writes the node's configuration and initialises IPFS and IPFS Cluster.
+9. Installs the namespace systemd templates, then writes the systemd units, which the supervisor `orama-node` runs in dependency order: RQLite, Olric, IPFS and IPFS Cluster, the vault guardian and the gateway, plus CoreDNS and Caddy with `--nameserver`. The running node registers itself with the cluster.
 10. Verifies the node before printing success: supervisor active and not crash-looping, RQLite `Leader` or `Follower`, `wg0` up, gateway `/health` 200. It exits non-zero and names the first component that did not come up.
 
 ## Prerequisites
 
-The signed archive from [Build and sign](/docs/operator/build-and-sign) extracted at `/opt/orama` on the server, or passed with `--archive` together with `--remote`. A genesis install also needs `--operator-wallet`, the address that signed the archive. It becomes the only signer in `/etc/orama/archive-signers`, written **before** the archive is verified.
+The signed archive from [Build and sign](/docs/operator/build-and-sign) extracted at `/opt/orama` on the server, or passed with `--archive` together with `--remote`. A genesis install also needs `--operator-wallet`, the address that signed the archive. It becomes the only signer in `/etc/orama/archive-signers`, written **before** the archive is verified. `orama node install` takes an archive; the published-release path (`--release`, `--release-repo`, `--release-root`) belongs to `orama node setup`, which turns the release into a signed archive first, and a node that installed one has adopted the release root (`orama node trust add-root` adopts one on a single node).
 
 ## Genesis node
 
@@ -61,10 +61,11 @@ To drive it from your own machine over SSH instead:
 ```bash
 orama node install --remote --token <INVITE> \
   --vps-ip 203.0.113.11 --base-domain cluster.example.com \
-  --archive $ARCHIVE --ssh-user root --host-key SHA256:…
+  --archive $ARCHIVE --operator-wallet 0xYourWallet \
+  --ssh-user root --host-key SHA256:…
 ```
 
-`--remote` is required to install a machine other than the one you are on. It used to be inferred from whether you used sudo, so the same command line meant two different things on two different machines.
+`--remote` verifies the archive on your computer before uploading it, so it needs `--operator-wallet`, the wallet that signed the build. It is also required to install a machine other than the one you are on. It used to be inferred from whether you used sudo, so the same command line meant two different things on two different machines.
 
 ## Flag reference
 
@@ -74,7 +75,7 @@ orama node install --remote --token <INVITE> \
 | `--base-domain` | Base domain for deployment routing |
 | `--domain` | Domain for HTTPS. Generated for non-nameservers if omitted |
 | `--nameserver` | Run CoreDNS and Caddy; make this a nameserver |
-| `--operator-wallet` | Genesis only: the archive signer. Required on genesis |
+| `--operator-wallet` | The archive signer. Required on genesis (it becomes the only signer) and with `--remote` (the archive is verified against it before upload) |
 | `--token` | The invite. It carries the gateway to join and the certificate to pin |
 | `--join`, `--join-sni`, `--ca-fingerprint` | Overrides for what the invite already carries |
 | `--expect-archive-signers` | When joining: the signers the cluster must send; checked before the join |
@@ -82,7 +83,7 @@ orama node install --remote --token <INVITE> \
 | `--archive` | With `--remote`: the archive to upload, verified here first |
 | `--remote`, `--ssh-user`, `--host-key` | Install the machine at `--vps-ip` over SSH |
 | `--environment` | Environment name |
-| `--skip-checks` | Skip the minimum RAM and CPU checks. Not recommended |
+| `--skip-checks` | Skip the minimum free-disk, RAM and CPU checks. Not recommended |
 | `--skip-firewall` | Do not configure `ufw` (you manage your own firewall) |
 | `--dry-run` | Show what would be done, change nothing |
 | `--force` | Force reconfiguration even if installed |

@@ -28,6 +28,7 @@ Three trust anchors matter:
 - **Listeners are on the overlay, not every interface.** Namespace gateways, RQLite, Olric, pub/sub, the Kubo API and IPFS Cluster all bind loopback or the WireGuard address. The CIDR is `10.0.0.0/24` in every component; other tenants on shared VPS networks cannot bypass the firewall with an overlapping `10.x` range.
 - **Local control planes are not open to every local process.** Caddy's admin API is a `0600` unix socket in its own runtime directory (the default `localhost:2019` let any local process load a config that proxies anything anywhere). The pub/sub API is a unix socket that admits only the gateways' user through `SO_PEERCRED`.
 - **Multicast name resolution is off** (`LLMNR=no`, `MulticastDNS=no`).
+- **No route registers a WireGuard peer on the strength of the cluster secret.** The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` endpoints took the secret itself as a bearer credential with no audience, nonce or body binding. They were deleted, not re-authenticated: a peer row is written only by the invite-gated join and the OramaOS enrolment.
 
 ## Authentication and authorization
 
@@ -35,9 +36,9 @@ Two identities exist: a wallet (a person) and a key (a program). Nothing else au
 
 - A sign-in signs a message that names the gateway's domain, the namespace, a single-use nonce and a five-minute expiry. A signature collected by another site does not verify here, and a captured signature cannot be replayed.
 - Access tokens last 15 minutes, signed by the gateway's own Ed25519 key. A namespace gateway's key is bound to its namespace, so one tenant's gateway cannot mint a token for another. Refresh tokens are stored only as hashes and rotate with replay detection. Revoking a key, a token, a session or a device takes effect within about ten seconds on every gateway through a replicated revocation list that fails closed.
-- A credential's power is read from the grant on every request, not from the token. A route with no declared policy cannot be registered.
+- A credential's power is read from the grant on every request, not from the token. That includes a deployed app's own workload token: a narrowed or revoked grant applies within the grant cache's ten seconds, an app can be granted only `runtime` or `reader` and never the control plane, and a token whose subject names one namespace while its claim names another is refused wherever it is verified, not only on renewal. A route with no declared policy cannot be registered.
 - API keys are stored only as HMACs, expire (90 days by default, a year at most), do not name their namespace, and carry a checksum so a leaked one is recognisable offline.
-- A browser-shippable key holds the data plane only, and storage, WebRTC and the anonymity proxy additionally require a logged-in user.
+- A browser-shippable key holds the data plane only. Storage and WebRTC refuse a key on its own and accept a logged-in user or an app's own workload token, and the anonymity proxy and tunnel stay a person's.
 - The audit trail records sign-ins, key and grant changes, namespace, deployment, function and secret changes and operator actions, kept 90 days. The actor is never a credential.
 
 ## Tenant isolation
@@ -57,11 +58,15 @@ Two identities exist: a wallet (a person) and a key (a program). Nothing else au
 
 ## Secrets at rest
 
-TURN secrets, function secrets, push credentials, deployment environment variables and agent tokens are encrypted with AES-256-GCM under a versioned key hierarchy rooted in the *encryption root*, which starts as a copy of the cluster secret. `orama operator rotate-secrets --rotate` replaces the root and re-encrypts. Private blobs are encrypted before they are added to IPFS. Certificates are sealed in the shared store. More on [Secrets and keys](/docs/architecture/secrets-and-keys).
+TURN secrets, function secrets, push credentials, deployment environment variables and agent tokens are encrypted with AES-256-GCM under a versioned key hierarchy rooted in the *encryption root*, which starts as a copy of the cluster secret. `orama operator rotate-secrets --rotate` replaces the root and re-encrypts. A deployment's environment is also sealed to its namespace and deployment id (the `enc:v2:` envelope), so a ciphertext copied onto another deployment's row does not open there; a new cluster writes that form from its first row, and an upgraded cluster switches to it when an operator runs `rotate-secrets` after every gateway is upgraded. Private blobs are encrypted before they are added to IPFS. Certificates are sealed in the shared store. More on [Secrets and keys](/docs/architecture/secrets-and-keys).
 
 ## Supply chain
 
-Build archives are signed with a RootWallet key (an EIP-191 signature over a domain-separated message that includes the manifest hash), and a node installs one only if the signer is in its trust anchor. Every file is listed in the signed manifest. The chain binary (`oramad`) is staged with TUF verification at staging time (`orama global stage-oramad`), and cosmovisor never downloads a binary. See [Build and sign](/docs/operator/build-and-sign). Not covered: a signature proves who built an archive, not that it is the newest, so a rollback to an older signed build is allowed; and the global-node binaries (`oramad`, `orama-global`) are not yet verified against a signature at install.
+Build archives are signed with a RootWallet key (an EIP-191 signature over a domain-separated message that includes the manifest hash), and a node installs one only if the signer is in its trust anchor. Every file is listed in the signed manifest. Builds are reproducible: two `orama build` runs of one commit give the same archive byte for byte, so several signers can rebuild and compare hashes before signing, and CI publishes each release's archive unsigned and holds no key.
+
+A cluster can also adopt a **TUF release root**. Releases are then fetched from a static HTTPS repository and trusted only when the release signers' metadata names their hash, through `stable` and `nightly` channel roles that are trusted for their own paths only. A client refuses metadata below a role's threshold, an expired timestamp, a snapshot older than the newest it accepted (rollback) and a target whose bytes differ. Nodes can follow a channel by themselves with the auto-update agent: `notify` is the default, `auto` installs inside a maintenance window one node at a time behind a health gate, rolls back and marks the release bad for the cluster if it fails, and is never applied to a machine that runs the chain. The agent installs only what the root's signers signed. See [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
+
+The chain binary (`oramad`) is staged with TUF verification at staging time (`orama global stage-oramad`), and cosmovisor never downloads a binary. See [Build and sign](/docs/operator/build-and-sign). Not covered: on the archive-signer path a signature proves who built an archive, not that it is the newest, so a rollback to an older signed build is allowed; and the global-node binaries (`oramad`, `orama-global`) are not verified against a signature at install, the operator is the check.
 
 ## OramaOS
 

@@ -38,7 +38,7 @@ For `opaque`, generate a `topic_secret` once and bake it into both your credenti
 
 ## 3. Store credentials
 
-Credentials live encrypted (AES-256-GCM under a key derived for this purpose) in your namespace's record in the cluster. They are **never returned** by any GET: responses report `has_<field>: true` only. Every request needs a credential with namespace write.
+Credentials live encrypted (AES-256-GCM under a key derived for this purpose) in your namespace's record in the cluster. They are **never returned** by any GET: responses report `has_<field>: true` only. Every request needs the `secrets` write permission: the `owner`, `admin` and `developer` roles hold it, `runtime` and `reader` do not, and neither does an `app-runtime` key.
 
 ```http
 PUT /v1/namespace/push-credentials/apns

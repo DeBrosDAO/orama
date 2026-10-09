@@ -37,7 +37,7 @@ This ensures any node can communicate directly with any other node with minimal 
 Configuration is fully automated during node installation. You do not configure WireGuard by hand.
 
 1. **Key generation.** A WireGuard keypair is generated for the node. The private key never leaves the node.
-2. **Address allocation.** A join allocates the **lowest free** address in `10.0.0.2-254` with a plain insert into the registry's `wireguard_peers` table, retrying only on an address collision. (The older approach of `max+1` could roll past `10.0.0.254` into `10.0.1.x`, outside the `/24` that the firewall and the internal-auth check both accept, and two racing joins could delete each other's row.)
+2. **Address allocation.** A join allocates the **lowest free** address in `10.0.0.2-254` with a plain insert into the registry's `wireguard_peers` table, retrying only on an address collision. Join and OramaOS enrolment both write through this one function (`pkg/overlay`), and the row stays unconfirmed until the node is seen in the node list, so a join that fails halfway leaves something the membership reconciler can remove. (The older approach of `max+1` could roll past `10.0.0.254` into `10.0.1.x`, outside the `/24` that the firewall and the internal-auth check both accept, and two racing joins could delete each other's row.)
 3. **Peer discovery.** The joining node receives the peer list in the join response and brings up `wg0` with a tunnel to every peer before any database, cache, storage or gateway service starts.
 4. **Self-repair every 60 seconds.** Every node checks its live tunnel configuration against the membership list in the registry. A peer whose endpoint or allowed IPs drifted is re-applied and the result is persisted to `/etc/wireguard/wg0.conf` (mode 0600). A peer whose public IP moved converges within a minute. The sync is additive from the node's own replica if the registry is unreachable, because Raft runs *over* the mesh and fixing the transport must not depend on the transport.
 5. **Removal.** `orama node remove` releases the node's mesh address by id and by address, and the membership reconciler drops a departed node's peer row.
@@ -46,7 +46,7 @@ The WireGuard unit (`orama-namespace-wireguard@index`) is **independent of the s
 
 ### No peer-management API
 
-There is no HTTP endpoint for adding, listing or removing mesh peers. A node joins only through the invite-gated join (or OramaOS enrolment), and peers converge through the 60-second self-repair above. The former `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes were removed because they let anyone holding the cluster secret add a machine to the mesh without an invite; an upgraded node answers them with `404`.
+There is no HTTP endpoint for adding, listing or removing mesh peers. A node joins only through the invite-gated join (or OramaOS enrolment, which also needs an invite), and peers converge through the 60-second self-repair above. The former `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes were removed because they let anyone holding the cluster secret add a machine to the mesh without an invite; an upgraded node answers them with `404`.
 
 ## Key Management
 
@@ -66,10 +66,10 @@ orama monitor mesh --env devnet
 orama monitor mesh --env devnet --json
 
 # Filter to a specific node
-orama monitor mesh --env devnet --node 1.2.3.4
+orama monitor mesh --env devnet --node 203.0.113.10
 ```
 
-This SSHs into each node and collects WireGuard peer status, showing which tunnels are healthy (recent handshakes) and which are stale.
+The data comes from the cluster gateway's telemetry, not SSH: each node's report carries its WireGuard peers, and the view shows the peers against the N-1 a full mesh needs and each link's handshake age and traffic, so you can see which tunnels are healthy (recent handshakes) and which are stale. Add `--ssh` to collect from the nodes directly when no gateway answers.
 
 ### Using orama inspect
 

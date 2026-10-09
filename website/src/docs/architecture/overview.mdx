@@ -31,7 +31,7 @@ flowchart TB
 | **wazero** | WebAssembly runtime (in the gateway process) | Serverless functions |
 | **CoreDNS** | Authoritative DNS (nameserver nodes) | Answers from a table in the registry |
 | **WireGuard** | Mesh VPN | All inter-node traffic |
-| **Tor** | Client-only | The anonymity proxy and relay |
+| **Tor** | Client-only on a cluster node | The anonymity proxy and relay. Relay, authority and onion roles of the Orama Tor network are installed on global nodes ([Tor](/docs/privacy/tor)) |
 | **Vault guardian** | Zig service | Shamir-split secrets |
 | **Pion** | WebRTC | SFU and TURN |
 
@@ -74,7 +74,7 @@ Platform state and tenant data are kept apart. A tenant's own database holds non
 | 10114 | IPFS Cluster swarm (WireGuard address) |
 | 9050 | Tor SOCKS (loopback) |
 | 3478, 5349, 49152-65535 | TURN, when WebRTC is on |
-| 31000-31021 | The chain and global services ([Running a chain node](/docs/blockchain/running)) |
+| 31000-31022 | The chain and global services ([Running a chain node](/docs/blockchain/running)) |
 
 Only the first few are public; everything from 10000 up listens on the overlay or loopback.
 

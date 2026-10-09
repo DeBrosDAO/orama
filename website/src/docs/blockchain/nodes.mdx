@@ -74,4 +74,4 @@ The fee-free registration quota planned for registering nodes is not in the code
 
 ## Queries
 
-`params`, `operator`, `node`, `cluster`, `unbondings` and `invariants`.
+`params`, `operator`, `node`, `cluster`, `unbondings` and `invariants` on `oramad query nodes`. The query behind `unbondings` is `NodeUnbondings` (`orama chain query orama.nodes.v1.Query/NodeUnbondings`, the SDK's `nodeUnbondings`); it returns at most 1,000 entries. The gateway serves all of them except `Invariants`.

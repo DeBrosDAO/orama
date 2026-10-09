@@ -1,8 +1,8 @@
-# Tor: anonymity proxy, tunnel and onion submission
+# Tor: anonymity proxy, tunnel, onion submission and the Orama Tor network
 
 Every Orama node runs a Tor client. It is client-only: it relays nothing, opens no inbound port and never becomes an exit. Three things use it: the gateway's anonymity routes, the `anon_fetch` host function, and the relayed fetch relay. The CLI and SDK also use Tor to submit chain transactions.
 
-This is the **public** Tor network. Orama's own Tor network (directory authorities, relays, exits run by Orama operators) is not built. See [What is not built](#what-is-not-built).
+The node's own Tor client described below is on the **public** Tor network, because the anonymity proxy needs public exits. Orama also has code for a separate, private Tor network run by its own directory authorities, with relays, opt-in exits and onion services on validators. That code has not been run against a real Tor network yet, and the public launch is switched off. See [Orama's own Tor network](#orama-s-own-tor-network).
 
 ## What runs on a node
 
@@ -65,13 +65,40 @@ A WebAssembly function calls the `anon_fetch` host function to make an outbound 
 
 Reads (`orama chain`) do not go through Tor yet.
 
-The server side, an onion service on each validator forwarding to its RPC port, has a unit renderer in the installer but nothing installs it, so there is no production onion to submit to today. The client works against any onion service that forwards to a chain RPC.
+Add `--onion-network <tor-network.json>` (or `ORAMA_ONION_NETWORK`) instead of `--onion` to have the command start a Tor client for the Orama Tor network for that one run, pick one of the file's `validator_onions` at random and stop the client afterwards. `--onion-socks` together with `--onion-network` is a usage error, since they are two Tor clients.
+
+The server side is an onion service on a validator, installed with `orama global install --services onion`. It forwards to `orama global txgate`, which serves three calls and nothing else of the chain's REST API: read the signer's account, broadcast, and look a transaction up. It logs no request. The wallet's proxy for it must be a client of the Orama Tor network, not the public one, which resolves none of its addresses.
+
+## Orama's own Tor network
+
+A separate anonymity network built from unmodified upstream Tor and run by Orama's own directory authorities. It is private: every role and client refuses a network file that is not marked `private`, and the public VPN launch gate (`chain/x/vpnlaunch`) is off in every build. Nothing in it has been run against a real Tor network yet.
+
+| Role | Installed with | Unit |
+|---|---|---|
+| Directory authority | `orama global install --services dirauth` | `orama-global-tor-dirauth.service` and an archive timer |
+| Relay | `--services relay` | `orama-global-tor-relay.service` and `orama-global-tor-monitor.timer` |
+| Exit (opt-in) | `--services relay,exit` | the relay's unit with an exit policy; refused unless the network file allows exits |
+| Validator onion service | `--services onion` | `orama-global-tor-onion.service` and `orama-global-txgate.service` |
+
+A host is an authority or a relay, never both. Each role runs under an account of its own and the global sandbox; none needs the chain except the onion role. The ports are 31020 (ORPort) and 31021 (authorities' DirPort).
+
+**One network file.** `tor-network.json` is the only format and one parser reads it, for the install, `orama vpn up`, `orama vpn check` and every `--onion-network` submission. It carries the network's name, `private`, the authorities (at least three, on public IPv4 literals, with their identities), the voting schedule, `bootstrap`, `allow_exit`, and `validator_onions`. The file is public. The authorities' keys are made once, on an air-gapped machine, by `orama global tor ceremony`; the authority identity key stays offline. After a validator's onion service starts, its address is added with `orama global tor onions add --network-file tor-network.json <addr.onion>`.
+
+**Relay health.** `orama-global-tor-monitor.timer` runs `orama global tor monitor` every five minutes as the relay's own account and writes `monitor.json` with `in_consensus`. `orama monitor node` shows whether the relay is in the relay set, and the health check `global.relay.consensus` warns when it is not.
+
+**The client.** `orama vpn up --network tor-network.json` starts a Tor client on the network and offers a loopback SOCKS5 proxy (default `127.0.0.1:9150`). It is a proxy, not a system-wide tunnel: only applications pointed at it use the network. When Tor stops, the port closes and nothing is routed around the network. `orama vpn check` joins the network and reads the all-zero account through each validator's onion service; it passes when at least one answers and fails when Tor cannot bootstrap, none answers or there is nothing to try. See [VPN](/docs/privacy/vpn).
+
+**Relay pay.** The bandwidth reporter on an authority host reports each closed emission epoch to `x/relay`, which pays registered relays. See [Relay rewards](/docs/blockchain/relay-rewards). The reporter drops an epoch whose report window has passed or that is already settled instead of retrying it.
+
+The full reference, including the ceremony, exits and the abuse-complaint procedure, is `docs/TOR_NETWORK.md` in the repository.
 
 ## What is not built
 
-- **A private Tor network.** `core/pkg/tornet` validates parameters (at least 3 directory authorities, exit policy `reject *:*`, 12-month certificates). It does not generate authority keys, start an authority or open an exit, and its exit start function refuses by design. No fleet node is a relay or runs Tor on a public address.
-- **The relay software.** The installer's relay unit points at a binary (`orama-relay`) that is not in the repository, and its reporter and bandwidth-scanner units are not installed by anything.
-- **Relay rewards.** See [Relay rewards](/docs/blockchain/relay-rewards).
+- **A run on a real network.** The Orama Tor network's code and install exist; no tor process was started while writing it, and the first bring-up is the first run.
+- **Independent authorities.** Orama runs all of them, so while it holds a majority it could sign a consensus that lists only its own relays. The public launch needs a majority of independent authorities, 100 relays from 40 operators and 15 exits in 5 countries, and the gate is off.
+- **Bandwidth measurement.** `sbws` and the reporter have unit renderers but `orama global install` does not set them up, so authorities weight relays by what they claim.
+- **Publication of the vote archive**, a signed fallback list, and IPv6.
+- **Registering a relay on chain** with a command: `MsgRegisterRelay` is a separate transaction and no `orama` command sends it. See [Relay rewards](/docs/blockchain/relay-rewards).
 - **A CLI command for the proxy routes**, and an SDK wrapper for the tunnel.
 
 ## Operating it

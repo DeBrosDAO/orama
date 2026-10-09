@@ -39,7 +39,7 @@ sequenceDiagram
 3. **Upload.** The owner uploads each sealed slot to its provider (`POST /pieces/<root>` on the provider service).
 4. **Challenge and prove.** Every epoch the chain samples 8 leaves per replica. The provider answers with a Merkle leaf-inclusion proof.
 5. **Settle.** At epoch close each challenge is scored into a settlement row, up to 100 per block. A proved slot is paid out of escrow.
-6. **Miss.** A missed challenge raises a consecutive-miss count. From the second consecutive miss the node is penalised 10% of one epoch's price. At 4 misses the slot is evicted and repaired. A bonded node is slashed through `x/nodes`; a probation node's record deposit is burned instead.
+6. **Miss.** A missed challenge raises a consecutive-miss count. From the second consecutive miss the node is penalised 10% of one epoch's price. At 4 misses the slot is evicted and a replacement slot is assigned; the lost piece is then rebuilt by the deal's repair delegate or, if it names none, by the owner (see [Repairing a deal](#repairing-a-deal)). A bonded node is slashed through `x/nodes`; a probation node's record deposit is burned instead.
 
 Each failing item is isolated: the block continues and a `storage_item_failed` event is emitted.
 
@@ -52,6 +52,13 @@ A proved slot pays `price per epoch` out of escrow, split:
 - 5% to the archive fund
 
 For `PRIVATE` deals there is also a subsidy, minted from the storage ceiling: `s x price`, where `s` is 0 while fewer than 8 operators are active and rises linearly to 1.0 at 32. It is capped per operator at ceiling divided by 8. Protocol `PUBLIC_PIN` and `ARCHIVE` deals are paid from the storage ceiling, and `ARCHIVE` is topped up from the archive fund.
+
+## Repairing a deal
+
+An evicted slot is reassigned to another provider that holds nothing yet. Someone has to rebuild the piece and upload it, and only a holder of the *repair seed* can, because each slot's ciphertext is keyed from it.
+
+- **The repair delegate.** A deal may name a `repair_delegate` operator. `orama-global repair` on that operator visits each deal it has a seed file for, fetches a surviving replica, rewraps it for the new slot, checks the result against the new slot's on-chain root and uploads it. A wrong seed misses the root and nothing is uploaded. It never sees plaintext. It logs `replica restored` with `blocks_since_assigned`, the number of blocks from the replacement slot's assignment to the upload (there is no metrics endpoint and no enforced threshold). A seed file that is readable by others, malformed or named for another deal is reported on every pass, and the delegate still repairs the deal files it can read.
+- **The owner, with `orama storage repair`.** For a deal that names no delegate, the owner runs `orama storage repair --deal-id N --repair-seed-file F --rpc <oramad RPC>`. For every slot assigned to a new provider that has not accepted, it fetches an accepted replica from another provider, rewraps it with the repair seed, checks it against the new slot's root and uploads it. A deal with no accepted replica is refused: `orama storage put` makes the first upload. Without a delegate and until the owner runs this, the deal runs with fewer replicas.
 
 ## Probation
 
@@ -84,7 +91,7 @@ Many of these are marked "launch default": they are the plan's starting values a
 Files are sealed on your machine before anything is uploaded.
 
 - `orama storage seal` wraps a random file key under your `orama-storage-v1` key from RootWallet (an XChaCha20-Poly1305 wrap) and writes one ciphertext per slot, each with a different keystream derived from a repair seed.
-- Providers never see plaintext. A *repair delegate* holding the repair seed can rebuild a lost slot by re-wrapping a surviving replica (`orama storage rewrap`) without ever seeing the file.
+- Providers never see plaintext. A *repair delegate*, or you, holding the repair seed can rebuild a lost slot by re-wrapping a surviving replica (`orama storage rewrap`, or `orama storage repair` for a whole deal) without ever seeing the file.
 - `orama storage open` decrypts one slot. `orama storage get` fetches and opens a private file from its providers.
 
 The key file for `--storage-key-file` is the dedicated `orama-storage-v1` key (32 bytes, hex, mode 0600), never the wallet seed.
@@ -99,9 +106,10 @@ orama storage extend  ...   add epochs
 orama storage prove   ...   submit proofs from a JSON file (provider side)
 orama storage accept / decline   answer an assigned slot (signed by the node's hot key)
 orama storage get / open / rewrap
+orama storage repair  ...   rebuild and upload the replacement slots of a deal that names no repair delegate
 ```
 
-`create`, `extend`, `accept`, `decline`, `prove`, `grant` and `revoke` build a transaction. With `--node` they sign through the RootWallet agent and broadcast; without it they print the sign document and submit nothing. `create` does not encrypt or upload the bytes, and `prove` does not choose the challenged leaf. See the [full flags](/docs/developer/cli/storage).
+`create`, `extend`, `accept`, `decline`, `prove`, `grant` and `revoke` build a transaction (`put`, `get`, `open`, `rewrap` and `repair` work on files and providers and send no transaction). With `--node` they sign through the RootWallet agent and broadcast; without it they print the sign document and submit nothing. `create` does not encrypt or upload the bytes, and `prove` does not choose the challenged leaf. See the [full flags](/docs/developer/cli/storage).
 
 ## The provider service
 

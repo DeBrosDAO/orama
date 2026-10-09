@@ -178,8 +178,8 @@ The TypeScript SDK invokes functions via the `/v1/invoke/{namespace}/{name}` end
 import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_your_key:namespace",
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
   functionsConfig: {
     namespace: "my-namespace",
   },
@@ -226,6 +226,8 @@ curl -X POST https://gateway.example.com/v1/invoke/my-namespace/hello-world \
 ```
 
 A public function can be invoked without a credential, but the request has to name the namespace: `/v1/invoke/<namespace>/<name>`, or `/v1/functions/<name>/invoke?namespace=<namespace>`. With a credential and no namespace named, the credential's namespace is used.
+
+A deployed app invokes functions with its own workload token ([Access control](/docs/developer/access-control#a-deployed-app-s-identity)). What it may run is its grant at the moment of the call, not the scopes its token was minted with, so narrowing or revoking the grant takes effect on a token already issued. An app holds nothing until `orama app grants set <app> runtime` gives it something; a `403 FORBIDDEN` means the grant does not cover the function, and `401` means no identity. It is never an admin on invoke, so admin-only `internal` functions stay closed to it, and its token is good in its own namespace only: a function of another namespace is refused `403`.
 
 ### WebSocket Invoke
 

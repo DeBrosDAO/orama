@@ -28,7 +28,7 @@ Short definitions of the words these docs use. Each links to the page that expla
 
 **Supervisor.** `orama-node`, the process that starts every other service as a component with declared dependencies and keeps them running. See [Node process model](/docs/architecture/node-process-model).
 
-**Archive.** The signed tarball `orama build` makes and `orama node setup` installs. Nodes install only archives signed by an address in `/etc/orama/archive-signers`. See [Build and sign](/docs/operator/build-and-sign).
+**Archive.** The signed tarball `orama build` makes and `orama node setup` installs. Nodes install only archives signed by an address in `/etc/orama/archive-signers`, or a release that a TUF release root they adopted vouches for. See [Build and sign](/docs/operator/build-and-sign) and [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
 
 **OramaOS.** A locked-down operating system for nodes: no SSH, no shell, read-only root, encrypted data partition. See [OramaOS](/docs/operator/orama-os).
 
@@ -69,6 +69,8 @@ Short definitions of the words these docs use. Each links to the page that expla
 ## Privacy
 
 **Anonymity proxy.** The gateway routes that send a request through the node's Tor client. See [Tor](/docs/privacy/tor).
+
+**Orama Tor network.** A separate, private Tor network run by Orama's own directory authorities, described by one `tor-network.json` file. The code and installer exist and it has not been run on a real network. See [Tor](/docs/privacy/tor#orama-s-own-tor-network).
 
 **Stealth TURN.** TURN over TLS on port 443 so relayed calls look like HTTPS. See [Stealth TURN](/docs/privacy/stealth-turn).
 

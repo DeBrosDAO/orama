@@ -47,7 +47,7 @@ orama members transfer 0xabc…          # the owner, and only the owner
 
 A member holds **one** grant. Adding a member who already holds one replaces it with the new role, selector and expiry, so `members add` is also how a role is changed or a selector removed. Roles you can grant: `reader`, `runtime`, `developer`, `admin`. A grant takes effect on every node as soon as the write returns.
 
-**Transferring ownership** is one step, not a removal and a grant, so there is no moment where the namespace has no owner. The outgoing owner keeps an `admin` grant, so handing a project over does not lock you out. The incoming owner's previous grant ends: ownership replaces it. The target must be a wallet address (`0x` and 40 hex digits, or a Solana public key).
+**Transferring ownership** is one step, not a removal and a grant, so there is no moment where the namespace has no owner. The outgoing owner keeps an `admin` grant, so handing a project over does not lock you out. The incoming owner's previous grant ends: ownership replaces it. The target must be a wallet address (`0x` and 40 hex digits, or a Solana public key). A transfer is held to the recipient's per-wallet namespace cap like a create is: a wallet already at the cap is refused `403 NAMESPACE_QUOTA` (`wallet` and `limit` in the body), the owner keeps the namespace and nothing is written; a cap that cannot be read is a retryable 503.
 
 ### Narrowing a grant
 
@@ -115,8 +115,9 @@ orama app grants set my-api runtime
 orama app grants list
 ```
 
-- An app can only be granted `runtime` or `reader`, never admin; a deployment cannot be granted the control plane. Its token is good in its own namespace only; naming another namespace's function is refused `403`.
-- The grant is read on every route, so a grant given or taken away applies within the grant cache's ten seconds, and at once for a token minted after it. A selector narrows an app as it narrows a wallet.
+- An app can only be granted `runtime` or `reader`, never admin; a deployment cannot be granted the control plane. Its token is good in its own namespace only: naming another namespace's function is refused `403`, and a token whose subject names one namespace while its claim names another is refused wherever it is verified, not only when it asks to renew.
+- The token's scopes are only the grant at the moment it was minted. What the app may do is its grant **now**, read wherever a token is read (every route, and the serverless admin answer), so a grant given or taken away applies within the grant cache's ten seconds, and at once for a token minted after it. A selector narrows an app as it narrows a wallet.
+- A grant is written for a deployment that exists in the namespace: `orama app grants set` on a name a deployment cannot have (it contains `/` or `:`) is refused `400`, and on a name nobody has deployed `404`. Deploy first, then grant.
 - Storage and WebRTC refuse a key on its own and accept an app's workload token as they accept a logged-in user's. The anonymity proxy and tunnel, and creating or listing namespaces, stay a person's.
 - Only a workload token may be renewed this way. A user session is renewed by its refresh token, which rotates and can be revoked.
 

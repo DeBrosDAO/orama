@@ -69,8 +69,11 @@ An API key carries grants, and a key in a browser bundle is a key in the hands o
 
 ```bash
 orama namespace keys create --scope app-runtime --label web
+orama namespace keys create --scope invoke,pubsub,cache --label worker
 orama namespace keys create --scope admin --label ci
 ```
+
+The calls below need these grants. `client.db` reaches the control plane, so it needs an `admin` key or a signed-in wallet holding the `developer` role or above. `client.pubsub` needs `pubsub` and `client.cache` needs `cache`, which the `app-runtime` profile leaves out, so name them in `--scope`. `client.storage` needs `storage` plus a signed-in user's session. `client.functions` needs `invoke`.
 
 See [Access control and keys](/docs/developer/access-control).
 
@@ -323,7 +326,8 @@ console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
 ```
 
 - **Reads.** The gateway proxy serves `status`, `block`, `blocks`, `tx`, `validators`, `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`, `indexAccountTxs`, `cnftAsset`, `cnftOwnerAssets`. A node's REST API adds `account`, `balances` and `broadcast`. Module state speaks gRPC only, so `moduleQuery(service, method, request, { height })` reads any query through the gateway, with typed reads for `x/nodes` (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`), `x/storage` (`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`, `storageQueue`), `x/fees` (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), `x/archive` (`archiveParams`, `archiveRange`, `lastArchivedHeight`, `retainHeight`) and `x/relay` (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`). uint64 fields come back as decimal strings; a key not on chain is an `SDKError` with `httpStatus` 404.
-- **Building.** `buildSignDoc` makes the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one signer; `signTx` has an `OramaSigner` sign it and checks the signature; `verifyTx` verifies an encoded transaction the way the chain does. `MSG` is the message set: every Orama message (53) plus bank send, staking, unjail, reward withdrawal and the two CosmWasm messages a wallet signs. The fee is always norama.
+- **A wallet with only a gateway.** A wallet shows an address and sends from it through `gatewayURL` alone, with no node and no `restURL`. Balances, delegations and unbonding are wallet queries on `/v1/chain/query/`: `bankBalance`, `bankAllBalances`, `bankSpendableBalances`, `authAccount`, `authAccountInfo`, `stakingDelegation`, `stakingDelegatorDelegations`, `stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`, `distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`. Then `simulateTx(txBytes)` returns the gas and fee, `broadcastTx(txBytes)` submits, and `tx(hash)` polls until the transaction is in a block (a `NotFoundError` until then). The listings take `{ limit, key }`. A transaction the chain refuses is a `ChainTxRefusedError`. `signAndBroadcast` still uses `restURL`.
+- **Building.** `buildSignDoc` makes the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one signer; `signTx` has an `OramaSigner` sign it and checks the signature; `verifyTx` verifies an encoded transaction the way the chain does. `MSG` is the message set: 69 messages, 59 of them Orama's own, plus bank send, staking, unjail, reward withdrawal and the two CosmWasm messages a wallet signs. The fee is always norama.
 - **Signers.** `OramaSigner` is `{ address, publicKey, signDirect(signDoc) }`. The builder hands the signer the serialized `SignDoc`, never a key, so a wallet can decode it and show the user what they approve. `LocalSigner` holds a key in memory, for tests and servers that own their key.
 - **Approval text.** `describeTx` and `describeMessage` summarize each message, with notes for what a signer must see (a token's powers, a deal allowance's limits and expiry, a collection's royalty, a contract call's decoded body) and a `sensitive` flag. A message type the SDK does not hold is described as unknown and sensitive.
 

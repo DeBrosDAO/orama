@@ -171,7 +171,7 @@ The request body requires `identity` (64 hex chars, `= SHA-256(pubkey)`), the ba
 const message = `vault-push-v1:${identityHex}:${version}`;
 const signature = sign(message, privateKey); // your Ed25519 signer, hex-encoded
 
-const res = await fetch("https://ns-myapp.orama-devnet.network/v1/vault/push", {
+const res = await fetch("https://ns-myapp.cluster.example.com/v1/vault/push", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
@@ -197,7 +197,7 @@ const timestamp = Math.floor(Date.now() / 1000);
 const message = `vault-pull-v1:${identityHex}:${timestamp}`;
 const signature = sign(message, privateKey);
 
-const res = await fetch("https://ns-myapp.orama-devnet.network/v1/vault/pull", {
+const res = await fetch("https://ns-myapp.cluster.example.com/v1/vault/pull", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
@@ -214,7 +214,7 @@ const { envelope, collected, threshold } = await res.json();
 ### Health Check
 
 ```bash
-curl https://ns-myapp.orama-devnet.network/v1/vault/health
+curl https://ns-myapp.cluster.example.com/v1/vault/health
 ```
 
 No authentication required. Returns aggregate guardian health: `healthy`, `degraded`, or `unavailable`.

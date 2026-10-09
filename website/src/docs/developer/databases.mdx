@@ -1,6 +1,6 @@
 # Databases
 
-Orama provides two database systems for your applications: **per-namespace SQLite databases** for isolated, node-local storage, and a **distributed RQLite ORM** for replicated relational data. Both are accessible via the CLI, SDK, and REST API.
+Orama provides two database systems for your applications: **per-namespace SQLite databases** for isolated, node-local storage, and a **distributed RQLite ORM** for replicated relational data. SQLite databases are reached from the CLI and the REST API; the RQLite ORM is reached from the SDK and REST. Both are control-plane routes (`db`): they need an `admin` key or a wallet holding the `developer` role or above, and an `app-runtime` key does not reach them.
 
 ## SQLite Databases
 
@@ -152,10 +152,12 @@ The RQLite ORM supports raw SQL (`exec`/`query`), a fluent query builder, a repo
 import { createClient } from "@debros/orama";
 
 const client = createClient({
-  baseURL: "https://gateway.example.com",
-  apiKey: "ak_your_key:namespace",
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_API_KEY,
 });
 ```
+
+The RQLite routes are control plane (`db:write`): use an `admin` key from a server or CI, or sign in as a wallet holding the `developer` role or above. An `app-runtime` key does not reach them ([Access control](/docs/developer/access-control#api-keys)).
 
 ### Creating Tables
 

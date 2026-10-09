@@ -23,16 +23,16 @@ orama node dns delegation --env mycluster
 ```
 
 ```text
-; cluster.example.com — create these in the parent zone example.com
-cluster.example.com.        IN  NS  ns1.cluster.example.com.
-cluster.example.com.        IN  NS  ns2.cluster.example.com.
-cluster.example.com.        IN  NS  ns3.cluster.example.com.
-ns1.cluster.example.com.    IN  A   203.0.113.10
-ns2.cluster.example.com.    IN  A   203.0.113.11
-ns3.cluster.example.com.    IN  A   203.0.113.12
+; cluster.example.com — create these in the parent zone example.com: as records in that zone, wherever its DNS is hosted
+cluster.example.com.	IN	NS	ns1.cluster.example.com.
+cluster.example.com.	IN	NS	ns2.cluster.example.com.
+cluster.example.com.	IN	NS	ns3.cluster.example.com.
+ns1.cluster.example.com.	IN	A	203.0.113.10
+ns2.cluster.example.com.	IN	A	203.0.113.11
+ns3.cluster.example.com.	IN	A	203.0.113.12
 ```
 
-`--json` prints the same as data. It reads the registry over SSH from the environment's recorded nodes, so it works before the cluster's name resolves, and it lists only slots whose glue exists. **Run it again after adding or removing a nameserver, and update the parent zone to match.**
+The fields are separated by tabs. When the base domain is a whole registered domain, the header reads `.com: at your registrar, as custom nameservers with glue (host) records` instead. After the records, the command asks DNS whether the parent zone returns them and says which NS or glue record is missing or points at another address, and it stores that answer on the environment. `--json` prints the same as data, with `delegated` and `findings` for each domain. It reads the registry over SSH from the environment's recorded nodes, so it works before the cluster's name resolves, and it lists only slots whose glue exists. **Run it again after adding or removing a nameserver, and update the parent zone to match.**
 
 ## NS records and glue
 
@@ -79,7 +79,7 @@ Registry changes can take hours to propagate (up to 48); most are visible within
 2. About 30 seconds later it holds `ns1`. Run `orama node dns delegation --env <env>` and create the records.
 3. Wait until `dig NS <base> @8.8.8.8` shows the delegation. The genesis node's certificate is issued then. Caddy keeps retrying; nothing needs restarting.
 4. Join the other nameservers. The invite pins the genesis certificate, so it must exist.
-5. Run `orama node dns delegation` again and add their records.
+5. Run `orama node dns delegation --env <env>` again and add their records.
 
 Full sequence: [Install a cluster from scratch](/docs/operator/install-from-scratch).
 
@@ -93,7 +93,7 @@ dig @ns1.cluster.example.com test.cluster.example.com        # your nameserver d
 dig @ns1.cluster.example.com myapp.node-abc123.cluster.example.com   # wildcard
 ```
 
-For global propagation use dnschecker.org or whatsmydns.net. Inside the CLI, `orama monitor dns` shows CoreDNS, Caddy, certificate expiry and resolution tests.
+For global propagation use dnschecker.org or whatsmydns.net. Inside the CLI, `orama monitor dns --env mycluster` shows CoreDNS, Caddy, certificate expiry and resolution tests.
 
 ## How the records stay correct
 
@@ -125,4 +125,4 @@ Two safety properties: the staleness window (15 minutes) is far longer than the 
 
 Only expose what is needed: `ufw allow 53/tcp` and `ufw allow 53/udp`. The generated Corefile does not enable CoreDNS's `health` or `prometheus` plugins, so there are no extra ports. The recursive block for non-authoritative queries answers only loopback clients (an `acl` allowing `127.0.0.0/8` and `::1`), so the node cannot be used as an open resolver. Consider rate limiting to blunt DNS amplification; that goes in the Corefile.
 
-When running several nameservers: they share one RQLite cluster, so DNS records synchronise automatically; all must use the same `--base-domain`; install them in order, one at a time; and re-run `orama node dns delegation` whenever the set changes.
+When running several nameservers: they share one RQLite cluster, so DNS records synchronise automatically; all must use the same `--base-domain`; install them in order, one at a time; and re-run `orama node dns delegation --env <env>` whenever the set changes.

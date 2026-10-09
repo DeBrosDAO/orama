@@ -25,7 +25,7 @@ You own what you create. Ownership is the only thing that writes an owner grant:
 
 ### Who may create one
 
-A new cluster lets only its operators create namespaces. An operator can allow an allowlist of wallets or any signed-in wallet, and can set how many a wallet may own (default 10, range 1 to 10,000). See [Cluster administration](/docs/operator/cluster-admin#who-may-create-namespaces). Creating a namespace on a cluster also needs an EVM wallet (a `0x` address).
+A new cluster lets only its operators create namespaces. An operator can allow an allowlist of wallets or any signed-in wallet, and can set how many a wallet may own (default 10, range 1 to 10,000). See [Cluster administration](/docs/operator/cluster-admin#who-may-create-namespaces). Creating a namespace on a cluster also needs an EVM wallet (a `0x` address). The cap holds for a transfer too: transferring a namespace to a wallet that already owns that many is refused `403 NAMESPACE_QUOTA` (the body carries the wallet and the limit), and the owner keeps the namespace. A cap lowered afterwards does not take namespaces from a wallet that owns more; it only stops that wallet receiving or creating another.
 
 ### How many nodes
 
@@ -93,5 +93,7 @@ orama namespace delete                                             # the signed-
 See [Backups and restore](/docs/developer/backups). Only the owner deletes a namespace. If the owner's wallet is lost, an operator removes it with `orama cluster namespace remove`.
 
 ## Repair
+
+A namespace's units start only on the cluster the registry names as its current one. A start request names its cluster and is refused `409` when it is not the namespace's current cluster, and a namespace deleted while it was provisioning gets no units, so a late provisioner cannot revive a namespace that was deleted and created again.
 
 A namespace with fewer healthy members than it should have is *under-provisioned*. Node replacement normally fixes this on its own within a minute (the tenant reconciler rewrites configurations and prunes departed members). To force it, run on a node: `sudo orama namespace repair myapp`. See [Replace a node](/docs/operator/node-replacement).
