@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
@@ -79,5 +80,24 @@ func TestCheckNodeBreakers_deploymentsAreTheirOwnAlert(t *testing.T) {
 	if alerts[1].Subsystem != "deployment" || !strings.Contains(alerts[1].Message, "acme/shop") ||
 		!strings.Contains(alerts[1].Message, "the deployments on 10.0.0.2") {
 		t.Errorf("deployment alert = %+v, want acme/shop on 10.0.0.2", alerts[1])
+	}
+}
+
+// The alert quoted the first breaker of the node's list, in namespace order,
+// and called it the first failure. It quotes the one whose last failure is the
+// oldest.
+func TestCheckNodeBreakers_quotesTheBreakerWithTheOldestLastFailure(t *testing.T) {
+	now := time.Now()
+	a, b, c := breaker("aaa", "10.0.0.2"), breaker("bbb", "10.0.0.2"), breaker("ccc", "10.0.0.2")
+	a.LastFailure, a.LastError = now, "newest"
+	b.LastFailure, b.LastError = now.Add(-10*time.Minute), "oldest"
+	c.LastFailure, c.LastError = now.Add(-time.Minute), "middle"
+	r := &report.NodeReport{Breakers: &report.BreakersReport{
+		Tracked: 3, NotClosed: 3, Unhealthy: []report.BreakerReport{a, b, c},
+	}}
+	alerts := checkNodeBreakers(r, "10.0.0.1")
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Message, "last: oldest") ||
+		strings.Contains(alerts[0].Message, "newest") || strings.Contains(alerts[0].Message, "First failure") {
+		t.Fatalf("alerts = %v, want the reason of bbb, whose last failure is the oldest", alerts)
 	}
 }

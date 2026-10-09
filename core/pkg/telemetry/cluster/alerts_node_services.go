@@ -113,11 +113,25 @@ func breakerAlerts(bs []report.BreakerReport, subsystem, what, host string, name
 			}
 			names = append(names, name(b))
 		}
-		msg := fmt.Sprintf("Circuit breaker %s toward %s on %s (%s): requests for them through this node are refused. First failure: %s",
-			group[0].State, what, node, strings.Join(names, ", "), breakerReason(group[0]))
+		oldest := oldestFailure(group)
+		msg := fmt.Sprintf("Circuit breaker %s toward %s on %s (%s): requests for them through this node are refused. Reason of the one whose last failure is the oldest: %s",
+			oldest.State, what, node, strings.Join(names, ", "), breakerReason(oldest))
 		alerts = append(alerts, Alert{AlertWarning, subsystem, host, msg})
 	}
 	return alerts
+}
+
+// oldestFailure is the breaker of bs whose last failure is the earliest. The
+// alert named group[0], the first in namespace order, "First failure", which
+// said nothing about time. A breaker with no recorded failure time sorts first.
+func oldestFailure(bs []report.BreakerReport) report.BreakerReport {
+	oldest := bs[0]
+	for _, b := range bs[1:] {
+		if b.LastFailure.Before(oldest.LastFailure) {
+			oldest = b
+		}
+	}
+	return oldest
 }
 
 func breakerReason(b report.BreakerReport) string {
