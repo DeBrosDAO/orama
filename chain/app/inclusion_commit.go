@@ -11,20 +11,17 @@ import (
 	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
 
-// injectedCommitMagic starts the transaction a proposer puts first in a block
-// to carry the previous height's ExtendedCommitInfo. Its first byte, 'O', is
-// protobuf field 9 with wire type 7, which is not a legal wire type, so these
-// bytes can never decode as a chain transaction.
-const injectedCommitMagic = "ORAMA-INCLUSION-EXTENDED-COMMIT-V1:"
+// injectedCommitMagic is the prefix of the transaction a proposer puts first in
+// a block to carry the previous height's ExtendedCommitInfo
+// (inclusion.InjectedCommitMagic).
+const injectedCommitMagic = inclusion.InjectedCommitMagic
 
 // blockOverheadReserve is subtracted from the consensus block max bytes to
 // get the budget for listed transactions: the header, last commit, evidence
 // and per-transaction framing all live outside the transaction bytes.
 const blockOverheadReserve = 2 * 1024 * 1024
 
-func isInjectedCommit(tx []byte) bool {
-	return bytes.HasPrefix(tx, []byte(injectedCommitMagic))
-}
+func isInjectedCommit(tx []byte) bool { return inclusion.IsInjectedCommit(tx) }
 
 func encodeInjectedCommit(ec abci.ExtendedCommitInfo) ([]byte, error) {
 	body, err := ec.Marshal()

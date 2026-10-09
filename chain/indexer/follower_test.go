@@ -16,6 +16,7 @@ import (
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
+	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
 
 func bankSend(t *testing.T, from, to string) fakeTx {
@@ -277,4 +278,54 @@ func TestFollower_aFailedDuplicateKeepsTheSuccessfulRecord(t *testing.T) {
 	require.True(t, ok)
 	require.Zero(t, got.Code)
 	require.Equal(t, int64(1), got.Height)
+}
+
+func TestFollower_skipsTheInjectedInclusionCommit(t *testing.T) {
+	ctx := context.Background()
+	alice, bob := addr(t, 1), addr(t, 2)
+	chain := newFakeChain()
+	chain.add()
+	// From the height inclusion lists switch on, the proposer puts the previous commit first in every
+	// block; the chain answers it with an empty successful result (OramaApp.FinalizeBlock).
+	injected := fakeTx{
+		raw: cmttypes.Tx(inclusion.InjectedCommitMagic + "commit bytes"),
+		res: &abci.ExecTxResult{Code: 0, Log: "inclusion-list extended commit"},
+	}
+	send := bankSend(t, alice, bob)
+	chain.add(injected, send)
+	chain.add(injected)
+
+	store := openStore(t, t.TempDir())
+	defer store.Close()
+	f, err := NewFollower(chain, store, 1)
+	require.NoError(t, err)
+	n, err := f.Step(ctx)
+	require.NoError(t, err, "a block that starts with the injected commit is indexed")
+	require.Equal(t, 3, n)
+
+	b, ok, err := store.Block(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, b.TxCount, "the injected commit is not a transaction")
+	require.Equal(t, []string{hex.EncodeToString(send.raw.Hash())}, b.TxHashes)
+	only, ok, err := store.Block(3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Zero(t, only.TxCount)
+	require.NotNil(t, only.TxHashes)
+
+	got, ok, err := store.Tx(send.raw.Hash())
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, uint32(1), got.Index, "the transaction keeps its place in the block")
+	_, ok, err = store.Tx(injected.raw.Hash())
+	require.NoError(t, err)
+	require.False(t, ok, "the injected commit has no transaction record")
+
+	latest, err := store.LatestTxs(10)
+	require.NoError(t, err)
+	require.Len(t, latest, 1)
+	st, err := store.Status()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), st.Cursor)
 }

@@ -16,6 +16,8 @@ import (
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+
+	"github.com/DeBrosOfficial/network/chain/x/inclusion"
 )
 
 // MaxBlocksPerStep bounds one Step, so a follower far behind the tip still
@@ -109,11 +111,16 @@ func (f *Follower) indexBlock(ctx context.Context, height int64) error {
 		Hash:     lowerHex(blk.BlockID.Hash),
 		Time:     blk.Block.Time,
 		Proposer: lowerHex(blk.Block.ProposerAddress),
-		TxCount:  len(txs),
 		TxHashes: make([]string, 0, len(txs)),
 	}
 	burned := math.ZeroInt()
 	for i, raw := range txs {
+		if inclusion.IsInjectedCommit(raw) {
+			// The proposer's extended commit (C13), not a transaction of anyone: its bytes are no
+			// Cosmos transaction by design, and it is not listed or counted. Indexes below keep
+			// the place CometBFT gives each transaction in the block.
+			continue
+		}
 		pos := txPos{height: height, index: uint32(i), time: block.Time}
 		hash, txBurned, err := f.indexTx(ctx, w, pos, raw, res.TxsResults[i])
 		if err != nil {
@@ -123,6 +130,7 @@ func (f *Follower) indexBlock(ctx context.Context, height int64) error {
 		block.GasUsed += res.TxsResults[i].GasUsed
 		burned = burned.Add(txBurned)
 	}
+	block.TxCount = len(block.TxHashes)
 	block.Burned = burned.String()
 	if err := w.putBlock(block); err != nil {
 		return errors.Join(err, w.close())
