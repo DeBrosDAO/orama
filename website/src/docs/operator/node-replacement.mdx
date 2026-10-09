@@ -1,0 +1,108 @@
+# Replace a node
+
+How to replace one nameserver with a new machine without losing the registry's Raft quorum and without breaking namespaces. The same process applies to any node.
+
+## Golden rules
+
+1. **Join the new node first.** Never remove the old node first.
+2. **Replace one registry voter at a time.** Quorum on three voters is two.
+3. **Prefer replacing a follower, not the Raft leader.**
+4. **Registry health is not namespace health.** Every namespace has its own RQLite, Olric and gateway.
+5. **Do not point namespace DNS at a node that is not running that namespace.**
+6. **Drive it with the `orama` CLI.** No parallel restarts.
+7. **Match the binary version** to the live cluster (`/opt/orama/manifest.json` on any node, and `orama version` locally).
+8. **Wait until the new node has fully caught up** (applied index, voter on both sides) before removing anyone.
+9. **Joining is not the same as being ready to run functions.** A new node starts with an empty IPFS block store. Function WebAssembly lives in IPFS, so until every active function is pinned on the new node, cold nodes can time out on `ipfs cat` and deploys can answer 504 on upload.
+
+## The mental model
+
+```text
+Public clients -> Caddy :443 -> index (registry) gateway -> proxies to
+                                  namespace gateways, namespace RQLite, Olric, SFU
+
+Registry RQLite   = cluster membership, DNS table, routing   (separate Raft group)
+Namespace RQLite  = that namespace's app data                (a Raft group per namespace)
+```
+
+Replacing a nameserver touches: the registry Raft group (add a voter, remove a voter), WireGuard (a new peer), the zone (the `nsN` slot and its glue), IPFS and IPFS Cluster (a new peer with an empty repo), **every namespace hosted on the old node**, and the parent zone's glue.
+
+## Preflight
+
+1. **Who are the nameservers, and who leads?** `orama status` and `orama monitor cluster` show roles and the RQLite state of each node.
+2. **Pick the victim** (a follower) and a **join hub** (the leader or any healthy nameserver).
+3. **Check cluster health:** `orama monitor report` shows quorum `ok`, one leader, a full mesh. Check the critical namespaces answer: `curl https://ns-<name>.<base-domain>/v1/health`.
+4. **Find the namespaces on the victim.** `orama monitor namespaces` shows each namespace's services per node. For each namespace the victim hosts you will need its replacement before the removal.
+5. **Have the same signed archive** the cluster runs, or build a new one and plan to upgrade after.
+6. **Read what removal would cost:**
+
+```bash
+orama node remove --env mycluster --node <victim-ip> --dry-run
+```
+
+It prints the voters, quorum and reachable count for the registry and for every namespace the node votes in, and which of them would lose quorum. This is the check that used to be done by hand.
+
+## Phase A: join the new node, old node stays up
+
+```bash
+orama node setup --ip <new-ip> --password --env mycluster --archive $ARCHIVE \
+  --base-domain cluster.example.com --role nameserver --join-via root@<hub-ip>
+```
+
+See [Joining nodes](/docs/operator/joining-nodes). While it joins you briefly have four registry voters: quorum is three, still safe.
+
+**Gate: do not continue until the new node is a healthy voter with a non-zero applied index.** For the first minutes it can show as not a voter, or empty, while it takes a snapshot; on a large database this takes several minutes. Check with `orama monitor node --node <new-ip>`: RQLite `Follower`, a leader known, applied index close to the leader's, and `orama status` healthy.
+
+## Phase B: DNS
+
+The nameserver slot is the thing that has to move. `orama node dns delegation --env mycluster` shows which address holds each `nsN`. Slots are claimed by the nodes themselves and stay with a machine until it is removed, so the new node takes the next free slot while the old one still holds its own. After the old node is removed (Phase D) its slot is released. Then update the parent zone to match what `orama node dns delegation` prints ([DNS and nameservers](/docs/operator/nameserver)). A glue record at a registrar can take hours.
+
+## Phase C: namespaces
+
+Namespace safety is what bit the first real replacement. The rule: **only advertise addresses that currently run that namespace's gateway.**
+
+Nodes now handle most of this themselves:
+
+- Each node probes the namespaces it hosts every 30 seconds. After 3 failed probes (about 90 seconds) it withdraws its own `ns-<ns>` and wildcard records. It never withdraws the last active record for a name.
+- Every node runs a tenant reconciler on a 60 second loop. One elected member per namespace prunes departed members, releases their ports and removes them from that namespace's Raft. The survivors' Olric peer lists drop a departed node on the next sweep.
+- IPFS content re-replicates on its own: a gateway elected through the `ipfs-pin-sweep` lock re-issues the pin for anything under its replication factor every 15 minutes.
+
+So this phase is **verification**. For each namespace the victim hosts:
+
+```bash
+orama monitor namespaces                       # which nodes run it, and are they healthy
+curl https://ns-<name>.cluster.example.com/v1/health
+```
+
+If a namespace would be left with one voter, repair it **before** removing the victim. On a node:
+
+```bash
+sudo orama namespace repair <name>             # repair an under-provisioned namespace cluster
+```
+
+It talks to that node's gateway on its WireGuard address (localhost is where public traffic arrives, so a repair sent there is refused). `orama node remove` refuses to run until every cluster survives, so you cannot skip this by accident.
+
+If a namespace's RQLite has already lost quorum (a single survivor), it needs the namespace-level recovery in [Troubleshooting](/docs/operator/troubleshooting#namespace-rqlite-has-no-leader).
+
+## Phase D: remove the old node
+
+```bash
+orama node remove --env mycluster --node <victim-ip> --dry-run    # confirm every cluster survives
+orama node remove --env mycluster --node <victim-ip>
+```
+
+It runs from a survivor. It takes the node out of the Raft configuration, writes an eviction tombstone so nothing re-adds it, releases its mesh address, nameserver slot, namespace memberships and port blocks and its TURN and SFU allocations, marks it retired so DNS purges its records, and wipes it. `--offline` if the machine is already gone.
+
+Then:
+
+```bash
+orama node dns delegation --env mycluster      # update the parent zone to match
+orama monitor report --env mycluster           # quorum ok, one leader, mesh ok, indices in sync
+```
+
+## Phase E: function WebAssembly on the new node
+
+If your namespaces run functions, check that every active function's WebAssembly is present on the new node ([Troubleshooting](/docs/operator/troubleshooting#function-wasm-timeouts-or-deploy-504-after-a-node-replacement)). A function that times out fetching its WebAssembly (about 15 seconds), or a deploy that answers 504 on upload, is the symptom of an empty block store.
+
+## After it
+
+Run the [rolling-upgrade monitoring check](/docs/operator/upgrades#checking-health-between-nodes) once more, and confirm `namespace_pending_cleanup` is empty. If something is wrong, do not fix it by hand on a node: fix the cause, then re-run `orama node remove`, which is safe to repeat.

@@ -81,31 +81,19 @@ All pull requests must:
 3. **Be focused** — One concern per PR. Don't mix refactoring with feature work
 4. **Have a clear description** — Explain what changed, why, and how to test it
 
-## Commit Message Format
+## Commit message format
 
-Write clear, imperative commit messages:
+Commits are `type(scope): subject`, with a plain-English body that says what changed and why. The history is the changelog, so write for someone who was not in the room.
 
-```
-<type>: <short description>
+```text
+feat(storage): relayed fetch. A client fetches a stored object so the node that serves it never sees the client's address ...
 
-<optional body with more context>
-```
+fix(namespace): creating a namespace still needs an EVM wallet ...
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
-
-Examples:
-
-```
-feat: add PubSub topic filtering by prefix
-
-fix: prevent Olric client initialization before service is ready
-
-refactor: extract JWT validation into middleware package
-
-test: add coverage for database transaction rollback
+docs(website): the operator journey, from empty servers to a running cluster
 ```
 
-Keep the first line under 72 characters. Use the body to explain "why" when the change isn't self-evident.
+Types: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`, `release`. Keep the subject short and imperative; use the body for the reasoning. Do not add co-author trailers. Never commit or push without the owner's say-so.
 
 ## Distributed System Rules
 

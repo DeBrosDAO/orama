@@ -1,0 +1,81 @@
+# Tor: anonymity proxy, tunnel and onion submission
+
+Every Orama node runs a Tor client. It is client-only: it relays nothing, opens no inbound port and never becomes an exit. Three things use it: the gateway's anonymity routes, the `anon_fetch` host function, and the relayed fetch relay. The CLI and SDK also use Tor to submit chain transactions.
+
+This is the **public** Tor network. Orama's own Tor network (directory authorities, relays, exits run by Orama operators) is not built. See [What is not built](#what-is-not-built).
+
+## What runs on a node
+
+| | |
+|---|---|
+| Daemon | `tor` from the Tor Project's apt repository, with the archive key pinned |
+| Unit | `orama-namespace-tor@index`, started by the supervisor |
+| SOCKS | `127.0.0.1:9050` only |
+| Config | `/etc/orama/tor/torrc` |
+| Data | `/var/lib/orama-tor` |
+
+The torrc sets `SocksPort 127.0.0.1:9050 IsolateSOCKSAuth`, `ClientOnly 1`, `ORPort 0`, `DirPort 0`, `ExitRelay 0` and `ClientRejectInternalAddresses 1`.
+
+The unit is sandboxed (`ProtectSystem=strict`, `MemoryDenyWriteExecute`, 1 GB memory limit) and is denied network access to private ranges: `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `fe80::/10`. Tor can never reach the WireGuard mesh.
+
+The installer installs Tor on `orama node install` and every upgrade, masks the distribution's own `tor.service`, and removes the old Anyone network if an earlier release left it. If Tor cannot be installed, the install fails: without it the anonymity routes would answer 503.
+
+## The gateway routes
+
+| Route | What it does | Gateway sees |
+|---|---|---|
+| `POST /v1/proxy/anon` | One HTTP(S) request per call through Tor. Methods are allow-listed, body at most 10 MB, 60 second timeout | The whole request and response, because the gateway performs it |
+| `GET /v1/proxy/tunnel` (WebSocket) | An opaque TCP stream to a destination, so TLS runs end to end with the destination. Ports 80 and 443 only | The destination host and port, not the content |
+| `GET /v1/proxy/relay` (WebSocket) | Anonymous relay used by [relayed fetch](/docs/privacy/relayed-fetch) | See that page |
+
+Both authenticated routes need the `proxy` grant **and** a genuine wallet session. An app key alone is refused with `USER_JWT_REQUIRED`: the point is that a signed-in person asked for it.
+
+Tunnel limits: 24 tunnels per user, 512 per node, 30 minutes maximum, 256 MiB, 2 minutes idle. Each user gets their own Tor circuit (a distinct SOCKS isolation key). The tunnel is a WebSocket because Caddy does not forward CONNECT and only a few ports are open.
+
+**What this does not claim.** The tunnel hides your destination from nobody but the destination's network path: the gateway sees the destination host and port. Do not tell your users that it hides the sites they visit from Orama.
+
+Callers:
+
+```ts
+// TypeScript SDK
+const res = await client.network.proxyAnon({ url: "https://example.com/", method: "GET" });
+```
+
+The tunnel has no SDK wrapper; use the WebSocket directly. There is no `orama` CLI command for either route.
+
+### From a serverless function
+
+A WebAssembly function calls the `anon_fetch` host function to make an outbound request through Tor. The old name `anyone_fetch` still works as a deprecated alias because shipped functions import it. See [Functions](/docs/developer/functions).
+
+### Health
+
+`GET /v1/health` reports `checks.anon_proxy` as `ok` or `unavailable`. A Tor outage is deliberately not an error: the node keeps serving and stays in DNS. `orama inspect --subsystem tor` and `orama monitor` show Tor state.
+
+## Submitting chain transactions over Tor
+
+`orama global`, `orama storage` and `orama cluster` commands that send transactions take `--onion <addr.onion[:port]>` (or `ORAMA_CHAIN_ONION`) and `--onion-socks <host:port>` (or `ORAMA_ONION_SOCKS`, default `127.0.0.1:9050`). The client:
+
+- accepts only a v3 onion address (56 base32 characters plus `.onion`)
+- talks plain HTTP to it, because Tor already encrypts end to end
+- has no direct dialer, no environment proxy and no redirects
+- uses a fresh random isolation credential, so each client gets a fresh circuit
+- times out after 90 seconds, and on failure says the transaction was not sent and nothing was tried outside Tor
+
+`--node` together with `--onion` is a usage error. Commands: `orama global register|bond|capacity`, the validator transaction commands, `orama storage create|grant|prove`, and `orama cluster register-onchain|retire-onchain`.
+
+Reads (`orama chain`) do not go through Tor yet.
+
+The server side, an onion service on each validator forwarding to its RPC port, has a unit renderer in the installer but nothing installs it, so there is no production onion to submit to today. The client works against any onion service that forwards to a chain RPC.
+
+## What is not built
+
+- **A private Tor network.** `core/pkg/tornet` validates parameters (at least 3 directory authorities, exit policy `reject *:*`, 12-month certificates). It does not generate authority keys, start an authority or open an exit, and its exit start function refuses by design. No fleet node is a relay or runs Tor on a public address.
+- **The relay software.** The installer's relay unit points at a binary (`orama-relay`) that is not in the repository, and its reporter and bandwidth-scanner units are not installed by anything.
+- **Relay rewards.** See [Relay rewards](/docs/blockchain/relay-rewards).
+- **A CLI command for the proxy routes**, and an SDK wrapper for the tunnel.
+
+## Operating it
+
+- Check: `sudo orama node status`, `orama monitor service`, `orama inspect --subsystem tor`.
+- Logs: `sudo orama node logs orama-namespace-tor@index -f`.
+- If `/v1/proxy/anon` answers 503, Tor is down or not installed on that gateway's node. Restart with `sudo orama node restart`.

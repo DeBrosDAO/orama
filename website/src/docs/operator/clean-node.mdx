@@ -1,0 +1,77 @@
+# Wipe a node
+
+How to take Orama off a server so it can be installed fresh, or so it can leave the cluster for good.
+
+## Use the CLI, and pick the right command
+
+| Situation | Command |
+|---|---|
+| The node is, or was, a member of a running cluster | `orama node remove` (from your computer; it uses a survivor) |
+| The node is already retired from the cluster and you only need the machine erased | `orama node wipe` |
+| You are rebuilding every node of a test cluster | `orama node wipe --env <env>` |
+| The server is already deleted at your provider | `orama node remove --offline` |
+| The CLI cannot reach the machine (lost SSH key, never enrolled) | The manual steps below |
+
+**`wipe` erases the target and says nothing to the cluster.** If the node is still a member, the survivors keep counting it toward quorum and keep re-adding its WireGuard peer. That is why `remove` exists: it checks that no cluster loses quorum, retires the node from Raft, the mesh, every namespace it served and the node registry, and only then erases it.
+
+```bash
+orama node remove --env mycluster --node 203.0.113.12 --dry-run   # the plan, and the quorum arithmetic
+orama node remove --env mycluster --node 203.0.113.12
+orama node remove --env mycluster --node 203.0.113.12 --offline   # machine already gone
+orama node wipe   --env mycluster --node 203.0.113.12             # erase only
+orama node wipe   --env mycluster --node 203.0.113.12 --nuclear   # also remove shared binaries and the Tor package
+```
+
+`--force` skips the confirmation. Both are destructive. A wipe uses the node's RootWallet SSH key; afterwards that key is deleted from your vault, because a retired node's key opens nothing. If the vault cannot be reached the command says so and fails: run it again once RootWallet is unlocked.
+
+`orama node clean` is deprecated; use `wipe` or `remove`.
+
+## What a wipe removes
+
+| Category | What |
+|---|---|
+| App data | `/opt/orama/.orama/` (configs, secrets, logs, IPFS, RQLite, Olric) |
+| Binaries | `/opt/orama/bin/…` |
+| Systemd | `orama-node`, every `orama-namespace-*` instance, leftover `orama-*` units, `coredns`, `caddy`, `orama-deploy-*`, the privileged-helper socket and service |
+| Privileged helper | `/usr/local/bin/orama-privhelper` and its socket |
+| WireGuard | `/etc/wireguard/wg0.conf` and the `wg-quick@wg0` unit |
+| Firewall | The `ufw` rules Orama added (tagged `orama`). Your own rules and the SSH rule stay |
+| User | The `orama` system user, and sudoers files left by older releases |
+| CoreDNS and Caddy | `/etc/coredns/Corefile`, `/etc/caddy/`, `/var/lib/caddy/` (certificates live in the cluster's shared store, not here) |
+| Tor | The unit, `/etc/orama/tor/torrc`, `/var/lib/orama-tor/` (the `tor` package stays unless `--nuclear`) |
+| Anyone network leftovers | On a node never upgraded past it |
+| Temporary files | `/tmp/orama`, build directories |
+
+`rm -rf` is unlink, not cryptographic erase. Assume a decommissioned provider disk is readable.
+
+Not removed without `--nuclear`: binaries in `/usr/local/bin` (`rqlited`, `ipfs`, `ipfs-cluster-service`, `olric-server`, `coredns`, `orama`, `orama-node`, `gateway`, `identity`, `sfu`, `turn`, `orama-sni-router`), Caddy in `/usr/bin`, and the `tor` package with its apt source and key.
+
+## OramaOS nodes
+
+This applies to Ubuntu-based nodes only. OramaOS has no SSH and no shell. To remove an OramaOS node call `POST /v1/node/leave` on the gateway API for a graceful departure, or reflash the image at your provider for a factory reset. See [OramaOS](/docs/operator/orama-os).
+
+## Manual cleanup (when the CLI cannot reach the machine)
+
+Only for a node whose SSH key is lost or that was never enrolled. Over your own SSH session, as root, and in this order:
+
+1. Stop and disable the privileged helper's socket, then `orama-node`, then every `orama-namespace-*` unit, then any leftover `orama-*`, `coredns`, `caddy`, `ntfy` and `wg-quick@wg0` units. Kill leftover `orama-node`, `ipfs`, `ipfs-cluster-service`, `olric-server`, `rqlited`, `coredns` and `vault-guardian` processes.
+2. Delete `/etc/systemd/system/orama-*.service`, `orama-*.timer`, `coredns.service`, `caddy.service`, and `systemctl daemon-reload`.
+3. Take WireGuard down (`wg-quick@wg0` is a oneshot that stays "active (exited)" until you stop the unit) and delete `/etc/wireguard/wg0.conf`.
+4. Delete the `ufw` rules tagged `orama`, highest number first. Leave your own and the SSH rule.
+5. Delete `/opt/orama`, the Orama environment files, `/etc/orama`, `/etc/coredns`, `/etc/caddy`, `/var/lib/caddy`, `/var/lib/orama-tor`.
+6. Delete the `orama` user (services must be stopped first or `userdel` fails).
+
+Then the machine is ready for `orama node setup`.
+
+## Multi-node: every node of a test environment
+
+```bash
+orama node wipe --env mycluster            # every node in the environment
+orama node wipe --env mycluster --nuclear
+```
+
+## Bringing a removed machine back
+
+`remove` revokes the node's key: its row in `node_credentials` keeps its `node_id` and gains a `revoked_at`, so the machine's disk stops being a working credential and cannot re-admit itself. **Re-admitting it is a join.** Mint an invite and install as you would a new node ([Joining nodes](/docs/operator/joining-nodes)). The join clears the revoked row, and the machine records a fresh key on its next start. No manual SQL.
+
+The same applies to a node that lost `secrets/node-key.pem` while keeping its peer identity: its new key will not match the one on record, the cluster will refuse it and the gateway log will say so. Re-join it; do not repair the row by hand.

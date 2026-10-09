@@ -1,0 +1,158 @@
+# Access control and keys
+
+Who may do what in a namespace. A namespace has exactly one **owner** and any number of **members**. A member holds a **role**, a role is a set of **permissions**, and a program holds a **key** with a set of permissions of its own. This page covers roles, members, narrowing, keys, a deployed app's own identity, revocation and the audit trail.
+
+## What a credential may do
+
+One sentence, three parts: **in this domain, this action, on this resource.**
+
+```text
+storage:read:avatars/*      read anything under avatars/
+db:write:posts              write one table
+fn:invoke:checkout          run one function
+deploy:*:*                  everything about deployments
+*:*:*                       everything
+```
+
+A *domain* is a part of the platform: `storage`, `pubsub`, `cache`, `push`, `webrtc`, `proxy`, `fn` on the **data plane**; `db`, `deploy`, `secrets`, `members`, `namespace`, `audit`, `operator` on the **control plane**. An *action* is `read`, `write`, `invoke` or `manage`. A *resource* is a glob, and `*` matches any run of characters, including `/`, deliberately, so `avatars/*` covers `avatars/2026/03/me.png`.
+
+The check happens twice, and they are different questions. The **gate**, before the handler runs, asks whether the credential reaches this domain and action at all. The **handler** asks again with the object: this CID, this topic, this key. A credential that reaches storage and is narrowed to `avatars/*` passes the first and is refused at the second for anything else. An object nothing could name (a CID the namespace recorded no name for) is refused by a narrowed permission and reached by an unrestricted one: "I could not work out what you are touching" is not a reason to allow it.
+
+## Roles
+
+| Role | Holds |
+|---|---|
+| `owner` | Everything. Only one wallet at a time |
+| `admin` | Everything the owner does, except being the owner |
+| `developer` | The data plane, plus `db`, `deploy`, `secrets` and `fn:manage`. **Not** `members`, `namespace` or `operator` |
+| `runtime` | The data plane: storage, pub/sub, cache, push, WebRTC, proxy, and invoking functions |
+| `reader` | Nothing beyond the routes that ask for no permission |
+
+`developer` is for somebody who builds and runs the application but does not decide who else may.
+
+A wallet with no grant at all, signed in to a namespace that opened sign-in, is not a member and holds no role: it has a session and the permissions a grantless wallet has ([Sign-in policy](/docs/developer/sign-in#sign-in-policy)).
+
+A `reader` or a `developer` signing in gets a session and **no API key**: a key stores scope words, and neither role can be written in them. The session carries the role itself. Asking for a key outright answers 403 `ROLE_HAS_NO_KEY`.
+
+### Members
+
+```bash
+orama members list
+orama members add 0xabc… --role developer
+orama members add 0xdef… --role runtime --expires-in-hours 24 --name "build bot"
+orama members add 0xabc… --role runtime --resource 'storage:avatars/*'
+orama members remove 0xabc…
+orama members transfer 0xabc…          # the owner, and only the owner
+```
+
+A member holds **one** grant. Adding a member who already holds one replaces it with the new role, selector and expiry, so `members add` is also how a role is changed or a selector removed. Roles you can grant: `reader`, `runtime`, `developer`, `admin`. A grant takes effect on every node as soon as the write returns.
+
+**Transferring ownership** is one step, not a removal and a grant, so there is no moment where the namespace has no owner. The outgoing owner keeps an `admin` grant, so handing a project over does not lock you out. The incoming owner's previous grant ends: ownership replaces it. The target must be a wallet address (`0x` and 40 hex digits, or a Solana public key).
+
+### Narrowing a grant
+
+A grant may be narrowed to a resource. Four domains apply a selector today:
+
+| Selector | What it matches |
+|---|---|
+| `pubsub:topic=chat.*` | Publish, publish-batch, and the subscribe WebSocket |
+| `fn:name=checkout` | Function invocation (HTTP and WebSocket). The selector bounds the entry points the caller reaches: a function it may run that calls another through `function_invoke` runs that function as its own code, and a socket already open is not re-checked when the grant later narrows |
+| `storage:avatars/*` | Upload, get, pin and unpin, against the name the object was uploaded with |
+| `cache:key=sessions/*` | get, mget, put, delete and scan, against `<map>/<key>` |
+
+A storage name is normalised before it is compared, so `/avatars/me.png` and `avatars//me.png` are the same object. `..` in a name is **refused**, not resolved, because resolving it would let `avatars/../keys/x` match `avatars/*`. A cache key is not a path and is not normalised: `sessions/../tokens/x` is a key called `../tokens/x` in the `sessions` map.
+
+A selector can only narrow. `storage:avatars/*` on a `reader`, who holds nothing, grants nothing. A selector in a domain whose resource no data path checks (today `db` and deployments) is **refused when the grant is written** rather than stored and silently ignored. `orama members list` shows `enforced` per grant.
+
+### The end user's special case
+
+A wallet that holds no grant holds the data plane, as every signed-in user does, with one exception: it may *read* pub/sub (subscribe, list topics, see who is present) and may not *publish*. Announcing presence also needs pub/sub write. The refusal is `403 INSUFFICIENT_SCOPE` with `required_permission: pubsub:write:*`. A topic an end user may write to is the application's decision: grant the wallet `pubsub` write, or publish from a function.
+
+### Reserved pub/sub topics
+
+Topics under `_orama/` belong to the platform (today `_orama/webrtc/<room>`, the WebRTC membership events). Nobody publishes to them (403 `PUBSUB_RESERVED_TOPIC`; the platform publishes in process). Subscribing needs a pub/sub grant that covers the topic: an API key of role `runtime` or above, an admin, a wallet with a grant. A grantless signed-in user is refused and the topic is hidden from topic listings. **A runtime key ships inside the application that uses it**, so every user of such an application can read every room's membership. An application that needs membership private keeps it behind functions and does not ship a runtime key.
+
+## API keys
+
+```bash
+orama namespace keys create --scope app-runtime --label web
+orama namespace keys create --scope admin --label ci --expires-in-days 30
+orama namespace keys create --scope invoke,pubsub,cache --label worker
+orama namespace keys list
+orama namespace keys rotate --id 12 --overlap-days 7
+orama namespace keys revoke --id 12
+```
+
+`--scope` takes a **profile** or a comma-separated grant list.
+
+| Profile | Grants |
+|---|---|
+| `invoke-only` | invoke |
+| `app-runtime` | invoke, storage, push, webrtc, proxy. **Not** pubsub and **not** cache |
+| `admin` | Everything, including the control plane |
+
+Grant names: `admin`, `cache`, `invoke`, `proxy`, `pubsub`, `push`, `storage`, `webrtc`. A key that publishes or uses the cache is minted with them named. The membership role a key is recorded with is `runtime` or `admin` and nothing finer, so it never widens a key past its scopes.
+
+- **Format.** `orama_<type>_<payload>_<checksum>`, base62. `sk` labels a key holding the control plane and `rk` one holding only the data plane; the row decides authority, not the label. The checksum is not a security property, but a leaked key is recognisable offline by a secret scanner, and a mistyped one is refused without a database lookup.
+- **It does not name its namespace.** It used to be `ak_<random>:<namespace>`, so a key pasted into an issue published which tenant it belonged to.
+- **Every key expires:** 90 days by default, a year at most (`--expires-in-days`). There is no way to ask for one that does not.
+- **Stored as an HMAC** under a server-side secret. The gateway never holds the key it issued. **The raw key is shown once and is not recoverable.**
+- **Rotating** mints a successor with the same grants and shortens the original's life to an overlap (7 days by default, 30 at most) instead of revoking it, so there is a window to deploy the new one. Revoking in the same breath as minting is an outage.
+- **Revoking** a key refuses it within about ten seconds on every gateway, and refuses the tokens exchanged from it.
+- `orama namespace keys revoke-legacy` revokes every legacy (unscoped) key: the cutover step from before scoped keys.
+
+**Where a key belongs.** A key in a browser bundle is public. Give it the data plane and nothing else, and let the user's own login carry the rest: storage, WebRTC and proxy refuse a key on its own anyway (they need a logged-in user, or a deployed app's own workload token). A key that touches the control plane belongs on a server.
+
+## A deployed app's identity
+
+A deployed app is a principal, `app:<namespace>/<name>`, with grants its owner chooses, and it holds a **token** rather than a key.
+
+- The token is minted when the unit starts, staged by systemd from a file only the gateway can read, and exposed to the app at `$ORAMA_TOKEN_FILE`, owned by the app's own user. It lasts an hour and the app renews it at `POST /v1/auth/renew` with the token it is holding. Nothing long-lived is on the node.
+- An app starts with **nothing**: a token that reaches nothing is the only safe default. Give it what it needs:
+
+```bash
+orama app grants set my-api runtime
+orama app grants list
+```
+
+- An app can only be granted `runtime` or `reader`, never admin; a deployment cannot be granted the control plane. Its token is good in its own namespace only; naming another namespace's function is refused `403`.
+- The grant is read on every route, so a grant given or taken away applies within the grant cache's ten seconds, and at once for a token minted after it. A selector narrows an app as it narrows a wallet.
+- Storage and WebRTC refuse a key on its own and accept an app's workload token as they accept a logged-in user's. The anonymity proxy and tunnel, and creating or listing namespaces, stay a person's.
+- Only a workload token may be renewed this way. A user session is renewed by its refresh token, which rotates and can be revoked.
+
+In code: `createWorkloadClient()` ([SDK](/docs/developer/sdk-reference#a-deployed-app)).
+
+A **function** has no identity of its own yet: host calls run on the gateway's handles, so what a function does is not attributable to the function. Deployed apps do have one.
+
+## Capabilities: access without an identity
+
+Some access is better handed over as a token that names a resource than as a credential that names a person.
+
+- **Fetch capabilities** let a client download one stored object without an identity so the serving node never learns who asked ([Relayed fetch](/docs/privacy/relayed-fetch)).
+- **Capability WebSockets** let a function accept a socket from a sender whose account the node is never told. A function that declares `ws_auth: capability` in `function.yaml` accepts `?cap=<token>` in place of a credential: `GET /v1/functions/<fn>/ws?namespace=<ns>&cap=<token>`. The recipient's device mints the capability from inside the function (`capability_mint`), bound to one namespace, one function, a resource the application chose (a mailbox id), the issuing device, a random id and an expiry of at most seven days. It is a payload plus an HMAC keyed per namespace, so any gateway can check one and nothing outside the cluster can mint or alter one. A request carrying both a capability and a credential is refused 400. Every check runs before the WebSocket upgrade and before a persistent instance is taken from the pool, so a stranger with a made-up token costs one HMAC. A forged, expired or misdirected token, and a function that is gone or does not accept capabilities, all get the same 403. Revoking: `capability_revoke` refuses one capability; revoking the issuing device refuses every capability it issued; sockets close within 10 seconds (`4403`). One capability holds at most 16 sockets open on a gateway. **What it hides:** no credential on the socket names the sender. **What it does not:** the gateway still learns the client's IP address, the timing and size of every frame, which mailbox is written to, which capability (and so which recipient device) is presented, and that two connections with one capability are one holder. A recipient who issues one capability per correspondent has told the gateway which correspondent is sending. Unlinkable capabilities are not implemented.
+
+## Open WebSockets and revocation
+
+A WebSocket is authorised once, at the upgrade. Every socket opened with a token (a function socket, a pub/sub subscription) is registered with that token's claims, and every 5 seconds each gateway reloads the replicated revocation list and re-checks its open sockets. A revocation recorded on any gateway closes the sockets it covers on every gateway within 10 seconds.
+
+| Close code | Means |
+|---|---|
+| `4401` | The token expired more than two minutes ago and was not refreshed on the socket. Reconnect with a fresh token |
+| `4403` | The token, its session or its subject was revoked. Sign in again |
+| `4503` | The gateway could not check revocation for 2 minutes. Reconnect shortly |
+
+A persistent function socket takes `{"__orama":"auth.refresh","jwt":…}` and is held to the new token from then on. A refresh must be for the **same subject**, and a socket opened with an API key or no credential cannot take one. A socket opened with an API key has no token and is not re-checked: revoking the key stops it opening new sockets, not the ones it has open.
+
+The revocation list **fails closed**: if it cannot be read and its copy is over 10 seconds old, a request that presents a credential is refused `503 AUTH_UNAVAILABLE` with `Retry-After`. An unknown state is never treated as "not revoked".
+
+## The audit trail
+
+```bash
+orama audit                                        # oldest first
+orama audit --follow                               # and keep printing
+orama audit --action key.issue --principal 0xabc… --since 2026-09-01T00:00:00Z
+```
+
+Recorded: sign-ins and their failures, the refresh-replay tripwire, keys minted, rotated and revoked, grants given and taken away, ownership transferred, namespaces created and deleted, functions and deployments deployed and deleted, secrets set and deleted, sign-in and device policy changes, and operator actions. A **refused** request is deliberately *not* recorded: one row per 401 would let anyone with a network connection fill a table replicated to every node. Events are kept 90 days.
+
+The actor is never a credential: a wallet is recorded as itself, anything else as a fingerprint. The trail is readable by every owner of the namespace.

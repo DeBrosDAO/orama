@@ -1,470 +1,254 @@
 # WebRTC
 
-Real-time voice, video, and data channels for the Orama Network. Media flows through TURN relays — clients never connect directly. The SFU (Selective Forwarding Unit) handles room management, track routing, and signaling over WebSocket.
+Real-time voice, video and data channels for a namespace: a **TURN** relay and a **selective forwarding unit** (SFU) that forwards each participant's tracks to the others. It is opt-in per namespace.
 
 ## Architecture
 
-All client media is relayed through TURN servers. The SFU binds exclusively to internal WireGuard interfaces and is unreachable from the public internet. Clients connect to TURN, TURN relays to the SFU over WireGuard.
-
-```mermaid
-graph TD
-    A["Client A"] -->|"TURN relay (UDP/TCP/TLS)"| T1["TURN Node 1"]
-    B["Client B"] -->|"TURN relay (UDP/TCP/TLS)"| T2["TURN Node 2"]
-    T1 <-->|"UDP (public IPs)"| T2
-    T1 -->|"WireGuard"| SFU["SFU (3 nodes)<br/>WebSocket signaling (WG only)<br/>RTP forwarding (Pion WebRTC)<br/>Room + track management"]
-    T2 -->|"WireGuard"| SFU
+```text
+Client A                                   Client B
+   | 1. Get TURN credentials (REST)           |
+   | 2. Open the signalling WebSocket         |
+   | 3. Exchange SDP and ICE through the SFU  |
+   v                                          v
+ +--------+     UDP relay      +--------+
+ |  TURN  |<------------------>|  TURN  |
+ | host 1 |   (public IPs)     | host 2 |
+ +---+----+                    +---+----+
+     | WireGuard                   | WireGuard
+     v                             v
+ +----------------------------------------+
+ |        SFU servers (3 nodes)           |
+ |  signalling on WireGuard only          |
+ |  Pion WebRTC, RTP forwarding, rooms    |
+ +----------------------------------------+
 ```
 
-Key properties:
+- **TURN-shielded.** The SFU binds only to WireGuard addresses. All client media flows through a TURN relay, and the server enforces `iceTransportPolicy: relay`, so there are no direct peer connections. Two people on a call never learn each other's IP addresses.
+- **SFU on all three of the namespace's nodes, TURN on two of three** (redundancy without over-provisioning). If the namespace has fewer viable nodes than TURN needs, every viable node gets one.
+- **One shared TURN server per host** (`orama-turn.service`) serves every namespace placed there, keeping TURN on the well-known ports 3478 and 5349 (restrictive networks routinely block other ports, and those are the networks whose users most need a relay). Isolation is the per-namespace HMAC secret: the credential carries the namespace, and the shared server resolves each to its own secret and rejects a namespace it does not serve.
+- WebRTC needs the namespace on **three nodes**. A one-node evaluation cluster cannot enable it.
 
-- **Forced relay** — `iceTransportPolicy: "relay"` enforced server-side. No direct peer connections.
-- **Namespace isolation** — Each namespace gets its own TURN secret, port ranges, and room space.
-- **Redundancy** — SFU runs on all 3 nodes. TURN runs on 2 of 3 (capacity-selected).
-
-## Enabling WebRTC
-
-WebRTC is opt-in per namespace. The namespace must already have a running cluster (RQLite + Olric + Gateway).
+## Enable and disable
 
 ```bash
-# Enable
 orama namespace enable webrtc --namespace myapp
-
-# Check status
 orama namespace webrtc-status --namespace myapp
-
-# Disable (stops services, deallocates ports, removes DNS)
 orama namespace disable webrtc --namespace myapp
+orama namespace enable webrtc-stealth --namespace myapp     # TURN over TLS on port 443
 ```
 
-On enable, the system allocates port blocks, spawns TURN on 2 nodes, spawns SFU on all 3 nodes, and creates DNS records for the TURN servers.
+**Enabling** generates the namespace's TURN secret (32 random bytes), records its config, allocates port blocks on each node, starts TURN on two nodes and the SFU on all three, asks each TURN host to apply its tenant set at once, and creates DNS records `turn.ns-<name>.<base>` (plain UDP and TCP TURN) and `turn-<name>.<base>` (a single-label host for TURNS). It fails if no TURN host confirms it serves the namespace, and rolls back everything it asked.
+
+**Disabling** marks the config disabled first (so no reconciler restarts what is being stopped), tears down the SFU on every node at once, removes the namespace from each shared TURN server's list (TURN itself keeps running for other namespaces; it stops only when its last tenant leaves), frees the port allocations of units that are gone, deletes DNS records and database records. A node that cannot be reached keeps its allocation row so the next namespace is not handed the same ports; the failed teardown is recorded and replayed.
+
+## Ports
+
+| Service | Port range | Protocol | Reachable from |
+|---|---|---|---|
+| SFU signalling | 30000-30099 | TCP | WireGuard only (1 per namespace) |
+| SFU media (RTP) | 20000-29999 | UDP | WireGuard only (500 per namespace) |
+| TURN | 3478 | UDP and TCP | Public, shared per host |
+| TURNS (TLS) | 5349 | TCP | Public, shared per host |
+| TURN relay | 49152-65535 | UDP | Public, shared per host |
+| Stealth TURNS | 443 | TCP | Public, when [stealth TURN](/docs/privacy/stealth-turn) is on |
+
+SFU ports are never opened in the firewall. `webrtc_port_allocations` has unique indexes so two allocations on one node can never hold the same port.
 
 ## Authentication
 
-All WebRTC endpoints require the same authentication as other namespace endpoints.
+Every WebRTC endpoint requires **a signed-in user's token**, not an API key, or a deployed app's own workload token:
 
-```
-# API Key via header (recommended)
-X-API-Key: <your-namespace-api-key>
-
-# API Key via Authorization header
-Authorization: ApiKey <your-namespace-api-key>
-
-# JWT Bearer token
-Authorization: Bearer <jwt>
+```text
+Authorization: Bearer <access token>
 ```
 
-## Client Integration
+An API key on its own is refused, which is what makes a runtime key extracted from an app bundle worthless against it. The SDK gets the token by exchanging your key, or from `auth.verify()` after a wallet signs in. On the signalling WebSocket, where a browser cannot set a header, the token goes in `?jwt=` (never a key).
 
-### 1. Get TURN Credentials
+## Client integration
 
-Request short-lived TURN credentials from the gateway. Credentials expire based on the returned `ttl`.
+### 1. Get TURN credentials
 
-```typescript
-const res = await fetch(
-  "https://ns-myapp.orama-devnet.network/v1/webrtc/turn/credentials",
-  {
-    method: "POST",
-    headers: { "X-API-Key": apiKey },
-  }
-);
-
+```js
+const res = await fetch("https://ns-myapp.cluster.example.com/v1/webrtc/turn/credentials", {
+  method: "POST",
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
 const { uris, username, password, ttl } = await res.json();
+// uris: turn:turn.ns-myapp.cluster.example.com:3478?transport=udp, ...tcp,
+//       turns:turn-myapp.cluster.example.com:5349   (and the stealth host on :443 when enabled)
+// username: "{expiry_unix}:{namespace}"   password: base64(HMAC-SHA1(secret, username))
+// ttl: 86400 (24 h): a one-shot credential is not refreshed mid-call, so it must outlast any call
 ```
 
-Response shape:
+Plain TURN uses the two-label host `turn.ns-<ns>.<base>`; TURNS uses the **single-label** host `turn-<ns>.<base>`, because only a single-label host is covered by the `*.<base>` wildcard certificate, so only it validates in browsers.
 
-```typescript
-interface TURNCredentials {
-  uris: string[];       // TURN server URIs (UDP, TCP, TLS)
-  username: string;     // "{expiry_unix}:{namespace}"
-  password: string;     // HMAC-SHA1 derived, base64-encoded
-  ttl: number;          // Seconds until expiry (default: 600)
-}
-```
+### 2. Create the PeerConnection
 
-Example `uris`:
-
-```json
-[
-  "turn:ns-myapp.orama-devnet.network:3478?transport=udp",
-  "turn:ns-myapp.orama-devnet.network:3478?transport=tcp",
-  "turns:ns-myapp.orama-devnet.network:5349"
-]
-```
-
-### 2. Create PeerConnection
-
-Use the credentials to build an `RTCPeerConnection` with relay-only transport.
-
-```typescript
+```js
 const pc = new RTCPeerConnection({
   iceServers: [{ urls: uris, username, credential: password }],
-  iceTransportPolicy: "relay",
+  iceTransportPolicy: "relay",   // also enforced by the SFU
 });
 ```
 
-The `iceTransportPolicy: "relay"` setting is mandatory. The SFU rejects non-relay candidates server-side.
+### 3. Open the signalling WebSocket
 
-### 3. Connect Signaling WebSocket
-
-The signaling channel is a WebSocket connection proxied by the gateway to the SFU. Pass authentication as a query parameter. All messages in both directions use an envelope of the form `{ type, data }`, and the first message you send must be a `join` with both `roomId` and `userId` in `data` — the SFU rejects the connection if either is missing. The `room` query parameter is optional but recommended: with it the gateway routes the socket straight to the SFU that owns the room; without it the gateway reads your `join` frame and routes by its `roomId`. If both are given they must match. Room ids are 1 to 128 printable ASCII characters, and each identity may open 60 signaling sockets a minute (burst 20), after which the gateway answers 429. Rooms are created implicitly on first join.
-
-```typescript
+```js
 const ws = new WebSocket(
-  `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
+  `wss://ns-myapp.cluster.example.com/v1/webrtc/signal?room=${roomId}&jwt=${encodeURIComponent(accessToken)}`,
 );
-
-ws.onopen = () => {
-  ws.send(JSON.stringify({
-    type: "join",
-    data: { roomId, userId },
-  }));
-};
-
 ws.onmessage = (event) => {
   const msg = JSON.parse(event.data);
-
   switch (msg.type) {
-    case "welcome":
-      // msg.data: { peerId, roomId, participants }
-      handleWelcome(msg.data);
-      break;
-    case "offer":
-      handleOffer(msg.data);
-      break;
-    case "answer":
-      handleAnswer(msg.data);
-      break;
-    case "ice-candidate":
-      handleICE(msg.data);
-      break;
-    case "participant-joined":
-      // msg.data: { participant: { peerId, userId } }
-      handleJoin(msg.data);
-      break;
-    case "participant-left":
-      // msg.data: { peerId }
-      handleLeave(msg.data);
-      break;
-    case "track-added":
-    case "track-removed":
-      // msg.data: { peerId, userId, trackId, kind, ... }
-      handleTrackChange(msg.type, msg.data);
-      break;
-    case "turn-credentials":
-    case "refresh-credentials":
-      updateTURN(msg.data);
-      break;
-    case "server-draining":
-      reconnect();
-      break;
-    case "error":
-      // msg.data: { code, message }
-      console.error(msg.data);
-      break;
+    case "offer": case "answer": case "ice-candidate": /* SDP and ICE exchange */ break;
+    case "peer-joined": case "peer-left": /* update the roster */ break;
+    case "turn-credentials": setTURN(msg); break;          // sent once, after welcome
+    case "refresh-credentials": updateTURN(msg); break;    // at 80% of the credential TTL
+    case "kicked": /* the SFU removed you; the socket closes */ break;
+    case "server-draining": reconnect(); break;            // the SFU is shutting down
   }
 };
 ```
 
-### 4. Handle SDP Exchange
+`room` is optional but recommended. With it the gateway routes the upgrade straight to the room's SFU; without it the gateway reads your first (`join`) frame (at most 4096 bytes, within 5 seconds) and routes by its `roomId`. When both are present they must match, or the join is refused with `room_mismatch`. Room ids are 1 to 128 printable ASCII characters with no whitespace. Joins are limited to 60 a minute per signed-in identity, with a burst of 20 (429 with `Retry-After`).
 
-Standard WebRTC offer/answer flow through the SFU.
+The `userId` in a client's `join` frame is **ignored**: a client cannot say who it is. The identity in a room is the token's subject, and the device id (`did`) when the session is device-bound.
 
-```typescript
-// Publishing a local track
-const stream = await navigator.mediaDevices.getUserMedia({
-  audio: true,
-  video: true,
-});
+### 4. Rooms (REST)
 
-for (const track of stream.getTracks()) {
-  pc.addTrack(track, stream);
-}
-
-const offer = await pc.createOffer();
-await pc.setLocalDescription(offer);
-
-ws.send(JSON.stringify({ type: "offer", data: { sdp: offer.sdp } }));
-
-// Handle answer from SFU
-function handleAnswer(data: { sdp: string }) {
-  pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
-}
-
-// Exchange ICE candidates
-pc.onicecandidate = ({ candidate }) => {
-  if (candidate) {
-    ws.send(JSON.stringify({
-      type: "ice-candidate",
-      data: {
-        candidate: candidate.candidate,
-        sdpMid: candidate.sdpMid,
-        sdpMLineIndex: candidate.sdpMLineIndex,
-      },
-    }));
-  }
-};
-
-function handleICE(data: RTCIceCandidateInit) {
-  pc.addIceCandidate(data);
-}
+```js
+const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+await fetch("/v1/webrtc/rooms", { method: "POST", headers, body: JSON.stringify({ room_id: "my-room" }) });
+const rooms = await fetch("/v1/webrtc/rooms", { headers });
+await fetch("/v1/webrtc/rooms?room_id=my-room", { method: "DELETE", headers });
 ```
 
-### 5. Handle Remote Tracks
+Creating and closing rooms needs namespace ownership. `GET /v1/webrtc/rooms` reports the health of the SFU on the gateway's own node only.
 
-The SFU forwards tracks from other participants.
-
-```typescript
-pc.ontrack = (event) => {
-  const [stream] = event.streams;
-  const video = document.createElement("video");
-  video.srcObject = stream;
-  video.autoplay = true;
-  document.getElementById("remote-videos")?.appendChild(video);
-};
-```
-
-### 6. Handle Credential Refresh
-
-The SFU sends refreshed TURN credentials at 80% of TTL (8 minutes for the default 10-minute TTL). Update the ICE configuration without renegotiating.
-
-```typescript
-function updateTURN(data: TURNCredentials) {
-  const config = pc.getConfiguration();
-  config.iceServers = [
-    { urls: data.uris, username: data.username, credential: data.password },
-  ];
-  pc.setConfiguration(config);
-}
-```
-
-### 7. Handle Server Draining
-
-When an SFU node is shutting down (during upgrades), it sends a `server-draining` message. Reconnect to another node.
-
-```typescript
-function reconnect() {
-  ws.close();
-  // Re-establish signaling connection — the gateway routes to an available SFU
-  const newWs = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
-  );
-  // Re-attach handlers and send a new join message on open...
-}
-```
-
-## Room Management
-
-There is no REST API for creating or closing rooms. Rooms are created implicitly when the first peer joins via the signaling WebSocket and are cleaned up when the last peer leaves. The `/v1/webrtc/rooms` endpoint is read-only (GET) and proxies to the SFU's health endpoint for room information.
-
-```typescript
-const headers = {
-  "X-API-Key": apiKey,
-};
-
-// Get room information (proxied to the SFU health endpoint)
-const rooms = await fetch("https://ns-myapp.orama-devnet.network/v1/webrtc/rooms", {
-  headers,
-}).then((r) => r.json());
-```
-
-## REST Endpoints
+## REST and signalling reference
 
 | Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/v1/webrtc/turn/credentials` | API key / JWT | Get TURN relay credentials |
-| GET (WebSocket) | `/v1/webrtc/signal` | API key / JWT | Signaling channel |
-| GET | `/v1/webrtc/rooms` | API key / JWT | Room information (SFU health) |
+|---|---|---|---|
+| POST | `/v1/webrtc/turn/credentials` | User token | TURN relay credentials |
+| GET (WebSocket) | `/v1/webrtc/signal` | User token | Signalling |
+| GET, PUT | `/v1/webrtc/config` | Owner or admin | `{"require_admission": bool}` |
+| GET | `/v1/webrtc/rooms` | User token | List rooms |
+| POST, DELETE | `/v1/webrtc/rooms` | Owner | Create, close |
 
-## Signaling Messages
+| Message | Direction | Meaning |
+|---|---|---|
+| `join`, `leave` | client to SFU | Enter or leave a room |
+| `offer`, `answer`, `ice-candidate` | both | SDP and ICE |
+| `audio-state`, `video-state` | client to SFU | `{"enabled": bool}`: the client turned mic or camera on or off |
+| `participant-state` | SFU to client | Another participant's state, or a mute the namespace applied (`"forced": true`) |
+| `kicked` | SFU to client | You were removed (`data.code` is `removed` or `admission_expired`) |
+| `peer-joined`, `peer-left` | SFU to client | Roster changes |
+| `turn-credentials`, `refresh-credentials` | SFU to client | Credentials (`{username, password, ttl, uris}`) |
+| `server-draining` | SFU to client | Reconnect |
 
-Messages exchanged over the WebSocket signaling channel. Every message is an envelope `{ type, data }` with the payload under `data`.
+**Negotiation: the SFU is the polite peer.** The SFU offers whenever it has something to tell a client; the client offers when it publishes; both can offer at once ("glare"). If a client `offer` arrives while the SFU's own is outstanding, the SFU withdraws its own, answers the client's, and offers again with everything the withdrawn offer carried. So the client treats it as perfect negotiation with itself impolite: ignore an SFU offer that arrives while your own is outstanding, and apply the SFU's next one after its `answer`. SFU m-lines have mids like `sfu1`, `sfu2`; do not assume numeric or contiguous mids.
 
-### Client to SFU
+**Signalling rate limit.** Offers and ICE candidates share one token bucket per peer (burst 40, refilled at 10 per second), and a peer may make the SFU yield to glare at most 6 times a minute. Exceeding either gets an `error` frame with code `rate_limited` and the socket is closed; the client can rejoin.
 
-| Type | Data payload | Description |
-|------|--------------|-------------|
-| `join` | `{ roomId, userId }` | Join a room (must be the first message; both fields required) |
-| `offer` | `{ sdp }` | SDP offer |
-| `answer` | `{ sdp }` | SDP answer |
-| `ice-candidate` | `{ candidate, sdpMid, sdpMLineIndex }` | ICE candidate |
-| `leave` | — | Leave a room |
+**Keyframes.** A subscriber that needs a keyframe sends PLI or FIR; the SFU relays at most one PLI per track per 500 ms to the publisher, so N subscribers cost one keyframe per interval.
 
-### SFU to Client
+**Failover.** If the cluster gateway cannot dial any of the namespace's gateways it answers 503 `NAMESPACE_GATEWAY_UNAVAILABLE` with `retryable: true`; reconnect with backoff. A peer ends exactly once whichever side ends it: the socket closing, `leave`, ICE failing, ICE not recovering within 15 s of `disconnected`, or a failed signalling write (5 s deadline).
 
-| Type | Data payload | Description |
-|------|--------------|-------------|
-| `welcome` | `{ peerId, roomId, participants }` | Join confirmed, with current participants |
-| `offer` | `{ sdp }` | SDP offer (for subscribing to new tracks) |
-| `answer` | `{ sdp }` | SDP answer |
-| `ice-candidate` | `{ candidate, sdpMid, sdpMLineIndex }` | ICE candidate |
-| `participant-joined` | `{ participant: { peerId, userId } }` | New participant entered the room |
-| `participant-left` | `{ peerId }` | Participant left the room |
-| `track-added` | `{ peerId, userId, trackId, streamId, kind }` | A new track is available |
-| `track-removed` | `{ peerId, userId, trackId, kind }` | A track was removed |
-| `turn-credentials` | `{ username, password, ttl, uris }` | Initial TURN credentials on connect |
-| `refresh-credentials` | `{ username, password, ttl, uris }` | Refreshed TURN credentials (sent at 80% TTL) |
-| `server-draining` | `{ reason, timeoutMs }` | SFU shutting down, reconnect to another node |
-| `error` | `{ code, message }` | Signaling error |
+## Room placement
 
-## TURN Credential Protocol
+A room lives in exactly one SFU process (rooms are in memory), so every peer of a call must reach the same SFU. Clients resolve the namespace host round-robin, so peers arrive at different gateways, and each gateway routes the socket to the room's owner:
 
-Credentials use HMAC-SHA1 with a per-namespace shared secret generated on WebRTC enable (32 bytes, `crypto/rand`).
+1. List the namespace's SFU nodes still counted active in the registry.
+2. Rank them by rendezvous (highest-random-weight) hash of `namespace|room|nodeID`: every gateway computes the same order.
+3. Probe each in parallel with `GET /health?room=<id>` (1.5 s). An SFU that does not answer, or answers 503 (draining), is skipped; a healthy one reports whether it already hosts the room.
+4. The owner is the first healthy node in rank that already hosts the room; with no live room, the top-ranked healthy node.
 
-| Property | Value |
-|----------|-------|
-| Algorithm | HMAC-SHA1 |
-| Username format | `{expiry_unix}:{namespace}` |
-| Password | `base64(HMAC-SHA1(shared_secret, username))` |
-| Default TTL | 600 seconds (10 minutes) |
-| Refresh | SFU sends `refresh-credentials` at 80% TTL |
+Nothing is written on the join path, so there is no lease to expire. A running call is never split by a recovery or by adding a node. With no SFU healthy the answer is 503; there is no fallback to the local SFU, which would split the call. A network partition between one gateway and the owner can split a room until the probe views agree.
 
-Clients must update their ICE server configuration when they receive a `refresh-credentials` message. Failure to refresh will cause media to stop flowing when the old credentials expire.
+## Identity, admission and moderation
 
-## Port Allocation
+The SFU takes every decision from a **join ticket** the namespace's gateway signs, never from a frame the client sends. The ticket carries the namespace, room, user, device, mute state, the gateway's event address, an issue time, an admission generation and an expiry 30 seconds out, under an HMAC key derived from the namespace's own TURN secret, so one namespace's SFU can neither accept another's ticket nor report into it. The SFU refuses an upgrade with no ticket, a bad MAC, an expired ticket or a ticket for another namespace (401 or 403). Keep node clocks synchronised: a gateway whose clock is more than 30 seconds behind the SFU's issues tickets the SFU finds already expired.
 
-WebRTC uses a separate port allocation system from core namespace services.
+### Admission
 
-| Service | Port Range | Protocol | Notes |
-|---------|-----------|----------|-------|
-| SFU signaling | 30000–30099 | TCP | WireGuard only, 1 port per namespace |
-| SFU media (RTP) | 20000–29999 | UDP | WireGuard only, 500 ports per namespace |
-| TURN listen | 3478 | UDP + TCP | Fixed, public |
-| TURNS (TLS) | 5349 | TCP | Fixed, public |
-| TURN relay | 49152–65535 | UDP | 800 ports per namespace |
+By default every signed-in user with the `webrtc` grant may join any room. A namespace can instead require admission:
 
-SFU ports are internal only — bound to WireGuard interfaces, not exposed through the firewall. TURN ports are public-facing and opened via UFW on TURN nodes.
-
-## Full Example
-
-A minimal working example connecting two peers in a room.
-
-```typescript
-async function joinRoom(roomId: string, userId: string, apiKey: string) {
-  // 1. Get TURN credentials
-  const creds = await fetch(
-    "https://ns-myapp.orama-devnet.network/v1/webrtc/turn/credentials",
-    { method: "POST", headers: { "X-API-Key": apiKey } }
-  ).then((r) => r.json());
-
-  // 2. Create PeerConnection
-  const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: creds.uris, username: creds.username, credential: creds.password },
-    ],
-    iceTransportPolicy: "relay",
-  });
-
-  // 3. Get local media
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: true,
-  });
-  for (const track of stream.getTracks()) {
-    pc.addTrack(track, stream);
-  }
-
-  // 4. Handle remote tracks
-  pc.ontrack = (event) => {
-    const [remoteStream] = event.streams;
-    const video = document.createElement("video");
-    video.srcObject = remoteStream;
-    video.autoplay = true;
-    document.getElementById("remote-videos")?.appendChild(video);
-  };
-
-  // 5. Connect signaling
-  const ws = new WebSocket(
-    `wss://ns-myapp.orama-devnet.network/v1/webrtc/signal?api_key=${apiKey}&room=${encodeURIComponent(roomId)}`
-  );
-
-  ws.onopen = async () => {
-    // First message must be a join with both roomId and userId in data
-    ws.send(JSON.stringify({ type: "join", data: { roomId, userId } }));
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: "offer", data: { sdp: offer.sdp } }));
-  };
-
-  pc.onicecandidate = ({ candidate }) => {
-    if (candidate) {
-      ws.send(JSON.stringify({
-        type: "ice-candidate",
-        data: {
-          candidate: candidate.candidate,
-          sdpMid: candidate.sdpMid,
-          sdpMLineIndex: candidate.sdpMLineIndex,
-        },
-      }));
-    }
-  };
-
-  ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-
-    switch (msg.type) {
-      case "answer":
-        pc.setRemoteDescription({ type: "answer", sdp: msg.data.sdp });
-        break;
-      case "ice-candidate":
-        pc.addIceCandidate(msg.data);
-        break;
-      case "offer":
-        pc.setRemoteDescription({ type: "offer", sdp: msg.data.sdp }).then(async () => {
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          ws.send(JSON.stringify({ type: "answer", data: { sdp: answer.sdp } }));
-        });
-        break;
-      case "refresh-credentials":
-        const config = pc.getConfiguration();
-        config.iceServers = [
-          { urls: msg.data.uris, username: msg.data.username, credential: msg.data.password },
-        ];
-        pc.setConfiguration(config);
-        break;
-      case "server-draining":
-        // Reconnect logic
-        break;
-    }
-  };
-
-  return { pc, ws, stream };
-}
+```bash
+curl -X PUT https://ns-myapp.cluster.example.com/v1/webrtc/config \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -d '{"require_admission": true}'
 ```
 
-## Data Channels
+With it on, a join succeeds only if the namespace's functions admitted that user to that room, and the admission is still good. A function admits with the `webrtc_admit` host function:
 
-WebRTC data channels work through the same SFU relay path. Create a data channel before generating the offer.
-
-```typescript
-const dc = pc.createDataChannel("app-data", { ordered: true });
-
-dc.onopen = () => {
-  dc.send(JSON.stringify({ action: "cursor-move", x: 100, y: 200 }));
-};
-
-dc.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  // Handle incoming data channel messages
-};
-
-// On the receiving side
-pc.ondatachannel = (event) => {
-  const channel = event.channel;
-  channel.onmessage = (e) => {
-    const data = JSON.parse(e.data);
-    // Handle incoming messages
-  };
-};
+```text
+webrtc_admit(room, user, device, ttl_seconds) -> {"room","user_id","device_id","expires_at"}
 ```
 
-## Security
+`device` empty admits from any device. `ttl_seconds` is 1 to 86,400. Admitting again extends the admission and lifts a revocation, and keeps a mute on record for 7 days after the admission expires. The admission's end holds for a live session: the SFU removes the peer then (`kicked` with code `admission_expired`; the leave event's reason is `expired`). Admitting again does not lengthen a session already open.
 
-- **Forced relay** — `iceTransportPolicy: "relay"` enforced server-side. Clients cannot bypass TURN.
-- **HMAC credentials** — Per-namespace shared secret. Credentials expire after 10 minutes.
-- **Namespace isolation** — Separate TURN secrets, port ranges, and room spaces per namespace.
-- **SFU on WireGuard only** — SFU binds to `10.0.0.x`, never `0.0.0.0`. Only reachable through TURN relay.
-- **Permissions-Policy** — `camera=(self), microphone=(self)` restricts media device access to same-origin.
-- **Room lifecycle** — Rooms have no owner and no REST create/close API; they are created implicitly on first join and cleaned up when the last peer leaves. Joining still requires namespace-level authentication (API key or JWT) on the signaling connection.
+A join that is not admitted is refused before it reaches an SFU:
+
+| Why | `?room=` upgrade (403) | Join frame without `?room=` |
+|---|---|---|
+| Never admitted | `WEBRTC_ADMISSION_REQUIRED` | `admission_required` |
+| Admission expired | `WEBRTC_ADMISSION_EXPIRED` | `admission_expired` |
+| Revoked by `webrtc_kick` | `WEBRTC_ADMISSION_REVOKED` | `admission_revoked` |
+| Records cannot be read | `SERVICE_UNAVAILABLE` (503, retryable) | `admission_unavailable` |
+
+Turning `require_admission` on or off changes **new joins** only. The policy (`webrtc_settings`) and admissions (`webrtc_admissions`) are tables in the namespace's own database (migrations 073 and 075), so they survive an SFU restart.
+
+### Membership events
+
+The SFU reports every join and leave to the namespace, which publishes it on the pub/sub topic **`_orama/webrtc/<room>`**:
+
+```json
+{"_orama":"webrtc.join","room":"standup","user_id":"0xabc…","device_id":"<did or absent>","peer_id":"<uuid>","at":"2026-10-06T10:00:00.123Z"}
+{"_orama":"webrtc.leave","room":"standup","user_id":"0xabc…","peer_id":"<uuid>","reason":"left","at":"…"}
+```
+
+`reason` is `left`, `kicked`, `expired` or `closed`. The `_orama` key is the platform's: publish routes refuse a payload carrying it, so a subscriber that sees it knows the platform wrote the message. The whole `_orama/` prefix is reserved ([Access control](/docs/developer/access-control#reserved-pub-sub-topics)); delivery is at most once, and a subscriber resynchronises from the `participants` list of a `welcome`.
+
+### Kick and mute
+
+Two host functions act on a participant:
+
+- `webrtc_kick(room, user)` **revokes** every admission of `user` to `room` and removes their connections (`kicked`, then a `leave` event with reason `kicked`). Rejoining is refused until a function admits them again. Each admission takes the next *generation* of its user in its room, the join ticket carries it, and the kick carries the newest generation it revoked; the SFU refuses a ticket whose generation is not newer than the kick's, with no clock involved, so a user re-admitted right after a kick joins at once. Without `require_admission` there is no admission to revoke: the kick closes the live connection and the user may rejoin.
+- `webrtc_mute(room, user, muted)` makes the SFU stop forwarding `user`'s audio (checked per packet on the server, so a modified client that keeps sending is silent) and tells the room with a forced `participant-state`. It is recorded on the user's admissions so it survives a rejoin.
+
+Both go to **every SFU of the namespace**, over the overlay, each request signed with a MAC that names the receiver and a nonce, so a captured request replays onto nothing. If an SFU cannot be reached the function fails and names it; the revocation is recorded and repeating is safe.
+
+## TURN credentials
+
+- Username `{expiry_unix}:{namespace}`; password `base64(HMAC-SHA1(shared secret, username))`.
+- REST and host-function credentials live 24 hours.
+- Credentials the SFU hands to clients use the namespace's `turn_credential_ttl` (default 600 s), and the SFU sends `refresh-credentials` at 80% of it. Update your ICE servers when you receive it.
+- The SFU's own relay credential lasts 24 hours and is swapped at 80% (19.2 h) with an ICE restart, so a session never outlives its relay credential.
+- TURNS presents the cluster's `*.<base>` wildcard certificate. A self-signed certificate is never served. If the wildcard is not exported yet, TURNS stays off and clients keep plain TURN on 3478.
+
+## Security model
+
+- Forced relay: clients cannot bypass TURN.
+- Per-namespace TURN secret, port ranges and rooms.
+- A logged-in user, not a key.
+- Join tickets, not client claims.
+- The SFU binds to WireGuard addresses only and is reachable only through the relay.
+- `Permissions-Policy: camera=(self), microphone=(self)` on gateway responses.
+- Known limit: TURN credentials are namespace-wide and cannot be revoked per user.
+
+## Monitoring and debugging
+
+```bash
+orama namespace webrtc-status --namespace myapp
+orama monitor report                       # per-namespace sfu_up and turn_up
+orama inspect --subsystem webrtc           # SFU coverage (3 nodes) and TURN redundancy (2 nodes)
+sudo orama node logs orama-namespace-sfu@myapp -f
+sudo orama node logs turn -f
+```
+
+`turn_up` is true when the host's shared TURN server is running **and** lists the namespace as a tenant.
+
+## Operator notes
+
+- A reconciler on every node (60 s) keeps SFU and TURN roles matching `webrtc_port_allocations`: it prunes departed members, reallocates roles of nodes that are no longer viable (only with a strict majority of viable members, so a partitioned minority cannot reshape roles; a lone survivor after a mass outage does not self-elect), starts an SFU that should run, retires one that should not, and advertises a node's TURN DNS records only when it both holds the allocation and is actually serving. Stopping requires positive evidence.
+- On a node restart the cluster state file restores TURN and SFU from the registry after the core services (RQLite, Olric, gateway). If the registry is unavailable they are skipped with a warning and restored on the next success.
+- Replacing a node moves its roles; see [Replace a node](/docs/operator/node-replacement).

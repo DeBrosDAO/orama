@@ -1,0 +1,146 @@
+# Push notifications
+
+Push is **bring your own credentials**: you control your Apple Developer account, your push keys and your topic format. The platform provides delivery infrastructure: an APNs HTTP/2 client pool, a self-hosted ntfy server on the nodes, and encrypted storage for your credentials. No push goes through a shared platform account.
+
+## Providers
+
+| Platform | Provider | Privacy | Setup |
+|---|---|---|---|
+| iOS (production) | `apns` (direct) | No proxies | Apple Developer account and a `.p8` key |
+| iOS (TestFlight) | `apns` with `"environment": "sandbox"` | No proxies | Same key |
+| Android without Google services | `ntfy` | Self-hosted | An ntfy topic (UnifiedPush works, GrapheneOS included) |
+| Web | `ntfy` | Self-hosted | Web Push against `push.<base-domain>` |
+| Android (FCM) | `expo` (legacy) | Routes via Expo and FCM | Expo access token |
+
+Use `apns` plus `ntfy` for a full-privacy stack. Use `expo` if you would rather not depend on ntfy and your users are on Google Play Services. Whether a notification carries message content is your application's choice; the platform does not strip it.
+
+## 1. Apple credentials (iOS only)
+
+You need an active Apple Developer Program membership for the team that owns your app's bundle id.
+
+1. Create a key at developer.apple.com, Certificates, Identifiers & Profiles, Keys, with **Apple Push Notifications service (APNs)** checked.
+2. Download the `.p8` file immediately. Apple will not let you download it again.
+3. Note the **Key ID** (10 characters) and your **Team ID**, and the **Bundle ID** of your iOS app.
+
+One key per team is enough: it signs for all apps under the team.
+
+## 2. Choose an ntfy topic mode (Android and web)
+
+| Mode | Topic | Privacy |
+|---|---|---|
+| `opaque` | `sha256(namespace + userId + secret)` | Best. Recommended |
+| `path` | `ns-<namespace>-<userId>` | Readable. Anyone enumerating topics sees ids |
+| `user` | `<userId>` | Reveals user ids |
+
+An ntfy topic is a **single path segment**: ntfy serves topics at `https://<host>/<topic>`, and a topic containing `/` is read as a sequence id, delivering to the part before it. That is why `path` mode uses `-`. `topic_mode` is a convention between your client and your topic-derivation code; the gateway publishes to whatever token the device registered and never re-derives it.
+
+For `opaque`, generate a `topic_secret` once and bake it into both your credential record and your client's signed config. Rotating means a client that knows both secrets first, then the PUT, then a client that drops the old one.
+
+## 3. Store credentials
+
+Credentials live encrypted (AES-256-GCM under a key derived for this purpose) in your namespace's record in the cluster. They are **never returned** by any GET: responses report `has_<field>: true` only. Every request needs a credential with namespace write.
+
+```http
+PUT /v1/namespace/push-credentials/apns
+Authorization: Bearer <token>
+
+{ "team_id": "1234567890", "key_id": "ABC123DEFG", "bundle_id": "com.example.myapp",
+  "p8_key": "-----BEGIN PRIVATE KEY-----\n…\n-----END PRIVATE KEY-----", "environment": "production" }
+```
+
+`environment` is `sandbox` (Xcode and TestFlight builds) or `production` (App Store builds). A mismatch produces `BadDeviceToken` at send time, not at PUT time.
+
+```http
+PUT /v1/namespace/push-credentials/ntfy
+
+{ "base_url": "https://push.cluster.example.com", "auth_token": "tk_…", "topic_mode": "opaque", "topic_secret": "<32 random bytes, base64 ok>" }
+```
+
+`auth_token` is optional. `base_url` falls back to the namespace gateway's `ntfy_base_url` (`https://push.<base-domain>`). Set it explicitly to use your own ntfy server. If neither is set, every ntfy push fails before any HTTP request. A `base_url` you set is reached through a **guarded client**: every connection is checked at dial time against the reserved ranges (loopback, private, link-local, carrier-grade NAT, multicast, the IPv6 forms that embed IPv4), redirects are not followed, and `PUT /v1/push/config` resolves the host and rejects one that resolves to a reserved address.
+
+Expo (legacy): `PUT /v1/push/config { "expo_access_token": "…" }`.
+
+```http
+GET    /v1/namespace/push-credentials/apns    # redacted view
+GET    /v1/namespace/push-credentials         # { "configured": ["apns","ntfy"], "supported": ["apns","ntfy"] }
+DELETE /v1/namespace/push-credentials/apns    # idempotent
+```
+
+If your p8 key leaks: make a new one at Apple, PUT it, and the new key takes effect within the credential cache's 30 seconds on every gateway.
+
+## 4. Register devices
+
+```http
+POST /v1/push/devices
+
+{ "device_id": "<unique per device>", "provider": "apns", "token": "<hex APNs token | ntfy topic | Expo token>",
+  "platform": "ios", "app_version": "1.2.3" }
+```
+
+For `ntfy` with `opaque`, the token is the sha256 hex your client computes from `(namespace, userId, topic_secret)`. With `path`, it is `ns-<namespace>-<userId>`.
+
+**From a device-bound session**, the registration is recorded against the device the gateway verified (`did`), not the `device_id` in the body. Revoking the device ends its push registrations too: before listing or sending, the gateway asks the registry which registrations belong to revoked devices, skips them and deletes them.
+
+### UnifiedPush (no Google services)
+
+ntfy is a UnifiedPush distributor, so de-Googled Android (GrapheneOS under "No Google Play" or "Sandboxed Google Play") receives push without Firebase. The app registers with the distributor, which hands back an endpoint URL such as `https://push.<base>/upXXXXXXXX`; register it:
+
+```http
+POST /v1/push/devices
+{ "device_id": "…", "provider": "ntfy", "token": "https://push.<base>/upXXXXXXXX", "platform": "android" }
+```
+
+The gateway POSTs to the endpoint verbatim, and its scheme and host **must match your configured ntfy push host**, so a device token can never publish to an arbitrary host. Registering just the bare topic works too. High-priority messages wake the app from Doze.
+
+### Rotating push topics (no account binding)
+
+`POST /v1/push/devices` keys a device on the caller's account, so the gateway holds a lasting account-to-device mapping. A **push topic** registration keys the device on a value the device chooses and stores nothing about the account.
+
+1. The device generates a random **topic secret** (16 to 64 bytes, hex-encoded) and keeps it, one fresh secret per namespace.
+2. The **topic id** is the lowercase hex SHA-256 of the decoded secret. The device gives it to whoever should be able to push to it. The gateway stores only the topic id.
+3. Registering, refreshing and removing need the secret. A contact who knows a topic id can push to it but cannot re-point or delete it.
+4. To rotate, register the provider token under a new secret: a provider token belongs to **one** topic per namespace, so the previous topic is removed in the same atomic write.
+
+```http
+POST /v1/push/topics
+{ "topic_secret": "<32 to 128 hex characters>", "provider": "apns", "token": "<provider token>" }
+→ { "status": "ok", "topic_id": "<64 hex>", "expires_at": 1700611200 }
+
+DELETE /v1/push/topics
+{ "topic_secret": "<the same secret>" }
+```
+
+A registration lives 7 to 8 days (`expires_at` is now plus 7 days, rounded up to a whole UTC day, so it does not record when the device registered); re-register to extend. Providers are `ntfy`, `expo`, `apns`, `apns_voip`. A wrong secret on `DELETE` is a 404, because a wrong secret names a different topic.
+
+What it protects: the table holds no account to topic mapping, senders cannot link rotations, provider tokens are scrubbed from what senders see, functions cannot touch the table. What it does **not**: the provider token is a stable identifier that the platform can link successive topics through; whoever knows a device's provider token can take its topic by registering it under their own secret; members with `db:write` can read and rewrite the rows; a lost device's topics only lapse within 8 days (a device that wants to stop at once calls `DELETE`); transport metadata (request log: method, path, client IP, key id, kept 7 days) shows that a caller registered a topic.
+
+Deploy functions that import `push_send_topic` only once every node runs a release that has it.
+
+## 5. Send
+
+**From a function** (Go, compiled with TinyGo; see [Functions](/docs/developer/functions)): `push_send`, `push_send_v2` and `push_send_topic` host functions. The message JSON has `title`, `body`, `channel`, `priority` (`high` or `normal`), `badge`, `sound`, `data`, `target_provider`, `exclude_provider`, `message_id`. A function can only push to users in its own namespace. `push_send` returns 1 or 0; `push_send_v2` returns a JSON envelope with a per-device result (HTTP status, reason, `unregistered`) because a non-zero return does not mean every device succeeded. `push_send_topic` takes the 64-hex topic id in place of a user id; a topic that is not registered or has expired answers `ok: false`, `devices_attempted: 0`, `reason: "TopicNotFound"`: stop addressing that id.
+
+**From a backend:**
+
+```http
+POST /v1/push/send
+Authorization: Bearer <token>
+{ "user_id": "0xUser…", "title": "New message", "body": "Hello", "channel": "messages", "priority": "high" }
+
+POST /v1/push/topics/send
+{ "topic_id": "<64 hex>", "title": "New message", "body": "Hello" }
+```
+
+Both need the namespace's `push:write` grant, which the `runtime` role holds, so these are **not admin-only**: add your own allow-list or admin check in your backend before exposing them to untrusted callers. Topic send answers 200 delivered, 400 malformed id, 404 not registered or expired, 502 provider refused, 503 push not configured.
+
+## How ntfy fans out
+
+ntfy is installed on every node and listens on loopback; Caddy fronts it as `push.<base-domain>`. Every node's ntfy is independent and subscribers land on one by round-robin DNS, so a publish through the platform ntfy is sent to **every active node** over the WireGuard overlay (never the public host), each hop signed with a coordination MAC. A send succeeds when at least one node accepted it; a subscriber pinned to a node that failed misses that message. A namespace that sets its own ntfy `base_url` is not fanned out. There is no fallback to publishing at `push.<base-domain>`.
+
+## FAQ
+
+**Does the platform hold my Apple key?** It stores it encrypted in your namespace's record, under a key derived from the cluster secret. Operators with cluster-secret access can decrypt it: the encryption protects against database-dump exfiltration, not against the operators. Treat operators as you would a hosting provider.
+
+**Can two tenants share Apple credentials?** Yes if their apps live under the same Apple team, but each namespace needs its own PUT.
+
+**Are pushes rate limited?** The gateway's per-client and per-namespace limits apply to every push route. Per-provider send limits at the dispatcher are not implemented.

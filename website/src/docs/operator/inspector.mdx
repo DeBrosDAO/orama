@@ -1,0 +1,69 @@
+# Inspector
+
+`orama inspect` SSHes into every node, collects subsystem data in parallel, runs deterministic checks, and can optionally send failures to an AI model for root-cause analysis. Use [`orama monitor`](/docs/operator/monitoring) to learn "is anything wrong right now?" and the inspector to learn "what exactly is wrong and why?".
+
+```text
+Collect (parallel SSH)  ->  Check (deterministic Go)  ->  Report (table or JSON)  ->  Analyze (optional AI)
+```
+
+## Quick start
+
+```bash
+orama inspect --env mycluster                        # every subsystem
+orama inspect --env mycluster --subsystem rqlite
+orama inspect --env mycluster --subsystem rqlite,olric,dns
+orama inspect --env mycluster --format json
+orama inspect --env mycluster --ai
+```
+
+## Flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--env` | | Environment to inspect |
+| `--subsystem` | `all` | Comma-separated: `rqlite`, `olric`, `ipfs`, `dns`, `wg` (also `wireguard`), `system`, `network`, `namespace`, `tor`, `webrtc`, `global` |
+| `--format` | `table` | `table` or `json`. The report goes to stdout and progress to stderr, so JSON is one document |
+| `--timeout` | `30s` | Time allowed for collecting one node |
+| `--verbose` | false | Print collection progress |
+| `--output` | | Save results to a directory as markdown |
+| `--config` | | Read nodes from a pipe-delimited file (`environment|user@host|role`) instead of resolving them |
+| `--ai`, `--model`, `--api-key` | | AI analysis through OpenRouter. The key can come from `--api-key`, `OPENROUTER_API_KEY` or a `.env` file |
+
+Nodes are resolved the way every other command does: the network API for the nodes your wallet owns, falling back to `nodes.conf`. SSH keys come from RootWallet.
+
+## What each subsystem checks
+
+| Subsystem | Checks |
+|---|---|
+| `rqlite` | Raft state, leader election, readiness, commit-applied gap, strong reads, query errors and snapshots, cross-node leader agreement, term consistency, quorum, version match |
+| `olric` | Service active, memberlist up, restart count, memory, log analysis (members marked failed is critical, suspicions are a warning), cross-node memberlist consistency |
+| `ipfs` | Daemon and cluster active, swarm and cluster peer counts, repo usage, swarm key present, bootstrap list empty, version consistency |
+| `dns` | CoreDNS and Caddy active, ports 53/80/443, Corefile exists, SOA/NS/wildcard/base-A resolution (needs `dig`: `apt install bind9-dnsutils`; without it these are skipped), TLS certificate expiry |
+| `wg` | Interface up, correct `10.0.0.x` address, listen port 51820, peer count against expected, MTU 1420, config permissions 600, handshakes (fresh, stale, never), catch-all route detection |
+| `system` | Core services, failed units, memory, disk, inodes, load, OOM kills, swap, UFW active, process user, panic count, expected ports |
+| `network` | Internet reachability, default route, WireGuard route, TCP connection counts, retransmission rate, ping of every mesh peer |
+| `namespace` | Per namespace: RQLite up with raft state and readiness, Olric memberlist, gateway health; cross namespace: all healthy, RQLite quorum. A namespace being provisioned or deprovisioned for under 15 minutes is not judged |
+| `tor` | `orama-namespace-tor@index` active, SOCKS `:9050` bound, bootstrap percentage, Anyone-network leftovers |
+| `webrtc` | Per namespace SFU and TURN active, cross-node SFU coverage (3 nodes), TURN redundancy (2 nodes). Only namespaces with WebRTC |
+| `global` | Chain unit and RPC (height lag, peers, block age, jailed or tombstoned, missed-block ratio), and the public Kubo, provider and relay units when installed |
+
+## Collection failures
+
+The inspector never reads a failed collection as zero values. Before collecting it opens one SSH session to each node. If that fails, the node is **unreachable**: nothing is collected from it and it produces one critical result, `node.reachable`. No other check runs against it, so you never get "wg0 down" from a node it simply could not read. If one subsystem's collection returns nothing or cut-off output, only that subsystem is affected: its checks on that node are skipped and a critical `<subsystem>.collected` result says why. Every collection failure is listed under "Collection Errors" in the summary and given to the AI analysis.
+
+The sessions of one node share one SSH connection and its collectors run at most four at a time.
+
+## Severity and status
+
+| Severity | Meaning |
+|---|---|
+| CRITICAL | Service completely down. Quorum lost, RQLite unresponsive, no leader |
+| HIGH | Service degraded. Olric down, gateway not responding, IPFS swarm key missing |
+| MEDIUM | Non-ideal but functional. Stale handshakes, elevated memory |
+| LOW | Informational. Non-standard MTU, port mismatch, version skew |
+
+Each check is `pass`, `fail` (action needed), `warn` (investigate) or `skip` (could not run). Exit code `0` means every check passed or only warned; `1` means at least one failed.
+
+## AI analysis
+
+With `--ai`, failures and warnings go to an LLM through OpenRouter together with cluster metadata, and a structured analysis of likely root causes and fixes comes back. The default model is `moonshotai/kimi-k2.5`; change it with `--model`. Failure output leaves your machine in this mode: it goes to a third party. Leave it off if your node output should not.

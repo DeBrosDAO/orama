@@ -1,39 +1,97 @@
-# Validators and voting power
+# Validators and staking
 
-Bonds live in `x/staking`. The voting power CometBFT uses is computed by `x/power` at the end of every block. Staking's own validator updates are discarded.
+Bonds live in `x/staking`. The voting power CometBFT uses is computed by `x/power` at the end of every block. Staking's own validator-set updates are discarded, so `x/power` is the only module that tells CometBFT who validates.
+
+## Becoming a validator
+
+An outsider creates a validator with the normal staking message (`MsgCreateValidator`) and delegators bond to it with `MsgDelegate`. Both can top up a bank shortfall from the signer's own earnings, inside the message and all or nothing.
+
+| Staking and slashing setting | Value |
+|---|---|
+| Unbonding time | 21 days (1,814,400 seconds) |
+| Maximum validators | 100 |
+| Maximum unbonding entries | 7 |
+| Minimum commission rate | 0 |
+| Double-sign slash | 5% |
+| Downtime slash | 0.01% |
+| Signed-blocks window | 10,000, minimum 50% signed |
+| Downtime jail | 600 seconds |
+| Minimum delegation to earn rewards | 1 ORAMA |
+
+The size of the active set (60 to 100) is not final: the benchmark that decides it has not run.
 
 ## Power is not raw stake
 
-Each bonded validator gets a share of the stake, then three limits apply.
+Each validator gets a power figure `P = (1 - lambda) x B + lambda x C`:
 
-**A cap.** No validator's capped share can exceed 5% of the set. Once more than 60 validators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs.
+- `B` is the bootstrap share, `1/n` for each member of the bootstrap committee.
+- `C` is the validator's share of bonded stake after the limits below.
+- `lambda` slides from 0 to 1 as the network matures (next section).
 
-**A ramp.** A validator that has just become eligible does not receive its full share immediately. The share ramps over 30 epochs.
+The limits on `C`:
 
-**A redistribution bound.** Power moved off a capped validator cannot raise another validator to more than twice that validator's own raw stake share.
+**A cap.** No validator's capped share can exceed 5% of the set. Once more than 60 validators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs. Power removed from a capped validator is redistributed by water-filling.
 
-If the ramp or the cap leaves some power unallocated, rewards are still paid on the power that was actually assigned, pro rata. They are not paid against a nominal total of 1, which would otherwise shrink the payout.
+**A ramp.** A validator that has just become eligible does not receive its full share at once. The share ramps in over 30 epochs.
 
-A parameter called the useful-work multiplier is stored and must be between 0.75 and 1.25. The default is 1.0 and it is marked not activated. No keeper reads it. It does not change power.
+**A redistribution bound.** Power moved off a capped validator cannot lift another validator above twice that validator's own raw stake share (`max_redistribution_multiplier` = 2).
 
-## Hand-over from the bootstrap committee
+**A per-block limit.** Power increases are limited to one third (total variation) per block. Decreases apply immediately.
 
-A production genesis needs at least 30 bootstrap committee members. A devnet, stagenet, or localnet chain id may have fewer.
+CometBFT receives `floor(P x 1e9)`, with a floor of 1 for any positive share. Jailed and tombstoned validators are excluded.
 
-A factor called lambda starts below 1 and never decreases. It reaches 1 when total bonded stake reaches 271,000 ORAMA, or at epoch 365, whichever comes first. Until then the bootstrap committee still carries weight next to stake-backed validators. The default parameters call 271,000 ORAMA the exit stake. That number is what the code uses. It is not 5% of the year-1 schedule maximum. The year-1 maximum is 730 times 14,848 ORAMA, which is 10,839,040 ORAMA.
+A "useful-work multiplier" parameter exists with default 1.0 and `activated = false`. Nothing reads it. It does not change power today. A governance proposal can activate it (see [Governance](/docs/blockchain/governance)), but nothing consumes the setting yet.
+
+## The bootstrap committee and the hand-over
+
+A new chain has no stake, so it starts with a *bootstrap committee*: validators declared in genesis (`oramad genesis add-bootstrap-validator`) who hold equal power without any stake. A production chain id requires at least 30 of them. A devnet, stagenet or localnet may have fewer.
+
+`lambda` starts at 0 and only ever goes up. It is recomputed once per closed epoch:
+
+```
+lambda = min(1, max(lambda_previous,
+                    bonded stake / 271,000 ORAMA,
+                    epochs since genesis / 365))
+```
+
+So the committee fades out when bonded stake reaches 271,000 ORAMA or at epoch 365, whichever comes first. Two protections:
+
+- Until the active validator count reaches a gate (twice the validators needed to fill 100% at the current cap), lambda is held at 0.95. Crossing the gate sets a flag permanently.
+- Each step is shortened if needed so ramped shares and capped-stake shifts stay within one third per block.
+
+At lambda = 1 a seat that exists only on the committee drops to zero power.
+
+**Force-bonding.** While lambda is below 1, half of a committee member's reward is self-delegated into its own validator until the self-bond reaches twice the minimum (2 x 1,000 ORAMA = 2,000 ORAMA). A guard stops a committee member undelegating below that amount while lambda is below 1. Force-bonding is skipped if the member has no validator record yet, is jailed, or has an invalid exchange rate; the whole reward then stays in earnings, so one bad validator cannot halt an epoch.
 
 ## Rewards
 
-Once an epoch closes, `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT is given in that block.
+At the end of an epoch `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT used. Rewards are paid on *capped* power, not on the stock distribution module.
 
-Each validator's amount is split by that validator's commission rate. The commission, plus the operator's own self-delegation, goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account. There is no withdraw transaction.
+Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account. There is no withdraw transaction. A delegation smaller than 1 ORAMA is skipped.
 
-A bootstrap committee member has 50% of their own reward force-bonded into their self-delegation, until that self-bond reaches twice the minimum. The minimum self-bond in the default parameters is 1,000 ORAMA, so the ceiling is 2,000 ORAMA. Force-bonding is skipped if the member has no validator record yet, or the validator is jailed, or the exchange rate is invalid. In those cases the whole reward stays in earnings, so one bad validator cannot halt the epoch.
+## Slashing and jailing
 
-A delegation smaller than 1 ORAMA does not receive rewards.
+Downtime is slashed 0.01% inside a window of 10,000 blocks. A double-sign is slashed 5% and tombstones the validator. Jailing and undelegation go through `x/staking`. Slashing applies to every CometBFT validator including bootstrap-committee seats.
 
-## Slashing
+A node that has a bonded role in `x/nodes` is separately slashed there when it fails a storage challenge. See [Nodes](/docs/blockchain/nodes).
 
-Downtime slashing is 0.01% inside a window of 10,000 signed blocks. Double-sign slashing is 5%. This app does not override the Cosmos SDK unbonding period, so unbonding stays at that SDK default.
+## Operating a validator key
 
-Jailing and undelegation still go through `x/staking`. An undelegation guard in `x/power` sits on that path so a committee member cannot drop the bond the power rules require.
+Moving a validator to a new machine without a double-sign is the most dangerous routine job on the chain. The CLI does it in steps (all under `orama global validator`):
+
+| Command | What it does |
+|---|---|
+| `export-key` | Writes `priv_validator_key.json` sealed to your public key |
+| `reseal` | Turns a key backup into a migration bundle for a new host |
+| `migrate prepare` | On the new host: prints the host's migration key |
+| `migrate export` | On the old host: stops the chain and seals the key and its sign state |
+| `migrate import` | On the new host: installs the key and records its sign floor |
+| `migrate cancel` | Removes a prepared migration key |
+| `check-sign-floor` | Fails when the chain must not start: the key moved away, or state is behind its floor |
+| `unjail`, `edit` | Build or send `MsgUnjail` and `MsgEditValidator` |
+
+The chain's systemd unit runs `check-sign-floor` before every start, so a stale copy of a key cannot sign. Full runbook: [Global nodes](/docs/operator/global-nodes#validators).
+
+## Queries
+
+`x/power` has no messages. Queries: `params`, `bootstrap-committee`, `lambda`, `validator-power` (only `comet_power` is filled) and `invariants`. `orama chain validator` lists the set. See [Reading the chain](/docs/blockchain/reading-the-chain).

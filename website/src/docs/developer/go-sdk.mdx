@@ -1,0 +1,139 @@
+# Go client
+
+The Go client talks to the same gateway as the [TypeScript SDK](/docs/developer/sdk-reference). Use whichever matches the code you are writing. API reference: [pkg.go.dev](https://pkg.go.dev/github.com/DeBrosOfficial/network/pkg/client).
+
+```bash
+go get github.com/DeBrosOfficial/network/pkg/client
+```
+
+## Quick start
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "strings"
+
+    "github.com/DeBrosOfficial/network/pkg/client"
+)
+
+func main() {
+    cfg := client.DefaultClientConfig("my-app")
+    cfg.GatewayURL = "https://ns-myapp.cluster.example.com"
+    cfg.APIKey = "<an app-runtime key>"
+
+    c, err := client.NewClient(cfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+    if err := c.Connect(); err != nil {
+        log.Fatal(err)
+    }
+    defer c.Disconnect()
+
+    resp, err := c.Storage().Upload(context.Background(), strings.NewReader("Hello, Orama!"), "hello.txt")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Uploaded: CID=%s\n", resp.Cid)
+}
+```
+
+## Configuration
+
+```go
+type ClientConfig struct {
+    AppName           string        // required
+    DatabaseName      string        // default "<AppName>_db"
+    BootstrapPeers    []string      // libp2p bootstrap multiaddresses
+    DatabaseEndpoints []string      // RQLite nodes to dial directly (in-mesh only); empty = through the gateway
+    GatewayURL        string        // gateway for HTTP API access
+    ConnectTimeout    time.Duration // default 30s
+    RetryAttempts     int           // default 3
+    RetryDelay        time.Duration // default 5s
+    QuietMode         bool          // suppress debug and info logs
+    APIKey            string        // API key for gateway auth
+    JWT               string        // optional bearer token
+    IdentityPath      string        // persistent libp2p identity key file
+    PubSubSocket      string        // unix socket of the node's pubsub API; admits only the gateways' user
+    ListenAddrs       []string      // libp2p listen multiaddrs; empty = no listener
+}
+```
+
+`DefaultClientConfig` fills in default bootstrap peers and leaves `DatabaseEndpoints` empty. `NewClient` errors if the config is nil or the app name is empty.
+
+The client only dials its bootstrap peers, so its libp2p host has **no listener** by default. Set `ListenAddrs` to accept inbound connections on a named interface (for example a node's WireGuard address, `/ip4/10.0.0.3/tcp/0`). `Connect` refuses an unspecified address such as `/ip4/0.0.0.0/...`, which is every interface, the public one included.
+
+The client's namespace is derived from its credential. There is no per-request namespace override: to work in several namespaces create a client per credential.
+
+## Authentication
+
+Set `cfg.APIKey` or `cfg.JWT`. Wallet login is not implemented in the Go client: use the gateway directly (`POST /v1/auth/challenge`, then `/v1/auth/verify`, see [Sign-in and sessions](/docs/developer/sign-in)), and `POST /v1/auth/api-key` with the JWT to mint a key.
+
+## Storage
+
+```go
+resp, _ := c.Storage().Upload(ctx, strings.NewReader("Hello"), "hello.txt")     // resp.Cid, resp.Size
+rc, _ := c.Storage().Get(ctx, cid)                                              // io.ReadCloser
+pin, _ := c.Storage().Pin(ctx, cid, "hello.txt")
+status, _ := c.Storage().Status(ctx, cid)                                       // Status, ReplicationFactor, Peers, Error
+err := c.Storage().Unpin(ctx, cid)
+```
+
+`Status.Status` is `pinned`, `pinning`, `queued`, `unpinned`, `error` or `unknown`: the cluster-wide state across the peers the pin is allocated to.
+
+**Unpin and deletion.** By default a successful unpin removes the pin immediately, but blocks are physically reclaimed only by the periodic garbage-collection sweep (about every 6 hours). For a privacy-grade "delete for everyone", call `DELETE /v1/storage/unpin/<cid>?immediate=true`: when the CID's *last* pin is removed (no other namespace references it), blocks are evicted cluster-wide at once. Use it only for genuine privacy deletes; it fans out work to every node. The cluster keeps ONE pin per CID however many namespaces uploaded the same bytes, decided by a cluster-wide reference count, so an unpin removes the pin only when the caller's release leaves no reference. The response's `evicted` field:
+
+| Value | Meaning |
+|---|---|
+| `"true"` | Every active node confirmed a complete local reclaim. The bytes are gone cluster-wide |
+| `"partial"` | At least one node did not confirm. The pin is gone everywhere, but blocks survive on that node until the next GC sweep (6 hours at most). Do not tell a user it was permanently deleted; log it |
+| `"shared"` | Another namespace still references this CID. Nothing removed. Correct and expected for deduplicated content |
+| `"skipped"` | Immediate reclaim was not requested, or the reference check could not run |
+
+An unpin answers a retryable 503 while the reference index is still being built (once, at the upgrade that introduced it).
+
+## Database
+
+With a `GatewayURL` and a credential and no `DatabaseEndpoints`, the database client goes through the gateway's `/v1/rqlite` API, authenticated with your key or JWT, so it works from anywhere the gateway is reachable. Setting `DatabaseEndpoints` dials RQLite nodes directly instead; that needs a route into the WireGuard mesh and is how a gateway reaches its own database.
+
+```go
+_, err := c.Database().Query(ctx, "INSERT INTO users (name, email) VALUES (?, ?)", "Alice", "alice@example.com")
+result, err := c.Database().Query(ctx, "SELECT id, name FROM users WHERE id = ?", 123)   // Columns, Rows, Count
+err = c.Database().CreateTable(ctx, `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)`)
+err = c.Database().Transaction(ctx, []string{"INSERT INTO users (name) VALUES ('Alice')", "INSERT INTO users (name) VALUES ('Bob')"})
+```
+
+Writes go through `Query` too (the client detects them). Also `DropTable` and `GetSchema`. Through the gateway, dropping a table that does not exist succeeds, and `GetSchema` leaves out the platform's own tables.
+
+## Pub/sub
+
+See the examples in the package documentation. `ListTopics` returns the topics of the client's namespace that this node's pubsub service holds a subscription on, sorted; another namespace's topics are never listed.
+
+## Not in the Go client
+
+- **Cache.** The distributed cache has no accessor yet. Use the TypeScript SDK or the REST API.
+- **Serverless.** Functions are deployed with `orama function`; there is no `Serverless()` accessor.
+- **The anonymity proxy and tunnel.** Call `POST /v1/proxy/anon` and `GET /v1/proxy/tunnel` directly. See [Tor](/docs/privacy/tor).
+
+## Errors and retries
+
+```go
+import "github.com/DeBrosOfficial/network/pkg/errors"
+
+if err != nil {
+    switch {
+    case errors.IsNotFound(err):     // resource not found
+    case errors.IsUnauthorized(err): // authentication failed
+    case errors.IsValidation(err):   // validation error
+    case errors.ShouldRetry(err):    // worth retrying
+    }
+}
+```
+
+## Testing
+
+`NetworkClient`, `StorageClient`, `DatabaseClient` and `PubSubClient` are interfaces, so write your own mocks for unit tests. The SDK ships none.

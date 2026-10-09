@@ -1,0 +1,62 @@
+# RootWallet security
+
+## Key hierarchy
+
+One BIP-39 phrase makes a 64-byte seed. From it:
+
+- EVM `m/44'/60'/0'/0/N`, Solana `m/44'/501'/N'/0'`, Bitcoin `m/84'/0'/N'/c/i`, ORAMA `m/44'/118'/0'/0/N`
+- a dedicated ed25519 release key at SLIP-0010 `m/1330790733'/1'/0'`
+- HKDF-SHA256 branches for the vault key (`rootvault-metadata-v1`), the storage key (`orama-storage-v1`), the backup key (`orama-backup-v1`), the sync identity key and the sync key-encryption key
+
+The storage and backup keys are what Orama's [storage deals](/docs/blockchain/storage-deals) and [sealed namespace backups](/docs/developer/backups) use. They are derived but no RootWallet screen uses them yet.
+
+## Encryption at rest
+
+- **CLI keystore:** scrypt (N=2^18, r=8, p=1) into AES-256-GCM, file mode 0600. Derived addresses are stored in plaintext.
+- **Desktop and mobile store:** two password layers: an outer wrapper (scrypt N=2^15) and inner wallet blobs (scrypt N=2^18). A password change re-keys both, crash-safely, with a journal.
+- **Vault:** AES-256-GCM under the vault key.
+- **Sync (dev builds):** XChaCha20-Poly1305.
+- Libraries: `@scure/bip39`, `@scure/bip32`, `@noble/*`. Key material is zeroed after use.
+
+Mobile stores the wallet password in the Keychain/Keystore (this-device-only, available when unlocked) for PIN and biometric unlock, blocks screen capture on recovery-phrase and key screens, and clears copied secrets after 30 seconds.
+
+## What it defends against
+
+- Offline brute force of the keystore (scrypt) and tampering (GCM tags).
+- A stolen session file: useless without the keychain key.
+- Mobile PIN guessing: escalating lockout.
+- On the agent: impersonation of a caller (kernel peer credentials and binary hash), abusing a signature as an Orama approval (domain-separated formats), and signing a transaction without a decoded prompt.
+- On vault sync (dev builds): a server reading or forging data, swapping or replaying records, and a hostile gateway (a sign-in message is signed only if it names the right gateway, wallet, namespace and device).
+
+## What it does not defend against
+
+- **Malware or a keylogger on your device.**
+- **Another process running as your user on desktop.** See [The agent](/docs/rootwallet/agent#security-properties-and-their-limits).
+- **Phishing,** or losing your phrase. There is no backup anywhere.
+- **A compromised custom RPC endpoint,** which is trusted for everything it serves.
+- **A stolen phrase.** Revoking a sync device does not help; move funds to a new wallet.
+- **A sync server that withholds or reorders records** (dev builds; needs a future signed log).
+
+## Post-quantum
+
+There is no post-quantum cryptography in RootWallet. The symmetric parts (AES-256, HMAC) lose about half their effective strength against a quantum attacker, and scrypt and HKDF are unaffected. The signature schemes the chains use (secp256k1, ed25519) are vulnerable to a future quantum computer, which is a property of those chains.
+
+## Audit status
+
+There has been **no independent audit.** One is planned after funding, along with a public bug bounty. An internal AI-assisted review dated 2026-07-06 exists, with findings marked resolved; it is not a third-party audit.
+
+## Privacy
+
+No telemetry, no accounts. DexScreener sees token addresses on swap and balance screens. Orama sees your requests to the `rootwallet` namespace functions (balances and quotes), tied to a per-install device key, not to your identity.
+
+## Reporting a vulnerability
+
+Email security@debros.io. Do not open a public issue. Acknowledgement within 48 hours and a 7-day target for critical issues.
+
+## Known gaps (as of this writing)
+
+- Auto-update is not published, so updates are manual.
+- The macOS build is not notarized.
+- Vault sync is not in release builds.
+- Shielded ORAMA is not supported.
+- Bitcoin accounts beyond the first need manual creation and rescan.

@@ -22,6 +22,15 @@ All deploy commands share these flags:
 | `--name` | Yes | Deployment name. Used in the domain: `<name>-<random>.<base-domain>` |
 | `--subdomain` | No | Custom subdomain override (default: uses `--name`) |
 | `--update` | No | Update an existing deployment instead of creating a new one |
+| `--env KEY=VALUE` | No | Environment variable (repeatable). First deploy only; not on `--update` |
+| `--env-file <file>` | No | Read variables from a `.env` file. First deploy only |
+| `--health-check <path>` | No | Path the platform polls to decide the app is up (default `/health`). Not on static sites |
+
+### Names and limits
+
+A deployment name is 1 to 56 characters of letters, digits, `-` and `_`, starting with a letter or digit. Anything else is refused with `400` before the upload is stored: the name becomes part of the app's subdomain (one DNS label) and of the systemd unit that runs it (`orama-deploy-<runtime>@<namespace>-<name>`).
+
+A new deployment is refused with `409` when one with the same name already exists in the namespace (deploy again with `--update`), or when its `<namespace>-<name>` is already another deployment's unit instance (namespace `a` with name `b-c` and namespace `a-b` with name `c` would share one unit, directory and environment file; choose a different name). The node enforces this by creating the deployment's directory, which only one request can do.
 
 Next.js has one additional flag:
 
@@ -304,15 +313,97 @@ Removes the deployment, frees the domain, and cleans up resources on the node.
 
 ---
 
-## Environment Variables
+## Environment variables
 
-Server-side deployments (Next.js, Go, Node.js) receive the following environment variable automatically:
+Go, Node.js and Next.js SSR deployments run as a process that reads its configuration from environment variables. Set them at deploy time or change them afterwards without redeploying.
 
-| Variable | Description |
-|----------|-------------|
-| `PORT` | Port the app must listen on. Assigned by the node. |
+```bash
+orama deploy go ./my-api --name my-api --env DATABASE_URL=postgres://... --env LOG_LEVEL=debug
+orama deploy go ./my-api --name my-api --env-file .env.production
+```
 
-`NODE_ENV=production` is set while dependencies are installed at deploy time (`npm install`), but it is not injected into the running app's environment -- set it yourself if your app relies on it at runtime.
+`--env` is repeatable and splits on the first `=` only, so a value may contain one. `--env-file` reads `KEY=VALUE` per line, skips `#` comments and blank lines, and removes one layer of surrounding quotes. It does **not** expand `$VAR`: the literal text in the file is sent. A `--env` on the command line overrides the same name from the file. They belong to a first deploy; with `--update` the CLI refuses them, because an update replaces the build and never reads variables.
+
+### After deploying
+
+```bash
+orama app env list my-api
+orama app env set my-api --env DATABASE_URL=postgres://...
+orama app env set my-api --env-file .env.production
+orama app env unset my-api OLD_FLAG DEBUG_MODE
+```
+
+Setting or removing a variable rewrites the app's environment file and restarts it. A static site has no process, so its variables are recorded and nothing restarts. The change reaches **every node that runs the app**, and the command succeeds only when all of them applied it; a node that could not be reached is named in the error (status 502), still runs the old environment, and running the same command again retries every replica (applying an environment is idempotent). During a rolling upgrade an environment change on an app with a not-yet-upgraded replica fails with 502 naming that node; run it again once that node is upgraded.
+
+`list` shows names, never values, because environment variables are where secrets live.
+
+### What the platform sets for you
+
+These names cannot be overwritten or removed.
+
+| Name | What it is |
+|---|---|
+| `PORT` | The port your app must listen on, over TCP. It is the only port your app may bind: any other port, or a UDP socket, fails with `EPERM`. Outbound connections are unaffected |
+| `ENTRY_POINT` | What a Node.js deployment runs: `npm:start` runs `npm start`, anything else runs `node <that file>`, no value runs `node index.js` |
+| `ORAMA_ENTRYPOINT` | The script the runtime starts, derived from `ENTRY_POINT` |
+| `ORAMA_NAMESPACE` | The namespace this deployment belongs to |
+| `ORAMA_GATEWAY_URL` | Your namespace's own gateway, `https://ns-<namespace>.<base-domain>` |
+| `ORAMA_STATE_DIR` | A directory your app may write to that survives restarts |
+| `ORAMA_CACHE_DIR` | A directory your app may write to that it must not rely on |
+| `ORAMA_TOKEN_FILE` | The file holding your app's own short-lived token (below) |
+
+`NODE_ENV=production` is set while dependencies are installed at deploy time but is not injected into the running app; set it yourself if your app relies on it.
+
+### Your app's own credential
+
+Your app is a principal of its own. At start it is handed a short-lived token in the file named by `$ORAMA_TOKEN_FILE` and renews it before it expires. It reaches **nothing** until you grant it something:
+
+```bash
+orama app grants set my-api runtime      # invoke, storage, push, webrtc, proxy, pubsub, cache
+orama app grants list
+```
+
+```js
+const token = await readFile(process.env.ORAMA_TOKEN_FILE, "utf8");
+const res = await fetch(`${process.env.ORAMA_GATEWAY_URL}/v1/auth/renew`, {
+  method: "POST", headers: { Authorization: `Bearer ${token}` },
+});
+const { access_token, expires_in } = await res.json();
+```
+
+In the SDK use `createWorkloadClient()`. A deployment cannot be granted the control plane. See [Access control](/docs/developer/access-control#a-deployed-app-s-identity).
+
+### Where your app may write
+
+Your app's own directory is read-only: its files are its build output, and a process that can rewrite its own code cannot be rolled back to a known version. Write to `$ORAMA_STATE_DIR` (yours alone; survives restarts) or `$ORAMA_CACHE_DIR` (anything you can regenerate). Files there are private to the app (`UMask=0077`).
+
+### How values are handled
+
+Values are held encrypted in the cluster database (AES-256-GCM, key derived from the cluster secret). On the node they are written to a file only the system can read, which systemd hands to your process; they are not written into the unit and are removed when the deployment stops. A value may contain any valid UTF-8 except NUL (a PEM key or a JSON blob goes in as it is), one value is at most 64 KiB, and the whole rendered environment at most 224 KiB (larger is refused `400`).
+
+### What your app runs as
+
+Each deployment runs as its own unprivileged user, allocated for it and reclaimed when it stops. No two deployments share an identity and none is root. It cannot reach the cluster's internal network, it has the memory, CPU and process limits recorded on the deployment, and of the platform's directory tree it sees only its own deployment directory, read-only. The unit is an instance of a template (`orama-deploy-node@`, `orama-deploy-npm@` or `orama-deploy-go@`) installed with the platform; the gateway writes only the environment file and starts the template.
+
+### Health check
+
+The platform polls `--health-check` (default `/health`) to decide the app has started.
+
+### Why there is no `orama.yaml`
+
+A project file for name, type, environment and health check is deliberately not built yet: it would need precedence rules against flags, a version field, validation, and an answer for what a checked-in file does with secrets. `--env-file` covers the part that hurt most.
+
+---
+
+## Replicas and updates
+
+A dynamic deployment (Next.js SSR, Node.js, Go) runs on its **home node** and on a second node, its **replica**. After the home node pins the build it asks the replica to set up; the replica polls for the artifact (every 2 s, up to 60 s) rather than failing on the first miss. A setup that fails is recorded (`replica_setup_failed` in `GET /v1/deployments/events`) and the cluster leader's reconciliation, every 5 minutes, sets it up again.
+
+An **update** (`--update`) and a **rollback** are applied on the home node, then on every active replica, and the command waits for each. It succeeds only when all replicas applied it; a replica that did not is reported with status 502, naming how many applied it and each node that did not (a `replica_update_failed` event is recorded). The home node already runs the new version and the failed nodes keep serving the old one. Running the same update or rollback again retries it. Each call carries the deployment's version, and a replica refuses a version older than the one it applied. Updates, rollbacks and environment changes of one deployment take turns on the home node; one that finds the lock held past 120 s is refused with 503 (run it again).
+
+Changes are made on the home node only, so one that reaches another gateway is forwarded, and refused with 503 and `Retry-After` if the home node does not answer. **Delete** is not tied to the home node, so a deployment whose home node is gone for good can still be deleted.
+
+Each node's health checker probes its local replicas' ports every 30 seconds. A `failed` replica returns to `active` only when the probe answers **and** its own unit reports active. The same checker reaps orphan runtime units (a unit whose deployment row is gone) every 2 minutes, conservatively: the unit must be unmatched on two consecutive sweeps, at least 10 minutes old, and at most 2 are stopped per sweep.
 
 ---
 

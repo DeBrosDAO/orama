@@ -299,3 +299,16 @@ interface SubscribeOptions {
   presence?: PresenceOptions;
 }
 ```
+
+
+---
+
+## Reserved topics, permissions and limits
+
+- **Reserved topics.** Everything under `_orama/` belongs to the platform (today the WebRTC membership events, `_orama/webrtc/<room>`). Nobody publishes to it (`403 PUBSUB_RESERVED_TOPIC`; the platform publishes in process). Subscribing needs a pub/sub grant that covers the topic; a grantless signed-in user is refused and the topic is left out of `GET /v1/pubsub/topics`.
+- **Reserved key.** A published payload that is a JSON object with a top-level `_orama` key (any letter case) is refused with `400 PUBSUB_RESERVED_KEY` on every topic, and one that starts as a JSON object but is not strict JSON is refused `400 PUBSUB_INVALID_OBJECT`. The key marks events the platform publishes itself. Rename it in your own events.
+- **Who may publish.** A signed-in wallet with no grant in the namespace may *subscribe* and read presence but not *publish*; the refusal is `403 INSUFFICIENT_SCOPE` with `required_permission: pubsub:write:*`. Grant `pubsub` write (a `runtime` role, or `pubsub:topic=chat.*`), or publish from a function. Announcing presence on a subscribe socket publishes under the caller's `member_id`, so it needs write too.
+- **An `app-runtime` key does not include pub/sub.** Mint the key with `--scope invoke,pubsub`.
+- **Narrowing.** `pubsub:topic=chat.*` limits publish, publish-batch and the subscribe WebSocket to matching topics.
+- **Ordering and delivery.** A message published on the same node is delivered once, not twice. The `timestamp` on a message is server-assigned. A dropped client is re-established with backoff (ten attempts by default). A presence member that stops answering the gateway's pings is dropped after 75 seconds.
+- **Trust inside the cluster.** A node of the cluster that passes the overlay gate may subscribe to and publish on any `<namespace>.<topic>`: the pub/sub libp2p hosts are gated to overlay addresses and to peers the gateway named, but there is no per-namespace topic authorization between nodes and no libp2p private network. Per-namespace authorization is enforced at the gateway, for your clients.

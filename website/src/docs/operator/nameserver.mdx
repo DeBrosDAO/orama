@@ -1,332 +1,128 @@
-# Nameserver Setup
+# DNS and nameservers
 
-When you install an Orama node with the `--nameserver` flag, the node runs CoreDNS as an authoritative nameserver for your domain. This is what makes the entire deployment system work -- without it, there is no dynamic DNS, no wildcard subdomains, and no automatic TLS certificates.
+An Orama cluster is its own DNS server. Its base domain, and every name under it (each deployment, each namespace gateway, each node, the TURN hosts) is answered by CoreDNS running on the cluster's nameserver nodes, from a table in the replicated registry. For the internet to ask your nodes, the **parent zone** of the base domain must delegate to them: NS records naming the nameservers, and *glue* A records giving their addresses.
 
-## Why You Need Nameservers
+This page explains the records, how to choose the base domain, how to create the records, and how to verify them.
 
-Every application deployed on the Orama Network gets a unique subdomain (e.g., `myapp.node-a3f8k2.example.com`). For these subdomains to resolve, the network must control DNS for the base domain. Running your own nameservers enables three critical capabilities:
+## Why you need your own nameservers
 
-- **Dynamic DNS for deployments** -- When a developer deploys an app, the gateway creates a DNS record pointing the app's subdomain to the correct node. No manual DNS configuration needed.
-- **Wildcard subdomains** -- A single wildcard record (`*.example.com`) routes all subdomains to your nodes, so new deployments work instantly without waiting for DNS propagation.
-- **ACME DNS-01 challenges** -- Automatic TLS certificate issuance via Let's Encrypt requires the ability to create TXT records on demand. CoreDNS handles this by writing challenge records directly to the shared RQLite database.
+- Deployments get names like `myapp-f3o4if.cluster.example.com` the moment they are created. A row is inserted, and the next DNS query sees it. There is no zone file and no external DNS provider.
+- Certificates are issued through the ACME DNS-01 challenge. The challenge record is served by your own CoreDNS, and the certificate authority finds that CoreDNS through the delegation. **Until the parent zone delegates to the cluster, the genesis node cannot get a certificate.**
+- Wildcard names (`*.cluster.example.com`) work for every subdomain.
 
-## Prerequisites
+## Nameserver slots
 
-| Requirement | Details |
-|-------------|---------|
-| Domain ownership | A domain you control (e.g., `example.com`) |
-| 3+ VPS nodes | Minimum for redundancy; registrars typically require at least 2 nameservers |
-| Static IP addresses | Each VPS must have a fixed public IPv4 address |
-| Registrar access | Admin-level access to your domain registrar's DNS and nameserver settings |
+Each node installed with `--role nameserver` (`--nameserver` on `orama node install`) claims a slot, `ns1`, `ns2`, and so on, the first time its DNS sweep runs (every 30 seconds, once it has registered). Slots are claimed dynamically, lowest free number first, so **you cannot know in advance which address holds which name**. A node keeps its slot across restarts and missed heartbeats. Two minutes of silence takes it out of the round-robin, not out of its slot, because freeing the slot would drop the zone's glue. `orama node remove` releases the slot. There are at most 13 slots.
 
-## Installing Nameserver Nodes
+Each slot holder writes its glue record `nsN.<base>` pointing at its public IP. The zone's own NS set and SOA derive from the slots: one NS record for every slot that has glue. A one-nameserver cluster publishes only `ns1`; a five-nameserver cluster publishes `ns1` to `ns5`.
 
-All nameserver nodes must be installed and running before you configure your registrar.
-
-**Genesis node (first node, creates the cluster):**
+To see which address holds which slot, ask the cluster:
 
 ```bash
-sudo orama node install \
-  --vps-ip <IP> \
-  --domain example.com \
-  --base-domain example.com \
-  --nameserver
+orama node dns delegation --env mycluster
 ```
 
-**Subsequent nameserver nodes (joining the cluster):**
+```text
+; cluster.example.com — create these in the parent zone example.com
+cluster.example.com.        IN  NS  ns1.cluster.example.com.
+cluster.example.com.        IN  NS  ns2.cluster.example.com.
+cluster.example.com.        IN  NS  ns3.cluster.example.com.
+ns1.cluster.example.com.    IN  A   203.0.113.10
+ns2.cluster.example.com.    IN  A   203.0.113.11
+ns3.cluster.example.com.    IN  A   203.0.113.12
+```
+
+`--json` prints the same as data. It reads the registry over SSH from the environment's recorded nodes, so it works before the cluster's name resolves, and it lists only slots whose glue exists. **Run it again after adding or removing a nameserver, and update the parent zone to match.**
+
+## NS records and glue
+
+The NS records tell resolvers which servers are authoritative for the base domain. Because those servers are named inside the domain they serve (`ns1.cluster.example.com` serves `cluster.example.com`), resolving them would need the very servers they name. So the parent also carries **glue**: an A record for each nameserver name, handed out alongside the delegation.
+
+## Choosing the base domain
+
+### A subdomain (recommended)
+
+Delegate a subdomain such as `cluster.example.com` from the `example.com` zone you already have. The NS and glue records are ordinary records inside the parent zone, created wherever that zone's DNS is hosted. The registrar is not involved and the rest of the domain keeps working.
+
+This is the **only** option for a domain registered with Cloudflare Registrar, which does not let its domains use custom nameservers.
+
+In the Cloudflare dashboard, for the parent zone: DNS, then Records, and add one row for each line the command printed:
+
+| Type | Name | Content | Proxy status |
+|---|---|---|---|
+| NS | `cluster` | `ns1.cluster.example.com` | not applicable |
+| NS | `cluster` | `ns2.cluster.example.com` | not applicable |
+| A | `ns1.cluster` | the IP printed for ns1 | **DNS only** |
+| A | `ns2.cluster` | the IP printed for ns2 | **DNS only** |
+
+The glue A records must be **DNS only** (grey cloud). A proxied record answers with Cloudflare's addresses and resolvers would send your cluster's queries there. Any DNS host works the same way; the records are what matter.
+
+`--cloudflare-token-file` writes the records into the parent zone for you when it is hosted at Cloudflare, then checks DNS. It refuses a registry TLD (a parent with no dot, such as `com`):
 
 ```bash
-sudo orama node install \
-  --join http://<GENESIS_IP> --token <TOKEN> \
-  --vps-ip <IP> \
-  --domain example.com \
-  --base-domain example.com \
-  --nameserver
+orama node dns delegation --env mycluster --cloudflare-token-file /path/to/cloudflare-token
 ```
 
-Key points:
-- Use `http://<IP>` (not HTTPS domain) for `--join` when DNS is not yet configured
-- All nameserver nodes must use the same `--domain` and `--base-domain` values
-- The `--token` is a single-use invite token generated on an existing node with `sudo orama node invite`
-- Genesis node does not need `--join` or `--token`
+### A whole registered domain
 
-## Understanding DNS: NS Records and Glue Records
+Use the registered domain itself (`example.com`) as the base domain. The NS and glue records then live at the registry and are set through your registrar: glue first (called *host records*, *child nameservers* or *personal DNS servers*), then the domain's nameservers switched to the `nsN` names.
 
-Two types of records need to be configured at your registrar. Understanding why both are required is important -- getting this wrong is the most common source of setup failures.
+- **Namecheap:** Domain List, Manage, **Advanced DNS**, *Personal DNS Servers*: add each `nsN.<domain>` with its IP. Then **Domain**, *Nameservers*, **Custom DNS**, and enter the `nsN.<domain>` names.
+- **GoDaddy:** **DNS**, *Hostnames*: add each `nsN` with its IP. Then *Nameservers*, **Change**, *Enter my own nameservers*.
+- **Cloudflare Registrar:** not possible. Use a subdomain.
 
-### NS Records
+Registry changes can take hours to propagate (up to 48); most are visible within 1 to 4 hours. The cluster then answers for the whole domain, because its nameservers are the domain's nameservers. Prefer a subdomain unless the domain is dedicated to Orama.
 
-NS (nameserver) records tell the internet which servers are authoritative for your domain. When anyone queries `example.com`, the DNS system first looks up the NS records to find out where to send the query:
+## Order: delegation before certificates
 
-```
-example.com.    IN    NS    ns1.example.com.
-example.com.    IN    NS    ns2.example.com.
-example.com.    IN    NS    ns3.example.com.
-```
+1. Install the genesis node with `--role nameserver --genesis`.
+2. About 30 seconds later it holds `ns1`. Run `orama node dns delegation --env <env>` and create the records.
+3. Wait until `dig NS <base> @8.8.8.8` shows the delegation. The genesis node's certificate is issued then. Caddy keeps retrying; nothing needs restarting.
+4. Join the other nameservers. The invite pins the genesis certificate, so it must exist.
+5. Run `orama node dns delegation` again and add their records.
 
-This says: "To get DNS answers for `example.com`, ask `ns1.example.com`, `ns2.example.com`, or `ns3.example.com`."
+Full sequence: [Install a cluster from scratch](/docs/operator/install-from-scratch).
 
-### Glue Records
-
-Here is the problem. The nameservers are *under* the domain they serve:
-
-1. A client wants to resolve `app.example.com`
-2. DNS says: "Ask `ns1.example.com` for the answer"
-3. To reach `ns1.example.com`, the client needs its IP address
-4. To get the IP of `ns1.example.com`, the client would need to query `example.com`'s nameservers
-5. But those nameservers *are* `ns1.example.com` -- circular dependency
-
-Glue records break this cycle. They are A records stored at the **registry level** (not in your DNS zone) that provide the IP addresses of your nameservers directly:
-
-```
-ns1.example.com.    IN    A    203.0.113.1
-ns2.example.com.    IN    A    203.0.113.2
-ns3.example.com.    IN    A    203.0.113.3
-```
-
-When a resolver encounters the circular dependency, the registry provides these glue records so the resolver knows the IP addresses without needing to query your nameservers first.
-
-Both NS records and glue records must be configured at your registrar. The NS records delegate authority; the glue records make that delegation resolvable.
-
-## Registrar Configuration
-
-### Namecheap
-
-**Step 1: Add Glue Records**
-
-1. Log into the Namecheap dashboard at https://www.namecheap.com
-2. Navigate to **Domain List**, then click **Manage** next to your domain
-3. Go to the **Advanced DNS** tab
-4. Scroll to the **Personal DNS Servers** section
-5. Click **Add Nameserver** and add each entry:
-
-| Nameserver | IP Address |
-|------------|------------|
-| `ns1.example.com` | Your first node's public IP |
-| `ns2.example.com` | Your second node's public IP |
-| `ns3.example.com` | Your third node's public IP |
-
-**Step 2: Set Custom Nameservers**
-
-1. Go back to the **Domain** tab
-2. Under **Nameservers**, select **Custom DNS**
-3. Enter your three nameserver hostnames:
-   - `ns1.example.com`
-   - `ns2.example.com`
-   - `ns3.example.com`
-4. Click the green checkmark to save
-
-### GoDaddy
-
-**Step 1: Add Glue Records (Host Names)**
-
-1. Log into your GoDaddy account
-2. Go to **My Products**, then open **DNS Management** for your domain
-3. Navigate to **Host Names** (sometimes under an advanced settings section)
-4. Add A records for each nameserver hostname with the corresponding IP
-
-**Step 2: Set Custom Nameservers**
-
-1. Under **Nameservers**, click **Change**
-2. Select **Enter my own nameservers (advanced)**
-3. Add your three nameserver hostnames
-4. Save the changes
-
-### Cloudflare (as Registrar)
-
-1. Log into the Cloudflare dashboard
-2. Go to **Domain Registration** and select your domain
-3. Under **Nameservers**, switch to custom nameservers
-4. Enter your three nameserver hostnames
-
-Cloudflare Registrar handles glue records differently from most registrars. If your custom nameservers are under the same domain, you may need to contact Cloudflare support to have glue records added manually. Check the Cloudflare Registrar documentation for current instructions on setting child nameservers.
-
-## Verification
-
-After configuring your registrar, verify that both NS records and glue records are propagating correctly. Changes are made at the registry level, not at the DNS level, so propagation works differently than normal DNS changes.
-
-### Check NS Records
-
-Query a public resolver to see if your NS delegation is visible:
+## Verify
 
 ```bash
-dig NS example.com @8.8.8.8
+orama node dns delegation --env mycluster    # what it should be
+dig NS cluster.example.com @8.8.8.8           # what the internet sees; the same nsN names
+dig A ns1.cluster.example.com @8.8.8.8        # glue; the IP printed for ns1
+dig @ns1.cluster.example.com test.cluster.example.com        # your nameserver directly
+dig @ns1.cluster.example.com myapp.node-abc123.cluster.example.com   # wildcard
 ```
 
-Expected output should include:
+For global propagation use dnschecker.org or whatsmydns.net. Inside the CLI, `orama monitor dns` shows CoreDNS, Caddy, certificate expiry and resolution tests.
 
-```
-;; ANSWER SECTION:
-example.com.    IN    NS    ns1.example.com.
-example.com.    IN    NS    ns2.example.com.
-example.com.    IN    NS    ns3.example.com.
-```
+## How the records stay correct
 
-### Check Glue Records
+Per-namespace records are round-robin sets: `ns-<namespace>.<base>` (the gateway host), its `*.ns-<namespace>.<base>` wildcard, `turn.ns-<namespace>.<base>`, `turn-<namespace>.<base>` and the stealth TURN host, each with one A record per node serving that role. Every node runs these reconcilers, which are per-node and idempotent, so no leader election is needed:
 
-Verify that the IP addresses for your nameservers are resolvable:
+| Reconciler | When | What it does |
+|---|---|---|
+| Ensure | WebRTC reconcile loop | Inserts this node's own A record if absent and re-enables it when this node's tenant gateway answers `/v1/health` |
+| Withdraw and restore | Every 30 s | After 3 failed health probes soft-disables this node's own `ns-<ns>` rows, never the last active record for a name. Restores after 3 healthy probes |
+| Purge | Every 30 s | Deletes A records of nodes that are non-active **and** silent longer than 15 minutes |
+| Orphan purge | Every 30 s | Deletes per-namespace records whose namespace no longer exists |
 
-```bash
-dig A ns1.example.com @8.8.8.8
-dig A ns2.example.com @8.8.8.8
-dig A ns3.example.com @8.8.8.8
-```
-
-Each query should return the correct public IP address for that node.
-
-### Test CoreDNS Directly
-
-Once glue records are propagating, query your nameservers directly to confirm CoreDNS is responding:
-
-```bash
-# Query ns1 for the base domain
-dig @ns1.example.com example.com
-
-# Test wildcard resolution
-dig @ns1.example.com anything.example.com
-```
-
-### Verify Global Propagation
-
-Use online tools to confirm your changes are visible worldwide:
-
-- [dnschecker.org](https://dnschecker.org) -- Check propagation across global resolvers
-- [whatsmydns.net](https://www.whatsmydns.net) -- Visual propagation map
-
-### Monitor DNS with the CLI
-
-The `orama monitor dns` command checks DNS health across the cluster:
-
-```bash
-# DNS health overview
-orama monitor dns --env devnet
-
-# JSON output
-orama monitor dns --env devnet --json
-```
-
-For deeper SSH-based DNS inspection:
-
-```bash
-orama inspect --env devnet --subsystem dns
-```
-
-## Propagation Times
-
-DNS registrar changes propagate differently than normal DNS record changes because they happen at the registry level (e.g., Verisign for `.com` domains).
-
-| Change | Typical Time | Maximum Time |
-|--------|-------------|-------------|
-| NS record delegation | 1-4 hours | 48 hours |
-| Glue record creation | 1-4 hours | 48 hours |
-| Glue record IP update | 1-4 hours | 48 hours |
-
-Most changes are visible within 1-4 hours. The 48-hour maximum is a worst case that accounts for aggressive caching by some resolvers. If your records are not visible after 4 hours, check your registrar configuration before waiting longer -- a misconfiguration will never propagate no matter how long you wait.
+Two safety properties: the staleness window (15 minutes) is far longer than the 120-second active-to-inactive flip, so a blip never deletes records; and the purge never empties a name, because deleting the last record of a namespace host would make the resolver fall through to the base wildcard and silently send clients to a node that does not host the namespace. A silent misroute is harder to diagnose than an outright failure. If a host is down to one record pointing at a departed node, add a replacement node and it re-advertises itself on the next sweep.
 
 ## Troubleshooting
 
-### CoreDNS Not Responding
+**DNS not resolving.**
 
-If `dig @ns1.example.com example.com` times out or returns no answer:
+1. Is CoreDNS running? `sudo orama node status` on the node.
+2. Logs: `sudo orama node logs coredns -f`.
+3. Is port 53 open (TCP and UDP)? `sudo ufw status`, and your provider's firewall.
+4. Test locally: `dig @localhost <base-domain>`.
 
-1. **Verify CoreDNS is running on the node:**
+**Glue not propagating.** For a whole registered domain, glue is stored at the registry and can take up to 48 hours; confirm at your registrar it saved. For a subdomain, glue is an ordinary A record in the parent zone; check it is not proxied. A slot does not move because a heartbeat was missed. It moves when its holder is removed with `orama node remove`, or when that node's public address changes. If a glue record names an address that no longer answers, run `orama node dns delegation --env <env>` and update the parent zone.
 
-   ```bash
-   sudo orama node status
-   ```
-
-   Look for the CoreDNS service in the output. It should show as `active`.
-
-2. **Check CoreDNS logs for errors:**
-
-   ```bash
-   sudo journalctl -u coredns -n 50
-   ```
-
-   Common issues: RQLite connection failures, port 53 already in use (systemd-resolved conflict), Corefile syntax errors.
-
-3. **Test locally on the node:**
-
-   ```bash
-   dig @localhost example.com
-   ```
-
-   If this works but external queries fail, the issue is firewall-related (see Security section below).
-
-4. **Verify port 53 is not blocked by systemd-resolved:**
-
-   On Ubuntu, `systemd-resolved` listens on `127.0.0.53:53` by default. The Orama installer disables this automatically, but if it was re-enabled:
-
-   ```bash
-   sudo systemctl status systemd-resolved
-   sudo ss -tlnp | grep ':53'
-   ```
-
-5. **Run the node doctor:**
-
-   ```bash
-   sudo orama node doctor
-   ```
-
-### Glue Records Not Propagating
-
-- Glue records are stored at the **registry** level, not in your DNS zone. They can take longer to propagate than normal DNS changes.
-- Verify at your registrar dashboard that the glue records were saved correctly. Some registrars show a confirmation or pending status.
-- Some registrars require the domain to be actively using their default nameservers before allowing glue record creation. Create the glue records first, then switch to custom nameservers.
-- If using a less common TLD, the registry may have different propagation characteristics.
-
-### Wrong IPs in Glue Records
-
-If your node IPs changed after initial setup:
-
-1. Update the glue records at your registrar with the new IP addresses
-2. Wait for propagation (1-4 hours typical)
-3. Verify with `dig A ns1.example.com @8.8.8.8`
-
-The Orama node's heartbeat system will automatically update the internal DNS records (the A records in RQLite) when a node's IP changes. But glue records at the registrar must be updated manually -- there is no API for this on most registrars.
-
-### SERVFAIL Errors
-
-SERVFAIL from your nameservers usually indicates a CoreDNS configuration issue rather than a registrar issue:
-
-1. Check the Corefile at `/etc/coredns/Corefile` for syntax errors
-2. Verify RQLite connectivity -- CoreDNS reads all records from RQLite
-3. Check that the `dns_records` table exists and has the expected SOA and NS records
+**SERVFAIL.** Usually CoreDNS configuration: check the Corefile syntax, RQLite connectivity and firewall rules. A zone with no SOA yet (no slot has glue) answers SERVFAIL rather than inventing one.
 
 ## Security
 
-### Firewall Rules
+Only expose what is needed: `ufw allow 53/tcp` and `ufw allow 53/udp`. The generated Corefile does not enable CoreDNS's `health` or `prometheus` plugins, so there are no extra ports. The recursive block for non-authoritative queries answers only loopback clients (an `acl` allowing `127.0.0.0/8` and `::1`), so the node cannot be used as an open resolver. Consider rate limiting to blunt DNS amplification; that goes in the Corefile.
 
-Nameserver nodes must have port 53 open to the public internet on both TCP and UDP. DNS primarily uses UDP, but zone transfers and large responses use TCP.
-
-```bash
-# Allow DNS queries from anywhere
-sudo ufw allow 53/tcp
-sudo ufw allow 53/udp
-```
-
-Keep internal service ports restricted to the WireGuard overlay network. The installer's UFW setup already does this with a blanket rule:
-
-```bash
-# Allow all traffic from the WireGuard mesh subnet
-sudo ufw allow from 10.0.0.0/24
-```
-
-Do not expose RQLite, Olric, or any other internal service ports to the public internet. All inter-node traffic flows over the WireGuard mesh.
-
-### Rate Limiting
-
-DNS servers are common targets for amplification attacks, where an attacker sends small queries with a spoofed source IP to generate large responses directed at the victim. The custom CoreDNS build used by Orama does not include the external `ratelimit` plugin -- do not add a `ratelimit` directive to the Corefile, as CoreDNS will fail to start with an "Unknown directive" error. If you need per-source query rate limiting, apply it at the firewall level (e.g., iptables/nftables rate rules on port 53) instead.
-
-## How It All Fits Together
-
-Once nameservers are configured and propagating:
-
-1. All three nameserver nodes share the same RQLite cluster, so DNS records are automatically synchronized across all nameservers
-2. When a developer deploys an application, the gateway writes an A record to RQLite
-3. CoreDNS on all three nodes picks up the new record within seconds (5-second refresh interval)
-4. The node's heartbeat system self-heals missing records -- if RQLite is reset or a node restarts, base DNS records (SOA, NS, A, wildcard) are automatically recreated
-5. Stale records for nodes that go offline are automatically cleaned up after 2 minutes of missed heartbeats
-6. ACME DNS-01 challenges are handled automatically -- Caddy requests a TXT record via the gateway's `/v1/internal/acme/present` endpoint, CoreDNS serves it, and Caddy cleans up via `/v1/internal/acme/cleanup`
-
-No manual DNS management is needed after the initial registrar configuration. The system is fully automated and self-healing.
+When running several nameservers: they share one RQLite cluster, so DNS records synchronise automatically; all must use the same `--base-domain`; install them in order, one at a time; and re-run `orama node dns delegation` whenever the set changes.

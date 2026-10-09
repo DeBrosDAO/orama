@@ -1,0 +1,95 @@
+# CLI overview
+
+`orama` is the human interface to an Orama network. One binary, two audiences: **operators** (`orama node`, `inspect`, `rollout`, `invite`, `monitor`) and **tenants** (`orama deploy`, `app`, `function`, `db`, `namespace`). Programs use the [SDK](/docs/developer/sdk-reference) and the [gateway HTTP API](/docs/developer/api-surface) instead. There is no dashboard and no Orama MCP server.
+
+The pages under "CLI commands" in the sidebar are generated from the command tree, so every command and flag in them exists in the binary. This page covers what applies to all of them.
+
+## Install
+
+```bash
+brew install DeBrosDAO/tap/orama
+orama version
+```
+
+Debian and Ubuntu packages and tarballs for macOS and Linux (amd64 and arm64) are on the [releases page](https://github.com/DeBrosDAO/orama/releases):
+
+```bash
+sudo dpkg -i orama_<version>_linux_amd64.deb
+```
+
+From source, in a checkout of the repository:
+
+```bash
+make build
+./core/bin/orama version
+```
+
+Homebrew tracks the latest stable release, which can lag nightly pre-releases by several versions. `orama node upgrade` expects the CLI and the nodes to be on the same version.
+
+## First run: there are no environments
+
+A fresh CLI knows no cluster. Add the one you use:
+
+```bash
+orama env add mycluster https://cluster.example.com
+orama env use mycluster
+orama auth login
+```
+
+The gateway URL must be `https://` with a host (`http://` only for a gateway on this machine). Every command sends its credential there. `orama env add` also takes `--ca-file` to trust a private or staging CA for that environment only. `orama env list` and `orama env current` show what is configured. The list is stored in `~/.orama/environments.json`, and `orama node setup --genesis` adds the cluster it creates.
+
+(The `orama env` help text still says "Available default environments: production, devnet, testnet". A fresh install has none; that sentence is out of date.)
+
+## Which cluster, which namespace, which credential
+
+- `--env <name>` on a command picks an environment for that command; otherwise the active one is used.
+- `orama auth login` signs in to the active environment's gateway. `orama auth login --namespace myapp` signs in to a namespace. Credentials are stored per environment and namespace.
+- `ORAMA_TOKEN` supplies a credential for scripts and CI: either an API key (exchanged for a short-lived token) or a token. `ORAMA_API_URL` points a command at another gateway, for example a namespace's own host (`https://ns-<name>.<domain>`) for the four commands that run on the namespace gateway: `namespace backup`, `restore`, `restore-key` and `rqlite export` or `import`.
+- `ORAMA_TOKEN_FILE` is what a deployed app reads: a file with a token that the platform renews. See [Deployments](/docs/developer/deployments).
+
+## Global flags
+
+| Flag | Meaning |
+|---|---|
+| `--help` | Help for any command |
+| `--json` | Machine-readable JSON instead of tables and status lines |
+
+`--json` works on every command. A command that prints a table emits one JSON object per row, keyed by the column headers lowercased with spaces as underscores (`NODE ID` becomes `node_id`). Commands that forward a gateway reply print it verbatim, so a field the CLI does not render is still there for whatever parses it. Status lines and progress are suppressed under `--json`, so the output is one document.
+
+## Colour and emoji
+
+Colour and emoji appear only on a terminal. Piping gives plain ASCII markers (`OK`, `WARN`, `ERROR`). `NO_COLOR` set to anything, including empty, turns styling off even on a terminal.
+
+## Exit codes
+
+| Code | Meaning | Worth retrying? |
+|---|---|---|
+| `0` | Success | |
+| `1` | Failed, with no more specific classification | Maybe |
+| `2` | The command line was wrong: a missing flag, a bad value, an unknown subcommand | No |
+| `3` | Not authenticated, or the credential is not permitted. Run `orama auth login` | No, until you log in |
+| `4` | The named thing does not exist | No |
+| `5` | The gateway or a node could not be reached | Yes |
+| `6` | The cluster refused because doing it would break an invariant, most often quorum | No, not unchanged |
+| `7` | You declined a confirmation. Nothing happened | |
+
+## RootWallet
+
+Commands that reach a node or sign something (`node setup`, `push`, `rollout`, `build`, `ssh`, `monitor`, `auth login`, anything that signs a chain transaction) ask the RootWallet desktop app's agent. See [The agent](/docs/rootwallet/agent). A command that seems to hang is usually an approval prompt in the app.
+
+## Command families
+
+| Page | Commands |
+|---|---|
+| [orama auth](/docs/developer/cli/auth) | `login`, `logout`, `status`, `whoami`, `list`, `switch`, `sessions`, `approve` |
+| [orama env](/docs/developer/cli/env) | `add`, `current`, `list`, `remove`, `use` |
+| [orama namespace](/docs/developer/cli/namespace) | `create`, `list`, `delete`, `keys`, `backup`, `restore`, `rqlite`, `session-policy`, `enable`, `disable`, `repair` |
+| [orama members, audit](/docs/developer/cli/members) | `members add`, `list`, `remove`, `transfer`; `audit` |
+| [orama deploy, domain](/docs/developer/cli/deploy) | `deploy static`, `nextjs`, `go`, `nodejs`; `domain add`, `verify`, `list`, `remove` |
+| [orama app](/docs/developer/cli/app) | `list`, `get`, `logs`, `stats`, `rollback`, `delete`, `env`, `grants` |
+| [orama db](/docs/developer/cli/db) | `create`, `query`, `list`, `backup`, `backups`, `delete` |
+| [orama function](/docs/developer/cli/function) | `init`, `build`, `deploy`, `invoke`, `logs`, `secrets`, `triggers`, `versions`, `enable`, `disable`, `delete` |
+| [orama chain](/docs/developer/cli/chain), [storage](/docs/developer/cli/storage), [global](/docs/developer/cli/global) | The chain, storage deals, global nodes |
+| [orama node](/docs/developer/cli/node), [cluster and operator](/docs/developer/cli/cluster), [monitor](/docs/developer/cli/monitor) | Running a cluster |
+| [Other commands](/docs/developer/cli/other) | `build`, `push`, `rollout`, `status`, `nodes`, `ssh`, `inspect`, `invite`, `version` |
+| [orama sandbox](/docs/developer/cli/sandbox) | Throwaway test clusters |

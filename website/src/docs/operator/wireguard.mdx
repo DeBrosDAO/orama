@@ -11,7 +11,7 @@ Each Orama node is assigned a private IP address on the `10.0.0.0/24` subnet. Al
 - **WireGuard** (UDP port 51820) -- the encrypted tunnel itself
 - **DNS** (port 53, TCP/UDP) -- only on nameserver nodes
 
-Internal service ports (RQLite on 5001/7001, Olric on 3320/3322, IPFS on 4501/8080/4101, IPFS Cluster on 9094/9096, gateway API on 6001, Caddy HTTPS behind the SNI router on 8443, etc.) are never exposed to the public internet.
+Internal service ports (the index services on 10100 to 10114, tenant namespaces on 10000 to 10099, the SFU on 20000 to 30099, the chain's loopback ports, and so on) are never exposed to the public internet: they listen on the overlay address or loopback. The only exception is TURN, which a namespace with WebRTC opens on purpose ([WebRTC](/docs/developer/webrtc#ports)).
 
 ## Network Topology
 
@@ -32,16 +32,21 @@ The mesh is a full-mesh topology -- every node has a direct WireGuard tunnel to 
 
 This ensures any node can communicate directly with any other node with minimal latency. There is no routing through intermediary nodes.
 
-## How WireGuard is Configured
+## How WireGuard is configured
 
-WireGuard configuration is fully automated during node installation. You do not need to manually configure WireGuard. The `orama node install` command handles everything:
+Configuration is fully automated during node installation. You do not configure WireGuard by hand.
 
-1. **Key generation** -- generates a WireGuard keypair for the node
-2. **Peer registration** -- registers the public key and endpoint with the cluster through the invite-gated join (or OramaOS enrolment), which also returns the peer list
-4. **Interface configuration** -- creates the WireGuard interface with all peer tunnels
-5. **Propagation** -- existing nodes are notified to add the new peer to their configurations
+1. **Key generation.** A WireGuard keypair is generated for the node. The private key never leaves the node.
+2. **Address allocation.** A join allocates the **lowest free** address in `10.0.0.2-254` with a plain insert into the registry's `wireguard_peers` table, retrying only on an address collision. (The older approach of `max+1` could roll past `10.0.0.254` into `10.0.1.x`, outside the `/24` that the firewall and the internal-auth check both accept, and two racing joins could delete each other's row.)
+3. **Peer discovery.** The joining node receives the peer list in the join response and brings up `wg0` with a tunnel to every peer before any database, cache, storage or gateway service starts.
+4. **Self-repair every 60 seconds.** Every node checks its live tunnel configuration against the membership list in the registry. A peer whose endpoint or allowed IPs drifted is re-applied and the result is persisted to `/etc/wireguard/wg0.conf` (mode 0600). A peer whose public IP moved converges within a minute. The sync is additive from the node's own replica if the registry is unreachable, because Raft runs *over* the mesh and fixing the transport must not depend on the transport.
+5. **Removal.** `orama node remove` releases the node's mesh address by id and by address, and the membership reconciler drops a departed node's peer row.
 
-When a new node joins, all existing nodes automatically update their WireGuard configurations to include the new peer. When a node is removed, its peer entry is cleaned up.
+The WireGuard unit (`orama-namespace-wireguard@index`) is **independent of the supervisor** `orama-node`: the mesh comes up at boot on its own, a restart of the node does not tear it down, and its stop is a no-op. Bring the interface down explicitly (`wg-quick down wg0`) only when that is the intent. The distribution's `wg-quick@wg0` unit stays disabled and must not be started.
+
+### No peer-management API
+
+There is no HTTP endpoint for adding, listing or removing mesh peers. A node joins only through the invite-gated join (or OramaOS enrolment), and peers converge through the 60-second self-repair above. The former `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes were removed because they let anyone holding the cluster secret add a machine to the mesh without an invite; an upgraded node answers them with `404`.
 
 ## Key Management
 
@@ -121,7 +126,7 @@ Some VPS providers have an external firewall (security groups, network policies)
 
 **Symptoms:** Peer handshakes stop updating after a VPS IP change.
 
-**Resolution:** If your node's public IP changes, the WireGuard endpoint registered with the cluster becomes stale. The node's heartbeat system will attempt to update peers automatically, but you may need to restart the node:
+**Resolution:** If your node's public IP changes, the WireGuard endpoint registered with the cluster becomes stale. The 60-second peer sync re-applies it and a peer whose public IP moved converges within a minute. If it does not, check what the node believes before touching it (`wg show wg0 dump`, and `sudo orama node logs node --since -10min | grep 'WireGuard peer sync completed'`: the line reports `added`, `updated`, `removed` and `persisted`; `persisted=false` means the mesh is right now but will regress at the next `wg-quick up`), then restart:
 
 ```bash
 sudo orama node restart

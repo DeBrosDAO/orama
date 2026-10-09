@@ -1,8 +1,8 @@
-# Supply
+# Supply and emission
 
-A normal genesis creates no `norama`. A genesis with coins already in accounts is allowed only on a devnet, stagenet, or localnet chain id, and only when emission is started with `--allow-bootstrap-stake`.
+A normal genesis creates no `norama`. A genesis with coins already in accounts is allowed only on a devnet, stagenet or localnet chain id, and only when emission is started with `--allow-bootstrap-stake`.
 
-New coins are minted once per epoch, not once per block.
+New coins are minted once per epoch, not once per block, and only the `x/emission` module can mint `norama`. Every other module that needs new coins (storage, relay, development) asks `x/emission`, which refuses anything above that epoch's ceiling.
 
 ## When an epoch closes
 
@@ -11,40 +11,71 @@ Both conditions have to be true:
 - at least 24 hours of block time have passed since the epoch started
 - at least 14,400 blocks have been produced in the epoch
 
-If blocks arrive faster than that, the epoch still waits for the 24 hours. If blocks arrive slower, the epoch waits for the 14,400th block. Together those floors are about one block every 6 seconds.
+If blocks arrive faster than that, the epoch still waits for the 24 hours. If they arrive slower, it waits for the 14,400th block. A halt does not mint the epochs that were missed: the next close moves the schedule forward by exactly one epoch.
 
-A halt does not mint the epochs that were missed. The next close moves the schedule forward by exactly one epoch.
+On a devnet, stagenet or localnet chain id, `allow_bootstrap_stake` relaxes both floors. The stagenet installer uses a 300 second epoch with 10 blocks; the localnet script uses 30 seconds with 5 blocks. Neither is the production schedule.
 
-On a devnet or stagenet chain id, `--allow-bootstrap-stake` also relaxes those two floors. The stagenet installer uses a 300 second epoch and 10 blocks. That is not the production schedule.
-
-None of the three emission parameters can be changed after genesis. `x/emission` has no message service.
+The three emission parameters (`epoch_duration_seconds` = 86,400, `min_blocks_per_epoch` = 14,400, `allow_bootstrap_stake` = false) are immutable after genesis. `x/emission` has no message that can change the schedule.
 
 ## The schedule
 
 The maximum for one epoch is fixed in code, in whole ORAMA. Halving counts epochs, not calendar days.
 
-| Epochs | Maximum per epoch |
-|---|---|
-| 1–730 | 14,848 ORAMA |
-| 731–1460 | 7,424 ORAMA |
-| 1461–2190 | 3,712 ORAMA |
-| 2191–2920 | 1,856 ORAMA |
-| 2921–3650 | 928 ORAMA |
-| 3651 onward | 274 ORAMA, every epoch, with no end |
+| Epochs | Maximum per epoch | Bracket total |
+|---|---|---|
+| 1 to 730 | 14,848 ORAMA | 10,839,040 |
+| 731 to 1,460 | 7,424 ORAMA | 5,419,520 |
+| 1,461 to 2,190 | 3,712 ORAMA | 2,709,760 |
+| 2,191 to 2,920 | 1,856 ORAMA | 1,354,880 |
+| 2,921 to 3,650 | 928 ORAMA | 677,440 |
+| 3,651 onward | 274 ORAMA, every epoch | about 100,010 per year |
 
-At one epoch a day, the five brackets are 10 years. Their maximum adds up to 21,000,640 ORAMA. After epoch 3650 the chain does not stop minting. Each later epoch may add another 274 ORAMA. There is no terminal supply cap.
+At one epoch a day the five brackets are ten years and their maximum adds up to 21,000,640 ORAMA. After epoch 3,650 the chain keeps minting a tail of 274 ORAMA per epoch. There is no terminal supply cap.
 
-## What is actually created
-
-Each epoch's maximum is split four ways. Only one share is minted.
+## How each epoch's maximum is split
 
 | Share | Percent | What happens |
 |---|---|---|
-| Validators and delegators | 60% | Minted, then paid by `x/power` |
-| Storage | 25% | Written down as a ceiling. Not minted. |
-| Relay | 10% | Written down as a ceiling. Not minted. |
-| Development | 5% | Written down as a ceiling. Not minted. |
+| Validators and delegators | 60% | Minted at epoch close and paid by `x/power` |
+| Storage | 25% | A **ceiling**. Minted only when `x/storage` settles a payment, never beyond the ceiling |
+| Relay | 10% | A **ceiling**. Minted only when `x/relay` pays a relay (see [Relay rewards](/docs/blockchain/relay-rewards)) |
+| Development | 5% | A **ceiling**. Minted only when a governance-approved spend asks for it |
 
-If every one of the 3,650 halving epochs hits its maximum, the chain mints 12,600,384 ORAMA. The other 8,400,256 ORAMA in that 10-year maximum is never created. Ceiling records are kept for 30 epochs and then deleted. No module pays a storage, relay, or development reward.
+Remainders from rounding fold into the validator share. In the first year the per-epoch shares are 8,908.8, 3,712, 1,484.8 and 742.4 ORAMA.
 
-The validator share is paid on voting power, not on raw stake. See [Validators](/docs/blockchain/validators). The coins land in an earnings balance. Earnings can pay a base fee or be bonded. They are not a normal spendable balance. A tip has to come from the public bank balance. See [Fees](/docs/blockchain/fees).
+If every one of the 3,650 halving epochs hits its maximum and every validator share is minted, validators receive 12,600,384 ORAMA. The rest is created only if storage, relay or development spending actually happens, and never above its share. Ceiling records are kept for 30 epochs and then pruned.
+
+The split can move, but only through governance and only within bounds: each share may move at most 10 percentage points from 60/25/10/5, and the four must still sum to 100. The halving table and the tail are not reachable by any message.
+
+## Other ways ORAMA is created
+
+| Source | Where | Bound |
+|---|---|---|
+| Storage service payments and the PRIVATE-deal subsidy | `x/storage` at epoch close | The epoch's storage ceiling |
+| Relay rewards | `x/relay` settlement | The epoch's relay ceiling. No production code calls the settlement yet |
+| Development spend | A passed `x/houses` proposal | The epoch's development ceiling minus what was already minted |
+| Test-network faucet | `MsgFaucet` | Only on a chain id containing `-devnet-`, `-stagenet-` or `-localnet-`. Off by default. Max drip 1,000 ORAMA, 100,000 ORAMA per epoch, 24 hour recipient cooldown |
+| Token factory | `x/token` | Mints only its own `factory/…` denoms. A mint of `norama` is refused |
+
+## The supply identity
+
+The chain checks this relationship (invariant 2):
+
+```
+bank supply = genesis supply
+            + minted for validators
+            + minted for development
+            + minted for storage and relay service
+            + minted by the faucet
+            - burned
+```
+
+Burns that happen in other modules are reconciled in `x/emission`'s EndBlock, so the identity holds even though fees, token creation, nullifiers and deals each burn something.
+
+## Where the coins land
+
+Emission lands in an earnings balance, not a normal spendable one. Earnings can pay a base fee, be bonded, fund a storage deal or pay for a token. They cannot be sent to another user. See [Fees](/docs/blockchain/fees) for how earnings accounts work.
+
+## Queries
+
+`orama chain query emission/…` and `oramad query emission …` expose `params`, `current-epoch`, `schedule-at [epoch]`, `cumulative-minted`, `supply-cap-so-far [epoch]` and `invariants`. See [Reading the chain](/docs/blockchain/reading-the-chain).

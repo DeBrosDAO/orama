@@ -1,337 +1,133 @@
-# Node Setup
+# Installing by hand
 
-This guide walks you through the full process of setting up an Orama node on a fresh VPS — from system requirements through installation, verification, and day-to-day lifecycle management.
+`orama node setup` ([Install a cluster from scratch](/docs/operator/install-from-scratch)) is the normal way. It runs `orama node install` for you over SSH. This page is for when you cannot use it: no RootWallet, or a server you reach some other way. It does the same thing with more steps.
 
-## Quick Start
+## What `orama node install` does
 
-The fastest way to set up a node is with `orama node setup` from your local machine:
+On the machine itself (or from your computer with `--remote`), it:
 
-```bash
-# First node (creates cluster). --password reads the vault login from
-# `rw vault add <IP>` (username root). It does not take the password.
-orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet --base-domain orama-devnet.network --role nameserver --genesis
+1. Checks the machine: root, Linux, a supported OS (Debian 12/13, Ubuntu 22.04/24.04/26.04), architecture (amd64, arm64, arm), at least 2 CPU cores, 2 GB RAM, 10 GB free disk.
+2. Verifies the build archive extracted at `/opt/orama` against the node's trust anchor.
+3. Generates a WireGuard key and sets up the mesh to every peer.
+4. Configures and starts RQLite, Olric, IPFS and IPFS Cluster, the vault guardian and the gateway.
+5. With `--nameserver`: CoreDNS and Caddy.
+6. Installs the Tor client from the Tor Project's apt repository (client only).
+7. Writes the systemd units, which the supervisor `orama-node` runs in dependency order.
+8. Configures the `ufw` firewall (unless `--skip-firewall`) and system hardening.
+9. Registers the node with the cluster.
+10. Verifies the node before printing success: supervisor active and not crash-looping, RQLite `Leader` or `Follower`, `wg0` up, gateway `/health` 200. It exits non-zero and names the first component that did not come up.
 
-# Authenticate with the new cluster
-orama auth login
+## Prerequisites
 
-# Add more nodes (invite token handled automatically)
-orama node setup --ip <IP> --password --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet --base-domain orama-devnet.network
+The signed archive from [Build and sign](/docs/operator/build-and-sign) extracted at `/opt/orama` on the server, or passed with `--archive` together with `--remote`. A genesis install also needs `--operator-wallet`, the address that signed the archive. It becomes the only signer in `/etc/orama/archive-signers`, written **before** the archive is verified.
 
-# Key-only image (no password). Do not pass --password.
-orama node setup --ip <IP> --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
-  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
-  --env devnet --base-domain orama-devnet.network
-```
-
-This handles everything: SSH key management (via RootWallet), binary upload, invite tokens, and installation. See [Getting Started](/docs/operator/getting-started) for the full walkthrough.
-
-> **Tip:** After installation, manage your nodes with: `orama nodes`, `orama ssh`, `orama status`, `orama rollout`, `orama push`. See [Node Management](/docs/operator/node-management) for details.
-
-## Manual Setup
-
-The sections below describe the manual installation process for advanced users or environments where `orama node setup` is not suitable.
-
-## System Requirements
-
-Provision a VPS with the following minimum specifications:
-
-| Resource | Minimum (enforced by installer) | Recommended |
-|----------|---------|-------------|
-| CPU | 2 vCPUs | 4 vCPUs (dedicated) |
-| RAM | 2 GB | 8 GB |
-| Storage | 10 GB free | 160 GB NVMe |
-| OS | Ubuntu 22.04 LTS | Ubuntu 22.04 LTS (clean install) |
-| Network | Public static IPv4 | 1 Gbps, unmetered |
-
-### Required Ports
-
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 22 | TCP | SSH access |
-| 80 | TCP | ACME challenges / HTTP-to-HTTPS redirect |
-| 443 | TCP | HTTPS (external traffic via Caddy) |
-| 51820 | UDP | WireGuard mesh tunnel |
-
-All other inter-node communication travels over the WireGuard overlay (`10.0.0.x` subnet) and does not require public port exposure. The Tor client's SOCKS5 proxy binds to `127.0.0.1:9050` and is never exposed publicly.
-
-## OS Preparation
-
-Start with a clean Ubuntu 22.04 installation. Update the system and install essential packages:
-
-```bash
-apt update && apt upgrade -y
-apt install -y curl wget unzip jq
-```
-
-## Installing the Orama Binary
-
-There is no download URL for the node binary. `orama node setup` and `orama push` put a signed archive at `/opt/orama`. The node installs from that archive. A machine with no archive cannot install.
-
-## Node Installation
-
-The `orama node install` command configures your VPS as a fully operational Orama node. It must be run as root (or with `sudo`). The behavior differs depending on whether you are bootstrapping a new network (genesis node) or joining an existing one.
-
-### Genesis Node
-
-A genesis node is the first node in an environment. It initializes the Raft cluster, creates the WireGuard mesh, and becomes the initial RQLite leader.
+## Genesis node
 
 ```bash
 sudo orama node install \
   --vps-ip 203.0.113.10 \
-  --base-domain orama-devnet.network \
-  --environment devnet \
-  --operator-wallet 0xYourWallet
+  --domain cluster.example.com \
+  --base-domain cluster.example.com \
+  --operator-wallet 0xYourWallet \
+  --nameserver
 ```
 
-`--operator-wallet` is required on a genesis install. It is the wallet that signed the archive, and it becomes the node's archive trust anchor.
+Then follow [DNS and nameservers](/docs/operator/nameserver) to delegate the domain.
 
-When no `--join` flag is provided, the node bootstraps itself as a standalone cluster. Additional nodes can then join it.
+## Joining node
 
-### Joining an Existing Node
+Mint an invite first, from your computer or from a node already in the cluster:
 
-To add a node to an existing cluster, use `--join` with the HTTPS URL of any current cluster member, along with a valid invite token:
+```bash
+orama invite --env mycluster                 # from your computer
+sudo orama node invite --expiry 24h          # on an existing node
+```
+
+Then on the new server:
 
 ```bash
 sudo orama node install \
-  --vps-ip 203.0.113.20 \
-  --base-domain orama-devnet.network \
-  --join https://orama-devnet.network \
-  --token eyJhbGciOi...
+  --token <INVITE> \
+  --vps-ip 203.0.113.11 \
+  --domain cluster.example.com \
+  --base-domain cluster.example.com \
+  --nameserver
 ```
 
-The join process registers the new node with the cluster, exchanges WireGuard keys, and starts all services in the correct dependency order.
+A worker is the same without `--nameserver` and without `--domain`; the domain is generated.
 
-### What Install Does
-
-1. Configures WireGuard keys and the mesh interface
-2. Sets up UFW firewall rules (unless `--skip-firewall` is passed)
-3. Runs system resource checks for RAM and CPU (unless `--skip-checks` is passed)
-4. Registers the node with the network (or bootstraps a new cluster)
-5. Creates systemd service units for all components
-6. Starts the service stack in dependency order
-
-### Install Flag Reference
-
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `--vps-ip` | string | *required* | Public IPv4 address of the VPS |
-| `--base-domain` | string | prompted on a terminal | Base domain used for routing (e.g., `orama-devnet.network`). Required when there is no terminal to ask. |
-| `--domain` | string | auto-generated | Domain for this node's HTTPS endpoint |
-| `--join` | string | — | HTTPS URL of an existing node to join |
-| `--token` | string | — | Invite token for joining an existing cluster |
-| `--nameserver` | bool | `false` | Configure this node as a nameserver (installs CoreDNS + Caddy) |
-| `--force` | bool | `false` | Force reconfiguration even if already installed |
-| `--dry-run` | bool | `false` | Show what changes would be made without applying them |
-| `--skip-checks` | bool | `false` | Skip system resource checks (RAM/CPU) |
-| `--skip-firewall` | bool | `false` | Skip UFW firewall setup |
-
-## Tor Client
-
-Every Orama node installs a [Tor](https://www.torproject.org) client for anonymized outbound requests (`/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` function host call). It is client only — no relay, no exit, no inbound port — and there is no flag for it: `orama node install` and `orama node upgrade` always set it up.
-
-- Installed from the Tor Project's repository (`deb.torproject.org`), with the archive key pinned by fingerprint. The OS must be one the Tor Project publishes for: Ubuntu 22.04 (`jammy`), 24.04 (`noble`), 26.04 (`resolute`), Debian 12 (`bookworm`) or 13 (`trixie`).
-- Runs as `orama-namespace-tor@index` (user `debian-tor`), with its config in `/etc/orama/tor/torrc` and its state in `/var/lib/orama-tor`. The package's own `tor.service` is masked.
-- The SOCKS5 proxy binds to `127.0.0.1:9050` and is never reachable off-host.
-
-Nodes installed before Tor replaced the Anyone network have Anyone removed on their next upgrade — units, the `anon` package, its apt source and all of `/etc/anon`, `/var/lib/anon` and `/var/log/anon`. The old `--anyone-*` flags now fail with an error explaining that Tor is installed automatically.
-
-## Service Stack
-
-The Orama node runs the following services, managed by systemd:
-
-| Service | Purpose | Dependency |
-|---------|---------|------------|
-| WireGuard | Mesh network overlay | None (starts first) |
-| RQLite | Distributed SQLite database | WireGuard |
-| Olric | Distributed cache | RQLite |
-| Gateway | API routing and reverse proxy | Olric |
-
-Services must start in this exact order. The `orama` CLI handles dependency ordering automatically. Never start services manually with raw `systemctl` commands — the CLI includes quorum checks, port verification, and health validation that `systemctl` bypasses.
-
-## Node Lifecycle
-
-Once installed, use the following commands to manage your node.
-
-### Start, Stop, and Restart
+To drive it from your own machine over SSH instead:
 
 ```bash
-# Start all services in dependency order
-orama node start
-
-# Stop all services and disable auto-start
-orama node stop
-
-# Force stop (skips graceful shutdown checks)
-orama node stop --force
-
-# Restart all services
-orama node restart
-
-# Force restart
-orama node restart --force
+orama node install --remote --token <INVITE> \
+  --vps-ip 203.0.113.11 --base-domain cluster.example.com \
+  --archive $ARCHIVE --ssh-user root --host-key SHA256:…
 ```
 
-### Status and Diagnostics
+`--remote` is required to install a machine other than the one you are on. It used to be inferred from whether you used sudo, so the same command line meant two different things on two different machines.
+
+## Flag reference
+
+| Flag | Meaning |
+|---|---|
+| `--vps-ip` | Public IP of this server. Required |
+| `--base-domain` | Base domain for deployment routing |
+| `--domain` | Domain for HTTPS. Generated for non-nameservers if omitted |
+| `--nameserver` | Run CoreDNS and Caddy; make this a nameserver |
+| `--operator-wallet` | Genesis only: the archive signer. Required on genesis |
+| `--token` | The invite. It carries the gateway to join and the certificate to pin |
+| `--join`, `--join-sni`, `--ca-fingerprint` | Overrides for what the invite already carries |
+| `--expect-archive-signers` | When joining: the signers the cluster must send; checked before the join |
+| `--acme-ca` | `letsencrypt`, `letsencrypt-staging` or an https URL |
+| `--archive` | With `--remote`: the archive to upload, verified here first |
+| `--remote`, `--ssh-user`, `--host-key` | Install the machine at `--vps-ip` over SSH |
+| `--environment` | Environment name |
+| `--skip-checks` | Skip the minimum RAM and CPU checks. Not recommended |
+| `--skip-firewall` | Do not configure `ufw` (you manage your own firewall) |
+| `--dry-run` | Show what would be done, change nothing |
+| `--force` | Force reconfiguration even if installed |
+| `--peers`, `--ipfs-peer`, `--ipfs-addrs`, `--ipfs-cluster-peer`, `--ipfs-cluster-addrs` | Advanced: name existing peers explicitly |
+
+## What the installer leaves on the machine
+
+| Path | What |
+|---|---|
+| `/opt/orama/` | Extracted archive: binaries, systemd templates |
+| `/opt/orama/.orama/configs/node.yaml` | The node's configuration |
+| `/opt/orama/.orama/secrets/` | Cluster secrets (cluster secret, RQLite password, API key HMAC secret, Olric key) |
+| `/etc/orama/archive-signers` | The archive trust anchor |
+| `/etc/orama/tor/torrc` | Tor client configuration |
+| `/etc/coredns/Corefile` | CoreDNS (nameservers) |
+
+## Service stack
+
+The supervisor `orama-node` starts these as components with declared dependencies and keeps them converged. The dependency that matters: RQLite, then Olric, then the gateway. See [Node process model](/docs/architecture/node-process-model).
+
+| Service | Systemd unit |
+|---|---|
+| Supervisor | `orama-node` |
+| Registry database | `orama-namespace-rqlite@index` |
+| Cache | `orama-namespace-olric@index` |
+| Gateway | `orama-namespace-gateway@index` |
+| Tor client | `orama-namespace-tor@index` |
+| CoreDNS (nameservers) | `orama-namespace-coredns@nameserver` |
+| Caddy | `orama-namespace-caddy@index` |
+| Storage | `orama-namespace-ipfs@index`, `orama-namespace-ipfs-cluster@index`, and a garbage-collection timer `orama-namespace-ipfs-gc@index` |
+| Other index services | `orama-namespace-vault@index` (vault guardian), `orama-namespace-pubsub@index`, `orama-namespace-ntfy@index` (push), `orama-namespace-wireguard@index` |
+| Each tenant namespace | `orama-namespace-{rqlite,olric,gateway}@<name>`, plus `sfu` and `turn` if WebRTC is enabled |
+
+## Day to day on the node
+
+Use the `orama` CLI. Do not use raw `systemctl` on a node: the CLI handles dependency ordering, quorum checks and port availability.
 
 ```bash
-# Show current service status
-orama node status
-
-# Run full diagnostics (checks services, ports, connectivity, Raft state)
-orama node doctor
-
-# Export health data as JSON (useful for monitoring integrations)
-orama node report
-
-# Export health data in JSON format
-orama node report --json
+sudo orama node status
+sudo orama node doctor            # automated diagnostics: services, ports, connectivity, Raft state
+sudo orama node logs <service> -f
+sudo orama node report            # health data as JSON
+sudo orama node restart           # all services, in order, with quorum safety
+sudo orama node stop
+sudo orama node start
 ```
 
-### Logs
-
-Stream logs from a specific service using shorthand aliases:
-
-```bash
-orama node logs node       # Supervisor logs
-orama node logs gateway    # Index gateway (orama-namespace-gateway@index)
-orama node logs ipfs       # IPFS daemon logs
-orama node logs cluster    # IPFS Cluster logs
-orama node logs olric      # Olric cache logs
-orama node logs rqlite     # Index RQLite (orama-namespace-rqlite@index)
-```
-
-### Invite Tokens
-
-Generate invite tokens so other operators can join the cluster through your node:
-
-```bash
-# Generate a token with default 1-hour expiry
-orama node invite
-
-# Generate a token with custom expiry
-orama node invite --expiry 24h
-```
-
-Share the generated token along with your node's HTTPS URL. The joining operator will use both with `--join` and `--token`.
-
-### Upgrades
-
-Upgrade the Orama binaries on a node. The upgrade command installs from the signed archive already staged on the node by `orama push` or `orama rollout`. It does not compile a source tree, and it does not download anything itself. It can restart services.
-
-```bash
-# Upgrade binary only (no restart)
-orama node upgrade
-
-# Upgrade and restart services
-orama node upgrade --restart
-
-# Force upgrade (skip confirmation prompts)
-orama node upgrade --force
-
-# Skip resource checks during upgrade
-orama node upgrade --skip-checks
-```
-
-The upgrade command also accepts `--env`, `--node`, and `--delay` for targeting specific environments and nodes. Every upgrade also upgrades the Tor client from `deb.torproject.org` before the node's services stop, and on a node that still has it removes the Anyone network.
-
-### Rolling Upgrades
-
-For operators managing multiple nodes, the rollout command automates the full build, push, and rolling upgrade process:
-
-```bash
-# Build, push, print the plan, and restart. Nothing restarts without --yes.
-orama node rollout --env devnet --yes
-
-# Roll out an archive you already built
-orama node rollout --env devnet --no-build --archive /tmp/orama-<version>-linux-amd64.tar.gz --yes
-```
-
-`--delay` defaults to 300 seconds. It is how long a node has to rejoin before the rollout stops, not a pause between nodes.
-
-### Pushing Binaries
-
-Push a binary archive to nodes without performing a restart:
-
-```bash
-orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
-
-orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 203.0.113.10
-```
-
-`--archive` is required. The upload comes from this computer. `--direct` is ignored.
-
-### Uninstall
-
-Remove all Orama services from a node:
-
-```bash
-orama node uninstall
-```
-
-This stops and disables all services (including namespace services) and removes their systemd unit files. Configuration and data are preserved in `/opt/orama/.orama` — to remove them as well, run `rm -rf /opt/orama/.orama` afterwards. Uninstall does not tear down the WireGuard interface or deregister the node from the cluster.
-
-## Recovery
-
-### Clean
-
-Wipe data and services from nodes. Useful for resetting a node to a clean state.
-
-```bash
-orama node wipe --env devnet --node 203.0.113.10
-
-orama node wipe --env devnet
-
-# Also remove shared binaries (rqlited, ipfs, caddy, and the Tor package)
-orama node wipe --env devnet --nuclear
-
-orama node wipe --env devnet --force
-```
-
-`orama node clean` is the old name. It now runs `wipe`. `--nuclear` removes those shared binaries. It does not delete the node's configuration by itself.
-
-### Raft Recovery
-
-If the RQLite cluster enters a split-brain state (multiple leaders, or no leader with quorum lost), use the recovery command:
-
-```bash
-# Recover Raft consensus by specifying the intended leader
-orama node recover-raft --env mainnet --leader 203.0.113.10
-
-# Force recovery (skip safety checks)
-orama node recover-raft --env mainnet --leader 203.0.113.10 --force
-```
-
-Raft recovery is a disruptive operation. It forces a single node to become the leader and re-bootstraps consensus. Only use this when the cluster cannot elect a leader on its own.
-
-## Verifying the Setup
-
-After installation, verify your node is healthy:
-
-```bash
-# Check all services are running
-orama node status
-
-# Run full diagnostics
-orama node doctor
-
-# Check the node's health report
-orama node report
-```
-
-| Check | Expected State |
-|-------|---------------|
-| All services | `active (running)` |
-| RQLite state | `Leader` or `Follower` |
-| WireGuard peers | All connected, recent handshakes |
-| Raft log index | In sync with other nodes |
-
-## Post-Setup
-
-Once your node is running:
-
-- Set up [monitoring](/docs/operator/monitoring) to track health and performance
-- Review the [upgrade process](/docs/operator/upgrades) to stay current with releases
-- Understand [WireGuard networking](/docs/operator/wireguard) and the mesh topology
-- Learn about [nameserver configuration](/docs/operator/nameserver) if your node serves DNS
+Restart only one node at a time on a cluster; see [Upgrades](/docs/operator/upgrades).

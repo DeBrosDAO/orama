@@ -1,0 +1,31 @@
+# VPN
+
+**There is no Orama VPN today.** Nothing in the code lets a user route their own traffic through Orama nodes, and there is no VPN client, endpoint, SDK call or price. This page exists so you can tell what is real from what is only a name.
+
+## What the word "VPN" means in the codebase
+
+- **WireGuard mesh.** Every cluster connects its nodes with WireGuard (`10.0.0.0/24`). That is internal infrastructure, not a product. See [WireGuard](/docs/operator/wireguard).
+- **`chain/x/vpnlaunch`.** A launch gate: a pure function that answers "could a VPN beta open?" It has no keeper, messages, genesis or wiring, and nothing imports it. A test pins it as unwired on the live chain. The gate is open only when all of these hold, measured over at least 30 days:
+
+| Condition | Threshold |
+|---|---|
+| Observation days | at least 30 |
+| Directory authorities | at least 5, with an independent majority |
+| Relays | at least 100 |
+| Relay operators | at least 40 |
+| Exits | at least 15, in at least 5 countries |
+| Largest operator's share of relay weight | at most 10% |
+
+The gate answers a question. Opening a beta would be a separate act.
+
+- **VPN pricing** is off-chain and has no genesis parameter.
+
+## What the gate measures
+
+Every threshold is about how many independent relays, exits and operators exist, and how evenly they share the load. Those numbers come from the private Tor network ([Tor](/docs/privacy/tor)) and the relay registry ([Relay rewards](/docs/blockchain/relay-rewards)). Neither exists in running form today, so the gate cannot open.
+
+## What to use instead today
+
+- To make a request without revealing a server's address to a destination: the [anonymity proxy](/docs/privacy/tor).
+- To download a stored object without revealing your address to the storing node: [relayed fetch](/docs/privacy/relayed-fetch).
+- To make calls that look like HTTPS: [stealth TURN](/docs/privacy/stealth-turn).

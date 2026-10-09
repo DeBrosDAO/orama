@@ -357,3 +357,19 @@ For full cluster-level backup and restore of the RQLite database:
 | `createTable` | `createTable(schema)` | Create a table from DDL SQL |
 | `dropTable` | `dropTable(table)` | Drop a table |
 | `getSchema` | `getSchema()` | Get the database schema |
+
+
+---
+
+## What tenant SQL may not do
+
+Your namespace's RQLite sits behind a SQL filter (`core/pkg/sqlguard`), applied to the raw-database routes (`/v1/rqlite/exec`, `query`, `transaction`, `select`, `find`, `create-table`, `drop-table`) and to every database host function a serverless function calls. It exists because the platform's own tables once shared a schema with yours, and a statement could `UPDATE` a grant. They are now kept in the cluster registry, where your SQL cannot name them, and the filter closes the direct path in depth.
+
+- A statement that names a reserved platform table (keys, grants, sessions, nonces, operators, WireGuard peers, function secrets, deployments and their domains and history, the function and trigger tables, `namespaces`, `ipfs_content_ownership`, and similar) is refused with `403` and `{"code": "SQL_NOT_ALLOWED"}`, whether the name is bare, quoted, bracketed, backticked, schema-qualified, or a string literal. A function that needs such text as data passes it as a bound argument.
+- `ATTACH`, `DETACH`, `PRAGMA`, `VACUUM` and `CREATE TRIGGER` are refused outright, and one call runs one statement.
+- Some reserved names are generic. A table called `functions` in your own schema is refused too.
+- `/v1/rqlite/export` and `/v1/rqlite/import` (the whole-database snapshot and load) are the owner's alone, and an imported image is checked first ([Backups](/docs/developer/backups#the-database-image-is-checked-first)).
+- On a namespace gateway nobody is exempt, owner and admin included: an admin who could write `api_keys` directly would bypass the key-minting path and its scope checks.
+- A function reaches only its own namespace's database. On the cluster gateway no function gets a database at all.
+
+If you hit `SQL_NOT_ALLOWED` on a table you created yourself, rename it.
