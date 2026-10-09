@@ -325,10 +325,13 @@ whole zone, so an index rqlite with no leader took every name in the fleet
 offline — including the names an operator needs to reach the machines and fix
 it.
 
-NXDOMAIN is cached for 30 seconds and never served stale. Without the cache a
+A negative answer — NXDOMAIN for a name that does not exist, NODATA (NOERROR,
+empty, with the zone's SOA) for a name that exists without a record of the type
+asked — is cached for 30 seconds and never served stale. Without the cache a
 flood of random subdomains was a query amplifier pointed straight at index
 rqlite; without the "never stale" rule, a name that appeared moments later would
-stay invisible for a day.
+stay invisible for a day. A name that owns any record, or that a wildcard covers,
+is never NXDOMAIN: resolvers cache an NXDOMAIN for the whole name (RFC 8020).
 
 Wildcard lookup walks outward — `*.b.c.d.`, `*.c.d.`, `*.d.` — most specific
 first, stopping at the edge of the zone. It used to rebuild only the first three

@@ -41,40 +41,25 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 			zap.Uint16("qtype", state.QType()),
 			zap.Bool("negative", negative),
 		)
-		// SetReply resets the rcode to success, so a cached NXDOMAIN has to
-		// have it put back — otherwise it is served as an empty NOERROR, which
-		// is a different answer and one resolvers cache differently.
+		// SetReply resets the rcode to success, so a cached negative answer
+		// has to have its own put back — otherwise an NXDOMAIN is served as
+		// an empty NOERROR, which is a different answer and one resolvers
+		// cache differently.
+		rcode := cachedMsg.Rcode
 		cachedMsg.SetReply(r)
 		if negative {
-			cachedMsg.Rcode = dns.RcodeNameError
+			cachedMsg.Rcode = rcode
 			w.WriteMsg(cachedMsg)
-			return dns.RcodeNameError, nil
+			return rcode, nil
 		}
 		w.WriteMsg(cachedMsg)
 		return dns.RcodeSuccess, nil
 	}
 
 	// Query RQLite backend
-	records, err := p.backend.Query(ctx, state.Name(), state.QType())
+	records, exists, err := p.lookup(ctx, state.Name(), state.QType())
 	if err != nil {
 		return p.serveStaleOrFail(w, r, &state, err)
-	}
-
-	// If no exact match, walk the wildcards outward.
-	if len(records) == 0 {
-		for _, wildcardName := range p.wildcardCandidates(state.Name()) {
-			if !p.isOurZone(wildcardName) {
-				// Past the edge of what this server is authoritative for.
-				break
-			}
-			records, err = p.backend.Query(ctx, wildcardName, state.QType())
-			if err != nil {
-				return p.serveStaleOrFail(w, r, &state, err)
-			}
-			if len(records) > 0 {
-				break
-			}
-		}
 	}
 
 	// No records found
@@ -83,7 +68,7 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 			zap.String("qname", state.Name()),
 			zap.Uint16("qtype", state.QType()),
 		)
-		return p.handleNXDomain(ctx, w, r, &state)
+		return p.handleNegative(ctx, w, r, &state, exists)
 	}
 
 	// Build response
@@ -103,6 +88,42 @@ func (p *RQLitePlugin) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dn
 
 	w.WriteMsg(msg)
 	return dns.RcodeSuccess, nil
+}
+
+// lookup is the records qname owns of qtype, and whether the name exists when
+// it owns none: it owns records of another type, or a wildcard that stands in
+// for it does. A name that owns any record is answered from its own records
+// only; a wildcard stands in only for a name that owns none (RFC 4592), the
+// nearest one first. Whatever the name, a miss costs the typed query and one
+// query for the name and all its wildcard candidates together.
+func (p *RQLitePlugin) lookup(ctx context.Context, qname string, qtype uint16) (records []*DNSRecord, exists bool, err error) {
+	records, err = p.backend.Query(ctx, qname, qtype)
+	if err != nil || len(records) > 0 {
+		return records, true, err
+	}
+	owners := []string{qname}
+	for _, wildcardName := range p.wildcardCandidates(qname) {
+		if !p.isOurZone(wildcardName) {
+			// Past the edge of what this server is authoritative for.
+			break
+		}
+		owners = append(owners, wildcardName)
+	}
+	found, owned, err := p.backend.Owners(ctx, owners, qtype)
+	if err != nil {
+		return nil, false, err
+	}
+	for i, owner := range owners {
+		// The name itself never answers here (the typed query above found
+		// nothing); owning any record makes it NODATA.
+		if i > 0 && len(found[owner]) > 0 {
+			return found[owner], true, nil
+		}
+		if owned[owner] {
+			return nil, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // isOurZone checks if the query is for one of our configured zones
@@ -189,8 +210,16 @@ func (p *RQLitePlugin) buildRR(qname string, record *DNSRecord) dns.RR {
 	}
 }
 
-// handleNXDomain answers a name with no records: NXDOMAIN, with the zone's
-// own SOA in the authority section for negative caching (RFC 2308).
+// handleNegative answers a query that found no record of its type, with the
+// zone's own SOA in the authority section for negative caching (RFC 2308):
+// NOERROR with no answer (NODATA) when the name exists with records of other
+// types, NXDOMAIN when it does not exist at all.
+//
+// The two are not interchangeable. A resolver that gets NXDOMAIN for a
+// name's AAAA concludes the name does not exist and caches that for every
+// type (RFC 8020), so an AAAA query for a name with only A records made the
+// name unresolvable at the resolvers that do — "no such host" for the next
+// minutes, from a name that was being served.
 //
 // The SOA is the one the zone carries in dns_records — the nameserver
 // component (pkg/node/dns_nameservers.go) writes it with the lowest glued
@@ -198,19 +227,22 @@ func (p *RQLitePlugin) buildRR(qname string, record *DNSRecord) dns.RR {
 // whatever the zone, so a cluster whose ns1 slot was released, or a query in
 // a second configured zone, got a negative answer signed by a nameserver that
 // is not the zone's.
-func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, state *request.Request) (int, error) {
-	zone := p.zoneOf(state.Name())
-	soa, err := p.zoneSOA(ctx, zone)
+func (p *RQLitePlugin) handleNegative(ctx context.Context, w dns.ResponseWriter, r *dns.Msg, state *request.Request, exists bool) (int, error) {
+	soa, err := p.zoneSOA(ctx, p.zoneOf(state.Name()))
 	if err != nil {
 		return p.serveStaleOrFail(w, r, state, err)
 	}
 
 	msg := new(dns.Msg)
-	msg.SetRcode(r, dns.RcodeNameError)
+	rcode := dns.RcodeNameError
+	if exists {
+		rcode = dns.RcodeSuccess
+	}
+	msg.SetRcode(r, rcode)
 	msg.Authoritative = true
 	msg.Ns = append(msg.Ns, soa)
 
-	// Cache the NXDOMAIN, briefly.
+	// Cache the negative answer, briefly.
 	//
 	// Without this a flood of random subdomains is a query amplifier pointed
 	// straight at index rqlite: every one missed the cache and became a
@@ -221,7 +253,7 @@ func (p *RQLitePlugin) handleNXDomain(ctx context.Context, w dns.ResponseWriter,
 	p.cache.SetNegative(state.Name(), state.QType(), msg)
 
 	w.WriteMsg(msg)
-	return dns.RcodeNameError, nil
+	return rcode, nil
 }
 
 // zoneOf is the most specific configured zone qname is in.

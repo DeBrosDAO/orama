@@ -1,9 +1,9 @@
 # The cluster's own DNS and TLS as the internet meets them: every nameserver
 # asked directly for SOA, NS, glue, apex and wildcard records (TTLs, the
 # outward wildcard walk, case, UDP and TCP, no open recursion), namespace and
-# TURN host records, the NXDOMAIN cache (authority SOA, never stale, gone in
-# 30s) driven through real signed ACME present/cleanup calls made on a node,
-# every refusal of those endpoints (unsigned, foreign key, stale or replayed
+# TURN host records, NODATA for a type a served name lacks, the negative cache
+# (authority SOA, never stale, gone in 30s) driven through real signed ACME
+# present/cleanup calls made on a node, every refusal of those endpoints (unsigned, foreign key, stale or replayed
 # stamp, a signed call sent twice, out-of-zone or malformed record), the base and wildcard certificates
 # on every node (staging on a provisioned fleet, production on stagenet), one
 # certificate for the whole cluster through the shared store, the store's
@@ -38,6 +38,7 @@ covers:
   claims:
     - "docs/NAMESERVER_SETUP.md#nameserver-slots: every glued slot is published as NS; the SOA names the lowest glued slot"
     - "docs/NAMESERVER_SETUP.md#nameserver-slots: a negative answer carries the zone's own SOA in its authority section"
+    - "docs/NAMESERVER_SETUP.md#nameserver-slots: a name that exists without a record of the type asked is NOERROR with the SOA (NODATA), never NXDOMAIN"
     - "docs/NAMESERVER_SETUP.md#security-considerations: recursion answers loopback only; the node is not an open resolver"
     - "docs/NAMESERVER_SETUP.md#record-lifecycle-and-self-healing: ns-<ns>, its wildcard, turn.ns-<ns> and turn-<ns> name the nodes serving each role"
     - "docs/NAMESERVER_SETUP.md#seeing-which-address-holds-which-slot: orama node dns delegation prints the records the zone publishes"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 )
 
 // fakeZoneDB serves rqlite /db/query for the records in rows, keyed by
-// "<fqdn> <type>". A nil map answers every query with a 500.
+// "<fqdn> <type>". A query for a list of names (what do they own?) is
+// answered from every row of those names. A nil map answers every query with a
+// 500.
 func fakeZoneDB(t *testing.T, rows map[string][][]interface{}) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +27,24 @@ func fakeZoneDB(t *testing.T, rows map[string][][]interface{}) *httptest.Server 
 			return
 		}
 		var body [][]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || len(body[0]) != 3 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || len(body[0]) < 2 {
+			http.Error(w, "bad query", http.StatusBadRequest)
+			return
+		}
+		if sql, _ := body[0][0].(string); strings.Contains(sql, " IN (") {
+			// What do these names own, of any type?
+			var owned [][]interface{}
+			for _, name := range body[0][1:] {
+				for key, values := range rows {
+					if strings.HasPrefix(key, name.(string)+" ") {
+						owned = append(owned, values...)
+					}
+				}
+			}
+			_ = json.NewEncoder(w).Encode(QueryResponse{Results: []QueryResult{{Values: owned}}})
+			return
+		}
+		if len(body[0]) != 3 {
 			http.Error(w, "bad query", http.StatusBadRequest)
 			return
 		}

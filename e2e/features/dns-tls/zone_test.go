@@ -124,6 +124,29 @@ func TestZone_wildcardWalksOutward(t *testing.T) {
 	}
 }
 
+// TestZone_missingTypeIsNoDataNotNXDOMAIN: a name that is served has no AAAA
+// (or TXT) record, and every nameserver says so with NOERROR, no answer and
+// the apex SOA, over UDP and TCP, for the apex, a glue name and a name only
+// the wildcard covers. NXDOMAIN there made the resolvers that apply RFC 8020
+// cache the whole name as nonexistent after one AAAA query, and the next A
+// lookup of a served host failed with "no such host"
+// (core/pkg/coredns/rqlite plugin.go handleNegative).
+func TestZone_missingTypeIsNoDataNotNXDOMAIN(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	base := f.State.BaseDomain
+	names := []string{base, "ns1." + base, under(t, base), under(t, base, "a", "b")}
+	for _, n := range edge.Nameservers(f) {
+		for _, network := range []string{"udp", "tcp"} {
+			for _, name := range names {
+				for _, typ := range []dnsmessage.Type{dnsmessage.TypeAAAA, dnsmessage.TypeTXT} {
+					requireNegative(t, n.Name, fmt.Sprintf("%s %s over %s", typ, name, network), base, askOver(t, network, n.PublicIP, name, typ))
+				}
+			}
+		}
+	}
+}
+
 // TestZone_caseInsensitive: a mixed-case name is the same name (RFC 4343).
 func TestZone_caseInsensitive(t *testing.T) {
 	t.Parallel()

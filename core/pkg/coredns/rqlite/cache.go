@@ -26,7 +26,7 @@ const (
 	// comes back promptly once the backend recovers.
 	StaleTTL = 30 * time.Second
 
-	// NegativeTTL is how long an NXDOMAIN is cached.
+	// NegativeTTL is how long a negative answer (NXDOMAIN or NODATA) is cached.
 	//
 	// Without it, a flood of random subdomains is a query amplifier pointed
 	// straight at index rqlite: every one missed the cache and became a
@@ -46,7 +46,7 @@ type CacheEntry struct {
 	// answer is served only when the backend cannot be reached.
 	staleUntil time.Time
 
-	// negative marks a cached NXDOMAIN.
+	// negative marks a cached negative answer, whose rcode is its message's.
 	negative bool
 }
 
@@ -81,12 +81,13 @@ func NewCache(maxSize int, ttl time.Duration) *Cache {
 	return c
 }
 
-// Get returns a FRESH cached message and whether it is a cached NXDOMAIN.
+// Get returns a FRESH cached message and whether it is a cached negative
+// answer.
 //
 // The caller needs the second value: a cached negative answer must be replied
-// with RcodeNameError, and returning it as a success would turn every cached
-// NXDOMAIN into an empty NOERROR — a different answer, which resolvers cache
-// differently.
+// with the rcode it was cached with (the message's own), and returning an
+// NXDOMAIN as a success would turn it into an empty NOERROR — a different
+// answer, which resolvers cache differently.
 func (c *Cache) Get(qname string, qtype uint16) (msg *dns.Msg, negative bool) {
 	entry := c.lookup(qname, qtype)
 	if entry == nil || !entry.Fresh(time.Now()) {
@@ -132,7 +133,7 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 	c.store(qname, qtype, msg, c.ttl, false)
 }
 
-// SetNegative caches an NXDOMAIN for a short time.
+// SetNegative caches a negative answer (NXDOMAIN or NODATA) for a short time.
 func (c *Cache) SetNegative(qname string, qtype uint16, msg *dns.Msg) {
 	c.store(qname, qtype, msg, NegativeTTL, true)
 }
