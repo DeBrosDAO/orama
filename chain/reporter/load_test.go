@@ -2,11 +2,15 @@ package reporter
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -134,3 +138,61 @@ func TestParseHeader_isBoundedByTheSizeOfAVote(t *testing.T) {
 	require.Error(t, err, "a header with no authority is not a vote")
 	require.LessOrEqual(t, src.read, maxVoteBytes+(64<<10), "read well past the largest vote")
 }
+
+// A file that cannot be opened for a reason that is not the file's (an I/O
+// error, no descriptors left) is not a damaged vote: leaving it out would build
+// the report from a partial vote set. The run gets the error and is retried.
+func TestLoadVotes_aVoteThatCannotBeOpenedIsAnErrorNotASkip(t *testing.T) {
+	dir := t.TempDir()
+	writeVote(t, dir, "a"+VoteSuffix, epochStart.Add(time.Hour))
+	writeVote(t, dir, "b"+VoteSuffix, epochStart.Add(2*time.Hour))
+	prev := voteOpen
+	t.Cleanup(func() { voteOpen = prev })
+	voteOpen = func(path string) (*os.File, error) {
+		if filepath.Base(path) == "b"+VoteSuffix {
+			return nil, &os.PathError{Op: "open", Path: path, Err: syscall.EIO}
+		}
+		return prev(path)
+	}
+	votes, err := LoadVotes(dir, testAuthority(), dayWindow())
+	require.ErrorIs(t, err, syscall.EIO)
+	require.ErrorContains(t, err, "b"+VoteSuffix)
+	require.Empty(t, votes, "no report may be built from the votes that could be read")
+}
+
+func TestLoadVotes_aVoteThatVanishedSinceTheListingIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	path := writeVote(t, dir, "a"+VoteSuffix, epochStart.Add(time.Hour))
+	prev := voteOpen
+	t.Cleanup(func() { voteOpen = prev })
+	voteOpen = func(p string) (*os.File, error) {
+		require.NoError(t, os.Remove(path))
+		return prev(p)
+	}
+	_, err := LoadVotes(dir, testAuthority(), dayWindow())
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// A read that fails half way is not a document that is wrong; one that parses
+// badly, or is larger than a vote, is the file's fault and is skipped.
+func TestParseVoteFile_tellsAFailedReadFromABadDocument(t *testing.T) {
+	whole := testVote(testAuthorityHex, epochStart.Add(time.Hour), relaySpec{n: 1, flags: "Running"})
+	for _, headerOnly := range []bool{true, false} {
+		failing := io.MultiReader(strings.NewReader(whole[:len(whole)/2]), iotest.ErrReader(syscall.EIO))
+		_, err := parseVoteFile("v.vote", failing, headerOnly)
+		if !headerOnly {
+			require.ErrorIs(t, err, syscall.EIO)
+			require.NotErrorIs(t, err, errUnusableVote)
+		}
+
+		_, err = parseVoteFile("v.vote", strings.NewReader("this is not a vote\n"), headerOnly)
+		require.ErrorIs(t, err, errUnusableVote)
+	}
+	_, err := parseVoteFile("big.vote", io.LimitReader(zeroReader{}, maxVoteBytes+2), false)
+	require.ErrorIs(t, err, errUnusableVote)
+	require.ErrorContains(t, err, "larger than")
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }
