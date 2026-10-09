@@ -2568,7 +2568,7 @@ to the node's REST API and answers 404 to the rest. The service lives on the **O
 `constants.TorNetSOCKSPort`, 9052 by convention); the default `127.0.0.1:9050` is the node's client of the public
 Tor network, which cannot resolve it. No unit on a node runs a client of the Orama network.
 
-`--onion-network <network.json>` (or `ORAMA_ONION_NETWORK`) makes the command start its own Tor client on an
+`--onion-network <tor-network.json>` (or `ORAMA_ONION_NETWORK`) makes the command start its own Tor client on an
 Orama Tor network, with that network's directory authorities and no others, and submit through it; without
 `--onion` it picks a validator onion service from the file at random for the transaction. The network file, the
 client and the failure behaviour are in [TOR_NETWORK.md](TOR_NETWORK.md#onion-transaction-submission).

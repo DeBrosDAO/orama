@@ -3,7 +3,9 @@ package globalcmd
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,5 +168,101 @@ func TestTxgateCmd_listenMustBeLoopback(t *testing.T) {
 	cmd.SetContext(context.Background())
 	if err := txgateCmd.RunE(cmd, nil); clierr.CodeOf(err) != clierr.CodeUsage {
 		t.Errorf("an https upstream: %v", err)
+	}
+}
+
+func writeTorNetworkFile(t *testing.T) string {
+	t.Helper()
+	n := tornet.Network{Name: "orama-test", Private: true, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300}
+	for i, ip := range []string{"57.129.166.16", "57.129.166.17", "161.97.184.199"} {
+		n.Authorities = append(n.Authorities, tornet.Authority{
+			Nickname: fmt.Sprintf("OramaAuth%d", i+1), Address: ip, ORPort: 31020, DirPort: 31021,
+			V3Ident: fmt.Sprintf("%040X", 0xA0+i), Fingerprint: fmt.Sprintf("%040X", 0xB0+i),
+			Ed25519ID: base64.RawStdEncoding.EncodeToString(append(make([]byte, 31), byte(i+1))),
+		})
+	}
+	body, err := n.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "tor-network.json")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestOnionsAdd_putsAValidatorOnionIntoTheNetworkFile(t *testing.T) {
+	file := writeTorNetworkFile(t)
+	saved := onionsFlags
+	defer func() { onionsFlags = saved }()
+	onionsFlags.networkFile = file
+	run := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		cmd := &cobra.Command{}
+		cmd.SetOut(&out)
+		err := onionsAddCmd.RunE(cmd, args)
+		return out.String(), err
+	}
+	out, err := run(testOnion)
+	if err != nil || !strings.Contains(out, "1 validator onion services (1 added)") {
+		t.Fatalf("add: %q, %v", out, err)
+	}
+	if out, err = run(testOnion); err != nil || !strings.Contains(out, "(0 added)") {
+		t.Fatalf("adding it again: %q, %v", out, err)
+	}
+	n, err := tornet.Load(file)
+	if err != nil || len(n.ValidatorOnions) != 1 || n.ValidatorOnions[0] != testOnion {
+		t.Fatalf("file = %+v, %v", n, err)
+	}
+	if _, err := run("chain.example.com"); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("a clearnet host as a validator onion: %v", err)
+	}
+	onionsFlags.networkFile = ""
+	if _, err := run(testOnion); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("no --network-file: %v", err)
+	}
+}
+
+// The file `onions add` writes is the file the client side reads: a validator
+// onion added by the operator is what --onion-network picks.
+func TestOnionsAdd_isWhatOnionNetworkPicks(t *testing.T) {
+	isolateEnv(t)
+	file := writeTorNetworkFile(t)
+	if _, _, err := tornet.AddValidatorOnionsToFile(file, testOnion); err != nil {
+		t.Fatal(err)
+	}
+	_, base, done, err := chainTarget(onionCmd(t, "--onion-network", file, "--onion-tor", fakeTor(t, bootedTor)), context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	if base != "http://"+testOnion+":80" {
+		t.Fatalf("base = %q", base)
+	}
+}
+
+func TestMonitorCmd_writesTheRelaysMonitorFile(t *testing.T) {
+	home := t.TempDir()
+	saved := monitorFlags
+	defer func() { monitorFlags = saved }()
+	monitorFlags.home = home
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := monitorCmd.RunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(home, tornet.MonitorFile))
+	if err != nil || string(body) != "{}\n" || !strings.Contains(out.String(), "unknown") {
+		t.Fatalf("a relay with no consensus yet: %q, %v, %q", body, err, out.String())
+	}
+	monitorFlags.home = filepath.Join(home, "absent")
+	if err := monitorCmd.RunE(cmd, nil); err == nil || clierr.CodeOf(err) != clierr.CodeFailure {
+		t.Errorf("a missing DataDirectory: %v", err)
+	}
+	monitorFlags.home = ""
+	if err := monitorCmd.RunE(cmd, nil); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Errorf("no --home: %v", err)
 	}
 }

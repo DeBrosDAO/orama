@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -20,9 +23,6 @@ const (
 	// onionMaxStreams caps the streams one rendezvous circuit may carry; a
 	// circuit past it is closed.
 	onionMaxStreams = 20
-
-	// clientSOCKSHost is the loopback listener of a client torrc.
-	clientSOCKSHost = "127.0.0.1"
 )
 
 // RelayConfig is a relay, an exit, or (with Authority set) a directory
@@ -242,13 +242,19 @@ func OnionTorrc(c OnionConfig) (string, error) {
 type ClientConfig struct {
 	Network Network
 	Home    string
-	// SOCKSPort is the loopback port the client listens on.
-	SOCKSPort int
+	// SOCKSAddr is the loopback "ip:port" the client listens on.
+	SOCKSAddr string
+	// DNSAddr, when set, is the loopback "ip:port" tor answers DNS on through
+	// the network, for an application that must resolve names itself.
+	DNSAddr string
 }
 
-// ClientTorrc renders the torrc of a client of the Orama network. The SOCKS
-// listener is loopback only and isolates streams by SOCKS credentials, so a
-// caller that sends a new credential per request gets a new circuit.
+// ClientTorrc renders the torrc of a client of the Orama network: a client
+// only, with exactly the network's authorities, no public Tor fallback list, no
+// control port, and listeners on loopback. The SOCKS listener isolates streams
+// by SOCKS credentials, so a caller that sends a new credential per request
+// gets a new circuit. Every value is written in the canonical form it was
+// parsed to, never as it was given, so none can add a line.
 func ClientTorrc(c ClientConfig) (string, error) {
 	if err := c.Network.Validate(); err != nil {
 		return "", err
@@ -256,8 +262,9 @@ func ClientTorrc(c ClientConfig) (string, error) {
 	if err := checkHome(c.Home); err != nil {
 		return "", err
 	}
-	if c.SOCKSPort < 1 || c.SOCKSPort > maxPort {
-		return "", fmt.Errorf("SOCKS port %d is not a TCP port", c.SOCKSPort)
+	socks, err := CanonLoopback(c.SOCKSAddr)
+	if err != nil {
+		return "", fmt.Errorf("SOCKS address: %w", err)
 	}
 	var b torrc
 	b.comment("Client of the Orama Tor network " + c.Network.Name + " (docs/TOR_NETWORK.md).")
@@ -265,13 +272,42 @@ func ClientTorrc(c ClientConfig) (string, error) {
 	b.line("Log notice stdout")
 	b.line("SafeLogging 1")
 	b.network(c.Network)
-	b.line(fmt.Sprintf("SocksPort %s:%d IsolateSOCKSAuth", clientSOCKSHost, c.SOCKSPort))
+	b.line("SocksPort " + socks + " IsolateSOCKSAuth")
+	if c.DNSAddr != "" {
+		dns, err := CanonLoopback(c.DNSAddr)
+		if err != nil {
+			return "", fmt.Errorf("DNS address: %w", err)
+		}
+		b.line("DNSPort " + dns)
+	}
+	b.line("ControlPort 0")
 	b.line("ClientOnly 1")
 	b.line("ORPort 0")
 	b.line("DirPort 0")
 	b.line("ExitRelay 0")
+	b.line("UseBridges 0")
 	b.line("ClientRejectInternalAddresses 1")
 	return b.String(), nil
+}
+
+// CanonLoopback validates a listen address a client binds: an IP loopback
+// literal without a zone and a numeric port, never a name or another host. It
+// returns the form to write into a torrc. netip accepts any text after a '%'
+// zone, newlines included, so a zone is refused rather than passed on.
+func CanonLoopback(addr string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("%q must be host:port: %w", addr, err)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || !ip.IsLoopback() || ip.Zone() != "" {
+		return "", fmt.Errorf("%q: %q is not a loopback IP address", addr, host)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil || p < 1 || p > maxPort || strconv.Itoa(p) != port {
+		return "", fmt.Errorf("%q: %q is not a port", addr, port)
+	}
+	return net.JoinHostPort(ip.String(), port), nil
 }
 
 type torrc struct{ strings.Builder }
@@ -295,7 +331,7 @@ func (b *torrc) network(n Network) {
 // checkHome refuses a DataDirectory that is not a plain absolute path: it is
 // written into a torrc line.
 func checkHome(home string) error {
-	if !strings.HasPrefix(home, "/") || strings.ContainsAny(home, " \t\r\n\"'\\#") || strings.Contains(home, "..") {
+	if !strings.HasPrefix(home, "/") || strings.ContainsAny(home, " \"'\\#") || strings.IndexFunc(home, unicode.IsControl) >= 0 || strings.Contains(home, "..") {
 		return fmt.Errorf("tor DataDirectory %q must be a plain absolute path", home)
 	}
 	return nil
@@ -304,7 +340,7 @@ func checkHome(home string) error {
 // checkTarget accepts host:port as a hidden service target.
 func checkTarget(t string) error {
 	host, port, ok := strings.Cut(t, ":")
-	if !ok || host == "" || strings.ContainsAny(host, " \t\r\n:#") {
+	if addr, err := netip.ParseAddr(host); !ok || err != nil || !addr.Is4() {
 		return fmt.Errorf("onion target %q must be ipv4:port", t)
 	}
 	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > maxPort || strconv.Itoa(p) != port {

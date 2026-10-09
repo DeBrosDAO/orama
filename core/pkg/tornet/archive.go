@@ -117,7 +117,7 @@ func writeArchive(dir, validAfter string, files map[string][]byte, votesMissing 
 		if keep {
 			data = existing
 		} else {
-			if err := writeAtomic(path, data); err != nil {
+			if err := writeAtomic(path, data, archiveFileMode); err != nil {
 				return Manifest{}, false, err
 			}
 			wrote = true
@@ -133,7 +133,7 @@ func writeArchive(dir, validAfter string, files map[string][]byte, votesMissing 
 	body = append(body, '\n')
 	manifestPath := filepath.Join(dir, ArchiveManifestFile)
 	if old, err := os.ReadFile(manifestPath); err != nil || !bytes.Equal(old, body) {
-		if err := writeAtomic(manifestPath, body); err != nil {
+		if err := writeAtomic(manifestPath, body, archiveFileMode); err != nil {
 			return Manifest{}, false, err
 		}
 		wrote = true
@@ -236,8 +236,10 @@ func readLimited(path string) ([]byte, error) {
 	return data, nil
 }
 
-func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".archive-*")
+// writeAtomic writes data to a new file beside path and renames it over path,
+// so a reader sees the old file or the new one and never half of either.
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create a temporary file beside %s: %w", path, err)
 	}
@@ -246,9 +248,13 @@ func writeAtomic(path string, data []byte) error {
 		tmp.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	if err := tmp.Chmod(archiveFileMode); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		tmp.Close()
 		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)

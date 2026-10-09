@@ -130,7 +130,7 @@ func TestEvaluate_publicKuboOverStorageMax(t *testing.T) {
 
 func TestEvaluate_relayNotInConsensus(t *testing.T) {
 	g := &report.GlobalReport{
-		Units: []report.GlobalUnit{{Name: constants.GlobalRelayUnit, State: "active"}},
+		Units: []report.GlobalUnit{{Name: constants.GlobalTorRelayUnit, State: "active"}},
 		Relay: &report.RelayReport{InConsensus: boolp(false)},
 	}
 	got := issuesFor(t, Node{Host: "a", Global: g})

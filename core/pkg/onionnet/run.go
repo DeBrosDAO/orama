@@ -1,3 +1,12 @@
+// Package onionnet runs an unmodified upstream tor as a client of an Orama Tor
+// network.
+//
+// The network is the one network file (tor-network.json, parsed by
+// pkg/tornet): its directory authorities are the only ones the client's tor is
+// given, and the torrc is rendered by tornet.ClientTorrc. The client built here
+// has one route: the tor it starts. It never falls back to the public Tor
+// network or to a direct connection. The users are orama vpn and onion
+// transaction submission (--onion-network).
 package onionnet
 
 import (
@@ -15,7 +24,24 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
+
+// DefaultTorBinary is the tor a client starts when none is named.
+const DefaultTorBinary = "tor"
+
+// Options say where a client tor keeps its state and listens.
+type Options struct {
+	// DataDir is tor's DataDirectory: the cached consensus and the guards. It
+	// must be an absolute path with no whitespace or newline in it.
+	DataDir string
+	// SocksAddr is the loopback "ip:port" tor accepts SOCKS5 on.
+	SocksAddr string
+	// DNSAddr, when set, is the loopback "ip:port" tor answers DNS on through
+	// the network, for an application that must resolve names itself.
+	DNSAddr string
+}
 
 const (
 	// BootstrapTimeout is how long a client waits for tor to build its first
@@ -74,8 +100,8 @@ func (t *Tor) Stop() error {
 // network's authorities to answer. ctx ends tor. Tor's log goes to logw when
 // it is not nil. When tor exits before bootstrapping, the error carries the
 // tail of its log.
-func Start(ctx context.Context, bin string, n Network, opts Options, logw io.Writer) (*Tor, error) {
-	torrc, err := n.Torrc(opts)
+func Start(ctx context.Context, bin string, n tornet.Network, opts Options, logw io.Writer) (*Tor, error) {
+	torrc, err := tornet.ClientTorrc(tornet.ClientConfig{Network: n, Home: opts.DataDir, SOCKSAddr: opts.SocksAddr, DNSAddr: opts.DNSAddr})
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +155,7 @@ func Start(ctx context.Context, bin string, n Network, opts Options, logw io.Wri
 // StartOnFreePort is Start for a client that has no fixed port to offer: tor
 // listens on a loopback port found for the run, and keeps its state in dataDir
 // (the network's directory under the user cache directory when empty).
-func StartOnFreePort(ctx context.Context, bin string, n Network, dataDir string, logw io.Writer) (*Tor, error) {
+func StartOnFreePort(ctx context.Context, bin string, n tornet.Network, dataDir string, logw io.Writer) (*Tor, error) {
 	if dataDir == "" {
 		var err error
 		if dataDir, err = DefaultDataDir(n.Name); err != nil {
@@ -186,6 +212,20 @@ func (l *logTail) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return strings.Join(l.lines, "\n")
+}
+
+// DefaultDataDir is where a client keeps tor's state for the network: under
+// the user's cache directory, so the consensus and the guards survive between
+// runs and each run does not fetch the consensus again.
+func DefaultDataDir(name string) (string, error) {
+	if !tornet.ValidNetworkName(name) {
+		return "", fmt.Errorf("network name %q is not a directory name", name)
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("find the user cache directory: %w", err)
+	}
+	return filepath.Join(cache, "orama", "onion", name), nil
 }
 
 // FreeLoopbackAddr returns a loopback "ip:port" nothing was listening on a

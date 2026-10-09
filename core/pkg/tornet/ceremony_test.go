@@ -110,7 +110,7 @@ func (f *fakeTor) write(path string, data []byte) {
 
 func ceremonyRequest(t *testing.T) CeremonyRequest {
 	return CeremonyRequest{
-		Network: Network{Name: "orama-teststage", VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300, AllowExit: true},
+		Network: Network{Name: "orama-teststage", Private: true, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300, AllowExit: true},
 		Specs: []AuthoritySpec{
 			{Nickname: "OramaAuth1", Address: "57.129.166.16", ORPort: 31020, DirPort: 31021},
 			{Nickname: "OramaAuth2", Address: "57.129.166.17", ORPort: 31020, DirPort: 31021},
@@ -137,7 +137,7 @@ func TestRunCeremony_producesALoadableNetworkAndSplitsTheKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the network file the ceremony wrote does not load: %v", err)
 	}
-	if len(got.Authorities) != 3 || !got.AllowExit || got.Authorities[1].V3Ident != fmt.Sprintf("%040X", 0xD2) {
+	if !got.Private || len(got.Authorities) != 3 || !got.AllowExit || got.Authorities[1].V3Ident != fmt.Sprintf("%040X", 0xD2) {
 		t.Fatalf("network = %+v", got)
 	}
 	if want := time.Date(2027, 10, 8, 0, 0, 0, 0, time.UTC); !res.Expires["OramaAuth1"].Equal(want) {

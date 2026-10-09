@@ -23,8 +23,11 @@ type fakeChain struct {
 	settled   map[uint64]bool
 	submitted []*relaytypes.MsgReportEpoch
 	// failOn is the 0-based submit call that fails once.
-	failOn   int
-	failed   bool
+	failOn int
+	failed bool
+	// onFail runs when the failing submit is refused, to change the chain as
+	// the refusal would find it.
+	onFail   func()
 	lookups  int
 	querying error
 }
@@ -42,6 +45,9 @@ func (c *fakeChain) EpochSettled(_ context.Context, e uint64) (bool, error) { re
 func (c *fakeChain) Submit(_ context.Context, m *relaytypes.MsgReportEpoch) error {
 	if !c.failed && len(c.submitted) == c.failOn && c.failOn >= 0 {
 		c.failed = true
+		if c.onFail != nil {
+			c.onFail()
+		}
 		return errors.New("broadcast refused")
 	}
 	c.submitted = append(c.submitted, m)
@@ -277,15 +283,111 @@ func TestStep_aFailingEpochDoesNotLoseTheNextOnesSpan(t *testing.T) {
 	require.ErrorIs(t, err, ErrIncompleteArchive)
 	require.NotErrorIs(t, err, ErrEpochMissed, "epoch 6 closed one epoch after the last pass saw its start")
 
+	// x/relay takes epoch 5's report only while the chain is in epoch 6; at
+	// epoch 7 it is past its window and dropped, and epoch 6 is still owed with
+	// its span.
+	require.ErrorIs(t, err, ErrWindowClosed)
 	st, err := loadState(r.home)
 	require.NoError(t, err)
-	require.Len(t, st.Due, 2, "both closed epochs are owed with their spans")
+	require.Len(t, st.Due, 1)
+	require.EqualValues(t, 6, st.Due[0].Epoch, "epoch 6 is still inside its window, with its span")
 
-	r.archive(seq(0, 24), three()...)
 	r.archive(seq(24, 48), three()...)
 	e, err := r.step()
 	require.NoError(t, err)
-	require.Equal(t, []uint64{5, 6}, e)
+	require.Equal(t, []uint64{6}, e)
+}
+
+// The window is the epoch after the closed one: reports are sent at the first
+// pass after the boundary, and an archive that fills in later in the window is
+// still reported.
+func TestStep_reportsUntilTheEndOfTheWindowAndNotAfter(t *testing.T) {
+	r := newRig(t)
+	_, _ = r.step()
+	r.closeEpoch()
+	_, err := r.step()
+	require.ErrorIs(t, err, ErrIncompleteArchive, "epoch 5's archive has not filled in yet")
+	require.NotErrorIs(t, err, ErrWindowClosed, "the chain is in epoch 6, epoch 5's window")
+
+	r.archive(seq(0, 24), three()...)
+	e, err := r.step()
+	require.NoError(t, err)
+	require.Equal(t, []uint64{5}, e, "the archive caught up inside the window")
+
+	r.closeEpoch()
+	r.closeEpoch()
+	_, err = r.step()
+	require.ErrorIs(t, err, ErrEpochMissed)
+}
+
+func TestStep_aReportPastTheWindowIsDroppedAndItsSavedEntriesRemoved(t *testing.T) {
+	r := newRig(t)
+	r.archive(seq(0, 24), three()...)
+	_, _ = r.step()
+	r.closeEpoch()
+	r.chain.failOn = 1
+	_, err := r.step()
+	require.Error(t, err)
+	require.FileExists(t, reportPath(r.home, 5), "the entries chosen for the retry")
+
+	r.closeEpoch() // epoch 7: epoch 5's window is over
+	_, err = r.step()
+	require.ErrorIs(t, err, ErrWindowClosed)
+	require.NoFileExists(t, reportPath(r.home, 5))
+	st, err := loadState(r.home)
+	require.NoError(t, err)
+	require.Len(t, st.Due, 1, "an epoch the chain refuses is not retried every pass")
+	require.EqualValues(t, 6, st.Due[0].Epoch, "only epoch 6, which has no archive yet, is owed")
+	require.Len(t, r.chain.submitted, 1, "nothing was sent after the window closed")
+}
+
+// The epoch rolls over between the check and a later chunk: the chain's refusal
+// is read as a closed window, not as a failure to retry.
+func TestStep_theEpochRollingOverMidReportIsAClosedWindow(t *testing.T) {
+	r := newRig(t)
+	r.archive(seq(0, 24), three()...)
+	_, _ = r.step()
+	r.closeEpoch()
+	r.chain.failOn = 1
+	r.chain.onFail = r.closeEpoch
+	_, err := r.step()
+	require.ErrorIs(t, err, ErrWindowClosed)
+	require.Contains(t, err.Error(), "broadcast refused")
+	st, err := loadState(r.home)
+	require.NoError(t, err)
+	require.Empty(t, st.Due)
+}
+
+// The chain settles the epoch between the check and a later chunk.
+func TestStep_aSettlementMidReportIsAnAlreadySettledEpoch(t *testing.T) {
+	r := newRig(t)
+	r.archive(seq(0, 24), three()...)
+	_, _ = r.step()
+	r.closeEpoch()
+	r.chain.failOn = 1
+	r.chain.onFail = func() { r.chain.settled[5] = true }
+	_, err := r.step()
+	require.ErrorIs(t, err, ErrEpochSettled)
+	st, err := loadState(r.home)
+	require.NoError(t, err)
+	require.Empty(t, st.Due)
+	require.NoFileExists(t, reportPath(r.home, 5))
+}
+
+// A refusal inside the window is an ordinary failure: the epoch stays owed.
+func TestStep_aRefusalInsideTheWindowKeepsTheEpochOwed(t *testing.T) {
+	r := newRig(t)
+	r.archive(seq(0, 24), three()...)
+	_, _ = r.step()
+	r.closeEpoch()
+	r.chain.failOn = 0
+	_, err := r.step()
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrWindowClosed)
+	require.NotErrorIs(t, err, ErrEpochSettled)
+	st, err := loadState(r.home)
+	require.NoError(t, err)
+	require.Len(t, st.Due, 1)
 }
 
 // The registry can change between the first chunk and a retry. The retry must

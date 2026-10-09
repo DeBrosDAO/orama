@@ -1,12 +1,16 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 func stubGlobalUnits(t *testing.T, states map[string]string) {
@@ -92,6 +96,50 @@ func TestCollectGlobal_providerMonitor(t *testing.T) {
 	}
 }
 
+// The Tor relay's own writer and the node report agree on the file: what
+// tornet.WriteRelayMonitor writes is what collectGlobal reads as the relay's
+// state, and a relay that cannot know leaves it unknown.
+func TestCollectGlobal_relayMonitorWrittenByTheTorRelay(t *testing.T) {
+	stubGlobalUnits(t, map[string]string{constants.GlobalTorRelayUnit: "active"})
+	old := relayMonitorPath
+	t.Cleanup(func() { relayMonitorPath = old })
+	home := t.TempDir()
+	relayMonitorPath = filepath.Join(home, constants.GlobalMonitorFile)
+	if constants.GlobalMonitorFile != tornet.MonitorFile {
+		t.Fatalf("the relay writes %s and the report reads %s", tornet.MonitorFile, constants.GlobalMonitorFile)
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "tornet", "testdata", "consensus-microdesc.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consensus, err := tornet.ParseConsensus(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "cached-microdesc-consensus"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := consensus.ValidAfter.Add(time.Minute)
+	for fingerprint, want := range map[string]bool{consensus.Relays[0].Fingerprint: true, "00000000000000000000000000000000000000EE": false} {
+		if err := os.WriteFile(filepath.Join(home, "fingerprint"), []byte("OramaRelayTest "+fingerprint+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tornet.WriteRelayMonitor(home, now); err != nil {
+			t.Fatal(err)
+		}
+		g := collectGlobal()
+		if g == nil || g.Relay == nil || g.Relay.Error != "" || g.Relay.InConsensus == nil || *g.Relay.InConsensus != want {
+			t.Fatalf("relay %s: report %+v, want in_consensus %t", fingerprint, g, want)
+		}
+	}
+	if _, err := tornet.WriteRelayMonitor(home, now.Add(30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if g := collectGlobal(); g.Relay == nil || g.Relay.Error != "" || g.Relay.InConsensus != nil {
+		t.Fatalf("an expired consensus must read as unknown: %+v", g.Relay)
+	}
+}
+
 func TestParseMonitor_rejectsANegativeSlotCount(t *testing.T) {
 	for _, body := range []string{`{"held_slots":-1}`, `{"pending_slots":-1}`} {
 		if _, err := parseMonitor([]byte(body)); err == nil {
@@ -129,5 +177,40 @@ func TestGlobalIPFSAPI_isLoopbackWithoutTheNamespaceLayout(t *testing.T) {
 	}
 	if constants.ColocatedGlobalIPFSAPIURL() != "http://198.18.0.2:31011" {
 		t.Errorf("ColocatedGlobalIPFSAPIURL = %q", constants.ColocatedGlobalIPFSAPIURL())
+	}
+}
+
+// The monitor files sit in directories owned by unprivileged accounts and the
+// reader is root: a link is refused, and a FIFO neither hangs the open nor
+// reads as a file.
+func TestReadCapped_refusesALinkAndAFIFO(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCapped(link, 4096); err == nil {
+		t.Error("a symlink was read")
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := readCapped(fifo, 4096); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a FIFO was read as a file")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a FIFO hung the reader")
+	}
+	if data, err := readCapped(target, 4096); err != nil || string(data) != "{}" {
+		t.Errorf("a regular file: %q, %v", data, err)
 	}
 }

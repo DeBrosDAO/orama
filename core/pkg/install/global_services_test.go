@@ -55,6 +55,7 @@ func TestGlobalServiceCompanions(t *testing.T) {
 	want := map[GlobalService][]string{
 		GlobalServiceIPFS:    {"orama-global-ipfs-gc.timer"},
 		GlobalServiceDirauth: {constants.GlobalTorArchiveTimer},
+		GlobalServiceRelay:   {constants.GlobalTorMonitorTimer},
 		GlobalServiceOnion:   {constants.GlobalTxGateUnit},
 	}
 	for _, s := range GlobalServiceOrder {

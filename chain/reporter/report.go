@@ -28,19 +28,20 @@ func reportPath(home string, epoch uint64) string {
 }
 
 // reportDue tries every closed epoch still owed. An epoch the chain took is
-// removed from st.Due, and so is one the chain settled without it; any other
-// failure leaves it owed. st is saved when it changed.
-func (r *Runner) reportDue(ctx context.Context, st *State) ([]uint64, error) {
+// removed from st.Due, and so is one the chain can no longer take a report for
+// (settled, or past its report window); any other failure leaves it owed. cur is
+// the epoch in progress. st is saved when it changed.
+func (r *Runner) reportDue(ctx context.Context, st *State, cur Epoch) ([]uint64, error) {
 	var done []uint64
 	var errs []error
 	var owed []Due
 	for _, d := range st.Due {
-		err := r.reportEpoch(ctx, d)
+		err := r.reportEpoch(ctx, d, cur)
 		switch {
 		case err == nil:
 			done = append(done, d.Epoch)
 			st.Reported = max(st.Reported, d.Epoch)
-		case errors.Is(err, ErrEpochSettled):
+		case errors.Is(err, ErrEpochSettled), errors.Is(err, ErrWindowClosed):
 			errs = append(errs, err)
 		default:
 			owed = append(owed, d)
@@ -57,16 +58,31 @@ func (r *Runner) reportDue(ctx context.Context, st *State) ([]uint64, error) {
 	return done, errors.Join(errs...)
 }
 
-func (r *Runner) reportEpoch(ctx context.Context, d Due) error {
-	settled, err := r.chain.EpochSettled(ctx, d.Epoch)
+// closedEpoch is ErrEpochSettled or ErrWindowClosed when the chain takes no
+// more reports for the epoch given the epoch in progress, nil when it does. The
+// report saved for such an epoch is removed: nothing will send it.
+func (r *Runner) closedEpoch(ctx context.Context, epoch uint64, cur Epoch) error {
+	settled, err := r.chain.EpochSettled(ctx, epoch)
 	if err != nil {
-		return fmt.Errorf("check whether epoch %d is settled: %w", d.Epoch, err)
+		return fmt.Errorf("check whether epoch %d is settled: %w", epoch, err)
 	}
-	if settled {
-		err := fmt.Errorf("%w: epoch %d", ErrEpochSettled, d.Epoch)
-		if rerr := os.Remove(reportPath(r.cfg.Home, d.Epoch)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			err = errors.Join(err, fmt.Errorf("remove the report of the settled epoch: %w", rerr))
-		}
+	var closed error
+	switch {
+	case settled:
+		closed = fmt.Errorf("%w: epoch %d", ErrEpochSettled, epoch)
+	case cur.Number > epoch && cur.Number-epoch > relaytypes.ReportWindowEpochs:
+		closed = fmt.Errorf("%w: epoch %d was open to reports until epoch %d began and the chain is at epoch %d", ErrWindowClosed, epoch, epoch+relaytypes.ReportWindowEpochs+1, cur.Number)
+	default:
+		return nil
+	}
+	if rerr := os.Remove(reportPath(r.cfg.Home, epoch)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		closed = errors.Join(closed, fmt.Errorf("remove the report of epoch %d: %w", epoch, rerr))
+	}
+	return closed
+}
+
+func (r *Runner) reportEpoch(ctx context.Context, d Due, cur Epoch) error {
+	if err := r.closedEpoch(ctx, d.Epoch, cur); err != nil {
 		return err
 	}
 	rep, err := r.chosen(ctx, d)
@@ -79,7 +95,7 @@ func (r *Runner) reportEpoch(ctx context.Context, d Due) error {
 	}
 	for _, m := range msgs {
 		if err := r.chain.Submit(ctx, m); err != nil {
-			return fmt.Errorf("submit chunk %d of %d for epoch %d: %w", m.ChunkIndex+1, m.ChunkCount, d.Epoch, err)
+			return errors.Join(r.refusedSubmit(ctx, d.Epoch), fmt.Errorf("submit chunk %d of %d for epoch %d: %w", m.ChunkIndex+1, m.ChunkCount, d.Epoch, err))
 		}
 	}
 	rep.Monitor.Epoch, rep.Monitor.Chunks, rep.Monitor.Relays = d.Epoch, len(msgs), len(rep.Entries)
@@ -90,6 +106,20 @@ func (r *Runner) reportEpoch(ctx context.Context, d Due) error {
 		return fmt.Errorf("remove the sent report of epoch %d: %w", d.Epoch, err)
 	}
 	return nil
+}
+
+// refusedSubmit says why the chain may have refused a chunk: the epoch rolled
+// over or was settled between the check before the first chunk and this one.
+// It reads the chain again rather than the refusal's text. The result is
+// ErrEpochSettled or ErrWindowClosed when the chain takes no more reports for
+// the epoch, an error when the chain could not be read, and nil when it still
+// takes them, so the refusal is an ordinary failure and the epoch stays owed.
+func (r *Runner) refusedSubmit(ctx context.Context, epoch uint64) error {
+	cur, err := r.chain.CurrentEpoch(ctx)
+	if err != nil {
+		return fmt.Errorf("read the current epoch after the refusal: %w", err)
+	}
+	return r.closedEpoch(ctx, epoch, cur)
 }
 
 // chosen is the report for the epoch: the one saved by an earlier attempt, or

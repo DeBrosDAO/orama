@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/onionnet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 	"github.com/spf13/cobra"
 )
 
@@ -20,7 +21,7 @@ const (
 	dataDirFlag = "data-dir"
 	// NetworkEnv is the configuration form of --network, shared with
 	// onion transaction submission (--onion-network).
-	NetworkEnv = onionnet.NetworkEnv
+	NetworkEnv = tornet.NetworkEnv
 	// DefaultSOCKS is where `orama vpn up` offers the proxy: Tor Browser's port,
 	// not 9050, which a node's own Tor client uses.
 	DefaultSOCKS = "127.0.0.1:9150"
@@ -37,8 +38,8 @@ func New() *cobra.Command {
 		Short: "Route traffic through an Orama Tor network",
 		Long: `Join an Orama Tor network from this machine.
 
-A network is described by a network.json file: its directory authorities, a
-fallback list and, optionally, validator onion services. up starts an unmodified
+A network is described by its tor-network.json file: the directory authorities
+and, optionally, the validator onion services it lists. up starts an unmodified
 upstream tor on it and offers a SOCKS5 proxy on loopback; check joins the
 network and proves a circuit reaches a validator's onion service.
 
@@ -61,23 +62,23 @@ type common struct {
 
 func (c *common) addFlags(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.StringVar(&c.network, networkFlag, "", "Orama Tor network file (network.json) [required] ($"+NetworkEnv+")")
+	f.StringVar(&c.network, networkFlag, "", "Orama Tor network file (tor-network.json) [required] ($"+NetworkEnv+")")
 	f.StringVar(&c.tor, torFlag, onionnet.DefaultTorBinary, "The tor binary to run")
 	f.StringVar(&c.dataDir, dataDirFlag, "", "Tor state directory (default: the user cache directory, per network)")
 }
 
 // load reads the network file and fills in the tor options with socks and dns.
-func (c *common) load(socks, dns string) (onionnet.Network, onionnet.Options, error) {
+func (c *common) load(socks, dns string) (tornet.Network, onionnet.Options, error) {
 	path := c.network
 	if path == "" {
 		path = os.Getenv(NetworkEnv)
 	}
 	if path == "" {
-		return onionnet.Network{}, onionnet.Options{}, clierr.Usage("--network is required: the Orama Tor network file")
+		return tornet.Network{}, onionnet.Options{}, clierr.Usage("--network is required: the Orama Tor network file")
 	}
-	n, err := onionnet.Load(path)
+	n, err := tornet.Load(path)
 	if err != nil {
-		return onionnet.Network{}, onionnet.Options{}, clierr.Usage("%v", err)
+		return tornet.Network{}, onionnet.Options{}, clierr.Usage("%v", err)
 	}
 	dir := c.dataDir
 	if dir == "" {
@@ -89,7 +90,7 @@ func (c *common) load(socks, dns string) (onionnet.Network, onionnet.Options, er
 }
 
 // join starts tor on the network and reports progress on stderr.
-func join(ctx context.Context, cmd *cobra.Command, bin string, n onionnet.Network, o onionnet.Options) (*onionnet.Tor, error) {
+func join(ctx context.Context, cmd *cobra.Command, bin string, n tornet.Network, o onionnet.Options) (*onionnet.Tor, error) {
 	fmt.Fprintf(cmd.ErrOrStderr(), "Joining the %s Tor network (this can take a minute)...\n", n.Name)
 	tor, err := onionnet.Start(ctx, bin, n, o, nil)
 	if err != nil {

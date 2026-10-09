@@ -95,7 +95,7 @@ var globalServiceSpecs = map[GlobalService]globalServiceSpec{
 	// The Tor roles run the distro tor binary. The dirauth's archive timer and the
 	// onion service's gate run the orama CLI.
 	GlobalServiceDirauth: {unit: constants.GlobalTorDirauthUnit, user: globalTorDirauthUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorArchiveTimer}, standalone: true},
-	GlobalServiceRelay:   {unit: constants.GlobalTorRelayUnit, user: globalTorRelayUser, standalone: true},
+	GlobalServiceRelay:   {unit: constants.GlobalTorRelayUnit, user: globalTorRelayUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorMonitorTimer}, standalone: true},
 	GlobalServiceOnion:   {unit: constants.GlobalTorOnionUnit, user: globalTorOnionUser, binaries: []string{globalOramaCLI}, users: []string{globalTxGateUser}, companions: []string{constants.GlobalTxGateUnit}},
 }
 
@@ -104,7 +104,7 @@ func GlobalServiceUnit(s GlobalService) string { return globalServiceSpecs[s].un
 
 // GlobalServiceCompanions are the units that run with s: started after it,
 // stopped before it. The public Kubo has its GC timer, a directory authority
-// its archive timer, and the onion service its tx gate.
+// its archive timer, a relay its monitor timer, and the onion service its tx gate.
 func GlobalServiceCompanions(s GlobalService) []string { return globalServiceSpecs[s].companions }
 
 // GlobalServiceNeedsChain reports whether s uses the local chain: every service
@@ -331,6 +331,11 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 		}
 	case GlobalServiceRelay:
 		main.body = RenderGlobalTorRelayUnit()
+		return []globalUnitFile{
+			main,
+			{name: constants.GlobalTorMonitorUnit, body: RenderGlobalTorMonitorUnit()},
+			{name: constants.GlobalTorMonitorTimer, body: RenderGlobalTorMonitorTimer(), enable: true},
+		}
 	case GlobalServiceOnion:
 		main.body = RenderGlobalTorOnionUnit()
 		return []globalUnitFile{main, {name: constants.GlobalTxGateUnit, body: RenderGlobalTxGateUnit(), enable: true}}

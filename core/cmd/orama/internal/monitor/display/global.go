@@ -49,7 +49,7 @@ func globalLine(t view.Theme, g *report.GlobalReport) string {
 	if state, ok := unitState(g, constants.GlobalProviderUnit); ok {
 		parts = append(parts, "provider "+unitLabel(t, state)+providerFacts(g.Provider))
 	}
-	if state, ok := unitState(g, constants.GlobalRelayUnit); ok {
+	if state, ok := unitState(g, constants.GlobalTorRelayUnit); ok {
 		parts = append(parts, "relay "+unitLabel(t, state)+relayFacts(t, g.Relay))
 	}
 	return strings.Join(parts, " | ")

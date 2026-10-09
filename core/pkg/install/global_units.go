@@ -372,6 +372,36 @@ WantedBy=timers.target
 `
 }
 
+// RenderGlobalTorMonitorUnit is the oneshot that writes the relay's
+// monitor.json for the node report, as the relay's own account in its own
+// DataDirectory. Its timer is RenderGlobalTorMonitorTimer.
+func RenderGlobalTorMonitorUnit() string {
+	home := constants.GlobalTorRelayHome
+	exec := fmt.Sprintf("%s/%s global tor monitor --home %s", globalBinDir, globalOramaCLI, home)
+	unit := renderGlobalOneshot("Orama Tor relay monitor", globalTorRelayUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	// It reads files and talks to nobody.
+	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_UNIX\n", 1)
+	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=any\nIPAddressAllow=localhost\n", 1)
+}
+
+// RenderGlobalTorMonitorTimer fires the monitor every five minutes: the
+// consensus changes hourly, and the node report is read less often than that.
+func RenderGlobalTorMonitorTimer() string {
+	return `[Unit]
+Description=Schedule the Orama Tor relay monitor
+# Restarting orama-node must not restart this timer.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=` + constants.GlobalTorMonitorUnit + `
+
+[Install]
+WantedBy=timers.target
+`
+}
+
 // RenderGlobalSBWSUnit measures relay bandwidth. Dirauth hosts only.
 func RenderGlobalSBWSUnit() string {
 	return renderGlobalUnit("Orama sbws", globalSBWSUser, "/var/lib/orama-global/sbws", "/usr/bin/sbws generate", "")

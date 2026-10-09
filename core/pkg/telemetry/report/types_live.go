@@ -93,8 +93,9 @@ type ProviderReport struct {
 	Error               string `json:"error,omitempty"`
 }
 
-// RelayReport is the relay's own status file. InConsensus is nil when the
-// file omits it: x/relay is not queried, because that module is not in oramad.
+// RelayReport is the Tor relay's own status file (orama-global-tor-relay.service).
+// InConsensus is whether the consensus the relay holds lists it, and nil when the
+// file omits it because the relay has no valid consensus to say.
 type RelayReport struct {
 	InConsensus *bool  `json:"in_consensus,omitempty"`
 	Error       string `json:"error,omitempty"`

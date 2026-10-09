@@ -16,6 +16,10 @@ import (
 
 const ceremonyPassphrase = "e2e ceremony passphrase, not a secret"
 
+// e2eOnion is a well-formed validator onion address (56 base32 characters);
+// the ceremony test only writes it into a file.
+const e2eOnion = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion"
+
 // publicLooking are three public addresses the ceremony writes into its
 // network file. Nothing connects to them.
 var publicLooking = []string{"192.5.5.241", "198.41.0.4", "199.7.91.13"}
@@ -71,7 +75,7 @@ func TestCeremony_realTorMakesKeysTheNetworkFileNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the ceremony's network file: %v", err)
 	}
-	if network.Name != "orama-e2e" || len(network.Authorities) != len(publicLooking) || !network.Bootstrap || network.AllowExit {
+	if network.Name != "orama-e2e" || !network.Private || len(network.Authorities) != len(publicLooking) || !network.Bootstrap || network.AllowExit || len(network.ValidatorOnions) != 0 {
 		t.Fatalf("network = %+v", network)
 	}
 	for _, a := range network.Authorities {
@@ -100,6 +104,17 @@ func TestCeremony_realTorMakesKeysTheNetworkFileNames(t *testing.T) {
 			t.Errorf("%s: relay identity key hashes to %s (%v), network file says %s", a.Nickname, fp, err, a.Fingerprint)
 		}
 	}
+	// The validator onion addresses exist only after the ceremony; the operator
+	// adds them to the same file, which still loads, with nothing else changed.
+	file := dir + "/out/" + constants.TorNetworkFile
+	added := infra.OnNode(t, f, n, "global", "tor", "onions", "add", "--network-file", file, e2eOnion)
+	infra.ExpectNodeExit(t, "adding a validator onion to the network file", added, infra.ExitOK, "1 added")
+	withOnion, err := tornet.ParseNetwork(f.ReadFile(t, n, file))
+	if err != nil || len(withOnion.ValidatorOnions) != 1 || withOnion.ValidatorOnions[0] != e2eOnion || len(withOnion.Authorities) != len(network.Authorities) {
+		t.Fatalf("the network file after the add: %+v, %v", withOnion, err)
+	}
+	refused := infra.OnNode(t, f, n, "global", "tor", "onions", "add", "--network-file", file, "chain.example.com")
+	infra.ExpectNodeExit(t, "adding a clearnet host as a validator onion", refused, infra.ExitUsage, "onion")
 	// A second ceremony never writes over the first one's keys.
 	again := infra.OnNode(t, f, n, ceremonyArgs(dir+"/out", pass, threeAuthorities()...)...)
 	infra.ExpectNodeExit(t, "a ceremony into a directory that holds keys", again, infra.ExitFailure, "never writes over keys")

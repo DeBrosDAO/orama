@@ -42,6 +42,11 @@ Relays that belong to this reporter's operator are left out.
 in x/relay's reporter set. <home>/operator holds the operator address and
 <home>/authority-id the authority's 40-hex v3 identity (the dir-source line of its votes).
 <home>/state.json and <home>/monitor.json report what the last pass did.
+x/relay takes a report for an epoch only while the chain is in the epoch after it, and settles
+the epoch in the first block after that; a pass that finds the window over (or the epoch
+settled) drops the epoch with an error instead of retrying it, so --interval must be much
+shorter than an epoch. <home>/authority-id is the v3_ident of this authority in the Orama Tor
+network file (tor-network.json), where the authorities are listed with their nicknames.
 Another party recomputes the observations from the same votes with reporter.LoadVotes and
 Observe; the entries sent are those narrowed by the registry as it stood when they were chosen.`,
 		RunE: func(cmd *cobra.Command, _ []string) error { return runReporter(cmd.Context(), fl) },
