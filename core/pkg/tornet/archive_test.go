@@ -1,6 +1,7 @@
 package tornet
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,8 +126,19 @@ func TestArchiveVotingPeriod_aDifferentConsensusForTheSamePeriodIsAnError(t *tes
 }
 
 func TestArchiveVotingPeriod_failures(t *testing.T) {
-	if _, _, err := ArchiveVotingPeriod(t.TempDir(), t.TempDir(), ""); err == nil {
-		t.Fatal("an authority with no consensus archived something")
+	archive := t.TempDir()
+	if _, wrote, err := ArchiveVotingPeriod(t.TempDir(), archive, ""); !errors.Is(err, ErrNoConsensusYet) || wrote {
+		t.Fatalf("an authority with no consensus yet: wrote %v, err %v; want ErrNoConsensusYet and nothing written", wrote, err)
+	}
+	if entries, _ := os.ReadDir(archive); len(entries) != 0 {
+		t.Fatalf("an authority with no consensus yet left %d entries in the archive", len(entries))
+	}
+	unreadable := t.TempDir()
+	if err := os.Mkdir(filepath.Join(unreadable, DataDirConsensus), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ArchiveVotingPeriod(unreadable, t.TempDir(), ""); err == nil || errors.Is(err, ErrNoConsensusYet) {
+		t.Fatalf("a consensus that cannot be read must fail, not read as none yet: %v", err)
 	}
 	dir := dataDir(t)
 	write(t, filepath.Join(dir, DataDirConsensus), []byte("garbage\n"))

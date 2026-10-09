@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -174,6 +175,8 @@ consensus and bandwidth file of the network is then recomputable by anyone who
 holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
 signatures.
+Before the authority's first consensus (up to one voting interval after the
+authorities start) there is nothing to archive, and the run succeeds saying so.
 
 With --export-votes-dir it also copies the authority's own vote of that period
 to <dir>/<valid-after>.vote, the files the bandwidth reporter reads. The
@@ -186,6 +189,10 @@ reporter's group); nothing else of the data directory is copied there.`,
 			return clierr.Usage("--data-dir and --archive-dir are required")
 		}
 		m, wrote, err := tornet.ArchiveVotingPeriod(f.dataDir, f.archiveDir, f.bandwidthFile)
+		if errors.Is(err, tornet.ErrNoConsensusYet) {
+			fmt.Fprintf(cmd.OutOrStdout(), "nothing to archive: %v\n", err)
+			return nil
+		}
 		if err != nil {
 			return clierr.Failure("%v", err)
 		}

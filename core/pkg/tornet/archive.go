@@ -62,6 +62,12 @@ func ManifestRoot(files map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ErrNoConsensusYet is an authority that has not taken part in a consensus
+// yet: tor writes cached-consensus only once the first vote has passed, up to
+// one voting interval after the authorities start. There is nothing to archive,
+// and that is not a failure.
+var ErrNoConsensusYet = errors.New("the authority holds no consensus yet")
+
 // ArchiveVotingPeriod copies the consensus a directory authority holds, the
 // votes that made it and, when bandwidthFile is not empty, the bandwidth file
 // it voted with, into <archiveDir>/<valid-after>/ with a manifest. It is safe
@@ -72,8 +78,11 @@ func ManifestRoot(files map[string]string) string {
 // It returns the manifest, and whether anything was written.
 func ArchiveVotingPeriod(dataDir, archiveDir, bandwidthFile string) (Manifest, bool, error) {
 	consensusRaw, err := readLimited(filepath.Join(dataDir, DataDirConsensus))
+	if errors.Is(err, fs.ErrNotExist) {
+		return Manifest{}, false, fmt.Errorf("%w: %s holds no %s", ErrNoConsensusYet, dataDir, DataDirConsensus)
+	}
 	if err != nil {
-		return Manifest{}, false, fmt.Errorf("the authority has no consensus to archive: %w", err)
+		return Manifest{}, false, fmt.Errorf("read the authority's consensus: %w", err)
 	}
 	c, err := ParseConsensus(bytes.NewReader(consensusRaw))
 	if err != nil {

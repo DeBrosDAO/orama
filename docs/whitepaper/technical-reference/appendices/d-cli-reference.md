@@ -2209,6 +2209,8 @@ consensus and bandwidth file of the network is then recomputable by anyone who
 holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
 signatures.
+Before the authority's first consensus (up to one voting interval after the
+authorities start) there is nothing to archive, and the run succeeds saying so.
 
 With --export-votes-dir it also copies the authority's own vote of that period
 to <dir>/<valid-after>.vote, the files the bandwidth reporter reads. The

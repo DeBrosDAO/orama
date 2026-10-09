@@ -114,8 +114,11 @@ func TestArchiveCmd_archivesAndReportsTheSecondRunAsDone(t *testing.T) {
 		t.Errorf("second run: %s", second)
 	}
 	archiveFlags.dataDir = t.TempDir()
-	if err := archiveCmd.RunE(&cobra.Command{}, nil); err == nil {
-		t.Error("an authority with no consensus archived something")
+	var none bytes.Buffer
+	early := &cobra.Command{}
+	early.SetOut(&none)
+	if err := archiveCmd.RunE(early, nil); err != nil || !strings.HasPrefix(none.String(), "nothing to archive: ") {
+		t.Errorf("an authority before its first consensus: %v, %q; want success and nothing to archive (the timer runs before the first vote)", err, none.String())
 	}
 	archiveFlags.dataDir = ""
 	if err := archiveCmd.RunE(&cobra.Command{}, nil); clierr.CodeOf(err) != clierr.CodeUsage {
