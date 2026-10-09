@@ -178,6 +178,13 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Simulating and broadcasting a transaction each have two buckets of their own: the
+		// client's network and the route as a whole (chain_tx_limit.go).
+		if l := g.chainTxLimiterFor(r); l != nil && !l.allow(ip) {
+			writeChainTxRateLimited(w)
+			return
+		}
+
 		// A capability-opened WebSocket carries no credential, so the address
 		// is all that can be limited. It gets a bucket of its own, on the
 		// gateway that sees the client; a namespace gateway sees only the

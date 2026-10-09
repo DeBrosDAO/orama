@@ -7,16 +7,19 @@
  * The protobuf types under ./gen are generated from chain/proto by
  * `pnpm gen:chain`; they are not exported wholesale, only what a caller needs.
  */
-export { OramaChainClient } from "./client";
+export { ChainTxRefusedError, OramaChainClient } from "./client";
 export type {
   BroadcastResult,
   ChainAccount,
   ChainClientConfig,
   ChainQueryResult,
+  GatewayBroadcastResult,
   PageOptions,
   QueryOptions,
   SignAndBroadcastOptions,
+  SimulateResult,
   Uint64Like,
+  WalletPageOptions,
 } from "./client";
 
 export { LocalSigner, verifyDirectSignature } from "./signer";
