@@ -306,8 +306,16 @@ Read and write to the distributed Olric cache. Each namespace has its own cache:
 | `cache_get(key)` | Get cached value by key. Returns empty on miss. |
 | `cache_set(key, value, ttlSeconds)` | Store value. `ttlSeconds > 0` expires the entry after that long (at most 10 years); `0` means no expiry; a negative or longer ttl is refused. No return value; a failure is logged by the gateway. |
 | `cache_delete(key)` | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. Requires gateway 0.200.0 or later: a function that imports it fails to instantiate on an older gateway. |
-| `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). |
-| `cache_incr_by(key, delta)` | Atomically increment by delta. |
+| `cache_incr(key)` | Atomically increment by 1 (initializes to 0 if missing). Returns the new value, or 0 on failure. |
+| `cache_incr_by(key, delta)` | Atomically increment by `delta` (may be negative). Same return. |
+
+**Counter guarantees.** Each increment is one call to Olric's atomic `Incr` on the key's partition owner; nothing reads the value and writes it back.
+
+- Concurrent increments from any number of invocations, on any of the namespace's gateways, are all counted and each returns a distinct value: `n` increments of 1 on a new key return `1..n`, each once.
+- An increment never sets or changes an expiry. A counter an increment created has none (clear it with `cache_delete`); a counter `cache_set` stored with a `ttlSeconds` keeps that deadline through increments, and after it expires the next increment starts again from 0. To count in a window, `cache_set` the key with the window as its ttl first.
+- A value that is missing, expired or not a number counts as 0 and is replaced by the result.
+- A failed call returns 0 to the function and is not retried by the platform. After a timeout the increment may or may not have been applied, so read the counter back with `cache_incr_by(key, 0)` before trying again if double counting matters.
+- A request the gateway refuses before it reaches your function (a retryable `503 SERVICE_UNAVAILABLE`) never ran and changed nothing.
 
 ### Storage (IPFS)
 

@@ -18,6 +18,10 @@ import (
 
 const testNamespace = "anchat"
 
+// expiryDriftMs is how far an entry's deadline may move when an increment
+// stores it again, far below the 60s a reset would add.
+const expiryDriftMs = 2000
+
 func newEmbeddedCache(t *testing.T) *HostFunctions {
 	t.Helper()
 	return &HostFunctions{cacheClient: fixedOlric(olrictest.Start(t).EmbeddedClient())}
@@ -223,5 +227,89 @@ func TestCacheHostFunctions_followTheCurrentClient(t *testing.T) {
 	current = nil // dropped again
 	if _, err := h.CacheGet(ctx, "k"); !errors.Is(err, serverless.ErrCacheUnavailable) {
 		t.Fatalf("after the drop CacheGet = %v, want ErrCacheUnavailable", err)
+	}
+}
+
+// An increment is the only thing that changes the counter: it never gives the
+// key an expiry and never takes one away. A counter that cache_set stored with
+// a ttl keeps that expiry through increments, and one that an increment created
+// has none.
+func TestCacheIncrBy_leavesTheExpiryAlone(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if got, err := h.CacheIncrBy(ctx, "created-by-incr", 5); err != nil || got != 5 {
+		t.Fatalf("CacheIncrBy on a missing key = %d, %v; want 5", got, err)
+	}
+	if ttl := storedTTL(t, h, "created-by-incr"); ttl != 0 {
+		t.Fatalf("a counter an increment created has TTL %d, want none", ttl)
+	}
+
+	if err := h.CacheSet(ctx, "windowed", []byte("10"), 60); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	before := storedTTL(t, h, "windowed")
+	if got, err := h.CacheIncrBy(ctx, "windowed", 1); err != nil || got != 11 {
+		t.Fatalf("CacheIncrBy on a counter set with a ttl = %d, %v; want 11", got, err)
+	}
+	after := storedTTL(t, h, "windowed")
+	// The expiry is a deadline in unix milliseconds; re-storing the value moves
+	// it by the rounding of the remaining time, never toward a fresh 60s.
+	if drift := after - before; after == 0 || drift < -expiryDriftMs || drift > expiryDriftMs {
+		t.Fatalf("increment changed the expiry: deadline %d before, %d after", before, after)
+	}
+}
+
+// A counter with a short ttl still expires although it is incremented, and the
+// next increment starts a new counter at the delta.
+func TestCacheIncrBy_expiredCounterStartsOver(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "short", []byte("7"), 1); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if got, err := h.CacheIncr(ctx, "short"); err != nil || got != 8 {
+		t.Fatalf("CacheIncr before expiry = %d, %v; want 8", got, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := h.CacheGet(ctx, "short"); errors.Is(err, olriclib.ErrKeyNotFound) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a counter with a 1s ttl was still readable after 5s: an increment extended it")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got, err := h.CacheIncr(ctx, "short"); err != nil || got != 1 {
+		t.Fatalf("CacheIncr after expiry = %d, %v; want 1", got, err)
+	}
+}
+
+func TestCacheIncrBy_noCacheClient(t *testing.T) {
+	h := &HostFunctions{}
+	if _, err := h.CacheIncr(nsCtx(), "k"); !errors.Is(err, serverless.ErrCacheUnavailable) {
+		t.Fatalf("CacheIncr without a cache = %v, want ErrCacheUnavailable", err)
+	}
+}
+
+// Olric counts a value that is not a number as 0 and replaces it; the host
+// function does not turn that into an error (docs/SERVERLESS.md#cache-olric-distributed-cache).
+func TestCacheIncrBy_nonNumericValueCountsAsZero(t *testing.T) {
+	h := newEmbeddedCache(t)
+	ctx := nsCtx()
+
+	if err := h.CacheSet(ctx, "text", []byte("hello"), 0); err != nil {
+		t.Fatalf("CacheSet: %v", err)
+	}
+	if got, err := h.CacheIncrBy(ctx, "text", 3); err != nil || got != 3 {
+		t.Fatalf("CacheIncrBy on text = %d, %v; want 3", got, err)
+	}
+	if got, err := h.CacheIncrBy(ctx, "text", -5); err != nil || got != -2 {
+		t.Fatalf("CacheIncrBy with a negative delta = %d, %v; want -2", got, err)
+	}
+	if v, err := h.CacheGet(ctx, "text"); err != nil || string(v) != "-2" {
+		t.Fatalf("cache_get of a counter = %q, %v; want its decimal text", v, err)
 	}
 }

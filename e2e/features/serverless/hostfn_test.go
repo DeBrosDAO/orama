@@ -3,8 +3,10 @@
 package serverless
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -81,24 +83,35 @@ func TestHostHTTPFetch_ssrfMatrix(t *testing.T) {
 // TestHostCache_atomicsAndTTL: cache_incr is atomic under concurrent
 // invocations; set/get/delete round-trip; a TTL expires; a negative TTL is
 // refused (docs/SERVERLESS.md#cache-olric-distributed-cache).
+//
+// Every increment's reply is checked. A call the edge refused (a 503 from an
+// open circuit) never ran, so it is reported as a refusal and not left to show
+// up as a counter that "lost" an increment; the calls that did run must return
+// 1..n each exactly once, which is what atomic means.
 func TestHostCache_atomicsAndTTL(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
 	const fn, workers = "e2e-cache", 20
 	deploy(t, fx, fnSpec{name: fn})
 	key := "e2e-counter-" + fx.n.Name
+	replies := make([]*gw.Response, workers)
+	errs := make([]error, workers)
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func(c *gw.Client) {
+		go func(i int, c *gw.Client) {
 			defer wg.Done()
-			_, _ = c.Send(t.Context(), gw.Req{Method: http.MethodPost, Path: "/v1/functions/" + fn + "/invoke", Bearer: fx.admin,
+			replies[i], errs[i] = c.Send(t.Context(), gw.Req{Method: http.MethodPost, Path: "/v1/functions/" + fn + "/invoke", Bearer: fx.admin,
 				Header: http.Header{"Content-Type": {"application/json"}}, Body: []byte(`{"op":"cache_incr","key":"` + key + `","delta":1}`)})
-		}(fx.c.PinTo(fx.f.State.Nodes[i%len(fx.f.State.Nodes)].PublicIP))
+		}(i, fx.c.PinTo(fx.f.State.Nodes[i%len(fx.f.State.Nodes)].PublicIP))
 	}
 	wg.Wait()
-	if got := call(t, fx, fn, map[string]any{"op": "cache_incr", "key": key, "delta": 0})["value"]; got != float64(workers) {
-		t.Errorf("%d concurrent increments across the gateways left %v", workers, got)
+	ran := incrementsThatRan(t, replies, errs)
+	if !isCounting(ran) {
+		t.Errorf("the %d increments that ran returned %v, want 1..%d each once (a repeated or skipped value is a lost update)", len(ran), ran, len(ran))
+	}
+	if got := call(t, fx, fn, map[string]any{"op": "cache_incr", "key": key, "delta": 0})["value"]; got != float64(len(ran)) {
+		t.Errorf("%d concurrent increments across the gateways left %v after %d of them ran", workers, got, len(ran))
 	}
 	call(t, fx, fn, map[string]any{"op": "cache_set", "key": "k", "value": "v-ü", "ttl": 0})
 	if got := call(t, fx, fn, map[string]any{"op": "cache_get", "key": "k"})["value"]; got != "v-ü" {
@@ -118,6 +131,43 @@ func TestHostCache_atomicsAndTTL(t *testing.T) {
 	eventually.Require(t, time.Second, cacheBudget, "a 2s entry to expire", func() (bool, error) {
 		return call(t, fx, fn, map[string]any{"op": "cache_get", "key": "short"})["value"] == "", nil
 	})
+}
+
+// incrementsThatRan reports every increment that did not get a 200 and returns,
+// sorted, the values of those that did.
+func incrementsThatRan(t *testing.T, replies []*gw.Response, errs []error) []int {
+	t.Helper()
+	var ran []int
+	for i := range replies {
+		if errs[i] != nil {
+			t.Errorf("increment %d was not sent: %v", i, errs[i])
+			continue
+		}
+		if replies[i].Status != http.StatusOK {
+			t.Errorf("increment %d was refused, so it never ran: status %d %s", i, replies[i].Status, replies[i].Body)
+			continue
+		}
+		var out struct {
+			Value int `json:"value"`
+		}
+		if err := json.Unmarshal(replies[i].Body, &out); err != nil {
+			t.Errorf("increment %d: undecodable reply %q: %v", i, replies[i].Body, err)
+			continue
+		}
+		ran = append(ran, out.Value)
+	}
+	sort.Ints(ran)
+	return ran
+}
+
+// isCounting reports whether sorted is exactly 1..len(sorted).
+func isCounting(sorted []int) bool {
+	for i, v := range sorted {
+		if v != i+1 {
+			return false
+		}
+	}
+	return true
 }
 
 // TestHostDB_guardRefusals: a function's SQL may not ATTACH, PRAGMA, VACUUM,

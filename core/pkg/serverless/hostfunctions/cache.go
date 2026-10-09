@@ -107,25 +107,32 @@ func (h *HostFunctions) CacheDelete(ctx context.Context, key string) error {
 	return nil
 }
 
-// CacheIncr atomically increments a numeric value in cache by 1 and returns the new value.
-// If the key doesn't exist, it is initialized to 0 before incrementing.
-// Returns an error if the value exists but is not numeric.
+// CacheIncr atomically increments a numeric value in cache by 1 and returns the
+// new value. See CacheIncrBy for what "atomically" covers.
 func (h *HostFunctions) CacheIncr(ctx context.Context, key string) (int64, error) {
 	return h.CacheIncrBy(ctx, key, 1)
 }
 
 // CacheIncrBy atomically increments a numeric value by delta and returns the new value.
-// If the key doesn't exist, it is initialized to 0 before incrementing.
-// Returns an error if the value exists but is not numeric.
+//
+// The DMap's Incr is the only thing that changes the counter. Olric runs it on
+// the partition owner under a per-key lock, so concurrent increments from any
+// number of gateways each see the previous one's result and return distinct
+// values. It keeps the key's expiry (an increment neither sets nor extends
+// one), so a counter that cache_set stored with a ttl expires on schedule and
+// one an increment created never does.
+//
+// A missing, expired or non-numeric value counts as 0 and is replaced; Olric
+// does not report the last as an error. A failed call is not retried (the
+// gateway's client sets no retries): when it timed out, the increment may or
+// may not have been applied, and the caller gets the error (the function sees 0).
 func (h *HostFunctions) CacheIncrBy(ctx context.Context, key string, delta int64) (int64, error) {
 	dm, err := h.cacheDMap(ctx, "cache_incr_by")
 	if err != nil {
 		return 0, err
 	}
 
-	// Olric's Incr method atomically increments a numeric value
-	// It initializes the key to 0 if it doesn't exist, then increments by delta
-	// Note: Olric's Incr takes int (not int64) and returns int
+	// Olric's Incr takes int (not int64) and returns int.
 	newValue, err := dm.Incr(ctx, key, int(delta))
 	if err != nil {
 		return 0, &serverless.HostFunctionError{Function: "cache_incr_by", Cause: fmt.Errorf("failed to increment: %w", err)}

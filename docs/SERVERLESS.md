@@ -423,14 +423,36 @@ if !res.Committed {
 | `cache_get(key)` → bytes | Get cached value by key. Returns empty on miss. |
 | `cache_set(key, value, ttl)` | Store value. `ttl` is in seconds: `> 0` expires the entry after that long (at most `olric.MaxEntryTTL`, 10 years), `0` means no expiry (lives until `cache_delete`), negative or longer is refused. No return value; a failure is logged by the gateway. |
 | `cache_delete(key)` → u32 | Remove a key. Returns 1 when the key is gone afterwards (including when it was never set), 0 on failure. The only way to clear a no-expiry entry. Requires gateway 0.200.0 or later on every node of the namespace: wazero resolves imports at instantiation, so a function importing it fails every invocation on an older gateway. |
-| `cache_incr(key)` → int64 | Atomically increment by 1 (init to 0 if missing). |
-| `cache_incr_by(key, delta)` → int64 | Atomically increment by delta. |
+| `cache_incr(key)` → int64 | Atomically increment by 1 (init to 0 if missing). Returns the new value, or 0 on failure. |
+| `cache_incr_by(key, delta)` → int64 | Atomically increment by `delta` (may be negative). Same return. |
 
 Each namespace has its own cache map (`:serverless_cache:<namespace>`), so a
 function reaches only its own namespace's keys, whichever Olric the gateway
 running it talks to. The cache
 host functions need an invocation, so they are unavailable while a warm-pool
 (stateless) reactor module runs `_initialize`; call them from `handle()`.
+
+**Counter guarantees.** `cache_incr` and `cache_incr_by` are one call to Olric's
+atomic `Incr` on the key's partition owner, under a per-key lock; nothing reads
+the value and writes it back. So:
+
+- Concurrent increments from any number of invocations, on any number of the
+  namespace's gateways, are all counted, and each returns a distinct value: `n`
+  increments of 1 on a new key return `1..n`, each once.
+- An increment never sets or changes an expiry. A counter an increment created
+  has none (clear it with `cache_delete`); a counter `cache_set` stored with a
+  `ttl` keeps that deadline through increments, and once it expires the next
+  increment starts again from 0. To count in a window, `cache_set` the key with
+  the window as its `ttl` first; do not expect `cache_incr` to start the clock.
+- A value that is missing, expired or not a number counts as 0 and is replaced
+  by the result. `cache_get` on a counter returns its decimal text.
+- A failed call returns 0 to the function and is not retried by the platform.
+  When the failure is a timeout the increment may or may not have been applied,
+  so a function that must not double count should read the counter back
+  (`cache_incr_by(key, 0)`) before it tries again.
+- A request the gateway refuses before it reaches the function (for example a
+  retryable `503 SERVICE_UNAVAILABLE` from the proxy) never ran, so it changed
+  nothing; a client that retries it counts once.
 
 **Upgrading to 0.200.0.** Before 0.200.0 every function shared one
 `serverless_cache` map and every entry was written without an expiry. After the
