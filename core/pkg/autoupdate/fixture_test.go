@@ -88,6 +88,7 @@ func newRelease(t *testing.T) *release {
 	if err := os.WriteFile(r.rootOut, root, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	releaseverify.AllowLocalRepositories(t)
 	srv := httptest.NewServer(http.FileServer(http.Dir(r.dir)))
 	t.Cleanup(srv.Close)
 	r.url = srv.URL
@@ -154,6 +155,13 @@ func (j *memJournal) Clear() error {
 	j.clearErrs++
 	return nil
 }
+
+// memRetries is the retry record in memory.
+type memRetries struct{ retry *Retry }
+
+func (r *memRetries) Current() (*Retry, error) { return r.retry, nil }
+func (r *memRetries) Set(v Retry) error        { r.retry = &v; return nil }
+func (r *memRetries) Clear() error             { r.retry = nil; return nil }
 
 // fakeNode records what the agent asks of the machine.
 type fakeNode struct {
@@ -259,6 +267,7 @@ type harness struct {
 	rel    *release
 	node   *fakeNode
 	jrnl   *memJournal
+	retry  *memRetries
 	agent  *Agent
 	notice string
 	logs   []string
@@ -267,9 +276,9 @@ type harness struct {
 // newHarness is the agent on host (one of testNodes), running 0.3.0, over db.
 func newHarness(t *testing.T, db *sql.DB, rel *release, host string) *harness {
 	t.Helper()
-	h := &harness{db: db, rel: rel, node: &fakeNode{current: "0.3.0"}, jrnl: &memJournal{}, notice: filepath.Join(t.TempDir(), "notice.json")}
+	h := &harness{db: db, rel: rel, node: &fakeNode{current: "0.3.0"}, jrnl: &memJournal{}, retry: &memRetries{}, notice: filepath.Join(t.TempDir(), "notice.json")}
 	h.agent = &Agent{
-		Store: testStore(db), Journal: h.jrnl,
+		Store: testStore(db), Journal: h.jrnl, Retries: h.retry,
 		Raft: fakeRaft{view: RaftView{LeaderHost: "10.0.0.1", Voters: 3, HealthyVoters: 3}},
 		Source: Source{
 			RootPath: rel.rootOut, SeenPath: filepath.Join(t.TempDir(), "release-seen.json"),

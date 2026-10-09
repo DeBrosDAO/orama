@@ -47,7 +47,7 @@ orama members transfer 0xabc…          # the owner, and only the owner
 
 A member holds **one** grant. Adding a member who already holds one replaces it with the new role, selector and expiry, so `members add` is also how a role is changed or a selector removed. Roles you can grant: `reader`, `runtime`, `developer`, `admin`. A grant takes effect on every node as soon as the write returns.
 
-**Transferring ownership** is one step, not a removal and a grant, so there is no moment where the namespace has no owner. The outgoing owner keeps an `admin` grant, so handing a project over does not lock you out. The incoming owner's previous grant ends: ownership replaces it. The target must be a wallet address (`0x` and 40 hex digits, or a Solana public key). A transfer is held to the recipient's per-wallet namespace cap like a create is: a wallet already at the cap is refused `403 NAMESPACE_QUOTA` (`wallet` and `limit` in the body), the owner keeps the namespace and nothing is written; a cap that cannot be read is a retryable 503.
+**Transferring ownership** is one step, not a removal and a grant, so there is no moment where the namespace has no owner. The outgoing owner keeps an `admin` grant, so handing a project over does not lock you out. The incoming owner's previous grant ends: ownership replaces it. The target must be a wallet address (`0x` and 40 hex digits, or a Solana public key). A transfer is held to the recipient's per-wallet namespace cap like a create is: a wallet already at the cap is refused `403 TRANSFER_REFUSED` (a generic answer that says nothing of the recipient), the owner keeps the namespace and nothing is written; a cap that cannot be read is a retryable 503.
 
 ### Narrowing a grant
 

@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -437,6 +438,16 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			MaxIdleConnsPerHost: 20,
 			IdleConnTimeout:     90 * time.Second,
 		},
+	}
+	// The older inter-node stamps are accepted, and written, only while the
+	// registry says some node may still need them.
+	if store := gw.registryStore(); store != nil {
+		nodeauth.InstallLegacyFloor(nodeauth.RegistryLegacyFloor(store, func(format string, args ...any) {
+			logger.ComponentWarn(logging.ComponentGeneral, fmt.Sprintf(format, args...))
+		}))
+	} else {
+		logger.ComponentWarn(logging.ComponentGeneral,
+			"This gateway has no registry to read the nodes' versions from, so the older inter-node stamps stay accepted")
 	}
 	// The hop key is what lets a namespace gateway believe this one validated
 	// a request. Without a cluster secret there is no key, no internal-auth

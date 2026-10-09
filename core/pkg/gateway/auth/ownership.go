@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/client"
@@ -177,7 +178,8 @@ func (s *Service) OwnerOf(ctx context.Context, namespace string) (string, error)
 // namespace reached it. The statement that moves the owner row carries the
 // count, so two transfers racing to one wallet cannot both find room; the
 // refusal is an *ErrNamespaceQuota and nothing is left written.
-func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to string, walletCap int) error {
+func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to string, walletCap int) (err error) {
+	defer func() { s.auditQuotaRefusal(ctx, namespace, from, to, err) }()
 	if s.db == nil {
 		return fmt.Errorf("transferring ownership requires the rqlite client (SetRqliteClient): without an affected-row count a transfer that changed nothing looks like one that worked")
 	}
@@ -253,6 +255,28 @@ func (s *Service) TransferOwnership(ctx context.Context, namespace, from, to str
 		Result:    AuditSuccess,
 	})
 	return nil
+}
+
+// auditQuotaRefusal records a transfer refused because the destination wallet
+// is at its namespace cap. The caller is told only that the transfer was
+// refused (the cap and count of another wallet are not theirs to learn); the
+// trail keeps the wallet and the limit for the operator.
+func (s *Service) auditQuotaRefusal(ctx context.Context, namespace, from, to string, err error) {
+	var quota *ErrNamespaceQuota
+	if !errors.As(err, &quota) {
+		return
+	}
+	s.audit.Record(ctx, AuditEvent{
+		Namespace: namespace,
+		Actor:     NormalizeWallet(from),
+		Action:    AuditOwnerTransferred,
+		Resource:  "wallet " + NormalizeWallet(to),
+		Result:    AuditFailure,
+		Metadata: map[string]string{
+			"reason": "the destination wallet owns as many namespaces as one wallet may",
+			"limit":  strconv.Itoa(quota.Cap),
+		},
+	})
 }
 
 // CountNamespacesOwnedBy is the per-wallet namespace quota's input.

@@ -16,12 +16,15 @@ import (
 
 // Creation refusals (core/pkg/gateway/handlers/namespace/create_handler.go).
 const (
-	codeDenied   = "NAMESPACE_CREATION_DENIED"
-	codeTaken    = "NAMESPACE_TAKEN"
-	codeQuota    = "NAMESPACE_QUOTA"
-	operatorsMsg = "only an operator"
-	allowlistMsg = "namespace-creator list"
-	takenMsg     = "already exists"
+	codeDenied = "NAMESPACE_CREATION_DENIED"
+	codeTaken  = "NAMESPACE_TAKEN"
+	codeQuota  = "NAMESPACE_QUOTA"
+	// codeTransferRefused is a transfer the recipient cannot take; it does not
+	// say the recipient is at its cap.
+	codeTransferRefused = "TRANSFER_REFUSED"
+	operatorsMsg        = "only an operator"
+	allowlistMsg        = "namespace-creator list"
+	takenMsg            = "already exists"
 )
 
 // The creation policy is checked before the name's existence, so asking for

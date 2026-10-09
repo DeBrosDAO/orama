@@ -49,7 +49,7 @@ covers:
     - "docs/AUTH.md#the-lobby: namespace creation follows the cluster's setting: operators, allowlist or open"
     - "docs/CLI_REFERENCE.md#orama-cluster-creators: an operator is not on the allowlist unless added; an empty list admits nobody"
     - "docs/API_SURFACE.md#namespace-management: a wallet at its per-wallet cap is refused (NAMESPACE_QUOTA)"
-    - "docs/AUTH.md#roles: a transfer to a wallet already at the per-wallet cap is 403 NAMESPACE_QUOTA with the wallet and the limit; the owner keeps the namespace"
+    - "docs/AUTH.md#roles: a transfer to a wallet already at the per-wallet cap is a generic 403 TRANSFER_REFUSED that does not name the wallet or the limit; the owner keeps the namespace"
     - "docs/AUTH.md#operating-the-cluster: operator endpoints need a wallet on the operator list (NOT_AN_OPERATOR)"
     - "docs/AUTH.md#which-key-signed-a-token: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
     - "docs/CLI_REFERENCE.md#orama-operator-rotate-secrets: the walker is idempotent"

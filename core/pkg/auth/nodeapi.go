@@ -244,18 +244,22 @@ func SignNodeAPI(signer NodeStampSigner, r *http.Request, nodeID string, body []
 	}
 	nonce := hex.EncodeToString(raw)
 	ts := now.Unix()
-	v1, err := signer.Sign([]byte(nodeAPIPayload(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, ts)))
-	if err != nil {
-		return err
-	}
 	v2, err := signer.Sign([]byte(nodeAPIPayloadNonced(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, nonce, ts)))
 	if err != nil {
 		return err
 	}
 	r.Header.Set(NodeIDHeader, nodeID)
 	r.Header.Set(NodeNonceHeader, nonce)
-	r.Header.Set(NodeStampHeader, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(v1))
 	r.Header.Set(NodeStampV2Header, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(v2))
+	// The unnonced stamp is written only while some node may need it: beside
+	// the nonced one it is what a replayer strips the nonced stamp back to.
+	if legacyStampsAccepted() {
+		v1, err := signer.Sign([]byte(nodeAPIPayload(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, ts)))
+		if err != nil {
+			return err
+		}
+		r.Header.Set(NodeStampHeader, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(v1))
+	}
 	return nil
 }
 
@@ -286,7 +290,7 @@ func VerifyNodeAPI(verifierFor NodeVerifierFor, r *http.Request, body []byte, no
 	header := NodeStampHeader
 	if nonced {
 		header = NodeStampV2Header
-	} else if !AcceptLegacyNodeStamp {
+	} else if !AcceptLegacyNodeStamp || !legacyStampsAccepted() {
 		return "", nil, false
 	}
 	ts, presented, ok := parseStamp(r.Header.Get(header), now, nodeAPIMaxSkew)

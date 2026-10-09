@@ -1,8 +1,10 @@
 package push
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -23,15 +25,74 @@ var keepRename = os.Rename
 
 // keepPrevious moves the entries a stage replaced (oldDir, which swapArchive
 // made 0700: only root reads a kept release) to base's PreviousRelease,
-// replacing the one kept before. When it fails, oldDir still holds the replaced
-// entries, so the caller can put them back.
+// replacing the one kept before. The release kept before is moved aside, into
+// the staging directory oldDir is in, and deleted only once oldDir is in its
+// place, so a kill at any step leaves a whole kept release (or oldDir, which
+// completePendingKeep keeps). When it fails, oldDir still holds the replaced
+// entries, so the caller can put them back, and the release kept before is
+// where it was.
 func keepPrevious(base, oldDir string) error {
 	kept := filepath.Join(base, PreviousRelease)
-	if err := os.RemoveAll(kept); err != nil {
-		return fmt.Errorf("remove the release kept before: %w", err)
+	aside := filepath.Join(filepath.Dir(oldDir), stagedAside)
+	asideKept := false
+	if _, err := os.Lstat(kept); err == nil {
+		if err := keepRename(kept, aside); err != nil {
+			return fmt.Errorf("move the release kept before aside: %w", err)
+		}
+		asideKept = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stat the release kept before: %w", err)
 	}
 	if err := keepRename(oldDir, kept); err != nil {
-		return fmt.Errorf("keep the replaced release at %s: %w", kept, err)
+		err = fmt.Errorf("keep the replaced release at %s: %w", kept, err)
+		if asideKept {
+			if backErr := os.Rename(aside, kept); backErr != nil {
+				err = errors.Join(err, fmt.Errorf("put the release kept before back at %s: %w", kept, backErr))
+			}
+		}
+		return err
+	}
+	if err := os.RemoveAll(aside); err != nil {
+		return fmt.Errorf("remove the release kept before, at %s: %w", aside, err)
+	}
+	return nil
+}
+
+// markKeep records in staging that the release its swap replaces is to be
+// kept, before the swap makes it the only copy.
+func markKeep(staging string) error {
+	if err := os.WriteFile(filepath.Join(staging, stagedKeep), nil, 0o600); err != nil {
+		return fmt.Errorf("record that the replaced release is to be kept: %w", err)
+	}
+	return nil
+}
+
+// completePendingKeep finishes a keep that a killed run left undone: a staging
+// directory marked stagedKeep whose old/ still holds a release, beside an
+// installed manifest (the swap had finished), and a PreviousRelease that is not
+// that release. It runs under the archive lock, before leftovers are removed.
+func completePendingKeep(base string) error {
+	markers, err := filepath.Glob(filepath.Join(base, stagingPrefix+"*", stagedKeep))
+	if err != nil {
+		return fmt.Errorf("list leftover staging directories: %w", err)
+	}
+	for _, marker := range markers {
+		old := filepath.Join(filepath.Dir(marker), stagedOld)
+		oldManifest, err := os.ReadFile(filepath.Join(old, archivetrust.ManifestName))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("read the manifest of the release to keep: %w", err)
+		}
+		keptManifest, err := os.ReadFile(filepath.Join(base, PreviousRelease, archivetrust.ManifestName))
+		if err == nil && bytes.Equal(oldManifest, keptManifest) {
+			continue
+		} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("read the manifest of the kept release: %w", err)
+		}
+		if err := keepPrevious(base, old); err != nil {
+			return fmt.Errorf("complete the keep of the release a killed run replaced: %w", err)
+		}
 	}
 	return nil
 }
@@ -82,6 +143,9 @@ func restorePrevious(t stageTarget, version string) (err error) {
 		}
 	}()
 	oldDir := filepath.Join(staging, stagedOld)
+	if err := markKeep(staging); err != nil {
+		return err
+	}
 	if err := swapArchive(t.base, kept, oldDir); err != nil {
 		return err
 	}

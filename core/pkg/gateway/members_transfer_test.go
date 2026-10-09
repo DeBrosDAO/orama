@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/auth"
@@ -23,9 +24,9 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return body
 }
 
-// A wallet at its cap is 403 NAMESPACE_QUOTA, the code a create at the cap
-// answers, carrying the limit and a hint.
-func TestRefuseTransfer_aWalletAtItsCapIsNamespaceQuota(t *testing.T) {
+// A wallet at its cap is a generic 403 TRANSFER_REFUSED: the caller learns
+// nothing of the other wallet, not that it is at a cap and not what the cap is.
+func TestRefuseTransfer_aWalletAtItsCapIsAGenericRefusal(t *testing.T) {
 	g := &Gateway{}
 	rec := httptest.NewRecorder()
 
@@ -35,14 +36,24 @@ func TestRefuseTransfer_aWalletAtItsCapIsNamespaceQuota(t *testing.T) {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 	body := decodeBody(t, rec)
-	if body["code"] != "NAMESPACE_QUOTA" {
-		t.Errorf("code = %v, want NAMESPACE_QUOTA", body["code"])
-	}
-	if body["limit"] != float64(10) || body["wallet"] != "0xfull" {
-		t.Errorf("the refusal does not name the wallet and its limit: %v", body)
+	if body["code"] != "TRANSFER_REFUSED" {
+		t.Errorf("code = %v, want TRANSFER_REFUSED", body["code"])
 	}
 	if h, _ := body["hint"].(string); h == "" {
 		t.Error("the refusal has no hint")
+	}
+	for _, leak := range []string{"wallet", "limit", "cap"} {
+		if _, ok := body[leak]; ok {
+			t.Errorf("the refusal carries %q: %v", leak, body)
+		}
+	}
+	for _, field := range []string{"error", "hint"} {
+		text, _ := body[field].(string)
+		for _, word := range []string{"0xfull", "10", "quota", "cap", "owns"} {
+			if strings.Contains(strings.ToLower(text), word) {
+				t.Errorf("%s %q says %q about the other wallet", field, text, word)
+			}
+		}
 	}
 }
 

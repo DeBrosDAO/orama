@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/auth"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/logging"
 	"github.com/DeBrosOfficial/network/pkg/nodeapi"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
+	"github.com/DeBrosOfficial/network/pkg/version"
 	"github.com/DeBrosOfficial/network/pkg/wireguard"
 	"go.uber.org/zap"
 )
@@ -66,6 +68,7 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 		Environment:    n.config.Node.Environment,
 		OperatorWallet: n.config.Node.OperatorWallet,
 		Role:           n.installedRole(),
+		Version:        version.Current,
 	}); err != nil {
 		return fmt.Errorf("failed to register DNS node: %w", err)
 	}
@@ -81,6 +84,7 @@ func (n *Node) registerDNSNode(ctx context.Context) error {
 
 // startDNSHeartbeat starts a goroutine that periodically updates the node's last_seen timestamp
 func (n *Node) startDNSHeartbeat(ctx context.Context) {
+	n.installLegacyFloor()
 	tick := &heartbeatTick{
 		heartbeat: func(ctx context.Context) {
 			if err := n.updateDNSHeartbeat(ctx); err != nil {
@@ -108,6 +112,21 @@ func (n *Node) startDNSHeartbeat(ctx context.Context) {
 	}()
 
 	n.logger.ComponentInfo(logging.ComponentNode, "Started DNS heartbeat (30s interval)")
+}
+
+// installLegacyFloor makes this node write the older inter-node stamps only
+// while the registry says some node may still need them (auth.LegacyFloor).
+// Without the registry it keeps writing them, as a node does that cannot tell.
+func (n *Node) installLegacyFloor() {
+	adapter := n.getRQLiteAdapter()
+	if adapter == nil {
+		n.logger.ComponentWarn(logging.ComponentNode,
+			"No registry handle yet to read the nodes' versions from, so this node keeps writing the older inter-node stamps")
+		return
+	}
+	auth.InstallLegacyFloor(auth.RegistryLegacyFloor(rqlite.NewClient(adapter.GetSQLDB()), func(format string, args ...any) {
+		n.logger.ComponentWarn(logging.ComponentNode, fmt.Sprintf(format, args...))
+	}))
 }
 
 // heartbeatTick is one DNS heartbeat. The heartbeat itself always runs: an
@@ -200,6 +219,7 @@ func (n *Node) updateDNSHeartbeat(ctx context.Context) error {
 	registered, err := client.Heartbeat(ctx, nodeapi.HeartbeatRequest{
 		Role:        n.installedRole(),
 		Environment: n.config.Node.Environment,
+		Version:     version.Current,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update DNS heartbeat: %w", err)

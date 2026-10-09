@@ -257,10 +257,11 @@ func (h *SpawnHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Stop operations can use request context since they're short-lived.
 	ctx := context.Background()
 
-	// A start is admitted under the namespace's lock, which it holds until the
-	// unit is started; a teardown of the namespace on this node holds it for
-	// the whole of the teardown.
-	if startsUnits[req.Action] {
+	// A start, and a save of the state a boot starts from, is admitted under the
+	// namespace's lock, which it holds until the unit is started or the state
+	// written; a teardown of the namespace on this node holds it for the whole of
+	// the teardown.
+	if admittedActions[req.Action] {
 		release, ok := h.admit(w, r, req)
 		if !ok {
 			return

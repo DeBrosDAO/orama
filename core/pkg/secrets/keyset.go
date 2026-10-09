@@ -172,12 +172,16 @@ func (h *Holder) Keyset(purpose string) (Keyset, error) {
 }
 
 // Seal encrypts with the holder's current keyset, or fallback if holder is nil.
+// A holder whose root cannot make the keyset is an error, never a reason to
+// seal under the static key: that row would be unreadable to every gateway that
+// has the root.
 func Seal(holder *Holder, purpose string, fallback []byte, plaintext string) (string, error) {
 	if holder != nil {
 		ks, err := holder.Keyset(purpose)
-		if err == nil {
-			return ks.Encrypt(plaintext)
+		if err != nil {
+			return "", fmt.Errorf("derive the %s encryption keys: %w", purpose, err)
 		}
+		return ks.Encrypt(plaintext)
 	}
 	if len(fallback) == 0 {
 		return "", fmt.Errorf("no encryption key")
@@ -191,9 +195,10 @@ func Seal(holder *Holder, purpose string, fallback []byte, plaintext string) (st
 func SealBound(holder *Holder, purpose string, fallback, aad []byte, plaintext string) (string, error) {
 	if holder != nil {
 		ks, err := holder.Keyset(purpose)
-		if err == nil {
-			return ks.EncryptBound(plaintext, aad)
+		if err != nil {
+			return "", fmt.Errorf("derive the %s encryption keys: %w", purpose, err)
 		}
+		return ks.EncryptBound(plaintext, aad)
 	}
 	return Seal(nil, purpose, fallback, plaintext)
 }

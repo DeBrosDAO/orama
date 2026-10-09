@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/storagefile"
 )
@@ -97,5 +99,28 @@ func TestRepair_skipsADeadSourceAndUsesAnother(t *testing.T) {
 	done, err := c.Repair(context.Background(), 5, testRepair)
 	if err != nil || len(done) != 1 || done[0].From != 1 {
 		t.Fatalf("got %v %+v, want slot 2 rebuilt from slot 1", err, done)
+	}
+}
+
+// Each slot is repaired within a budget of its own: a provider that stalls on
+// one slot's upload must not leave the slots after it with none.
+func TestRepair_aStalledSlotDoesNotSpendTheBudgetOfTheNext(t *testing.T) {
+	w := newWorld(t, []byte("payload"))
+	w.holdAll(t)
+	w.lose(1)
+	w.lose(2)
+	w.providers[1].stall = true
+	c := w.client(t)
+	c.wait = 300 * time.Millisecond
+
+	done, err := c.Repair(context.Background(), 5, testRepair)
+	if err == nil || !strings.Contains(err.Error(), "slot 1") {
+		t.Fatalf("err = %v, want slot 1's failure", err)
+	}
+	if len(done) != 1 || done[0].Slot != 2 {
+		t.Fatalf("repaired %+v, want slot 2 after slot 1 stalled", done)
+	}
+	if len(w.providers[2].pieces) != 1 {
+		t.Fatal("slot 2's provider holds nothing")
 	}
 }

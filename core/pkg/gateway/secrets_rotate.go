@@ -164,8 +164,10 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "root is required")
 		return
 	}
-	root := req.Root
-	if err := secrets.CheckSuccessor(g.encHolder.Get(), root); err != nil {
+	// A push more than one generation ahead means this gateway missed a
+	// fan-out: the registry, the source of truth, says what the root is.
+	root, err := secrets.ResolveSuccessor(r.Context(), g.registryStore(), g.encHolder.Get(), req.Root)
+	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -191,7 +193,7 @@ func (g *Gateway) handleInternalReencrypt(w http.ResponseWriter, r *http.Request
 	if !isNamespaceGateway(g.cfg) {
 		cols = secrets.IndexColumns()
 	}
-	res, err := secrets.Walk(r.Context(), g.ormClient, req.Root, cols)
+	res, err := secrets.Walk(r.Context(), g.ormClient, root, cols)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

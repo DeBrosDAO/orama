@@ -2,6 +2,7 @@ package autoupdate
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,15 +138,22 @@ func TestCompare_ordersNumericSegments(t *testing.T) {
 	}
 }
 
-func TestDecide_aValidatorIsNeverAuto(t *testing.T) {
+func TestDecide_aValidatorOnAutoSkipsAndIsNotAnError(t *testing.T) {
 	settings := DefaultSettings()
 	settings.Role = RoleValidator
 	settings.Mode = ModeAuto
-	if _, err := Decide(settings, Health{Voters: 3, HealthyVoters: 3}, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil); err == nil {
-		t.Fatal("a validator was allowed auto")
+	health := Health{Voters: 3, HealthyVoters: 3}
+	d, err := Decide(settings, health, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil)
+	if err != nil || d.Action != ActionSkip || !strings.Contains(d.Reason, "by hand") {
+		t.Fatalf("a validator on auto: %+v, %v", d, err)
+	}
+	// With nothing newer there is nothing to skip.
+	d, err = Decide(settings, health, time.Now(), "1.0.1", Candidate{Version: "1.0.1"}, nil)
+	if err != nil || d.Action != ActionNone {
+		t.Fatalf("a validator on auto with nothing newer: %+v, %v", d, err)
 	}
 	settings.Mode = ModeNotify
-	d, err := Decide(settings, Health{Voters: 3, HealthyVoters: 3}, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil)
+	d, err = Decide(settings, health, time.Now(), "1.0.0", Candidate{Version: "1.0.1"}, nil)
 	if err != nil || d.Action != ActionNotify {
 		t.Fatalf("a validator on notify: %+v, %v", d, err)
 	}

@@ -108,11 +108,17 @@ func LoadOrMaterialize(ctx context.Context, store Store, cacheDir, seedDir, clus
 		return Root{}, fmt.Errorf("no encryption root: no registry row, no %s file in %s or %s, and no cluster secret to copy", FileName, cacheDir, seedDir)
 	}
 
-	// Nothing anywhere: this is the cluster's first root, so no gateway of an
-	// older version holds or will read rows under it, and it starts at the
-	// highest write level. A root that already existed is never here: an
-	// upgraded cluster has its row or its files and keeps their level.
-	r = Root{CurrentID: FirstID, CurrentIKM: clusterSecret, WriteVersioned: true, WriteBound: true}
+	// Nothing anywhere. On a cluster whose registry holds no deployment and no
+	// sealed column this is its first root: no gateway of an older version
+	// holds or will read rows under it, and it starts at the highest write
+	// level. A node of an existing cluster that has no root file yet (a rolling
+	// upgrade reaches it before any rotation) is materialised at the legacy
+	// level, which older gateways can read, until rotate-secrets raises it.
+	fresh, ferr := registryHoldsNothing(ctx, store)
+	if ferr != nil {
+		return Root{}, fmt.Errorf("tell whether this cluster is new before creating its first encryption root: %w", ferr)
+	}
+	r = Root{CurrentID: FirstID, CurrentIKM: clusterSecret, WriteVersioned: fresh, WriteBound: fresh}
 	if err := writeFiles(cacheDir, r); err != nil {
 		return Root{}, err
 	}
@@ -123,6 +129,38 @@ func LoadOrMaterialize(ctx context.Context, store Store, cacheDir, seedDir, clus
 		_ = saveToRegistry(ctx, store, r)
 	}
 	return r, nil
+}
+
+// registryHoldsNothing reports whether the registry has no deployment and no
+// sealed value in an index column: a cluster that has never stored anything
+// under an encryption root. A registry that cannot be asked is an error, not a
+// new cluster; no store at all has nothing in it. A table that does not exist
+// yet (schema apply runs after the secrets manager is built) is empty.
+func registryHoldsNothing(ctx context.Context, store Store) (bool, error) {
+	if store == nil {
+		return true, nil
+	}
+	queries := []string{`SELECT COUNT(*) AS n FROM deployments`}
+	for _, col := range IndexColumns() {
+		queries = append(queries, fmt.Sprintf(`SELECT COUNT(*) AS n FROM %s WHERE %s IS NOT NULL AND %s <> ''`, col.Table, col.Column, col.Column))
+	}
+	for _, q := range queries {
+		var rows []struct {
+			N int `db:"n"`
+		}
+		if err := store.Query(ctx, &rows, q); err != nil {
+			if isNoSuchTable(err) {
+				continue
+			}
+			return false, err
+		}
+		for _, row := range rows {
+			if row.N > 0 {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
 }
 
 // loadFromFirstDir reads the root from the first directory that has one, and

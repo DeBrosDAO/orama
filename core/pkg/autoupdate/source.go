@@ -18,6 +18,8 @@ const (
 	archiveFilePerm = 0o600
 	// downloadName is the archive a fetch leaves in its directory.
 	downloadName = "release.tar.gz"
+	// fetchPrefix names the directory a fetch is made in, inside WorkDir.
+	fetchPrefix = "fetch-"
 )
 
 // Source is a release repository as one node reads it: through the root this
@@ -48,6 +50,22 @@ func (r Release) MetadataDir() string { return filepath.Join(r.Dir, "metadata") 
 // ArchivePath is where Download leaves the archive.
 func (r Release) ArchivePath() string { return filepath.Join(r.Dir, downloadName) }
 
+// SweepStale removes the fetch directories a run that was killed left in
+// WorkDir (the archive in one is hundreds of megabytes). The caller holds the
+// run lock, so none is in use.
+func (s Source) SweepStale() error {
+	stale, err := filepath.Glob(filepath.Join(s.WorkDir, fetchPrefix+"*"))
+	if err != nil {
+		return fmt.Errorf("list the fetch directories in %s: %w", s.WorkDir, err)
+	}
+	for _, dir := range stale {
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove the stale fetch directory %s: %w", dir, err)
+		}
+	}
+	return nil
+}
+
 // Newest fetches the channel's metadata from repoURL, verifies it against the
 // adopted root and the rollback record, and returns the newest release for
 // this machine's architecture. ok is false when the channel lists none. The
@@ -56,7 +74,7 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 	if err := os.MkdirAll(s.WorkDir, workDirPerm); err != nil {
 		return Release{}, false, fmt.Errorf("create %s: %w", s.WorkDir, err)
 	}
-	dir, err := os.MkdirTemp(s.WorkDir, "fetch-*")
+	dir, err := os.MkdirTemp(s.WorkDir, fetchPrefix+"*")
 	if err != nil {
 		return Release{}, false, fmt.Errorf("create a fetch directory: %w", err)
 	}

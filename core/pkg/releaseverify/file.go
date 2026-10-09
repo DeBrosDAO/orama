@@ -182,7 +182,7 @@ func readMetadata(rootPath, dir string, roles []string) (Metadata, error) {
 		*dst = data
 	}
 	for _, role := range roles {
-		if err := validRoleName(role); err != nil {
+		if err := ValidRoleName(role); err != nil {
 			return Metadata{}, err
 		}
 		data, err := readLimited(filepath.Join(dir, role+".json"))

@@ -190,11 +190,11 @@ func TestCheckFile_readsTheChannelsItIsAskedFor(t *testing.T) {
 
 func TestCheckFile_aRoleNameThatIsAPathIsRefused(t *testing.T) {
 	for _, bad := range []string{"../root", "a/b", "", "Stable", "targets", strings.Repeat("a", 33)} {
-		if err := validRoleName(bad); err == nil {
+		if err := ValidRoleName(bad); err == nil {
 			t.Errorf("role name %q was accepted", bad)
 		}
 	}
-	if err := validRoleName("stable"); err != nil {
+	if err := ValidRoleName("stable"); err != nil {
 		t.Errorf("stable: %v", err)
 	}
 }

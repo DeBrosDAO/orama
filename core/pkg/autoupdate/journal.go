@@ -17,6 +17,17 @@ type Intent struct {
 	// refused before anything stopped), which marks it bad for the cluster.
 	RollingBack bool `json:"rolling_back,omitempty"`
 	Blame       bool `json:"blame,omitempty"`
+	// RolledBack: the node is back on the previous release and healthy, and
+	// the failure of the release is not yet in the cluster's registry. The
+	// intent is kept until it is, so the next run records it instead of
+	// installing the same release again.
+	RolledBack bool `json:"rolled_back,omitempty"`
+	// Mode and Channel are the policy the install began under, for the notice
+	// a run that resumes it writes without reading the policy.
+	Mode    string `json:"mode,omitempty"`
+	Channel string `json:"channel,omitempty"`
+	// Reason is why the install failed, once it has.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Journal keeps the Intent on this machine, not in the cluster: it describes

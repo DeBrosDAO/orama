@@ -2255,6 +2255,7 @@ func (cm *ClusterManager) saveClusterStateToAllNodes(ctx context.Context, cluste
 				"action":        "save-cluster-state",
 				"namespace":     cluster.NamespaceName,
 				"node_id":       node.NodeID,
+				"cluster_id":    cluster.ID,
 				"cluster_state": json.RawMessage(data),
 			})
 			if err != nil {

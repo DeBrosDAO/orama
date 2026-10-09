@@ -33,6 +33,8 @@ type fakeProvider struct {
 	pieces   map[string][]byte
 	corrupt  bool
 	down     bool
+	// stall holds an upload until the client gives up on it.
+	stall bool
 }
 
 func (p *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +47,12 @@ func (p *fakeProvider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPost:
+		if p.stall {
+			// The server notices a client that left only once the body is read.
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done()
+			return
+		}
 		if p.refusals > 0 {
 			p.refusals--
 			http.Error(w, "not assigned", http.StatusForbidden)

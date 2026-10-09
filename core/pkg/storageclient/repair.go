@@ -50,12 +50,10 @@ func (c *Client) Repair(ctx context.Context, dealID uint64, repairSeed []byte) (
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("deal %d: %w", dealID, ErrNoSource)
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.wait)
-	defer cancel()
 	var done []Repaired
 	var errs []error
 	for _, target := range targets {
-		r, err := c.repairSlot(ctx, deal, repairSeed, sources, target)
+		r, err := c.repairSlotWithin(ctx, deal, repairSeed, sources, target)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("slot %d: %w", target.Index, err))
 			continue
@@ -63,6 +61,14 @@ func (c *Client) Repair(ctx context.Context, dealID uint64, repairSeed []byte) (
 		done = append(done, r)
 	}
 	return done, errors.Join(errs...)
+}
+
+// repairSlotWithin is repairSlot with a budget of its own: one slot whose
+// provider is slow must not leave the slots after it with none.
+func (c *Client) repairSlotWithin(ctx context.Context, deal Deal, seed []byte, sources []Slot, target Slot) (Repaired, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.wait)
+	defer cancel()
+	return c.repairSlot(ctx, deal, seed, sources, target)
 }
 
 func (c *Client) repairSlot(ctx context.Context, deal Deal, seed []byte, sources []Slot, target Slot) (Repaired, error) {

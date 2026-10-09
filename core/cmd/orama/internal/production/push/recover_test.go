@@ -278,3 +278,50 @@ func TestCheckBaseOwnedByRoot_refusesABaseAnotherUserOwns(t *testing.T) {
 		t.Fatal("a directory owned by a user was accepted as root's")
 	}
 }
+
+// A stage that keeps the release it replaces, killed at any step, leaves the
+// node on a whole release and the release it replaced is either still running
+// or kept: removing the kept release before the replaced one was in its place
+// lost the only way back when the run died between the two.
+func TestRecoverInterruptedSwap_aKeepingStageKilledAtAnyStepNeverLosesTheReplacedRelease(t *testing.T) {
+	n := newReleaseOnlyNode(t)
+	// A first stage leaves "old cli" kept, so the keep under test replaces a
+	// kept release.
+	if err := n.stageUnsigned(t, newBuild, true); err != nil {
+		t.Fatal(err)
+	}
+	third := map[string]string{}
+	for k, v := range newBuild {
+		third[k] = v
+	}
+	third["bin/orama"] = "third cli"
+
+	snaps := snapshotBeforeEveryRename(t, n.base, func() error { return n.stageUnsigned(t, third, true) })
+	var sawKeptAfterSwap bool
+	for i, snap := range snaps {
+		if err := removeLeftoverStaging(snap); err != nil {
+			t.Fatalf("kill point %d: recover: %v", i, err)
+		}
+		kept := read(t, filepath.Join(snap, PreviousRelease, "bin", "orama"))
+		switch running := read(t, filepath.Join(snap, "bin", "orama")); running {
+		case "new cli":
+			if kept != "old cli" {
+				t.Fatalf("kill point %d: still on the second release, but the kept one is %q, want the first", i, kept)
+			}
+		case "third cli":
+			sawKeptAfterSwap = true
+			if kept != "new cli" {
+				t.Fatalf("kill point %d: on the third release, but the kept one is %q: the release it replaced is lost", i, kept)
+			}
+		default:
+			t.Fatalf("kill point %d: bin/orama = %q, not a whole release", i, running)
+		}
+		leftovers, _ := filepath.Glob(filepath.Join(snap, stagingPrefix+"*"))
+		if len(leftovers) != 0 {
+			t.Fatalf("kill point %d: staging left behind: %v", i, leftovers)
+		}
+	}
+	if !sawKeptAfterSwap {
+		t.Fatal("no kill point after the swap")
+	}
+}

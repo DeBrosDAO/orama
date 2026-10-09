@@ -23,3 +23,19 @@ SyslogIdentifier=orama-autoupdate
 
 NoNewPrivileges=yes
 PrivateTmp=yes
+# Confinement that leaves the run what it does as root: it swaps /opt/orama,
+# writes /etc/orama and /var/lib/orama-autoupdate, runs `orama node upgrade
+# --restart` (systemctl over D-Bus, apt, ufw, wg and iptables) and reads the
+# registry over the overlay.
+ProtectHome=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+# AF_NETLINK is for ufw, iptables and wg, which the upgrade runs to reconcile
+# the firewall and the WireGuard mesh.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Deliberately not set, because `orama node upgrade` does what they forbid:
+# ProtectKernelTunables (it runs `sysctl -w` and `sysctl -p`: pkg/install/
+# firewall.go), ProtectSystem (it writes /opt/orama, /etc, /usr/local/bin and
+# the package database), and SystemCallFilter, which the upgrade's apt, dpkg and
+# ufw would have to be proven against on a node first.

@@ -152,19 +152,45 @@ func TestAgent_notifyReportsAndInstallsNothing(t *testing.T) {
 	}
 }
 
-func TestAgent_aValidatorOnAutoRefusesToRunAndOnNotifyOnlyReports(t *testing.T) {
+// A validator is upgraded by hand. On auto it says so in a refusal notice and
+// records the release as skipped, and exits clean: failing every tick, as it did
+// when auto was an error, stalled the nodes after it in the rollout.
+func TestAgent_aValidatorOnAutoSaysItIsUpgradedByHandAndTheRolloutDoesNotWaitForIt(t *testing.T) {
 	db, rel := newClusterDB(t), newRelease(t)
-	h := newHarness(t, db, rel, "10.0.0.2")
-	h.agent.Role = RoleValidator
-	auto(t, h)
-	if _, err := h.run(t); err == nil || !strings.Contains(err.Error(), "validator") {
-		t.Fatalf("a validator on auto: err = %v", err)
+	validator := newHarness(t, db, rel, "10.0.0.2") // first in the plan
+	validator.agent.Role = RoleValidator
+	auto(t, validator)
+
+	for i := 0; i < 2; i++ { // a second tick changes nothing
+		out, err := validator.run(t)
+		if err != nil || out.Action != ActionSkip || out.Version != testVersion || !strings.Contains(out.Reason, "validator") {
+			t.Fatalf("a validator on auto: %+v, %v", out, err)
+		}
 	}
-	if len(h.node.calls) != 0 {
-		t.Fatalf("it touched the node: %v", h.node.calls)
+	if len(validator.node.calls) != 0 {
+		t.Fatalf("it touched the node: %v", validator.node.calls)
 	}
+	if got := installState(t, db, testVersion, "n2"); got != StateSkipped {
+		t.Fatalf("n2 recorded %q, want skipped", got)
+	}
+	n := noticeOf(t, validator)
+	if n == nil || n.State != updatenotice.StateRefused || !strings.Contains(n.Reason, "by hand") || n.Candidate != testVersion {
+		t.Fatalf("notice %+v", n)
+	}
+	var locks int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM cluster_locks WHERE holder <> ''`).Scan(&locks); err != nil || locks != 0 {
+		t.Fatalf("it took the rollout lock (%d), %v", locks, err)
+	}
+
+	// n3 is next in the plan, with the skipped validator done.
+	next := newHarness(t, db, rel, "10.0.0.3")
+	auto(t, next)
+	if out, err := next.run(t); err != nil || out.Action != OutcomeInstalled {
+		t.Fatalf("the node after the validator: %+v, %v", out, err)
+	}
+
 	setSetting(t, db, updatepolicy.KeyMode, updatepolicy.ModeNotify)
-	if out, err := h.run(t); err != nil || out.Action != ActionNotify {
+	if out, err := validator.run(t); err != nil || out.Action != ActionNotify {
 		t.Fatalf("a validator on notify: %+v, %v", out, err)
 	}
 }

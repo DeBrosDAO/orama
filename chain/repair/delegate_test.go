@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +22,10 @@ import (
 type stubChain struct {
 	deal  types.Deal
 	slots []types.Slot
+	// heightErr makes Height fail, as a node that is busy or restarting does.
+	heightErr error
+	// order, when set, is told "height" each time Height is read.
+	order *[]string
 }
 
 func (c stubChain) Deal(context.Context, uint64) (types.Deal, error) { return c.deal, nil }
@@ -32,7 +39,15 @@ func (c stubChain) ProviderURL(_ context.Context, id string) (string, error) {
 // stubHeight is the chain height every stubChain reports.
 const stubHeight = 150
 
-func (c stubChain) Height(context.Context) (int64, error) { return stubHeight, nil }
+func (c stubChain) Height(context.Context) (int64, error) {
+	if c.order != nil {
+		*c.order = append(*c.order, "height")
+	}
+	if c.heightErr != nil {
+		return 0, c.heightErr
+	}
+	return stubHeight, nil
+}
 
 type memNet struct {
 	pieces   map[string][]byte
@@ -89,12 +104,70 @@ func TestRepairDeal_rebuildsTheMissingSlotFromASurvivor(t *testing.T) {
 	if err != nil || len(done) != 1 || done[0].From != 1 {
 		t.Fatalf("done %+v err %v", done, err)
 	}
-	if done[0].BlocksSinceAssigned != stubHeight-100 {
+	if !done[0].BlocksKnown || done[0].BlocksSinceAssigned != stubHeight-100 {
 		t.Fatalf("restore latency %d blocks, want %d", done[0].BlocksSinceAssigned, stubHeight-100)
 	}
 	got, _ := piece.Commit(net.uploaded["http://n2"])
 	if !bytes.Equal(got.Root, c.slots[2].PieceRoot) {
 		t.Fatal("uploaded bytes do not match slot 2")
+	}
+}
+
+// The height only measures how long the restore took. A node that cannot say
+// what it is must not undo, or refuse, the restore: the replica is uploaded,
+// the failure is logged as an error, and the metric is left out.
+func TestRepairDeal_aFailedHeightReadDoesNotFailTheRestore(t *testing.T) {
+	seed := bytes.Repeat([]byte{5}, 32)
+	c, net := fixture(t, seed)
+	c.heightErr = errors.New("rpc: connection refused")
+	d, err := New(c, net, "delegate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	d.log = slog.New(slog.NewTextHandler(&logs, nil))
+
+	done, err := d.RepairDeal(context.Background(), 1, seed)
+	if err != nil || len(done) != 1 || done[0].Slot != 2 {
+		t.Fatalf("done %+v err %v", done, err)
+	}
+	if done[0].BlocksKnown || done[0].BlocksSinceAssigned != 0 {
+		t.Fatalf("a metric was reported without a height: %+v", done[0])
+	}
+	if _, ok := net.uploaded["http://n2"]; !ok {
+		t.Fatal("the replica was not uploaded")
+	}
+	if out := logs.String(); !strings.Contains(out, "level=ERROR") || !strings.Contains(out, "connection refused") {
+		t.Fatalf("the failed read was not logged as an error: %q", out)
+	}
+}
+
+// orderNet tells order about each upload.
+type orderNet struct {
+	*memNet
+	order *[]string
+}
+
+func (n orderNet) Upload(ctx context.Context, base string, root, body []byte) error {
+	*n.order = append(*n.order, "upload")
+	return n.memNet.Upload(ctx, base, root, body)
+}
+
+// The height is read once the upload is done, so the latency includes it.
+func TestRepairDeal_readsTheHeightAfterTheUpload(t *testing.T) {
+	seed := bytes.Repeat([]byte{5}, 32)
+	c, net := fixture(t, seed)
+	var order []string
+	c.order = &order
+	d, err := New(c, orderNet{net, &order}, "delegate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.RepairDeal(context.Background(), 1, seed); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(order, []string{"upload", "height"}) {
+		t.Fatalf("order = %v, want the upload first", order)
 	}
 }
 

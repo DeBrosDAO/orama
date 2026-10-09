@@ -446,15 +446,17 @@ func TestStep_chainErrorsAreReturned(t *testing.T) {
 	require.ErrorContains(t, err, "rpc down")
 }
 
-func TestStep_aDamagedVoteIsNotReportedAround(t *testing.T) {
+// A file in the archive that is not a vote is left out and logged; it does not
+// stop the epoch from being reported from the votes that are there.
+func TestStep_aDamagedFileDoesNotStopTheReport(t *testing.T) {
 	r := newRig(t)
 	r.archive(seq(0, 24), three()...)
 	require.NoError(t, os.WriteFile(filepath.Join(r.votes, "bad"+VoteSuffix), []byte("not a vote"), 0o640))
 	_, _ = r.step()
 	r.closeEpoch()
 	_, err := r.step()
-	require.ErrorContains(t, err, "bad.vote")
-	require.Empty(t, r.chain.submitted)
+	require.NoError(t, err)
+	require.NotEmpty(t, r.chain.submitted)
 }
 
 func TestStep_ignoresOtherFilesAndOtherAuthorities(t *testing.T) {

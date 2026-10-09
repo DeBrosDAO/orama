@@ -575,8 +575,11 @@ owner. The incoming owner's previous grant ends: ownership replaces it.
 
 A transfer is held to the per-wallet namespace cap (`max_namespaces_per_wallet`,
 default 10) as a create is: a wallet that already owns that many is refused
-`403 NAMESPACE_QUOTA` (the body carries `wallet` and `limit`), the owner keeps the
-namespace, and nothing is written. The count is decided by the statement that moves
+`403 TRANSFER_REFUSED` (a generic refusal: it does not say that the recipient is at
+its cap or what the cap is, because a transfer would otherwise tell anyone the
+namespace count of any wallet; the audit trail records the `namespace.transfer`
+failure with the recipient and the limit), the owner keeps the namespace, and
+nothing is written. The count is decided by the statement that moves
 the owner row, not by a count read first, so two transfers racing to one wallet cannot
 both find room. The cap bounds what a wallet owns, not only what it creates: without
 this a wallet could be pushed past it by namespaces it never asked for. A cap an
@@ -985,7 +988,8 @@ about it — plus the fields that make it actionable.
 | `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
-| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it, and so is a transfer to that wallet (`wallet` and `limit` in the body); the owner keeps the namespace |
+| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it; the body carries `wallet` and `limit` |
+| `TRANSFER_REFUSED` | a transfer the recipient cannot take (403), for example a wallet at its namespace cap. It names neither the wallet nor the limit; the owner keeps the namespace, and the reason is in the audit trail |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |
 | `RELAY_DESTINATION_NOT_ALLOWED` | the relay (`/v1/proxy/relay`) reaches only a host under its allowed suffixes, on port 443, never an IP literal (400) |
 | `RELAY_UNAVAILABLE` | the relay could not carry the stream: Tor is down on the node, or the destination was not reached through it (503); it never connects directly |
@@ -1304,14 +1308,19 @@ path or query (network status, telemetry, repair, evict). Every namespace spawn
 action, the secrets re-encrypt and the deployment replica routes
 (`/v1/internal/deployments/replica/*`) carry parameters in the body and require
 v2, and the spawn handler also refuses a `node_id` that is not its own node's.
-A re-encrypt whose root is older than the gateway's, more than one generation
-ahead of it, or at its generation with a previous root it does not hold is
-refused. The v3 MAC (`X-Orama-Coordination-MAC-V3`) adds the port of the
+A re-encrypt whose root is older than the gateway's, at its generation with a
+previous root it does not hold, or at its generation with a lower write level is
+refused; one more than one generation ahead means the gateway missed a fan-out,
+and the gateway takes the registry's root instead when the registry is at least
+that generation (and has the pushed key at it). The v3 MAC (`X-Orama-Coordination-MAC-V3`) adds the port of the
 process the request is for (read from the connection on the receiving side), so
 a stamp for the index gateway is not good at a namespace gateway on the same
 node; v2 stays accepted beside it while the fleet is mixed
-(`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances are removed in
-the next release. It proves cluster membership, not which node signed.
+(`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances (and the
+unnonced ACME and node-api stamps) are accepted, and written, only while some
+registered node reports a release older than 0.3.1 (`dns_nodes.node_version`,
+read by `auth.LegacyFloor`); once every node is past it a request with its
+newer stamp stripped is refused. They are removed in the next release. It proves cluster membership, not which node signed.
 Details: SECURITY.md, "Coordination MAC v2" and "Coordination MAC v3".
 
 The source IP is not consulted, and must not be: every public request arrives

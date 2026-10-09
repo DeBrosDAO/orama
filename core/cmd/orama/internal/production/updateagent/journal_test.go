@@ -197,3 +197,47 @@ func TestMachineRestore_namesTheReleaseToGoBackTo(t *testing.T) {
 		t.Fatalf("version %q, err %v", got, err)
 	}
 }
+
+func TestFileRetries_setCurrentClear(t *testing.T) {
+	r := fileRetries{path: filepath.Join(t.TempDir(), "work", retryName)}
+	if got, err := r.Current(); got != nil || err != nil {
+		t.Fatalf("nothing set: %v, %v", got, err)
+	}
+	want := autoupdate.Retry{Version: "0.3.1", Attempts: 2, Until: time.Unix(1_700_000_000, 0).UTC(), Reason: "disk full"}
+	if err := r.Set(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Current()
+	if err != nil || got == nil || *got != want {
+		t.Fatalf("current = %+v, %v", got, err)
+	}
+	if info, err := os.Stat(r.path); err != nil || info.Mode().Perm() != retryPerm {
+		t.Fatalf("retry file: %v, %v", info, err)
+	}
+	want.Attempts = 3
+	if err := r.Set(want); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Current(); got == nil || got.Attempts != 3 {
+		t.Fatalf("set did not replace: %+v", got)
+	}
+	if err := r.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Clear(); err != nil {
+		t.Fatalf("clearing nothing: %v", err)
+	}
+	if got, _ := r.Current(); got != nil {
+		t.Fatal("a cleared record is still there")
+	}
+}
+
+func TestFileRetries_aRecordThatDoesNotParseIsAnErrorNotNoRecord(t *testing.T) {
+	r := fileRetries{path: filepath.Join(t.TempDir(), retryName)}
+	if err := os.WriteFile(r.path, []byte("{broken"), retryPerm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Current(); err == nil {
+		t.Fatal("a corrupt retry record read as none")
+	}
+}

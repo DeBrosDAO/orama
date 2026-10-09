@@ -120,9 +120,9 @@ func (s SQLStore) Installs(ctx context.Context, version string) (map[string]stri
 // Record writes a node's state for version, replacing an earlier one.
 func (s SQLStore) Record(ctx context.Context, version, nodeID, state, detail string) error {
 	switch state {
-	case StateInstalled, StateFailed:
+	case StateInstalled, StateFailed, StateSkipped:
 	default:
-		return fmt.Errorf("install state %q is not %s or %s", state, StateInstalled, StateFailed)
+		return fmt.Errorf("install state %q is not %s, %s or %s", state, StateInstalled, StateFailed, StateSkipped)
 	}
 	db, closeDB, err := s.Open(ctx)
 	if err != nil {

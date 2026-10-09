@@ -109,7 +109,9 @@ func SignACME(key []byte, r *http.Request, body []byte, now time.Time) error {
 	ts := now.Unix()
 	r.Header.Set(ACMENonceHeader, nonce)
 	setCoordinationStamp(key, r, ACMEMACV2Header, ts, acmePayloadNonced(r.Method, r.URL.Path, r.URL.RawQuery, body, nonce, ts))
-	setCoordinationStamp(key, r, CoordinationMACHeader, ts, acmePayload(r.Method, r.URL.Path, r.URL.RawQuery, body, ts))
+	if legacyStampsAccepted() {
+		setCoordinationStamp(key, r, CoordinationMACHeader, ts, acmePayload(r.Method, r.URL.Path, r.URL.RawQuery, body, ts))
+	}
 	return nil
 }
 
@@ -124,7 +126,7 @@ func VerifyACME(key []byte, r *http.Request, body []byte, now time.Time) bool {
 	if r.Header.Get(ACMEMACV2Header) != "" {
 		return verifyACMENonced(key, r, body, now)
 	}
-	return AcceptLegacyACMEMAC && verifyACMEUnnonced(key, r, body, now)
+	return AcceptLegacyACMEMAC && legacyStampsAccepted() && verifyACMEUnnonced(key, r, body, now)
 }
 
 func verifyACMEUnnonced(key []byte, r *http.Request, body []byte, now time.Time) bool {
