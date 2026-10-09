@@ -250,7 +250,7 @@ instead. A refusal is a failed host call: `db_query_v2` and `db_execute_v2` retu
 The reserved names are `api_keys`, `wallet_api_keys`, `refresh_tokens`,
 `nonces`, `device_authorizations`, `session_devices`,
 `namespace_session_policy`, `invite_tokens`, `operators`, `cluster_settings`,
-`namespace_creators`, `principals`,
+`namespace_creators`, `release_installs`, `principals`,
 `signing_keys`, `node_credentials`, `encryption_roots`, `grants`,
 `namespace_ownership` (0.122.x's ownership table, kept for the rolling upgrade),
 `api_keys_expiry_cutoff`,

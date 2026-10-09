@@ -38,6 +38,9 @@ type Builder struct {
 	zig string
 	// agent signs the manifest: the RootWallet agent.
 	agent archiveSigner
+	// releaseRoot is the manifest's release_root: base64 of the validated
+	// root.json --release-root named, or "".
+	releaseRoot string
 }
 
 // NewBuilder creates a new Builder.
@@ -83,7 +86,11 @@ func (b *Builder) Build() error {
 	if b.commit, err = b.readCommit(); err != nil {
 		return err
 	}
-	b.date = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	built, err := buildDate(os.Environ(), time.Now())
+	if err != nil {
+		return err
+	}
+	b.date = built.Format(dateLayout)
 
 	// Create temp build directory
 	b.tmpDir, err = os.MkdirTemp("", "orama-build-*")
@@ -161,7 +168,7 @@ func (b *Builder) Build() error {
 	}
 	switch {
 	case signer == "":
-		fmt.Printf("\n⚠️  Unsigned archive: no node will install it\n")
+		fmt.Printf("\n⚠️  Unsigned archive: a node installs it only through its adopted TUF release root\n")
 	case len(manifest.Signers) > 0:
 		fmt.Printf("  Signed. Nodes that install this build will trust only: %s\n", strings.Join(manifest.Signers, ", "))
 	default:
@@ -189,8 +196,8 @@ func (b *Builder) Build() error {
 func (b *Builder) buildOramaBinaries() error {
 	fmt.Println("[1/8] Cross-compiling Orama binaries...")
 
-	ldflags := fmt.Sprintf("-s -w -X 'main.version=%s' -X 'main.commit=%s' -X 'main.date=%s'",
-		b.version, b.commit, b.date)
+	ldflags := fmt.Sprintf("%s -X 'main.version=%s' -X 'main.commit=%s' -X 'main.date=%s'",
+		goLDFlags, b.version, b.commit, b.date)
 
 	gatewayLDFlags := fmt.Sprintf("%s -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildVersion=%s' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildCommit=%s' -X 'github.com/DeBrosOfficial/network/pkg/gateway.BuildTime=%s'",
 		ldflags, b.version, b.commit, b.date)
@@ -261,7 +268,7 @@ func (b *Builder) buildVaultGuardian() error {
 	}
 
 	if b.flags.Verbose {
-		fmt.Printf("  zig build-exe src/main.zig -target %s -O ReleaseSafe\n", zigTarget)
+		fmt.Printf("  zig build-exe src/main.zig -target %s -O ReleaseSafe -fstrip\n", zigTarget)
 	}
 
 	// Use `zig build-exe` rather than `zig build` (the build-system runner).
@@ -276,6 +283,10 @@ func (b *Builder) buildVaultGuardian() error {
 		"src/main.zig",
 		"-target", zigTarget,
 		"-O", "ReleaseSafe",
+		// Stripped, as the Go binaries are: unstripped, the binary holds the
+		// path of zig's per-build cache directory, which differs on every
+		// build, and the build machine's source paths.
+		"-fstrip",
 		"--name", "vault-guardian",
 		"-femit-bin=zig-out/bin/vault-guardian")
 	cmd.Dir = vaultDir
@@ -314,285 +325,6 @@ func copyFile(src, dst string) error {
 	if _, err := srcFile.WriteTo(dstFile); err != nil {
 		return err
 	}
-	return nil
-}
-
-func (b *Builder) buildOlric() error {
-	fmt.Printf("[3/8] Cross-compiling Olric %s...\n", constants.OlricVersion)
-
-	// go install doesn't support cross-compilation with GOBIN set,
-	// so we create a temporary module and use go build -o instead.
-	tmpDir, err := os.MkdirTemp("", "olric-build-*")
-	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	modInit := exec.Command("go", "mod", "init", "olric-build")
-	modInit.Dir = tmpDir
-	modInit.Stderr = os.Stderr
-	if err := modInit.Run(); err != nil {
-		return fmt.Errorf("go mod init: %w", err)
-	}
-
-	modGet := exec.Command("go", "get",
-		fmt.Sprintf("github.com/olric-data/olric/cmd/olric-server@%s", constants.OlricVersion))
-	modGet.Dir = tmpDir
-	modGet.Env = append(os.Environ(),
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-	modGet.Stderr = os.Stderr
-	if err := modGet.Run(); err != nil {
-		return fmt.Errorf("go get olric: %w", err)
-	}
-
-	cmd := exec.Command("go", "build",
-		"-ldflags", "-s -w",
-		"-trimpath",
-		"-o", filepath.Join(b.binDir, "olric-server"),
-		"github.com/olric-data/olric/cmd/olric-server")
-	cmd.Dir = tmpDir
-	cmd.Env = append(b.crossEnv(),
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	fmt.Println("  ✓ olric-server")
-	return nil
-}
-
-func (b *Builder) buildIPFSCluster() error {
-	fmt.Printf("[4/8] Cross-compiling IPFS Cluster %s...\n", constants.IPFSClusterVersion)
-
-	tmpDir, err := os.MkdirTemp("", "ipfs-cluster-build-*")
-	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	modInit := exec.Command("go", "mod", "init", "ipfs-cluster-build")
-	modInit.Dir = tmpDir
-	modInit.Stderr = os.Stderr
-	if err := modInit.Run(); err != nil {
-		return fmt.Errorf("go mod init: %w", err)
-	}
-
-	modGet := exec.Command("go", "get",
-		fmt.Sprintf("github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service@%s", constants.IPFSClusterVersion))
-	modGet.Dir = tmpDir
-	modGet.Env = append(os.Environ(),
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-	modGet.Stderr = os.Stderr
-	if err := modGet.Run(); err != nil {
-		return fmt.Errorf("go get ipfs-cluster: %w", err)
-	}
-
-	cmd := exec.Command("go", "build",
-		"-ldflags", "-s -w",
-		"-trimpath",
-		"-o", filepath.Join(b.binDir, "ipfs-cluster-service"),
-		"github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service")
-	cmd.Dir = tmpDir
-	cmd.Env = append(b.crossEnv(),
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		return err
-	}
-	fmt.Println("  ✓ ipfs-cluster-service")
-	return nil
-}
-
-func (b *Builder) buildCoreDNS() error {
-	fmt.Printf("[5/8] Building CoreDNS %s with RQLite plugin...\n", constants.CoreDNSVersion)
-
-	buildDir := filepath.Join(b.tmpDir, "coredns-build")
-
-	// Clone CoreDNS
-	fmt.Println("  Cloning CoreDNS...")
-	cmd := gitCommand("clone", "--depth", "1",
-		"--branch", "v"+constants.CoreDNSVersion,
-		"https://github.com/coredns/coredns.git", buildDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to clone coredns: %w", err)
-	}
-
-	// Copy RQLite plugin from local source
-	pluginSrc := filepath.Join(b.projectDir, "pkg", "coredns", "rqlite")
-	pluginDst := filepath.Join(buildDir, "plugin", "rqlite")
-	if err := os.MkdirAll(pluginDst, 0755); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(pluginSrc)
-	if err != nil {
-		return fmt.Errorf("failed to read rqlite plugin source at %s: %w", pluginSrc, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(pluginSrc, entry.Name()))
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(pluginDst, entry.Name()), data, 0644); err != nil {
-			return err
-		}
-	}
-
-	// Write plugin.cfg (same as build-linux-coredns.sh)
-	pluginCfg := `metadata:metadata
-cancel:cancel
-tls:tls
-reload:reload
-nsid:nsid
-bufsize:bufsize
-root:root
-bind:bind
-debug:debug
-trace:trace
-ready:ready
-health:health
-pprof:pprof
-prometheus:metrics
-errors:errors
-log:log
-dnstap:dnstap
-local:local
-dns64:dns64
-acl:acl
-any:any
-chaos:chaos
-loadbalance:loadbalance
-cache:cache
-rewrite:rewrite
-header:header
-dnssec:dnssec
-autopath:autopath
-minimal:minimal
-template:template
-transfer:transfer
-hosts:hosts
-file:file
-auto:auto
-secondary:secondary
-loop:loop
-forward:forward
-grpc:grpc
-erratic:erratic
-whoami:whoami
-on:github.com/coredns/caddy/onevent
-sign:sign
-view:view
-rqlite:rqlite
-`
-	if err := os.WriteFile(filepath.Join(buildDir, "plugin.cfg"), []byte(pluginCfg), 0644); err != nil {
-		return err
-	}
-
-	// Add dependencies
-	fmt.Println("  Adding dependencies...")
-	goPath := os.Getenv("PATH")
-	baseEnv := append(os.Environ(),
-		"PATH="+goPath,
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-
-	for _, dep := range []string{"github.com/miekg/dns@latest", "go.uber.org/zap@latest"} {
-		cmd := exec.Command("go", "get", dep)
-		cmd.Dir = buildDir
-		cmd.Env = baseEnv
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to get %s: %w", dep, err)
-		}
-	}
-
-	cmd = exec.Command("go", "mod", "tidy")
-	cmd.Dir = buildDir
-	cmd.Env = baseEnv
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go mod tidy failed: %w", err)
-	}
-
-	// Generate plugin code
-	fmt.Println("  Generating plugin code...")
-	cmd = exec.Command("go", "generate")
-	cmd.Dir = buildDir
-	cmd.Env = baseEnv
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go generate failed: %w", err)
-	}
-
-	// Cross-compile
-	fmt.Println("  Building binary...")
-	cmd = exec.Command("go", "build",
-		"-ldflags", "-s -w",
-		"-trimpath",
-		"-o", filepath.Join(b.binDir, "coredns"))
-	cmd.Dir = buildDir
-	cmd.Env = append(baseEnv,
-		"GOOS=linux",
-		fmt.Sprintf("GOARCH=%s", b.flags.Arch),
-		"CGO_ENABLED=0")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("build failed: %w", err)
-	}
-
-	fmt.Println("  ✓ coredns")
-	return nil
-}
-
-// caddyModulePath is the Go module of the Caddy modules the node's Caddy is
-// built with (dns.providers.orama and caddy.storage.orama), kept in the
-// repository's caddy/ directory beside core/.
-const caddyModulePath = "github.com/DeBrosOfficial/caddy-orama"
-
-func (b *Builder) buildCaddy() error {
-	fmt.Printf("[6/8] Building Caddy %s with the Orama modules...\n", constants.CaddyVersion)
-
-	// Ensure xcaddy is available
-	if _, err := exec.LookPath("xcaddy"); err != nil {
-		return fmt.Errorf("xcaddy not found in PATH — install with: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest")
-	}
-
-	moduleDir := filepath.Join(b.projectDir, "..", "caddy")
-	if _, err := os.Stat(filepath.Join(moduleDir, "go.mod")); err != nil {
-		return fmt.Errorf("the Caddy modules are missing at %s (expected the repository's caddy/ directory): %w", moduleDir, err)
-	}
-
-	fmt.Println("  Building binary...")
-	cmd := exec.Command("xcaddy", "build",
-		"v"+constants.CaddyVersion,
-		"--with", caddyModulePath+"="+moduleDir,
-		"--output", filepath.Join(b.binDir, "caddy"))
-	cmd.Env = append(os.Environ(),
-		"GOOS=linux",
-		fmt.Sprintf("GOARCH=%s", b.flags.Arch),
-		"GOPROXY=https://proxy.golang.org|direct",
-		"GONOSUMDB=*")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("xcaddy build failed: %w", err)
-	}
-
-	fmt.Println("  ✓ caddy")
 	return nil
 }
 
@@ -672,7 +404,7 @@ func (b *Builder) copySystemdTemplates() error {
 
 // crossEnv returns the environment for cross-compilation.
 func (b *Builder) crossEnv() []string {
-	return append(os.Environ(),
+	return append(hermeticGoEnv(os.Environ()),
 		"GOOS=linux",
 		fmt.Sprintf("GOARCH=%s", b.flags.Arch),
 		"CGO_ENABLED=0")

@@ -44,3 +44,30 @@ func TestParseClusterSetting(t *testing.T) {
 		t.Fatalf("unknown setting: %v", err)
 	}
 }
+
+func TestParseClusterSetting_updatePolicy(t *testing.T) {
+	for name, value := range map[string]string{
+		"auto-update": "auto", "update-channel": "nightly", "update-window": "1-5", "release-repo": "https://releases.example.org/tuf",
+	} {
+		path, body, err := parseClusterSetting(name, value)
+		if err != nil {
+			t.Fatalf("%s=%s: %v", name, value, err)
+		}
+		if path != "/v1/operator/settings/"+name {
+			t.Errorf("%s: path %q", name, path)
+		}
+		if got, _ := body.(map[string]string); got["value"] != value {
+			t.Errorf("%s: body %#v", name, body)
+		}
+	}
+	for name, value := range map[string]string{
+		"auto-update": "yes", "update-channel": "Nightly!", "update-window": "late", "release-repo": "http://example.org",
+	} {
+		if _, _, err := parseClusterSetting(name, value); clierr.CodeOf(err) != clierr.CodeUsage {
+			t.Errorf("%s=%s: %v, want a usage error", name, value, err)
+		}
+	}
+	if _, _, err := parseClusterSetting("update-window", ""); err != nil {
+		t.Errorf("an empty window clears it: %v", err)
+	}
+}

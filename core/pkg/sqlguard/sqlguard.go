@@ -56,6 +56,7 @@ var protectedTables = map[string]string{
 	"operators":                "operator identity",
 	"cluster_settings":         "who may create namespaces, and how many",
 	"namespace_creators":       "wallets allowed to create a namespace",
+	"release_installs":         "which node installed or failed which release; a row marks a release bad for every node",
 	"principals":               "who the platform will authenticate",
 	// Public keys, but writing one publishes a key the cluster will accept
 	// tokens from — which is minting authority by another route.

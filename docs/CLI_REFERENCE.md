@@ -60,9 +60,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama cluster namespace remove`](#orama-cluster-namespace-remove) — Remove a namespace whose owner can no longer delete it
   - [`orama cluster register-onchain`](#orama-cluster-register-onchain) — Register this cluster's public name on the Orama chain
   - [`orama cluster retire-onchain`](#orama-cluster-retire-onchain) — Retire this cluster's public row on the Orama chain
-  - [`orama cluster settings`](#orama-cluster-settings) — Show or change namespace-creation settings
-    - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation or the per-wallet cap
-    - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, and the per-wallet cap
+  - [`orama cluster settings`](#orama-cluster-settings) — Show or change the cluster's settings
+    - [`orama cluster settings set`](#orama-cluster-settings-set) — Change namespace creation, the per-wallet cap or the update policy
+    - [`orama cluster settings show`](#orama-cluster-settings-show) — Show who may create namespaces, the per-wallet cap and the update policy
 - [`orama db`](#orama-db) — Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) — Backup database to IPFS
   - [`orama db backups`](#orama-db-backups) — List backups for a database
@@ -182,6 +182,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) — Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) — Node operator commands
   - [`orama node autoupdate`](#orama-node-autoupdate) — Decide whether a newer release should be installed
+    - [`orama node autoupdate run`](#orama-node-autoupdate-run) — Look for a newer release on the cluster's channel and act on it (requires sudo)
   - [`orama node clean`](#orama-node-clean) — Deprecated: use 'orama node wipe' or 'orama node remove'
   - [`orama node dns`](#orama-node-dns) — Cluster DNS: what the outside world needs to reach its nameservers
     - [`orama node dns delegation`](#orama-node-dns-delegation) — Print the NS and glue records to create at the parent zone
@@ -207,6 +208,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node start`](#orama-node-start) — Start all production services (requires sudo)
   - [`orama node status`](#orama-node-status) — Show the service status of the node on this machine
   - [`orama node stop`](#orama-node-stop) — Stop all production services (requires sudo)
+  - [`orama node trust`](#orama-node-trust) — Manage what this node accepts code from, besides its operator's wallet
+    - [`orama node trust add-root`](#orama-node-trust-add-root) — Adopt a TUF release root on this node (requires sudo)
   - [`orama node uninstall`](#orama-node-uninstall) — Remove production services (requires sudo)
   - [`orama node unlock`](#orama-node-unlock) — Unlock an OramaOS genesis node
   - [`orama node upgrade`](#orama-node-upgrade) — Upgrade existing installation (requires sudo)
@@ -597,19 +600,31 @@ orama build [flags]
 Cross-compile all Orama binaries and dependencies for Linux,
 then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
-  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy
+  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy (built from
+    checked-in, checksum-pinned modules; Kubo and RQLite by pinned digest)
   - Systemd namespace templates
   - manifest.json with checksums of every file, and manifest.sig
 
 The manifest is signed with your RootWallet (the agent's active account, through
 its wallet:sign capability). Nodes install only archives signed by an address in
 their trust anchor, /etc/orama/archive-signers, so signing is the default;
---unsigned makes an archive for local inspection that no node will install.
+--unsigned makes an archive without a wallet signature: the CI build that release
+signers sign. A node installs it only when its release root accepted it
+('orama node stage-archive --release-only'); otherwise it is for local inspection.
 
 --signers rotates the trusted signers: nodes that install this build replace
 their list with the given addresses. The build must be signed by a signer the
 nodes trust now, and the list must include that signer; retiring a key takes
 two builds (the old key adds the new one, the new key then drops the old).
+
+--release-root <root.json> puts a TUF release root in the signed manifest. A node that
+installs the build adopts it (/etc/orama/release-root.json) the way it takes a signer
+rotation, and from then on accepts releases signed under that root
+('orama node stage-archive --release-only', the auto-update agent).
+
+The build is reproducible: with SOURCE_DATE_EPOCH set (a release build sets it to
+the commit's time) two builds of one commit produce the same archive, byte for
+byte. See docs/DEV_DEPLOY.md, "Reproducible builds".
 
 The resulting archive can be pushed to nodes with 'orama node push'.
 
@@ -622,8 +637,9 @@ Examples:
 |------|---------|-------------|
 | `--arch` | `amd64` | Target architecture (amd64, arm64) |
 | `--output` | — | Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz) |
+| `--release-root` | — | A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root |
 | `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
-| `--unsigned` | `false` | Do not sign the manifest (a local-only archive: nodes refuse it) |
+| `--unsigned` | `false` | Do not sign the manifest (a node installs it only through its adopted TUF release root) |
 | `--verbose` | `false` | Verbose output |
 
 ### orama chain
@@ -957,7 +973,7 @@ the sign document and does not submit it.
 
 ### orama cluster settings
 
-Show or change namespace-creation settings
+Show or change the cluster's settings
 
 ```
 orama cluster settings
@@ -967,7 +983,7 @@ Subcommands: `set`, `show`
 
 ### orama cluster settings set
 
-Change namespace creation or the per-wallet cap
+Change namespace creation, the per-wallet cap or the update policy
 
 ```
 orama cluster settings set <setting> <value>
@@ -981,9 +997,20 @@ namespace-creation is operators, allowlist or open.
 
 max-namespaces-per-wallet is an integer from 1 to 10000. The default is 10.
 
+The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+
+  auto-update      off, notify (the default) or auto. notify reports a newer
+                   release in 'orama monitor'; auto installs it, one node at a
+                   time, when the cluster is healthy and the hour is in the window
+  update-channel   the release channel to follow: stable (the default) or nightly
+  update-window    start-end hours UTC when auto may install, for example 1-5;
+                   empty for any hour
+  release-repo     the https URL of the release repository; empty (the default)
+                   means no updates are looked up
+
 ### orama cluster settings show
 
-Show who may create namespaces, and the per-wallet cap
+Show who may create namespaces, the per-wallet cap and the update policy
 
 ```
 orama cluster settings show
@@ -3066,7 +3093,7 @@ Remote, run from your machine and reaching nodes over SSH:
 The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.
 
-Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
+Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `trust`, `uninstall`, `unlock`, `upgrade`, `wipe`
 
 ### orama node autoupdate
 
@@ -3078,10 +3105,13 @@ orama node autoupdate [flags]
 
 Report what this cluster should do with a candidate release.
 
+This answers the question for the values you give it and changes nothing. The
+agent that asks it of the cluster's real state, and acts, is 'orama node
+autoupdate run'.
+
 The default mode is notify: a newer verified release is reported and not
 installed. auto means the node may install, and only when the cluster is
-healthy, the release is newer, and the maintenance window is open. The
-install itself is one node at a time and is not performed by this command.
+healthy, the release is newer, and the maintenance window is open.
 
 A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
@@ -3103,6 +3133,51 @@ upgrades are staged explicitly with 'orama global stage-oramad'.
 | `--verify` | — | simulated TUF failure: rollback, freeze, threshold, or hash |
 | `--voters` | `3` | raft voters |
 | `--window` | — | maintenance window as start-end hours, for example 1-5 |
+
+Subcommands: `run`
+
+### orama node autoupdate run
+
+Look for a newer release on the cluster's channel and act on it (requires sudo)
+
+```
+orama node autoupdate run
+```
+
+Run this node's auto-update agent once. orama-autoupdate.timer runs it every
+15 minutes on every node; running it by hand does the same thing.
+
+The agent reads the cluster's policy (orama cluster settings show): auto-update
+off, notify or auto; the channel; the maintenance window; the release repository.
+It does nothing unless the cluster stored a release repository and this node
+adopted a release root (orama node trust add-root).
+
+It fetches the channel's metadata and verifies it against the adopted root:
+every role at its threshold, an unexpired timestamp, a snapshot no older than the
+newest this node has accepted, and the channel's own keys for the channel's own
+paths. What does not verify is refused, reported in 'orama monitor', and never
+installed.
+
+With notify (the default) a newer release is reported in 'orama monitor' and
+nothing is installed. With auto the node installs it only when
+
+  - the cluster is not degraded and a majority of the raft voters are up;
+  - the hour is inside the maintenance window, if there is one;
+  - no node has failed the release (a failure anywhere marks the release bad for
+    every node, until a newer release supersedes it);
+  - it is this node's turn in the rollout plan: followers first, the leader
+    last, nameservers spaced, one node at a time;
+  - it holds the cluster-wide rollout lock.
+
+The install is 'orama node stage-archive --release-only', keeping the release it
+replaces, then 'orama node upgrade --restart', then the health gate. If the
+upgrade or the gate fails, the previous release is put back and the node is
+upgraded onto it again; the release is then marked bad for the cluster. A
+validator (a machine that runs the chain) is never installed automatically.
+
+If a run is killed in the middle of an install, the next run finishes it first
+(the intent is in /var/lib/orama-autoupdate/install-intent.json), whatever the
+policy now says. One agent runs at a time on a machine.
 
 ### orama node clean
 
@@ -3658,6 +3733,12 @@ Examples:
     --base-domain orama-devnet.network --role nameserver --genesis \
     --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
+  # From a published release: no checkout, no Go or zig. The root is the
+  # release signers' key set you decided to trust; the cluster adopts it.
+  orama node setup --ip 1.2.3.4 --password --env mycluster \
+    --base-domain cluster.example.com --role nameserver --genesis \
+    --release 0.3.1 --release-repo https://releases.example.org/tuf --release-root ./root.json
+
   # Join existing cluster
   orama node setup --ip 5.6.7.8 --password --env devnet \
     --base-domain orama-devnet.network \
@@ -3680,6 +3761,7 @@ Examples:
 | `--archive` | — | Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
 | `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
+| `--channel` | — | Release channel to read (default stable); with --release |
 | `--env` | — | Target environment (default: active) |
 | `--gateway` | — | Gateway URL of the cluster to join (default: the environment's): its domain, e.g. https://orama-devnet.network; the invite is minted through one of its nodes and pins that node's certificate |
 | `--genesis` | `false` | Create a new cluster (first node) |
@@ -3687,6 +3769,9 @@ Examples:
 | `--ip` | — | Public IP address of the VPS (required) |
 | `--join-via` | — | user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed) |
 | `--password` | `false` | Bootstrap over password login; the password is read from your RootWallet vault login for the IP (rw vault add <ip>), never from the command line |
+| `--release-repo` | — | https URL of the release repository (TUF metadata and archives); with --release |
+| `--release-root` | — | The TUF root.json of the release signers you trust, checked out of band; with --release. The cluster adopts it |
+| `--release` | — | Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet |
 | `--role` | `node` | Node role: node or nameserver |
 | `--user` | `root` | SSH user on the VPS |
 
@@ -3720,10 +3805,18 @@ and hashes. Any failure refuses the archive; the wallet check is not tried
 instead. An archive that passes is then verified against the trust anchor as
 above: the release root is required in addition to it, not in place of it.
 
+--release-only is the one case where the release root is enough: the archive
+is an unsigned release (the CI build), it must not name signers or a release
+root, and the node records in /etc/orama/release-staged.json that it was staged
+through the release root, which is what lets 'orama node upgrade' install it.
+A channel target ('stable/orama-...') is checked against that channel's
+delegated role.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--archive` | — | The pushed archive on this node [required] |
 | `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target |
+| `--release-only` | `false` | Accept the archive on the release root's checks alone, without a wallet signature (an installed node; needs --release-metadata and --release-target) |
 | `--release-target` | — | Name the archive has in the release targets metadata; requires --release-metadata |
 | `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
 
@@ -3762,6 +3855,45 @@ Use --force to bypass quorum safety check.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--force` | `false` | Bypass quorum safety check |
+
+### orama node trust
+
+Manage what this node accepts code from, besides its operator's wallet
+
+```
+orama node trust
+```
+
+Subcommands: `add-root`
+
+### orama node trust add-root
+
+Adopt a TUF release root on this node (requires sudo)
+
+```
+orama node trust add-root <root.json> [flags]
+```
+
+Adopt a TUF release root as /etc/orama/release-root.json.
+
+A node trusts its operator's wallet by default (/etc/orama/archive-signers). A
+cluster may also trust a release root: a set of keys whose threshold signature
+on release metadata makes an archive installable without the operator building
+and signing it. The Orama release root is one; a cluster adopts it by choice
+and can drop it by deleting the file.
+
+The root is checked before it is written: well-formed, signed by its own keys at
+its threshold, not expired. Adopting a root other than the one already adopted
+needs --replace. This command changes this node only; 'orama build
+--release-root' puts the root in a signed archive, and every node that installs
+that archive adopts it.
+
+Examples:
+  sudo orama node trust add-root ./root.json
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--replace` | `false` | Replace a different release root that is already adopted |
 
 ### orama node uninstall
 

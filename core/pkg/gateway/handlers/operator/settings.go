@@ -27,7 +27,8 @@ type Creator struct {
 //	GET /v1/operator/settings
 //	PUT /v1/operator/settings/{setting}
 //
-// {setting} is namespace-creation or max-namespaces-per-wallet. The storage
+// {setting} is namespace-creation, max-namespaces-per-wallet, auto-update,
+// update-channel, update-window or release-repo. The storage
 // keys are namespace_creation and max_namespaces_per_wallet; both spellings
 // are accepted. Every method requires a wallet already on the operator list.
 func (h *Handler) HandleSettings(w http.ResponseWriter, r *http.Request) {
@@ -94,10 +95,25 @@ func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "cannot read cluster settings right now; the registry did not answer")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	update, err := loadUpdateSettings(r.Context(), h.rqliteClient)
+	if err != nil {
+		var bad *PolicyConfigError
+		if errors.As(err, &bad) {
+			writeError(w, http.StatusInternalServerError, bad.Error())
+			return
+		}
+		h.logger.Error("could not read cluster settings", zap.Error(err))
+		writeError(w, http.StatusServiceUnavailable, "cannot read cluster settings right now; the registry did not answer")
+		return
+	}
+	out := map[string]any{
 		SettingNamespaceCreation:      policy.Mode,
 		SettingMaxNamespacesPerWallet: policy.WalletCap,
-	})
+	}
+	for key, value := range update {
+		out[key] = value
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) putSetting(w http.ResponseWriter, r *http.Request, caller, key string) {
@@ -222,6 +238,9 @@ func (h *Handler) recordClusterChange(r *http.Request, caller, resource string, 
 // normalizeSetting maps the CLI's hyphenated name onto the stored key and
 // rejects a value the create handler would refuse to enforce.
 func normalizeSetting(key string, raw json.RawMessage) (string, string, error) {
+	if storedKey, value, ok, err := normalizeUpdateSetting(key, raw); ok {
+		return storedKey, value, err
+	}
 	switch key {
 	case "namespace-creation", SettingNamespaceCreation:
 		var value string

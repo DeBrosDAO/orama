@@ -5,7 +5,35 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
+
+// A check made before anything is stopped is a preflight refusal: the node is
+// as it was, and a caller that upgrades for an operator can tell it from an
+// upgrade that stopped services and failed.
+func TestExecute_aRefusalBeforeTheStopIsAPreflightFailure(t *testing.T) {
+	for _, step := range []string{"phase1", "verify-archive", "hand-over"} {
+		r := &recorder{update: true, fail: step}
+		err := r.orchestrator(&Flags{RestartServices: true}).Execute()
+		if clierr.CodeOf(err) != clierr.CodePreflight {
+			t.Errorf("%s failed: exit code %d, want %d (%v)", step, clierr.CodeOf(err), clierr.CodePreflight, err)
+		}
+		if slices.Contains(r.calls, "stop") {
+			t.Errorf("%s failed but the node was stopped: %v", step, r.calls)
+		}
+	}
+}
+
+func TestExecute_aFailureAfterTheStopIsNotAPreflightFailure(t *testing.T) {
+	for _, step := range []string{"stop", "install-binaries", "phase5", "restart"} {
+		r := &recorder{update: true, fail: step}
+		err := r.orchestrator(&Flags{RestartServices: true}).Execute()
+		if err == nil || clierr.CodeOf(err) == clierr.CodePreflight {
+			t.Errorf("%s failed: err = %v (exit code %d)", step, err, clierr.CodeOf(err))
+		}
+	}
+}
 
 // recorder stands in for every step of an upgrade and records the order they
 // ran in.

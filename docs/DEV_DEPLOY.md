@@ -133,7 +133,9 @@ in order (install the first node, print the delegation, join two more,
 `orama env use`, `orama auth login`, `orama namespace create`, sign in to the
 namespace, `orama deploy static`, then `orama status --json` and `orama app
 list`), substituting the page's example addresses, domain, environment and
-archive with the fixture's. It checks the results: the delegation output names
+release (version, repository and root) with the fixture's. A fixture given a build
+archive instead has the three release flags of each `orama node setup` replaced by
+`--archive`. It checks the results: the delegation output names
 your domain, all three nodes report `healthy`, and `www` is listed.
 
 The page and the executed steps cannot drift. `Plan()` in
@@ -150,15 +152,23 @@ is not part of `make test`; you run it:
 ```bash
 E2E_CLUSTER_IPS=<ip1>,<ip2>,<ip3> \
 E2E_CLUSTER_BASE_DOMAIN=<a domain whose NS you can publish> \
-E2E_CLUSTER_ARCHIVE=<the path orama build printed> \
+E2E_CLUSTER_RELEASE=<a published version> \
+E2E_CLUSTER_RELEASE_REPO=<the release repository's https URL> \
+E2E_CLUSTER_RELEASE_ROOT=<its root.json> \
 make e2e-cluster
 ```
+
+To install a build of your own instead of a release, give
+`E2E_CLUSTER_ARCHIVE=<the path orama build printed>` and none of the three release
+variables; a fixture with both is refused. The release run is the path the page
+describes (no checkout on the machine that types it).
 
 | Variable | Purpose |
 |----------|---------|
 | `E2E_CLUSTER_BASE_DOMAIN` | The domain the cluster is named under (required) |
 | `E2E_CLUSTER_IPS` | Three or more bare Linux machines, comma separated; the first is the genesis nameserver |
-| `E2E_CLUSTER_ARCHIVE` | Build archive, signed by the RootWallet account that is unlocked (`orama build`) |
+| `E2E_CLUSTER_RELEASE`, `E2E_CLUSTER_RELEASE_REPO`, `E2E_CLUSTER_RELEASE_ROOT` | A published release, its repository and the TUF root to verify it against; all three together. `go run ./cmd/testtuf` (in `core/`) makes a test repository and root |
+| `E2E_CLUSTER_ARCHIVE` | Instead of a release: a build archive, signed by the RootWallet account that is unlocked (`orama build`) |
 | `E2E_CLUSTER_ENV` | Environment name to create (default `e2eguide`; the page's `mycluster` is replaced by it) |
 | `E2E_CLUSTER_CLOUDFLARE_TOKEN_FILE` | Optional. Runs the page's `--cloudflare-token-file` step; without it the delegation must already exist |
 | `E2E_CLUSTER_DELEGATION_WAIT` | How long to wait for the NS records and the genesis certificate (default `20m`) |
@@ -296,6 +306,50 @@ The `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes are gone. A node
 not yet upgraded still serves them, and an upgraded one answers 404; nothing
 calls them, so a mixed fleet needs no handling.
 
+### Reproducible builds
+
+Two `orama build` runs of one commit produce the same archive, byte for byte, so
+the people who sign a release can each rebuild it and compare hashes before they
+sign. What fixes that:
+
+- **The build date** is `SOURCE_DATE_EPOCH` (seconds since the epoch) when it is
+  set, else the time of the build. A release build sets it to the commit's time,
+  `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. A value that is not a
+  count of seconds fails the build. The date goes into the manifest and the
+  binaries' version strings.
+- **Go binaries** are built with `-trimpath -buildvcs=false -ldflags "-s -w
+  -buildid="` and `-mod=readonly`. The vault is built with `zig build-exe
+  -fstrip`; unstripped, it holds the path of zig's per-build cache directory.
+- **The archive** lists its entries in a fixed order, each with the build date as
+  its time, root as owner, and mode 0755 (executable files and directories) or
+  0644; its gzip header names nothing and carries no time.
+- **Third-party programs** are built from modules checked in to the repository,
+  each with a `go.sum`: Olric in `core/thirdparty/olric`, IPFS Cluster in
+  `core/thirdparty/ipfs-cluster`, and Caddy from `caddy/cmd/caddy` (Caddy's
+  standard modules plus the Orama DNS provider and certificate storage; xcaddy is
+  no longer used). `go build -mod=readonly` refuses a module the `go.sum` does not
+  list or whose hash differs. The version each module requires is the constant in
+  `core/pkg/constants/versions.go`, and a test holds the two together. CoreDNS is
+  cloned at its tag and refused unless the checkout is the commit pinned in
+  `constants.CoreDNSCommit`; its own `go.sum` and `go.mod` decide its
+  dependencies, so nothing is upgraded to `@latest`. Kubo and RQLite are
+  downloaded and refused unless their SHA-256 equals the digest in
+  `constants/release_digests.go`.
+- **The environment cannot switch verification off.** `GOFLAGS`, `GOSUMDB`,
+  `GONOSUMDB`, `GONOSUMCHECK`, `GOPRIVATE`, `GONOPROXY` and `GOINSECURE` are
+  removed from the environment of every `go` command the build runs.
+
+To bump a third-party program, change its constant, then in its module directory
+run `go get -tool <package>@<version>` (in `caddy/`, `go get
+github.com/caddyserver/caddy/v2@v<version>`) and commit the `go.mod` and `go.sum`.
+IPFS Cluster v1.1.6 requires a `cockroachdb/swiss` that does not compile with
+Go 1.27; its module pins a newer one, which is why
+`core/thirdparty/ipfs-cluster/go.mod` lists it.
+
+`.github/workflows/release-archive.yml` builds the archive for each published
+release twice per architecture, fails if the two differ, and attaches the archive
+and its SHA-256 to the release. It holds no signing key.
+
 ### Signed archives
 
 Nodes install only build archives signed by an address they trust. The list of
@@ -333,47 +387,6 @@ outside the signature. `--unsigned` builds an archive for local inspection
 only; no node installs it. `orama node rollout` builds a signed archive the
 same way.
 
-**Auto-update check.** `orama node autoupdate --current <ver> --candidate <ver>`
-reports whether a newer release should be installed. The cluster default is
-`notify`: the command prints `notify` and does not swap binaries. `auto`
-prints `upgrade` only when the cluster is not degraded, a majority of raft
-voters are up, the candidate is a newer dotted version on the cluster's
-channel, and the hour is inside `--window` when one is set. A downgrade, a
-release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
-print `refuse`. `--role validator` with `--mode auto` is an error: a
-validator may be `off` or `notify`, never `auto`; its chain binary is changed by
-hand: the unit `orama global install` writes runs `oramad` under cosmovisor,
-so a new binary goes in through `orama global stage-oramad --upgrade <plan>`
-(see [CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor) and
-[RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)); installing again with different
-`oramad` bytes is refused. This command does not take
-a lease and does not restart a node. `max_parallel` is 1; a higher value is
-rejected.
-
-**Auto-update install (library).** `autoupdate.Upgrade` is what installs a
-release on one node once the decision is `upgrade`. It refuses any mode but
-`auto` and any validator. It runs the caller's verification first (the A4 TUF
-check of the archive, `releaseverify.CheckFile`); a failure there changes
-nothing. Then: the caller's stop, and for each binary a stage step (the
-verified file copied beside the live one as `<name>.next`, with the live
-binary's mode and owner, synced) and a swap step (the live binary hard-linked
-to `<name>.prev`, then `<name>.next` renamed over it, so the path is never
-missing), the caller's start (a failed start is stopped again), and the
-`pkg/nodehealth` gate — the same check `orama node start` and `orama node
-upgrade` wait on. A failure undoes what ran, last first (stop, each `.prev`
-renamed back, start), and reads the gate again; the error says whether the
-node came back on the previous release. `Upgrade` reports the release bad only
-when the new binaries ran and failed — the start or the health gate; a failed
-stop, copy or rename is an error about the node and does not mark the release
-bad. Verification and the stage step read each new file by path in turn, so
-the caller must keep the new files in a directory only root can write (the
-0700 staging directory stage-archive extracts into). `<name>.prev` stays after a
-successful swap. The rollout lease (`autoupdate.LockName`) is not taken by
-`Upgrade`; the caller must hold it. Nothing in the CLI calls `Upgrade` yet:
-there is no timer, no metadata fetch, and no command that installs through
-it, and it does not re-apply file capabilities (`setcap`) to a swapped
-binary.
-
 **Push.** `orama push` uploads into a fresh `mktemp -d` directory on each node
 and runs the node's **installed** CLI, `/usr/local/bin/orama node
 stage-archive`. Under a lock on `/opt/orama` that install and upgrade share, it
@@ -391,12 +404,27 @@ straight from `/opt/orama/bin`. Because the verifier is the node's installed
 CLI, push reaches only installed nodes; a fresh machine gets its first archive
 from `orama node setup` (or `orama node install --remote`).
 
-**Release root (opt-in).** A node that has adopted a TUF release root — a
-`root.json` placed at `/etc/orama/release-root.json` by its operator; no
-command writes that file yet — can require it when it stages:
+**Release root (opt-in).** A cluster may also trust a TUF **release root**: the
+key set of a group of release signers, whose threshold signature on release
+metadata makes an archive installable without the operator building and signing
+it. It is off by default; a cluster that never adopts one trusts only its
+operator's wallet. A node adopts a root as `/etc/orama/release-root.json`, by
+either of:
+
+- `sudo orama node trust add-root <root.json>`, on that node. The root is
+  checked first (well-formed, signed by its own keys at its threshold, not
+  expired); adopting a root other than the one already there needs `--replace`.
+- A signed archive that carries it: `orama build --release-root <root.json>` puts
+  the root in the signed manifest, and every node that installs that archive
+  adopts it, with the signer rotation's replay rule (a build older than the last
+  rotation cannot put an older root back). `orama node setup --release` builds
+  such an archive for you (below).
+
+A node with a root can require it when it stages:
 `orama node stage-archive --archive <file> --release-metadata <dir>
 --release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
-`targets.json`. The archive is first copied into the node's 0700 staging
+`targets.json`, and `<role>.json` for the channel when the target is
+`<channel>/orama-...`. The archive is first copied into the node's 0700 staging
 directory under `/opt/orama`; that copy is what is checked and what is
 extracted. Before anything is extracted, `pkg/releaseverify` checks the
 metadata against the adopted root (every role at its threshold, an unexpired
@@ -404,16 +432,56 @@ timestamp, a snapshot no older than the one recorded in
 `/etc/orama/release-seen.json`, which is read and raised under a `flock` on
 `release-seen.json.lock`) and checks, through the descriptor that wrote the
 copy, that it has the length and hashes `<name>` has in the verified targets.
-Any failure — no adopted root, a tampered archive, an
-expired timestamp, metadata signed under another root, an older snapshot —
-refuses the archive and leaves `/opt/orama` untouched; the command never falls
-back to the wallet-only path when these flags are given, and giving only one of
-the two is an error. An archive that passes is then verified against the
-wallet anchor exactly as above: the release root is required **in addition to**
-the operator's wallet signature, not in place of it. Without these flags
-nothing changes. `orama push`, `orama node setup` and `orama node upgrade` do
-not pass them, and no command fetches release metadata; the operator supplies
-the directory.
+Any failure — no adopted root, a tampered archive, an expired timestamp,
+metadata signed under another root, an older snapshot, a channel signing a path
+outside its own — refuses the archive and leaves `/opt/orama` untouched; the
+command never falls back to the wallet-only path when these flags are given, and
+giving only one of the two is an error. An archive that passes is then verified
+against the wallet anchor exactly as above: the release root is required **in
+addition to** the operator's wallet signature, not in place of it.
+
+`--release-only` is the one case where the root is enough. The archive is an
+unsigned release (the CI build, hashed in the TUF targets): it may not name
+signers or a release root, so a release can change what code runs and never who
+is trusted. After the TUF checks, the node verifies every file against the
+archive's own manifest and records the manifest's SHA-256, the root's SHA-256,
+the target and the snapshot version in `/etc/orama/release-staged.json`
+(outside `/opt/orama`, so no archive can write it). `orama node upgrade` and
+install accept an archive with no `manifest.sig` only when that record names its
+manifest under the root adopted now; replacing the root withdraws every earlier
+endorsement. This is how the auto-update agent installs (see "Auto-update"). It
+needs a node that is already installed, since the archive trust anchor must exist.
+
+**Release repository.** A repository is a static directory served over HTTPS
+(plain HTTP only to a loopback address): `timestamp.json`, `snapshot.json`,
+`targets.json`, one `<channel>.json` per delegated channel (`stable`, `nightly`),
+and the files under `targets/`, such as
+`targets/stable/orama-0.3.1-linux-amd64.tar.gz`. A channel is a delegated targets
+role with keys and a threshold of its own, trusted only for `<channel>/*`.
+`releaseverify.Repository` fetches it. The client reads no root from the
+repository: the root is the operator's out-of-band decision.
+
+**Install from a release.** `orama node setup --release <version> --release-repo
+<url> --release-root <root.json> [--channel stable]` needs no checkout, Go or
+zig. On your machine it fetches the metadata, verifies it against the root you
+name (threshold, expiry, a snapshot not older than the newest this machine has
+accepted, kept in `~/.orama/release-seen.json`), downloads
+`<channel>/orama-<version>-linux-<arch>.tar.gz` and checks its length and hashes.
+Only then does your RootWallet sign it: the manifest gains the root and your
+wallet's signature, and the archive goes on through the install above. The
+cluster therefore still trusts your wallet for what it installs, and now also
+trusts the root. `--release` and `--archive` are alternatives.
+
+**Signers and the test root.** Publishing a production release is a signing
+ceremony of the release signers (`pkg/releasesign`, a RootWallet purpose of its
+own); it is not implemented as a command. For a test network,
+`go run ./cmd/testtuf` (in `core/`) makes and updates a repository signed by
+software keys: `testtuf init -dir D`, `testtuf publish -dir D -channel stable
+-archive orama-0.3.1-linux-amd64.tar.gz`, and `testtuf refresh -dir D` before the
+timestamp (7 days by default) expires. Serve `D/repo` over HTTPS and give
+operators `D/repo/root.json`. Never adopt a test root on a production cluster.
+No code walks a chain of root versions: replacing a root is `add-root --replace`
+or a new signed archive.
 
 **First install.** A new machine has no verified binary of its own: the one
 that runs the install comes out of the archive. So `orama node setup` and
@@ -545,6 +613,137 @@ leader until the node restarts (an election per namespace, not a lost quorum).
 
 New joins need the minting node to have an anchor, so give the cluster its
 anchors before adding nodes.
+
+### Auto-update
+
+A cluster can keep itself on a release channel. Every node runs
+`orama-autoupdate.timer` (installed and enabled by install and upgrade; first run
+10 minutes after boot, then 15 minutes after each run ends). The service runs
+`orama node autoupdate run` as root. The agent does nothing, and says why, until
+the cluster stored a release repository and this node adopted a release root
+(`orama node trust add-root`, or an archive built with `--release-root`).
+
+**Policy** is four cluster settings, read from the index RQLite and set by an
+operator with `orama cluster settings set` (audited):
+
+| Setting | Values | Default |
+|---|---|---|
+| `auto-update` | `off`, `notify`, `auto` | `notify` |
+| `update-channel` | a channel name | `stable` |
+| `update-window` | `start-end` hours UTC (`22-4` wraps midnight), or empty | any hour |
+| `release-repo` | an https URL, or empty | none |
+
+A stored value the agent cannot use fails the run and is reported; it is never
+read as the default. `max_parallel` is 1 and is not a setting.
+
+**Each run:** read the policy; fetch the channel's metadata from the repository
+and verify it against the adopted root (every role at its threshold, an
+unexpired timestamp, a snapshot not older than `release-seen.json`, the channel
+role for `<channel>/*` only); take the newest `<channel>/orama-<version>-linux-<arch>.tar.gz`
+(versions are dotted numbers, so a nightly is `0.4.0.20261008`, not `0.4.0-nightly`);
+and decide. Anything that does not verify is refused, written to
+`/etc/orama/update-notice.json` and shown by `orama monitor` as a warning. The
+decision (`orama node autoupdate` prints the same table for values you give it):
+
+- a version not newer than the one installed is nothing to do; an older one is refused;
+- a release some node failed (a `failed` row in `release_installs`) is refused;
+- the cluster degraded (a registered, not retired, node that is not `active` or
+  has not heartbeated for 5 minutes) or fewer than a majority of raft voters
+  reachable is refused;
+- `notify`: the newer release is written to the notice and shown by `orama
+  monitor` as information (`Release X is available on the stable channel`);
+- `auto` outside the window is `notify`; `auto` inside it installs.
+
+A machine that runs the chain (a validator) is never `auto`: the run fails with
+an error saying so on `auto`, and reports only on `notify`. Its chain binary is
+changed by hand: the unit `orama global install` writes runs `oramad` under
+cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
+<plan>` (see [CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor) and
+[RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)).
+
+**Install, one node at a time.**
+
+1. The node's turn: the rollout plan of `pkg/rollout` over the registry's
+   nodes (followers first, the raft leader last, nameservers spaced) names the
+   first node without an `installed` row for the version. Another node's turn
+   is a wait.
+2. The node takes the cluster-wide rollout lock (`cluster_locks`, name
+   `autoupdate`, held in the node's id, 45 minute lease, so a node that dies
+   frees it, and a node that finds a lease of its own left over takes it back),
+   and judges again: the cluster can have changed in between. A machine runs one
+   agent at a time (a lock on `/var/lib/orama-autoupdate/run.lock`; a second run
+   says so and exits 0).
+3. It records the intent (`/var/lib/orama-autoupdate/install-intent.json`:
+   the release and the one it replaces), then downloads the archive and checks
+   its length and hashes (this is what raises `release-seen.json`).
+4. `orama node stage-archive --release-only` places it under `/opt/orama` and
+   keeps the release it replaced in `/opt/orama/.release-previous`. If the old
+   release cannot be kept, the stage puts it back and fails.
+5. The new release's own `orama node upgrade --restart` runs: leadership is
+   handed over, services stop in dependency order, the binaries are installed,
+   units and configs are written, services start.
+6. The health gate (`pkg/nodehealth`): Raft Leader or Follower, a leader known,
+   applied index within 200 of the commit, the gateway serving.
+7. Success is an `installed` row, the intent is removed and the lock is freed,
+   through a database handle opened for the purpose: the upgrade restarted this
+   node's own RQLite. The next node's timer finds it is its turn.
+
+A node that already runs the release when auto-update is `auto` (pushed by hand,
+installed at that version) records itself as installed on its first run, so it
+does not hold the rollout at its place in the plan.
+
+**Failure.** If the upgrade or the gate fails, the kept release is put back
+(verified first), `orama node upgrade --restart` runs on it, and the gate is
+read again. The node writes a `failed` row, which makes the release bad for
+every node: the rollout stops, because every other node refuses it, and
+`orama monitor` warns on this node. A newer release supersedes a bad one; there
+is no command that clears the mark. An upgrade that fails at a check before it
+stopped anything (exit code 8, the preflight code) is not blamed on the release:
+the previous tree is put back, nothing restarts, no `failed` row is written, and
+the run fails so the unit shows failed. If the previous release does not come
+back healthy either, the run's error says so.
+
+**A run that did not finish.** If a run is killed between staging and the end
+of the upgrade (a signal, the service's timeout, power loss), the intent is
+still there, and `/opt/orama` holds the new release. The next run does not
+conclude that there is nothing to install: it takes the lock, upgrades onto the
+staged release and gates, and records the result or rolls back, even if the
+cluster turned updates off in between. An intent whose release is not the one
+installed (staging never completed) is discarded. A stage killed half-way
+through its swap is undone by the next stage or restore before it removes its
+leftovers, and the agent does that recovery before it reads the installed
+version, so a node is not left without a release and an unreadable manifest is
+never taken for a stale intent. A stage that fails after its swap is not "the
+node unchanged": the install goes on to the health gate. The rollback is
+journaled before it begins (the intent says it is rolling back, and whether the
+release is to blame), so a run killed in the middle of it is finished by the
+next, which also marks the release bad. A run that is stopped by a signal rolls
+nothing back and blames nobody. The `orama node upgrade --restart` child of a
+killed run can outlive it; nothing in the agent stops it.
+
+**Time.** A run fetches metadata for at most 10 minutes, the archive for at most
+10, each `orama node upgrade --restart` for at most 12 and each health gate for
+at most 3 (`pkg/autoupdate/budgets.go`), so an install, with its rollback, fits
+inside the 45 minute lease and a run inside `TimeoutStartSec=1h`; a test holds
+the arithmetic. Nothing renews the lease. The maintenance window is in UTC
+whatever zone the node's clock is in.
+
+Migrations stay expand-only across one release, so a mixed-version cluster
+during the rollout is safe, and so is the rollback.
+
+**What this does not do.** It does not update the validator or any
+`orama-global-*` unit; it does not walk a chain of root versions; it does not
+sign anything (publishing a release is the signers' ceremony). Every registered
+node is in the rollout plan, so every node has to run the agent (install and
+upgrade enable the timer) and have adopted the root, which a cluster installed
+with `orama node setup --release` has on every node; a node that does not, is
+down, or cannot take the architecture the channel lists holds the rollout until
+it is fixed or removed (`orama node remove`). A node that can write to the index
+RQLite (a compromised one) can mark a release bad, forge another node's
+install, or hold the lock for a lease: it can stop an update, never install one,
+since nothing installs without the root's signatures. The install keeps the
+release it replaced beside the new one (hundreds of megabytes of `/opt/orama`);
+nothing checks free space first.
 
 ### Fresh Node Install
 

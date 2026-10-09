@@ -62,6 +62,16 @@ type Options struct {
 	Archive string
 	// ACMECA is passed to `orama node install --acme-ca`.
 	ACMECA string
+	// Release installs a published release instead of an archive built here:
+	// the version to fetch from ReleaseRepo on Channel, verified against the
+	// root in ReleaseRoot, then signed by the operator's wallet (build
+	// .EndorseRelease) so the cluster installs it as it installs any archive
+	// its operator built. Exclusive with Archive.
+	Release     string
+	ReleaseRepo string
+	ReleaseRoot string
+	// Channel is the release channel, DefaultReleaseChannel when empty.
+	Channel string
 	// JoinVia is "user@ip" of a node already in the cluster. The invite is
 	// minted on it over SSH with its RootWallet key, instead of through the
 	// gateway's operator API — no `orama auth login` and no bearer token.
@@ -78,6 +88,9 @@ func Run(opts Options) error {
 	}
 	if opts.Role == "" {
 		opts.Role = "node"
+	}
+	if err := checkReleaseFlags(opts); err != nil {
+		return err
 	}
 
 	// 1. Ensure rootwallet agent is running
@@ -153,7 +166,16 @@ func Run(opts Options) error {
 	fmt.Println("  SSH connection OK")
 
 	// 6. Put exactly this build on the node.
-	if err := EnsureArchive(node, opts.Archive, wallet); err != nil {
+	archive := opts.Archive
+	if opts.Release != "" {
+		path, cleanup, err := releaseForNode(node, opts)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		archive = path
+	}
+	if err := EnsureArchive(node, archive, wallet); err != nil {
 		return err
 	}
 
@@ -831,17 +853,26 @@ func nodeRunsBuild(node inspector.Node, archive, cliSum string) (bool, error) {
 // goArch names the architectures `uname -m` reports as Go does.
 var goArch = map[string]string{"x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
 
+// nodeArchitecture is the node's architecture as Go names it.
+func nodeArchitecture(node inspector.Node) (string, error) {
+	out, err := remotessh.RunSSHOutput(node, "uname -m")
+	if err != nil {
+		return "", fmt.Errorf("read the node's architecture: %w", err)
+	}
+	machine := strings.TrimSpace(out)
+	arch, ok := goArch[machine]
+	if !ok {
+		return "", fmt.Errorf("the node reports architecture %q, which no build targets", machine)
+	}
+	return arch, nil
+}
+
 // checkNodeArch refuses an archive built for another architecture than the
 // node's, before anything is uploaded — for a join, before the invite is spent.
 func checkNodeArch(node inspector.Node, arch string) error {
-	out, err := remotessh.RunSSHOutput(node, "uname -m")
+	nodeArch, err := nodeArchitecture(node)
 	if err != nil {
-		return fmt.Errorf("read the node's architecture: %w", err)
-	}
-	machine := strings.TrimSpace(out)
-	nodeArch, ok := goArch[machine]
-	if !ok {
-		return fmt.Errorf("the node reports architecture %q, which no build targets", machine)
+		return err
 	}
 	if nodeArch != arch {
 		return fmt.Errorf("the archive is built for linux/%s and the node is linux/%s: build with --arch %s", arch, nodeArch, nodeArch)

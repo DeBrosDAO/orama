@@ -197,6 +197,8 @@ var oneshotUnits = []string{
 	"orama-namespace-ipfs-gc@.timer",
 	"orama-deploy-build@.service", // one npm install, started and waited for by the gateway
 	"orama-deploy-clean@.service", // removes that install's output
+	AutoUpdateServiceName,         // looks for a release, fired by its timer
+	AutoUpdateTimerName,
 }
 
 // supervisedUnits are the long-running units orama-node starts and reconciles:

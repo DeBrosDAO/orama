@@ -1,6 +1,7 @@
 package archivetrust
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
@@ -85,12 +87,14 @@ func Verify(anchorPath, archiveDir, arch string) (*Verified, error) {
 }
 
 // VerifyAndRotate is Verify, then, when the verified manifest names a signer
-// list, applies it. A different list becomes the anchor, recorded with the
-// build date first so an interruption between the two writes is finished by
-// running this again on the same archive. The same list with a newer build
-// date only advances the mark. It reports whether the anchor changed. Because
-// a rotation must name its own signer, verifying the same archive again
-// afterwards succeeds.
+// list or carries a release root, applies them. A different signer list
+// becomes the anchor, recorded with the build date first so an interruption
+// between the two writes is finished by running this again on the same
+// archive. The same list with a newer build date only advances the mark. A
+// release root other than the adopted one is adopted after both, under the
+// same replay rule. It reports whether the anchor changed. Because a rotation
+// must name its own signer, verifying the same archive again afterwards
+// succeeds.
 func VerifyAndRotate(anchorPath, archiveDir, arch string) (*Verified, bool, error) {
 	v, rot, err := verifyWithRotation(anchorPath, archiveDir, arch)
 	if err != nil || rot == nil {
@@ -101,28 +105,41 @@ func VerifyAndRotate(anchorPath, archiveDir, arch string) (*Verified, bool, erro
 			return nil, false, fmt.Errorf("record the rotation to %s: %w", strings.Join(v.Signers, ", "), err)
 		}
 	}
-	if !rot.changeAnchor {
-		return v, false, nil
+	if rot.changeAnchor {
+		if err := writeAnchor(anchorPath, v.Signers); err != nil {
+			return nil, false, fmt.Errorf("rotate the archive signers to %s: %w", strings.Join(v.Signers, ", "), err)
+		}
 	}
-	if err := writeAnchor(anchorPath, v.Signers); err != nil {
-		return nil, false, fmt.Errorf("rotate the archive signers to %s: %w", strings.Join(v.Signers, ", "), err)
+	if rot.changeRoot {
+		if _, err := releaseverify.AdoptRoot(ReleaseRootPath, v.ReleaseRoot, now()); err != nil {
+			return nil, false, fmt.Errorf("adopt the release root the archive carries: %w", err)
+		}
+		v.AdoptedRoot = true
 	}
-	return v, true, nil
+	return v, rot.changeAnchor, nil
 }
 
-// rotation is what applying a verified archive's signer list takes.
+// rotation is what applying a verified archive's signer list and release root
+// takes.
 type rotation struct {
 	at           time.Time
 	advanceMark  bool
 	changeAnchor bool
+	changeRoot   bool
 }
 
-// verifyWithRotation verifies the archive and works out what its signer list,
-// if it names one, asks of the anchor and its mark (nil: nothing).
+// verifyWithRotation verifies the archive and works out what its signer list
+// and release root, if it names them, ask of the anchor, its mark and the
+// adopted root (nil: nothing). An archive with no signature is verified
+// through the release root when it was staged through it; such an archive asks
+// for nothing.
 func verifyWithRotation(anchorPath, archiveDir, arch string) (*Verified, *rotation, error) {
 	trusted, err := ReadAnchor(anchorPath)
 	if err != nil {
 		return nil, nil, err
+	}
+	if v, err := verifyStagedRelease(archiveDir, arch); v != nil || err != nil {
+		return v, nil, err
 	}
 	v, err := VerifyTree(archiveDir, trusted)
 	if err != nil {
@@ -132,54 +149,90 @@ func verifyWithRotation(anchorPath, archiveDir, arch string) (*Verified, *rotati
 		return nil, nil, fmt.Errorf("the archive is built for linux/%s and this node is linux/%s; build with --arch %s",
 			v.Manifest.Arch, arch, arch)
 	}
-	if v.Signers == nil {
+	changeRoot, err := rootDiffers(v.ReleaseRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	if v.Signers == nil && !changeRoot {
 		return v, nil, nil
 	}
-	rot, err := planRotation(anchorPath, v, trusted)
+	rot, err := planRotation(anchorPath, v, trusted, changeRoot)
 	if err != nil {
 		return nil, nil, err
 	}
 	return v, rot, nil
 }
 
-// planRotation decides what the verified signer list v carries asks of the
-// anchor (trusted) and its mark.
-func planRotation(anchorPath string, v *Verified, trusted []string) (*rotation, error) {
+// verifyStagedRelease verifies an archive that has no signature through the
+// release root. It returns nil, nil for an archive that has one (or that was
+// not staged that way), which the signature path then judges and refuses with
+// its own message.
+func verifyStagedRelease(archiveDir, arch string) (*Verified, error) {
+	if _, err := lstat(filepath.Join(archiveDir, SignatureName)); err == nil {
+		return nil, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("stat %s in the archive: %w", SignatureName, err)
+	}
+	v, err := VerifyReleaseTree(archiveDir, arch)
+	if errors.Is(err, ErrNotStaged) {
+		return nil, nil
+	}
+	return v, err
+}
+
+// rootDiffers reports whether root, the one a verified manifest carries, is
+// other than the root this node has adopted. A manifest with no root differs
+// from nothing.
+func rootDiffers(root []byte) (bool, error) {
+	if root == nil {
+		return false, nil
+	}
+	current, err := releaseverify.ReadRoot(ReleaseRootPath)
+	if errors.Is(err, releaseverify.ErrNoRoot) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !bytes.Equal(current, root), nil
+}
+
+// planRotation decides what the verified signer list and release root v
+// carries ask of the anchor (trusted), its mark and the adopted root.
+func planRotation(anchorPath string, v *Verified, trusted []string, changeRoot bool) (*rotation, error) {
 	at, err := time.Parse(time.RFC3339, v.Manifest.Date)
 	if err != nil {
-		return nil, fmt.Errorf("the signed manifest names signers but its build date %q is not an RFC 3339 time: %w",
+		return nil, fmt.Errorf("the signed manifest names signers or a release root but its build date %q is not an RFC 3339 time: %w",
 			v.Manifest.Date, err)
 	}
 	last, err := ReadRotationMark(anchorPath)
 	if err != nil {
 		return nil, err
 	}
-	same := SameSigners(trusted, v.Signers)
+	changeAnchor := v.Signers != nil && !SameSigners(trusted, v.Signers)
 	if at.After(last) && at.After(now().Add(MaxRotationClockSkew)) {
 		// Whatever this build asks of the anchor, its date would become the
 		// mark, and a mark ahead of every clock refuses every later rotation.
-		return nil, fmt.Errorf("the archive names signers with a build dated %s, more than %s ahead of this "+
+		return nil, fmt.Errorf("the archive names signers or a release root with a build dated %s, more than %s ahead of this "+
 			"node's clock: the builder's clock or this node's clock is wrong; fix it and rebuild",
 			at.UTC().Format(time.RFC3339), MaxRotationClockSkew)
 	}
-	switch {
-	case same && !at.After(last):
-		// Nothing to change: this build's list is the anchor, and the mark is
-		// as new as this build or newer.
-		return nil, nil
-	case same:
+	if (changeAnchor || changeRoot) && at.Before(last) {
+		return nil, fmt.Errorf("the archive changes the signers or the release root with a build from %s, older than the rotation "+
+			"this node last took (%s): an old build is being replayed — rotate with a new build",
+			at.UTC().Format(time.RFC3339), last.UTC().Format(time.RFC3339))
+	}
+	if !changeAnchor && !changeRoot {
+		if !at.After(last) {
+			// This build's list is the anchor, and the mark is as new as
+			// this build or newer.
+			return nil, nil
+		}
 		// The list is already the anchor, but the mark is older than this
 		// build: advance it (this also repairs a mark write that failed).
 		return &rotation{at: at, advanceMark: true}, nil
-	case at.Before(last):
-		return nil, fmt.Errorf("the archive rotates the signers with a build from %s, older than the rotation "+
-			"this node last took (%s): an old build is being replayed — rotate with a new build",
-			at.UTC().Format(time.RFC3339), last.UTC().Format(time.RFC3339))
-	case at.Equal(last):
-		// The mark already records this build: an interrupted rotation of
-		// this same build, which only the anchor write has left to finish.
-		return &rotation{at: at, changeAnchor: true}, nil
-	default:
-		return &rotation{at: at, advanceMark: true, changeAnchor: true}, nil
 	}
+	// A mark equal to the build's date is an interrupted rotation of this same
+	// build, which only the anchor and root writes have left to finish.
+	return &rotation{at: at, advanceMark: at.After(last), changeAnchor: changeAnchor, changeRoot: changeRoot}, nil
 }

@@ -100,6 +100,7 @@ var tablePlacement = map[string]tableNote{
 	"namespace_session_policy": {PlacementCluster, TrustPlatform, "what a sign-in must prove; read where sessions are issued"},
 	"operators":                {PlacementCluster, TrustPlatform, "who may operate the cluster"},
 	"cluster_settings":         {PlacementCluster, TrustPlatform, "who may create namespaces, and how many one wallet may own; read on the index, so a copy in a tenant database is a policy the cluster never enforces"},
+	"release_installs":         {PlacementCluster, TrustPlatform, "which node installed or failed which release; a tenant copy would let a tenant mark a release bad or skip a node's turn"},
 	"namespace_creators":       {PlacementCluster, TrustPlatform, "the allowlist for namespace creation; a tenant copy would let the tenant add themselves"},
 	"audit_events":             {PlacementCluster, TrustPlatform, "a record its own subject could delete is not a record"},
 	"encryption_roots":         {PlacementCluster, TrustPlatform, "the IKM stored secrets are derived from; a tenant copy would be a KEK they can rewrite"},

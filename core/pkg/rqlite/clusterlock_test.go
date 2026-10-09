@@ -3,6 +3,7 @@ package rqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,9 @@ func TestClusterLock_heldLockBlocksAndTimesOut(t *testing.T) {
 	_, err = AcquireClusterLock(context.Background(), db, "migrations", "second", time.Minute, 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("a second holder took a lock that was already held")
+	}
+	if !errors.Is(err, ErrClusterLockHeld) {
+		t.Fatalf("a lock that is held reports %v, which is not ErrClusterLockHeld", err)
 	}
 
 	if err := held.Release(context.Background()); err != nil {

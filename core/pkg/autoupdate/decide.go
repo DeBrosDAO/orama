@@ -1,13 +1,21 @@
-// Package autoupdate decides whether a node may install a newer release,
-// and installs one on this node when it may.
+// Package autoupdate keeps a cluster on its release channel.
 //
-// Decide says what to do. Upgrade does it: it verifies the release, swaps
-// the binaries with an atomic rename each, restarts through the caller's
-// stop and start, and gates on pkg/nodehealth, rolling back on failure.
-// It does not download anything and does not take the rollout lock; the
-// caller holds the lock before it calls Upgrade. A node whose mode is off
-// or notify never reaches Upgrade, and a validator never runs auto. The
-// default mode is notify.
+// Every node of a cluster runs an agent on a timer (Agent.Run). The agent
+// reads the cluster's policy (updatepolicy), fetches the channel's metadata
+// from the cluster's release repository and verifies it against the release
+// root the cluster adopted (releaseverify), and asks Decide what to do with
+// the newest release: nothing, tell `orama monitor` (notify, the default), or
+// install it (auto).
+//
+// Install is one node at a time. A node installs only when it holds the
+// cluster-wide lock and it is its turn in the rollout plan (followers first,
+// the leader last, nameservers spaced: pkg/rollout), and never while the
+// cluster is degraded or below a quorum of healthy voters. The install is
+// `orama node stage-archive --release-only` keeping the release it replaces,
+// then `orama node upgrade` of the new release, then the health gate
+// (pkg/nodehealth). A failure puts the previous release back, upgrades onto it
+// again, and records the release as failed for the cluster: no other node then
+// installs it. A validator is never auto.
 package autoupdate
 
 import (
@@ -18,16 +26,17 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
+	"github.com/DeBrosOfficial/network/pkg/updatepolicy"
 )
 
 const (
 	// ModeOff does not look for a release.
-	ModeOff = "off"
+	ModeOff = updatepolicy.ModeOff
 	// ModeNotify reports a newer release and does not install it. This is the
 	// default. A validator may use notify or off, never auto.
-	ModeNotify = "notify"
+	ModeNotify = updatepolicy.ModeNotify
 	// ModeAuto installs, one node at a time, inside the maintenance window.
-	ModeAuto = "auto"
+	ModeAuto = updatepolicy.ModeAuto
 
 	ActionNone    = "none"
 	ActionNotify  = "notify"
@@ -39,9 +48,6 @@ const (
 	// RoleValidator is a global chain validator. It is never auto: its
 	// operator stages each chain upgrade explicitly.
 	RoleValidator = "validator"
-
-	// defaultChannel is the channel a cluster follows before it chooses.
-	defaultChannel = "stable"
 )
 
 // Settings is the cluster's auto-update policy. MaxParallel is fixed at 1:
@@ -50,18 +56,20 @@ type Settings struct {
 	Mode        string
 	Channel     string
 	MaxParallel int
-	// WindowStart and WindowEnd are hours in [0, 24). The window is
+	// WindowStart and WindowEnd are hours in [0, 24), UTC. The window is
 	// [start, end). A start equal to the end means the window is unset and
 	// auto may run at any hour. A start after the end wraps midnight.
 	WindowStart int
 	WindowEnd   int
 	// Role is this node's role: RoleCluster or RoleValidator.
 	Role string
+	// RepoURL is the cluster's release repository; empty means none.
+	RepoURL string
 }
 
 // DefaultSettings is what a cluster does before an operator chooses.
 func DefaultSettings() Settings {
-	return Settings{Mode: ModeNotify, Channel: defaultChannel, MaxParallel: 1, Role: RoleCluster}
+	return Settings{Mode: updatepolicy.DefaultMode, Channel: updatepolicy.DefaultChannel, MaxParallel: 1, Role: RoleCluster}
 }
 
 // Health is what Decide needs to know about the cluster. Voters is the raft
@@ -164,7 +172,7 @@ func inWindow(s Settings, now time.Time) bool {
 	if s.WindowStart == s.WindowEnd {
 		return true
 	}
-	hour := now.Hour()
+	hour := now.UTC().Hour()
 	if s.WindowStart < s.WindowEnd {
 		return hour >= s.WindowStart && hour < s.WindowEnd
 	}

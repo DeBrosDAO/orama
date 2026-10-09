@@ -1,0 +1,32 @@
+# The auto-update agent on a single-node eval cluster of its own (the run's
+# fleet is never updated): the agent does nothing until the cluster stores a
+# release repository and the node adopts a release root; with notify, the
+# default, it reports a newer release and installs nothing; a release whose
+# archive differs from its target, a frozen timestamp and an older snapshot are
+# each refused and reported, never installed; with auto, a node that cannot be
+# stopped safely (the cluster's only voter) is staged, refused by the upgrade's
+# own preflight, put back exactly as it was, and the release is not marked bad.
+# The repository is a static server on the node's loopback.
+id: autoupdate-agent
+title: Auto-update agent on an eval cluster
+area: infrastructure
+subtasks: [2751]
+stage: 10
+destructive: false
+requires:
+  extra_nodes: 1
+  probe: false
+  chain: false
+covers:
+  cli:
+    - orama node autoupdate run
+    - orama cluster settings
+    - orama cluster settings set
+  units:
+    - orama-autoupdate.service
+    - orama-autoupdate.timer
+  claims:
+    - "docs/DEV_DEPLOY.md#auto-update: the agent does nothing until the cluster stores a release repository and the node adopts a release root"
+    - "docs/DEV_DEPLOY.md#auto-update: notify reports a newer release and installs nothing"
+    - "docs/DEV_DEPLOY.md#auto-update: a release that does not verify is refused and reported, never installed"
+    - "docs/DEV_DEPLOY.md#auto-update: an upgrade that fails at a check before it stopped anything puts the previous release back and does not mark the release bad"

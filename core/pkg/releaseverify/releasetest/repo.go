@@ -1,28 +1,24 @@
 // Package releasetest builds TUF repositories for tests. Every key is
 // generated when a test runs; nothing here is a production root, and no
 // root this package makes is ever written outside a test's temp directory.
+// The metadata itself is made by releaserepo.
 package releasetest
 
 import (
-	"crypto"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/sigstore/sigstore/pkg/signature"
-	"github.com/theupdateframework/go-tuf/v2/metadata"
+	"github.com/DeBrosOfficial/network/pkg/releaseverify/releaserepo"
 )
 
 // Metadata file names, as releaseverify reads them from a directory.
 const (
-	RootFile      = metadata.ROOT + ".json"
-	TimestampFile = metadata.TIMESTAMP + ".json"
-	SnapshotFile  = metadata.SNAPSHOT + ".json"
-	TargetsFile   = metadata.TARGETS + ".json"
+	RootFile      = releaserepo.RootFile
+	TimestampFile = releaserepo.TimestampFile
+	SnapshotFile  = releaserepo.SnapshotFile
+	TargetsFile   = releaserepo.TargetsFile
 )
 
 // validity is how long a generated root and its roles stay unexpired
@@ -32,32 +28,21 @@ const validity = 7 * 24 * time.Hour
 // Repo is a generated root with one key per top-level role.
 type Repo struct {
 	root       []byte
-	keys       map[string]ed25519.PrivateKey
+	keys       releaserepo.Keys
 	validUntil time.Time
 }
 
 // NewRepo generates a root valid for a week after now.
 func NewRepo(t testing.TB, now time.Time) *Repo {
 	t.Helper()
-	r := &Repo{keys: map[string]ed25519.PrivateKey{}, validUntil: now.Add(validity)}
-	root := metadata.Root(r.validUntil)
-	root.Signed.ConsistentSnapshot = false
-	for _, role := range []string{metadata.ROOT, metadata.TIMESTAMP, metadata.SNAPSHOT, metadata.TARGETS} {
-		_, key, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pub, err := metadata.KeyFromPublicKey(key.Public())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := root.Signed.AddKey(pub, role); err != nil {
-			t.Fatal(err)
-		}
-		r.keys[role] = key
+	keys, err := releaserepo.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
 	}
-	sign(t, root, r.keys[metadata.ROOT])
-	r.root = toBytes(t, root)
+	r := &Repo{keys: keys, validUntil: now.Add(validity)}
+	if r.root, err = releaserepo.NewRoot(keys, r.validUntil); err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 
@@ -77,67 +62,15 @@ func (r *Repo) WriteRoot(t testing.TB, path string) {
 // one before the reference time is a frozen repository.
 func (r *Repo) Publish(t testing.TB, dir string, version int64, timestampExpires time.Time, targets map[string][]byte) {
 	t.Helper()
-	if timestampExpires.IsZero() {
-		timestampExpires = r.validUntil
+	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
+		Version: version, RootValidUntil: r.validUntil, TimestampExpires: timestampExpires, Targets: targets,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	tgt := metadata.Targets(r.validUntil)
-	tgt.Signed.Version = version
-	for name, content := range targets {
-		info, err := metadata.TargetFile().FromBytes(name, content, "sha256")
-		if err != nil {
-			t.Fatal(err)
-		}
-		tgt.Signed.Targets[name] = info
-	}
-	sign(t, tgt, r.keys[metadata.TARGETS])
-	targetsBytes := toBytes(t, tgt)
-
-	snap := metadata.Snapshot(r.validUntil)
-	snap.Signed.Version = version
-	snap.Signed.Meta = map[string]*metadata.MetaFiles{TargetsFile: hashed(version, targetsBytes)}
-	sign(t, snap, r.keys[metadata.SNAPSHOT])
-	snapshotBytes := toBytes(t, snap)
-
-	ts := metadata.Timestamp(timestampExpires)
-	ts.Signed.Version = version
-	ts.Signed.Meta = map[string]*metadata.MetaFiles{SnapshotFile: hashed(version, snapshotBytes)}
-	sign(t, ts, r.keys[metadata.TIMESTAMP])
-
-	for name, data := range map[string][]byte{
-		TimestampFile: toBytes(t, ts),
-		SnapshotFile:  snapshotBytes,
-		TargetsFile:   targetsBytes,
-	} {
+	for name, data := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-}
-
-func hashed(version int64, data []byte) *metadata.MetaFiles {
-	sum := sha256.Sum256(data)
-	meta := metadata.MetaFile(version)
-	meta.Length = int64(len(data))
-	meta.Hashes = metadata.Hashes{"sha256": sum[:]}
-	return meta
-}
-
-func sign[T metadata.Roles](t testing.TB, meta *metadata.Metadata[T], key ed25519.PrivateKey) {
-	t.Helper()
-	signer, err := signature.LoadSigner(key, crypto.Hash(0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := meta.Sign(signer); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func toBytes[T metadata.Roles](t testing.TB, meta *metadata.Metadata[T]) []byte {
-	t.Helper()
-	data, err := meta.ToBytes(false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
 }

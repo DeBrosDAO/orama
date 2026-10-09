@@ -8,7 +8,7 @@
 //     /v1/internal/tls-store, so a certificate is obtained once per cluster and
 //     every node serves it.
 //
-// This is its own Go module: xcaddy builds it into Caddy, and it cannot import
+// This is its own Go module: cmd/caddy builds it into Caddy, and it cannot import
 // the repository's core packages. The wire formats it shares with them — the
 // MACs, the key derivation and the sealing of stored values — are spelled out
 // here and in core/pkg/auth and core/pkg/tlsstore, and both sides carry the

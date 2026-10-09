@@ -35,6 +35,8 @@ func (b *Builder) generateManifest() (*Manifest, error) {
 		Arch:      b.flags.Arch,
 		Checksums: make(map[string]string),
 		Signers:   b.flags.Signers,
+		// Empty unless --release-root named a root (signingPlan).
+		ReleaseRoot: b.releaseRoot,
 	}
 	if err := addChecksums(m.Checksums, b.binDir, ""); err != nil {
 		return nil, err
@@ -81,9 +83,18 @@ func addChecksums(checksums map[string]string, dir, keyPrefix string) error {
 
 // createArchive creates the tar.gz archive from the build directory, with
 // manifestJSON as manifest.json and, when set, signature as manifest.sig.
+//
+// The archive is a function of the files and the build date alone: entries are
+// in a fixed order with the build date as their time, root as owner and one of
+// two modes, and the gzip header names nothing and carries no time. Two builds
+// of one release therefore produce the same bytes.
 func (b *Builder) createArchive(outputPath string, manifest *Manifest, manifestJSON []byte, signature string) error {
 	fmt.Printf("\nCreating archive: %s\n", outputPath)
 
+	built, err := time.Parse(dateLayout, b.date)
+	if err != nil {
+		return fmt.Errorf("the build date %q: %w", b.date, err)
+	}
 	if err := os.WriteFile(filepath.Join(b.tmpDir, archivetrust.ManifestName), manifestJSON, 0644); err != nil {
 		return err
 	}
@@ -93,93 +104,104 @@ func (b *Builder) createArchive(outputPath string, manifest *Manifest, manifestJ
 		}
 	}
 
-	// Create output file
-	f, err := os.Create(outputPath)
+	size, err := writeArchiveFile(outputPath, b.tmpDir, built, signature != "")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
-
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	// Add bin/ directory
-	if err := addDirToTar(tw, b.binDir, "bin"); err != nil {
-		return err
-	}
-
-	// Add systemd/ directory
-	systemdDir := filepath.Join(b.tmpDir, "systemd")
-	if _, err := os.Stat(systemdDir); err == nil {
-		if err := addDirToTar(tw, systemdDir, "systemd"); err != nil {
-			return err
-		}
-	}
-
-	// Add packages/ directory if it exists (checksummed like the rest)
-	packagesDir := filepath.Join(b.tmpDir, packagesArchiveDir)
-	if _, err := os.Stat(packagesDir); err == nil {
-		if err := addDirToTar(tw, packagesDir, "packages"); err != nil {
-			return err
-		}
-	}
-
-	// Add manifest.json
-	if err := addFileToTar(tw, filepath.Join(b.tmpDir, archivetrust.ManifestName), archivetrust.ManifestName); err != nil {
-		return err
-	}
-
-	if signature != "" {
-		if err := addFileToTar(tw, filepath.Join(b.tmpDir, archivetrust.SignatureName), archivetrust.SignatureName); err != nil {
-			return err
-		}
-	}
-
-	// Print summary
 	fmt.Printf("  files:     %d, all in the manifest\n", len(manifest.Checksums))
 	fmt.Printf("  systemd/:  namespace templates\n")
 	fmt.Printf("  manifest:  v%s (%s) linux/%s\n", manifest.Version, manifest.Commit, manifest.Arch)
 
-	info, err := f.Stat()
-	if err == nil {
-		fmt.Printf("  size:      %s\n", printer.FormatBytes(info.Size()))
-	}
-
+	fmt.Printf("  size:      %s\n", printer.FormatBytes(size))
 	return nil
 }
 
-// addDirToTar adds all files in a directory to the tar archive under the given prefix.
-func addDirToTar(tw *tar.Writer, srcDir, prefix string) error {
-	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+// writeArchiveFile writes the tar.gz of the build tree under root to
+// outputPath, with every entry dated modTime, and returns its size. The
+// streams are closed in order with their errors kept: a gzip trailer that
+// failed to write is a corrupt archive.
+func writeArchiveFile(outputPath, root string, modTime time.Time, signed bool) (size int64, err error) {
+	f, err := os.Create(outputPath)
+	if err != nil {
+		return 0, err
+	}
+	gw := gzip.NewWriter(f)
+	w := &archiveWriter{tw: tar.NewWriter(gw), modTime: modTime}
+	buildErr := w.addBuildTree(root, signed)
+	closeErr := errors.Join(w.tw.Close(), gw.Close(), f.Close())
+	if err := errors.Join(buildErr, closeErr); err != nil {
+		return 0, errors.Join(fmt.Errorf("write the archive %s: %w", outputPath, err), os.Remove(outputPath))
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
+// archiveWriter writes tar entries whose headers hold nothing about the
+// machine that built them.
+type archiveWriter struct {
+	tw      *tar.Writer
+	modTime time.Time
+}
+
+// Fixed permissions: an executable file, any other file, and a directory.
+const (
+	archiveExecMode = 0o755
+	archiveFileMode = 0o644
+	archiveDirMode  = 0o755
+)
+
+// addBuildTree writes the content directories that exist under root, then the
+// manifest and, when signed, its signature.
+func (w *archiveWriter) addBuildTree(root string, signed bool) error {
+	for _, sub := range archivetrust.ContentDirs {
+		dir := filepath.Join(root, sub)
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if err := w.addDir(dir, sub); err != nil {
+			return err
+		}
+	}
+	files := []string{archivetrust.ManifestName}
+	if signed {
+		files = append(files, archivetrust.SignatureName)
+	}
+	for _, name := range files {
+		if err := w.addFile(filepath.Join(root, name), name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addDir adds srcDir and everything under it, in lexical order, under prefix.
+func (w *archiveWriter) addDir(srcDir, prefix string) error {
+	return filepath.WalkDir(srcDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-
-		// Calculate relative path
-		relPath, err := filepath.Rel(srcDir, path)
+		rel, err := filepath.Rel(srcDir, path)
 		if err != nil {
 			return err
 		}
-		tarPath := filepath.Join(prefix, relPath)
-
-		if info.IsDir() {
-			header := &tar.Header{
-				Name:     tarPath + "/",
-				Mode:     0755,
-				Typeflag: tar.TypeDir,
-			}
-			return tw.WriteHeader(header)
+		name := filepath.ToSlash(filepath.Join(prefix, rel))
+		if entry.IsDir() {
+			return w.tw.WriteHeader(&tar.Header{
+				Name: name + "/", Typeflag: tar.TypeDir, Mode: archiveDirMode, ModTime: w.modTime,
+			})
 		}
-
-		return addFileToTar(tw, path, tarPath)
+		return w.addFile(path, name)
 	})
 }
 
-// addFileToTar adds a single file to the tar archive.
-func addFileToTar(tw *tar.Writer, srcPath, tarPath string) error {
+// addFile adds the regular file at srcPath as name.
+func (w *archiveWriter) addFile(srcPath, name string) error {
 	f, err := os.Open(srcPath)
 	if err != nil {
 		return err
@@ -190,18 +212,16 @@ func addFileToTar(tw *tar.Writer, srcPath, tarPath string) error {
 	if err != nil {
 		return err
 	}
-
-	header := &tar.Header{
-		Name: tarPath,
-		Size: info.Size(),
-		Mode: int64(info.Mode()),
+	mode := int64(archiveFileMode)
+	if info.Mode()&0o111 != 0 {
+		mode = archiveExecMode
 	}
-
-	if err := tw.WriteHeader(header); err != nil {
+	if err := w.tw.WriteHeader(&tar.Header{
+		Name: name, Typeflag: tar.TypeReg, Size: info.Size(), Mode: mode, ModTime: w.modTime,
+	}); err != nil {
 		return err
 	}
-
-	_, err = io.Copy(tw, f)
+	_, err = io.Copy(w.tw, f)
 	return err
 }
 

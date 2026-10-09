@@ -171,7 +171,7 @@ docs:
 e2e-cluster:
 	@if [ -z "$$E2E_CLUSTER_BASE_DOMAIN" ]; then \
 		echo "E2E_CLUSTER_BASE_DOMAIN is not set."; \
-		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_ARCHIVE=<orama build archive> make e2e-cluster"; \
+		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_RELEASE=<version> E2E_CLUSTER_RELEASE_REPO=<url> E2E_CLUSTER_RELEASE_ROOT=<root.json> make e2e-cluster   (or E2E_CLUSTER_ARCHIVE=<orama build archive> instead of the three RELEASE ones)"; \
 		echo "  use-only:  E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster"; \
 		echo "  see docs/DEV_DEPLOY.md, Cluster guide e2e"; \
 		exit 2; \

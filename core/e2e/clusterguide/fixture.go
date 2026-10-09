@@ -14,9 +14,14 @@ const (
 	guideThirdIP    = "203.0.113.12"
 	guideDomain     = "cluster.example.com"
 	guideEnv        = "mycluster"
-	guideArchive    = "/tmp/orama-linux-amd64.tar.gz"
 	guideTokenFile  = "/path/to/token"
 	guideSiteSource = "./site"
+
+	// The release flags of the Install section. Bind replaces their values
+	// with the fixture's release, or drops them for the fixture's archive.
+	guideRelease     = "0.3.1"
+	guideReleaseRepo = "https://releases.example.org/tuf"
+	guideReleaseRoot = "./root.json"
 )
 
 // The guide's sections the harness runs.
@@ -37,7 +42,13 @@ type Fixture struct {
 	// EnvName replaces the guide's environment name, so a run never touches an
 	// environment the operator already has.
 	EnvName string
-	Archive string
+	// Archive is a build archive to install in place of a release. Release,
+	// ReleaseRepo and ReleaseRoot are a published release to install. A fixture
+	// has one or the other.
+	Archive     string
+	Release     string
+	ReleaseRepo string
+	ReleaseRoot string
 	// TokenFile is a Cloudflare token for the parent zone. Empty leaves the
 	// guide's token step out: the delegation must already exist.
 	TokenFile string
@@ -69,14 +80,31 @@ func (f *Fixture) Validate() error {
 	if strings.TrimSpace(f.BaseDomain) == "" {
 		return fmt.Errorf("no base domain")
 	}
-	if !f.UseOnly && strings.TrimSpace(f.Archive) == "" {
-		return fmt.Errorf("no build archive")
+	if !f.UseOnly {
+		if err := f.validateSource(); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(f.EnvName) == "" {
 		return fmt.Errorf("no environment name")
 	}
 	if strings.TrimSpace(f.SiteDir) == "" {
 		return fmt.Errorf("no directory to deploy")
+	}
+	return nil
+}
+
+// validateSource requires exactly one thing to install: an archive, or a
+// release with its repository and root.
+func (f *Fixture) validateSource() error {
+	release := f.Release != "" || f.ReleaseRepo != "" || f.ReleaseRoot != ""
+	switch {
+	case release && f.Archive != "":
+		return fmt.Errorf("a build archive and a release are alternatives; give one")
+	case release && (f.Release == "" || f.ReleaseRepo == "" || f.ReleaseRoot == ""):
+		return fmt.Errorf("a release needs its version, its repository and its root")
+	case !release && strings.TrimSpace(f.Archive) == "":
+		return fmt.Errorf("nothing to install: give a build archive, or a release with its repository and root")
 	}
 	return nil
 }
@@ -88,7 +116,6 @@ func (f *Fixture) Bind(c Command) ([]string, error) {
 	pairs := []string{
 		guideDomain, f.BaseDomain,
 		guideEnv, f.EnvName,
-		guideArchive, f.Archive,
 		guideTokenFile, f.TokenFile,
 		guideSiteSource, f.SiteDir,
 	}
@@ -105,9 +132,47 @@ func (f *Fixture) Bind(c Command) ([]string, error) {
 	out := make([]string, len(c.Argv))
 	for i, a := range c.Argv {
 		out[i] = strings.NewReplacer(pairs...).Replace(a)
-		if left := exampleValue.FindString(out[i]); left != "" && enforce {
-			return nil, fmt.Errorf("argument %q still holds the example value %q: bind it in fixture.go", a, left)
+	}
+	out = f.bindSource(out)
+	for i, a := range out {
+		if left := exampleValue.FindString(a); left != "" && enforce {
+			return nil, fmt.Errorf("argument %q still holds the example value %q: bind it in fixture.go", c.Argv[min(i, len(c.Argv)-1)], left)
 		}
 	}
 	return out, nil
+}
+
+// releaseFlags are the flags that name a release in the guide's setup commands.
+var releaseFlags = map[string]string{
+	"--release":      guideRelease,
+	"--release-repo": guideReleaseRepo,
+	"--release-root": guideReleaseRoot,
+}
+
+// bindSource gives a setup command the fixture's way to install: the release
+// the fixture was given, or, when it was given an archive, --archive in place
+// of the three release flags.
+func (f *Fixture) bindSource(argv []string) []string {
+	if f.Release == "" && f.Archive == "" {
+		return argv
+	}
+	fixture := map[string]string{"--release": f.Release, "--release-repo": f.ReleaseRepo, "--release-root": f.ReleaseRoot}
+	out := make([]string, 0, len(argv))
+	dropped := false
+	for i := 0; i < len(argv); i++ {
+		if _, ok := releaseFlags[argv[i]]; !ok || i+1 >= len(argv) {
+			out = append(out, argv[i])
+			continue
+		}
+		if f.Release != "" {
+			out = append(out, argv[i], fixture[argv[i]])
+		} else {
+			dropped = true
+		}
+		i++
+	}
+	if dropped {
+		out = append(out, "--archive", f.Archive)
+	}
+	return out
 }

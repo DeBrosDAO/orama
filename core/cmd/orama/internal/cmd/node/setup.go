@@ -25,6 +25,12 @@ Examples:
     --base-domain orama-devnet.network --role nameserver --genesis \
     --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
+  # From a published release: no checkout, no Go or zig. The root is the
+  # release signers' key set you decided to trust; the cluster adopts it.
+  orama node setup --ip 1.2.3.4 --password --env mycluster \
+    --base-domain cluster.example.com --role nameserver --genesis \
+    --release 0.3.1 --release-repo https://releases.example.org/tuf --release-root ./root.json
+
   # Join existing cluster
   orama node setup --ip 5.6.7.8 --password --env devnet \
     --base-domain orama-devnet.network \
@@ -59,5 +65,9 @@ func init() {
 	setupCmd.Flags().StringVar(&setupOpts.Archive, "archive", "", "Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded")
 	setupCmd.Flags().StringVar(&setupOpts.JoinVia, "join-via", "", "user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed)")
 	setupCmd.Flags().StringVar(&setupOpts.ACMECA, "acme-ca", "", "ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL")
+	setupCmd.Flags().StringVar(&setupOpts.Release, "release", "", "Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet")
+	setupCmd.Flags().StringVar(&setupOpts.ReleaseRepo, "release-repo", "", "https URL of the release repository (TUF metadata and archives); with --release")
+	setupCmd.Flags().StringVar(&setupOpts.ReleaseRoot, "release-root", "", "The TUF root.json of the release signers you trust, checked out of band; with --release. The cluster adopts it")
+	setupCmd.Flags().StringVar(&setupOpts.Channel, "channel", "", "Release channel to read (default stable); with --release")
 	setupCmd.MarkFlagRequired("ip")
 }
