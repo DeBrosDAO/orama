@@ -74,31 +74,44 @@ func (a *Agent) install(ctx context.Context, s Settings, rel Release, self Membe
 		return Outcome{}, errors.New("this node's installed release cannot be read, so there is nothing to roll back to")
 	}
 	a.Logf("installing release %s over %s", rel.Version, prev)
-	in := Intent{Version: rel.Version, Previous: prev, StartedAt: a.Now().UTC()}
+	in := Intent{Version: rel.Version, Previous: prev, StartedAt: a.Now().UTC(), Mode: s.Mode, Channel: s.Channel}
 	if err := a.Journal.Begin(in); err != nil {
 		return Outcome{}, fmt.Errorf("record that an install is beginning: %w", err)
 	}
 	res, installErr := Install(ctx, a.Node, a.Journal, in, rel)
-	return a.settle(ctx, s, rel.Version, self, res, installErr)
+	return a.settle(ctx, in, self, res, installErr)
 }
 
 // settle records how an install ended and, when the node is in a state no
-// later run has to repair, takes the intent off the journal.
-func (a *Agent) settle(ctx context.Context, s Settings, version string, self Member, res Result, installErr error) (Outcome, error) {
+// later run has to repair, takes the intent off the journal. A release that
+// failed is marked bad in the registry first: when that cannot be written the
+// intent stays, marked rolled back, and the next run records the failure instead
+// of installing the release again.
+func (a *Agent) settle(ctx context.Context, in Intent, self Member, res Result, installErr error) (Outcome, error) {
 	var out Outcome
 	var err error
+	owed := false
 	switch {
 	case res.Installed:
 		if res.StageErr != nil {
-			a.Logf("release %s is installed and healthy; %v", version, res.StageErr)
+			a.Logf("release %s is installed and healthy; %v", in.Version, res.StageErr)
 		}
-		out, err = a.installed(ctx, version, self)
+		out, err = a.installed(ctx, in.Version, self)
 	case res.ReleaseBad:
-		out, err = a.markBad(ctx, s, version, self, installErr)
+		var recorded bool
+		out, recorded, err = a.markBad(ctx, in, self, installErr)
+		owed = !recorded && res.RolledBack
 	default:
 		out, err = Outcome{}, installErr
+		if res.Settled() && installErr != nil {
+			err = errors.Join(err, a.deferRetry(in, installErr))
+		}
 	}
-	if res.Settled() {
+	switch {
+	case owed:
+		in.RollingBack, in.Blame, in.RolledBack, in.Reason = true, true, true, installErr.Error()
+		err = errors.Join(err, a.Journal.Replace(in))
+	case res.Settled():
 		err = errors.Join(err, a.Journal.Clear())
 	}
 	return out, err
@@ -108,6 +121,9 @@ func (a *Agent) installed(ctx context.Context, version string, self Member) (Out
 	if err := a.Store.Record(ctx, version, self.ID, StateInstalled, ""); err != nil {
 		return Outcome{}, err
 	}
+	if err := a.Retries.Clear(); err != nil {
+		return Outcome{}, err
+	}
 	if err := updatenotice.Clear(a.NoticePath); err != nil {
 		return Outcome{}, err
 	}
@@ -115,14 +131,15 @@ func (a *Agent) installed(ctx context.Context, version string, self Member) (Out
 }
 
 // markBad records that the release failed on this node, which stops every
-// other node from installing it, and reports it.
-func (a *Agent) markBad(ctx context.Context, s Settings, version string, self Member, installErr error) (Outcome, error) {
-	recordErr := a.Store.Record(ctx, version, self.ID, StateFailed, installErr.Error())
+// other node from installing it, and reports it. recorded says whether the
+// registry has the failure.
+func (a *Agent) markBad(ctx context.Context, in Intent, self Member, installErr error) (out Outcome, recorded bool, err error) {
+	recordErr := a.Store.Record(ctx, in.Version, self.ID, StateFailed, installErr.Error())
 	noticeErr := updatenotice.Write(a.NoticePath, updatenotice.Notice{
-		State: updatenotice.StateFailed, Mode: s.Mode, Channel: s.Channel,
-		Current: a.Node.Current(), Candidate: version, Reason: installErr.Error(), CheckedAt: a.Now().UTC(),
+		State: updatenotice.StateFailed, Mode: in.Mode, Channel: in.Channel,
+		Current: a.Node.Current(), Candidate: in.Version, Reason: installErr.Error(), CheckedAt: a.Now().UTC(),
 	})
-	return Outcome{Action: OutcomeFailed, Reason: installErr.Error(), Version: version},
+	return Outcome{Action: OutcomeFailed, Reason: installErr.Error(), Version: in.Version}, recordErr == nil,
 		errors.Join(installErr, recordErr, noticeErr)
 }
 
@@ -156,10 +173,12 @@ func (a *Agent) recordCurrent(ctx context.Context, s Settings, rel Release) erro
 // /opt/orama the run left half-done is recovered first, so the installed release
 // can be read. The release is in place if the node's installed release is the
 // intent's; otherwise staging never completed, or was undone, and the intent is
-// stale. An intent that says a rollback had begun is finished as a rollback.
-// It finishes whatever the policy now says: a half-installed node is not left
-// half-installed because the cluster turned updates off meanwhile.
-func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
+// stale. An intent that says a rollback had begun is finished as a rollback; one
+// that says it ended is only owed its failure row in the registry.
+// It finishes whatever the policy now says, and without reading it: a
+// half-installed node is not left half-installed because the cluster turned
+// updates off, or stored a policy that does not parse, meanwhile.
+func (a *Agent) resume(ctx context.Context) (Outcome, bool, error) {
 	intent, err := a.Journal.Pending()
 	if err != nil || intent == nil {
 		return Outcome{}, false, err
@@ -183,13 +202,26 @@ func (a *Agent) resume(ctx context.Context, s Settings) (Outcome, bool, error) {
 		return Outcome{}, true, err
 	}
 	defer a.unlock(ctx, release)
-	var res Result
-	var finishErr error
-	if intent.RollingBack {
-		res, finishErr = RollBack(ctx, a.Node, *intent, nil)
-	} else {
-		res, finishErr = Finish(ctx, a.Node, a.Journal, *intent)
-	}
-	out, err := a.settle(ctx, s, intent.Version, self, res, finishErr)
+	res, finishErr := a.finish(ctx, *intent)
+	out, err := a.settle(ctx, *intent, self, res, finishErr)
 	return out, true, err
+}
+
+// finish is what is left of the intent's install.
+func (a *Agent) finish(ctx context.Context, intent Intent) (Result, error) {
+	var cause error
+	if intent.Reason != "" {
+		cause = errors.New(intent.Reason)
+	}
+	switch {
+	case intent.RolledBack:
+		if cause == nil {
+			cause = errors.New("a previous run rolled it back and could not record the failure")
+		}
+		return Result{RolledBack: true, ReleaseBad: intent.Blame}, cause
+	case intent.RollingBack:
+		return RollBack(ctx, a.Node, intent, cause)
+	default:
+		return Finish(ctx, a.Node, a.Journal, intent)
+	}
 }

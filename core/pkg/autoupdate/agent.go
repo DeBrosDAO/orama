@@ -30,6 +30,9 @@ type Agent struct {
 	// Journal keeps an install that has begun, so a run that dies in the middle
 	// of one is finished by the next.
 	Journal Journal
+	// Retries keeps a release this node could not start installing, so that
+	// the next ticks leave it alone for a while.
+	Retries Retries
 	// Role is RoleCluster, or RoleValidator on a machine that runs the chain.
 	Role string
 	// NodeHost is this node's overlay address, the key of its registry row.
@@ -49,13 +52,21 @@ type Outcome struct {
 
 // Run looks for a newer release of the cluster's channel and acts on it
 // according to the cluster's policy.
+//
+// The caller holds the machine's run lock: no other run is using the work
+// directory, so what an earlier run left in it is swept first. An install an
+// earlier run began is finished before the policy is read, so a policy that
+// does not parse cannot stop a half-installed node from being repaired.
 func (a *Agent) Run(ctx context.Context) (Outcome, error) {
+	if err := a.Source.SweepStale(); err != nil {
+		return Outcome{}, err
+	}
+	if out, done, err := a.resume(ctx); done {
+		return out, err
+	}
 	settings, err := a.settings(ctx)
 	if err != nil {
 		return Outcome{}, err
-	}
-	if out, done, err := a.resume(ctx, settings); done {
-		return out, err
 	}
 	if out, done, err := a.nothingToDo(settings); done {
 		return out, err
@@ -195,6 +206,8 @@ func (a *Agent) act(ctx context.Context, s Settings, rel Release, d Decision, mi
 		return a.refuse(s, rel.Version, d.Reason)
 	case ActionNotify:
 		return a.notify(s, rel.Version, d.Reason)
+	case ActionSkip:
+		return a.skip(ctx, s, rel.Version, d.Reason)
 	}
 	if !mine {
 		if _, err := a.notify(s, rel.Version, "it is another node's turn to install"); err != nil {
@@ -202,7 +215,35 @@ func (a *Agent) act(ctx context.Context, s Settings, rel Release, d Decision, mi
 		}
 		return Outcome{Action: OutcomeWait, Reason: "it is another node's turn to install", Version: rel.Version}, nil
 	}
+	if out, backedOff, err := a.backedOff(rel.Version); backedOff || err != nil {
+		return out, err
+	}
 	return a.installUnderLock(ctx, s, rel)
+}
+
+// skip is a validator on auto: it records the release as skipped, so that the
+// rollout does not wait for the node, and refuses it in the notice.
+func (a *Agent) skip(ctx context.Context, s Settings, version, reason string) (Outcome, error) {
+	members, err := a.Store.Members(ctx)
+	if err != nil {
+		return Outcome{}, err
+	}
+	self, found := memberAt(members, a.NodeHost)
+	if !found {
+		return Outcome{}, fmt.Errorf("this node (%s) is not in the cluster's registry (it is matched by its overlay address)", a.NodeHost)
+	}
+	installs, err := a.Store.Installs(ctx, version)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if installs[self.ID] != StateSkipped {
+		if err := a.Store.Record(ctx, version, self.ID, StateSkipped, reason); err != nil {
+			return Outcome{}, err
+		}
+	}
+	out, err := a.refuse(s, version, reason)
+	out.Action = ActionSkip
+	return out, err
 }
 
 func (a *Agent) notify(s Settings, version, reason string) (Outcome, error) {

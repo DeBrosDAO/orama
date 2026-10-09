@@ -15,7 +15,9 @@
 // then `orama node upgrade` of the new release, then the health gate
 // (pkg/nodehealth). A failure puts the previous release back, upgrades onto it
 // again, and records the release as failed for the cluster: no other node then
-// installs it. A validator is never auto.
+// installs it. A validator is never auto: on that mode it writes a notice that
+// its upgrades are by hand and records the release as skipped, which the rollout
+// counts as done.
 package autoupdate
 
 import (
@@ -33,7 +35,7 @@ const (
 	// ModeOff does not look for a release.
 	ModeOff = updatepolicy.ModeOff
 	// ModeNotify reports a newer release and does not install it. This is the
-	// default. A validator may use notify or off, never auto.
+	// default. A validator on auto is told to upgrade by hand (ActionSkip).
 	ModeNotify = updatepolicy.ModeNotify
 	// ModeAuto installs, one node at a time, inside the maintenance window.
 	ModeAuto = updatepolicy.ModeAuto
@@ -42,6 +44,9 @@ const (
 	ActionNotify  = "notify"
 	ActionUpgrade = "upgrade"
 	ActionRefuse  = "refuse"
+	// ActionSkip: a validator is on auto, which it never obeys. It says so and
+	// leaves the upgrade to its operator.
+	ActionSkip = "skip"
 
 	// RoleCluster is a private-cluster node. It may run auto.
 	RoleCluster = "cluster"
@@ -122,6 +127,10 @@ func Decide(settings Settings, health Health, now time.Time, current string, can
 	if cmp == 0 || settings.Mode == ModeOff {
 		return Decision{Action: ActionNone, Reason: "nothing to install"}, nil
 	}
+	if settings.Role == RoleValidator && settings.Mode == ModeAuto {
+		return Decision{Action: ActionSkip, Reason: "release " + candidate.Version + " is not installed here: this machine is a validator, " +
+			"upgrade it by hand ('orama global stage-oramad')"}, nil
+	}
 	if health.Degraded || !quorum(health) {
 		return Decision{Action: ActionRefuse, Reason: "cluster is degraded or below quorum"}, nil
 	}
@@ -141,11 +150,7 @@ func (s Settings) validate() error {
 		return fmt.Errorf("auto-update mode %q is not off, notify, or auto", s.Mode)
 	}
 	switch s.Role {
-	case RoleCluster:
-	case RoleValidator:
-		if s.Mode == ModeAuto {
-			return fmt.Errorf("auto-update mode auto is refused for a validator; use notify and stage chain upgrades explicitly")
-		}
+	case RoleCluster, RoleValidator:
 	default:
 		return fmt.Errorf("node role %q is not %s or %s", s.Role, RoleCluster, RoleValidator)
 	}

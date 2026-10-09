@@ -50,6 +50,19 @@ func TestNextNode_aNodeThatFailedStillHoldsItsTurn(t *testing.T) {
 	}
 }
 
+// A validator is upgraded by hand and records the release as skipped: the order
+// moves on to the node after it.
+func TestNextNode_aSkippedNodeIsDoneForTheOrder(t *testing.T) {
+	raft := RaftView{LeaderHost: "10.0.0.1", Voters: 3, HealthyVoters: 3}
+	next, ok, err := NextNode(members(), raft, map[string]string{"n2": StateSkipped})
+	if err != nil || !ok || next.ID != "n3" {
+		t.Fatalf("next = %+v, %v, %v", next, ok, err)
+	}
+	if _, ok, err := NextNode(members(), raft, map[string]string{"n1": StateSkipped, "n2": StateInstalled, "n3": StateSkipped}); err != nil || ok {
+		t.Fatalf("every member done or skipped, but ok = %v, err = %v", ok, err)
+	}
+}
+
 func TestNextNode_refusals(t *testing.T) {
 	raft := RaftView{LeaderHost: "10.0.0.1"}
 	if _, _, err := NextNode(members(), RaftView{}, nil); err == nil || !strings.Contains(err.Error(), "leader") {

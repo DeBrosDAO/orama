@@ -89,6 +89,7 @@ func newAgent(out io.Writer) (*autoupdate.Agent, error) {
 		Store:   autoupdate.SQLStore{Open: indexOpener(ep)},
 		Raft:    raftView{admin: ep.Admin()},
 		Journal: fileJournal{path: filepath.Join(workDir, journalName)},
+		Retries: fileRetries{path: filepath.Join(workDir, retryName)},
 		Source: autoupdate.Source{
 			RootPath: releaseverify.RootPath, SeenPath: releaseverify.SeenPath,
 			WorkDir: workDir, Arch: runtime.GOARCH, Now: time.Now,

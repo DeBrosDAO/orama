@@ -654,8 +654,11 @@ decision (`orama node autoupdate` prints the same table for values you give it):
   monitor` as information (`Release X is available on the stable channel`);
 - `auto` outside the window is `notify`; `auto` inside it installs.
 
-A machine that runs the chain (a validator) is never `auto`: the run fails with
-an error saying so on `auto`, and reports only on `notify`. Its chain binary is
+A machine that runs the chain (a validator) is never `auto`. On `auto` the run
+writes a refusal notice (this machine is a validator, upgrade it by hand),
+records a `skipped` row in `release_installs` for the release, and exits 0; the
+rollout plan counts a `skipped` node as done, so the nodes after it are not held
+up. On `notify` it reports like any node. Its chain binary is
 changed by hand: the unit `orama global install` writes runs `oramad` under
 cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
 <plan>` (see [CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor) and
@@ -665,7 +668,7 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
 
 1. The node's turn: the rollout plan of `pkg/rollout` over the registry's
    nodes (followers first, the raft leader last, nameservers spaced) names the
-   first node without an `installed` row for the version. Another node's turn
+   first node without an `installed` or `skipped` row for the version. Another node's turn
    is a wait.
 2. The node takes the cluster-wide rollout lock (`cluster_locks`, name
    `autoupdate`, held in the node's id, 45 minute lease, so a node that dies
@@ -678,7 +681,16 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
    following a symlink.
 3. It records the intent (`/var/lib/orama-autoupdate/install-intent.json`:
    the release and the one it replaces), then downloads the archive and checks
-   its length and hashes (this is what raises `release-seen.json`).
+   its length and hashes (this is what raises `release-seen.json`). A release
+   that this node could not start installing (staging failed with the node
+   unchanged, or the upgrade's checks refused before any service stopped) is not
+   fetched again on every tick: `/var/lib/orama-autoupdate/install-retry.json`
+   holds the release, the attempts and the time before which it is not tried
+   again (15 minutes, doubling per failure in a row up to 12 hours); the notice
+   says when the next try is, a tick inside the wait exits 0 having fetched
+   nothing, a different release is not held back, and an install that succeeds
+   removes the record. Each run starts by removing the `fetch-*` directories a
+   killed run left in the work directory.
 4. `orama node stage-archive --release-only` places it under `/opt/orama` and
    keeps the release it replaced in `/opt/orama/.release-previous`. If the old
    release cannot be kept, the stage puts it back and fails.
@@ -699,14 +711,18 @@ does not hold the rollout at its place in the plan.
 (verified first), `orama node upgrade --restart` runs on it, and the gate is
 read again. The node writes a `failed` row, which makes the release bad for
 every node: the rollout stops, because every other node refuses it, and
-`orama monitor` warns on this node. A newer release supersedes a bad one; there
+`orama monitor` warns on this node. If that row cannot be written (the registry
+is unreachable right after the rollback), the intent stays, marked rolled back,
+and the next run writes the row without installing anything. A newer release supersedes a bad one; there
 is no command that clears the mark. An upgrade that fails at a check before it
 stopped anything (exit code 8, the preflight code) is not blamed on the release:
 the previous tree is put back, nothing restarts, no `failed` row is written, and
 the run fails so the unit shows failed. If the previous release does not come
 back healthy either, the run's error says so.
 
-**A run that did not finish.** If a run is killed between staging and the end
+**A run that did not finish.** The agent finishes the install of a previous run
+before it reads the policy, so a stored policy that does not parse cannot stop a
+half-installed node from being repaired. If a run is killed between staging and the end
 of the upgrade (a signal, the service's timeout, power loss), the intent is
 still there, and `/opt/orama` holds the new release. The next run does not
 conclude that there is nothing to install: it takes the lock, upgrades onto the
@@ -721,7 +737,12 @@ a swap has every current entry aside (`swapping` beside its `old/`), what it
 had moved in goes back to where it came from, a stage's copy of the new release
 or `.release-previous` for a restore, which swaps the kept release itself in. A
 restore killed at any step therefore leaves the kept release whole, and the
-rollback runs again. A stage that fails after its swap is not "the node
+rollback runs again. A stage that keeps the release it replaces marks its staging
+directory `keep` before the swap, and moves the release kept before aside (into
+that directory) instead of deleting it, deleting it only once the replaced
+release is in `.release-previous`; a stage killed after the swap and before the
+keep finished is completed by the next stage, restore or recovery, which moves
+`old/` into `.release-previous` before it removes leftovers. A stage that fails after its swap is not "the node
 unchanged": the install goes on to the health gate, and the stage's error is
 kept (joined into a failure, or logged when the release installs). A stage that
 fails and leaves a tree whose manifest cannot be read, or one that is neither

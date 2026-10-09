@@ -120,7 +120,7 @@ func Finish(ctx context.Context, n Node, j Journal, in Intent) (Result, error) {
 	if ctx.Err() != nil {
 		return Result{}, fmt.Errorf("stopped while installing release %s; the next run finishes it: %w", in.Version, errors.Join(err, ctx.Err()))
 	}
-	in.RollingBack, in.Blame = true, !errors.Is(err, ErrNotStarted)
+	in.RollingBack, in.Blame, in.Reason = true, !errors.Is(err, ErrNotStarted), err.Error()
 	if jerr := j.Replace(in); jerr != nil {
 		err = errors.Join(err, fmt.Errorf("record that the rollback has begun (the rollback goes on but is not crash-safe: "+
 			"a run killed before it ends cannot tell it from a stage that changed nothing, so it will not finish it or mark the release bad): %w", jerr))

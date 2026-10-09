@@ -15,6 +15,9 @@ const (
 	// StateFailed: the node installed the release and rolled back. Any failed
 	// row makes the release bad for every node.
 	StateFailed = "failed"
+	// StateSkipped: the node does not install releases by itself (a validator),
+	// and says so, so that the rollout does not wait for it.
+	StateSkipped = "skipped"
 )
 
 // Member is a node of the cluster as the registry (dns_nodes) knows it.
@@ -70,7 +73,9 @@ func ClusterHealth(members []Member, raft RaftView) Health {
 
 // NextNode is the member whose turn it is to install a release: the first in
 // the rollout plan (followers before the leader, nameservers spaced) that has
-// not recorded the release as installed. ok is false when every member has.
+// not recorded the release as installed or skipped. ok is false when every
+// member has. A skipped member (a validator, upgraded by hand) is done for the
+// order: waiting for it would stall every node after it.
 func NextNode(members []Member, raft RaftView, installs map[string]string) (next Member, ok bool, err error) {
 	byHost := make(map[string]Member, len(members))
 	nodes := make([]inspector.Node, 0, len(members))
@@ -92,7 +97,7 @@ func NextNode(members []Member, raft RaftView, installs map[string]string) (next
 	}
 	for _, step := range plan.Steps {
 		m := byHost[step.Node.Host]
-		if installs[m.ID] != StateInstalled {
+		if state := installs[m.ID]; state != StateInstalled && state != StateSkipped {
 			return m, true, nil
 		}
 	}
