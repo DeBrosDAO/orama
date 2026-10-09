@@ -13,5 +13,5 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/vault/SECURITY_MODEL.md#threshold-and-share-count: a push reported stored has W > K shares; one guardian down refuses writes and keeps reads"
-    - "docs/vault/API.md#rate-limiting: the per-address limit cannot be bypassed with X-Forwarded-For"
+    - "vault/docs/SECURITY_MODEL.md#threshold-and-share-count: a push reported stored has W > K shares; one guardian down refuses writes and keeps reads"
+    - "vault/docs/API.md#rate-limiting: the per-address limit cannot be bypassed with X-Forwarded-For"

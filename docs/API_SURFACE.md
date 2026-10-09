@@ -144,7 +144,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 |-------|-------|-------|
 | `/v1/vault/health` | direct | Aggregate guardian health. |
 | `/v1/vault/pull` | direct | Retrieve a secret. Ed25519-signed per request. |
-| `/v1/vault/push` | direct | Store a secret. Ed25519-signed per request; see docs/vault/SECURITY_MODEL.md. Deliberately not in `@debros/orama` — see chg-343. |
+| `/v1/vault/push` | direct | Store a secret. Ed25519-signed per request; see vault/docs/SECURITY_MODEL.md. Deliberately not in `@debros/orama` — see chg-343. |
 | `/v1/vault/status` | direct | Guardian count and threshold. |
 
 ### WebRTC

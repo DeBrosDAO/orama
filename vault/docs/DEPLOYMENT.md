@@ -1,5 +1,7 @@
 # Orama Vault -- Deployment Guide
 
+> **Status:** partly aspirational. This document describes parts of the design the code in `vault/src` does not implement (production port 7500 where nodes use 10106, a K of 3 for five nodes where the code gives 2, a V2 flow without ownership proof, Merkle roots in the verify protocol, a key-wrapping hierarchy). The code is the source of truth; known gaps are listed in the technical reference (`docs/whitepaper/technical-reference/vol1/28-vault.md`).
+
 ## Prerequisites
 
 - **Zig 0.15.2+** (specified in `build.zig.zon` as `minimum_zig_version`). Older versions, including 0.15.0/0.15.1, are refused by the build.
@@ -181,7 +183,7 @@ The service is `PartOf=orama-node.service`, meaning:
 - `RestartSec=5s`: Wait 5 seconds between restarts.
 - `StartLimitIntervalSec=0`: No start limit. `orama-node` reconciles this unit,
   and `systemctl start` on a rate-limited unit refuses until someone runs
-  `reset-failed`. See "Unit restart policy" in `docs/ARCHITECTURE.md`.
+  `reset-failed`. See "Unit restart policy" in `docs/ARCHITECTURE.md` (repository root).
 - The guardian generates a new server secret on each start, which invalidates all existing session tokens. This is intentional -- sessions should not survive restarts.
 
 ---

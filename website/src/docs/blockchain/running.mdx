@@ -1,10 +1,8 @@
 # Running a chain node
 
-`orama node install` does not start the chain. The chain has its own installer, `chain/scripts/stagenet/deploy.sh`, and that script refuses to run unless the chain id contains `-stagenet-` or `-devnet-`. The default chain id is `orama-stagenet-1`.
+`orama node install` does not start the chain. A machine runs it as a global node, installed with `sudo orama global install --services chain,...`: see [Run a global node](/docs/blockchain/run-a-global-node) for the install, the start and stop commands, validators, the double-sign guard and removal. The development networks are also stood up by `chain/scripts/stagenet/deploy.sh`, which refuses to run unless the chain id contains `-stagenet-` or `-devnet-` (the default chain id is `orama-stagenet-1`) and uses an unencrypted test keyring. That is a devnet convenience. It is not acceptable once the token has value outside a test.
 
-The script is explicit that this is temporary. A global-node role that would let `orama node install` manage `oramad` does not exist yet. The script also uses an unencrypted test keyring. That is a devnet convenience. It is not acceptable once the token has value outside a test.
-
-The script's own epoch is 300 seconds and 10 blocks. Production parameters require 24 hours and 14,400 blocks unless `--allow-bootstrap-stake` is set, which that devnet path does set.
+The chain's own epoch on that script is 300 seconds and 10 blocks. Production parameters require 24 hours and 14,400 blocks unless `--allow-bootstrap-stake` is set, which that devnet path does set.
 
 ## Process
 
@@ -15,7 +13,7 @@ The script's own epoch is 300 seconds and 10 blocks. Production parameters requi
 | User | `orama-chain` |
 | Home | `/var/lib/orama-global/chain` |
 
-The unit is not one of the `orama-namespace-*` services. Stopping the Orama node supervisor does not stop the chain, and the chain installer does not touch the cluster's other services.
+The unit runs `oramad` under cosmovisor. It is not one of the `orama-namespace-*` services. Stopping the Orama node supervisor does not stop the chain, and the chain installer does not touch the cluster's other services.
 
 ## Ports
 
@@ -31,6 +29,6 @@ The Orama node reads height, block time, and whether this machine is a validator
 
 ## What a running chain is not
 
-Installing this unit does not put ORAMA in front of apps. Gateway requests stay on the gateway. The two networks described in the whitepaper, devnet and testnet for the platform, are still installed with `orama node install`. Whether `orama-global-chain` is up on a given machine is a fact about that machine, not a consequence of installing Orama.
+Installing this unit does not put ORAMA in front of apps. Gateway requests stay on the gateway. Whether `orama-global-chain` is up on a given machine is a fact about that machine, not a consequence of installing Orama.
 
 Queries against the chain use `oramad query`. The platform CLI `orama` does not wrap them.

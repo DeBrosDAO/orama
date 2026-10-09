@@ -1,5 +1,7 @@
 # Orama Vault -- Security Model
 
+> **Status:** partly aspirational. This document describes parts of the design the code in `vault/src` does not implement (production port 7500 where nodes use 10106, a K of 3 for five nodes where the code gives 2, a V2 flow without ownership proof, Merkle roots in the verify protocol, a key-wrapping hierarchy). The code is the source of truth; known gaps are listed in the technical reference (`docs/whitepaper/technical-reference/vol1/28-vault.md`).
+
 ## Threat Model
 
 | Threat | Severity | Mitigation | Status |
@@ -67,7 +69,7 @@ single guardian holds enough to reconstruct on its own.
 **Eval exception (one VPS).** Shamir `Split` requires `K≥2` and `N≥K`, so a
 single guardian cannot split. The gateway stores the envelope as a local key on
 that disk (`K=1`, `W=1`) and logs it. That is not information-theoretic secret
-sharing; lose the disk, lose the secret. See [EVAL.md](../EVAL.md). Production
+sharing; lose the disk, lose the secret. See [EVAL.md](../../docs/EVAL.md). Production
 (`N≥3`) is unchanged. Do not fold K=1 into `AdaptiveThreshold`.
 
 `W > K` is the durability guarantee for **N≥3**. At N=1 it cannot hold (one

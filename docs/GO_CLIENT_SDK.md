@@ -569,7 +569,7 @@ func (m *mockStorage) Upload(ctx context.Context, r io.Reader, name string) (*cl
 
 ## Examples
 
-Serverless function examples (hello, echo, counter) live in `docs/examples/functions/`. There are currently no standalone SDK example programs in the repository.
+Serverless function examples (hello, echo, counter) live in `core/examples/functions/`. There are currently no standalone SDK example programs in the repository.
 
 ## API Reference
 

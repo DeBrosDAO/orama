@@ -65,7 +65,7 @@ export class BlogPostError extends Error {
 function splitFrontmatter(slug: string, raw: string): { data: unknown; body: string } {
   const text = raw.replace(/^﻿/, "").replace(/\r\n/g, "\n");
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text);
-  if (!match) throw new BlogPostError(slug, "must start with a --- frontmatter block (see docs/WEBSITE_BLOG.md)");
+  if (!match) throw new BlogPostError(slug, "must start with a --- frontmatter block (see website/docs-blog.md)");
   let data: unknown;
   try {
     data = parseYaml(match[1]);

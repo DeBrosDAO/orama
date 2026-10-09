@@ -38,6 +38,9 @@ func titleOf(b *Book, file string) string {
 
 // writeGenerated renders every generated appendix to disk.
 func writeGenerated(b *Book) error {
+	if len(b.Manifest.Appendices) == 0 {
+		return nil
+	}
 	for file, gen := range generators {
 		out, err := gen(b)
 		if err != nil {
@@ -53,6 +56,9 @@ func writeGenerated(b *Book) error {
 
 // checkGenerated is the generated-content gate.
 func checkGenerated(b *Book) []problem {
+	if len(b.Manifest.Appendices) == 0 {
+		return nil
+	}
 	var probs []problem
 	for file, gen := range generators {
 		want, err := gen(b)

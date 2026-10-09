@@ -600,7 +600,7 @@ cluster cannot reach.
 An application reaches the vault through the gateway's `/v1/vault/push` and
 `/v1/vault/pull` endpoints over HTTPS, which do the Shamir split server-side and
 authenticate each request with a per-request Ed25519 ownership signature. See
-[vault/SECURITY_MODEL.md](vault/SECURITY_MODEL.md).
+[vault/docs/SECURITY_MODEL.md](../vault/docs/SECURITY_MODEL.md).
 
 ---
 

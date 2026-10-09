@@ -1,5 +1,7 @@
 # Post-Quantum Crypto Integration Guide
 
+> **Status:** roadmap. ML-KEM-768 and ML-DSA-65 are stubs in `vault/src/crypto/pq_kem.zig` and `pq_sig.zig`; nothing here is deployed. The code is the source of truth.
+
 ## Current Status
 
 The PQ modules (`pq_kem.zig`, `pq_sig.zig`) are **stub implementations**:

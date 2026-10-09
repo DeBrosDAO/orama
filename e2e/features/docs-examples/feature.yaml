@@ -1,6 +1,6 @@
 # The examples users copy out of the documents (README.md, sdk/README.md,
 # sdk/QUICKSTART.md, docs/DEPLOYMENT_GUIDE.md, docs/GO_CLIENT_SDK.md,
-# docs/TS_SDK.md, docs/SERVERLESS.md, docs/examples, sdk/examples), checked
+# docs/TS_SDK.md, docs/SERVERLESS.md, core/examples, sdk/examples), checked
 # for real: every `orama` command line in a shell block names a real command,
 # subcommand and flags (validated against the binary, never executed unless
 # read-only); the read-only ones run as written against the fleet with the

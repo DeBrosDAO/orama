@@ -34,7 +34,23 @@ local function clean(dir, rel)
   return table.concat(parts, "/")
 end
 
+-- root_dir is the typst root on disk and root_prefix the book's path inside
+-- it; both differ from the book directory when the book borrows files (the
+-- template, diagrams) from a sibling book.
+local root_dir = nil
+local root_prefix = ""
+
 function Meta(meta)
+  -- Optional diagram sizing from the book's typeset block.
+  if meta.diagram_max_width then MAX_W_PT = tonumber(pandoc.utils.stringify(meta.diagram_max_width)) end
+  if meta.diagram_max_height then MAX_H_PT = tonumber(pandoc.utils.stringify(meta.diagram_max_height)) end
+  if meta.diagram_scale then PT_PER_PX = tonumber(pandoc.utils.stringify(meta.diagram_scale)) end
+  if meta.root then
+    root_dir = pandoc.utils.stringify(meta.root)
+  end
+  if meta.rootprefix then
+    root_prefix = pandoc.utils.stringify(meta.rootprefix)
+  end
   self_path = pandoc.utils.stringify(meta.self)
   self_key = pandoc.utils.stringify(meta.key)
   for k, v in pairs(meta.filemap or {}) do
@@ -81,8 +97,12 @@ local function svgSize(path)
 end
 
 local function figureTypst(src, caption)
-  local rootPath = "/" .. clean(dirname(self_path), src)
-  local w, h = svgSize(PANDOC_STATE.resource_path[1] .. rootPath)
+  local dir = dirname(self_path)
+  if root_prefix ~= "" then
+    dir = root_prefix .. (dir ~= "" and "/" .. dir or "")
+  end
+  local rootPath = "/" .. clean(dir, src)
+  local w, h = svgSize((root_dir or PANDOC_STATE.resource_path[1]) .. rootPath)
   local width = "100%"
   if w and h then
     local scale = math.min(1, MAX_W_PT / (w * PT_PER_PX), MAX_H_PT / (h * PT_PER_PX))

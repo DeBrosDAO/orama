@@ -1,5 +1,7 @@
 # Orama Vault -- API Reference
 
+> **Status:** partly aspirational. This document describes parts of the design the code in `vault/src` does not implement (production port 7500 where nodes use 10106, a K of 3 for five nodes where the code gives 2, a V2 flow without ownership proof, Merkle roots in the verify protocol, a key-wrapping hierarchy). The code is the source of truth; known gaps are listed in the technical reference (`docs/whitepaper/technical-reference/vol1/28-vault.md`).
+
 ## Base URL
 
 All endpoints are prefixed with `/v1/vault/` (V1) or `/v2/vault/` (V2). The guardian listens on the configured client port (default: **7500**).

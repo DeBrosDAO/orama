@@ -379,6 +379,92 @@ The query allowlist is explicit: `publicQuery` names each Orama method served, `
 | Bad input to the gateway | refused before forwarding, with a fixed message | 400, 404, 405, 413 or 422 with a sanitised log |
 | Gateway cannot reach the chain | `502 chain unreachable` | the explorer and wallets stop; the cluster is unaffected |
 
+### Operator playbooks
+
+No module has a pause, a freeze or an admin key, so every response to a chain fault is one of two things: reading the books, or the coordinated fix below. No external audit has been done, and none of the playbooks has been rehearsed on a live chain; each says where that matters.
+
+#### Reading the books
+
+Every module that holds or moves norama checks its own books through `oramad query <module> invariants`. `chain/scripts/stagenet/deploy.sh` lists them in `INVARIANT_MODULES` (`emission fees storage nodes relay houses token market power shielded`), and `deploy.sh invariants` fails when any node reports a broken check.
+
+| Module | What the check asserts |
+|---|---|
+| `x/emission` | minted equals the schedule; bank supply equals genesis supply plus validator, development and service mints minus burns |
+| `x/fees` | earnings total equals the fees account; open deposits equal the deposits account; burned plus distributed equals collected |
+| `x/storage` | escrow conserved; the module account holds exactly the queued mint payments; distinct operators; reserved within declared; the settlement queue is well formed |
+| `x/nodes` | module balance equals role bonds plus unbonding entries; active and capacity rules |
+| `x/relay` | each settled epoch minted within its ceiling and its payouts sum to what was minted |
+| `x/houses` | locked house bonds equal the houses account |
+| `x/token` | each token's issued supply equals its bank supply; its metadata deposit matches `x/fees` |
+| `x/market` | the market balance equals the open bids |
+| `x/power` | the module account holds no norama |
+| `x/shielded` | module balance equals pools plus the queued unshields; no negative pool; `data/shielded_nullifiers.db` folds to the accumulator in state |
+
+`x/cnft` and `x/archive` hold no norama of their own, so they have no query. Only `x/emission` mints norama: `x/storage` and `x/relay` payments are minted by it and moved, and `x/token`'s bank keeper refuses a norama mint (`chain/app/mint_policy.go`, `TestGetMaccPerms_onlyEmissionMintsNorama`). The emission checks and the locked-parameter check also run on every `InitGenesis`, so a chain will not start from a genesis that breaks them. Run every query on every validator after any binary change and whenever a balance looks wrong. A broken invariant is a halt-height fix, never a patch on one node.
+
+#### The coordinated halt-height fix
+
+A fix to the state machine changes the app hash, so every validator must switch at the same height or the chain splits; nothing on chain switches them. The steps:
+
+1. Keep the finding with the release signers until the fix is built; open no public issue before step 4 ends.
+2. Build from a tagged commit with `make build` in `chain/`, using the `-trimpath` and version ldflags of `chain/scripts/stagenet/deploy.sh`.
+3. Sign the release so the TUF root verifies it (`orama global stage-oramad --release-metadata --release-target`, [build, signing and release](../vol1/29-build-signing-and-release.md)). The production signer ceremony has not happened; stagenet uses a test root.
+4. Announce a halt height in blocks, far enough ahead for every validator to act.
+5. Each validator sets `halt-height` in `config/app.toml` or starts `oramad` with `--halt-height`. At that height the node commits the block and stops.
+6. Each validator stages the new binary with `orama global stage-oramad --upgrade <name>` into the cosmovisor layout ([global nodes](37-global-nodes.md#cosmovisor-staging)). Validators stay on notify, so nothing installs by itself.
+7. Blocks resume once validators holding more than two thirds of voting power run the fix, which before the lambda hand-over means the bootstrap committee.
+8. Run every invariant query on every validator. The patched binary must run on the same home: it keeps `data/shielded_nullifiers.db`, which lives outside the application database, and the verifier binary `x/shielded` needs. A validator started from a copy of only `application.db` has an empty nullifier database, accepts a spent nullifier, diverges and fails the invariant.
+
+The procedure swaps a binary over unchanged stored types. A fix that changes stored types has no migration to run (see Authority and upgrades) and restarts from an exported genesis, as in the committee-failure recovery below.
+
+#### Bootstrap committee failure
+
+Until lambda reaches 1 a permissioned committee of at least 30 seats signs blocks, and CometBFT needs more than two thirds of power online. Seen with `oramad status` (the height stops), `oramad query power bootstrap-committee` and `lambda` (a halt stops epochs, so lambda stops too), and CometBFT's `/validators`.
+
+By itself the chain jails a member that misses more than half of a 10,000-block window for 600 seconds and slashes it 0.01%, and a jailed or tombstoned member's bootstrap share is zero at once, so a committee that keeps two thirds online repairs itself. Slashing and jailing need blocks: with less than two thirds online no block commits, nobody is jailed and nothing on chain can fix it. Seats lapse at lambda 1; lambda is held at 0.95 (`pre_gate_lambda_cap`) until enough validators are active, and the deadline is a genesis parameter no message extends.
+
+Recovery when members are gone for good is a coordinated hard fork over exported state:
+
+1. Wait for enough members to return if possible; the chain resumes by itself above two thirds.
+2. Otherwise the survivors stop `oramad`, agree on one height and each run `oramad export --height H --output-document exported.json`. They hash and compare the files; a difference means state diverged and nobody proceeds.
+3. `x/power` takes the validator set from the exported `power_records`, not from the committee list, so a seat that must stop signing has `comet_power` set to 0 there. A production chain-id refuses fewer than 30 committee members (`checkCommitteeSizeChainIDGate`), so the dead seats cannot be deleted from `bootstrap_committee`.
+4. `oramad genesis validate exported.json` runs the module and locked-parameter checks. Every validator then starts the same file with the same fix binary and runs the invariant queries.
+
+Not rehearsed: step 3's edit on a live chain, and whether a fork also needs a new chain-id. Not possible: adding a seat to a running chain, or shortening the deadline.
+
+#### Directory authority or reporter compromise
+
+`x/relay` pays from reports signed by a reporter set that is separate from the `DIRAUTH` role in `x/nodes`; nothing on chain links a reporter to a `DIRAUTH` node ([relay rewards](46-relay-rewards.md), [anonymity and Tor](38-anonymity-and-tor.md)). Compromise means a reporter's hot key, or an authority host's signing key and relay identity; the authority identity key is offline.
+
+- **A compromised authority host** cannot mint certificates. Remove the authority from `tor-network.json`, ship the file in an emergency release, and run `orama global tor ceremony` for the replacement. The others keep voting; three authorities tolerate one loss and two lost lose the consensus. A host that is suspected, not compromised, gets a new signing certificate with `tor-gencert --reuse` on the offline machine.
+- **A lying reporter** moves the median only below three reports; the default quorum is 3, so one liar is ignored. A genesis quorum of 2 makes the median the average of two values, and one bad reporter then skews a relay's weight by half the difference.
+- **A reporter that is down or late** loses its epoch: reports for epoch `e` are taken only while the chain is in `e+1`, the epoch settles in the first block of `e+2`, and a late report is refused. With fewer than `min_reporters_quorum` complete reports the epoch mints nothing, so with three reporters and quorum 3 one reporter that stays down stops relay pay.
+- **Replacing a reporter** is a structural proposal: `MsgSubmitProposal` with a `relay_reporters` content (`add`, `remove`), voted with `MsgVoteToken` and `MsgVoteOperator`, run with `MsgExecuteProposal` after the timelock, through `x/relay`'s own `MsgUpdateReporters`. A change that would leave no reporter fails. Removal also applies to unsettled epochs, since settlement counts only reports from addresses in the set at that time. The structural tier must be open (lambda 1 and 21 eligible operators over 7 /16 networks and 5 ASNs) and the timelock is 60 days; before the tier opens, or when 60 days is too long, the only lever is a hard fork with a new reporter set in genesis.
+
+Not possible: jailing a relay (`Keeper.JailRelay` has no caller), slashing another operator's `DIRAUTH` node (node messages are signed by the owner only), changing the quorum, caps or uptime minimum (genesis-only), or revoking a directory-authority certificate from the chain. Until a majority of authorities is independent, Orama could list only its own relays, and the VPN is not public until that is fixed.
+
+#### Release-key compromise
+
+A node verifies a staged `oramad` or archive against the TUF root at `/etc/orama/release-root.json`, and no command reaches `autoupdate.Upgrade`, so no node installs a release unless an operator runs a stage command. Nothing rotates the TUF root: `releaseverify` loads the root it is given and walks no chain of root versions, there is no key revocation or threshold change, and no command writes `release-root.json` or signs TUF metadata. The compromised keys' metadata stays valid for any node that still trusts the old root.
+
+An operator can: (1) stop staging and tell the other validators; (2) build a new root and targets on a trusted machine with new keys and reproducible builds; (3) replace `/etc/orama/release-root.json` by hand on each node after comparing its hash with the other operators over a channel that does not depend on the release repository, which is the whole trust step; (4) reset `release-seen.json` by hand if the new repository restarts numbering below the recorded snapshot version, since it refuses a lower one as a rollback; (5) re-stage the fix, as a halt-height fix if the compromise shipped a bad binary. The wallet-signer anchor for archives is a separate rotation that works: `orama build --signers 0xA,0xB` replaces the trusted list when a currently trusted signer signs it, retiring a key takes two builds, and a recorded build date stops replay of a retired key. It covers neither the TUF root nor the chain binary.
+
+#### Mass storage-provider failure
+
+Seen with `oramad query storage queue`, `invariants`, `deal <id>` and `params`, the gRPC `Challenges` and `Slot` queries (no CLI), and the events `storage_slot_evicted`, `storage_slot_assigned`, `storage_slot_declined` and `storage_slot_accepted`. The chain's own response is in [storage deals](41-storage-deals.md): two consecutive misses slash 10% of the epoch price, four (`miss_threshold`) evict the slot, an evicted slot returns to `Pending` and is reassigned every block to a node with a distinct operator, /16 network and ASN, and an open deal with no holder is refunded. Below `s_min_providers` (8) distinct active operators the private-deal subsidy for the epoch is 0.
+
+Operators and owners can: read a replica back with `orama storage get --deal-id N`, re-upload a slot to a new provider with `orama storage put --deal-id N --dir <seal output>`, run a repair delegate (`orama-global repair`, which rebuilds a lost slot from a surviving replica with the owner's repair seed and never sees plaintext), and let a provider that cannot serve answer `orama storage decline` (no penalty) or send `MsgReleaseReplica` (no slash, two per epoch, no CLI). Not possible: changing any storage parameter (genesis-only), or recovering a deal whose every replica is gone without the original `seal` output.
+
+#### Settlement or archive backlog
+
+The settlement queue drains `max_settlements_per_block` (100) items a block and each epoch adds one per challenge. `oramad query storage queue` gives `pending`, `head` and `tail`, and `invariants` checks `queue_well_formed` and `subsidy_within_ceiling`. Eviction, slashing and payment are all applied at settlement, so a backlog delays them, and a deal does not expire or return its escrow while an item is pending. Payment does not depend on the emission ceiling window, because `x/storage` mints the epoch's whole payment into its own account at epoch close; a queue lagging past 30 epochs still settles, except for items a binary older than that change wrote. A queue that grows faster than 100 a block needs a binary with a higher genesis-only rate, shipped as a halt-height fix.
+
+For the archive, `oramad query archive last-archived-height` is the contiguous archived prefix (one unarchived range stalls it), with `range <start> <end>`, `retain-height` and `params`. Only canonical ranges of `range_blocks` are accepted, and an archiver that finds a root conflict writes `<home>/conflicts/<start>-<end>.json` ([archive and indexer](42-archive-and-indexer.md)). `orama-global history get --height H` verifies a bundle against its file hash, each block against its header and the root against `x/archive`. The retain height never rises above the last archived height, but no node prunes by it: a validator's real retention is its own `min-retain-blocks` in `app.toml`, which nothing sets. During an archive stall set it to 0 on every validator, by hand, until the stalled ranges are archived. Not possible: creating an `ARCHIVE` deal for a bundle from `x/storage`, or slashing an archiver for a wrong root.
+
+#### Unshield run
+
+`oramad query shielded pools` shows the pool balances and the queue, `tree-state` the tree and `invariants` the books. The brakes are all code and none is a switch: net unshield from a pool is capped at 2% of it (at least the 1 ORAMA floor) per 24 hours, and a bond unshield over the cap queues and is paid pro rata per window; each vintage and asset has a turnstile so a pool cannot pay out more than went in; an unshield is signed by its target's owner and goes only to that owner's own bond, node bond or fee-only balance ([the shielded pool](43-the-shielded-pool.md)). There is no pause. A circuit bug is answered by the halt-height fix, with the cap bounding the loss meanwhile, and both verifiers call the same upstream `orchard` crate, so a soundness bug there is not caught by the second. A node that halts on the first shielded bundle after a restart is missing a verifier, has the wrong verifier binary (`--shielded-verifier`, `--shielded-verifier-sha256`) or lost `data/shielded_nullifiers.db`, and its start-up message says which. Not rehearsed: a shielded incident on stagenet, and a state-sync of the nullifier database between two nodes.
+
 ## Trust and security
 
 **Trust boundaries.** There are five. The validator set (stake plus the committee) is trusted for liveness and, above 2/3, for safety. A node operator is trusted with that node's keys only: the sign floor guards the validator key; a hot key signs a node's own transactions and holds only a fee-only balance. The gateway is a public, unauthenticated read and submit proxy that is trusted for nothing: it forwards signed bytes and answers reads the chain would answer to anyone. A client trusts a node's answers as it would any single full node (the library queries at latest height with no proof). The native verifiers are trusted for the shielded pool: two independent implementations must both accept a bundle.

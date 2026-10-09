@@ -39,7 +39,9 @@ func runChecks(b *Book) ([]problem, error) {
 	}
 	docs, probs := loadDocuments(b)
 	probs = append(probs, checkVersion(b)...)
-	probs = append(probs, checkOwnership(b, files)...)
+	if b.Manifest.OwnershipOn() {
+		probs = append(probs, checkOwnership(b, files)...)
+	}
 
 	anchors := map[string]map[string]bool{}
 	for _, d := range docs {
@@ -59,11 +61,16 @@ func runChecks(b *Book) ([]problem, error) {
 			}
 		}
 	}
+	probs = append(probs, checkWords(b, docs)...)
 	probs = append(probs, checkDiagrams(b, used)...)
 	probs = append(probs, checkGenerated(b)...)
 	sort.SliceStable(probs, func(i, j int) bool { return probs[i].gate < probs[j].gate })
 	return probs, nil
 }
+
+// bookDocs are the Markdown files at a book's root that are about the book,
+// not part of it.
+var bookDocs = map[string]bool{"README.md": true, "STYLE.md": true}
 
 // loadDocuments reads every chapter and appendix in the manifest, and
 // reports manifest entries without a file and book files without an entry.
@@ -86,10 +93,10 @@ func loadDocuments(b *Book) ([]document, []problem) {
 	for _, a := range b.Manifest.Appendices {
 		add(a.File, nil)
 	}
-	for _, dir := range []string{"vol1", "vol2", "appendices"} {
+	for _, dir := range []string{".", "vol1", "vol2", "appendices"} {
 		found, _ := filepath.Glob(b.Path(filepath.Join(dir, "*.md")))
 		for _, f := range found {
-			if r := rel(b, f); !listed[r] {
+			if r := rel(b, f); !listed[r] && !bookDocs[r] {
 				probs = append(probs, problem{gate: "manifest", file: r, msg: "is not listed in book.yaml"})
 			}
 		}

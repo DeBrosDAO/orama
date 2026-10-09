@@ -22,7 +22,7 @@ const (
 	buildBudget = 5 * time.Minute
 	// functionExamples holds the serverless function examples
 	// (docs/SERVERLESS.md, docs/GO_CLIENT_SDK.md "Examples").
-	functionExamples = "docs/examples/functions"
+	functionExamples = "core/examples/functions"
 	corePath         = "core"
 	coreModule       = "github.com/DeBrosOfficial/network"
 )
@@ -142,7 +142,7 @@ func TestDocsExamples_functionExamplesBuild(t *testing.T) {
 			}
 			tinygo, err := exec.LookPath("tinygo")
 			if err != nil {
-				harness.SkipNotApplicable(t, "tinygo is not installed on the runner, so the WASM build docs/examples/functions/build.sh does is not checked")
+				harness.SkipNotApplicable(t, "tinygo is not installed on the runner, so the WASM build core/examples/functions/build.sh does is not checked")
 			}
 			if out, err := build(t, dir, tinygo, "build", "-o", filepath.Join(dir, "fn.wasm"), "-target", "wasi", "."); err != nil {
 				t.Errorf("%s does not build to WASM with TinyGo (%v):\n%s", src, err, out)

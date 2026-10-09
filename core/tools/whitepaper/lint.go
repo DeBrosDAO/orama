@@ -122,7 +122,7 @@ func lintLinks(b *Book, file string, lines []mdLine, anchors map[string]map[stri
 			}
 		}
 		for _, m := range linkRe.FindAllStringSubmatch(prose, -1) {
-			if msg := checkLink(dir, file, m[3], anchors); msg != "" {
+			if msg := checkLink(b, dir, file, m[3], anchors); msg != "" {
 				probs = append(probs, problem{gate: "links", file: file, line: l.num, msg: msg})
 			}
 		}
@@ -130,7 +130,11 @@ func lintLinks(b *Book, file string, lines []mdLine, anchors map[string]map[stri
 	return probs
 }
 
-func checkLink(dir, file, target string, anchors map[string]map[string]bool) string {
+// sharedDiagrams is the directory of the deep book's diagrams, which a short
+// edition may link to and embed from its own chapters.
+const sharedDiagrams = "../technical-reference/diagrams/"
+
+func checkLink(b *Book, dir, file, target string, anchors map[string]map[string]bool) string {
 	if strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") {
 		return ""
 	}
@@ -140,6 +144,9 @@ func checkLink(dir, file, target string, anchors map[string]map[string]bool) str
 		dest = filepath.ToSlash(filepath.Clean(filepath.Join(dir, path)))
 	}
 	known, ok := anchors[dest]
+	if !ok && strings.HasPrefix(dest, sharedDiagrams) && fileExists(b.Path(dest)) {
+		return ""
+	}
 	if !ok {
 		return fmt.Sprintf("link %s points at %s, which is not a book file", target, dest)
 	}

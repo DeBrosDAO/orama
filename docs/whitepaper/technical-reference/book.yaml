@@ -24,6 +24,7 @@ exclude:
   - os/
   - website/
   - docs/
+  - core/tools/whitepaper/
   - plans/
   - secrets/
   - .omc/
@@ -524,3 +525,6 @@ appendices:
   - file: appendices/h-known-gaps.md
     title: Known gaps
     generated: true
+  - file: appendices/i-api-surface.md
+    title: API surface
+    generated: false

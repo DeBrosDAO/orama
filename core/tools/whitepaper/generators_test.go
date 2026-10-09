@@ -227,3 +227,22 @@ func TestGenRoutes_coversTheRealTable(t *testing.T) {
 		}
 	}
 }
+
+func TestSameDocument_keepsOnlyFilesOfTheSamePDF(t *testing.T) {
+	keys := map[string]string{"vol1/a.md": "ch01", "vol1/b.md": "ch02", "vol2/c.md": "ch03", "appendices/x.md": "appA"}
+	groups := map[string]string{"vol1/a.md": "vol1", "vol1/b.md": "vol1", "vol2/c.md": "vol2", "appendices/x.md": "appendices"}
+	got := sameDocument(keys, groups, "vol1/a.md")
+	if len(got) != 2 || got["vol1/b.md"] != "ch02" {
+		t.Fatalf("sameDocument(vol1/a.md) = %v, want only the two volume I files", got)
+	}
+	if _, ok := got["vol2/c.md"]; ok {
+		t.Fatal("a link into another volume must not get a label")
+	}
+}
+
+func TestSameDocument_unknownFile(t *testing.T) {
+	got := sameDocument(map[string]string{"a.md": "ch01"}, map[string]string{"a.md": "vol1"}, "zzz.md")
+	if len(got) != 0 {
+		t.Fatalf("an unlisted file shares a PDF with nothing, got %v", got)
+	}
+}

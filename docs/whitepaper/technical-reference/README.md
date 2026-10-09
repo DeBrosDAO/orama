@@ -30,10 +30,11 @@ Run from the repository root.
 
 | Command | What it does |
 |---|---|
-| `make whitepaper-check` | Runs every gate. Part of `make test` |
+| `make whitepaper-check` | Runs every gate, and the short edition's (`whitepaper-short-check`). Part of `make test` |
 | `make whitepaper-diagrams` | Renders changed D2 diagrams to SVG and stamps them |
 | `make whitepaper-gen` | Regenerates the appendices built from code (and the CLI reference) |
 | `make whitepaper` | All of the above, then typesets `dist/orama-whitepaper-technical-reference-v<version>-{vol1,vol2,appendices}.pdf` |
+| `make whitepaper-short` | Typesets the 100-page edition ([`../orama-whitepaper/`](../orama-whitepaper/README.md)) to `dist/orama-whitepaper-v<version>.pdf` |
 
 Tools: Go, `d2`, `pandoc`, `typst` (`brew install d2 pandoc typst`). The
 gate itself needs only Go and git.

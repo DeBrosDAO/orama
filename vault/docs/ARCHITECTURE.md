@@ -1,5 +1,7 @@
 # Orama Vault -- Architecture
 
+> **Status:** partly aspirational. This document describes parts of the design the code in `vault/src` does not implement (production port 7500 where nodes use 10106, a K of 3 for five nodes where the code gives 2, a V2 flow without ownership proof, Merkle roots in the verify protocol, a key-wrapping hierarchy). The code is the source of truth; known gaps are listed in the technical reference (`docs/whitepaper/technical-reference/vol1/28-vault.md`).
+
 ## What is Orama Vault?
 
 Orama Vault is a distributed secrets store. It runs as a guardian daemon (`vault-guardian`) on every node in the Orama Network. The guardian protocol is share-at-a-time: a direct client splits locally and pushes one share per guardian, then reconstructs locally on pull.
@@ -215,7 +217,7 @@ Addition and subtraction in GF(2^8) are both XOR. Multiplication uses log/exp ta
 
 ### Why All-Node Replication
 
-Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(2, floor(N/3)). On a one-node eval cluster Shamir cannot run; the gateway stores the envelope as a local key on that disk (see [EVAL.md](../EVAL.md)). On a production fleet:
+Every guardian stores one share per user. In a 14-node cluster, each user has 14 shares with an adaptive threshold K = max(2, floor(N/3)). On a one-node eval cluster Shamir cannot run; the gateway stores the envelope as a local key on that disk (see [EVAL.md](../../docs/EVAL.md)). On a production fleet:
 
 - With 5 nodes: K=2, so any 2 guardians can reconstruct.
 - With 14 nodes: K=4, so any 4 guardians can reconstruct.

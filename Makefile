@@ -95,8 +95,8 @@ build: core-build
 # diagrams, generated appendices, version stamps) and is part of `make test`.
 # whitepaper-gen regenerates the appendices built from code, including the CLI
 # reference. whitepaper typesets the volumes to PDF (needs pandoc, typst, d2).
-.PHONY: whitepaper whitepaper-check whitepaper-gen whitepaper-diagrams
-whitepaper-check:
+.PHONY: whitepaper whitepaper-check whitepaper-gen whitepaper-diagrams whitepaper-short whitepaper-short-check
+whitepaper-check: whitepaper-short-check
 	cd core && go run ./tools/whitepaper check
 
 whitepaper-gen:
@@ -105,6 +105,16 @@ whitepaper-gen:
 
 whitepaper-diagrams:
 	cd core && go run ./tools/whitepaper diagrams
+
+# The short edition (docs/whitepaper/orama-whitepaper): one ~100-page volume
+# derived from the Technical Reference. whitepaper-short-check runs its gates
+# (anchors, structure, links, words), whitepaper-short typesets it to
+# dist/orama-whitepaper-v<version>.pdf and prints the page count.
+whitepaper-short-check:
+	cd core && go run ./tools/whitepaper check -book docs/whitepaper/orama-whitepaper
+
+whitepaper-short: whitepaper-diagrams whitepaper-short-check
+	cd core && go run ./tools/whitepaper build -book docs/whitepaper/orama-whitepaper
 
 whitepaper: whitepaper-diagrams whitepaper-gen whitepaper-check
 	cd core && go run ./tools/whitepaper build

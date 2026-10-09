@@ -1,5 +1,7 @@
 # Orama Vault -- Operator Guide
 
+> **Status:** partly aspirational. This document describes parts of the design the code in `vault/src` does not implement (production port 7500 where nodes use 10106, a K of 3 for five nodes where the code gives 2, a V2 flow without ownership proof, Merkle roots in the verify protocol, a key-wrapping hierarchy). The code is the source of truth; known gaps are listed in the technical reference (`docs/whitepaper/technical-reference/vol1/28-vault.md`).
+
 ## Monitoring
 
 ### Health Endpoint
@@ -428,7 +430,7 @@ K = max(2, floor(alive_count / 3))
 - Removing nodes may reduce K if the alive count drops enough.
 - K never drops below 2 **except on a one-node eval cluster**, where Shamir
   cannot run and the gateway stores the envelope as a local key (`K=1`, `W=1`)
-  on that disk. That is eval-only; see [EVAL.md](../EVAL.md).
+  on that disk. That is eval-only; see [EVAL.md](../../docs/EVAL.md).
 - For N≥3 the write quorum W = min(N, max(K+1, ceil(2N/3))) is greater than K,
   so a write reported successful stores more shares than a read needs.
 

@@ -30,8 +30,20 @@
 )
 
 // A part divider: a page of its own on the right.
-#let part(title) = {
-  pagebreak(to: "odd", weak: true)
+#let start-mode = state("start-mode", "odd")
+
+#let part(title) = context {
+  let mode = start-mode.get()
+  if mode == "flow" {
+    pagebreak(weak: true)
+    v(6mm)
+    text(size: 11pt, tracking: 0.2em, fill: accent)[PART]
+    v(3pt)
+    text(size: 20pt, weight: "bold", fill: ink, title)
+    v(-2mm)
+    return
+  }
+  if mode == "odd" { pagebreak(to: "odd", weak: true) } else { pagebreak(weak: true) }
   set page(header: none, footer: none)
   v(1fr)
   align(center, {
@@ -42,10 +54,10 @@
     text(size: 26pt, weight: "bold", fill: ink, title)
   })
   v(2fr)
-  pagebreak(to: "odd", weak: true)
+  if mode == "odd" { pagebreak(to: "odd", weak: true) } else { pagebreak(weak: true) }
 }
 
-#let title-page(title, subtitle, volume, version, commit) = {
+#let title-page(title, subtitle, volume, version, commit, source) = {
   set page(header: none, footer: none, numbering: none)
   v(30%)
   text(size: 30pt, weight: "bold", fill: ink, title)
@@ -62,7 +74,7 @@
     row-gutter: 6pt,
     text(fill: luma(90))[Version], [#version],
     text(fill: luma(90))[Built from], raw(commit),
-    text(fill: luma(90))[Source], [`docs/whitepaper/technical-reference/` in the Orama repository],
+    text(fill: luma(90))[Source], [#raw(source) in the Orama repository],
   )
   v(8pt)
   text(size: 9pt, fill: luma(90))[
@@ -100,12 +112,21 @@
   commit: "",
   first-chapter: 1,
   mode: "chapters",
+  source: "docs/whitepaper/technical-reference/",
+  // Optional typesetting parameters; the defaults are the Technical
+  // Reference's layout. chapter-start is "odd" (new chapters open on a
+  // right-hand page), "next" (on the next page) or "flow" (they follow the
+  // previous chapter on the same page).
+  toc-depth: 2,
+  body-size: 10.5pt,
+  margin: (inside: 28mm, outside: 22mm, top: 26mm, bottom: 26mm),
+  chapter-start: "odd",
   body,
 ) = {
   set document(title: title + " — " + subtitle + " — " + volume, author: "Orama Network")
   set page(
     paper: "a4",
-    margin: (inside: 28mm, outside: 22mm, top: 26mm, bottom: 26mm),
+    margin: margin,
     binding: left,
     header: running-header(title + " — " + subtitle),
     footer: context align(
@@ -113,7 +134,7 @@
       text(size: 9pt, counter(page).display()),
     ),
   )
-  set text(font: body-font, size: 10.5pt, fill: ink, lang: "en", hyphenate: true)
+  set text(font: body-font, size: body-size, fill: ink, lang: "en", hyphenate: true)
   set par(justify: false, leading: 0.62em, spacing: 0.95em)
 
   show raw: set text(font: mono-font, size: 0.82em)
@@ -139,18 +160,18 @@
   let chapter-numbering = if mode == "appendices" { "A.1" } else { "1.1" }
   set heading(numbering: chapter-numbering)
   show heading.where(level: 1): it => {
-    pagebreak(to: "odd", weak: true)
-    v(18mm)
+    if chapter-start == "odd" { pagebreak(to: "odd", weak: true) } else if chapter-start == "next" { pagebreak(weak: true) }
+    v(if chapter-start == "flow" { 8mm } else { 18mm })
     text(size: 11pt, tracking: 0.15em, fill: accent)[#upper(chapter-label) #counter(heading).display(chapter-numbering.first())]
     v(4pt)
     text(size: 24pt, weight: "bold", it.body)
-    v(10mm)
+    v(if chapter-start == "flow" { 5mm } else { 10mm })
   }
   show heading.where(level: 2): it => block(above: 1.6em, below: 0.8em, text(size: 14pt, weight: "bold", it))
   show heading.where(level: 3): it => block(above: 1.3em, below: 0.6em, text(size: 11.5pt, weight: "bold", it))
   show heading.where(level: 4): it => block(above: 1.1em, below: 0.5em, text(size: 10.5pt, weight: "bold", style: "italic", it.body))
 
-  title-page(title, subtitle, volume, version, commit)
+  title-page(title, subtitle, volume, version, commit, source)
 
   set page(numbering: "i")
   counter(page).update(1)
@@ -160,10 +181,11 @@
   }
   text(size: 20pt, weight: "bold")[Contents]
   v(8mm)
-  outline(title: none, depth: 2, indent: auto)
+  outline(title: none, depth: toc-depth, indent: auto)
 
   set page(numbering: "1")
   counter(page).update(1)
   counter(heading).update(first-chapter - 1)
+  start-mode.update(chapter-start)
   body
 }
