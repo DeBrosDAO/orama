@@ -62,6 +62,40 @@ func TestNamespaceDNS_hostAndWildcardNameItsNodes(t *testing.T) {
 	}
 }
 
+// TestNamespaceDNS_missingTypeIsNODATANotNXDOMAIN: a name that exists answers
+// NOERROR with no records for a type it has none of — AAAA, NS and TXT for
+// ns-<ns>.<base>, a name under its wildcard and the apex, MX for the apex — on
+// every nameserver, and its A record still resolves afterwards. NXDOMAIN there
+// said the name did not exist, so a resolver that asked AAAA or NS (or
+// minimised the name) answered "no such host" to the A query for the negative
+// TTL (docs/NAMESERVER_SETUP.md "A negative answer"; core/pkg/coredns/rqlite
+// plugin.go handleNegative).
+func TestNamespaceDNS_missingTypeIsNODATANotNXDOMAIN(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	n := tenancy.Namespace(t, f, ns.Options{})
+	host := tenancy.NamespaceHost(f, n.Name)
+	want := publicIPs(hosting(t, f, n.Name))
+	base := f.State.BaseDomain
+	queries := map[string][]dnsmessage.Type{
+		host:          {dnsmessage.TypeAAAA, dnsmessage.TypeNS, dnsmessage.TypeTXT},
+		"app." + host: {dnsmessage.TypeAAAA, dnsmessage.TypeTXT},
+		base:          {dnsmessage.TypeAAAA, dnsmessage.TypeMX, dnsmessage.TypeTXT},
+	}
+	for _, srv := range edge.Nameservers(f) {
+		for name, types := range queries {
+			for _, typ := range types {
+				requireNoData(t, srv.Name, fmt.Sprintf("%s %s", name, typ), ask(t, srv.PublicIP, name, typ))
+			}
+		}
+		a := ask(t, srv.PublicIP, host, dnsmessage.TypeA)
+		requireAuthoritative(t, srv.Name, host, a)
+		if got := sorted(a.Values(dnsmessage.TypeA)); !slices.Equal(got, want) {
+			t.Errorf("%s: %s -> %v after the NODATA answers, want the namespace's nodes %v", srv.Name, host, got, want)
+		}
+	}
+}
+
 // TestNamespaceDNS_unknownNamespaceFallsToTheBase: a namespace host nobody
 // created is answered by the base wildcard — the nameservers — which is why
 // the purge never empties a namespace host (docs/NAMESERVER_SETUP.md, the

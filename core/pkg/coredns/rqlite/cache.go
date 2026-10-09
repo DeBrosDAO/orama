@@ -26,7 +26,7 @@ const (
 	// comes back promptly once the backend recovers.
 	StaleTTL = 30 * time.Second
 
-	// NegativeTTL is how long an NXDOMAIN is cached.
+	// NegativeTTL is how long a negative answer (NXDOMAIN or NODATA) is cached.
 	//
 	// Without it, a flood of random subdomains is a query amplifier pointed
 	// straight at index rqlite: every one missed the cache and became a
@@ -132,7 +132,8 @@ func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
 	c.store(qname, qtype, msg, c.ttl, false)
 }
 
-// SetNegative caches an NXDOMAIN for a short time.
+// SetNegative caches a negative answer — NXDOMAIN or NODATA, told apart by the
+// response code the message carries — for a short time.
 func (c *Cache) SetNegative(qname string, qtype uint16, msg *dns.Msg) {
 	c.store(qname, qtype, msg, NegativeTTL, true)
 }

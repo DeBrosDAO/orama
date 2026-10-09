@@ -29,7 +29,7 @@ const staleBudget = edge.PluginCacheTTL + 30*time.Second
 // CoreDNS cannot reach its index rqlite, every name it answered before keeps
 // resolving — the same addresses, re-served with a 30s TTL so resolvers come
 // back soon — while a name it never answered, and a name it only knew as
-// NXDOMAIN, is SERVFAIL rather than an invented or stale negative. Other
+// NODATA, is SERVFAIL rather than an invented or stale negative. Other
 // nameservers are unaffected, and the node recovers its normal TTLs once the
 // backend is back (core/pkg/coredns/rqlite plugin.go serveStaleOrFail,
 // cache.go StaleWindow/StaleTTL; "DNS is the last thing that should fail when
@@ -41,8 +41,8 @@ func TestStale_backendUnreachableServesCachedAnswers(t *testing.T) {
 	n := edge.Nameservers(f)[0]
 	base := f.State.BaseDomain
 	negative := "_acme-challenge." + edge.RandomLabel(t, "neg-") + "." + base
-	if a := ask(t, n.PublicIP, negative, dnsmessage.TypeTXT); a.RCode != dnsmessage.RCodeNameError {
-		t.Fatalf("%s is not NXDOMAIN before the cut: %v", negative, a.RCode)
+	if a := ask(t, n.PublicIP, negative, dnsmessage.TypeTXT); a.RCode != dnsmessage.RCodeSuccess || len(a.Answers) != 0 {
+		t.Fatalf("%s is not NODATA before the cut: %v %v", negative, a.RCode, a.Answers)
 	}
 	primed := []string{base, edge.RandomLabel(t, "stale-") + "." + base}
 	want := map[string][]string{}

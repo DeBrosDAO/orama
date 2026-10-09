@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +26,15 @@ func fakeZoneDB(t *testing.T, rows map[string][][]interface{}) *httptest.Server 
 			return
 		}
 		var body [][]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 || len(body[0]) != 3 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body) != 1 {
+			http.Error(w, "bad query", http.StatusBadRequest)
+			return
+		}
+		if sql, _ := body[0][0].(string); strings.Contains(sql, "substr(") {
+			_ = json.NewEncoder(w).Encode(QueryResponse{Results: []QueryResult{{Values: nameExists(rows, body[0][1:])}}})
+			return
+		}
+		if len(body[0]) != 3 {
 			http.Error(w, "bad query", http.StatusBadRequest)
 			return
 		}
@@ -33,6 +43,27 @@ func fakeZoneDB(t *testing.T, rows map[string][][]interface{}) *httptest.Server 
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// nameExists answers Backend.NameExists's query the way SQLite would: args are
+// the exact names, then the substr start (negative: counted from the end) and
+// the suffix it must equal.
+func nameExists(rows map[string][][]interface{}, args []interface{}) [][]interface{} {
+	names := args[:len(args)-2]
+	fromEnd := -int(args[len(args)-2].(float64))
+	suffix := args[len(args)-1].(string)
+	for key := range rows {
+		fqdn, _, _ := strings.Cut(key, " ")
+		for _, n := range names {
+			if fqdn == n {
+				return [][]interface{}{{float64(1)}}
+			}
+		}
+		if len(fqdn) >= fromEnd && fqdn[len(fqdn)-fromEnd:] == suffix {
+			return [][]interface{}{{float64(1)}}
+		}
+	}
+	return nil
 }
 
 func nxPlugin(t *testing.T, srv *httptest.Server, zones ...string) *RQLitePlugin {
@@ -51,8 +82,13 @@ func nxPlugin(t *testing.T, srv *httptest.Server, zones ...string) *RQLitePlugin
 
 func serveA(t *testing.T, p *RQLitePlugin, qname string) (*dnstest.Recorder, int, error) {
 	t.Helper()
+	return serveType(t, p, qname, dns.TypeA)
+}
+
+func serveType(t *testing.T, p *RQLitePlugin, qname string, qtype uint16) (*dnstest.Recorder, int, error) {
+	t.Helper()
 	req := new(dns.Msg)
-	req.SetQuestion(qname, dns.TypeA)
+	req.SetQuestion(qname, qtype)
 	rec := dnstest.NewRecorder(&test.ResponseWriter{})
 	code, err := p.ServeDNS(context.Background(), rec, req)
 	return rec, code, err
@@ -129,5 +165,147 @@ func TestHandleNXDomain_backendDownIsAServerFailure(t *testing.T) {
 	_, code, err := serveA(t, p, "missing.example.test.")
 	if code != dns.RcodeServerFailure || err == nil {
 		t.Fatalf("got rcode %d err %v, want SERVFAIL", code, err)
+	}
+}
+
+// zoneWithNamespace is a zone whose only names are a namespace's A records —
+// the apex SOA, ns-ns1.<zone> and its wildcard — as CreateNamespaceRecords
+// writes them.
+func zoneWithNamespace() map[string][][]interface{} {
+	return map[string][][]interface{}{
+		"example.test. SOA":        {{"example.test.", "SOA", "ns1.example.test. admin.example.test. 1 3600 1800 604800 300", float64(300)}},
+		"ns-ns1.example.test. A":   {{"ns-ns1.example.test.", "A", "192.0.2.10", float64(60)}},
+		"*.ns-ns1.example.test. A": {{"*.ns-ns1.example.test.", "A", "192.0.2.10", float64(60)}},
+		"deep.sub.example.test. A": {{"deep.sub.example.test.", "A", "192.0.2.11", float64(60)}},
+		"example.test. NS":         {{"example.test.", "NS", "ns1.example.test.", float64(300)}},
+		"ns1.example.test. A":      {{"ns1.example.test.", "A", "192.0.2.1", float64(300)}},
+	}
+}
+
+// TestHandleNegative_existingNameWithoutTheTypeIsNODATA reproduces the stagenet
+// failure: AAAA, NS and TXT for ns-<name>.<base> were answered NXDOMAIN while
+// its A record existed, so a resolver that asked any of them concluded the name
+// did not exist and answered "no such host" to the A query as well.
+func TestHandleNegative_existingNameWithoutTheTypeIsNODATA(t *testing.T) {
+	cases := []struct {
+		name  string
+		qname string
+	}{
+		{"name with records", "ns-ns1.example.test."},
+		{"covered by a wildcard", "turn.ns-ns1.example.test."},
+		{"empty non-terminal", "sub.example.test."},
+		{"zone apex", "example.test."},
+	}
+	for _, tc := range cases {
+		for _, qtype := range []uint16{dns.TypeAAAA, dns.TypeTXT, dns.TypeMX} {
+			t.Run(tc.name+"/"+dns.TypeToString[qtype], func(t *testing.T) {
+				p := nxPlugin(t, fakeZoneDB(t, zoneWithNamespace()), "example.test.")
+
+				rec, code, err := serveType(t, p, tc.qname, qtype)
+				if err != nil || code != dns.RcodeSuccess {
+					t.Fatalf("got rcode %s err %v, want NOERROR (NODATA): the name exists", dns.RcodeToString[code], err)
+				}
+				if rec.Msg.Rcode != dns.RcodeSuccess || len(rec.Msg.Answer) != 0 {
+					t.Fatalf("message rcode %d with %d answers, want NOERROR and none", rec.Msg.Rcode, len(rec.Msg.Answer))
+				}
+				if len(rec.Msg.Ns) != 1 {
+					t.Fatalf("authority section has %d records, want the zone SOA for negative caching", len(rec.Msg.Ns))
+				}
+				if _, ok := rec.Msg.Ns[0].(*dns.SOA); !ok {
+					t.Fatalf("authority record is %T, want *dns.SOA", rec.Msg.Ns[0])
+				}
+				if !rec.Msg.Authoritative {
+					t.Error("a NODATA answer must be authoritative")
+				}
+			})
+		}
+	}
+}
+
+func TestHandleNegative_absentNameStaysNXDOMAIN(t *testing.T) {
+	p := nxPlugin(t, fakeZoneDB(t, zoneWithNamespace()), "example.test.")
+
+	for _, qname := range []string{"missing.example.test.", "ns-other.example.test.", "x.sub2.example.test.", "ub.example.test."} {
+		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA} {
+			if _, code, _ := serveType(t, p, qname, qtype); code != dns.RcodeNameError {
+				t.Errorf("%s %s: got rcode %s, want NXDOMAIN", qname, dns.TypeToString[qtype], dns.RcodeToString[code])
+			}
+		}
+	}
+}
+
+func TestHandleNegative_withdrawnNamespaceIsNXDOMAIN(t *testing.T) {
+	// The fake serves only active rows, like the real query; with nothing
+	// active the namespace is gone and every type is NXDOMAIN again.
+	rows := zoneWithNamespace()
+	delete(rows, "ns-ns1.example.test. A")
+	delete(rows, "*.ns-ns1.example.test. A")
+	p := nxPlugin(t, fakeZoneDB(t, rows), "example.test.")
+
+	if _, code, _ := serveType(t, p, "ns-ns1.example.test.", dns.TypeAAAA); code != dns.RcodeNameError {
+		t.Fatalf("got rcode %s, want NXDOMAIN for a withdrawn namespace", dns.RcodeToString[code])
+	}
+}
+
+func TestHandleNegative_cachedNODATAIsServedAsNODATA(t *testing.T) {
+	// The cache replays with SetReply, which resets the rcode; the second
+	// answer must still be NOERROR/empty, not NXDOMAIN and not a bare success.
+	p := nxPlugin(t, fakeZoneDB(t, zoneWithNamespace()), "example.test.")
+
+	for i, want := range []string{"database", "cache"} {
+		rec, code, err := serveType(t, p, "ns-ns1.example.test.", dns.TypeAAAA)
+		if err != nil || code != dns.RcodeSuccess || rec.Msg.Rcode != dns.RcodeSuccess || len(rec.Msg.Ns) != 1 {
+			t.Fatalf("answer %d from the %s: code %d rcode %d authority %d err %v", i+1, want, code, rec.Msg.Rcode, len(rec.Msg.Ns), err)
+		}
+	}
+	if hits, _, _ := p.cache.Stats(); hits != 1 {
+		t.Fatalf("cache hits = %d, want the second answer served from cache", hits)
+	}
+}
+
+func TestHandleNegative_cachedNXDOMAINIsStillNXDOMAIN(t *testing.T) {
+	p := nxPlugin(t, fakeZoneDB(t, zoneWithNamespace()), "example.test.")
+
+	for range 2 {
+		rec, code, _ := serveA(t, p, "missing.example.test.")
+		if code != dns.RcodeNameError || rec.Msg.Rcode != dns.RcodeNameError {
+			t.Fatalf("code %d rcode %d, want NXDOMAIN both times", code, rec.Msg.Rcode)
+		}
+	}
+}
+
+func TestHandleNegative_existenceCheckFailureIsAServerFailure(t *testing.T) {
+	// The type lookups answer; the existence query fails. Guessing NXDOMAIN
+	// here is the wrong answer this change removes.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body [][]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if sql, _ := body[0][0].(string); strings.Contains(sql, "substr(") {
+			http.Error(w, "no leader", http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(QueryResponse{Results: []QueryResult{{}}})
+	}))
+	t.Cleanup(srv.Close)
+	p := nxPlugin(t, srv, "example.test.")
+
+	_, code, err := serveType(t, p, "ns-ns1.example.test.", dns.TypeAAAA)
+	if code != dns.RcodeServerFailure || err == nil {
+		t.Fatalf("got rcode %d err %v, want SERVFAIL", code, err)
+	}
+	if _, negative := p.cache.Get("ns-ns1.example.test.", dns.TypeAAAA); negative {
+		t.Fatal("an unanswered existence check was cached as a negative answer")
+	}
+}
+
+func TestZoneWildcards_stopsAtTheZoneEdge(t *testing.T) {
+	p := wildcardPlugin("example.test.")
+	got := p.zoneWildcards("a.ns-ns1.example.test.")
+	want := []string{"*.ns-ns1.example.test.", "*.example.test."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v (nothing above the zone)", got, want)
+	}
+	if got := p.zoneWildcards("outside.other."); len(got) != 0 {
+		t.Fatalf("got %v for a name outside the zone", got)
 	}
 }

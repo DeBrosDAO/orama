@@ -54,6 +54,16 @@ func requireAuthoritative(t *testing.T, server, what string, a *edge.Answer) {
 	}
 }
 
+// requireNoData fails unless a is an authoritative NODATA: NOERROR, no answer
+// records, and the zone's SOA in the authority section for negative caching.
+func requireNoData(t *testing.T, server, what string, a *edge.Answer) {
+	t.Helper()
+	if a.RCode != dnsmessage.RCodeSuccess || !a.Authoritative || len(a.Answers) != 0 || len(a.Authority) != 1 || a.Authority[0].Type != dnsmessage.TypeSOA {
+		t.Fatalf("%s @%s: rcode %v, authoritative %v, answers %v, authority %v; want an authoritative NOERROR with no records and the zone SOA (NODATA, never NXDOMAIN for a name that exists)",
+			what, server, a.RCode, a.Authoritative, a.Answers, a.Authority)
+	}
+}
+
 // requireTTL fails unless every answer record of typ carries ttl.
 func requireTTL(t *testing.T, server, what string, a *edge.Answer, typ dnsmessage.Type, ttl uint32) {
 	t.Helper()
