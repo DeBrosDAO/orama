@@ -841,6 +841,7 @@ func (cm *ClusterManager) saveRemoteState(ctx context.Context, nodeIP, nodeID, n
 		"action":        "save-cluster-state",
 		"namespace":     namespace,
 		"node_id":       nodeID,
+		"cluster_id":    state.ClusterID,
 		"cluster_state": state,
 	})
 	if err != nil {

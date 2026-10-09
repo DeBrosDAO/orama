@@ -604,7 +604,11 @@ it read before waiting for it:
   answers **409**, wrapping `ErrNamespaceBeingDeleted`; a registry that cannot be read
   refuses too, with 500, and a lock not free in time answers 503). The first refused spawn
   fails the provisioning, which rolls itself back (it tears down what it started).
-- A spawn names its cluster: every `spawn-*` and `restart-gateway` request carries
+- `save-cluster-state`, which writes the file a boot restores the namespace from, is
+  admitted the same way: a save that landed after the namespace's teardown would bring
+  the deleted namespace back at the next boot, so it is refused (409) like a spawn.
+  `delete-cluster-state` is not admitted.
+- A spawn names its cluster: every `spawn-*`, `restart-gateway` and `save-cluster-state` request carries
   `cluster_id`, and the spawn is refused (**409**, wrapping `ErrClusterMismatch`) when it is
   not the id of the namespace's current cluster, read under the lock. That is what stops
   the provisioner of an incarnation that was deleted and re-created from starting units

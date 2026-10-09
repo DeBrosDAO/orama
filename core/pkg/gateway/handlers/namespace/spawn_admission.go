@@ -20,15 +20,20 @@ type SpawnAdmitter interface {
 // through.
 func (h *SpawnHandler) SetSpawnAdmitter(a SpawnAdmitter) { h.admitter = a }
 
-// startsUnits lists the actions that start or restart a unit of the namespace.
-// The stop-* and teardown-* actions are not here: stopping what a delete is
-// stopping anyway is harmless, and a teardown takes the lock itself.
-var startsUnits = map[string]bool{
-	"spawn-rqlite":    true,
-	"spawn-olric":     true,
-	"spawn-gateway":   true,
-	"restart-gateway": true,
-	"spawn-sfu":       true,
+// admittedActions lists the actions that start or restart a unit of the
+// namespace, and the one that writes the state file the next boot starts them
+// from: a save that lands after the namespace's teardown would bring the
+// deleted namespace back at boot. The stop-* and teardown-* actions (and
+// delete-cluster-state, which only removes what a delete removes anyway) are
+// not here: stopping what a delete is stopping is harmless, and a teardown takes
+// the lock itself.
+var admittedActions = map[string]bool{
+	"spawn-rqlite":       true,
+	"spawn-olric":        true,
+	"spawn-gateway":      true,
+	"restart-gateway":    true,
+	"spawn-sfu":          true,
+	"save-cluster-state": true,
 }
 
 // admit takes the namespace's lock and checks, under it, that the namespace is
