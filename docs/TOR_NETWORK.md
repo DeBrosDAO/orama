@@ -183,7 +183,7 @@ writes below `--out`:
 
 | Path | What | Where it goes |
 |---|---|---|
-| `offline/<nick>/authority_identity_key` | the authority identity key, encrypted with the passphrase. It signs certificates and nothing else | **offline media**, encrypted, in two places (or an HSM), then deleted from the ceremony machine. Never on a server, never in a wallet vault |
+| `offline/<nick>/authority_identity_key` | the authority identity key, encrypted with the passphrase, mode `0400` (read-only for its owner, whatever `tor-gencert` left). It signs certificates and nothing else | **offline media**, encrypted, in two places (or an HSM), then deleted from the ceremony machine. Never on a server, never in a wallet vault |
 | `deploy/<nick>/keys/` | the signing key, its certificate, the relay identity keys | the authority host, via `--tor-authority-keys` |
 | `tor-network.json` | the network file | every node and wallet |
 | `TRANSCRIPT.txt` | fingerprints, v3 identities, certificate expiry | read aloud against the host's own output, signed, kept |
