@@ -9,13 +9,20 @@ import (
 	"time"
 )
 
+// testReadyTimeout bounds the wait for a fake agent's ready file. The fake is
+// this test binary run again, and on a machine running every package's tests
+// at once it took more than the 5 seconds this was before to start. The wait
+// polls and ends the moment the agent exits, so the size of the bound costs
+// nothing when the agent refuses to start.
+const testReadyTimeout = 2 * time.Minute
+
 func startCfg(t *testing.T, mode, rwScript string) StartConfig {
 	t.Helper()
 	rw, agentBin := fakeBins(t, mode, rwScript)
 	orama := filepath.Join(t.TempDir(), "orama")
 	writeScript(t, orama, "#!/bin/sh\n")
 	return StartConfig{
-		RWBin: rw, AgentBin: agentBin, BaseDir: shortBase(t), ReadyTimeout: 5 * time.Second,
+		RWBin: rw, AgentBin: agentBin, BaseDir: shortBase(t), ReadyTimeout: testReadyTimeout,
 		Approvals: []Approval{{Binary: orama, Caps: OramaCaps}},
 	}
 }
@@ -50,6 +57,18 @@ func TestStart_happyPathAndStop(t *testing.T) {
 	}
 	if err := a.Stop(); err != nil {
 		t.Fatalf("a second Stop: %v", err)
+	}
+}
+
+// An agent that exits before it is ready ends the wait at once: the bound is
+// two minutes, and the error is the exit, not the bound.
+func TestStart_exitBeforeReadyEndsTheWaitAtOnce(t *testing.T) {
+	fakeHome(t)
+	cfg := startCfg(t, modeRefuseCap, okRW)
+	cfg.ReadyTimeout = 10 * time.Minute
+	_, err := Start(context.Background(), cfg)
+	if err == nil || !strings.Contains(err.Error(), "exited before it was ready") || strings.Contains(err.Error(), "was not ready in") {
+		t.Fatalf("Start with an agent that exits: %v", err)
 	}
 }
 

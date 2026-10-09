@@ -168,8 +168,12 @@ func fakeHome(t *testing.T) string {
 	return home
 }
 
+// goneTimeout bounds the wait for an agent to leave after Stop, for the
+// reason testReadyTimeout is large.
+const goneTimeout = time.Minute
+
 func waitGone(pid int) bool {
-	return waitExit(context.Background(), pid, 5*time.Second)
+	return waitExit(context.Background(), pid, goneTimeout)
 }
 
 func containsAll(s string, subs ...string) bool {
