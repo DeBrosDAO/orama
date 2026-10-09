@@ -2,6 +2,8 @@ package reporter
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,8 +17,10 @@ const VoteSuffix = ".vote"
 
 // LoadVotes reads the regular files named *.vote in dir that hold a vote of
 // authority inside the window. It reads a file's header first and the whole file
-// only for a match. A .vote file that does not parse is an error naming it: an archive
-// with a damaged vote must be repaired, not reported around.
+// only for a match. A .vote file that cannot be read or does not parse is logged
+// as an error naming it and left out: one damaged file in the archive must not
+// stop the reporter from reporting the epochs the rest of it covers. Whoever
+// recomputes the observations reads the same files and skips the same ones.
 //
 // The directory is written by the authority's account, which runs a Tor
 // process facing the network, and read here by the account that holds the
@@ -36,14 +40,16 @@ func LoadVotes(dir string, authority [fingerprintLen]byte, w Window) ([]Vote, er
 		path := filepath.Join(dir, e.Name())
 		head, err := readVote(path, true)
 		if err != nil {
-			return nil, err
+			slog.Error("leaving out a vote file that cannot be read", "path", path, "err", err)
+			continue
 		}
 		if head.Authority != authority || head.ValidAfter.Before(w.From) || !head.ValidAfter.Before(w.To) {
 			continue
 		}
 		full, err := readVote(path, false)
 		if err != nil {
-			return nil, err
+			slog.Error("leaving out a vote file that cannot be read", "path", path, "err", err)
+			continue
 		}
 		votes = append(votes, full)
 	}
@@ -61,11 +67,17 @@ func readVote(path string, headerOnly bool) (Vote, error) {
 	}
 	parse := ParseVote
 	if headerOnly {
-		parse = ParseVoteHeader
+		parse = parseHeader
 	}
 	v, err := parse(f)
 	if err != nil {
 		return Vote{}, fmt.Errorf("vote %s: %w", path, err)
 	}
 	return v, nil
+}
+
+// parseHeader is ParseVoteHeader on at most maxVoteBytes: a header ends at the
+// first relay, and a file with none is not read to its end.
+func parseHeader(r io.Reader) (Vote, error) {
+	return ParseVoteHeader(io.LimitReader(r, maxVoteBytes))
 }
