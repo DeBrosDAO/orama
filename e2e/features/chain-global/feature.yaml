@@ -21,6 +21,10 @@
 # global status lists the run's chain unit; global install is exercised for
 # every refusal it gives before it changes the machine (its success path needs
 # a staged release and a machine the stagenet deploy script did not install).
+# The public Kubo's GC oneshot (orama-global-ipfs-gc.service) on a node that
+# `orama global install --services ipfs` ran on: it runs `orama node ipfs-gc`, the
+# bearer is in gc.env and in neither the unit nor its ExecStart, and a run ends
+# successful (not applicable on a target with no such node).
 id: chain-global
 title: Chain CLI documents, RootWallet signing gap, co-hosting
 area: chain
@@ -87,3 +91,4 @@ covers:
     - "docs/ARCHITECTURE.md#boot-components-not-a-sequence: a machine that already has preferences (a cluster node) keeps them when the global services are installed beside it"
     - "docs/CLI_REFERENCE.md#orama-global-install: every refusal happens before the machine changes"
     - "docs/CLI_REFERENCE.md#orama-global-install: REFUSAL PATHS ONLY: the install itself needs a staged release and a machine the deploy script did not install (trigger: the harness installs the chain through orama global install)"
+    - "docs/RUN_A_GLOBAL_NODE.md#install: the public Kubo's GC unit (orama-global-ipfs-gc.service) runs `orama node ipfs-gc`, which reads the RPC bearer from the environment file gc.env (mode 0600), so it is never on a command line; the run ends successful (needs a node that `orama global install --services ipfs` ran on; without one the test says not applicable)"
