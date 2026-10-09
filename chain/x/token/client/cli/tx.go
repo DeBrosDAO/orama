@@ -75,7 +75,7 @@ func GetCmdCreate() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			hook, err := cmd.Flags().GetBool("transfer-hook")
+			hook, err := cmd.Flags().GetString("transfer-hook")
 			if err != nil {
 				return err
 			}
@@ -103,7 +103,7 @@ func GetCmdCreate() *cobra.Command {
 	cmd.Flags().Uint32("transfer-fee-bps", 0, "transfer fee in basis points of the token, burned")
 	cmd.Flags().Bool("non-transferable", false, "block transfers until this capability is renounced")
 	cmd.Flags().Bool("pause", false, "keep pause authority (renounce-only)")
-	cmd.Flags().Bool("transfer-hook", false, "call the chain transfer hook, gas-capped at 100000")
+	cmd.Flags().String("transfer-hook", "", "address of a contract the chain calls on every transfer, gas-capped at 100000 (renounce-only)")
 	flags.AddTxFlagsToCmd(cmd)
 	return cmd
 }

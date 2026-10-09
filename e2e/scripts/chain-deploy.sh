@@ -46,6 +46,12 @@ BIN_DIR="/usr/lib/orama-global/bin"
 HOME_DIR="/var/lib/orama-global/chain"
 SVC_USER="orama-chain"
 UNIT="orama-global-chain.service"
+# The chain indexer (orama-global indexer) runs beside every node: the gateway of the node a request
+# lands on proxies /v1/chain/index/ to 127.0.0.1:$INDEXER_PORT, so a node without one answers 502.
+INDEXER_PORT=31015
+INDEXER_USER="orama-indexer"
+INDEXER_HOME="/var/lib/orama-global/indexer"
+INDEXER_UNIT="orama-global-indexer.service"
 EPOCH_DURATION="${EPOCH_DURATION:-60s}"
 EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-5}"
 SSH_USER="${E2E_SSH_USER:-root}"
@@ -147,6 +153,66 @@ build() {
 		-trimpath \
 		-ldflags "-s -w -X github.com/cosmos/cosmos-sdk/version.Name=oramad -X github.com/cosmos/cosmos-sdk/version.AppName=oramad -X github.com/cosmos/cosmos-sdk/version.Version=$VERSION -X github.com/cosmos/cosmos-sdk/version.Commit=$COMMIT" \
 		-o "$work/oramad" ./cmd/oramad)
+}
+
+build_indexer() {
+	log "building orama-global for linux/amd64 ($VERSION, $COMMIT)"
+	(cd "$chain_root" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$work/orama-global" ./cmd/orama-global)
+}
+
+# install_indexer <ip> <name>: the binary, the indexer's own user and state directory, and its unit.
+# It reads blocks from the local RPC and has no key and no access to the chain home.
+install_indexer() {
+	local ip="$1" name="$2"
+	log "[$name] installing the chain indexer"
+	gzip -c "$work/orama-global" | on "$ip" "gunzip -c | sudo sh -c 'umask 022; tmp=\$(mktemp $BIN_DIR/.orama-global.XXXXXX) && cat > \"\$tmp\" && chmod 0755 \"\$tmp\" && mv -f \"\$tmp\" $BIN_DIR/orama-global'"
+	on "$ip" "id $INDEXER_USER >/dev/null 2>&1 || sudo useradd --system --no-create-home --shell /usr/sbin/nologin $INDEXER_USER"
+	on "$ip" "sudo install -d -m 0700 -o $INDEXER_USER -g $INDEXER_USER $INDEXER_HOME"
+	on "$ip" "sudo tee /etc/systemd/system/$INDEXER_UNIT >/dev/null" <<EOF
+[Unit]
+Description=Orama chain indexer
+After=$UNIT
+Requires=$UNIT
+
+[Service]
+User=$INDEXER_USER
+Group=$INDEXER_USER
+ExecStart=$BIN_DIR/orama-global indexer --rpc tcp://127.0.0.1:$RPC_PORT --home $INDEXER_HOME --listen 127.0.0.1:$INDEXER_PORT
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=$INDEXER_HOME
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	on "$ip" "sudo systemctl daemon-reload && sudo systemctl enable --now $INDEXER_UNIT"
+}
+
+# indexer_answers succeeds when a node's indexer answers its status on loopback.
+indexer_answers() {
+	on "$1" "curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:$INDEXER_PORT/index/v1/status"
+}
+
+# wait_indexers polls every node's indexer until each answers, or READY_TIMEOUT passes.
+wait_indexers() {
+	local deadline=$((SECONDS + READY_TIMEOUT)) n pending
+	while :; do
+		pending=""
+		for n in "${NODES[@]}"; do
+			indexer_answers "$(field "$n" 2)" || pending="$pending $(field "$n" 1)"
+		done
+		[ -n "$pending" ] || return 0
+		[ "$SECONDS" -lt "$deadline" ] || die "no indexer answer after ${READY_TIMEOUT}s from:$pending"
+		sleep "$READY_POLL"
+	done
 }
 
 install_node() {
@@ -351,6 +417,7 @@ wait_blocks() {
 
 cmd_up() {
 	build
+	build_indexer
 	local n
 	for n in "${NODES[@]}"; do install_node "$(field "$n" 2)" "$(field "$n" 1)"; done
 	build_genesis
@@ -367,6 +434,8 @@ cmd_up() {
 		write_unit "$(field "$n" 2)" "${all_wg[@]}"
 	done
 	wait_blocks
+	for n in "${NODES[@]}"; do install_indexer "$(field "$n" 2)" "$(field "$n" 1)"; done
+	wait_indexers
 	cmd_status
 }
 
@@ -383,6 +452,7 @@ cmd_status() {
 		ip="$(field "$n" 2)"
 		h="$(height_of "$ip")"
 		if api_answers "$ip"; then api="api ok"; else api="api not responding on :$API_PORT"; failed=1; fi
+		if indexer_answers "$ip"; then api="$api, indexer ok"; else api="$api, indexer not responding on :$INDEXER_PORT"; failed=1; fi
 		if [ -n "$h" ]; then
 			printf '%-12s height %s, %s\n' "$(field "$n" 1)" "$h" "$api"
 		else
@@ -431,8 +501,11 @@ cmd_reset() {
 		on "$ip" "if sudo systemctl cat $UNIT >/dev/null 2>&1; then sudo systemctl disable --now $UNIT; fi"
 		on "$ip" "sudo rm -f /etc/systemd/system/$UNIT"
 		on "$ip" "sudo systemctl daemon-reload"
-		on "$ip" "sudo rm -rf $HOME_DIR"
-		on "$ip" "sudo rm -f $BIN_DIR/oramad"
+		on "$ip" "if sudo systemctl cat $INDEXER_UNIT >/dev/null 2>&1; then sudo systemctl disable --now $INDEXER_UNIT; fi"
+		on "$ip" "sudo rm -f /etc/systemd/system/$INDEXER_UNIT"
+		on "$ip" "sudo systemctl daemon-reload"
+		on "$ip" "sudo rm -rf $HOME_DIR $INDEXER_HOME"
+		on "$ip" "sudo rm -f $BIN_DIR/oramad $BIN_DIR/orama-global"
 	done
 }
 

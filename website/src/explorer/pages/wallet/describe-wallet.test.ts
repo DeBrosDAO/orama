@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { partsToText } from "./activity-model";
 import { describeWallet } from "./describe-wallet";
-import { ALICE, NOW, profile } from "./fixtures";
+import { NOW, profile } from "./fixtures";
 
 const words = (p = profile(), now = NOW) => partsToText(describeWallet(p, now));
 
 describe("describeWallet", () => {
   it("TestDescribeWallet_plain_wallet", () => {
-    expect(words()).toBe("Last active 2 min ago, first seen 12 d ago, with 128 transactions and no failed payments this week.");
+    expect(words()).toBe("Last active 2 min ago, first seen 12 d ago, with 128 transactions.");
   });
 
   it("TestDescribeWallet_validator_operator_opening", () => {
@@ -19,43 +19,21 @@ describe("describeWallet", () => {
     expect(words(profile({}, ["Authority"]))).toMatch(/^An authority wallet\. /);
   });
 
-  it("TestDescribeWallet_sender_and_delegate", () => {
-    const p = profile({ topSender: ALICE, topDelegate: { moniker: "val-3", operator: "orama1val" } });
-    expect(words(p)).toMatch(/^Mostly receives ORAMA from Alice and delegates to val-3\. Last active/);
-  });
-
-  it("TestDescribeWallet_only_sender", () => {
-    expect(words(profile({ topSender: ALICE }))).toMatch(/^Mostly receives ORAMA from Alice\. Last active/);
-  });
-
-  it("TestDescribeWallet_only_delegate", () => {
-    const p = profile({ topDelegate: { moniker: "val-3", operator: "orama1val" } });
-    expect(words(p)).toMatch(/^Mostly delegates to val-3\. Last active/);
-  });
-
-  it("TestDescribeWallet_no_sender_no_delegate_has_no_mostly", () => {
-    expect(words()).not.toContain("Mostly");
-  });
-
-  it("TestDescribeWallet_failures_singular_and_plural", () => {
-    expect(words(profile({ failedLast7d: 1 }))).toContain("and 1 failed payment this week.");
-    expect(words(profile({ failedLast7d: 3 }))).toContain("and 3 failed payments this week.");
-    expect(words(profile({ failedLast7d: 0 }))).toContain("no failed payments this week.");
-  });
-
   it("TestDescribeWallet_transaction_count_singular_plural_and_grouping", () => {
-    expect(words(profile({ txCount: 1 }))).toContain("with 1 transaction and");
-    expect(words(profile({ txCount: 0 }))).toContain("with 0 transactions and");
-    expect(words(profile({ txCount: 12345 }))).toContain("with 12,345 transactions and");
-  });
-
-  it("TestDescribeWallet_keeps_names_as_link_parts", () => {
-    const parts = describeWallet(profile({ topSender: ALICE }), NOW);
-    expect(parts.some((p) => p.kind === "wallet" && p.ref.address === ALICE.address)).toBe(true);
+    expect(words(profile({ txCount: 1 }))).toContain("with 1 transaction.");
+    expect(words(profile({ txCount: 12345 }))).toContain("with 12,345 transactions.");
   });
 
   it("TestDescribeWallet_old_activity_shows_a_date", () => {
     const old = profile({ lastActive: "2026-01-05T10:00:00.000Z" });
     expect(words(old)).toContain("Last active 5 Jan 2026,");
+  });
+
+  it("TestDescribeWallet_a_funded_wallet_with_no_transaction_says_so", () => {
+    const funded = profile({ firstSeen: null, lastActive: null, txCount: 0 });
+    expect(words(funded)).toBe("No transaction has named this wallet yet.");
+    expect(words(profile({ firstSeen: null, lastActive: null, txCount: 0 }, ["Validator operator"]))).toBe(
+      "A validator operator wallet. No transaction has named this wallet yet.",
+    );
   });
 });

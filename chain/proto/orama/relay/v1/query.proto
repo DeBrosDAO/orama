@@ -3,16 +3,27 @@ package orama.relay.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/relay/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/relay/v1/relay.proto";
 
 // Query defines the gRPC querier service for x/relay.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Reporters(QueryReportersRequest) returns (QueryReportersResponse);
-  rpc Relay(QueryRelayRequest) returns (QueryRelayResponse);
-  rpc EpochResult(QueryEpochResultRequest) returns (QueryEpochResultResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/relay/v1/params";
+  }
+  rpc Reporters(QueryReportersRequest) returns (QueryReportersResponse) {
+    option (google.api.http).get = "/orama/relay/v1/reporters";
+  }
+  rpc Relay(QueryRelayRequest) returns (QueryRelayResponse) {
+    option (google.api.http).get = "/orama/relay/v1/relay/{rsa_fingerprint_hex}";
+  }
+  rpc EpochResult(QueryEpochResultRequest) returns (QueryEpochResultResponse) {
+    option (google.api.http).get = "/orama/relay/v1/epoch-result/{epoch}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/relay/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

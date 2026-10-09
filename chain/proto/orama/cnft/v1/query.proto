@@ -3,15 +3,24 @@ package orama.cnft.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/cnft/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/cnft/v1/cnft.proto";
 
 // Query is x/cnft's gRPC query service.
 service Query {
-  rpc Collection(QueryCollectionRequest) returns (QueryCollectionResponse);
-  rpc Tree(QueryTreeRequest) returns (QueryTreeResponse);
-  rpc Decompressed(QueryDecompressedRequest) returns (QueryDecompressedResponse);
-  rpc Snapshots(QuerySnapshotsRequest) returns (QuerySnapshotsResponse);
+  rpc Collection(QueryCollectionRequest) returns (QueryCollectionResponse) {
+    option (google.api.http).get = "/orama/cnft/v1/collection/{id}";
+  }
+  rpc Tree(QueryTreeRequest) returns (QueryTreeResponse) {
+    option (google.api.http).get = "/orama/cnft/v1/tree/{id}";
+  }
+  rpc Decompressed(QueryDecompressedRequest) returns (QueryDecompressedResponse) {
+    option (google.api.http).get = "/orama/cnft/v1/decompressed";
+  }
+  rpc Snapshots(QuerySnapshotsRequest) returns (QuerySnapshotsResponse) {
+    option (google.api.http).get = "/orama/cnft/v1/snapshots/{tree_id}";
+  }
 }
 
 message QueryCollectionRequest {

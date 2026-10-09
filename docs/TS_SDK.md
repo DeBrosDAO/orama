@@ -659,7 +659,7 @@ console.log(result.txHash, describeTx(signed.txBytes).messages[0].summary);
 `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`,
 `indexAccountTxs`, `cnftAsset` and `cnftOwnerAssets`: the routes in
 [CHAIN.md](CHAIN.md#explorer). A node's REST API (`restURL`) adds `account`, `balances` and
-`broadcast`. The Orama modules' own state speaks gRPC only and has no REST route; the gateway serves
+`broadcast`. The Orama modules' own queries are on a node's REST API ([CHAIN.md](CHAIN.md#module-queries-over-rest)), not on the gateway's; the gateway serves
 each module's Query service at `/v1/chain/query/<package.Service>/<Method>`, and the client reads it
 through `gatewayURL`: `moduleQuery(service, method, request, { height })` for any embedded query, and typed
 reads for x/nodes (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`), x/storage

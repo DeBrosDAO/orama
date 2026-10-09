@@ -39,9 +39,12 @@ type FeesKeeper interface {
 	FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 
-// TransferHook is the gas-capped callback a token may request at creation.
-// The keeper calls it with a meter limited to TransferHookGasCap. There is
-// no CosmWasm execution in this module; the app injects the implementation.
+// TransferHook is the contract call a token may request at creation: the token names a CosmWasm
+// contract, and the keeper calls it on every MsgTransfer with a gas meter limited to
+// TransferHookGasCap. This module executes no CosmWasm itself; the app injects the implementation.
 type TransferHook interface {
-	OnTransfer(ctx context.Context, denom string, from, to sdk.AccAddress, amount math.Int) error
+	// ValidateHook is called at creation: contract must be a contract that exists in this build.
+	ValidateHook(ctx context.Context, contract sdk.AccAddress) error
+	// OnTransfer runs the contract's hook for one transfer. An error refuses the transfer.
+	OnTransfer(ctx context.Context, contract sdk.AccAddress, denom string, from, to sdk.AccAddress, amount math.Int) error
 }

@@ -10,7 +10,10 @@
 // way the chain rebuilds a leaf from the transaction that wrote it.
 package indexer
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Block is one indexed block. Hashes are lowercase hex.
 type Block struct {
@@ -20,6 +23,11 @@ type Block struct {
 	Proposer string    `json:"proposer"`
 	TxCount  int       `json:"tx_count"`
 	TxHashes []string  `json:"tx_hashes"`
+	// GasUsed is the sum of the gas its transactions used.
+	GasUsed int64 `json:"gas_used"`
+	// Burned is the norama its transactions burned as base fee (the "base_fee"
+	// attribute of each "tx" event). Finalize-block burns are not included.
+	Burned string `json:"burned"`
 }
 
 // Attribute is one event attribute as the chain emitted it.
@@ -48,6 +56,33 @@ type Tx struct {
 	GasUsed   int64    `json:"gas_used"`
 	Messages  []string `json:"messages"`
 	Events    []Event  `json:"events"`
+	// Time is the block's time.
+	Time time.Time `json:"time"`
+	// Signer is the account of the transaction's first signature, or empty for a
+	// transaction with none (a shielded one) or whose bytes do not decode.
+	Signer string `json:"signer,omitempty"`
+	Memo   string `json:"memo,omitempty"`
+	// Body is the transaction body as JSON: one object per message, each with its
+	// "@type". A message whose type this build does not know is the "@type" alone.
+	Body []json.RawMessage `json:"body"`
+}
+
+// AccountSummary is what the index knows of one account: how many
+// transactions named it, and the time of the first and of the last.
+type AccountSummary struct {
+	Address    string    `json:"address"`
+	TxCount    uint64    `json:"tx_count"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastActive time.Time `json:"last_active"`
+}
+
+// HourStat is the transactions of one UTC hour. Burned is base fee burned by
+// transactions, in norama.
+type HourStat struct {
+	Hour   time.Time `json:"hour"`
+	Txs    uint64    `json:"txs"`
+	Failed uint64    `json:"failed"`
+	Burned string    `json:"burned"`
 }
 
 // Asset states.

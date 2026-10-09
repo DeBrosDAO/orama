@@ -3,17 +3,30 @@ package orama.nodes.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/nodes/v1/nodes.proto";
 
 // Query is the gRPC querier for x/nodes.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc Operator(QueryOperatorRequest) returns (QueryOperatorResponse);
-  rpc Node(QueryNodeRequest) returns (QueryNodeResponse);
-  rpc Cluster(QueryClusterRequest) returns (QueryClusterResponse);
-  rpc NodeUnbondings(QueryNodeUnbondingsRequest) returns (QueryNodeUnbondingsResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/params";
+  }
+  rpc Operator(QueryOperatorRequest) returns (QueryOperatorResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/operator/{address}";
+  }
+  rpc Node(QueryNodeRequest) returns (QueryNodeResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/node/{node_id}";
+  }
+  rpc Cluster(QueryClusterRequest) returns (QueryClusterResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/cluster/{cluster_id}";
+  }
+  rpc NodeUnbondings(QueryNodeUnbondingsRequest) returns (QueryNodeUnbondingsResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/node-unbondings/{node_id}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

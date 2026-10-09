@@ -66,8 +66,8 @@ export function InvestigateCard({ tx }: { tx: TxDetail }) {
   const { previousFromSigner, otherInBlock } = tx.context;
   return (
     <Card title="Keep investigating">
-      <WalletRow wallet={tx.signer} />
-      {receiver && receiver.address !== tx.signer.address && <WalletRow wallet={receiver} />}
+      {tx.signer && <WalletRow wallet={tx.signer} />}
+      {receiver && receiver.address !== tx.signer?.address && <WalletRow wallet={receiver} />}
       {previousFromSigner && <PreviousTxRow previous={previousFromSigner} />}
       {otherInBlock > 0 && (
         <Link to={explorerPaths.block(tx.height)} className={cn(ROW, "text-sm")}>

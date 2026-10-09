@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { addressFor } from "../data/demo/ids";
 import { bech32Encode } from "./bech32";
 import { classify } from "./search";
+
+/** A valid bech32 "orama1…" address, the same for the same seed. */
+function addressFor(seed: string): string {
+  const bytes = new Uint8Array(20);
+  for (let i = 0; i < seed.length; i++) bytes[i % bytes.length] ^= seed.charCodeAt(i);
+  return bech32Encode("orama", bytes);
+}
 
 const HASH = "a91f3c0000000000000000000000000000000000000000000000000000bc03bc";
 

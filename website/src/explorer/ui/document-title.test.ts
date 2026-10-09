@@ -2,15 +2,11 @@ import { describe, expect, it } from "vitest";
 import { documentTitle } from "./document-title";
 
 describe("documentTitle", () => {
-  it("appends the suffix for live data", () => {
-    expect(documentTitle("Validators", false)).toBe("Validators · Orama Explorer");
+  it("TestDocumentTitle_appends_the_suffix", () => {
+    expect(documentTitle("Validators")).toBe("Validators · Orama Explorer");
   });
 
-  it("marks demo data in the tab title", () => {
-    expect(documentTitle("Validators", true)).toBe("Validators · Orama Explorer (demo)");
-  });
-
-  it("still produces a title for an empty page name", () => {
-    expect(documentTitle("", true)).toBe(" · Orama Explorer (demo)");
+  it("TestDocumentTitle_still_produces_a_title_for_an_empty_page_name", () => {
+    expect(documentTitle("")).toBe(" · Orama Explorer");
   });
 });

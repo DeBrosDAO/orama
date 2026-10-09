@@ -3,10 +3,6 @@ import type { ActivityItem } from "../../model/types";
 
 export const CSV_HEADER = ["time", "direction", "type", "counterparty", "amount_ORAMA", "status", "tx_hash"] as const;
 
-/** A first line spreadsheets show as a note; marks an export of made-up data. */
-export const DEMO_COMMENT = "# Demo data: not a real chain";
-export const DEMO_FILE_PREFIX = "DEMO-";
-
 const LINE_BREAK = "\r\n";
 const NEEDS_QUOTES = /[",\r\n]/;
 /** Characters a spreadsheet reads as the start of a formula. */
@@ -45,22 +41,17 @@ function rowFor(item: ActivityItem): string {
   ].join(",");
 }
 
-export interface CsvOptions {
-  /** The rows come from a demo world: say so on the first line. */
-  demo?: boolean;
-}
-
 /**
  * The loaded activity as CSV (RFC 4180, CRLF). Every text cell is untrusted, so
  * each is neutralised against formula injection. The amount is generated from
  * a validated integer, never free text, so its leading "-" stays a minus sign.
  */
-export function activityToCsv(items: ActivityItem[], { demo = false }: CsvOptions = {}): string {
-  const lines = [...(demo ? [DEMO_COMMENT] : []), CSV_HEADER.join(","), ...items.map(rowFor)];
+export function activityToCsv(items: ActivityItem[]): string {
+  const lines = [CSV_HEADER.join(","), ...items.map(rowFor)];
   return lines.join(LINE_BREAK) + LINE_BREAK;
 }
 
-/** The download's name; a demo export can never be mistaken for a real one. */
-export function csvFilename(address: string, { demo = false }: CsvOptions = {}): string {
-  return `${demo ? DEMO_FILE_PREFIX : ""}${address}-activity.csv`;
+/** The download's name. */
+export function csvFilename(address: string): string {
+  return `${address}-activity.csv`;
 }

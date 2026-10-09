@@ -7,9 +7,8 @@
 //     validator set, supply, the staking pool and the indexer;
 //   - a node's Cosmos REST API (--node): accounts, bank balances and every
 //     standard SDK module;
-//   - a node's CometBFT RPC (--rpc): abci_query, the only HTTP route to
-//     x/nodes, x/storage, x/fees and the other Orama modules, which speak gRPC
-//     and carry no REST annotations. GRPC encodes the request and decodes the
+//   - a node's CometBFT RPC (--rpc): abci_query, the route the gateway proxies to
+//     x/nodes, x/storage, x/fees and the other Orama modules. GRPC encodes the request and decodes the
 //     response with descriptors embedded from chain/proto.
 package chainread
 

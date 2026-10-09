@@ -61,6 +61,11 @@ describe("activityLabel", () => {
     expect(text(sendItem({ message, direction: "in" }))).toBe("Accepted a private storage deal from orama1me");
   });
 
+  it("TestActivityLabel_storage_deal_without_a_provider_names_none", () => {
+    const message = { type: "storage_deal" as const, owner: ME, provider: null, amount: "5", replicas: 3, visibility: "public" as const };
+    expect(text(sendItem({ message }))).toBe("Opened a public storage deal");
+  });
+
   it("TestActivityLabel_failed_storage_deal", () => {
     const message = { type: "storage_deal" as const, owner: ME, provider: ALICE, amount: "5", replicas: 1, visibility: "public" as const };
     expect(text(sendItem({ message, status: { ok: false, reason: "no funds" } }))).toBe("Tried to open a public storage deal · Alice · no funds");

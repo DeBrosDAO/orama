@@ -47,6 +47,18 @@ func (k Keeper) CreateToken(ctx sdk.Context, msg *types.MsgCreateToken) (types.T
 	if err := types.ValidateExtensions(ext); err != nil {
 		return types.Token{}, err
 	}
+	if ext.TransferHook != "" {
+		if k.transferHook == nil {
+			return types.Token{}, fmt.Errorf("token %s asks for a transfer hook but this build has no contract VM", msg.Subdenom)
+		}
+		contract, err := parseAcc(ext.TransferHook, "transfer hook contract")
+		if err != nil {
+			return types.Token{}, err
+		}
+		if err := k.transferHook.ValidateHook(ctx, contract); err != nil {
+			return types.Token{}, fmt.Errorf("transfer hook %s: %w", ext.TransferHook, err)
+		}
+	}
 
 	denom := types.Denom(creator.String(), msg.Subdenom)
 	if err := sdk.ValidateDenom(denom); err != nil {

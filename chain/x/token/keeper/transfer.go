@@ -82,7 +82,7 @@ func (k Keeper) Transfer(ctx sdk.Context, msg *types.MsgTransfer) error {
 		return fmt.Errorf("transfer fee %s%s exceeds issued supply %s", fee, token.Denom, spendableText(token.Issued))
 	}
 	if net.IsPositive() {
-		if err := k.bank.SendCoins(ctx, from, to, coins(token.Denom, net)); err != nil {
+		if err := k.bank.SendCoins(scopedTransfer(ctx), from, to, coins(token.Denom, net)); err != nil {
 			return fmt.Errorf("failed to send %s: %w", token.Denom, err)
 		}
 	}

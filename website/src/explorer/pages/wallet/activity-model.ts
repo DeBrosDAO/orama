@@ -41,7 +41,7 @@ function storageLabel(m: Extract<TxMessage, { type: "storage_deal" }>, item: Act
   const failed = !item.status.ok;
   if (item.direction === "out") {
     const verb = failed ? "Tried to open a " : "Opened a ";
-    return [t(`${verb}${m.visibility} storage deal · `), { kind: "wallet", ref: m.provider }];
+    return m.provider ? [t(`${verb}${m.visibility} storage deal · `), { kind: "wallet", ref: m.provider }] : [t(`${verb}${m.visibility} storage deal`)];
   }
   const verb = failed ? "Failed storage deal from " : `Accepted a ${m.visibility} storage deal from `;
   return [t(verb), { kind: "wallet", ref: m.owner }];

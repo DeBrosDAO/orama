@@ -85,7 +85,7 @@ func TestParamsAndGenesis(t *testing.T) {
 }
 
 func TestExtensions_renounceIsOneWay(t *testing.T) {
-	ext := types.Extensions{Mint: true, Freeze: true, TransferFeeBps: 25, Pause: true, TransferHook: true}
+	ext := types.Extensions{Mint: true, Freeze: true, TransferFeeBps: 25, Pause: true, TransferHook: "orama1hook"}
 	require.True(t, ext.BlocksShield())
 	next, err := ext.Renounce(types.EXTENSION_FREEZE)
 	require.NoError(t, err)

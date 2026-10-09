@@ -57,6 +57,10 @@ func TestIndexProxy_buildsEachUpstreamURL(t *testing.T) {
 	cases := []struct{ path, want string }{
 		{"/v1/chain/index/status", "/index/v1/status"},
 		{"/v1/chain/index/blocks/42", "/index/v1/blocks/42"},
+		{"/v1/chain/index/stats", "/index/v1/stats"},
+		{"/v1/chain/index/txs", "/index/v1/txs"},
+		{"/v1/chain/index/txs?limit=100", "/index/v1/txs?limit=100"},
+		{"/v1/chain/index/accounts/" + testAccount, "/index/v1/accounts/" + testAccount},
 		{"/v1/chain/index/txs/0x" + hash, "/index/v1/txs/" + strings.ToLower(hash)},
 		{"/v1/chain/index/accounts/" + testAccount + "/txs", "/index/v1/accounts/" + testAccount + "/txs"},
 		{"/v1/chain/index/accounts/" + testAccount + "/txs?limit=100&page=1000", "/index/v1/accounts/" + testAccount + "/txs?limit=100&page=1000"},
@@ -94,6 +98,13 @@ func TestIndexProxy_refusesBadParamsWithoutCallingTheIndexer(t *testing.T) {
 		code int
 	}{
 		{"/v1/chain/index/status?x=1", http.StatusBadRequest},
+		{"/v1/chain/index/stats?hours=3", http.StatusBadRequest},
+		{"/v1/chain/index/txs?limit=101", http.StatusBadRequest},
+		{"/v1/chain/index/txs?limit=0", http.StatusBadRequest},
+		{"/v1/chain/index/txs?limit=1&limit=2", http.StatusBadRequest},
+		{"/v1/chain/index/txs?page=2", http.StatusBadRequest},
+		{"/v1/chain/index/accounts/" + testAccount + "?x=1", http.StatusBadRequest},
+		{"/v1/chain/index/accounts/notanaddress", http.StatusNotFound},
 		{"/v1/chain/index/blocks/2?full=1", http.StatusBadRequest},
 		{"/v1/chain/index/accounts/" + testAccount + "/txs?limit=101", http.StatusBadRequest},
 		{"/v1/chain/index/accounts/" + testAccount + "/txs?limit=0", http.StatusBadRequest},

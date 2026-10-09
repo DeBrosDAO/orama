@@ -3,13 +3,19 @@ package indexer
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"cosmossdk.io/math"
 	abci "github.com/cometbft/cometbft/abci/types"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	gogoproto "github.com/cosmos/gogoproto/proto"
+
+	"github.com/cosmos/cosmos-sdk/codec"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 )
 
 // MaxBlocksPerStep bounds one Step, so a follower far behind the tip still
@@ -34,6 +40,7 @@ type Follower struct {
 	chain Chain
 	store *Store
 	start int64
+	codec *codec.ProtoCodec
 }
 
 // NewFollower binds store to start. A store that was started from another
@@ -45,7 +52,7 @@ func NewFollower(chain Chain, store *Store, start int64) (*Follower, error) {
 	if err := store.bindStart(start); err != nil {
 		return nil, err
 	}
-	return &Follower{chain: chain, store: store, start: start}, nil
+	return &Follower{chain: chain, store: store, start: start, codec: newCodec()}, nil
 }
 
 // Step indexes the committed blocks after the cursor, at most
@@ -105,65 +112,127 @@ func (f *Follower) indexBlock(ctx context.Context, height int64) error {
 		TxCount:  len(txs),
 		TxHashes: make([]string, 0, len(txs)),
 	}
+	burned := math.ZeroInt()
 	for i, raw := range txs {
-		hash, err := f.indexTx(ctx, w, height, uint32(i), raw, res.TxsResults[i])
+		pos := txPos{height: height, index: uint32(i), time: block.Time}
+		hash, txBurned, err := f.indexTx(ctx, w, pos, raw, res.TxsResults[i])
 		if err != nil {
 			return errors.Join(fmt.Errorf("index tx %d of block %d: %w", i, height, err), w.close())
 		}
 		block.TxHashes = append(block.TxHashes, hash)
+		block.GasUsed += res.TxsResults[i].GasUsed
+		burned = burned.Add(txBurned)
 	}
+	block.Burned = burned.String()
 	if err := w.putBlock(block); err != nil {
 		return errors.Join(err, w.close())
 	}
 	return w.commit(height)
 }
 
-func (f *Follower) indexTx(ctx context.Context, w *writer, height int64, index uint32, raw cmttypes.Tx, res *abci.ExecTxResult) (string, error) {
+// txPos is where a transaction sits: its block and place in it, and the time of
+// the block.
+type txPos struct {
+	height int64
+	index  uint32
+	time   time.Time
+}
+
+// indexTx writes one transaction and returns its hash and the base fee it burned.
+func (f *Follower) indexTx(ctx context.Context, w *writer, pos txPos, raw cmttypes.Tx, res *abci.ExecTxResult) (string, math.Int, error) {
 	if res == nil {
-		return "", errors.New("node returned no result")
+		return "", math.Int{}, errors.New("node returned no result")
 	}
 	hash := raw.Hash()
 	hashHex := hex.EncodeToString(hash)
 	t := Tx{
-		Hash: hashHex, Height: height, Index: index,
+		Hash: hashHex, Height: pos.height, Index: pos.index, Time: pos.time,
 		Code: res.Code, Codespace: res.Codespace, Log: res.Log,
 		GasWanted: res.GasWanted, GasUsed: res.GasUsed,
-		Messages: []string{}, Events: toEvents(res.Events),
+		Messages: []string{}, Events: toEvents(res.Events), Body: []json.RawMessage{},
 	}
-	msgs, err := bodyMessages(raw)
+	env, err := readEnvelope(f.codec, raw)
 	switch {
 	case err == nil:
-		t.Messages = typeURLs(msgs)
+		t.Messages = typeURLs(env.msgs)
+		t.Signer, t.Memo, t.Body = env.signer, env.memo, env.body
 	case res.Code == 0:
 		// A block holds only what the application accepted; a successful
 		// transaction the index cannot decode means the decoder is wrong.
-		return "", fmt.Errorf("successful transaction %s: %w", hashHex, err)
+		return "", math.Int{}, fmt.Errorf("successful transaction %s: %w", hashHex, err)
 	}
-	if err := w.putTxOnce(hash, t); err != nil {
-		return "", err
+	burned, err := baseFeeBurned(res.Events)
+	if err != nil {
+		return "", math.Int{}, fmt.Errorf("transaction %s: %w", hashHex, err)
 	}
-	for _, addr := range eventAddresses(res.Events) {
-		if err := w.addAccountTx(addr, height, index, hash); err != nil {
-			return "", err
-		}
+	if err := f.writeTx(w, pos, hash, t, res, burned); err != nil {
+		return "", math.Int{}, err
 	}
 	if res.Code != 0 {
-		return hashHex, nil
+		return hashHex, burned, nil
 	}
-	resps, err := msgResponses(res.Data)
-	if err != nil {
-		return "", fmt.Errorf("transaction %s: %w", hashHex, err)
+	return hashHex, burned, f.applyMessages(ctx, w, pos, hashHex, env.msgs, res)
+}
+
+// writeTx stores the transaction and every index that points at it.
+func (f *Follower) writeTx(w *writer, pos txPos, hash []byte, t Tx, res *abci.ExecTxResult, burned math.Int) error {
+	if err := w.putTxOnce(hash, t); err != nil {
+		return err
 	}
-	if len(resps) != len(msgs) {
-		return "", fmt.Errorf("transaction %s has %d messages but %d responses", hashHex, len(msgs), len(resps))
+	if err := w.addLatest(pos.height, pos.index, hash); err != nil {
+		return err
 	}
-	a := applier{ctx: ctx, chain: f.chain, w: w, height: height, tx: hashHex}
-	for i := range msgs {
-		if err := a.apply(msgs[i], resps[i]); err != nil {
-			return "", fmt.Errorf("transaction %s message %d (%s): %w", hashHex, i, msgs[i].TypeUrl, err)
+	if err := w.addToHour(pos.time, res.Code != 0, burned); err != nil {
+		return err
+	}
+	for _, addr := range eventAddresses(res.Events) {
+		if err := w.addAccountTx(addr, pos.height, pos.index, hash); err != nil {
+			return err
+		}
+		if err := w.touchAccount(addr, pos.time); err != nil {
+			return err
 		}
 	}
-	return hashHex, nil
+	return nil
+}
+
+// applyMessages folds a successful transaction's x/cnft and x/market messages into the asset index.
+func (f *Follower) applyMessages(ctx context.Context, w *writer, pos txPos, hashHex string, msgs []*codectypes.Any, res *abci.ExecTxResult) error {
+	resps, err := msgResponses(res.Data)
+	if err != nil {
+		return fmt.Errorf("transaction %s: %w", hashHex, err)
+	}
+	if len(resps) != len(msgs) {
+		return fmt.Errorf("transaction %s has %d messages but %d responses", hashHex, len(msgs), len(resps))
+	}
+	a := applier{ctx: ctx, chain: f.chain, w: w, height: pos.height, tx: hashHex}
+	for i := range msgs {
+		if err := a.apply(msgs[i], resps[i]); err != nil {
+			return fmt.Errorf("transaction %s message %d (%s): %w", hashHex, i, msgs[i].TypeUrl, err)
+		}
+	}
+	return nil
+}
+
+// baseFeeBurned is the "base_fee" attribute of the "tx" event the fee ante handler
+// emits, or zero for a transaction that never reached it.
+func baseFeeBurned(events []abci.Event) (math.Int, error) {
+	for _, e := range events {
+		if e.Type != "tx" {
+			continue
+		}
+		for _, a := range e.Attributes {
+			if a.Key != "base_fee" {
+				continue
+			}
+			v, ok := math.NewIntFromString(a.Value)
+			if !ok {
+				return math.Int{}, fmt.Errorf("tx event base_fee %q is not an integer", a.Value)
+			}
+			return v, nil
+		}
+	}
+	return math.ZeroInt(), nil
 }
 
 func lowerHex(b []byte) string { return hex.EncodeToString(b) }

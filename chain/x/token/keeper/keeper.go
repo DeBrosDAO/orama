@@ -41,8 +41,8 @@ type Keeper struct {
 	Frozen collections.KeySet[collections.Pair[string, string]]
 }
 
-// NewKeeper builds a new x/token Keeper. hook may be nil; a token created with
-// the transfer-hook capability then fails its transfers until one is set.
+// NewKeeper builds a new x/token Keeper. hook may be nil; a token cannot then be created with
+// the transfer-hook capability.
 func NewKeeper(
 	cdc codec.BinaryCodec,
 	storeService storetypes.KVStoreService,

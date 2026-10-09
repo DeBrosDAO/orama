@@ -1016,7 +1016,6 @@ that truncation would erase a real move, steps by one norama, floored at `Params
 `chain/x/token` is the tokenfactory-style module from
 plans/open-network/track-c-chain.md C10. It is registered in `chain/app/app.go`. The module
 account may mint and burn. Creation-fee burns and metadata deposits go through `x/fees`.
-The transfer hook wired today does nothing.
 
 Denoms are `factory/{creator bech32}/{subdenom}`. Balances live in x/bank, not in this module.
 `Token.issued` is the module's running total. `CheckInvariants` requires that total to equal
@@ -1042,8 +1041,14 @@ message that adds or reassigns one, and no module admin key:
 - transfer fee is a basis-point share of the token itself, burned on `MsgTransfer`;
 - non-transferable blocks every transfer, including the permanent delegate;
 - pause blocks transfers only (mint and burn still work) until the creator unpauses;
-- transfer hook calls a Go `TransferHook`, not CosmWasm, under a gas meter capped at 100_000.
-  Asking for more gas fails the transfer and moves nothing.
+- transfer hook names a CosmWasm contract (`MsgCreateToken.transfer_hook`, a bech32 address that must
+  already be a contract; a build without the contract VM refuses a hook). On every `MsgTransfer` of the
+  token the chain calls the contract's `sudo` entry point with
+  `{"transfer_hook":{"denom","from","to","amount"}}` under a gas meter capped at 100_000
+  (`types.TransferHookGasCap`). The contract returning an error refuses the transfer; asking for more gas
+  fails it with "transfer hook exceeded gas cap"; either way nothing moves, and what the contract wrote is
+  dropped. Its state writes are kept only when the transfer succeeds. The address is fixed at creation and
+  can only be renounced.
 
 Renouncing freeze or pause does not clear an existing freeze or the paused flag. Only the
 permanent delegate can renounce that capability. `MsgSetShieldable` may be signed by anyone. It
@@ -1053,14 +1058,72 @@ shields only ORAMA (multi-asset is off). A shieldable token still moves by the p
 `MsgTransfer` bank send.
 
 `MsgTransfer` does that send after the pause, non-transferable, signer, and freeze checks.
-`from` must be the signer unless the signer is the current permanent delegate. Because the
-module is not wired, `x/bank` `MsgSend` does not run these checks. The `token` module account
-would also need minter and burner permissions before a real bank would accept mint, burn, or
-the creation-fee burn. Neither is granted in `app.go`.
+`from` must be the signer unless the signer is the current permanent delegate.
+
+**The bank send restriction.** The same powers hold on every other path that moves a token, because
+`app.go` appends `Keeper.SendRestriction` to the bank keeper: `x/bank` `MsgSend` and `MsgMultiSend`, a
+contract's `BankMsg` and attached funds, and any module send. Such a send of a factory denom is refused
+when the token is paused or non-transferable, when it has a transfer fee or a transfer hook (those run
+only in `MsgTransfer`), or when the sender or the recipient is frozen. The restriction lets through a
+send with the `token` module account on either side (its own mint, burn and fee burn) and the bank send
+inside `MsgTransfer`, which has made the checks itself. A factory-looking denom with no token record
+is not governed. The permanent-delegate move exists only in `MsgTransfer`.
 
 State is one record per token plus one key per frozen account. A transfer is a single bank send,
 plus a burn when a fee is due. The invariant walks every token, the same shape as x/fees'
 deposit walk.
+
+## `x/cnft` and `x/market`: compressed NFTs and the royalty market
+
+`chain/x/cnft` and `chain/x/market` implement plans/open-network/track-c-chain.md C11. Both are
+registered and neither has an admin key.
+
+**Trees.** `MsgCreateCollection{name, royalty_bps}` makes a collection (royalty at most 10,000 bps).
+`MsgCreateTree{collection_id, depth, buffer, canopy}` is signed by the collection's creator. Depth is
+1 to 30, the changelog buffer 1 to 2,048 roots, the canopy 0 to 14 and below the depth. It locks a
+state deposit through `x/fees`, one norama per byte of a stated state model (header, one changelog
+slot per buffer entry, the rightmost path, the canopy), so the deposit is a pure function of the
+three numbers (`types.TreeDeposit`). A tree keeps its root, the changelog ring, the rightmost path and
+the canopy. A proof built against any root still in the ring is fast-forwarded through the changes
+since, so several updates to one tree in one block all land; a proof against a root that has left the
+ring, or one the update of another leaf invalidated, fails (`TestStaleProofAndRootOlderThanBuffer`).
+Many trees per collection are the intended shape, because writes to one tree serialise.
+
+**Leaves.** A leaf is the SHA-256 of `types.EncodeLeaf`: asset id, owner, delegate, metadata CID and
+creator hash, each as a 4-byte length and the bytes, then the nonce (8 bytes) and the `hash_id` (4 bytes,
+1 for SHA-256), all big-endian. The creator hash is the SHA-256 of the collection creator's address
+bytes. Every owner, delegate and nonce change rewrites the leaf with the nonce plus one.
+
+**Messages.** `MsgMint` (the tree's creator, up to 64 leaves, nonce 0) appends. `MsgTransfer`,
+`MsgBurn` and `MsgUpdateMetadata` carry the current leaf and a Merkle proof and are signed by the leaf's
+owner or its delegate. `MsgDecompress` (the owner) removes the leaf and writes a
+`DecompressedAsset` record, which is the on-chain handle a contract can hold; `MsgCompress` appends it
+back with the nonce plus one. `MsgRecordSnapshot` (the tree's creator) records a CID and the tree's
+sequence number. A Merkle proof is a root, a leaf index and the siblings.
+
+**Data availability.** The chain does not keep leaves, and ABCI events are not in consensus (the C0-6
+record). Every leaf is rebuilt from the committed transaction bytes: `TestRebuildTreeFromTxBodies`
+replays only message bodies and gets the on-chain root. The index (`chain/indexer`) does the same.
+`x/cnft` and `x/market` emit no events.
+
+**Market.** `x/market` has listings and bids. `MsgList` (the owner, with a proof) records the seller,
+the price and the collection's royalty creator and rate at the time of listing; an asset has at most
+one listing. `MsgBid` escrows the bid in the `market` module account; `MsgCancelBid` and
+`MsgCancelListing` refund. `MsgSettle` either buys at the listed price (the signer is the buyer and
+pays from the bank balance) or, signed by the seller, accepts a bid (`bid_id` set). It proves the
+seller still owns the leaf, moves the leaf to the buyer (the delegate is cleared), refunds every other
+bid, and credits the royalty (`price * royalty_bps / 10,000`, rounded down) to the collection creator's
+**earnings account** and the rest to the seller's earnings account. Nothing is paid to a bank balance, so
+the market cannot be a public payment rail. A transfer outside the market pays no royalty. `oramad query
+market invariants` checks that the module account holds exactly the open bids.
+
+**Not built.**
+- Tree snapshots are recorded as CIDs by the tree's creator. The chain does not open protocol
+  `PUBLIC_PIN` deals for them every N epochs and does not check that a CID is pinned: a protocol deal
+  needs a piece commitment, which only the party holding the snapshot bytes can compute, and the
+  chain cannot derive one from its rightmost path.
+- Metadata is a CID. No `PUBLIC_PIN` deal is opened or prepaid at mint.
+- Shielding a cNFT waits for multi-asset shielding.
 
 ## `x/houses`: two-house governance
 
@@ -1815,12 +1878,25 @@ Following:
 
 What is indexed:
 - **Blocks:** height, hash, time, proposer address (hex), transaction count,
-  transaction hashes.
+  transaction hashes, the gas its transactions used, and the base fee they
+  burned (the `base_fee` attribute of each `tx` event; burns in the
+  finalize-block phase are not counted).
 - **Transactions** (failed ones too): hash (SHA-256 of the bytes, lowercase
-  hex), height, index in the block, code, codespace, log, gas wanted and used,
-  the type URL of each message, and the events of the `ExecTxResult`. A
+  hex), height, index in the block, the block's time, code, codespace, log, gas
+  wanted and used, the type URL of each message, the events of the
+  `ExecTxResult`, the signer (the account of the first signature's public key;
+  empty for a transaction with none, such as a shielded one), the memo, and
+  `body`: each message as JSON with its `@type`. A message whose type the
+  indexer's codec does not know (CosmWasm messages) is `{"@type": url}` alone;
+  a message of a known type that cannot be decoded stops the pass. A
   transaction whose bytes are not a Cosmos transaction (the chain refused it)
-  is kept with no message type URLs.
+  is kept with no message type URLs and an empty body.
+- **Newest transactions:** every transaction in block order, so the newest can
+  be listed without walking blocks.
+- **Hourly statistics:** per UTC hour, the transactions included, how many
+  failed, and the base fee they burned. They count from `--start-height`.
+- **Account summary:** per address in the address index, how many transactions
+  named it and the time of the first and of the last.
 - **Address → transactions:** every distinct attribute value, in the
   transaction's events, that is exactly a lowercase bech32 `orama1…` account
   address. That includes `message.sender`, `transfer.recipient` and
@@ -1884,12 +1960,20 @@ method, path, or query parameter is refused (`404`, `405`, `400`):
 | `/index/v1/status` | `start_height`, `cursor`, and the node's `earliest` and `tip` (`502` if the node is unreachable) |
 | `/index/v1/blocks/{height}` | the block, or `404` `not indexed` |
 | `/index/v1/txs/{hash}` | the transaction (64 hex, either case, no `0x`) |
+| `/index/v1/txs?limit=` | the newest transactions, newest first (`limit` 1–100, default 20; no page) |
+| `/index/v1/stats` | `start_height` and `hours`: 48 hourly buckets ending with the hour of the newest indexed block, oldest first, each `{hour, txs, failed, burned}`; an hour with no transaction is zeros |
+| `/index/v1/accounts/{address}` | `{address, tx_count, first_seen, last_active}`, or `404` `not indexed` for an address no transaction named |
 | `/index/v1/accounts/{address}/txs?page=&limit=` | the address's transactions, newest first |
 | `/index/v1/cnft/assets/{id}` | `{"id", "records": [...]}`, each record a DAS-style asset (`ownership`, `compression`, `grouping` by collection, `burnt`, `content.metadata_cid`, `last_update`) |
 | `/index/v1/cnft/owners/{address}/assets?page=&limit=` | the compressed and decompressed assets the address owns, by asset id |
 
 `page` is 1–1000 (default 1) and `limit` 1–100 (default 20). An address must
-be a lowercase bech32 `orama1…` account with a valid checksum. The gateway
+be a lowercase bech32 `orama1…` account with a valid checksum.
+
+An index carries a layout version, and an index written by another version is
+refused. This version (2) added `time`, `signer`, `memo`, `body`, the block's `gas_used` and
+`burned`, and the three indexes above. The indexer exits naming the problem;
+the fix is to index again into a new `--home`. The gateway
 serves these routes at `/v1/chain/index/…` (see Explorer).
 
 ### Client side
@@ -2187,8 +2271,10 @@ execution calls its finalize path directly and would skip this, so it must stay 
 ## Explorer
 
 The website explorer (`website/src/explorer`, mounted at `/explorer` by `website/src/pages/explorer.tsx`)
-**runs on demo data today. It does not read the chain.** The header, the footer and the tab title
-say "demo", and none of the wallets or transactions it shows exist.
+reads the chain through the gateway's chain proxy (below) on the origin it is served from. It has no
+demo data and no fixture accounts: when the proxy or the indexer is down, a page shows an error box
+and nothing else. It needs the chain indexer ("Chain indexer" above) on the node the gateway
+reads; without it the transaction, block and wallet pages fail with "The chain could not be read".
 
 Layout of `website/src/explorer`:
 
@@ -2196,7 +2282,7 @@ Layout of `website/src/explorer`:
 |---|---|
 | `model/` | domain types (`types.ts`), ORAMA/norama formatting (`units.ts`), what a pasted string is (`search.ts`, with a bech32 checksum check), the investigation trail (`trail.ts`), and how a transaction reads as a sentence (`describe.ts`) |
 | `data/` | the `ExplorerDataSource` interface (`source.ts`), the React provider and the `useQuery` / `useLiveQuery` hooks |
-| `data/demo/` | the demo source: a seeded simulation of about 20,000 transactions over 30 days (transfers, staking, reward claims, storage deals, failed transactions) that replays every balance, so each transaction's before/after rows sum to zero and total supply is conserved. History is anchored to the start of the UTC day, so a link keeps working across reloads within a day; the head advances every 2 s |
+| `data/chain/` | the one implementation of that interface (`source.ts`): the HTTP client (`client.ts`), the response readers (`wire.ts`), the validator directory (`directory.ts`), and the mapping of transactions, blocks, wallets, the network and validators |
 | `ui/` | shared building blocks (amounts, wallet links, sentences, transaction rows, help tips) |
 | `shell/` | the header, the ⌘K search palette, the investigation trail bar, and the transaction preview drawer |
 | `pages/` | Home, Transaction, Block, Wallet, and Validators (the λ hand-over is a card on that page) |
@@ -2204,15 +2290,31 @@ Layout of `website/src/explorer`:
 Pages only ever call `ExplorerDataSource`. Its contract is written per method in `data/source.ts`:
 a lookup for something that does not exist resolves to `null` (never an invented empty record); a
 real failure rejects with a readable `Error`; ordering is stated per method; pagination is
-cursor-based and a bad cursor is rejected; limits are clamped. Connecting the explorer to the chain
-means writing one implementation of that interface and passing it to `<ExplorerApp source={…}>`.
-Nothing in `ui/`, `shell/` or `pages/` changes.
+cursor-based and a bad cursor is rejected; limits are clamped. A figure the chain cannot give is `null`
+or absent in the model, and the page leaves it out.
 
-That implementation reads the chain indexer ("Chain indexer" above) and the module queries through the
-gateway's chain proxy below. The pages ask for things CometBFT and the SDK REST API cannot serve
-directly: every transaction of a wallet, its counterparties, its balance over time, and the
-transactions of a block, decoded. `tx_search` is capped at 100 per page and is not a public API, and
-the Orama modules speak gRPC only, with no REST annotations.
+What each page reads, and from where:
+
+| Shown | Read from |
+|---|---|
+| Head, chain id, sync state | `GET /v1/chain/status` |
+| Supply, base fee, epoch, fees burned, transaction counts | `/supply/norama`, `orama.fees.v1.Query/BaseFee`, `orama.emission.v1.Query/CurrentEpoch` and `Params`, and the indexer's `/stats` (transactions, failures and burned base fee per hour; the 24 hours and the 24 before) |
+| Validators, voting power, committee seats, λ, the Nakamoto coefficient, total bonded | the node's staking validators, CometBFT's `/validators`, `orama.power.v1.Query/BootstrapCommittee` and `Lambda`, `/staking/pool`. A validator's consensus address is the first 20 bytes of the SHA-256 of its ed25519 key, computed in the browser |
+| Blocks | CometBFT's `/blocks` and `/block`, and the indexer's block (gas, burned base fee, transaction hashes). A block's signatures are the next block's last commit, so the head has none yet |
+| A transaction | the indexer's record: signer, memo, the body as JSON, events, code and log. The fee is the `base_fee` and `tip` of the `tx` event the fee handler emits. "Balances before → after" is built from the `coin_spent`, `coin_received` and `burn` events, so it has the change and not the before and after, and it leaves out what moved through an earnings account |
+| A wallet | the bank `AllBalances`, staking `DelegatorDelegations` and `DelegatorUnbondingDelegations` queries of the wallet-query route (norama only), and the indexer's account summary (count, first and last time). A wallet with no transaction and no funds is not found |
+| A wallet's activity | the indexer's per-address transactions, 100 a page, filtered in the browser; the cursor is `page:position` |
+| Who a wallet deals with | its 100 newest transactions only: successful transfers, by volume |
+
+Messages the explorer has a sentence for are bank sends of norama, staking delegate and undelegate of
+norama, and `x/storage` `MsgCreateDeal` (the amount is the escrow: price per epoch times replicas
+times epochs; the providers are assigned later, so none is named). Any other message, and a send of
+another token, is shown by its type URL. A transaction with no signature (a shielded one) has no
+signer.
+
+Not shown, because nothing on the chain gives it: a wallet's balance over time, a validator's
+uptime history, the number of delegators, claimable rewards, how large a transfer is against the
+week's, and how often a signer has paid a receiver before.
 
 ### What the chain adapter must do
 
@@ -2234,7 +2336,7 @@ anyone:
 
 `core/pkg/gateway/routes.go` mounts the `core/pkg/gateway/handlers/chainread` proxy at `/v1/chain/`
 (an open route in `route_policy.go`): reads for the explorer and for wallets, plus two POST routes that
-take a signed transaction (below). **The explorer does not use it yet.** The upstream bases are
+take a signed transaction (below). The website explorer reads only this proxy. The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
 three loopback URLs, or, on a co-located machine (the `orama-global` namespace layout is installed), to the
 same ports on the namespace address `198.18.0.2`, where the chain and indexer listen there and only the
@@ -2259,9 +2361,13 @@ gateway answers; each asks its own node) has indexed it:
 | `GET /v1/chain/validators` | CometBFT `GET /validators` (`page` and `per_page` optional; default 1 and 100, capped at 100) |
 | `GET /v1/chain/supply/norama` | REST `GET /cosmos/bank/v1beta1/supply/by_denom?denom=norama` |
 | `GET /v1/chain/staking/pool` | REST `GET /cosmos/staking/v1beta1/pool` |
+| `GET /v1/chain/staking/validators` | REST `GET /cosmos/staking/v1beta1/validators` (page size fixed at 200, no query; the wallet queries below serve one validator, not the list) |
 | `GET /v1/chain/index/status` | indexer `GET /index/v1/status` |
 | `GET /v1/chain/index/blocks/{height}` | indexer `GET /index/v1/blocks/{height}` |
 | `GET /v1/chain/index/txs/{hash}` | indexer `GET /index/v1/txs/{hash}` (32-byte hex, `0x` optional on the gateway path, sent lowercase) |
+| `GET /v1/chain/index/txs` | indexer `GET /index/v1/txs` (`limit` 1–100, optional) |
+| `GET /v1/chain/index/stats` | indexer `GET /index/v1/stats` |
+| `GET /v1/chain/index/accounts/{address}` | indexer `GET /index/v1/accounts/{address}` |
 | `GET /v1/chain/index/accounts/{address}/txs` | indexer `GET /index/v1/accounts/{address}/txs` (`page` 1–1000, `limit` 1–100, both optional) |
 | `GET /v1/chain/index/cnft/assets/{id}` | indexer `GET /index/v1/cnft/assets/{id}` (32-byte hex, sent lowercase) |
 | `GET /v1/chain/index/cnft/owners/{address}/assets` | indexer `GET /index/v1/cnft/owners/{address}/assets` (`page`, `limit` as above) |
@@ -2269,12 +2375,12 @@ gateway answers; each asks its own node) has indexed it:
 | `POST /v1/chain/simulate` | CometBFT JSON-RPC `abci_query` of `/cosmos.tx.v1beta1.Service/Simulate`, and x/fees `BaseFee` (see "Simulate and broadcast") |
 | `POST /v1/chain/broadcast` | CometBFT JSON-RPC `broadcast_tx_sync` (see "Simulate and broadcast") |
 
-On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
+The validator list takes no query (`400`). On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
 characters) and the indexer checks its checksum. A route that takes no query refuses one.
 What the indexer holds, and what it does not, is under "Chain indexer" above.
 
-**Module queries.** The Orama modules speak gRPC and have no REST annotations, so `abci_query` is their one
-HTTP route. `GET /v1/chain/query/<package.Service>/<Method>`, for example
+**Module queries.** The gateway reaches the Orama modules through `abci_query`, its one HTTP route to
+them (they are also on the node's own REST API, see "Module queries over REST" below). `GET /v1/chain/query/<package.Service>/<Method>`, for example
 `/v1/chain/query/orama.nodes.v1.Query/Node`, runs one of them on the local node's RPC and answers the
 decoded response as JSON with the proto field names (uint64 fields are decimal strings). The route serves
 only the `Query` services embedded in `core/pkg/chainread/queries.binpb`: a Msg service, a transaction
@@ -2376,6 +2482,26 @@ answered 429 with the retryable `RATE_LIMITED` envelope and `Retry-After: 10`:
 The SDK calls are `simulateTx`, `broadcastTx` and the wallet reads of `OramaChainClient`
 ([TS_SDK.md](TS_SDK.md#the-chain-module)); the Go client is `chainread.Reader.Simulate` and `Broadcast`
 (a refused transaction is a `*TxRefusedError`). Fleet e2e: `e2e/features/chain-wallet-routes`.
+
+The explorer shows what these routes serve and nothing else: where the chain has no source for a figure
+(a wallet's balance over time, a validator's uptime history, the number of delegators), the page leaves
+it out.
+
+### Module queries over REST
+
+Every rpc of every Orama module's `Query` service (x/archive, cnft, emission, fees, houses, market,
+nodes, power, relay, shielded, storage, token) carries a `google.api.http` GET annotation in
+`chain/proto/orama/<module>/v1/query.proto`, and each module's `RegisterGRPCGatewayRoutes` serves it
+on the node's REST API (`api.enable`, port 31003 on a node), next to the SDK's own routes. The path is
+`/orama/<module>/v1/<method-in-kebab-case>`; a numeric key, an address or a node id is a path segment
+(`/orama/emission/v1/schedule-at/3`, `/orama/fees/v1/earnings/{address}`), and a field that can hold a
+slash (a token denom, a deposit id) or is bytes is a query parameter
+(`/orama/token/v1/token?denom=factory/…`). The node's REST API serves every query including each
+`Invariants`; what the public gateway serves is still only the list under "Module queries" above.
+`chain/app/rest_gateway_test.go` serves the routes over a real gRPC connection to the app. The
+generated code is `query.pb.go` and `query.pb.gw.go` (`protoc` with `protoc-gen-gocosmos` and
+`protoc-gen-grpc-gateway` v1.16); after a change to a `query.proto`, regenerate them and
+`core/pkg/chainread/queries.binpb` (`core/pkg/chainread/gen.sh`).
 
 ## Wallet clients: transactions, reads and onion submission
 

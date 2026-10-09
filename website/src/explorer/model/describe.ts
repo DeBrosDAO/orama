@@ -64,6 +64,6 @@ export function describeMessage(m: TxMessage, failed = false): SentencePart[] {
         a(m.amount),
       ];
     case "unknown":
-      return [w(m.signer), t(` sent a ${m.typeUrl.replace(/^\//, "")} message`)];
+      return [...(m.signer ? [w(m.signer)] : [t("A signer-less transaction")]), t(` sent a ${m.typeUrl.replace(/^\//, "")} message`)];
   }
 }

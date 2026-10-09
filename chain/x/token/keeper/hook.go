@@ -16,11 +16,15 @@ import (
 // committed only after the bank send succeeds. Out-of-gas and gas overflow
 // from that meter become ErrHookGasCap; any other panic is re-raised.
 func (k Keeper) runTransferHook(ctx sdk.Context, token types.Token, from, to sdk.AccAddress, amount math.Int) (func(), error) {
-	if !token.Extensions.TransferHook {
+	if token.Extensions.TransferHook == "" {
 		return nil, nil
 	}
 	if k.transferHook == nil {
 		return nil, fmt.Errorf("token %s has a transfer hook but none is registered", token.Denom)
+	}
+	contract, err := parseAcc(token.Extensions.TransferHook, "transfer hook contract")
+	if err != nil {
+		return nil, err
 	}
 
 	cacheCtx, write := ctx.CacheContext()
@@ -41,7 +45,7 @@ func (k Keeper) runTransferHook(ctx sdk.Context, token types.Token, from, to sdk
 				panic(recovered)
 			}
 		}()
-		if err := k.transferHook.OnTransfer(hookCtx, token.Denom, from, to, amount); err != nil {
+		if err := k.transferHook.OnTransfer(hookCtx, contract, token.Denom, from, to, amount); err != nil {
 			hookErr = fmt.Errorf("transfer hook rejected %s: %w", token.Denom, err)
 		}
 	}()

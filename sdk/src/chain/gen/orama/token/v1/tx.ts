@@ -27,7 +27,11 @@ export interface MsgCreateToken {
   transferFeeBps: number;
   nonTransferable: boolean;
   pause: boolean;
-  transferHook: boolean;
+  /**
+   * transfer_hook is the address of an existing contract that the chain calls on
+   * every transfer of the token (empty: none).
+   */
+  transferHook: string;
 }
 
 export interface MsgCreateTokenResponse {
@@ -151,7 +155,7 @@ function createBaseMsgCreateToken(): MsgCreateToken {
     transferFeeBps: 0,
     nonTransferable: false,
     pause: false,
-    transferHook: false,
+    transferHook: "",
   };
 }
 
@@ -190,8 +194,8 @@ export const MsgCreateToken: MessageFns<MsgCreateToken> = {
     if (message.pause !== false) {
       writer.uint32(88).bool(message.pause);
     }
-    if (message.transferHook !== false) {
-      writer.uint32(96).bool(message.transferHook);
+    if (message.transferHook !== "") {
+      writer.uint32(98).string(message.transferHook);
     }
     return writer;
   },
@@ -298,11 +302,11 @@ export const MsgCreateToken: MessageFns<MsgCreateToken> = {
             continue;
           }
           case 12: {
-            if (tag !== 96) {
+            if (tag !== 98) {
               break;
             }
 
-            message.transferHook = reader.bool();
+            message.transferHook = reader.string();
             continue;
           }
         }
@@ -343,10 +347,10 @@ export const MsgCreateToken: MessageFns<MsgCreateToken> = {
         : false,
       pause: isSet(object.pause) ? globalThis.Boolean(object.pause) : false,
       transferHook: isSet(object.transferHook)
-        ? globalThis.Boolean(object.transferHook)
+        ? globalThis.String(object.transferHook)
         : isSet(object.transfer_hook)
-        ? globalThis.Boolean(object.transfer_hook)
-        : false,
+        ? globalThis.String(object.transfer_hook)
+        : "",
     };
   },
 
@@ -385,7 +389,7 @@ export const MsgCreateToken: MessageFns<MsgCreateToken> = {
     if (message.pause !== false) {
       obj.pause = message.pause;
     }
-    if (message.transferHook !== false) {
+    if (message.transferHook !== "") {
       obj.transferHook = message.transferHook;
     }
     return obj;
@@ -407,7 +411,7 @@ export const MsgCreateToken: MessageFns<MsgCreateToken> = {
     message.transferFeeBps = object.transferFeeBps ?? 0;
     message.nonTransferable = object.nonTransferable ?? false;
     message.pause = object.pause ?? false;
-    message.transferHook = object.transferHook ?? false;
+    message.transferHook = object.transferHook ?? "";
     return message;
   },
 };

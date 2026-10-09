@@ -44,7 +44,9 @@ message MsgCreateToken {
   uint32 transfer_fee_bps   = 9;
   bool   non_transferable   = 10;
   bool   pause              = 11;
-  bool   transfer_hook      = 12;
+  // transfer_hook is the address of an existing contract that the chain calls on
+  // every transfer of the token (empty: none).
+  string transfer_hook      = 12;
 }
 
 message MsgCreateTokenResponse {

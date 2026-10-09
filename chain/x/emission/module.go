@@ -51,9 +51,13 @@ func (AppModuleBasic) RegisterInterfaces(r cdctypes.InterfaceRegistry) {
 	types.RegisterInterfaces(r)
 }
 
-// RegisterGRPCGatewayRoutes is a no-op: x/emission does not generate a gRPC-gateway (REST)
-// handler. Queries are available over gRPC and the `oramad query emission` CLI.
-func (AppModuleBasic) RegisterGRPCGatewayRoutes(client.Context, *gwruntime.ServeMux) {}
+// RegisterGRPCGatewayRoutes serves x/emission's queries over REST (the paths are the google.api.http
+// annotations of proto/orama/emission/v1/query.proto).
+func (AppModuleBasic) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *gwruntime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(context.Background(), mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(fmt.Errorf("failed to register the emission REST routes: %w", err))
+	}
+}
 
 // DefaultGenesis returns x/emission's default genesis state as raw JSON.
 func (b AppModuleBasic) DefaultGenesis(cdc codec.JSONCodec) json.RawMessage {

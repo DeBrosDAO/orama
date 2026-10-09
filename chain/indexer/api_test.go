@@ -140,7 +140,7 @@ func TestAPI_refusesUnknownPathsAndMethods(t *testing.T) {
 		"/index/v1/./status",
 		"/index/v1/%73tatus",
 		"/index/v2/status",
-		"/index/v1/accounts/" + alice,
+		"/index/v1/accounts/" + alice + "/x",
 		"/index/v1/cnft/owners/" + alice,
 		"/status",
 	} {

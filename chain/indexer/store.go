@@ -15,6 +15,7 @@ import (
 const (
 	keyStart   = "m/start"
 	keyCursor  = "m/cursor"
+	keyVersion = "m/version"
 	pfxBlock   = "b/" // height
 	pfxTx      = "t/" // 32-byte hash
 	pfxAccount = "a/" // address "/" height index → 32-byte hash
@@ -23,7 +24,14 @@ const (
 	pfxTree    = "c/t/" // tree id → collection id
 	pfxListing = "k/l/" // listing id → listing
 	pfxBid     = "k/b/" // listing id, bid id → bidder
+	pfxLatest  = "l/"   // height index → 32-byte hash, for the newest-first transaction list
+	pfxHour    = "s/h/" // unix hour → hour statistics
+	pfxSummary = "s/a/" // address → account summary
 )
+
+// schemaVersion is the layout of an index. An index written by another version
+// is refused rather than served with fields it never recorded.
+const schemaVersion uint64 = 2
 
 // Store is the on-disk index. Reads are safe while the follower writes.
 type Store struct {
@@ -36,7 +44,36 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open index %s: %w", dir, err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.checkVersion(); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	return s, nil
+}
+
+// checkVersion stamps a new index with schemaVersion and refuses one that was
+// written by another version.
+func (s *Store) checkVersion() error {
+	have, ok, err := getUint(s.db, []byte(keyVersion))
+	if err != nil {
+		return err
+	}
+	if ok {
+		if have != schemaVersion {
+			return fmt.Errorf("index has layout version %d, this indexer writes %d; index again into a new --home", have, schemaVersion)
+		}
+		return nil
+	}
+	if _, started, err := getUint(s.db, []byte(keyStart)); err != nil || started {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("index was written before layout version %d; index again into a new --home", schemaVersion)
+	}
+	if err := s.db.Set([]byte(keyVersion), be64(schemaVersion), pebble.Sync); err != nil {
+		return fmt.Errorf("failed to record index layout version: %w", err)
+	}
+	return nil
 }
 
 // Close flushes and closes the index.
@@ -152,6 +189,11 @@ func bidPrefix(listing uint64) []byte {
 }
 func bidKey(listing, bid uint64) []byte { return join(bidPrefix(listing), be64(bid)) }
 
+func latestKey(height int64, index uint32) []byte {
+	return join([]byte(pfxLatest), be64(uint64(height)), be32(index))
+}
+func hourKey(hour int64) []byte        { return join([]byte(pfxHour), be64(uint64(hour))) }
+func summaryKey(addr string) []byte    { return []byte(pfxSummary + addr) }
 func accountPrefix(addr string) []byte { return []byte(pfxAccount + addr + "/") }
 func accountKey(addr string, height int64, index uint32) []byte {
 	return join(accountPrefix(addr), be64(uint64(height)), be32(index))

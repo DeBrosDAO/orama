@@ -3,18 +3,31 @@ package orama.emission.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/emission/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/emission/v1/emission.proto";
 
 // Query defines the gRPC querier service for x/emission. There is no Msg
 // service: this module ships queries only.
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc CurrentEpoch(QueryCurrentEpochRequest) returns (QueryCurrentEpochResponse);
-  rpc ScheduleAt(QueryScheduleAtRequest) returns (QueryScheduleAtResponse);
-  rpc CumulativeMinted(QueryCumulativeMintedRequest) returns (QueryCumulativeMintedResponse);
-  rpc SupplyCapSoFar(QuerySupplyCapSoFarRequest) returns (QuerySupplyCapSoFarResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/emission/v1/params";
+  }
+  rpc CurrentEpoch(QueryCurrentEpochRequest) returns (QueryCurrentEpochResponse) {
+    option (google.api.http).get = "/orama/emission/v1/current-epoch";
+  }
+  rpc ScheduleAt(QueryScheduleAtRequest) returns (QueryScheduleAtResponse) {
+    option (google.api.http).get = "/orama/emission/v1/schedule-at/{epoch}";
+  }
+  rpc CumulativeMinted(QueryCumulativeMintedRequest) returns (QueryCumulativeMintedResponse) {
+    option (google.api.http).get = "/orama/emission/v1/cumulative-minted";
+  }
+  rpc SupplyCapSoFar(QuerySupplyCapSoFarRequest) returns (QuerySupplyCapSoFarResponse) {
+    option (google.api.http).get = "/orama/emission/v1/supply-cap-so-far/{epoch}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/emission/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

@@ -27,7 +27,7 @@ func tokenMsg(typ string, fields map[string]any) chain.Msg {
 func createTokenMsg(creator, sub, name, symbol, desc string, fee uint32) chain.Msg {
 	return tokenMsg("MsgCreateToken", map[string]any{"creator": creator, "subdenom": sub, "name": name, "symbol": symbol,
 		"description": desc, "mint": true, "freeze": true, "permanent_delegate": "", "transfer_fee_bps": fee,
-		"non_transferable": false, "pause": true, "transfer_hook": false})
+		"non_transferable": false, "pause": true, "transfer_hook": ""})
 }
 
 // TestToken_createNeedsBankBalance: a well-formed MsgCreateToken needs the
@@ -84,6 +84,24 @@ func TestToken_createSucceedsWithFaucetFunds(t *testing.T) {
 		t.Errorf("balance %s norama after the create, want at most %s (the creation fee is burned)", left.String(), max.String())
 	}
 	c.RequireInvariants(t, "a funded token create")
+}
+
+// TestToken_createRefusesATransferHookThatIsNoContract: a token's transfer hook names a contract
+// (docs/CHAIN.md "x/token"): an account that is no contract is refused at creation, and so is a
+// string that is no address.
+func TestToken_createRefusesATransferHookThatIsNoContract(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.NewFundedKey(t, c.Node(t, 1), "e2e-token-hook", chain.Orama(30))
+	for hook, want := range map[string]string{
+		k.Address:            "there is no contract at",
+		"orama1notanaddress": "invalid transfer hook contract",
+	} {
+		m := createTokenMsg(k.Address, chain.UniqueID(t, "e2e"), "E2E Hook", "EHK", "fleet e2e", 0)
+		m["transfer_hook"] = hook
+		chain.RequireRefused(t, "hook "+hook, c.Submit(t, k, chain.TxOptions{}, m), want)
+	}
+	c.RequireInvariants(t, "refused hook creations")
 }
 
 // TestToken_createShapeRefusals: subdenom, name, symbol, description and
@@ -147,12 +165,12 @@ func TestToken_messagesNeedAnExistingToken(t *testing.T) {
 	c.RequireInvariants(t, "refused token messages")
 }
 
-// TestToken_bankSendBypassIsOnlyForFactoryDenoms: x/bank MsgSend does not run
-// x/token's checks (docs/CHAIN.md: "x/bank MsgSend does not run these
-// checks"), and the norama send restriction does not apply to a factory
-// denom: a user-to-user MsgSend of a factory denom is refused only for the
-// missing balance, not as a public norama payment.
-func TestToken_bankSendBypassIsOnlyForFactoryDenoms(t *testing.T) {
+// TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment: the norama send
+// restriction does not apply to a factory denom, and x/token's bank restriction
+// governs only tokens that exist: a user-to-user MsgSend of a factory denom
+// nobody created is refused only for the missing balance, not as a public
+// norama payment.
+func TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	k := c.FundedValidator(t, 0, chain.Orama(1))
@@ -165,4 +183,30 @@ func TestToken_bankSendBypassIsOnlyForFactoryDenoms(t *testing.T) {
 	if strings.Contains(r.Log, "public user-to-user norama transfer is refused") {
 		t.Errorf("the norama restriction refused a factory denom: %s", r.Log)
 	}
+}
+
+// TestToken_bankSendHoldsTokenPowers: a token's pause holds on a plain x/bank
+// MsgSend too (docs/CHAIN.md "x/token": the bank send restriction), not only on
+// x/token MsgTransfer. A faucet-funded key creates a token with the pause
+// power, mints to itself, pauses it, and the bank send is refused; after the
+// unpause the same send goes through.
+func TestToken_bankSendHoldsTokenPowers(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.NewFundedKey(t, c.Node(t, 1), "e2e-token-bank-send", chain.Orama(30))
+	other := c.Validator(t, c.Node(t, 0)).Address
+	sub := chain.UniqueID(t, "e2e")
+	denom := "factory/" + k.Address + "/" + sub
+	chain.RequireOK(t, "create", c.Submit(t, k, chain.TxOptions{}, createTokenMsg(k.Address, sub, "E2E Bank Send", "EBS", "fleet e2e", 0)))
+	chain.RequireOK(t, "mint", c.Submit(t, k, chain.TxOptions{}, tokenMsg("MsgMint", map[string]any{"sender": k.Address, "denom": denom, "recipient": k.Address, "amount": "10"})))
+	send := chain.NewMsg("/cosmos.bank.v1beta1.MsgSend", map[string]any{"from_address": k.Address, "to_address": other,
+		"amount": []any{map[string]any{"denom": denom, "amount": "1"}}})
+	pause := func(paused bool) chain.Msg {
+		return tokenMsg("MsgSetPaused", map[string]any{"sender": k.Address, "denom": denom, "paused": paused})
+	}
+	chain.RequireOK(t, "pause", c.Submit(t, k, chain.TxOptions{}, pause(true)))
+	chain.RequireRefused(t, "bank send of a paused token", c.Submit(t, k, chain.TxOptions{}, send), "is paused")
+	chain.RequireOK(t, "unpause", c.Submit(t, k, chain.TxOptions{}, pause(false)))
+	chain.RequireOK(t, "bank send after the unpause", c.Submit(t, k, chain.TxOptions{}, send))
+	c.RequireInvariants(t, "a bank send of a factory token")
 }

@@ -249,6 +249,8 @@ type OramaApp struct {
 	// isContract reports whether an address is a wasm contract, or is being funded as one by
 	// wasmd's instantiate. It is set by installWasm and is always false without the wasm VM.
 	isContract func(ctx context.Context, addr sdk.AccAddress) bool
+	// tokenHook is x/token's transfer hook; installWasm binds it to the wasm keeper.
+	tokenHook *contractTransferHook
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	wasmModules      []module.AppModule
 	wasmGenesisOrder []string
@@ -481,12 +483,13 @@ func NewOramaApp(
 		app.FeesKeeper,
 	)
 
+	app.tokenHook = &contractTransferHook{}
 	app.TokenKeeper = tokenkeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[tokentypes.StoreKey]),
 		app.BankKeeper.WithMintCoinsRestriction(refuseNoramaMint),
 		app.FeesKeeper,
-		noopTokenHook{},
+		app.tokenHook,
 	)
 	app.NodesKeeper = nodeskeeper.NewKeeper(
 		appCodec,
@@ -566,6 +569,8 @@ func NewOramaApp(
 
 	app.installWasm(keys, appOpts)
 	app.BankKeeper.AppendSendRestriction(app.contractSend.Restrict)
+	// A factory token's pause, freeze, non-transferable flag and transfer fee hold on a bank send too.
+	app.BankKeeper.AppendSendRestriction(app.TokenKeeper.SendRestriction)
 
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	baseModules := []module.AppModule{

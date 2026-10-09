@@ -76,9 +76,9 @@ function StatTiles({ network }: { network: NetworkSnapshot }) {
         footer={<Sparkline values={n.transactionsSeries} />}
       />
       <Stat
-        label="Active wallets · 24h"
-        value={formatInt(n.activeWallets24h)}
-        detail={`${formatInt(n.newWallets24h)} new`}
+        label="Failed · 24h"
+        value={formatInt(n.failed24h)}
+        detail={`of ${formatInt(n.transactions24h)} transactions`}
       />
       <Stat
         label={<>Fees burned · 24h<Help tip={TIP_BURN} /></>}

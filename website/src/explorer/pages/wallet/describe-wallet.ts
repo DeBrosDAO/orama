@@ -12,35 +12,19 @@ function opening(roles: string[]): SentencePart[] {
   return [text(`${VOWELS.test(noun) ? "An" : "A"} ${noun} wallet. `)];
 }
 
-function relations(facts: WalletProfile["facts"]): SentencePart[] {
-  const { topSender, topDelegate } = facts;
-  if (!topSender && !topDelegate) return [];
-  const parts: SentencePart[] = [text("Mostly ")];
-  if (topSender) parts.push(text("receives ORAMA from "), { kind: "wallet", ref: topSender });
-  if (topSender && topDelegate) parts.push(text(" and "));
-  if (topDelegate) parts.push(text("delegates to "), { kind: "validator", ref: topDelegate });
-  parts.push(text(". "));
-  return parts;
-}
-
-function failures(count: number): string {
-  if (count === 0) return "no failed payments this week";
-  return `${formatInt(count)} failed ${count === 1 ? "payment" : "payments"} this week`;
-}
-
 /**
- * The plain-words summary of a wallet, from facts the explorer can compute:
- * what kind of wallet it is, who it deals with most, how active it is.
+ * The plain-words summary of a wallet, from facts the chain gives: what kind
+ * of wallet it is, when it was first and last seen, and how many transactions
+ * name it. A wallet that holds funds and has no transaction says so.
  */
 export function describeWallet(profile: WalletProfile, nowMs: number): SentencePart[] {
   const { facts } = profile;
+  if (facts.firstSeen === null || facts.lastActive === null) {
+    return [...opening(profile.roles), text("No transaction has named this wallet yet.")];
+  }
   const txs = `${formatInt(facts.txCount)} ${facts.txCount === 1 ? "transaction" : "transactions"}`;
   return [
     ...opening(profile.roles),
-    ...relations(facts),
-    text(
-      `Last active ${formatRelative(facts.lastActive, nowMs)}, first seen ${formatRelative(facts.firstSeen, nowMs)}, ` +
-        `with ${txs} and ${failures(facts.failedLast7d)}.`,
-    ),
+    text(`Last active ${formatRelative(facts.lastActive, nowMs)}, first seen ${formatRelative(facts.firstSeen, nowMs)}, with ${txs}.`),
   ];
 }

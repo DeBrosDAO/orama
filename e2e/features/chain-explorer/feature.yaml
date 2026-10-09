@@ -1,0 +1,31 @@
+# Stage 8: the gateway's /v1/chain/ account and validator reads that the website
+# explorer (website/src/explorer/data/chain) calls: the staking validator list
+# (the node's SDK REST API, fixed page size, no caller query), an address's bank
+# balances, delegations and unbonding through the cosmos-sdk Query methods of
+# /v1/chain/query/, and
+# the indexer routes added for it (the newest transactions, hourly statistics,
+# an account's summary). The REST routes are checked against the run's own
+# validators (the bank balance equals `orama chain balance`'s answer, the
+# validator set holds the run's validators bonded) and every refusal (a
+# malformed address, a caller query, another method) is checked for its status.
+# The run chain deploy installs the indexer beside every node, so the index tests run in every
+# fleet run.
+id: chain-explorer
+title: Explorer reads through the gateway - balances, validators, index
+area: chain
+subtasks: [2776]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  routes:
+    - /v1/chain/
+  claims:
+    - "docs/CHAIN.md#the-gateways-chain-proxy: AllBalances, DelegatorDelegations and DelegatorUnbondingDelegations of /v1/chain/query/ answer an address's balances, delegations and unbonding, at most 100 entries"
+    - "docs/CHAIN.md#the-gateways-chain-proxy: GET /v1/chain/staking/validators is the node's REST staking validators, at most 200"
+    - "docs/CHAIN.md#the-gateways-chain-proxy: the validator list route takes no query and a page limit above 100 on a wallet query is a 400"
+    - "docs/CHAIN.md#module-queries-over-rest: every Orama module serves its queries over the node's REST API at the google.api.http paths of its query.proto"
+    - "docs/CHAIN.md#chain-indexer-orama-global-indexer: GET /index/v1/txs, /index/v1/stats and /index/v1/accounts/{address} answer the newest transactions, 48 hourly buckets and an account's transaction count and dates"

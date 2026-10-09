@@ -2,8 +2,6 @@ import type {
   ActivityFilter,
   ActivityItem,
   ActivityQuery,
-  BalancePoint,
-  BalanceRange,
   Block,
   BlockSummary,
   Counterparty,
@@ -50,8 +48,8 @@ export function clampLimit(limit: number): number {
  *    the block in progress, and its transactions, do not exist yet.
  */
 export interface ExplorerDataSource {
-  /** Where the data comes from, shown in the header so nobody mistakes a demo for a chain. */
-  readonly origin: { kind: "demo" | "chain"; label: string };
+  /** Where the data comes from, shown in the footer: the chain id of the network read. */
+  readonly origin: { label: string };
 
   /** Chain-wide numbers as of the head. Rejects with an Error if they cannot be read. */
   getNetwork(): Promise<NetworkSnapshot>;
@@ -83,10 +81,8 @@ export interface ExplorerDataSource {
    * Error for a cursor this source did not issue.
    */
   getWalletActivity(address: string, query: ActivityQuery): Promise<Page<ActivityItem>>;
-  /** Wallets this one dealt with, largest total volume first. */
+  /** Wallets this one dealt with, largest total volume first. A source may read them from the wallet's most recent transactions only. */
   getCounterparties(address: string, limit: number): Promise<Counterparty[]>;
-  /** Total balance over time inside the range, oldest first, ending now. */
-  getBalanceHistory(address: string, range: BalanceRange): Promise<BalancePoint[]>;
 
   /** Every validator, in no particular order; the UI ranks them. */
   getValidators(): Promise<ValidatorSet>;
@@ -96,9 +92,10 @@ export interface ExplorerDataSource {
 
   /**
    * Call `listener` whenever the chain head advances. Returns the function
-   * that stops it. The listener is not called for the current head.
+   * that stops it. The listener is not called for the current head. `onError`
+   * is called each time the head cannot be read; the subscription goes on.
    */
-  subscribeHead(listener: (head: Head) => void): () => void;
+  subscribeHead(listener: (head: Head) => void, onError: (error: Error) => void): () => void;
   /** The current head, without subscribing. */
   getHead(): Promise<Head>;
 }

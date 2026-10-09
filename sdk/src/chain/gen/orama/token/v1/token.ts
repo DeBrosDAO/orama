@@ -104,8 +104,8 @@ export interface Params {
 
 /**
  * Extensions is the set of capabilities still held. A false flag, an empty
- * permanent_delegate, or a zero transfer_fee_bps means that capability is
- * absent (never set, or already renounced).
+ * permanent_delegate or transfer_hook, or a zero transfer_fee_bps means that
+ * capability is absent (never set, or already renounced).
  */
 export interface Extensions {
   mint: boolean;
@@ -123,7 +123,13 @@ export interface Extensions {
   transferFeeBps: number;
   nonTransferable: boolean;
   pause: boolean;
-  transferHook: boolean;
+  /**
+   * transfer_hook is the bech32 address of the CosmWasm contract the chain calls
+   * (sudo) on every x/token MsgTransfer of this token, under a gas cap. It is
+   * fixed at creation and can only be renounced. Empty means the capability is
+   * absent.
+   */
+  transferHook: string;
 }
 
 /**
@@ -261,7 +267,7 @@ function createBaseExtensions(): Extensions {
     transferFeeBps: 0,
     nonTransferable: false,
     pause: false,
-    transferHook: false,
+    transferHook: "",
   };
 }
 
@@ -285,8 +291,8 @@ export const Extensions: MessageFns<Extensions> = {
     if (message.pause !== false) {
       writer.uint32(48).bool(message.pause);
     }
-    if (message.transferHook !== false) {
-      writer.uint32(56).bool(message.transferHook);
+    if (message.transferHook !== "") {
+      writer.uint32(58).string(message.transferHook);
     }
     return writer;
   },
@@ -353,11 +359,11 @@ export const Extensions: MessageFns<Extensions> = {
             continue;
           }
           case 7: {
-            if (tag !== 56) {
+            if (tag !== 58) {
               break;
             }
 
-            message.transferHook = reader.bool();
+            message.transferHook = reader.string();
             continue;
           }
         }
@@ -393,10 +399,10 @@ export const Extensions: MessageFns<Extensions> = {
         : false,
       pause: isSet(object.pause) ? globalThis.Boolean(object.pause) : false,
       transferHook: isSet(object.transferHook)
-        ? globalThis.Boolean(object.transferHook)
+        ? globalThis.String(object.transferHook)
         : isSet(object.transfer_hook)
-        ? globalThis.Boolean(object.transfer_hook)
-        : false,
+        ? globalThis.String(object.transfer_hook)
+        : "",
     };
   },
 
@@ -420,7 +426,7 @@ export const Extensions: MessageFns<Extensions> = {
     if (message.pause !== false) {
       obj.pause = message.pause;
     }
-    if (message.transferHook !== false) {
+    if (message.transferHook !== "") {
       obj.transferHook = message.transferHook;
     }
     return obj;
@@ -437,7 +443,7 @@ export const Extensions: MessageFns<Extensions> = {
     message.transferFeeBps = object.transferFeeBps ?? 0;
     message.nonTransferable = object.nonTransferable ?? false;
     message.pause = object.pause ?? false;
-    message.transferHook = object.transferHook ?? false;
+    message.transferHook = object.transferHook ?? "";
     return message;
   },
 };

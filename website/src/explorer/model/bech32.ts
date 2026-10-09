@@ -57,11 +57,44 @@ function toFiveBitGroups(bytes: Uint8Array): number[] {
   return out;
 }
 
-/** Encode bytes as a bech32 string. Used by the demo world to mint valid addresses. */
+/** Encode bytes as a bech32 string. Used to turn a validator operator address into the account address of the same bytes. */
 export function bech32Encode(hrp: string, bytes: Uint8Array): string {
   const data = toFiveBitGroups(bytes);
   const mod = polymod([...hrpExpand(hrp), ...data, 0, 0, 0, 0, 0, 0]) ^ 1;
   const checksum: number[] = [];
   for (let i = 0; i < CHECKSUM_LEN; i++) checksum.push((mod >> (5 * (CHECKSUM_LEN - 1 - i))) & 31);
   return `${hrp}1${[...data, ...checksum].map((d) => CHARSET[d]).join("")}`;
+}
+
+function fromFiveBitGroups(groups: number[]): Uint8Array | null {
+  const out: number[] = [];
+  let acc = 0;
+  let bits = 0;
+  for (const g of groups) {
+    acc = (acc << 5) | g;
+    bits += 5;
+    while (bits >= 8) {
+      bits -= 8;
+      out.push((acc >> bits) & 255);
+    }
+    acc &= (1 << bits) - 1;
+  }
+  // The leftover bits must be fewer than five and zero, or the string is not a canonical encoding of bytes.
+  if (bits >= 5 || acc !== 0) return null;
+  return Uint8Array.from(out);
+}
+
+/** The bytes an address encodes, or null when its checksum, charset or padding fails. */
+export function bech32Decode(addr: string): { hrp: string; bytes: Uint8Array } | null {
+  const hrp = bech32Hrp(addr);
+  if (hrp === null) return null;
+  const data = [...addr.toLowerCase().slice(hrp.length + 1, -CHECKSUM_LEN)].map((c) => CHARSET.indexOf(c));
+  const bytes = fromFiveBitGroups(data);
+  return bytes === null ? null : { hrp, bytes };
+}
+
+/** The same bytes under another prefix: a validator operator address as its account address. Null for a bad address. */
+export function bech32Rehrp(addr: string, hrp: string): string | null {
+  const decoded = bech32Decode(addr);
+  return decoded === null ? null : bech32Encode(hrp, decoded.bytes);
 }

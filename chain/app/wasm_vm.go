@@ -105,6 +105,11 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 	)
 	keeper := &k
 	wasmK = keeper
+	app.tokenHook.exists = wasmK.HasContractInfo
+	app.tokenHook.sudo = func(ctx context.Context, contract sdk.AccAddress, msg []byte) error {
+		_, err := wasmkeeper.NewDefaultPermissionKeeper(wasmK).Sudo(sdk.UnwrapSDKContext(ctx), contract, msg)
+		return err
+	}
 	app.wasmKeeper = keeper
 	app.contractSend = ante.NewContractSendDecorator(isContract, moduleAccountNames())
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it

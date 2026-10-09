@@ -1,5 +1,5 @@
 import { useQuery } from "../data/use-query";
-import { formatCompact, formatInt } from "../model/units";
+import { formatCompact } from "../model/units";
 import type { ValidatorSet } from "../model/types";
 import { Help } from "../ui/help";
 import { Page } from "../ui/page";
@@ -32,7 +32,7 @@ function ValidatorsBody({ set }: { set: ValidatorSet }) {
         <Stat
           label="Validators signing"
           value={`${summary.signing} / ${summary.total}`}
-          detail={set.jailedLast30d > 0 ? `${set.jailedLast30d} jailed in the last 30 days` : "None jailed in the last 30 days"}
+          detail={set.jailed > 0 ? `${set.jailed} jailed now` : "None jailed now"}
         />
         <Stat
           label={
@@ -44,7 +44,7 @@ function ValidatorsBody({ set }: { set: ValidatorSet }) {
           value={set.nakamoto}
           detail={`${set.nakamoto} validator${set.nakamoto === 1 ? "" : "s"} together reach a third of the power`}
         />
-        <Stat label="Total staked" value={<>{formatCompact(set.totalStaked)} <span className="text-sm font-normal text-muted">ORAMA</span></>} detail={`${formatInt(set.delegators)} delegators`} />
+        <Stat label="Total staked" value={<>{formatCompact(set.totalStaked)} <span className="text-sm font-normal text-muted">ORAMA</span></>} detail="bonded to validators" />
       </div>
       <ValidatorTable validators={set.validators} />
     </>

@@ -15,8 +15,7 @@ function network(over: Partial<NetworkSnapshot> = {}): NetworkSnapshot {
     transactions24h: 18204,
     transactionsChangePct: 12,
     transactionsSeries: [1, 2, 3],
-    activeWallets24h: 1432,
-    newWallets24h: 61,
+    failed24h: 17,
     burned24h: "312000000000",
     ...over,
   };

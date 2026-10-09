@@ -9,12 +9,21 @@ import { Stat } from "../../ui/stat";
 
 const PERCENT = 100;
 
-function signedShare({ signed, total }: Block["signatures"]): number {
+type Signed = NonNullable<Block["signatures"]>;
+
+function signedShare({ signed, total }: Signed): number {
   return total > 0 ? Math.min(PERCENT, (signed / total) * PERCENT) : 0;
 }
 
 /** How many of the validators vouched for this block, as a sentence and a bar. */
 function Signatures({ signatures }: { signatures: Block["signatures"] }) {
+  if (signatures === null) {
+    return (
+      <Card>
+        <p className="text-sm text-muted">The validators&apos; signatures on this block arrive with the next block.</p>
+      </Card>
+    );
+  }
   const { signed, total } = signatures;
   return (
     <Card>
@@ -37,7 +46,11 @@ export function BlockStats({ block }: { block: Block }) {
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Time" value={<RelTime iso={block.time} />} detail={formatUtc(block.time)} />
-        <Stat label="Proposer" value={<ValidatorLink validator={block.proposer} className="text-lg" />} detail="Built this block" />
+        <Stat
+          label="Proposer"
+          value={block.proposer ? <ValidatorLink validator={block.proposer} className="text-lg" /> : <span className="text-lg text-muted">Not in the validator list</span>}
+          detail="Built this block"
+        />
         <Stat
           label="Transactions"
           value={formatInt(block.txCount)}

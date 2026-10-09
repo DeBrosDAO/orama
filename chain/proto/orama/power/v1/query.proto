@@ -3,6 +3,7 @@ package orama.power.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/power/types";
 
+import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/power/v1/power.proto";
 
@@ -10,11 +11,21 @@ import "orama/power/v1/power.proto";
 // service: bootstrap committee membership, the power formula and its
 // parameters are all genesis-only (see Params).
 service Query {
-  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);
-  rpc BootstrapCommittee(QueryBootstrapCommitteeRequest) returns (QueryBootstrapCommitteeResponse);
-  rpc Lambda(QueryLambdaRequest) returns (QueryLambdaResponse);
-  rpc ValidatorPower(QueryValidatorPowerRequest) returns (QueryValidatorPowerResponse);
-  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse);
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/orama/power/v1/params";
+  }
+  rpc BootstrapCommittee(QueryBootstrapCommitteeRequest) returns (QueryBootstrapCommitteeResponse) {
+    option (google.api.http).get = "/orama/power/v1/bootstrap-committee";
+  }
+  rpc Lambda(QueryLambdaRequest) returns (QueryLambdaResponse) {
+    option (google.api.http).get = "/orama/power/v1/lambda";
+  }
+  rpc ValidatorPower(QueryValidatorPowerRequest) returns (QueryValidatorPowerResponse) {
+    option (google.api.http).get = "/orama/power/v1/validator-power/{operator_address}";
+  }
+  rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
+    option (google.api.http).get = "/orama/power/v1/invariants";
+  }
 }
 
 message QueryParamsRequest {}

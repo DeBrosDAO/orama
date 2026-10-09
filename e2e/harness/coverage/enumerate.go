@@ -152,6 +152,9 @@ func parseProto(repoRoot, path string) ([]Item, error) {
 		return nil, fmt.Errorf("failed to relate %s to the repository root: %w", path, err)
 	}
 	var pkg, service string
+	// inRPC is true inside an rpc's own braces (`rpc X(...) returns (...) {` holding an option),
+	// whose closing brace is not the end of the service.
+	inRPC := false
 	var out []Item
 	for _, line := range strings.Split(string(raw), "\n") {
 		line = strings.TrimSpace(line)
@@ -163,12 +166,17 @@ func parseProto(repoRoot, path string) ([]Item, error) {
 			continue
 		}
 		if line == "}" {
+			if inRPC {
+				inRPC = false
+				continue
+			}
 			service = ""
 		}
 		m := protoRPC.FindStringSubmatch(line)
 		if m == nil || service == "" {
 			continue
 		}
+		inRPC = strings.HasSuffix(line, "{")
 		if pkg == "" {
 			return nil, fmt.Errorf("%s declares rpc %s before its package", rel, m[1])
 		}

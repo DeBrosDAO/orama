@@ -44,7 +44,7 @@ type TokenCreate struct {
 	TransferFeeBps    uint32 `json:"transfer_fee_bps"`
 	NonTransferable   bool   `json:"non_transferable"`
 	Pause             bool   `json:"pause"`
-	TransferHook      bool   `json:"transfer_hook"`
+	TransferHook      string `json:"transfer_hook"`
 }
 
 // TokenMint mints a token the contract created and still holds mint authority over.
