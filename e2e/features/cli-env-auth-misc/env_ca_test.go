@@ -15,12 +15,16 @@ import (
 // to a client that does not trust it ("certificate signed by unknown authority").
 const certRefusal = "certificate"
 
-// TestEnvAdd_withoutCAFileRefusesTheStagingChain: the run's certificates come
-// from Let's Encrypt staging, which no system trust store accepts, so an
-// environment added without --ca-file must refuse the gateway's TLS
-// (docs/CLI_REFERENCE.md#orama-env-add: the CA is trusted only for the
-// environment it was given to). The run's own environment, which carries the
-// CA for the same domain, is removed first so it cannot lend its trust.
+// TestEnvAdd_withoutCAFileRefusesTheStagingChain: an environment added without
+// --ca-file trusts the system roots alone (docs/CLI_REFERENCE.md#orama-env-add:
+// the CA is trusted only for the environment it was given to), so what its
+// login does follows the CA the run's certificates come from. A fleet the run
+// provisioned uses Let's Encrypt staging, which no system trust store accepts:
+// the login must be refused with a certificate error and store no credential.
+// The stagenet cluster serves Let's Encrypt production, which the system
+// roots accept: the same login must succeed on the system roots alone.
+// The run's own environment, which carries the CA for the same domain, is
+// removed first so it cannot lend its trust.
 func TestEnvAdd_withoutCAFileRefusesTheStagingChain(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -30,11 +34,22 @@ func TestEnvAdd_withoutCAFileRefusesTheStagingChain(t *testing.T) {
 	cli.MustOK(t, "env", "add", name, f.State.GatewayURL)
 	cli.MustOK(t, "env", "use", name)
 	res := run(t, cli, "auth", "login")
+	who := run(t, cli, "auth", "whoami")
+	if !f.State.StagingCerts() {
+		if res.Exit != exitOK {
+			t.Fatalf("auth login through an environment without a CA file, against production certificates the system roots accept: exit %d, want %d\n%s",
+				res.Exit, exitOK, output(res))
+		}
+		if who.Exit != exitOK {
+			t.Errorf("whoami after a login that succeeded on the system roots: exit %d, want %d\n%s", who.Exit, exitOK, output(who))
+		}
+		return
+	}
 	if res.Exit == exitOK || !strings.Contains(output(res), certRefusal) {
 		t.Fatalf("auth login through an environment without the staging CA: exit %d, want a certificate refusal\n%s",
 			res.Exit, output(res))
 	}
-	if who := run(t, cli, "auth", "whoami"); who.Exit != exitAuth {
+	if who.Exit != exitAuth {
 		t.Errorf("a refused login stored a credential: whoami exit %d\n%s", who.Exit, output(who))
 	}
 }

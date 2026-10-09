@@ -211,14 +211,23 @@ func hasOwnFlags(cmd *cobra.Command) bool {
 // into its own set and leaves them there, so LocalNonPersistentFlags answers
 // differently depending on whether something earlier in the process executed
 // that command — and a reference whose content depends on test ordering is not
-// a reference. Subtracting the ancestors' persistent flags by name gives the
-// same answer either way.
+// a reference. Subtracting the ancestors' persistent flags gives the same
+// answer either way.
+//
+// A flag is inherited when an ancestor has a persistent flag of the same name
+// and usage. It is compared by name and usage, not by flag object: every
+// newRootCmd() builds its own root flags, and the commands are shared, so a
+// command that ran under an earlier root holds that root's copy. A command that
+// declares a flag named like an ancestor's persistent one with a meaning of its
+// own shadows it (orama chain faucet --node is an SSH host, orama chain's
+// persistent --node a REST URL), and the shadowing flag is the command's own
+// and must be documented.
 func ownFlags(cmd *cobra.Command) []*pflag.Flag {
 	// cobra injects --help into a command's own flag set the first time that
 	// command runs, so it appears or not depending on what else the process did.
-	inherited := map[string]bool{"help": true}
+	inherited := map[string]string{}
 	for parent := cmd.Parent(); parent != nil; parent = parent.Parent() {
-		parent.PersistentFlags().VisitAll(func(f *pflag.Flag) { inherited[f.Name] = true })
+		parent.PersistentFlags().VisitAll(func(f *pflag.Flag) { inherited[f.Name] = f.Usage })
 	}
 
 	// A command's own persistent flags belong to it, but cobra only merges them
@@ -226,7 +235,7 @@ func ownFlags(cmd *cobra.Command) []*pflag.Flag {
 	seen := map[string]bool{}
 	var own []*pflag.Flag
 	collect := func(f *pflag.Flag) {
-		if f.Hidden || inherited[f.Name] || seen[f.Name] {
+		if usage, ok := inherited[f.Name]; f.Hidden || f.Name == "help" || (ok && usage == f.Usage) || seen[f.Name] {
 			return
 		}
 		seen[f.Name] = true
@@ -256,4 +265,38 @@ func renderFlags(flags []*pflag.Flag) string {
 	}
 	sort.Strings(rows)
 	return strings.Join(rows, "")
+}
+
+// TestOwnFlags_shadowingFlagIsTheCommandsOwn: a flag named like an ancestor's
+// persistent flag belongs to the command that declares it, an inherited one
+// does not, and running the command (which merges the inherited flags into its
+// set) changes neither answer.
+func TestOwnFlags_shadowingFlagIsTheCommandsOwn(t *testing.T) {
+	root := &cobra.Command{Use: "root"}
+	root.PersistentFlags().String("node", "", "REST URL")
+	root.PersistentFlags().String("rpc", "", "RPC")
+	child := &cobra.Command{Use: "child", Run: func(*cobra.Command, []string) {}}
+	child.Flags().String("node", "", "SSH host")
+	child.Flags().String("amount", "", "amount")
+	root.AddCommand(child)
+
+	names := func() string {
+		var out []string
+		for _, f := range ownFlags(child) {
+			out = append(out, f.Name+"="+f.Usage)
+		}
+		sort.Strings(out)
+		return strings.Join(out, ",")
+	}
+	const want = "amount=amount,node=SSH host"
+	if got := names(); got != want {
+		t.Fatalf("before running: own flags %q, want %q", got, want)
+	}
+	root.SetArgs([]string{"child"})
+	if err := root.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); got != want {
+		t.Fatalf("after running: own flags %q, want %q", got, want)
+	}
 }
