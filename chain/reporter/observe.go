@@ -19,9 +19,6 @@ const (
 	// per-relay cap (100 ORAMA) is reached at a measured 100000.
 	NoramaPerWeight int64 = 1_000_000
 
-	// DefaultVoteInterval is how often an authority votes (dir-spec: hourly).
-	DefaultVoteInterval = time.Hour
-
 	// MinCoverageNumerator and MinCoverageDenominator are the share of an
 	// epoch's expected votes the archive must hold before the reporter will
 	// report it: 4/5.
@@ -44,6 +41,13 @@ const (
 // ErrIncompleteArchive means the archive holds too few of an epoch's votes to
 // judge uptime from. The reporter reports nothing rather than a guess.
 var ErrIncompleteArchive = errors.New("the vote archive does not cover the epoch")
+
+// ErrEpochTooShort means the epoch lasted less than one voting interval of the
+// network, so its window can hold no vote to judge uptime from. Nothing later
+// changes that, so the epoch is dropped, not retried. It is a mismatch of the
+// chain's epoch duration with the Tor network's voting interval, not a fault of
+// the reporter.
+var ErrEpochTooShort = errors.New("the epoch is shorter than one voting interval of the Tor network")
 
 // Window is the half-open span [From, To) an epoch lasted.
 type Window struct {
@@ -95,12 +99,9 @@ func Select(votes []Vote, authority [fingerprintLen]byte, w Window) ([]Vote, err
 // interval. It returns ErrIncompleteArchive when votes cover less than
 // MinCoverage of the window.
 func Observe(votes []Vote, w Window, interval time.Duration) ([]Observation, error) {
-	if interval <= 0 {
-		return nil, errors.New("vote interval must be positive")
-	}
-	expected := int(w.To.Sub(w.From) / interval)
-	if expected < 1 {
-		return nil, fmt.Errorf("window %s to %s is shorter than one vote interval %s", w.From, w.To, interval)
+	expected, err := expectedVotes(w, interval)
+	if err != nil {
+		return nil, err
 	}
 	if len(votes)*MinCoverageDenominator < expected*MinCoverageNumerator {
 		return nil, fmt.Errorf("%w: %d of %d expected votes", ErrIncompleteArchive, len(votes), expected)
@@ -122,6 +123,19 @@ func Observe(votes []Vote, w Window, interval time.Duration) ([]Observation, err
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Fingerprint[:], out[j].Fingerprint[:]) < 0 })
 	return out, nil
+}
+
+// expectedVotes is the number of votes an authority casts in the window, or
+// ErrEpochTooShort when the window is shorter than one voting interval.
+func expectedVotes(w Window, interval time.Duration) (int, error) {
+	if interval <= 0 {
+		return 0, errors.New("vote interval must be positive")
+	}
+	expected := int(w.To.Sub(w.From) / interval)
+	if expected < 1 {
+		return 0, fmt.Errorf("%w: it lasted %s (%s to %s) and the network votes every %s", ErrEpochTooShort, w.To.Sub(w.From), w.From.Format(time.RFC3339), w.To.Format(time.RFC3339), interval)
+	}
+	return expected, nil
 }
 
 type accum struct {

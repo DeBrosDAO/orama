@@ -1772,9 +1772,10 @@ is checked before anything on the host changes.
                   reports each closed epoch's relay bandwidth and uptime to x/relay
                   from the authority's votes. It goes beside dirauth and chain, with
                   --tor-reporter-operator. The install writes the reporter's home
-                  (/var/lib/orama-global/reporter) with its operator and the
-                  authority-id, which is the v3_ident the network file lists for
-                  --tor-address; the hot key is created when the reporter first
+                  (/var/lib/orama-global/reporter) with its operator, the
+                  authority-id (the v3_ident the network file lists for
+                  --tor-address) and the vote-interval (the network file's
+                  voting_interval_minutes); the hot key is created when the reporter first
                   starts, and its address still has to be added to x/relay's
                   reporter set and funded.
 

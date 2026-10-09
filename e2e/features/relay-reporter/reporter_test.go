@@ -4,6 +4,7 @@ package relayreporter
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -100,11 +101,16 @@ func TestReporter_installPreparedItsHome(t *testing.T) {
 	if op := strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/operator")).Stdout); !operatorAddress.MatchString(op) {
 		t.Errorf("%s/operator is %q, not an account address", reporterHome, op)
 	}
+	wantInterval := fmt.Sprintf("%dm", network.VotingIntervalMinutes)
+	if got := strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/vote-interval")).Stdout); got != wantInterval {
+		t.Errorf("%s/vote-interval is %q, want %q, the voting interval of the installed network file", reporterHome, got, wantInterval)
+	}
 	for path, want := range map[string]string{
-		reporterHome:                   reporterAccount + " 700",
-		reporterHome + "/authority-id": reporterAccount + " 600",
-		reporterHome + "/operator":     reporterAccount + " 600",
-		reporterHome + "/votes":        reporterAccount + " 700",
+		reporterHome:                    reporterAccount + " 700",
+		reporterHome + "/authority-id":  reporterAccount + " 600",
+		reporterHome + "/operator":      reporterAccount + " 600",
+		reporterHome + "/vote-interval": reporterAccount + " 600",
+		reporterHome + "/votes":         reporterAccount + " 700",
 	} {
 		if got := strings.TrimSpace(c.F.MustExec(t, n, "stat -c '%U %a' "+fleet.ShellQuote(path)).Stdout); got != want {
 			t.Errorf("%s is %q, want %q", path, got, want)

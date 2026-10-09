@@ -503,3 +503,92 @@ func TestNewRunner_validation(t *testing.T) {
 	_, err = NewRunner(good, nil)
 	require.Error(t, err)
 }
+
+// An epoch shorter than the network's voting interval holds no vote and never
+// will: it is dropped at the first pass after it closes, not retried until its
+// window ends, and the failure says what the interval was.
+func TestStep_anEpochShorterThanTheVoteIntervalIsDroppedAtOnce(t *testing.T) {
+	r := newRig(t)
+	r.runner.cfg.VoteInterval = 30 * time.Hour // the rig's epochs last 24 hours
+	_, _ = r.step()
+	r.closeEpoch()
+	e, err := r.step()
+	require.Empty(t, e)
+	require.ErrorIs(t, err, ErrEpochTooShort)
+	var ee *EpochError
+	require.ErrorAs(t, err, &ee)
+	require.EqualValues(t, 5, ee.Epoch)
+	require.ErrorContains(t, err, "30h0m0s")
+	st, err := loadState(r.home)
+	require.NoError(t, err)
+	require.Empty(t, st.Due, "the epoch is not owed")
+
+	_, err = r.step()
+	require.NoError(t, err, "it is not tried again")
+	require.Empty(t, r.chain.submitted)
+}
+
+// The runner measures an epoch against the interval it is configured with, not
+// an hour: a network voting every 30 minutes has epochs of 30 minutes to report.
+func TestStep_theConfiguredVoteIntervalDecidesWhetherAnEpochIsLongEnough(t *testing.T) {
+	r := newRig(t)
+	r.runner.cfg.VoteInterval = 30 * time.Minute
+	r.chain.epoch = Epoch{Number: 5, Start: epochStart}
+	_, _ = r.step()
+	r.chain.epoch = Epoch{Number: 6, Start: epochStart.Add(30 * time.Minute)}
+	doc := testVote(testAuthorityHex, epochStart, three()...)
+	require.NoError(t, os.WriteFile(filepath.Join(r.votes, "a"+VoteSuffix), []byte(doc), 0o640))
+
+	e, err := r.step()
+	require.NoError(t, err)
+	require.Equal(t, []uint64{5}, e, "one vote in a 30-minute epoch is complete at a 30-minute interval")
+
+	r.runner.cfg.VoteInterval = time.Hour
+	r.chain.epoch = Epoch{Number: 7, Start: epochStart.Add(60 * time.Minute)}
+	_, err = r.step()
+	require.ErrorIs(t, err, ErrEpochTooShort, "the same epoch is too short for an hourly network")
+}
+
+// Every per-epoch failure names its epoch, so a log line can say which.
+func TestStep_epochFailuresCarryTheirEpoch(t *testing.T) {
+	r := newRig(t)
+	_, _ = r.step()
+	r.closeEpoch()
+	_, err := r.step()
+	require.ErrorIs(t, err, ErrIncompleteArchive)
+	var ee *EpochError
+	require.ErrorAs(t, err, &ee)
+	require.EqualValues(t, 5, ee.Epoch)
+	require.NotNil(t, ExpectedState(err))
+	require.Nil(t, ExpectedState(errors.New("connection refused")))
+}
+
+// A closed epoch whose saved report cannot be removed is a failure, not the
+// expected "window closed": the leftover file needs someone, and the epoch
+// stays owed so the removal is tried again.
+func TestStep_aSavedReportThatCannotBeRemovedIsAFailure(t *testing.T) {
+	r := newRig(t)
+	_, _ = r.step()
+	r.closeEpoch()
+	_, _ = r.step() // epoch 5 is due, its archive empty
+	r.closeEpoch()
+	stuck := reportPath(r.home, 5)
+	require.NoError(t, os.MkdirAll(filepath.Join(stuck, "x"), 0o750))
+	_, err := r.step()
+	require.Error(t, err)
+	require.NotErrorIs(t, err, ErrWindowClosed)
+	var ee *EpochError
+	require.ErrorAs(t, err, &ee)
+	require.EqualValues(t, 5, ee.Epoch)
+	require.Nil(t, ExpectedState(ee))
+	st, lerr := loadState(r.home)
+	require.NoError(t, lerr)
+	require.NotEmpty(t, st.Due, "epoch 5 is still owed")
+}
+
+func TestLeaves(t *testing.T) {
+	a, b, c := errors.New("a"), errors.New("b"), errors.New("c")
+	require.Empty(t, Leaves(nil))
+	require.Equal(t, []error{a}, Leaves(a))
+	require.Equal(t, []error{a, b, c}, Leaves(errors.Join(a, errors.Join(b, c))))
+}

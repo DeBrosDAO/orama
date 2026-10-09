@@ -83,7 +83,7 @@ network reads it through that parser:
 | `orama vpn up`, `orama vpn check` | `--network`, or `ORAMA_ONION_NETWORK` |
 | every chain transaction command | `--onion-network`, or `ORAMA_ONION_NETWORK` |
 | `orama global tor onions add` | `--network-file` |
-| the relay reporter | does not read the file itself (it is in the `chain` module, which does not import `core`); its `authority-id` is the `v3_ident` of its authority in this file |
+| the relay reporter | does not read the file itself (it is in the `chain` module, which does not import `core`); its `authority-id` is the `v3_ident` of its authority in this file and its `vote-interval` is this file's `voting_interval_minutes` |
 
 The file is public. The ceremony writes it, it is staged beside the release
 binaries, and the same file ships to wallets.
@@ -643,8 +643,9 @@ install matches against its key bundle). Then it:
 
 - creates the account `orama-reporter` and the home `/var/lib/orama-global/reporter` (0700,
   that account's);
-- writes `authority-id` (that authority's `v3_ident`) and `operator`, mode 0600, the account's,
-  again on every install, so a changed `--tor-reporter-operator` takes effect;
+- writes `authority-id` (that authority's `v3_ident`), `vote-interval` (the file's
+  `voting_interval_minutes`, as `30m`) and `operator`, mode 0600, the account's, again on every
+  install, so a changed `--tor-reporter-operator` takes effect;
 - makes the votes directory `/var/lib/orama-global/tor-votes` (see "Where the votes come from");
 - writes and enables `orama-global-reporter.service` under the shared global sandbox (private
   ranges denied, `/opt/orama` and `/etc/orama` hidden, loopback only to the chain's RPC, which
@@ -661,6 +662,7 @@ State directory (`/var/lib/orama-global/reporter`):
 |---|---|
 | `hot-key` | The reporter's signing key, created on first start (mode 0600). Its address must be in `x/relay`'s reporter set, and funded. |
 | `operator` | The operator address this reporter runs for (`--tor-reporter-operator`, written by the install). |
+| `vote-interval` | The Tor network's voting interval as a duration (`30m`): `voting_interval_minutes` of `tor-network.json`, written by `orama global install`. The reporter measures an epoch against it, so a network that votes every 30 minutes is not judged by an hour. There is no default: a reporter without the file, or with one that is not a positive duration, does not start (re-run the install). |
 | `authority-id` | The authority's v3 identity, 40 hex (the `dir-source` line of its votes): the `v3_ident` of this authority in `tor-network.json`. The reporter lives in the `chain` module and does not import the parser, so `orama global install` writes the file from the network file. |
 | `votes/*.vote` | Only for a reporter run by hand without `--votes-dir`; the installed unit reads `/var/lib/orama-global/tor-votes` instead (below). The files are regular files, each a complete vote (one that ends before its `directory-footer` is still being written and is refused); other files in the directory are ignored. A `.vote` file that is not a vote, deterministically (it does not parse, is larger than a vote, or is swapped for a link or a FIFO after the listing; a link or FIFO is never followed or waited on) is logged as an error naming it and left out; the rest of the archive is still read. A file that cannot be opened or read for a reason that is not the file's (an I/O error, a descriptor limit, a file that vanished since the listing) fails the run instead, which is retried: a report is never built from a partial vote set. A header is read up to 64 MiB, the size limit of a vote, and no further. |
 | `state.json` | The epoch in progress at the last pass, and the closed epochs still owed a report with their spans. |
@@ -735,10 +737,14 @@ Rules that keep a node from paying itself:
   unregistered, the key mismatches, the own-operator relays and the relays with no ed25519
   identity.
 - An epoch is not reported when the archive holds fewer than four fifths of the votes the
-  voting interval implies (`--vote-interval`, default 1 hour), so a gap in the archive is never
-  read as relay downtime. The epoch stays owed and each pass tries it again (with its span
+  voting interval implies (`vote-interval` in the home, the network file's `voting_interval_minutes`),
+  so a gap in the archive is never read as relay downtime. The epoch stays owed and each pass tries it again (with its span
   kept in `state.json`) until the archive catches up or the chain stops taking reports for it
   (next paragraph).
+- An epoch that lasted less than one voting interval holds no vote to judge uptime from, and never
+  will. It is dropped at the first pass after it closes with `the epoch is shorter than one voting
+  interval of the Tor network` (`reporter.ErrEpochTooShort`), not retried. The chain's epoch
+  duration has to be at least the Tor network's voting interval for any epoch to be reported.
 - A relay's pay is the median across reporters (`x/relay`; the default quorum is 3, one per
   initial authority), so one lying reporter cannot move it; see "Directory authority
   compromise" in [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md).
@@ -750,7 +756,8 @@ is never settled and takes no later report. So the reporter reports epoch `e` at
 after the boundary and keeps trying during `e+1`; a pass that finds the window over drops the
 epoch with `the report window of the epoch has closed` (`reporter.ErrWindowClosed`), and one that
 finds it already settled drops it with `the epoch is already settled on chain` (`ErrEpochSettled`).
-Neither is retried, and the saved `report-<epoch>.json` is removed. A chunk the chain refuses is
+Neither is retried, and the saved `report-<epoch>.json` is removed (a report that cannot be removed is a
+failure and leaves the epoch owed until it can). A chunk the chain refuses is
 read the same way: the reporter reads the chain's epoch and settlement again, and if the window
 passed or the epoch settled in between, the error says so; otherwise the refusal is an ordinary
 failure and the epoch stays owed. Run `--interval` (default 5 minutes) much shorter than an epoch,
@@ -762,6 +769,13 @@ it sees it, before it tries any report. The first pass on a new home only record
 more than one epoch closes between passes, the epochs in between cannot be bounded and are
 skipped with an error (`epochs closed between two passes`). After a chain reset, remove
 `state.json` and `report-*.json`.
+
+**What the log says.** A pass that fails is logged `ERROR reporter pass failed`, each time it fails.
+The states a healthy reporter meets are not failures: an epoch dropped because its window closed, it
+was settled, it was shorter than a voting interval, or epochs were lost between two passes is a
+`WARN reporter is not reporting an epoch` line, and an archive still filling in is an `INFO reporter
+is waiting for the vote archive of an epoch` line. Each is logged once for its epoch, not again on the
+next pass that meets it (`reporter.ExpectedState` names them).
 
 The entries of an epoch are fixed when its first chunk is sent and saved in
 `report-<epoch>.json`; a retry sends exactly those, because the registry can change in between
