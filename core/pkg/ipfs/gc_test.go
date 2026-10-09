@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 func TestAPIEndpoint(t *testing.T) {
@@ -22,9 +24,29 @@ func TestAPIEndpoint(t *testing.T) {
 		"no credential":     {"/ip4/127.0.0.1/tcp/10102", ""},
 		"basic credential":  {"/ip4/127.0.0.1/tcp/10102", "basic:user:pass"},
 		"empty bearer":      {"/ip4/127.0.0.1/tcp/10102", "bearer:"},
+		"a mesh address":    {"/ip4/10.0.0.2/tcp/10102", "bearer:abc"},
+		"a public address":  {"/ip4/203.0.113.9/tcp/10102", "bearer:abc"},
+		"every interface":   {"/ip4/0.0.0.0/tcp/10102", "bearer:abc"},
+		"a public ip6":      {"/ip6/2001:db8::1/tcp/10102", "bearer:abc"},
 	} {
 		if _, _, err := APIEndpoint(c.addr, c.auth); err == nil {
 			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+// Loopback is where every namespace's Kubo listens; the host-only address of
+// the co-located global node's namespace is the other place a GC unit is
+// pointed at.
+func TestAPIEndpoint_acceptsTheAddressesOfThisHost(t *testing.T) {
+	for addr, want := range map[string]string{
+		"/ip4/127.0.0.1/tcp/10102":                         "http://127.0.0.1:10102",
+		"/ip4/127.0.0.5/tcp/10102":                         "http://127.0.0.5:10102",
+		"/ip6/::1/tcp/10102":                               "http://[::1]:10102",
+		"/ip4/" + constants.GlobalNetnsAddr + "/tcp/31011": "http://" + constants.GlobalNetnsAddr + ":31011",
+	} {
+		if url, _, err := APIEndpoint(addr, "bearer:abc"); err != nil || url != want {
+			t.Errorf("APIEndpoint(%q) = %q, %v; want %q", addr, url, err, want)
 		}
 	}
 }

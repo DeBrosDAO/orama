@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 )
@@ -29,6 +30,10 @@ const (
 // environment, "/ip4/127.0.0.1/tcp/10102") and its --api-auth value
 // ("bearer:<token>") into the base URL and bearer RepoGC takes. Only a TCP
 // address and a bearer are accepted: they are the only form install writes.
+// The address must be on this host (loopback, or the host-only address of the
+// network namespace a co-located global node runs Kubo in): the request is
+// plain HTTP and carries the bearer, so an address that leaves the host would
+// send it across the network in cleartext.
 func APIEndpoint(apiAddr, apiAuth string) (baseURL, token string, err error) {
 	if apiAddr == "" {
 		return "", "", errors.New("the Kubo API address is empty (IPFS_API)")
@@ -44,6 +49,10 @@ func APIEndpoint(apiAddr, apiAuth string) (baseURL, token string, err error) {
 	addr, isTCP := netAddr.(*net.TCPAddr)
 	if !isTCP {
 		return "", "", fmt.Errorf("the Kubo API address %q is not a TCP address", apiAddr)
+	}
+	if !addr.IP.IsLoopback() && addr.IP.String() != constants.GlobalNetnsAddr {
+		return "", "", fmt.Errorf("the Kubo API address %q is not on this host (loopback or %s), and the request carries the bearer in cleartext",
+			apiAddr, constants.GlobalNetnsAddr)
 	}
 	token, ok := strings.CutPrefix(apiAuth, bearerAuthPrefix)
 	if !ok || token == "" {
