@@ -2129,18 +2129,15 @@ serveLocal:
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
+	// Copy response headers. The marker is the gateway's to set: one the app
+	// sent (empty, to blank it, or a fake) is dropped on every path.
+	copyProxiedHeaders(w, resp)
 	// The app answered. The node that forwarded this request holds a 502, 503
 	// or 504 against this node's circuit breaker, and what an app returns says
 	// nothing about the node, so it is told whose answer this is. A client's own
 	// request gets no marker.
 	if proxyNode != "" {
-		w.Header().Set(httputil.HeaderTenantOrigin, "1")
+		httputil.MarkTenantOrigin(w.Header())
 	}
 
 	// Write status code and body

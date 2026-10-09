@@ -12,6 +12,7 @@ func TestIsReservedResponseHeader(t *testing.T) {
 		"Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive",
 		"Proxy-Authenticate", "Proxy-Authorization", "TE", "Trailer", "Upgrade",
 		"X-Internal-Auth", "x-internal-anything", "  X-Request-Id  ",
+		"X-Orama-Tenant-Origin", "x-orama-tenant-origin", "X-Orama-Anything",
 	}
 	for _, h := range reserved {
 		if !isReservedResponseHeader(h) {

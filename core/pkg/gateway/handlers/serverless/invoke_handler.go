@@ -108,7 +108,7 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 	// From here the response is the function's: its output, its own status, or
 	// the failure to run it. The proxy in front does not hold a 502, 503 or 504
 	// that carries this against the gateway.
-	w.Header().Set(httputil.HeaderTenantOrigin, "1")
+	httputil.MarkTenantOrigin(w.Header())
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
 		// Bug #212: every error path here emits the canonical RPC
@@ -310,7 +310,8 @@ func writeVersions(w http.ResponseWriter, versions []*serverless.Function) {
 // reservedResponseHeaders are response headers a raw-HTTP-response tenant
 // function (bugboard #835) must not be able to set or overwrite: gateway-owned
 // trace/auth headers and hop-by-hop / framing-control headers. Compared
-// case-insensitively; the X-Internal- prefix is matched separately.
+// case-insensitively; the X-Internal- and X-Orama- prefixes (the latter holds
+// the tenant-origin marker the proxy in front reads) are matched separately.
 var reservedResponseHeaders = map[string]struct{}{
 	"x-request-id":        {},
 	"x-duration-ms":       {},
@@ -332,6 +333,9 @@ func isReservedResponseHeader(key string) bool {
 	if _, ok := reservedResponseHeaders[k]; ok {
 		return true
 	}
-	// Any internal-auth header the gateway uses for inter-service trust.
-	return strings.HasPrefix(k, "x-internal-")
+	// Any internal-auth header the gateway uses for inter-service trust, and
+	// any header the platform's own components exchange (x-orama-): a function
+	// that blanked the tenant-origin marker would make its own 503 count
+	// against its namespace's circuit breaker.
+	return strings.HasPrefix(k, "x-internal-") || strings.HasPrefix(k, "x-orama-")
 }

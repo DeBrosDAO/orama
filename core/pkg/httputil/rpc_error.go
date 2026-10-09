@@ -38,6 +38,14 @@ import (
 // that ran it. The forwarding gateway removes it before the client sees it.
 const HeaderTenantOrigin = "X-Orama-Tenant-Origin"
 
+// MarkTenantOrigin sets the tenant-origin marker on h. It removes any value
+// first, so one the tenant's code put there (an empty one, say) cannot sit
+// beside it.
+func MarkTenantOrigin(h http.Header) {
+	h.Del(HeaderTenantOrigin)
+	h.Set(HeaderTenantOrigin, "1")
+}
+
 // RPCErrorCode is the typed error-code enum. New codes go here, alphabetic
 // within their class. Codes are stable strings — clients pin to them.
 type RPCErrorCode string

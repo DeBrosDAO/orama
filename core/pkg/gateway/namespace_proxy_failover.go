@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -64,7 +65,14 @@ var errNoClusterSecret = errors.New("this gateway has no cluster secret, so it c
 // (httputil.HeaderTenantOrigin), say nothing about the gateway: counting them
 // let one function that returned 503 take its whole namespace out of rotation.
 func isUpstreamFailure(resp *http.Response) bool {
-	return IsResponseFailure(resp.StatusCode) && resp.Header.Get(httputil.HeaderTenantOrigin) == ""
+	return IsResponseFailure(resp.StatusCode) && !hasTenantOriginMarker(resp.Header)
+}
+
+// hasTenantOriginMarker reports whether h carries the tenant-origin marker at
+// all. A present marker counts even with an empty value, so nothing can turn a
+// tenant's answer into the gateway's by blanking it.
+func hasTenantOriginMarker(h http.Header) bool {
+	return len(h.Values(httputil.HeaderTenantOrigin)) > 0
 }
 
 // retainBreakers drops the breakers of namespace's gateways on nodes the
@@ -102,7 +110,7 @@ func failureReason(err error) string {
 // not for its client.
 func copyProxiedHeaders(w http.ResponseWriter, resp *http.Response) {
 	for key, values := range resp.Header {
-		if key == httputil.HeaderTenantOrigin {
+		if strings.EqualFold(key, httputil.HeaderTenantOrigin) {
 			continue
 		}
 		for _, value := range values {
