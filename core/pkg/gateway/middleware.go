@@ -53,6 +53,12 @@ func isLongRunningProxyPath(p string) bool {
 	return false
 }
 
+// namespaceGatewayUnavailableMessage is what a client is told when no member of
+// its namespace's gateway could be reached. The cause (the member's overlay
+// address, port, and the request's path and query) stays in the node log: it
+// is the operator's to read, not the caller's.
+const namespaceGatewayUnavailableMessage = "namespace gateway unavailable: none of the namespace's gateways could be reached; retry shortly, and contact the network operator if it persists"
+
 // proxyTimeoutMessage explains a proxy timeout in terms of the request that
 // timed out. Only a function invocation has a timeout its caller can raise;
 // telling an SDK storage read to edit function.yaml sent the reader to a file
@@ -1945,7 +1951,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			candidateCB.Abandon()
 			g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
-				zap.String("namespace", namespaceName), zap.Error(err))
+				zap.String("namespace", namespaceName), zap.String("error", failureReason(err)))
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -1968,7 +1974,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
 			zap.String("namespace", namespaceName),
 			zap.String("target", candidate.ip),
-			zap.Error(err),
+			zap.String("error", failureReason(err)),
 		)
 		if !isDialFailure(err) || (undialed != nil && undialed.read) {
 			break
@@ -1987,8 +1993,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 			return
 		}
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable,
-			httputil.ErrCodeServiceUnavailable,
-			"namespace gateway unavailable: "+lastErr.Error())
+			httputil.ErrCodeServiceUnavailable, namespaceGatewayUnavailableMessage)
 		return
 	}
 	defer resp.Body.Close()
@@ -2109,7 +2114,7 @@ serveLocal:
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "local proxy request failed",
 			zap.String("target", target),
-			zap.Error(err),
+			zap.String("error", failureReason(err)),
 		)
 
 		// Local process is down — try other replica nodes before giving up
@@ -2215,7 +2220,7 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 	body, tracked := hopBody(r)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
-		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
+		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", failureReason(err)))
 		return false
 	}
 	keepBodyLength(proxyReq, r)
@@ -2250,7 +2255,7 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
-			zap.Error(err))
+			zap.String("error", failureReason(err)))
 		return false
 	}
 	defer resp.Body.Close()
@@ -2347,7 +2352,7 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 	body, tracked := hopBody(r)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
-		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
+		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", failureReason(err)))
 		return false
 	}
 	keepBodyLength(proxyReq, r)
@@ -2378,7 +2383,7 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 		recordHopError(cb, r, tracked, err)
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
-			zap.Error(err),
+			zap.String("error", failureReason(err)),
 		)
 		return false
 	}
