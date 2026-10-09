@@ -61,3 +61,27 @@ func TestRESTGet_cancelledContextStaysMatchable(t *testing.T) {
 		t.Errorf("the error quotes the query: %v", err)
 	}
 }
+
+// A URL the client refuses to build a request for is quoted in the parse error
+// too, query string included.
+func TestRESTGet_unbuildableURLErrorDropsTheQueryString(t *testing.T) {
+	r := &Reader{REST: "http://127.0.0.1:1"}
+	_, err := r.RESTGet(context.Background(), "/x?api_key=SECRET-QUERY-VALUE\x7f")
+	if err == nil {
+		t.Fatal("an unbuildable URL was requested")
+	}
+	if strings.Contains(err.Error(), "SECRET-QUERY-VALUE") || strings.Contains(err.Error(), "api_key") {
+		t.Errorf("the error quotes the query: %v", err)
+	}
+}
+
+func TestGatewayPostTx_unbuildableURLErrorDropsTheQueryString(t *testing.T) {
+	r := &Reader{Gateway: "http://127.0.0.1:1?api_key=SECRET-QUERY-VALUE\x7f"}
+	_, err := r.gatewayPostTx(context.Background(), simulateRoute, []byte{1})
+	if err == nil {
+		t.Fatal("an unbuildable URL was requested")
+	}
+	if strings.Contains(err.Error(), "SECRET-QUERY-VALUE") || strings.Contains(err.Error(), "api_key") {
+		t.Errorf("the error quotes the query: %v", err)
+	}
+}

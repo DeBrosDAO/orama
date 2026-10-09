@@ -96,7 +96,7 @@ func (r *Reader) gatewayPostTx(ctx context.Context, route string, txRaw []byte) 
 	target := root + "/v1/chain/" + route
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("build %s request: %w", route, err)
+		return nil, fmt.Errorf("build %s request: %w", route, httputil.WithoutURL(err))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client().Do(req)

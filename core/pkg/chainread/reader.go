@@ -98,7 +98,7 @@ func Escape(segment string) string { return url.PathEscape(segment) }
 func (r *Reader) get(ctx context.Context, target string) (json.RawMessage, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, err
+		return nil, httputil.WithoutURL(err)
 	}
 	return r.do(req)
 }
