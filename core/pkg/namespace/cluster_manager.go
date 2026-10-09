@@ -1352,36 +1352,43 @@ func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string
 		Namespace: cluster.NamespaceName,
 	}
 
-	// Check individual service status by inspecting cluster nodes
+	// Check individual service status by inspecting cluster nodes. There is
+	// one row per node and role, so a node appears in Nodes once however many
+	// roles it holds, while readiness looks at every row.
 	nodes, err := cm.getClusterNodes(ctx, clusterID)
-	if err == nil {
-		runningCount := 0
-		hasRQLite := false
-		hasOlric := false
-		hasGateway := false
-
-		for _, node := range nodes {
-			status.Nodes = append(status.Nodes, node.NodeID)
-			if node.Status == NodeStatusRunning {
-				runningCount++
-			}
-			if node.RQLiteHTTPPort > 0 {
-				hasRQLite = true
-			}
-			if node.OlricHTTPPort > 0 {
-				hasOlric = true
-			}
-			if node.GatewayHTTPPort > 0 {
-				hasGateway = true
-			}
-		}
-
-		allRunning := len(nodes) > 0 && runningCount == len(nodes)
-		status.RQLiteReady = allRunning && hasRQLite
-		status.OlricReady = allRunning && hasOlric
-		status.GatewayReady = allRunning && hasGateway
-		status.DNSReady = allRunning
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the nodes of namespace cluster %s: %w", clusterID, err)
 	}
+	runningCount := 0
+	hasRQLite := false
+	hasOlric := false
+	hasGateway := false
+	seen := make(map[string]bool, len(nodes))
+
+	for _, node := range nodes {
+		if !seen[node.NodeID] {
+			seen[node.NodeID] = true
+			status.Nodes = append(status.Nodes, node.NodeID)
+		}
+		if node.Status == NodeStatusRunning {
+			runningCount++
+		}
+		if node.RQLiteHTTPPort > 0 {
+			hasRQLite = true
+		}
+		if node.OlricHTTPPort > 0 {
+			hasOlric = true
+		}
+		if node.GatewayHTTPPort > 0 {
+			hasGateway = true
+		}
+	}
+
+	allRunning := len(nodes) > 0 && runningCount == len(nodes)
+	status.RQLiteReady = allRunning && hasRQLite
+	status.OlricReady = allRunning && hasOlric
+	status.GatewayReady = allRunning && hasGateway
+	status.DNSReady = allRunning
 
 	if cluster.ErrorMessage != "" {
 		status.Error = cluster.ErrorMessage
