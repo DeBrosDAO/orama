@@ -183,8 +183,9 @@ func TestEmission_devnetShortEpochParams(t *testing.T) {
 // epoch (each read at once: the run chain prunes state older than about 100
 // blocks), cumulative_minted equals exactly 60% of the schedule over the
 // completed epochs, and bank supply equals genesis + minted + development +
-// service - burned (docs/CHAIN.md "Invariants"; only x/emission mints
-// norama); cumulative-minted agrees with current-epoch.
+// service + faucet - burned (docs/CHAIN.md "Invariants"; only x/emission
+// mints norama, and the faucet that other tests of the stage drip from is one
+// of its mints); cumulative-minted agrees with current-epoch.
 func TestEmission_mintedMatchesScheduleAndSupply(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -197,7 +198,7 @@ func TestEmission_mintedMatchesScheduleAndSupply(t *testing.T) {
 		if want := validatorMinted(completed); e.CumulativeMinted.Cmp(want) != 0 {
 			t.Errorf("height %d (epoch %s): cumulative_minted %s, want %s", h, e.CurrentEpoch.String(), e.CumulativeMinted.String(), want.String())
 		}
-		want := e.GenesisSupply.Add(e.CumulativeMinted).Add(e.CumulativeDevelopmentMinted).Add(e.CumulativeServiceMinted).Sub(e.CumulativeBurned)
+		want := e.ExpectedSupply()
 		if got := c.Supply(t, n, h); got.Cmp(want) != 0 {
 			t.Errorf("height %d: bank supply %s, want %s", h, got.String(), want.String())
 		}

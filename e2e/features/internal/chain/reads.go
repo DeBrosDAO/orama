@@ -18,6 +18,15 @@ type EpochState struct {
 	GenesisSupply               Int `json:"genesis_supply"`
 	CumulativeDevelopmentMinted Int `json:"cumulative_development_minted"`
 	CumulativeServiceMinted     Int `json:"cumulative_service_minted"`
+	CumulativeFaucetMinted      Int `json:"cumulative_faucet_minted"`
+}
+
+// ExpectedSupply is the bank supply the epoch state accounts for (docs/CHAIN.md "Invariants"):
+// genesis supply plus every mint (the epoch, development, service and test-network faucet ones)
+// minus the burns.
+func (e EpochState) ExpectedSupply() Int {
+	return e.GenesisSupply.Add(e.CumulativeMinted).Add(e.CumulativeDevelopmentMinted).
+		Add(e.CumulativeServiceMinted).Add(e.CumulativeFaucetMinted).Sub(e.CumulativeBurned)
 }
 
 // Epoch reads x/emission's live epoch state, at height when height > 0.

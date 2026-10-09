@@ -11,6 +11,10 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 )
 
+// grpcUnimplemented is gRPC codes.Unimplemented, the code of the REST server's answer to a path no
+// route serves.
+const grpcUnimplemented = 12
+
 // restGet reads one path of validator 0's REST API (loopback on the node, through an SSH tunnel).
 func restGet(t *testing.T, c *chain.Chain, path string) (int, []byte) {
 	t.Helper()
@@ -29,7 +33,9 @@ func restGet(t *testing.T, c *chain.Chain, path string) (int, []byte) {
 
 // TestModuleREST_servesTheQueriesTheModulesAnnotate: the node's REST API serves each Orama module's
 // queries at the paths of its query.proto (google.api.http), with the same answer as the gRPC
-// query; a path parameter is read as the request field, and a path that is no query is a 404.
+// query; a path parameter is read as the request field, a subject that does not exist is a 404, and
+// a path that is no query is the REST server's routing error, a 501 (grpc-gateway v1 maps an unrouted
+// path to gRPC code 12, Unimplemented), the same answer as an unknown path of the SDK's own modules.
 func TestModuleREST_servesTheQueriesTheModulesAnnotate(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -57,7 +63,14 @@ func TestModuleREST_servesTheQueriesTheModulesAnnotate(t *testing.T) {
 	if code, body = restGet(t, c, "/orama/token/v1/token?denom=factory/orama1none/none"); code != http.StatusNotFound {
 		t.Errorf("a token that does not exist: HTTP %d %.200s, want 404", code, body)
 	}
-	if code, _ = restGet(t, c, "/orama/token/v1/nonsense"); code != http.StatusNotFound {
-		t.Errorf("a path that is no query: HTTP %d, want 404", code)
+	for _, path := range []string{"/orama/token/v1/nonsense", "/cosmos/bank/v1beta1/nonsense"} {
+		code, body = restGet(t, c, path)
+		var routing struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		if code != http.StatusNotImplemented || json.Unmarshal(body, &routing) != nil || routing.Code != grpcUnimplemented {
+			t.Errorf("GET %s, a path that is no query: HTTP %d %.200s, want 501 with gRPC code %d", path, code, body, grpcUnimplemented)
+		}
 	}
 }

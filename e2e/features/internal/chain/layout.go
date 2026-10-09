@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/config"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
 // FleetHost is where a fleet run's validator serves RPC, REST and gRPC:
@@ -62,4 +63,25 @@ func checkChainID(st *fleet.State, id string) error {
 		return fmt.Errorf("every run chain is a devnet chain (id contains %s)", DevnetMarker)
 	}
 	return nil
+}
+
+// IndexerGateway is the run's public gateway for /v1/chain/index/. A gateway proxies the indexer of
+// its own node. A fleet run installs one beside every validator (e2e/scripts/chain-deploy.sh), so
+// any gateway answers; stagenet runs one on a single node (chain/scripts/stagenet/deploy.sh), so
+// the client is pinned to that node's gateway and the DNS answer cannot pick one without it.
+func (c *Chain) IndexerGateway(t testing.TB) *gw.Client {
+	t.Helper()
+	g := harness.GW(t)
+	if ip := indexerPin(c.F.State); ip != "" {
+		return g.PinTo(ip)
+	}
+	return g
+}
+
+// indexerPin is the address IndexerGateway pins to, or "" when any gateway has an indexer.
+func indexerPin(st *fleet.State) string {
+	if st.IsStagenet() {
+		return config.StagenetIndexerIP()
+	}
+	return ""
 }

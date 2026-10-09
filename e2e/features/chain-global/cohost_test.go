@@ -146,20 +146,53 @@ func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
 // clusterPreferences is the node's preferences.yaml (core/pkg/install/preferences.go).
 const clusterPreferences = "/opt/orama/.orama/preferences.yaml"
 
+// colocatedRole and colocatedNetns are the two lines a co-located install adds to the cluster node's
+// preferences.yaml (core/pkg/install/global_netns.go; docs/RUN_A_GLOBAL_NODE.md).
+const (
+	colocatedRole  = "both"
+	colocatedNetns = "orama-global"
+)
+
+// roleProblems says what is wrong with a cluster node's preferences.yaml after the chain was
+// installed beside it. A fleet run installs the chain with e2e/scripts/chain-deploy.sh, which does
+// not touch the preferences, so the node has no role line (the cluster role). A co-located install
+// (`orama global install --colocated`, the stagenet deploy) records `role: both` and
+// `global_netns: orama-global` and nothing else. Either way the node runs the cluster graph, so
+// the role must never be global, which would boot the global graph and never WireGuard.
+func roleProblems(prefs string, colocated bool) []string {
+	values := map[string]string{}
+	for _, line := range strings.Split(prefs, "\n") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(line), ":"); ok {
+			values[k] = strings.TrimSpace(v)
+		}
+	}
+	var problems []string
+	switch role := values["role"]; {
+	case colocated && role != colocatedRole:
+		problems = append(problems, fmt.Sprintf("records role %q, want %q: a co-located install records it", role, colocatedRole))
+	case !colocated && role != "" && role != "cluster":
+		problems = append(problems, fmt.Sprintf("records role %q, want the cluster role (no role line)", role))
+	}
+	if netns, has := values["global_netns"]; colocated && netns != colocatedNetns {
+		problems = append(problems, fmt.Sprintf("records global_netns %q (set: %t), want %q", netns, has, colocatedNetns))
+	} else if !colocated && has {
+		problems = append(problems, fmt.Sprintf("records global_netns %q on a node with no co-located install", netns))
+	}
+	return problems
+}
+
 // TestCoHost_clusterNodeKeepsItsClusterRole: installing the chain beside a
-// cluster node leaves the node's preferences on the cluster role, so
-// orama-node keeps booting the cluster graph (docs/ARCHITECTURE.md, node
-// roles): the role is neither global nor both, and WireGuard, which only the
-// cluster graph starts, is up.
+// cluster node leaves the node on the cluster graph, so orama-node keeps
+// booting it (docs/ARCHITECTURE.md, node roles): the role is the cluster
+// role, or `both` with global_netns on a co-located install (stagenet),
+// never global, and orama-node is active.
 func TestCoHost_clusterNodeKeepsItsClusterRole(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	for _, n := range c.Nodes() {
 		prefs := c.F.MustExec(t, n, "cat "+clusterPreferences).Stdout
-		for _, line := range strings.Split(prefs, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), "role:") {
-				t.Errorf("%s: %s records %q, want the cluster role (no role line)", n.Name, clusterPreferences, line)
-			}
+		for _, p := range roleProblems(prefs, c.F.State.IsStagenet()) {
+			t.Errorf("%s: %s %s", n.Name, clusterPreferences, p)
 		}
 		if s := c.F.Unit(t, n, "orama-node.service"); s != "active" {
 			t.Errorf("%s: orama-node.service is %s", n.Name, s)

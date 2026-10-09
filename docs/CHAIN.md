@@ -1888,7 +1888,13 @@ What is indexed:
 - **Blocks:** height, hash, time, proposer address (hex), transaction count,
   transaction hashes, the gas its transactions used, and the base fee they
   burned (the `base_fee` attribute of each `tx` event; burns in the
-  finalize-block phase are not counted).
+  finalize-block phase are not counted). The injected extended commit that
+  starts every block from the height inclusion lists switch on
+  ("Inclusion lists (C13)") is not a transaction: its bytes are no Cosmos
+  transaction by design, so the index skips it, and the count, the hashes and
+  the transaction list leave it out. The other transactions keep the index
+  CometBFT gives them in the block, so the first one of such a block is at
+  index 1.
 - **Transactions** (failed ones too): hash (SHA-256 of the bytes, lowercase
   hex), height, index in the block, the block's time, code, codespace, log, gas
   wanted and used, the type URL of each message, the events of the
@@ -2526,6 +2532,9 @@ on the node's REST API (`api.enable`, port 31003 on a node), next to the SDK's o
 slash (a token denom, a deposit id) or is bytes is a query parameter
 (`/orama/token/v1/token?denom=factory/…`). The node's REST API serves every query including each
 `Invariants`; what the public gateway serves is still only the list under "Module queries" above.
+A path no route serves, an Orama module's or the SDK's, is answered by the REST server itself with
+HTTP 501 and `{"code":12,"message":"Not Implemented","details":[]}` (grpc-gateway v1 maps an unrouted
+path to gRPC `Unimplemented`), not a 404; a 404 means a routed query whose subject does not exist.
 `chain/app/rest_gateway_test.go` serves the routes over a real gRPC connection to the app. The
 generated code is `query.pb.go` and `query.pb.gw.go` (`protoc` with `protoc-gen-gocosmos` and
 `protoc-gen-grpc-gateway` v1.16); after a change to a `query.proto`, regenerate them and

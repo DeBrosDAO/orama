@@ -3,6 +3,7 @@
 package chain
 
 import (
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
@@ -138,5 +139,35 @@ func TestInvariantScript_failedQueryLeavesTheErrorLine(t *testing.T) {
 	want := invariantMark + "storage\n" + queryFailedMark + "\nboom: out of gas\n"
 	if string(out) != want {
 		t.Fatalf("script output %q, want %q", out, want)
+	}
+}
+
+func TestIndexerPin_perTarget(t *testing.T) {
+	if got := indexerPin(&fleet.State{Target: config.TargetFleet}); got != "" {
+		t.Errorf("a fleet run pins the index reads to %q, want none: every node has an indexer", got)
+	}
+	got := indexerPin(&fleet.State{Target: config.TargetStagenet})
+	if got != "57.129.166.16" {
+		t.Errorf("stagenet pins the index reads to %q, want mew's address 57.129.166.16", got)
+	}
+}
+
+// The answer oramad printed on stagenet after the faucet had dripped 1216 ORAMA: its mints are in the
+// epoch state and in the supply identity.
+func TestEpochState_expectedSupplyCountsTheFaucet(t *testing.T) {
+	const answer = `{"epoch_state":{"current_epoch":"46","epoch_start_unix_nano":"1791567798480204787","blocks_in_epoch":"50",
+"cumulative_minted":"400896000000000","cumulative_burned":"467279948","genesis_supply":"0","cumulative_development_minted":"7",
+"cumulative_service_minted":"11","validator_split_delta":"0","cumulative_faucet_minted":"1216000000000","faucet_epoch_minted":"0"}}`
+	var r struct {
+		EpochState EpochState `json:"epoch_state"`
+	}
+	if err := json.Unmarshal([]byte(answer), &r); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.EpochState.ExpectedSupply().String(), "402111532720070"; got != want {
+		t.Errorf("expected supply %s, want %s (minted + development + service + faucet - burned)", got, want)
+	}
+	if got := (EpochState{}).ExpectedSupply(); !got.IsZero() {
+		t.Errorf("expected supply of an empty state %s, want 0", got.String())
 	}
 }

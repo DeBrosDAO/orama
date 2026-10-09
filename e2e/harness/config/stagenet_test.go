@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -57,5 +59,23 @@ func TestStagenetPins_neverNameASharedEnvironment(t *testing.T) {
 	}
 	if len(StagenetNodes) != 5 || len(StagenetIPs()) != 5 {
 		t.Fatalf("want 5 stagenet nodes, have %d", len(StagenetNodes))
+	}
+}
+
+// The indexer runs on one node; the label here is the one the deploy script installs it on.
+func TestStagenetIndexerLabel_isTheDeployScriptsIndexerNode(t *testing.T) {
+	raw, err := os.ReadFile("../../../chain/scripts/stagenet/deploy.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^INDEXER_NODE="([^"]+)"`).FindSubmatch(raw)
+	if m == nil {
+		t.Fatal("deploy.sh names no INDEXER_NODE")
+	}
+	if string(m[1]) != StagenetIndexerLabel {
+		t.Errorf("deploy.sh installs the indexer on %q, StagenetIndexerLabel is %q", m[1], StagenetIndexerLabel)
+	}
+	if ip := StagenetIndexerIP(); ip == "" {
+		t.Errorf("no stagenet node is labelled %q", StagenetIndexerLabel)
 	}
 }
