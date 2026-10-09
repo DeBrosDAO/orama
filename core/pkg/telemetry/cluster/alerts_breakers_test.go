@@ -101,3 +101,47 @@ func TestCheckNodeBreakers_quotesTheBreakerWithTheOldestLastFailure(t *testing.T
 		t.Fatalf("alerts = %v, want the reason of bbb, whose last failure is the oldest", alerts)
 	}
 }
+
+// A group can mix open and half-open breakers, so the alert counts each state
+// instead of printing the state of one of them.
+func TestCheckNodeBreakers_countsBreakersPerState(t *testing.T) {
+	var bs []report.BreakerReport
+	for i := 0; i < 3; i++ {
+		bs = append(bs, breaker(fmt.Sprintf("open%d", i), "10.0.0.2"))
+	}
+	half := breaker("probing", "10.0.0.2")
+	half.State = report.BreakerHalfOpen
+	bs = append(bs, half)
+	r := &report.NodeReport{Breakers: &report.BreakersReport{Tracked: 4, NotClosed: 4, Unhealthy: bs}}
+
+	alerts := checkNodeBreakers(r, "10.0.0.1")
+	if len(alerts) != 1 || !strings.Contains(alerts[0].Message, "3 open, 1 half-open") {
+		t.Fatalf("alerts = %v, want the counts 3 open, 1 half-open", alerts)
+	}
+}
+
+func TestBreakerStates(t *testing.T) {
+	st := func(states ...string) []report.BreakerReport {
+		var out []report.BreakerReport
+		for _, s := range states {
+			out = append(out, report.BreakerReport{State: s})
+		}
+		return out
+	}
+	cases := []struct {
+		name string
+		in   []report.BreakerReport
+		want string
+	}{
+		{"all open", st("open", "open"), "2 open"},
+		{"all half-open", st("half-open"), "1 half-open"},
+		{"half-open reported first", st("half-open", "open", "half-open"), "1 open, 2 half-open"},
+		{"a state of a newer node", st("open", "zzz", "aaa"), "1 open, 1 aaa, 1 zzz"},
+		{"none", nil, ""},
+	}
+	for _, c := range cases {
+		if got := breakerStates(c.in); got != c.want {
+			t.Errorf("%s: breakerStates = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

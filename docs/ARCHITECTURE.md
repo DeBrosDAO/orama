@@ -1659,7 +1659,7 @@ app's requests there.
   close. A breaker that keeps failing its probes says so once every 5 minutes,
   with how many cycles it left out. The breakers that are not closed are in the
   node report (`breakers`), as a warning alert per kind and target node naming
-  the namespaces, or the `namespace/deployment` apps, and the first reason, and
+  the namespaces, or the `namespace/deployment` apps, how many breakers are open and how many half-open, and the reason of the one whose last failure is the oldest, and
   as a line in `orama monitor node`; see [MONITORING.md](MONITORING.md).
 
 ## Security Architecture

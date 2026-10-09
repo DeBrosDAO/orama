@@ -65,8 +65,9 @@ const breakerAlertNamespaces = 5
 // not closed, toward namespace gateways and toward the nodes that run deployed
 // apps: requests for that namespace or app through this node are being refused
 // (or, half-open, probed) while it lasts. One alert per kind and per node the
-// targets are on, so a dead peer is one alert and not one per tenant; the names
-// and the reason of the first are in the message.
+// targets are on, so a dead peer is one alert and not one per tenant; the names,
+// how many are open and how many half-open, and the reason of the one whose last
+// failure is the oldest are in the message.
 func checkNodeBreakers(r *report.NodeReport, host string) []Alert {
 	if r.Breakers == nil || r.Breakers.NotClosed == 0 {
 		return nil
@@ -114,11 +115,35 @@ func breakerAlerts(bs []report.BreakerReport, subsystem, what, host string, name
 			names = append(names, name(b))
 		}
 		oldest := oldestFailure(group)
-		msg := fmt.Sprintf("Circuit breaker %s toward %s on %s (%s): requests for them through this node are refused. Reason of the one whose last failure is the oldest: %s",
-			oldest.State, what, node, strings.Join(names, ", "), breakerReason(oldest))
+		msg := fmt.Sprintf("Circuit breakers toward %s on %s are not closed: %s (%s). Requests for the open ones through this node are refused, the half-open ones are being probed. Reason of the one whose last failure is the oldest: %s",
+			what, node, breakerStates(group), strings.Join(names, ", "), breakerReason(oldest))
 		alerts = append(alerts, Alert{AlertWarning, subsystem, host, msg})
 	}
 	return alerts
+}
+
+// breakerStates counts bs by state, "3 open, 1 half-open": a group can mix the
+// two, and the state of one of them says nothing about the others. Open comes
+// first, then half-open, then any other state a newer node reports.
+func breakerStates(bs []report.BreakerReport) string {
+	counts := map[string]int{}
+	for _, b := range bs {
+		counts[b.State]++
+	}
+	var others []string
+	for state := range counts {
+		if state != report.BreakerOpen && state != report.BreakerHalfOpen {
+			others = append(others, state)
+		}
+	}
+	sort.Strings(others)
+	var parts []string
+	for _, state := range append([]string{report.BreakerOpen, report.BreakerHalfOpen}, others...) {
+		if n := counts[state]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, state))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // oldestFailure is the breaker of bs whose last failure is the earliest. The
