@@ -102,6 +102,10 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err != nil {
 		return err
 	}
+	reporter, err := planGlobalReporter(opts, torPlan)
+	if err != nil {
+		return err
+	}
 	if err := requireChainForOnion(h, opts); err != nil {
 		return err
 	}
@@ -161,6 +165,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	}
 	if torPlan != nil {
 		if err := applyGlobalTor(h, torPlan); err != nil {
+			return err
+		}
+	}
+	if reporter != nil {
+		if err := applyGlobalReporter(h, reporter); err != nil {
 			return err
 		}
 	}

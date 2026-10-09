@@ -97,7 +97,7 @@ func TestCollectGlobal_providerMonitor(t *testing.T) {
 }
 
 // The Tor relay's own writer and the node report agree on the file: what
-// tornet.WriteRelayMonitor writes is what collectGlobal reads as the relay's
+// tornet.WriteMonitor writes is what collectGlobal reads as the relay's
 // state, and a relay that cannot know leaves it unknown.
 func TestCollectGlobal_relayMonitorWrittenByTheTorRelay(t *testing.T) {
 	stubGlobalUnits(t, map[string]string{constants.GlobalTorRelayUnit: "active"})
@@ -124,7 +124,7 @@ func TestCollectGlobal_relayMonitorWrittenByTheTorRelay(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(home, "fingerprint"), []byte("OramaRelayTest "+fingerprint+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tornet.WriteRelayMonitor(home, now); err != nil {
+		if _, err := tornet.WriteMonitor(home, now); err != nil {
 			t.Fatal(err)
 		}
 		g := collectGlobal()
@@ -132,11 +132,45 @@ func TestCollectGlobal_relayMonitorWrittenByTheTorRelay(t *testing.T) {
 			t.Fatalf("relay %s: report %+v, want in_consensus %t", fingerprint, g, want)
 		}
 	}
-	if _, err := tornet.WriteRelayMonitor(home, now.Add(30*24*time.Hour)); err != nil {
+	if _, err := tornet.WriteMonitor(home, now.Add(30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if g := collectGlobal(); g.Relay == nil || g.Relay.Error != "" || g.Relay.InConsensus != nil {
 		t.Fatalf("an expired consensus must read as unknown: %+v", g.Relay)
+	}
+}
+
+// A directory authority is in the consensus as a relay is: its monitor.json,
+// written in its own home by the same timer, is read as the node's relay
+// state, and a relay's file is not read for it.
+func TestCollectGlobal_directoryAuthorityMonitor(t *testing.T) {
+	stubGlobalUnits(t, map[string]string{constants.GlobalTorDirauthUnit: "active"})
+	oldDirauth, oldRelay := dirauthMonitorPath, relayMonitorPath
+	t.Cleanup(func() { dirauthMonitorPath, relayMonitorPath = oldDirauth, oldRelay })
+	dirauthMonitorPath = filepath.Join(t.TempDir(), constants.GlobalMonitorFile)
+	relayMonitorPath = filepath.Join(t.TempDir(), constants.GlobalMonitorFile)
+	if err := os.WriteFile(relayMonitorPath, []byte(`{"in_consensus":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if g := collectGlobal(); g == nil || g.Relay == nil || g.Relay.Error != "" || g.Relay.InConsensus != nil {
+		t.Fatalf("an authority that wrote no file must read as unknown, not as the relay home's answer: %+v", g)
+	}
+	if err := os.WriteFile(dirauthMonitorPath, []byte(`{"in_consensus":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	g := collectGlobal()
+	if g == nil || g.Relay == nil || g.Relay.InConsensus == nil || *g.Relay.InConsensus {
+		t.Fatalf("the authority's own file says it is not in the consensus: %+v", g)
+	}
+	if state, ok := globalUnitState(g, constants.GlobalTorDirauthUnit); !ok || state != "active" {
+		t.Errorf("units = %+v, want the authority's unit", g.Units)
+	}
+	if err := os.WriteFile(dirauthMonitorPath, []byte(`{"in_consensus":"yes"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if g := collectGlobal(); g.Relay == nil || g.Relay.Error == "" {
+		t.Fatalf("a malformed file must be an error in the section: %+v", g.Relay)
 	}
 }
 

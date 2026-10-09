@@ -55,10 +55,11 @@ sudo orama global install \
 ```
 
 - `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`,
-  `repair`; the Tor roles `dirauth`, `relay` (with `exit` for an exit) and `onion`
+  `repair`; the Tor roles `dirauth`, `relay` (with `exit` for an exit) and `onion`,
+  and a directory authority's bandwidth `reporter` (beside `chain` and `dirauth`),
   are described in [TOR_NETWORK.md](TOR_NETWORK.md). The chain is required: the
   other services reach it only through its RPC on `127.0.0.1:31001`. A `dirauth`
-  or `relay` host needs no chain, and `onion` joins a chain that is installed
+  or `relay` host needs no chain (the `reporter` does), and `onion` joins a chain that is installed
   already (the chain unit is not rewritten when `chain` is not named). Adding a
   service to a co-located machine later keeps the ports of the services already
   installed. `provider` needs `ipfs` beside it, since it pins

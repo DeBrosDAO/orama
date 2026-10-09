@@ -204,9 +204,16 @@ func globalIssues(n Node) []Issue {
 				*g.Provider.DiskBytes, *g.Provider.StorageMaxBytes))
 		}
 	}
-	if addUnit(constants.GlobalTorRelayUnit, "global.relay.down", "relay") == "active" && g.Relay != nil && g.Relay.Error == "" {
-		if g.Relay.InConsensus != nil && !*g.Relay.InConsensus {
-			add(Warning, "global.relay.consensus", "relay reports it is not in the relay set")
+	// A host runs a relay or a directory authority; each is in the consensus
+	// and reports whether the consensus it holds lists it.
+	for _, role := range []struct{ unit, code, label string }{
+		{constants.GlobalTorRelayUnit, "relay", "relay"},
+		{constants.GlobalTorDirauthUnit, "dirauth", "directory authority"},
+	} {
+		if addUnit(role.unit, "global."+role.code+".down", role.label) == "active" && g.Relay != nil && g.Relay.Error == "" {
+			if g.Relay.InConsensus != nil && !*g.Relay.InConsensus {
+				add(Warning, "global."+role.code+".consensus", role.label+" reports it is not in the relay set")
+			}
 		}
 	}
 	return out

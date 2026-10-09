@@ -38,7 +38,6 @@ func TestGlobalPorts_doNotCollideWithClusterOrChain(t *testing.T) {
 		constants.GlobalIPFSAPIPort,
 		constants.GlobalIPFSGatewayPort,
 		constants.GlobalProviderPort,
-		constants.GlobalRelayMetricsPort,
 		constants.GlobalIndexerPort,
 		constants.GlobalTorORPort,
 		constants.GlobalTorDirPort,
@@ -59,11 +58,11 @@ func TestGlobalPorts_doNotCollideWithClusterOrChain(t *testing.T) {
 	}
 	if constants.GlobalIPFSSwarmPort != 31010 || constants.GlobalIPFSAPIPort != 31011 ||
 		constants.GlobalIPFSGatewayPort != 31012 || constants.GlobalProviderPort != 31013 ||
-		constants.GlobalRelayMetricsPort != 31014 || constants.GlobalTorORPort != 31020 ||
+		constants.GlobalTorORPort != 31020 ||
 		constants.GlobalIndexerPort != 31015 || constants.GlobalTorDirPort != 31021 {
-		t.Fatalf("global ports drifted: swarm %d api %d gateway %d provider %d relay %d indexer %d or %d dir %d",
+		t.Fatalf("global ports drifted: swarm %d api %d gateway %d provider %d indexer %d or %d dir %d",
 			constants.GlobalIPFSSwarmPort, constants.GlobalIPFSAPIPort, constants.GlobalIPFSGatewayPort,
-			constants.GlobalProviderPort, constants.GlobalRelayMetricsPort, constants.GlobalIndexerPort,
+			constants.GlobalProviderPort, constants.GlobalIndexerPort,
 			constants.GlobalTorORPort, constants.GlobalTorDirPort)
 	}
 }

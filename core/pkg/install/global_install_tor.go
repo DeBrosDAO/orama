@@ -65,10 +65,14 @@ type TorOptions struct {
 	// DirauthKeysDir is the authority's bundle from the key ceremony
 	// (deploy/<nickname>): its keys/ directory holds the keys to install.
 	DirauthKeysDir string
+	// ReporterOperator is the operator address the authority's bandwidth
+	// reporter runs for (it leaves that operator's own relays out of a report).
+	ReporterOperator string
 }
 
 func (t TorOptions) validate(services []GlobalService) error {
 	relay, dirauth, onion := slices.Contains(services, GlobalServiceRelay), slices.Contains(services, GlobalServiceDirauth), slices.Contains(services, GlobalServiceOnion)
+	reporter := slices.Contains(services, GlobalServiceReporter)
 	publishes := relay || dirauth
 	set := t.Exit || t.Address != "" || t.Contact != "" || t.NodeID != "" || t.BandwidthMbit != 0 || len(t.Family) > 0 || t.DirauthKeysDir != ""
 	switch {
@@ -88,6 +92,24 @@ func (t TorOptions) validate(services []GlobalService) error {
 		return errors.New("--tor-authority-keys applies only with the dirauth service")
 	case publishes && (t.Address == "" || t.Contact == ""):
 		return errors.New("a relay or directory authority publishes its public address and contact: give --tor-address and --tor-contact")
+	}
+	return t.validateReporter(reporter, dirauth)
+}
+
+// validateReporter checks the reporter's options: it reports for this host's
+// directory authority, and for an operator whose address it checks here, the
+// file it is written to being read by a service that refuses a bad one only
+// when it starts.
+func (t TorOptions) validateReporter(reporter, dirauth bool) error {
+	switch {
+	case reporter && !dirauth:
+		return errors.New("the reporter reports for this host's directory authority: add dirauth to --services")
+	case reporter && t.ReporterOperator == "":
+		return errors.New("the reporter reports for an operator: give --tor-reporter-operator")
+	case !reporter && t.ReporterOperator != "":
+		return errors.New("--tor-reporter-operator applies only with the reporter service")
+	case reporter && !operatorAddress.MatchString(t.ReporterOperator):
+		return fmt.Errorf("--tor-reporter-operator %q is not an orama1... account address", t.ReporterOperator)
 	}
 	return nil
 }

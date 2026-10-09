@@ -139,6 +139,31 @@ func TestEvaluate_relayNotInConsensus(t *testing.T) {
 	}
 }
 
+func TestEvaluate_directoryAuthorityNotInConsensus(t *testing.T) {
+	g := &report.GlobalReport{
+		Units: []report.GlobalUnit{{Name: constants.GlobalTorDirauthUnit, State: "active"}},
+		Relay: &report.RelayReport{InConsensus: boolp(false)},
+	}
+	got := issuesFor(t, Node{Host: "a", Global: g})
+	if len(got) != 1 || got[0].Code != "global.dirauth.consensus" || got[0].Severity != Warning || !strings.Contains(got[0].Message, "directory authority") {
+		t.Fatalf("got %+v", got)
+	}
+	g.Relay = &report.RelayReport{InConsensus: boolp(true)}
+	if got := issuesFor(t, Node{Host: "a", Global: g}); len(got) != 0 {
+		t.Fatalf("an authority in the consensus raised %+v", got)
+	}
+	g.Relay = &report.RelayReport{}
+	if got := issuesFor(t, Node{Host: "a", Global: g}); len(got) != 0 {
+		t.Fatalf("an authority that cannot say raised %+v", got)
+	}
+	g.Units[0].State = "failed"
+	g.Relay = &report.RelayReport{InConsensus: boolp(false)}
+	got = issuesFor(t, Node{Host: "a", Global: g})
+	if len(got) != 1 || got[0].Code != "global.dirauth.down" || got[0].Severity != Critical {
+		t.Fatalf("a failed authority unit: %+v", got)
+	}
+}
+
 func TestEvaluate_failedUnit(t *testing.T) {
 	c := &report.ChainReport{ServiceActive: false, UnitState: "failed"}
 	got := issuesFor(t, Node{Host: "a", Chain: c})

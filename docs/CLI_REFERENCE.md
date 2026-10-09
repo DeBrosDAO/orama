@@ -122,7 +122,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
     - [`orama global tor archive`](#orama-global-tor-archive) — Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
     - [`orama global tor ceremony`](#orama-global-tor-ceremony) — Generate the directory authorities' keys and the network file (run on an offline machine)
     - [`orama global tor info`](#orama-global-tor-info) — Show this node's Tor identities and the consensus it holds (run as root)
-    - [`orama global tor monitor`](#orama-global-tor-monitor) — Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)
+    - [`orama global tor monitor`](#orama-global-tor-monitor) — Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)
     - [`orama global tor onions`](#orama-global-tor-onions) — The validator onion services the network file lists
       - [`orama global tor onions add`](#orama-global-tor-onions-add) — Add validator onion services to the network file clients join with
   - [`orama global txgate`](#orama-global-txgate) — Serve the validator's transaction gate on loopback (run by orama-global-txgate.service)
@@ -1704,11 +1704,11 @@ orama global install [flags]
 
 Install global services on this machine: chain, and optionally ipfs,
 provider, archiver, indexer, repair, and the roles of the Orama Tor network
-(dirauth, relay, relay,exit, onion). The chain is required unless the machine
-only runs dirauth or relay: the other services reach it only on this host's
-loopback RPC. provider needs ipfs beside
-it (it pins public deals through the public Kubo). provider and repair are
-never installed together. indexer is optional: it serves the chain read API on
+(dirauth, relay, relay,exit, onion) and a directory authority's bandwidth
+reporter (reporter). The chain is required unless the machine only runs dirauth
+or relay: the other services reach it only on this host's loopback RPC. provider
+needs ipfs beside it (it pins public deals through the public Kubo). provider
+and repair are never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
@@ -1761,10 +1761,20 @@ is checked before anything on the host changes.
                   --tor-address to be one of the network's authorities and
                   --tor-authority-keys, its bundle from 'orama global tor
                   ceremony'; a bundle that is not this authority's is refused.
-                  A dirauth or relay host needs no chain.
+                  A dirauth or relay host needs no chain, unless it also runs
+                  the reporter.
   onion           the validator's onion service, forwarding to a tx gate on
                   loopback that serves only account read, broadcast and tx lookup.
                   It publishes no port and needs the chain.
+  reporter        the authority's bandwidth reporter, 'orama-global reporter': it
+                  reports each closed epoch's relay bandwidth and uptime to x/relay
+                  from the authority's votes. It goes beside dirauth and chain, with
+                  --tor-reporter-operator. The install writes the reporter's home
+                  (/var/lib/orama-global/reporter) with its operator and the
+                  authority-id, which is the v3_ident the network file lists for
+                  --tor-address; the hot key is created when the reporter first
+                  starts, and its address still has to be added to x/relay's
+                  reporter set and funded.
 
 --colocated installs the services on a machine that already runs a cluster node
 (orama node setup first). The global units run in their own network namespace,
@@ -1794,7 +1804,7 @@ refuses the install, and the set is kept by later installs.
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
 | `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
-| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required] |
+| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
@@ -1803,6 +1813,7 @@ refuses the install, and the set is kept by later installs.
 | `--tor-contact` | — | dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes) |
 | `--tor-family` | — | dirauth, relay: the RSA fingerprints of the operator's other relays |
 | `--tor-node-id` | — | relay: the on-chain node id the relay's nickname is derived from |
+| `--tor-reporter-operator` | — | reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report |
 
 ### orama global register
 
@@ -2064,22 +2075,22 @@ no identity. The root's --json prints the same as a JSON array.
 
 ### orama global tor monitor
 
-Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)
+Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)
 
 ```
 orama global tor monitor [flags]
 ```
 
-Write <home>/monitor.json with whether the consensus the relay holds lists it:
-{"in_consensus": true|false}. 'orama monitor node' shows it on the Global line and the
-node report raises a warning when the relay is not listed. The field is left out
-(the file is "{}") while the relay has no consensus yet or the one it holds has
-expired, so an unknown state is never reported as a no. It reads only the relay's
-own DataDirectory and writes only monitor.json there.
+Write <home>/monitor.json with whether the consensus the relay or directory authority
+holds lists it: {"in_consensus": true|false}. 'orama monitor node' shows it on the Global
+line and the node report raises a warning when the node is not listed. The field is left
+out (the file is "{}") while the node has no consensus yet or the one it holds has
+expired, so an unknown state is never reported as a no. It reads only the role's own
+DataDirectory and writes only monitor.json there.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--home` | — | The relay's tor DataDirectory [required] |
+| `--home` | — | The relay's or directory authority's tor DataDirectory [required] |
 
 ### orama global tor onions
 

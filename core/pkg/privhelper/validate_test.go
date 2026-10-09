@@ -26,7 +26,6 @@ func TestValidate_globalUnitsAreExact(t *testing.T) {
 		"orama-global-tor-monitor.timer",
 		"orama-global-archiver.service",
 		"orama-global-repair.service",
-		"orama-global-relay.service",
 	} {
 		for _, verb := range []string{"start", "stop", "restart", "status", "is-active"} {
 			if _, err := Validate([]string{"systemctl", verb, unit}); err != nil {

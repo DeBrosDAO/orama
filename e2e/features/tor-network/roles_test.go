@@ -61,6 +61,41 @@ func TestAuthorities_signAConsensusThatListsEveryRelay(t *testing.T) {
 	}
 }
 
+// globalCLI is the orama CLI `orama global install` puts beside the other global binaries.
+const globalCLI = constants.GlobalBinDir + "/orama"
+
+// TestPublishers_monitorFileSaysTheyAreInTheConsensus: a relay and a directory
+// authority each run the monitor timer, and the oneshot it fires, run now as
+// the role's own account, writes the monitor.json in the role's home that the
+// node report reads: in_consensus true for a node the consensus lists.
+func TestPublishers_monitorFileSaysTheyAreInTheConsensus(t *testing.T) {
+	t.Parallel()
+	f, r := requireRoles(t)
+	for _, n := range r.publishers() {
+		home := firstHome(r, n)
+		if got := f.Unit(t, n, constants.GlobalTorMonitorTimer); got != infra.UnitActive {
+			t.Errorf("%s: %s is %q", n.Name, constants.GlobalTorMonitorTimer, got)
+		}
+		eventually.Require(t, pollEvery, consensusBudget, n.Name+" to hold a consensus that lists it", func() (bool, error) {
+			c := homeInfo(t, infoOf(t, f, n), n, home).Consensus
+			return c != nil && c.Valid && c.Listed, nil
+		})
+		owner := strings.TrimSpace(f.MustExec(t, n, "stat -c %U "+fleet.ShellQuote(home)).Stdout)
+		f.MustExec(t, n, "sudo -u "+owner+" "+globalCLI+" global tor monitor --home "+fleet.ShellQuote(home))
+		file := home + "/" + constants.GlobalMonitorFile
+		var mon struct {
+			InConsensus *bool `json:"in_consensus"`
+		}
+		if err := json.Unmarshal([]byte(f.MustExec(t, n, "sudo cat "+fleet.ShellQuote(file)).Stdout), &mon); err != nil {
+			t.Errorf("%s: %s: %v", n.Name, file, err)
+			continue
+		}
+		if mon.InConsensus == nil || !*mon.InConsensus {
+			t.Errorf("%s: %s says in_consensus %v for a node the consensus lists", n.Name, file, mon.InConsensus)
+		}
+	}
+}
+
 // TestAuthorities_archiveMatchesItsManifest: every authority archives its
 // consensus, the votes that made it and its manifest, and each file hashes to
 // the digest in the manifest, whose root is the digest of the digests.

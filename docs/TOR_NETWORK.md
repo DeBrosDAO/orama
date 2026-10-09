@@ -29,14 +29,15 @@ key ceremony, consensus reader, vote archive, relay monitor file),
 
 | Role | Installed with | Unit | Public ports |
 |---|---|---|---|
-| Directory authority | `--services dirauth` | `orama-global-tor-dirauth.service` + `orama-global-tor-archive.timer` | ORPort 31020/tcp, DirPort 31021/tcp |
+| Directory authority | `--services dirauth` | `orama-global-tor-dirauth.service` + `orama-global-tor-archive.timer` + `orama-global-tor-monitor.timer` | ORPort 31020/tcp, DirPort 31021/tcp |
+| Authority's bandwidth reporter | `--services chain,dirauth,reporter` | `orama-global-reporter.service` | none |
 | Relay | `--services relay` | `orama-global-tor-relay.service` + `orama-global-tor-monitor.timer` | ORPort 31020/tcp |
 | Exit (opt-in) | `--services relay,exit` | the relay's unit, with an exit policy | ORPort 31020/tcp |
 | Validator onion service | `--services onion` (chain installed) | `orama-global-tor-onion.service` + `orama-global-txgate.service` | none |
 | Client | not a node role | `orama vpn`, `--onion-network`, or a wallet's own tor (`tornet.ClientTorrc`) | none (loopback SOCKS; `constants.TorNetSOCKSPort` 9052 by convention) |
 
 A directory authority is a relay as well, so a host runs `dirauth` or `relay`,
-never both. A dirauth or relay host needs no chain; it can be a machine that
+never both. A dirauth or relay host needs no chain (only the authority's reporter does); it can be a machine that
 runs nothing else (`orama global install --services dirauth`), or it can share a
 cluster node (`--colocated`: the tor process then runs in the `orama-global`
 network namespace like every global service, and its traffic leaves through the
@@ -260,6 +261,11 @@ loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-comp
   and bandwidth relative to the network.
 - The archive timer runs `orama global tor archive` every minute (the shortest
   voting interval is five, and a period must not pass unseen).
+- The monitor timer is the relay's (see "Relay health" below), run for the
+  authority's own account in its own home: an authority is in the consensus as a
+  relay is, so it writes `/var/lib/orama-global/tor-dirauth/monitor.json` too.
+- With `--services chain,dirauth,reporter` the install also sets up the
+  authority's bandwidth reporter ([below](#the-relay-bandwidth-reporter)).
 
 **Archive.** Every voting period is copied to
 `/var/lib/orama-global/tor-dirauth/archive/<valid-after>/`:
@@ -279,8 +285,7 @@ kilobytes at stagenet size and grows with the relay count).
 **Bandwidth measurement (sbws) is not built.** Without a bandwidth file the
 authorities weight relays by the bandwidth they report, capped by their
 `RelayBandwidthRate`. That is gameable and is the reason the consensus weight
-is not yet a reward basis. `orama-global-sbws` and `orama-global-reporter` have
-unit renderers but no installer.
+is not yet a reward basis. `orama-global-sbws` has a unit renderer but no installer.
 
 Look at an authority with `orama global tor info` (as root on the host; `--json`
 for scripts): the nickname, RSA fingerprint, ed25519 id, the consensus it holds
@@ -330,6 +335,16 @@ monitor node` shows `relay active (in the relay set)` or `(not in the relay set)
 line, the node report carries it, and the health check `global.relay.consensus` warns when the relay
 says it is not listed. The unit the report watches for the relay is
 `orama-global-tor-relay.service`.
+
+A directory authority is in the consensus as a relay is, so it runs the same timer and oneshot
+under its own account in its own DataDirectory: `orama global tor monitor --home
+/var/lib/orama-global/tor-dirauth` as `orama-tor-dirauth`, writing
+`/var/lib/orama-global/tor-dirauth/monitor.json` (a host runs a relay or an authority, never
+both, so the unit name is the same). The node report, the inspector and `orama monitor node`
+read the file from the home of whichever of the two units is installed: the Global line shows
+`directory authority active (in the relay set)` or `(not in the relay set)`, and the health
+check `global.dirauth.consensus` warns when the authority says it is not listed
+(`global.dirauth.down` when its unit is not active).
 
 ## Exits
 
@@ -608,14 +623,43 @@ register-onchain|retire-onchain`) can send through a validator's onion service i
 `orama-reporter`, after the chain). Each time `x/emission` closes an epoch it sends `x/relay` a
 chunked `MsgReportEpoch` for that epoch.
 
+**Installing it.** The reporter is a service of `orama global install`, beside `dirauth` and
+`chain` (it signs and reads the epoch through the host's chain RPC, so the chain is on the same
+install):
+
+```bash
+sudo orama global install --services chain,dirauth,reporter --staged-dir <dir> \
+  --tor-address <ip> --tor-contact <who> --tor-authority-keys <bundle> \
+  --tor-reporter-operator <orama1...>
+```
+
+`--tor-reporter-operator` is the account address of the operator the reporter runs for; it is
+checked for shape (an `orama1...` account address) and the reporter checks the checksum when it
+starts. The install, before anything on the host changes, reads the staged `tor-network.json`
+and finds the authority published at `--tor-address` (the one the `dirauth` role of the same
+install matches against its key bundle). Then it:
+
+- creates the account `orama-reporter` and the home `/var/lib/orama-global/reporter` (0700,
+  that account's) with an empty `votes/` directory;
+- writes `authority-id` (that authority's `v3_ident`) and `operator`, mode 0600, the account's,
+  again on every install, so a changed `--tor-reporter-operator` takes effect;
+- writes and enables `orama-global-reporter.service` under the shared global sandbox (private
+  ranges denied, `/opt/orama` and `/etc/orama` hidden, loopback only to the chain's RPC, which
+  moves to the namespace address with `--colocated`), after the chain and not part of
+  `orama-node.service`; `orama global start` starts it with the other services.
+
+The hot key is not touched: the reporter creates `hot-key` on its first start and logs its
+address, which still has to be added to `x/relay`'s reporter set and funded. A re-install leaves
+the hot key, `state.json` and the reports in the home as they are.
+
 State directory (`/var/lib/orama-global/reporter`):
 
 | File | Holds |
 |---|---|
 | `hot-key` | The reporter's signing key, created on first start (mode 0600). Its address must be in `x/relay`'s reporter set, and funded. |
-| `operator` | The operator address this reporter runs for. |
-| `authority-id` | The authority's v3 identity, 40 hex (the `dir-source` line of its votes): the `v3_ident` of this authority in `tor-network.json`. The reporter lives in the `chain` module and does not import the parser, so the file is written from the network file by whoever sets the reporter up (`jq -r '.authorities[] \| select(.nickname=="<nick>") \| .v3_ident' tor-network.json`). |
-| `votes/*.vote` | The archived votes: regular files, each a complete vote (one that ends before its `directory-footer` is still being written and is refused). Other files in the directory (consensus documents, bandwidth files) are ignored. `--votes-dir` overrides the directory. The directory belongs to the reporter's user, so whatever syncs the archive (E2) must be able to write it. |
+| `operator` | The operator address this reporter runs for (`--tor-reporter-operator`, written by the install). |
+| `authority-id` | The authority's v3 identity, 40 hex (the `dir-source` line of its votes): the `v3_ident` of this authority in `tor-network.json`. The reporter lives in the `chain` module and does not import the parser, so `orama global install` writes the file from the network file. |
+| `votes/*.vote` | The archived votes: regular files, each a complete vote (one that ends before its `directory-footer` is still being written and is refused). Other files in the directory (consensus documents, bandwidth files) are ignored. `--votes-dir` overrides the directory. The directory belongs to the reporter's user and the install leaves it empty. **Nothing copies the archive into it yet:** the archive (`archive/<period>/votes`, one file of concatenated votes in the authority's home) is not in the `*.vote` form the reporter reads, and the authority's home is not readable by the reporter's account. Until that sync exists (E2) an install gives a reporter with nothing to report from, and it skips every epoch (fewer than four fifths of the votes). |
 | `state.json` | The epoch in progress at the last pass, and the closed epochs still owed a report with their spans. |
 | `report-<epoch>.json` | The entries chosen for an epoch, from before its first chunk is sent until the chain has all of them. |
 | `monitor.json` | What the last report contained and left out. |
@@ -703,8 +747,8 @@ Stated so nothing here reads as more than it is (the spike's list is in
 - **Never run against a real network.** The code was written against Tor's
   manual and dir-spec; no tor process was started while writing it. The first
   stagenet bring-up is the first run, and E0 lists what it must confirm.
-- sbws and the bandwidth reporter (E5) have no installer: `orama-global reporter` is built and
-  runs from a home the operator prepares, but `orama global install` does not set it up.
+- sbws (E5) has no installer. The bandwidth reporter has one, but its votes directory is empty
+  and nothing fills it from the authority's archive yet (see "The relay bandwidth reporter").
 - No independent authority: Orama runs all of them. While Orama runs a majority,
   Orama could sign a consensus that lists only its own relays and deanonymise
   users. The launch thresholds (a majority of independent authorities, 100

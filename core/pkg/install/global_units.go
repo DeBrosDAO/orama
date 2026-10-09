@@ -13,9 +13,10 @@ import (
 // Global unit accounts and paths. `orama global install` (InstallGlobal)
 // writes the chain (RenderGlobalChainUnit, under cosmovisor), public Kubo and
 // its GC timer, provider, archiver, indexer and repair units; the cluster
-// install writes none of them, and the sbws and reporter renderers
-// here and the relay are not installed by anything yet. The Tor roles (dirauth,
-// relay, onion) are, with their torrc (global_install_tor.go).
+// install writes none of them, and the sbws renderer here is not installed by
+// anything yet. The Tor roles (dirauth, relay, onion) are, with their torrc
+// (global_install_tor.go), and so is a directory authority's reporter
+// (global_install_reporter.go).
 // chain/scripts/stagenet/deploy.sh writes its own orama-global-chain unit for
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
@@ -25,7 +26,6 @@ const (
 	globalCosmovisor = globalBinDir + "/" + constants.CosmovisorBinary
 	globalChainUser  = constants.ChainUser
 	globalIPFSUser   = "orama-ipfs-pub"
-	globalRelayUser  = "orama-relay"
 
 	globalProviderUser = "orama-provider"
 	globalSBWSUser     = "orama-sbws"
@@ -41,8 +41,7 @@ const (
 	globalTorOnionUser   = "orama-tor-onion"
 	globalTxGateUser     = "orama-txgate"
 
-	globalIPFSHome  = constants.GlobalIPFSHome
-	globalRelayHome = constants.GlobalRelayHome
+	globalIPFSHome = constants.GlobalIPFSHome
 )
 
 // globalSandbox is the hardening every global unit shares. It hides /opt/orama
@@ -210,13 +209,6 @@ func RenderGlobalProviderUnit(apiHost string) string {
 		"orama-global/provider", constants.GlobalProviderHome, exec, "")))
 }
 
-// RenderGlobalRelayUnit is orama-global-relay.service. Metrics listen on
-// loopback only.
-func RenderGlobalRelayUnit() string {
-	exec := fmt.Sprintf("%s/orama-relay --metrics-addr 127.0.0.1:%d", globalBinDir, constants.GlobalRelayMetricsPort)
-	return renderGlobalUnit("Orama relay", globalRelayUser, globalRelayHome, exec, "")
-}
-
 func renderGlobalUnit(description, user, home, exec, extra string) string {
 	state := strings.TrimPrefix(home, "/var/lib/")
 	return renderGlobalUnitExtra(description, user, user, "", state, home, exec, extra)
@@ -376,9 +368,21 @@ WantedBy=timers.target
 // monitor.json for the node report, as the relay's own account in its own
 // DataDirectory. Its timer is RenderGlobalTorMonitorTimer.
 func RenderGlobalTorMonitorUnit() string {
-	home := constants.GlobalTorRelayHome
+	return renderTorMonitorUnit("Orama Tor relay monitor", globalTorRelayUser, constants.GlobalTorRelayHome)
+}
+
+// RenderGlobalTorDirauthMonitorUnit is the same oneshot for a directory
+// authority, which is in the consensus as a relay is: it runs as the
+// authority's account and writes monitor.json in the authority's DataDirectory.
+// A host runs a relay or an authority, never both, so the unit has the same
+// name and the same timer as the relay's.
+func RenderGlobalTorDirauthMonitorUnit() string {
+	return renderTorMonitorUnit("Orama Tor directory authority monitor", globalTorDirauthUser, constants.GlobalTorDirauthHome)
+}
+
+func renderTorMonitorUnit(description, user, home string) string {
 	exec := fmt.Sprintf("%s/%s global tor monitor --home %s", globalBinDir, globalOramaCLI, home)
-	unit := renderGlobalOneshot("Orama Tor relay monitor", globalTorRelayUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	unit := renderGlobalOneshot(description, user, strings.TrimPrefix(home, "/var/lib/"), home, exec)
 	// It reads files and talks to nobody.
 	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_UNIX\n", 1)
 	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=any\nIPAddressAllow=localhost\n", 1)
@@ -388,7 +392,7 @@ func RenderGlobalTorMonitorUnit() string {
 // consensus changes hourly, and the node report is read less often than that.
 func RenderGlobalTorMonitorTimer() string {
 	return `[Unit]
-Description=Schedule the Orama Tor relay monitor
+Description=Schedule the Orama Tor relay or directory authority monitor
 # Restarting orama-node must not restart this timer.
 
 [Timer]

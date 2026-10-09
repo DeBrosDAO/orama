@@ -37,3 +37,4 @@ covers:
     - "docs/TOR_NETWORK.md#directory-authorities: the authorities sign a consensus that lists every relay, and the archive's manifest matches the files"
     - "docs/TOR_NETWORK.md#exits: an exit refuses reserved ranges and mail ports; a relay that was not installed as an exit has no Exit flag"
     - "docs/TOR_NETWORK.md#relays: the ORPort is reachable from outside and the tx gate is not"
+    - "docs/TOR_NETWORK.md#relays: a relay and a directory authority each write monitor.json in their own home (in_consensus), which the node report reads"

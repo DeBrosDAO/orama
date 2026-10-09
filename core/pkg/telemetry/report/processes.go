@@ -107,6 +107,7 @@ var managedServiceUnits = []string{
 	constants.GlobalIPFSUnit,
 	constants.GlobalProviderUnit,
 	constants.GlobalTorRelayUnit,
+	constants.GlobalTorDirauthUnit,
 }
 
 // collectManagedPIDs queries systemd for the MainPID of each known service.

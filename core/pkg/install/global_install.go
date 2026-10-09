@@ -30,6 +30,10 @@ const (
 	// GlobalServiceOnion is the validator's onion service: tor, and the tx
 	// gate it forwards to.
 	GlobalServiceOnion GlobalService = "onion"
+	// GlobalServiceReporter is a directory authority's bandwidth reporter: it
+	// reads the authority's votes and reports each closed epoch to x/relay
+	// through this host's chain. It goes beside dirauth and chain.
+	GlobalServiceReporter GlobalService = "reporter"
 )
 
 // globalExitRole is the --services word that makes the relay an exit.
@@ -40,7 +44,7 @@ const globalExitRole = "exit"
 // before the provider, which pins through it. Stop runs it backwards.
 var GlobalServiceOrder = []GlobalService{
 	GlobalServiceChain, GlobalServiceIPFS, GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceIndexer, GlobalServiceRepair,
-	GlobalServiceDirauth, GlobalServiceRelay, GlobalServiceOnion,
+	GlobalServiceDirauth, GlobalServiceRelay, GlobalServiceOnion, GlobalServiceReporter,
 }
 
 // Binaries the global units run, by their name in GlobalBinDir and in the
@@ -94,9 +98,11 @@ var globalServiceSpecs = map[GlobalService]globalServiceSpec{
 	GlobalServiceRepair:   {unit: constants.GlobalRepairUnit, user: globalRepairUser, binaries: []string{globalServiceBin}},
 	// The Tor roles run the distro tor binary. The dirauth's archive timer and the
 	// onion service's gate run the orama CLI.
-	GlobalServiceDirauth: {unit: constants.GlobalTorDirauthUnit, user: globalTorDirauthUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorArchiveTimer}, standalone: true},
+	GlobalServiceDirauth: {unit: constants.GlobalTorDirauthUnit, user: globalTorDirauthUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorArchiveTimer, constants.GlobalTorMonitorTimer}, standalone: true},
 	GlobalServiceRelay:   {unit: constants.GlobalTorRelayUnit, user: globalTorRelayUser, binaries: []string{globalOramaCLI}, companions: []string{constants.GlobalTorMonitorTimer}, standalone: true},
 	GlobalServiceOnion:   {unit: constants.GlobalTorOnionUnit, user: globalTorOnionUser, binaries: []string{globalOramaCLI}, users: []string{globalTxGateUser}, companions: []string{constants.GlobalTxGateUnit}},
+	// The reporter is orama-global's reporter command; it reaches the chain's loopback RPC.
+	GlobalServiceReporter: {unit: constants.GlobalReporterUnit, user: globalReporterUser, binaries: []string{globalServiceBin}},
 }
 
 // GlobalServiceUnit is the systemd unit of s.
@@ -104,7 +110,7 @@ func GlobalServiceUnit(s GlobalService) string { return globalServiceSpecs[s].un
 
 // GlobalServiceCompanions are the units that run with s: started after it,
 // stopped before it. The public Kubo has its GC timer, a directory authority
-// its archive timer, a relay its monitor timer, and the onion service its tx gate.
+// its archive timer and its monitor timer, a relay its monitor timer, and the onion service its tx gate.
 func GlobalServiceCompanions(s GlobalService) []string { return globalServiceSpecs[s].companions }
 
 // GlobalServiceNeedsChain reports whether s uses the local chain: every service
@@ -117,7 +123,8 @@ func GlobalServiceNeedsChain(s GlobalService) bool {
 // chain must be in it unless every service is a standalone Tor role (relay,
 // dirauth) or the onion service, which InstallGlobal lets join a machine whose
 // chain is installed: the others reach the chain only on this host's loopback
-// RPC. A directory-authority host runs dirauth alone.
+// RPC. A directory-authority host runs dirauth alone, or with the chain and the
+// reporter that reports its votes through that chain.
 // A provider pins through this host's public Kubo, so it needs ipfs beside it.
 // A repair delegate holds repair seeds and never runs beside a provider. A
 // directory authority is a relay already, so it and relay never go together.
@@ -126,12 +133,12 @@ func ParseGlobalServices(names []string) ([]GlobalService, error) {
 	for _, raw := range names {
 		s := GlobalService(strings.TrimSpace(raw))
 		if _, ok := globalServiceSpecs[s]; !ok {
-			return nil, fmt.Errorf("unknown global service %q (known: chain, ipfs, provider, archiver, indexer, repair, dirauth, relay, onion; exit goes beside relay)", raw)
+			return nil, fmt.Errorf("unknown global service %q (known: chain, ipfs, provider, archiver, indexer, repair, dirauth, relay, onion, reporter; exit goes beside relay)", raw)
 		}
 		seen[s] = true
 	}
 	if len(seen) == 0 {
-		return nil, fmt.Errorf("no global service named; --services takes chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,onion]")
+		return nil, fmt.Errorf("no global service named; --services takes chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,onion,reporter]")
 	}
 	for _, s := range GlobalServiceOrder {
 		// The onion service is added to a machine whose chain is already installed;
@@ -208,7 +215,7 @@ type GlobalInstallOptions struct {
 	// unknown one refuses the install, and the set is kept in the state directory so a re-install
 	// without the flag keeps it.
 	ChainClientUsers []string
-	// Tor is what the Tor roles (dirauth, relay, onion) need beyond the service names.
+	// Tor is what the Tor roles (dirauth, relay, onion) and the reporter need beyond the service names.
 	Tor TorOptions
 }
 
@@ -328,6 +335,8 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 			main,
 			{name: constants.GlobalTorArchiveUnit, body: RenderGlobalTorArchiveUnit()},
 			{name: constants.GlobalTorArchiveTimer, body: RenderGlobalTorArchiveTimer(), enable: true},
+			{name: constants.GlobalTorMonitorUnit, body: RenderGlobalTorDirauthMonitorUnit()},
+			{name: constants.GlobalTorMonitorTimer, body: RenderGlobalTorMonitorTimer(), enable: true},
 		}
 	case GlobalServiceRelay:
 		main.body = RenderGlobalTorRelayUnit()
@@ -339,6 +348,8 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 	case GlobalServiceOnion:
 		main.body = RenderGlobalTorOnionUnit()
 		return []globalUnitFile{main, {name: constants.GlobalTxGateUnit, body: RenderGlobalTxGateUnit(), enable: true}}
+	case GlobalServiceReporter:
+		main.body = RenderGlobalReporterUnit()
 	default:
 		main.body = RenderGlobalRepairUnit()
 	}

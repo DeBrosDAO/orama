@@ -16,7 +16,7 @@ import (
 func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 	chain := RenderGlobalChainUnit("")
 	ipfs := RenderGlobalIPFSUnit()
-	relay := RenderGlobalRelayUnit()
+	relay := RenderGlobalTorRelayUnit()
 
 	users := []string{}
 	for _, unit := range []string{chain, ipfs, relay} {
@@ -45,8 +45,8 @@ func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 	if users[0] == users[1] || users[1] == users[2] || users[0] == users[2] {
 		t.Fatalf("global units share users %v", users)
 	}
-	if users[0] != globalChainUser || users[1] != globalIPFSUser || users[2] != globalRelayUser {
-		t.Fatalf("users = %v, want %s %s %s", users, globalChainUser, globalIPFSUser, globalRelayUser)
+	if users[0] != globalChainUser || users[1] != globalIPFSUser || users[2] != globalTorRelayUser {
+		t.Fatalf("users = %v, want %s %s %s", users, globalChainUser, globalIPFSUser, globalTorRelayUser)
 	}
 
 	for _, p := range []int{
@@ -74,13 +74,6 @@ func TestGlobalUnits_usersPortsAndNoClusterSecret(t *testing.T) {
 	}
 	if constants.GlobalIPFSAPIPort != 31011 {
 		t.Fatalf("GlobalIPFSAPIPort = %d", constants.GlobalIPFSAPIPort)
-	}
-	relayAddr := "127.0.0.1:" + strconv.Itoa(constants.GlobalRelayMetricsPort)
-	if !strings.Contains(relay, relayAddr) {
-		t.Errorf("relay unit missing %s\n%s", relayAddr, relay)
-	}
-	if constants.GlobalRelayMetricsPort != 31014 {
-		t.Fatalf("GlobalRelayMetricsPort = %d", constants.GlobalRelayMetricsPort)
 	}
 }
 
@@ -113,7 +106,6 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 		"ipfs":     RenderGlobalIPFSUnit(),
 		"gc":       RenderGlobalIPFSGCUnit("127.0.0.1"),
 		"provider": RenderGlobalProviderUnit("127.0.0.1"),
-		"relay":    RenderGlobalRelayUnit(),
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
 		"onion":    RenderGlobalTorOnionUnit(),
@@ -194,7 +186,7 @@ func TestGlobalIndexerUnit_ownUserLoopbackAPIAndOwnHome(t *testing.T) {
 	if user := mustDirective(t, unit, "User"); user != "orama-indexer" || mustDirective(t, unit, "Group") != user {
 		t.Fatalf("indexer runs as %q", user)
 	}
-	for _, other := range []string{globalChainUser, globalArchiverUser, globalProviderUser, globalRepairUser, globalRelayUser, globalIPFSUser} {
+	for _, other := range []string{globalChainUser, globalArchiverUser, globalProviderUser, globalRepairUser, globalTorRelayUser, globalIPFSUser} {
 		if other == globalIndexerUser {
 			t.Fatalf("indexer shares user %s", other)
 		}
@@ -249,7 +241,6 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 		"ipfs":     RenderGlobalIPFSUnit(),
 		"gc":       RenderGlobalIPFSGCUnit("127.0.0.1"),
 		"provider": RenderGlobalProviderUnit("127.0.0.1"),
-		"relay":    RenderGlobalRelayUnit(),
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
 		"onion":    RenderGlobalTorOnionUnit(),

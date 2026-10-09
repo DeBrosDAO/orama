@@ -374,8 +374,8 @@ func (o GlobalInstallOptions) hostPorts() []int {
 
 // colocatedListeners moves a unit's loopback listeners for the chain's RPC,
 // REST API and the indexer to the namespace address, and points the services
-// that call the chain's RPC (the provider, archiver, repair delegate and
-// indexer) at it. The chain's gRPC stays on loopback: only the chain's own
+// that call the chain's RPC (the provider, archiver, repair delegate,
+// indexer and reporter) at it. The chain's gRPC stays on loopback: only the chain's own
 // tools use it. Every rewrite must match exactly once, so a template change
 // that no longer has the flag fails the install instead of leaving a listener
 // unreachable from the host.
@@ -401,6 +401,10 @@ func colocatedListeners(s GlobalService, body string) (string, error) {
 		swaps = [][2]string{
 			{fmt.Sprintf("--rpc tcp://127.0.0.1:%d", constants.ChainRPCPort), "--rpc " + rpcFlag},
 			{fmt.Sprintf("--listen 127.0.0.1:%d", constants.GlobalIndexerPort), fmt.Sprintf("--listen %s:%d", ns, constants.GlobalIndexerPort)},
+		}
+	case GlobalServiceReporter:
+		swaps = [][2]string{
+			{fmt.Sprintf("--rpc tcp://127.0.0.1:%d", constants.ChainRPCPort), "--rpc " + rpcFlag},
 		}
 	case GlobalServiceProvider, GlobalServiceArchiver, GlobalServiceRepair:
 		// These take the chain's RPC from --rpc, whose default is loopback.

@@ -1848,7 +1848,7 @@ holds it, for every node, so an archiver that is down or behind costs storage bu
 | `pieces_uploaded` | Bundle uploads to assigned providers this process completed since it started. |
 | `upload_failures` | Uploads that failed all their tries in a pass (or were refused for a wrong root); a slot nobody uploads to is evicted. |
 
-core's telemetry does not read this file yet; its `MonitorFile` covers the provider and the relay.
+core's telemetry does not read this file yet; its `MonitorFile` covers the provider, the relay and the directory authority.
 
 **Budget.** `TestArchiveBudget_aYearOfRangesFitsTheStorageCeiling` sizes the deals from the defaults: at
 1000 blocks a range and 6-second blocks the chain archives about 14 ranges a day, each with three deals of

@@ -19,10 +19,6 @@ const (
 	GlobalIPFSGatewayPort = 31012
 	// GlobalProviderPort is the storage provider's upload and retrieval HTTP.
 	GlobalProviderPort = 31013
-	// GlobalRelayMetricsPort is the relay's metrics listener, on 127.0.0.1.
-	// It is not a public service; it stays in this block so it cannot land
-	// on a cluster port.
-	GlobalRelayMetricsPort = 31014
 	// GlobalIndexerPort is the chain indexer's read API (orama-global
 	// indexer), on 127.0.0.1 only. The gateway proxies /v1/chain/index/ to it.
 	GlobalIndexerPort = 31015
@@ -46,10 +42,12 @@ const (
 const (
 	GlobalIPFSUnit     = "orama-global-ipfs.service"
 	GlobalProviderUnit = "orama-global-provider.service"
-	GlobalRelayUnit    = "orama-global-relay.service"
 	GlobalArchiverUnit = "orama-global-archiver.service"
 	GlobalIndexerUnit  = "orama-global-indexer.service"
 	GlobalRepairUnit   = "orama-global-repair.service"
+	// GlobalReporterUnit is the bandwidth reporter of a directory authority
+	// (docs/TOR_NETWORK.md, "The relay bandwidth reporter").
+	GlobalReporterUnit = "orama-global-reporter.service"
 
 	// The Orama Tor network's units (docs/TOR_NETWORK.md). A directory
 	// authority is also a relay, so GlobalTorDirauthUnit and GlobalTorRelayUnit
@@ -60,8 +58,10 @@ const (
 	GlobalTxGateUnit      = "orama-global-txgate.service"
 	GlobalTorArchiveUnit  = "orama-global-tor-archive.service"
 	GlobalTorArchiveTimer = "orama-global-tor-archive.timer"
-	// GlobalTorMonitorUnit is the oneshot that writes a relay's monitor.json
-	// (whether the consensus lists it) for the node report; the timer fires it.
+	// GlobalTorMonitorUnit is the oneshot that writes the monitor.json of a relay
+	// or a directory authority (whether the consensus lists it) for the node
+	// report; the timer fires it. A host runs one of the two roles, so the unit
+	// name is the same and its body names the role's account and home.
 	GlobalTorMonitorUnit  = "orama-global-tor-monitor.service"
 	GlobalTorMonitorTimer = "orama-global-tor-monitor.timer"
 
@@ -72,7 +72,6 @@ const (
 	GlobalStateRoot    = "/var/lib/orama-global"
 	GlobalIPFSHome     = "/var/lib/orama-global/ipfs"
 	GlobalProviderHome = "/var/lib/orama-global/provider"
-	GlobalRelayHome    = "/var/lib/orama-global/relay"
 	GlobalArchiverHome = "/var/lib/orama-global/archiver"
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
 	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
@@ -113,9 +112,10 @@ const (
 
 	// GlobalIPFSAPITokenFile is the public Kubo RPC bearer, mode 0640, in GlobalIPFSHome.
 	GlobalIPFSAPITokenFile = "api-token"
-	// GlobalMonitorFile is the status file a provider or a Tor relay writes in its
-	// home. The node report reads it. The provider writes its own every step; the
-	// Tor relay's is written by orama-global-tor-monitor.timer (tornet.WriteRelayMonitor).
+	// GlobalMonitorFile is the status file a provider, a Tor relay or a directory
+	// authority writes in its home. The node report reads it. The provider writes
+	// its own every step; the Tor relay's and the authority's are written by
+	// orama-global-tor-monitor.timer (tornet.WriteMonitor).
 	GlobalMonitorFile = "monitor.json"
 )
 
