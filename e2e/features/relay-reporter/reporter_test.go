@@ -110,7 +110,6 @@ func TestReporter_installPreparedItsHome(t *testing.T) {
 		reporterHome + "/authority-id":  reporterAccount + " 600",
 		reporterHome + "/operator":      reporterAccount + " 600",
 		reporterHome + "/vote-interval": reporterAccount + " 600",
-		reporterHome + "/votes":         reporterAccount + " 700",
 	} {
 		if got := strings.TrimSpace(c.F.MustExec(t, n, "stat -c '%U %a' "+fleet.ShellQuote(path)).Stdout); got != want {
 			t.Errorf("%s is %q, want %q", path, got, want)
@@ -167,15 +166,18 @@ type reporterMonitor struct {
 
 // The reporter reports the epoch that closed. It needs what the install does
 // not make: a hot key whose address is in x/relay's reporter set and funded (the
-// reporter creates the key on its first start); without it the run is not
-// applicable. The votes it reports from are the ones the authority exports, which
-// the test waits for. A reporter that is running is read; one that is stopped is
-// run across an epoch close.
+// reporter creates the key on its first start), and a chain whose epochs last at
+// least one voting interval of the Tor network; without either the run is not
+// applicable (reportBlockers) and ends at once, and with both a reporter that
+// reports nothing fails after the budget. The votes it reports from are the ones
+// the authority exports, which the test waits for. A reporter that is running is
+// read; one that is stopped is run across an epoch close.
 func TestReporter_reportsAClosedEpoch(t *testing.T) {
 	c, n := installedNode(t)
 	if c.F.Exec(t, n, "sudo test -f "+fleet.ShellQuote(reporterHome+"/hot-key")).Exit != 0 {
 		harness.SkipNotApplicable(t, n.Name+" has no reporter hot key yet: start the reporter once, add its address to x/relay's reporter set and fund it")
 	}
+	skipUnlessReportable(t, c, n)
 	eventually.Require(t, pollEvery, voteBudget, n.Name+" to export its authority's vote", func() (bool, error) {
 		return strings.TrimSpace(c.F.Exec(t, n, "sudo ls "+fleet.ShellQuote(constants.GlobalTorVotesDir)+" | grep -c '\\.vote$'").Stdout) != "0", nil
 	})
@@ -202,6 +204,23 @@ func TestReporter_reportsAClosedEpoch(t *testing.T) {
 	mon := readJSON[reporterMonitor](t, c, n, "monitor.json")
 	if mon.Epoch != st.Reported || mon.Chunks < 1 {
 		t.Errorf("monitor = %+v, state = %+v", mon, st)
+	}
+}
+
+// skipUnlessReportable says the test does not apply when the chain cannot take
+// this reporter's report whatever the reporter does (reportBlockers): waiting
+// for a reported epoch would only run out the budget. When nothing blocks, the
+// wait stays and a reporter that reports nothing fails it.
+func skipUnlessReportable(t *testing.T, c *chain.Chain, n fleet.Node) {
+	t.Helper()
+	network, err := tornet.ParseNetwork(c.F.ReadFile(t, n, constants.GlobalStateRoot+"/"+constants.GlobalTorAuthoritiesFile))
+	if err != nil {
+		t.Fatalf("%s: the network file the install kept: %v", n.Name, err)
+	}
+	address := strings.TrimSpace(c.F.MustExec(t, n, "sudo -u "+reporterAccount+" "+reporterBin+" reporter --print-address --home "+fleet.ShellQuote(reporterHome)).Stdout)
+	blockers := reportBlockers(address, c.RelayReporters(t, n), c.EpochDuration(t, n), time.Duration(network.VotingIntervalMinutes)*time.Minute)
+	if len(blockers) > 0 {
+		harness.SkipNotApplicable(t, "this chain cannot take the report, whatever the reporter does: "+strings.Join(blockers, "; and "))
 	}
 }
 

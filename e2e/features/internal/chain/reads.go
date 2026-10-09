@@ -4,6 +4,7 @@ package chain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
@@ -41,6 +42,31 @@ func (c *Chain) Epoch(t testing.TB, n fleet.Node, height int64) EpochState {
 		c.Query(t, n, &r, "emission", "current-epoch")
 	}
 	return r.EpochState
+}
+
+// EmissionParams are the x/emission parameters the tests read.
+type EmissionParams struct {
+	EpochDurationSeconds Int `json:"epoch_duration_seconds"`
+}
+
+// EpochDuration is the minimum length of an x/emission epoch on this chain.
+func (c *Chain) EpochDuration(t testing.TB, n fleet.Node) time.Duration {
+	t.Helper()
+	var r struct {
+		Params EmissionParams `json:"params"`
+	}
+	c.Query(t, n, &r, "emission", "params")
+	return time.Duration(r.Params.EpochDurationSeconds.Int64()) * time.Second
+}
+
+// RelayReporters are the account addresses in x/relay's reporter set.
+func (c *Chain) RelayReporters(t testing.TB, n fleet.Node) []string {
+	t.Helper()
+	var r struct {
+		Reporters []string `json:"reporters"`
+	}
+	c.Query(t, n, &r, "relay", "reporters")
+	return r.Reporters
 }
 
 // FeeCounters are x/fees' cumulative settlement counters (its Invariants

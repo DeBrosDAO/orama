@@ -31,7 +31,11 @@ const (
 	pollEvery       = 15 * time.Second
 	consensusBudget = 35 * time.Minute
 	bootstrapBudget = 15 * time.Minute
-	fetchSeconds    = 120
+	// fetchSeconds bounds one request through the network. It must end before
+	// fleet.CommandBudget does: a request that hangs then ends as curl's own timeout
+	// (exit 28), which the wait around it retries, and not as an interrupted ssh
+	// command, which fails the test on the first hang.
+	fetchSeconds = 60
 
 	// clientPortBase is the first loopback SOCKS port of a throwaway client; each
 	// client takes the next, so parallel tests on one node do not collide.
@@ -165,7 +169,7 @@ func startClient(t *testing.T, f *fleet.Fleet, n fleet.Node, network tornet.Netw
 }
 
 // fetch GETs url through the client's circuits and returns the HTTP status (0
-// when no response arrived) and the body.
+// when no response arrived, curl's error in the body) and the body.
 func (c *circuitClient) fetch(t *testing.T, url string, curlArgs ...string) (int, string) {
 	t.Helper()
 	const mark = "\n__STATUS__"

@@ -36,6 +36,9 @@ type Relay struct {
 	Bandwidth int64
 	// Measured is true when a bandwidth authority measured the relay.
 	Measured bool
+	// Policy is the entry's `p` line, the summary of its exit policy that
+	// clients choose exits by. Only the full ("ns") consensus carries it.
+	Policy string
 }
 
 // Consensus is a parsed network-status consensus (dir-spec section 3.4).
@@ -97,6 +100,10 @@ func ParseConsensus(r io.Reader) (Consensus, error) {
 		case "s":
 			if cur != nil {
 				cur.Flags = strings.Fields(rest)
+			}
+		case "p":
+			if cur != nil {
+				cur.Policy = strings.TrimSpace(rest)
 			}
 		case "w":
 			if cur != nil {
@@ -201,3 +208,20 @@ func (c Consensus) Count(flag string) int {
 func (c Consensus) Running() int { return c.Count(flagRunning) }
 func (c Consensus) Exits() int   { return c.Count(flagExit) }
 func (c Consensus) Guards() int  { return c.Count(flagGuard) }
+
+// noExitPolicy is the summary of a policy that accepts no port.
+const noExitPolicy = "reject 1-65535"
+
+// ExitsWithoutPorts counts the relays that carry the Exit flag and whose
+// policy summary accepts no port. A client takes such a relay for no exit at
+// all: with only these in the consensus it reports "no exit nodes" and builds no
+// path to the internet. It counts only in a consensus that carries the summary.
+func (c Consensus) ExitsWithoutPorts() int {
+	n := 0
+	for _, r := range c.Relays {
+		if r.Policy == noExitPolicy && slices.Contains(r.Flags, flagExit) {
+			n++
+		}
+	}
+	return n
+}

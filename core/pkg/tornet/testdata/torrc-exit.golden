@@ -37,8 +37,6 @@ ExitPolicy reject 192.168.0.0/16:*
 ExitPolicy reject 198.18.0.0/15:*
 ExitPolicy reject 198.51.100.0/24:*
 ExitPolicy reject 203.0.113.0/24:*
-ExitPolicy reject 224.0.0.0/4:*
-ExitPolicy reject 240.0.0.0/4:*
 ExitPolicy reject *:25
 ExitPolicy reject *:465
 ExitPolicy reject *:587

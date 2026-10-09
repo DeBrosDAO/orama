@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -22,6 +24,7 @@ type reporterFlags struct {
 	rpc, home, votes string
 	interval         time.Duration
 	chunk            int
+	printAddress     bool
 }
 
 func reporterCmd() *cobra.Command {
@@ -38,7 +41,7 @@ an unmeasured relay weighs zero. Uptime is the share of the epoch's votes that l
 Running. An epoch whose votes the archive holds less than four fifths of is not reported.
 Relays that belong to this reporter's operator are left out.
 <home>/hot-key is the signing key, created on first start (mode 0600); its address must be
-in x/relay's reporter set. <home>/operator holds the operator address and
+in x/relay's reporter set (--print-address prints it). <home>/operator holds the operator address and
 <home>/authority-id the authority's 40-hex v3 identity (the dir-source line of its votes) and
 <home>/vote-interval the voting interval of that Tor network (voting_interval_minutes of
 tor-network.json, for example 30m); "orama global install" writes all three from the network
@@ -52,7 +55,12 @@ shorter than an epoch. <home>/authority-id is the v3_ident of this authority in 
 network file (tor-network.json), where the authorities are listed with their nicknames.
 Another party recomputes the observations from the same votes with reporter.LoadVotes and
 Observe; the entries sent are those narrowed by the registry as it stood when they were chosen.`,
-		RunE: func(cmd *cobra.Command, _ []string) error { return runReporter(cmd.Context(), fl) },
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if fl.printAddress {
+				return printReporterAddress(cmd.OutOrStdout(), fl.home)
+			}
+			return runReporter(cmd.Context(), fl)
+		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&fl.rpc, "rpc", defaultRPC, "oramad CometBFT RPC")
@@ -60,7 +68,25 @@ Observe; the entries sent are those narrowed by the registry as it stood when th
 	f.StringVar(&fl.votes, "votes-dir", "", "Directory of archived votes (default <home>/votes)")
 	f.DurationVar(&fl.interval, "interval", reporterInterval, "Time between passes")
 	f.IntVar(&fl.chunk, "chunk-entries", reporter.DefaultChunkEntries, "Relays per MsgReportEpoch")
+	f.BoolVar(&fl.printAddress, "print-address", false, "Print the address of <home>/hot-key and exit (creates nothing)")
 	return cmd
+}
+
+// printReporterAddress writes the address of the reporter's hot key: the one to
+// add to x/relay's reporter set and to fund. The key is created by the first
+// start and its address was only ever logged then; this reads it back and
+// creates nothing.
+func printReporterAddress(out io.Writer, home string) error {
+	path := filepath.Join(home, "hot-key")
+	key, err := readHotKey(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s does not exist: start the reporter once and it creates the key", path)
+	}
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, key.Address)
+	return err
 }
 
 func runReporter(ctx context.Context, fl reporterFlags) error {

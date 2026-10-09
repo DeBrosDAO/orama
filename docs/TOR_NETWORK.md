@@ -292,7 +292,9 @@ is not yet a reward basis.
 Look at an authority with `orama global tor info` (as root on the host; `--json`
 for scripts): the nickname, RSA fingerprint, ed25519 id, the consensus it holds
 (flavour, validity, signature count, relay/exit/guard counts) and whether it
-lists the authority itself. A role whose DataDirectory cannot be read is shown
+lists the authority itself. When the consensus carries exit policy summaries (the full one an
+authority or relay holds) and some exit's summary accepts no port, it also says how many exits
+are in that state (`exits_without_ports` in `--json`): a client does not use them. A role whose DataDirectory cannot be read is shown
 with its error beside the others, and the command then exits 1. The files are
 read without following a link and within a size bound, and an onion hostname is
 shown only if it is a v3 address, because the directory belongs to the Tor
@@ -356,12 +358,27 @@ install is refused otherwise, so a production network file that does not carry
 it cannot be given an exit by a flag.
 
 The policy (rendered by `tornet.ExitPolicyLines`, in this order): the operator's
-own refusals; every reserved IPv4 range (`netguard.Ranges`: private, loopback,
-link-local, carrier-grade `100.64.0.0/10`, the `198.18.0.0/15` range that holds
-the co-located namespace's host address, multicast, reserved); mail (`25`,
-`465`, `587`) and the file-sharing and Windows-sharing ports Tor refuses by
-default; then accept the rest. `ExitRelay 1`, `IPv6Exit 0`. Exit traffic leaves
-from the node's public address (`--colocated`: through the host's masquerade).
+own refusals; every reserved IPv4 range an exit can be asked to reach
+(`netguard.Ranges`: private, loopback, link-local, carrier-grade `100.64.0.0/10`,
+the `198.18.0.0/15` range that holds the co-located namespace's host address, the
+documentation and benchmarking blocks); mail (`25`, `465`, `587`) and the
+file-sharing and Windows-sharing ports Tor refuses by default; then accept the
+rest. `ExitRelay 1`, `IPv6Exit 0`. Exit traffic leaves from the node's public
+address (`--colocated`: through the host's masquerade).
+
+Multicast (`224.0.0.0/4`) and the reserved class E block (`240.0.0.0/4`) are not
+in the policy, as they are not in Tor's own: no TCP connection reaches them, and
+listing them breaks the exit. The authorities summarise a policy into the `p`
+line of the consensus, and clients choose exits by that summary. Tor's summary
+lists a port as refused when the refusals for it (the private ranges Tor expands
+itself are not counted) name more than two `/8` blocks of addresses, and these two
+ranges are sixteen `/8` blocks each: with them the summary was `reject 1-65535`
+for every port, the exit kept its `Exit` flag, and every client said "The
+current consensus has no exit nodes" and built no path to the internet. The same
+holds for an operator's reject list: `tor-exit-reject` entries that together
+cover more than two `/8` blocks on every port (for example `0.0.0.0/1`) leave no
+port, and `orama global install` refuses the exit then, naming the cause.
+`orama global tor info` counts the exits whose summary accepts no port.
 
 Three layers keep an exit away from the node's own services, and the first is
 Tor's: the policy above, with `ExitPolicyRejectPrivate 1` and
@@ -653,7 +670,9 @@ install matches against its key bundle). Then it:
   `orama-node.service`; `orama global start` starts it with the other services.
 
 The hot key is not touched: the reporter creates `hot-key` on its first start and logs its
-address, which still has to be added to `x/relay`'s reporter set and funded. A re-install leaves
+address (`orama-global reporter --home /var/lib/orama-global/reporter --print-address` prints it
+later, as the reporter's account, and creates nothing), which still has to be added to
+`x/relay`'s reporter set and funded. A re-install leaves
 the hot key, `state.json` and the reports in the home as they are.
 
 State directory (`/var/lib/orama-global/reporter`):

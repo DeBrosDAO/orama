@@ -56,7 +56,10 @@ type ConsensusInfo struct {
 	Relays     int       `json:"relays"`
 	Running    int       `json:"running"`
 	Exits      int       `json:"exits"`
-	Guards     int       `json:"guards"`
+	// ExitsWithoutPorts is how many of the Exits the consensus summarises as
+	// accepting no port, which no client uses (full consensus only).
+	ExitsWithoutPorts int `json:"exits_without_ports,omitempty"`
+	Guards            int `json:"guards"`
 	// Listed is true when the consensus lists this process's own relay.
 	Listed      bool     `json:"listed"`
 	ListedFlags []string `json:"listed_flags,omitempty"`
@@ -129,7 +132,7 @@ func summarise(c Consensus, fingerprint string, now time.Time) *ConsensusInfo {
 	out := &ConsensusInfo{
 		Flavor: c.Flavor, ValidAfter: c.ValidAfter, FreshUntil: c.FreshUntil, ValidUntil: c.ValidUntil,
 		Fresh: c.Fresh(now), Valid: c.Valid(now), Signatures: c.Signatures,
-		Relays: len(c.Relays), Running: c.Running(), Exits: c.Exits(), Guards: c.Guards(),
+		Relays: len(c.Relays), Running: c.Running(), Exits: c.Exits(), ExitsWithoutPorts: c.ExitsWithoutPorts(), Guards: c.Guards(),
 	}
 	if fingerprint != "" {
 		if r, ok := c.Listed(fingerprint); ok {

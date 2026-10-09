@@ -312,3 +312,22 @@ func TestMonitorCmd_writesTheRelaysMonitorFile(t *testing.T) {
 		t.Errorf("no --home: %v", err)
 	}
 }
+
+func TestPrintTorInfo_saysWhenExitsAcceptNoPort(t *testing.T) {
+	infos := []tornet.NodeInfo{{
+		Home:      "/var/lib/orama-global/tor-relay",
+		Consensus: &tornet.ConsensusInfo{Flavor: "ns", Relays: 5, Exits: 2, ExitsWithoutPorts: 2},
+	}, {
+		Home:      "/var/lib/orama-global/tor-dirauth",
+		Consensus: &tornet.ConsensusInfo{Flavor: "ns", Relays: 5, Exits: 1},
+	}}
+	var text bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&text)
+	if err := printTorInfo(cmd, infos, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(text.String(), "accept no port in their policy summary"); got != 1 || !strings.Contains(text.String(), "2 of 2 accept no port") {
+		t.Errorf("want one warning, for the relay whose exits are all unusable:\n%s", text.String())
+	}
+}

@@ -204,8 +204,13 @@ func TestRelays_onlyAnInstalledExitHasTheExitFlag(t *testing.T) {
 		}
 	}
 	n := r.publishers()[0]
-	if c := homeInfo(t, infoOf(t, f, n), n, firstHome(r, n)).Consensus; c != nil && c.Exits > exits {
-		t.Errorf("the consensus has %d exits, but %d nodes were installed as exits", c.Exits, exits)
+	if c := homeInfo(t, infoOf(t, f, n), n, firstHome(r, n)).Consensus; c != nil {
+		if c.Exits > exits {
+			t.Errorf("the consensus has %d exits, but %d nodes were installed as exits", c.Exits, exits)
+		}
+		if c.ExitsWithoutPorts > 0 {
+			t.Errorf("%d of the consensus's %d exits are summarised as accepting no port (`p reject 1-65535`), so no client uses them: check the exit policy's refusals cover no more than two /8 blocks (docs/TOR_NETWORK.md#exits)", c.ExitsWithoutPorts, c.Exits)
+		}
 	}
 }
 
