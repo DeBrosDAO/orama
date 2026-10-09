@@ -3,51 +3,45 @@
 package onionnetwork
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
-
-// envNetwork names the network file of a live private Tor network (the
-// stagenet one) for the tests that need to join it.
-const envNetwork = "E2E_ONION_NETWORK"
 
 // A well-formed validator onion address (56 base32 characters).
 const sampleOnion = "abcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion"
 
-// networkFile writes a network file whose authorities are documentation
-// addresses: valid, and nobody answers there.
+// networkFile writes a network file (tor-network.json, the one format every
+// role and client reads) whose authorities are public-looking addresses: valid,
+// and nobody answers there.
 func networkFile(t *testing.T, private bool) string {
 	t.Helper()
-	type authority struct {
-		Nickname    string `json:"nickname"`
-		Address     string `json:"address"`
-		ORPort      int    `json:"orport"`
-		V3Ident     string `json:"v3ident"`
-		Fingerprint string `json:"fingerprint"`
+	n := tornet.Network{
+		Name: "e2e", Private: private, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300,
+		ValidatorOnions: []string{sampleOnion},
 	}
-	doc := struct {
-		Name            string      `json:"name"`
-		Private         bool        `json:"private"`
-		Authorities     []authority `json:"authorities"`
-		ValidatorOnions []string    `json:"validator_onions"`
-	}{Name: "e2e", Private: private, ValidatorOnions: []string{sampleOnion}}
-	for i, ip := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
-		doc.Authorities = append(doc.Authorities, authority{
-			Nickname: "e2eauth" + string(rune('a'+i)), Address: ip + ":31021", ORPort: 31020,
-			V3Ident: strings.Repeat(string(rune('a'+i)), 40), Fingerprint: strings.Repeat("0", 40),
+	for i, ip := range []string{"192.5.5.241", "198.41.0.4", "199.7.91.13"} {
+		n.Authorities = append(n.Authorities, tornet.Authority{
+			Nickname: fmt.Sprintf("E2EAuth%d", i+1), Address: ip, ORPort: 31020, DirPort: 31021,
+			V3Ident: fmt.Sprintf("%040X", 0xA0+i), Fingerprint: fmt.Sprintf("%040X", 0xB0+i),
+			Ed25519ID: base64.RawStdEncoding.EncodeToString(append(make([]byte, 31), byte(i+1))),
 		})
 	}
-	body, err := json.Marshal(doc)
+	// Marshal refuses a network that is not private, and the refusal is what
+	// the tests probe, so the file is written without it.
+	body, err := json.MarshalIndent(n, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "network.json")
+	path := filepath.Join(t.TempDir(), constants.TorNetworkFile)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -58,9 +52,9 @@ func networkFile(t *testing.T, private bool) string {
 // test is not applicable.
 func liveNetwork(t *testing.T) string {
 	t.Helper()
-	path := os.Getenv(envNetwork)
+	path := os.Getenv(tornet.NetworkEnv)
 	if path == "" {
-		harness.SkipNotApplicable(t, envNetwork+" names no network file: the run has no private Tor network to join (track E builds it)")
+		harness.SkipNotApplicable(t, tornet.NetworkEnv+" names no network file: the run has no private Tor network to join (track E builds it)")
 	}
 	return path
 }
@@ -99,7 +93,21 @@ func TestVPN_theProxyStaysOnLoopback(t *testing.T) {
 }
 
 func TestVPN_checkReachesAValidatorThroughTheNetwork(t *testing.T) {
-	file := liveNetwork(t)
-	res := infra.RunFor(t, harness.CLI(t), checkBudget, "vpn", "check", "--network", file)
+	cli := harness.CLI(t)
+	cli.Env = []string{tornet.NetworkEnv + "=" + liveNetwork(t)}
+	res := infra.RunFor(t, cli, checkBudget, "vpn", "check")
 	infra.ExpectExit(t, res, infra.ExitOK, "Joined the", "answered through the network")
+}
+
+// The variable names the same file as --network, through the same parser: a
+// public network file is refused whichever way it is named. The CLI inherits
+// nothing from the test process, so the variable is set on the runner.
+func TestVPN_theNetworkFileCanComeFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+	cli := harness.CLI(t)
+	cli.Env = []string{tornet.NetworkEnv + "=" + networkFile(t, false)}
+	for _, verb := range []string{"up", "check"} {
+		res := infra.Run(t, cli, "vpn", verb)
+		infra.ExpectExit(t, res, infra.ExitUsage, "not launched")
+	}
 }

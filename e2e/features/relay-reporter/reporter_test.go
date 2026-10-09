@@ -14,6 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 const (
@@ -47,6 +48,31 @@ func TestReporter_refusesToStartWithoutItsIdentity(t *testing.T) {
 	c, n := node(t)
 	out := c.F.Exec(t, n, `d=$(mktemp -d) && `+reporterBin+` reporter --home "$d" --rpc tcp://127.0.0.1:31001; code=$?; rm -rf "$d"; exit $code`)
 	infra.ExpectNodeExit(t, "orama-global reporter without an identity", out, infra.ExitFailure, "operator", "must hold")
+}
+
+// The authority-id the reporter reads is the v3 identity the network file
+// lists for an authority: one file names the authorities for the Tor roles,
+// the clients and the reporter. The test reads the file from
+// ORAMA_ONION_NETWORK (as every client does) and the reporter home from
+// E2E_REPORTER_HOME.
+func TestReporter_authorityIDIsOneOfTheNetworkFilesAuthorities(t *testing.T) {
+	file := os.Getenv(tornet.NetworkEnv)
+	home := os.Getenv(envHome)
+	if file == "" || home == "" {
+		harness.SkipNotApplicable(t, tornet.NetworkEnv+" and "+envHome+" must name the network file and a reporter home: the run has no directory authority to report for")
+	}
+	network, err := tornet.Load(file)
+	if err != nil {
+		t.Fatalf("the network file %s: %v", file, err)
+	}
+	c, n := node(t)
+	id := strings.ToUpper(strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(home+"/authority-id")).Stdout))
+	for _, a := range network.Authorities {
+		if a.V3Ident == id {
+			return
+		}
+	}
+	t.Fatalf("%s/authority-id is %s, which no authority of %s lists as its v3_ident", home, id, file)
 }
 
 type reporterState struct {

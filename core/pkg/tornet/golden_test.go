@@ -33,7 +33,7 @@ func TestTorrcGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := ClientTorrc(ClientConfig{Network: network, Home: "/var/lib/orama-tornet", SOCKSPort: 9052})
+	client, err := ClientTorrc(ClientConfig{Network: network, Home: "/var/lib/orama-tornet", SOCKSAddr: "127.0.0.1:9052"})
 	if err != nil {
 		t.Fatal(err)
 	}

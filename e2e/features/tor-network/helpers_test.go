@@ -147,7 +147,7 @@ func startClient(t *testing.T, f *fleet.Fleet, n fleet.Node, network tornet.Netw
 	t.Helper()
 	unit := "e2e-tornet-" + randomSuffix(t)
 	port := int(clientPortBase + clientPorts.Add(1))
-	torrc, err := tornet.ClientTorrc(tornet.ClientConfig{Network: network, Home: "/run/" + unit, SOCKSPort: port})
+	torrc, err := tornet.ClientTorrc(tornet.ClientConfig{Network: network, Home: "/run/" + unit, SOCKSAddr: fmt.Sprintf("127.0.0.1:%d", port)})
 	if err != nil {
 		t.Fatal(err)
 	}

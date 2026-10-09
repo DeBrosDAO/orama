@@ -99,7 +99,7 @@ func runCeremony(cmd *cobra.Command, _ []string) error {
 	}
 	res, err := tornet.RunCeremony(cmd.Context(), runProgram, tornet.CeremonyRequest{
 		Network: tornet.Network{
-			Name: f.name, Bootstrap: f.bootstrap, AllowExit: f.allowExit,
+			Name: f.name, Private: true, Bootstrap: f.bootstrap, AllowExit: f.allowExit,
 			AllowSharedSubnets: f.sharedSubnets, HSDirMinUptimeHours: f.hsdirHours,
 			VotingIntervalMinutes: f.interval, VoteDelaySeconds: f.voteDelay, DistDelaySeconds: f.distDelay,
 		},

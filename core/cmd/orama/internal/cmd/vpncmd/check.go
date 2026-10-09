@@ -2,6 +2,7 @@ package vpncmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,12 +11,17 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/chainonion"
 	"github.com/DeBrosOfficial/network/pkg/onionnet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 	"github.com/spf13/cobra"
 )
 
 const (
-	// probePath is a validator onion service's CometBFT RPC status route.
-	probePath = "/status"
+	// probePath is the account read, one of the three routes a validator onion
+	// service's tx gate serves (pkg/txgate); the gate answers 404 to anything
+	// else, /status included. The account is the all-zero address, which no key
+	// controls: the chain answers "not found" for it, which proves the circuit,
+	// the gate and the chain API without naming anyone's account.
+	probePath = "/cosmos/auth/v1beta1/accounts/orama1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqmg3rhc"
 	// probeBodyLimit bounds what a probe reads of the answer.
 	probeBodyLimit = 1 << 16
 	// probeTimeout covers one probe: a rendezvous circuit and one request.
@@ -28,8 +34,10 @@ func newCheckCmd() *cobra.Command {
 	check := &cobra.Command{
 		Use:   "check",
 		Short: "Join an Orama Tor network and reach a validator onion service through it",
-		Long: `Start tor on the network (stopped again when the check ends) and request the status
-route of a validator onion service through the proxy, over a fresh circuit each.
+		Long: `Start tor on the network (stopped again when the check ends) and read an account
+through each validator onion service's tx gate, over a fresh circuit each. The gate
+serves only the account read, the broadcast and the tx lookup, so the check uses the
+account read; the chain answering "account not found" for the probe address passes.
 
 By default every validator onion service the network file lists is tried, and the check
 passes when at least one answers; --onion tries only the one given. It fails when tor
@@ -58,7 +66,7 @@ func runCheck(cmd *cobra.Command, c common, onion string) error {
 		targets = []string{onion}
 	}
 	if len(targets) == 0 {
-		return clierr.Usage("%v", onionnet.ErrNoValidatorOnion)
+		return clierr.Usage("%v", tornet.ErrNoValidatorOnion)
 	}
 	for _, t := range targets {
 		if _, err := chainonion.Base(t); err != nil {
@@ -92,7 +100,7 @@ func probeAll(ctx context.Context, cmd *cobra.Command, tor *onionnet.Tor, networ
 	return nil
 }
 
-// probe requests the status route of one onion service over a circuit of its
+// probe requests the account route of one onion service over a circuit of its
 // own, through tor's SOCKS port and nothing else.
 func probe(ctx context.Context, tor *onionnet.Tor, onion string) error {
 	base, err := chainonion.Base(onion)
@@ -114,11 +122,26 @@ func probe(ctx context.Context, tor *onionnet.Tor, onion string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, probeBodyLimit)); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, probeBodyLimit))
+	if err != nil {
 		return fmt.Errorf("read the answer: %w", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("answered HTTP %d", resp.StatusCode)
+	return checkAnswer(resp.StatusCode, body)
+}
+
+// checkAnswer is whether the gate forwarded the account read to the chain API
+// and the chain answered it: HTTP 200, or the chain's own 404 for an account
+// that does not exist, which is a JSON error with a numeric code. The gate's
+// refusal of a route it does not serve is also a 404 but carries no code.
+func checkAnswer(status int, body []byte) error {
+	if status == http.StatusOK {
+		return nil
 	}
-	return nil
+	var chain struct {
+		Code *int `json:"code"`
+	}
+	if status == http.StatusNotFound && json.Unmarshal(body, &chain) == nil && chain.Code != nil {
+		return nil
+	}
+	return fmt.Errorf("answered HTTP %d", status)
 }

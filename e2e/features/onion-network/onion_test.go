@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 const (
@@ -60,6 +61,13 @@ func TestOnion_aPublicNetworkFileIsRefused(t *testing.T) {
 	t.Parallel()
 	args := retireArgs("e2e-chain", operator, "--onion-network", networkFile(t, false))
 	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), args...), infra.ExitUsage, "not launched")
+}
+
+func TestOnion_theNetworkFileCanComeFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+	cli := harness.CLI(t)
+	cli.Env = []string{tornet.NetworkEnv + "=" + networkFile(t, false)}
+	infra.ExpectExit(t, infra.Run(t, cli, retireArgs("e2e-chain", operator)...), infra.ExitUsage, "not launched")
 }
 
 // With the live Tor network, the account is read from a validator's onion

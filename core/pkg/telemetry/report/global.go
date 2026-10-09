@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
@@ -21,7 +22,7 @@ const globalMonitorLimit = 4096
 var (
 	publicKuboTokenPath = filepath.Join(constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
 	providerMonitorPath = filepath.Join(constants.GlobalProviderHome, constants.GlobalMonitorFile)
-	relayMonitorPath    = filepath.Join(constants.GlobalRelayHome, constants.GlobalMonitorFile)
+	relayMonitorPath    = filepath.Join(constants.GlobalTorRelayHome, constants.GlobalMonitorFile)
 	globalSystemctl     = chainSystemctl
 	globalIPFSPost      = postBearer
 )
@@ -42,7 +43,7 @@ func collectGlobal() *GlobalReport {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	units := []string{constants.GlobalIPFSUnit, constants.GlobalProviderUnit, constants.GlobalRelayUnit}
+	units := []string{constants.GlobalIPFSUnit, constants.GlobalProviderUnit, constants.GlobalTorRelayUnit}
 	var g GlobalReport
 	installed := 0
 	for _, name := range units {
@@ -66,7 +67,7 @@ func collectGlobal() *GlobalReport {
 	if _, ok := globalUnitState(&g, constants.GlobalProviderUnit); ok {
 		g.Provider = readProviderMonitor()
 	}
-	if _, ok := globalUnitState(&g, constants.GlobalRelayUnit); ok {
+	if _, ok := globalUnitState(&g, constants.GlobalTorRelayUnit); ok {
 		g.Relay = readRelayMonitor()
 	}
 	return &g
@@ -169,9 +170,10 @@ func readRelayMonitor() *RelayReport {
 	return r
 }
 
-// MonitorFile is /var/lib/orama-global/{provider,relay}/monitor.json.
-// Absent fields stay nil. The storage provider writes its file; no process
-// writes the relay's yet, so a relay's fields stay absent.
+// MonitorFile is /var/lib/orama-global/{provider,tor-relay}/monitor.json.
+// Absent fields stay nil. The storage provider writes its file every step; the
+// Tor relay's holds only in_consensus, written by orama-global-tor-monitor.timer
+// (tornet.WriteRelayMonitor) and left out while the relay cannot know.
 type MonitorFile struct {
 	HotKeyBalanceNorama *int64 `json:"hot_key_balance_norama"`
 	ProofMisses         *int   `json:"proof_misses"`
@@ -246,12 +248,19 @@ func parseRepoStat(body []byte) (int64, int64, error) {
 	return resp.RepoSize, resp.StorageMax, nil
 }
 
+// readCapped reads a regular file of at most limit bytes. The monitor files sit
+// in directories owned by unprivileged service accounts (a Tor relay among
+// them) and the reader is root, so a link is refused and a FIFO does not hang
+// the open.
 func readCapped(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", filepath.Base(path))
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return nil, err

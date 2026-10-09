@@ -79,6 +79,14 @@ var ErrEpochMissed = errors.New("epochs closed between two passes")
 // reached it, so it takes none.
 var ErrEpochSettled = errors.New("the epoch is already settled on chain and takes no report")
 
+// ErrWindowClosed means the epoch's report window passed (x/relay takes reports
+// for an epoch only while the chain is in the epoch after it,
+// relaytypes.ReportWindowEpochs) without this reporter's report reaching the
+// chain in full. x/relay settles an epoch only if it holds a report for it, so
+// an epoch nobody reported is never settled: the chain refuses the report and
+// no retry can succeed.
+var ErrWindowClosed = errors.New("the report window of the epoch has closed")
+
 // Runner reports each closed epoch once.
 type Runner struct {
 	cfg   Config
@@ -108,6 +116,9 @@ func NewRunner(cfg Config, chain Chain) (*Runner, error) {
 
 // Step is one pass. It notes the epoch boundary if one passed, then reports
 // every closed epoch still owed, and returns the epochs the chain took in full.
+// x/relay takes a report for epoch e only while the chain is in epoch e+1
+// (relaytypes.ReportWindowEpochs), so a report owed past that is dropped with
+// ErrWindowClosed, or ErrEpochSettled when x/relay settled the epoch.
 //
 // The boundary is saved before any report is tried, so a report that keeps
 // failing (an archive still filling in) does not cost the epoch after it its
@@ -131,7 +142,7 @@ func (r *Runner) Step(ctx context.Context) ([]uint64, error) {
 	if serr := saveState(r.cfg.Home, st); serr != nil {
 		return nil, errors.Join(err, serr)
 	}
-	reported, rerr := r.reportDue(ctx, &st)
+	reported, rerr := r.reportDue(ctx, &st, cur)
 	return reported, errors.Join(err, rerr)
 }
 

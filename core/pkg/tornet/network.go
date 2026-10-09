@@ -13,17 +13,21 @@ package tornet
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/netip"
+	"os"
 	"regexp"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/chainonion"
 	"github.com/DeBrosOfficial/network/pkg/netguard"
 )
 
@@ -36,6 +40,12 @@ const (
 
 	// NetworkFileLimit bounds a network file read from disk.
 	NetworkFileLimit = 1 << 20
+	// NetworkEnv is the variable that names the network file for every client
+	// of a network: orama vpn (--network), onion transaction submission
+	// (--onion-network) and the relay reporter (--network).
+	NetworkEnv = "ORAMA_ONION_NETWORK"
+	// maxValidatorOnions bounds the validator onion services one file lists.
+	maxValidatorOnions = 1024
 
 	// minVotingIntervalMinutes is Tor's own floor for a production voting interval.
 	minVotingIntervalMinutes = 5
@@ -58,6 +68,10 @@ var (
 	networkNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,47}$`)
 )
 
+// ValidNetworkName reports whether name is a network name: it is also the
+// name of a directory, so nothing but lower-case letters, digits and dashes.
+func ValidNetworkName(name string) bool { return networkNamePattern.MatchString(name) }
+
 // Authority is one directory authority as every relay and client knows it.
 // Nothing in it is secret.
 type Authority struct {
@@ -76,12 +90,25 @@ type Authority struct {
 	Ed25519ID string `json:"ed25519_id"`
 }
 
+// ErrPublicNetwork is a network file that is not marked private.
+var ErrPublicNetwork = errors.New("the public Orama Tor network is not launched; only a private network can be joined")
+
+// ErrNoValidatorOnion means the network file lists no validator onion service
+// to submit a transaction to.
+var ErrNoValidatorOnion = errors.New("the Tor network file lists no validator onion service; pass --onion")
+
 // Network is the description every relay and client of the Orama Tor network
-// is given: its name, voting schedule and directory authorities. Every
-// authority must be configured with the same schedule or they cannot agree on
-// a consensus.
+// is given: its name, voting schedule, directory authorities and validator
+// onion services. It is the one network file (tor-network.json): the ceremony
+// writes it, the roles install from it and the clients (orama vpn, onion
+// transaction submission, the relay reporter) join with it. Every authority
+// must be configured with the same schedule or they cannot agree on a
+// consensus.
 type Network struct {
 	Name string `json:"name"`
+	// Private must be true. A public network is not launched (track E, E7): a
+	// file that says otherwise is refused by every role and client.
+	Private bool `json:"private"`
 	// Bootstrap sets AssumeReachable on authorities and relays. A new network
 	// needs it for its first consensus (Tor's manual: "used when bootstrapping a
 	// new Tor network"); it bypasses reachability testing, so it is switched off
@@ -104,6 +131,11 @@ type Network struct {
 	VoteDelaySeconds      int         `json:"vote_delay_seconds"`
 	DistDelaySeconds      int         `json:"dist_delay_seconds"`
 	Authorities           []Authority `json:"authorities"`
+	// ValidatorOnions are the validator onion services that accept transaction
+	// submissions, as "addr.onion[:port]". A submission picks one at random.
+	// A validator's onion address exists only once its onion role has started,
+	// after the ceremony, so `orama global tor onions add` puts them here.
+	ValidatorOnions []string `json:"validator_onions,omitempty"`
 }
 
 // ParseNetwork reads a network file. Unknown fields are an error: a misspelt
@@ -137,7 +169,67 @@ func (n Network) Marshal() ([]byte, error) {
 	return append(out, '\n'), nil
 }
 
+// Load reads and validates the network file at path.
+func Load(path string) (Network, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Network{}, fmt.Errorf("open the Tor network file: %w", err)
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, NetworkFileLimit+1))
+	if err != nil {
+		return Network{}, fmt.Errorf("read the Tor network file: %w", err)
+	}
+	if len(raw) > NetworkFileLimit {
+		return Network{}, fmt.Errorf("Tor network file %s is larger than %d bytes", path, NetworkFileLimit)
+	}
+	n, err := ParseNetwork(raw)
+	if err != nil {
+		return Network{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return n, nil
+}
+
+// RandomValidatorOnion picks one of the network's validator onion services
+// uniformly with a cryptographic random source, so no transaction is steered
+// to a fixed validator.
+func (n Network) RandomValidatorOnion() (string, error) {
+	if len(n.ValidatorOnions) == 0 {
+		return "", ErrNoValidatorOnion
+	}
+	i, err := rand.Int(rand.Reader, big.NewInt(int64(len(n.ValidatorOnions))))
+	if err != nil {
+		return "", fmt.Errorf("pick a validator onion: %w", err)
+	}
+	return n.ValidatorOnions[i.Int64()], nil
+}
+
+// WithValidatorOnions returns the network with onions added to the validator
+// onion services it lists, in the canonical lower-case form. An onion that is
+// already listed is not listed twice; the result is validated.
+func (n Network) WithValidatorOnions(onions ...string) (Network, error) {
+	out := n
+	out.ValidatorOnions = append([]string(nil), n.ValidatorOnions...)
+	listed := map[string]bool{}
+	for _, o := range n.ValidatorOnions {
+		listed[strings.ToLower(o)] = true
+	}
+	for _, o := range onions {
+		if o = strings.ToLower(o); !listed[o] {
+			listed[o] = true
+			out.ValidatorOnions = append(out.ValidatorOnions, o)
+		}
+	}
+	if err := out.Validate(); err != nil {
+		return Network{}, err
+	}
+	return out, nil
+}
+
 func (n *Network) normalize() {
+	for i := range n.ValidatorOnions {
+		n.ValidatorOnions[i] = strings.ToLower(n.ValidatorOnions[i])
+	}
 	for i := range n.Authorities {
 		a := &n.Authorities[i]
 		a.V3Ident = strings.ToUpper(a.V3Ident)
@@ -149,6 +241,9 @@ func (n *Network) normalize() {
 // would refuse at startup (an interval that does not divide a day, delays that
 // do not fit in it) so a bad file fails at install, not on a restart.
 func (n Network) Validate() error {
+	if !n.Private {
+		return ErrPublicNetwork
+	}
 	if !networkNamePattern.MatchString(n.Name) {
 		return fmt.Errorf("tor network name %q must be 2-%d lowercase letters, digits and dashes", n.Name, maxNameLen)
 	}
@@ -160,6 +255,9 @@ func (n Network) Validate() error {
 	}
 	if n.HSDirMinUptimeHours < 0 || n.HSDirMinUptimeHours > maxHSDirUptimeHours {
 		return fmt.Errorf("hsdir_min_uptime_hours %d must be 0 (Tor's default) to %d", n.HSDirMinUptimeHours, maxHSDirUptimeHours)
+	}
+	if err := n.validateOnions(); err != nil {
+		return err
 	}
 	seen := map[string]string{}
 	for _, a := range n.Authorities {
@@ -176,6 +274,26 @@ func (n Network) Validate() error {
 			}
 			seen[key] = a.Nickname
 		}
+	}
+	return nil
+}
+
+func (n Network) validateOnions() error {
+	if len(n.ValidatorOnions) > maxValidatorOnions {
+		return fmt.Errorf("a network lists at most %d validator onion services", maxValidatorOnions)
+	}
+	seen := map[string]bool{}
+	for i, o := range n.ValidatorOnions {
+		if _, err := chainonion.Base(o); err != nil {
+			return fmt.Errorf("validator onion %d: %w", i, err)
+		}
+		if o != strings.ToLower(o) {
+			return fmt.Errorf("validator onion %d %q must be lower case", i, o)
+		}
+		if seen[o] {
+			return fmt.Errorf("validator onion %d %s is listed twice", i, o)
+		}
+		seen[o] = true
 	}
 	return nil
 }

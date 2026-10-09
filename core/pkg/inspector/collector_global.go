@@ -87,7 +87,7 @@ unit_load %s
 mark relay_state
 unit_state %s
 mark relay_monitor
-sudo -n head -c 4096 %s/%s 2>/dev/null || true
+sudo -n dd if=%s/%s bs=4096 count=1 iflag=nofollow,nonblock 2>/dev/null || true
 `,
 		globalnetns.UnitName, constants.GlobalNetnsAddr, constants.GlobalNetnsAddr, chainCurlFailedSudo, chainCurlFailed,
 		constants.ChainServiceUnit, constants.ChainServiceUnit,
@@ -99,8 +99,8 @@ sudo -n head -c 4096 %s/%s 2>/dev/null || true
 		constants.GlobalNetnsAddr, constants.GlobalIPFSAPIPort,
 		constants.GlobalProviderUnit, constants.GlobalProviderUnit,
 		constants.GlobalProviderHome, constants.GlobalMonitorFile,
-		constants.GlobalRelayUnit, constants.GlobalRelayUnit,
-		constants.GlobalRelayHome, constants.GlobalMonitorFile,
+		constants.GlobalTorRelayUnit, constants.GlobalTorRelayUnit,
+		constants.GlobalTorRelayHome, constants.GlobalMonitorFile,
 	)
 }
 
@@ -187,7 +187,7 @@ func globalFromSections(sections map[string]string) *report.GlobalReport {
 	}
 	ipfs := add("ipfs_load", "ipfs_state", constants.GlobalIPFSUnit)
 	provider := add("provider_load", "provider_state", constants.GlobalProviderUnit)
-	relay := add("relay_load", "relay_state", constants.GlobalRelayUnit)
+	relay := add("relay_load", "relay_state", constants.GlobalTorRelayUnit)
 	if ipfs == "" && provider == "" && relay == "" {
 		return nil
 	}

@@ -60,6 +60,10 @@ const (
 	GlobalTxGateUnit      = "orama-global-txgate.service"
 	GlobalTorArchiveUnit  = "orama-global-tor-archive.service"
 	GlobalTorArchiveTimer = "orama-global-tor-archive.timer"
+	// GlobalTorMonitorUnit is the oneshot that writes a relay's monitor.json
+	// (whether the consensus lists it) for the node report; the timer fires it.
+	GlobalTorMonitorUnit  = "orama-global-tor-monitor.service"
+	GlobalTorMonitorTimer = "orama-global-tor-monitor.timer"
 
 	// GlobalStateRoot is the root-owned parent of every global state
 	// directory. Root keeps its own files for the global role here (the
@@ -109,8 +113,9 @@ const (
 
 	// GlobalIPFSAPITokenFile is the public Kubo RPC bearer, mode 0640, in GlobalIPFSHome.
 	GlobalIPFSAPITokenFile = "api-token"
-	// GlobalMonitorFile is the status file a provider or relay writes in its home.
-	// The node report reads it. The provider writes its file; nothing writes the relay's yet.
+	// GlobalMonitorFile is the status file a provider or a Tor relay writes in its
+	// home. The node report reads it. The provider writes its own every step; the
+	// Tor relay's is written by orama-global-tor-monitor.timer (tornet.WriteRelayMonitor).
 	GlobalMonitorFile = "monitor.json"
 )
 

@@ -145,6 +145,13 @@ suspected, not compromised, with `tor-gencert --reuse` on the offline machine
   genesis that lowers the quorum to 2 makes the median of two values their average, and one bad
   reporter then skews a relay's paid weight by half the difference.
 
+- A reporter that is down or late loses its epoch. `x/relay` takes the reports for epoch `e` only
+  while the chain is in epoch `e+1` and settles the epoch in the first block of `e+2`; a report
+  that misses the window is refused and is not made up later. With fewer than `min_reporters_quorum`
+  complete reports the epoch's quorum is not met and it mints nothing, so at the default quorum of 3
+  with three reporters one reporter that stays down stops relay pay. The reporter drops an epoch
+  whose window passed instead of retrying it ([TOR_NETWORK.md](TOR_NETWORK.md#the-relay-bandwidth-reporter)).
+
 **What can be done**
 - Remove or replace a reporter with a structural proposal: `oramad tx houses submit-proposal` with a
   `relay_reporters` content (`add`, `remove`), voted with `vote-token` and `vote-operator`, executed with

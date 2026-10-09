@@ -19,7 +19,7 @@ func TestGlobalLine_showsDealsAndRelayHealth(t *testing.T) {
 		Units: []report.GlobalUnit{
 			{Name: constants.GlobalIPFSUnit, State: "active"},
 			{Name: constants.GlobalProviderUnit, State: "active"},
-			{Name: constants.GlobalRelayUnit, State: "active"},
+			{Name: constants.GlobalTorRelayUnit, State: "active"},
 		},
 		PublicIPFS: &report.PublicIPFSReport{RepoBytes: 5 << 20, StorageMaxBytes: 100 << 20},
 		Provider: &report.ProviderReport{HeldSlots: intp(12), PendingSlots: intp(3), ProofMisses: intp(1),

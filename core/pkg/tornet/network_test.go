@@ -11,6 +11,7 @@ import (
 func testNetwork() Network {
 	n := Network{
 		Name:                  "orama-teststage",
+		Private:               true,
 		VotingIntervalMinutes: 30,
 		VoteDelaySeconds:      300,
 		DistDelaySeconds:      300,

@@ -3,12 +3,29 @@ package onionnet
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
+
+// testNetwork is a valid three-authority network on public addresses.
+func testNetwork() tornet.Network {
+	n := tornet.Network{Name: "stagenet", Private: true, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300}
+	for i, ip := range []string{"57.129.166.16", "57.129.166.17", "161.97.184.199"} {
+		n.Authorities = append(n.Authorities, tornet.Authority{
+			Nickname: fmt.Sprintf("OramaAuth%d", i+1), Address: ip, ORPort: 31020, DirPort: 31021,
+			V3Ident: fmt.Sprintf("%040X", 0xA0+i), Fingerprint: fmt.Sprintf("%040X", 0xB0+i),
+			Ed25519ID: base64.RawStdEncoding.EncodeToString(append(make([]byte, 31), byte(i+1))),
+		})
+	}
+	return n
+}
 
 // fakeTor writes an executable that stands in for tor: it saves the torrc it
 // was given beside it, prints body, and then waits to be interrupted.
@@ -50,7 +67,7 @@ func TestStart_returnsOnceBootstrappedAndRunsTheNetworksTorrc(t *testing.T) {
 		t.Errorf("tor was not given the empty defaults file: %v %q", err, args)
 	}
 	seen, err := os.ReadFile(filepath.Join(opts.DataDir, torrcName+".seen"))
-	if err != nil || !strings.Contains(string(seen), "DirAuthority autha") {
+	if err != nil || !strings.Contains(string(seen), "DirAuthority OramaAuth1") {
 		t.Fatalf("tor was not started on the network's torrc: %v\n%s", err, seen)
 	}
 	info, _ := os.Stat(filepath.Join(opts.DataDir, torrcName))
@@ -145,7 +162,7 @@ func TestStartOnFreePort_usesTheCacheDirectoryAndALoopbackPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tor.Stop()
-	if err := ValidateLoopback(tor.SocksAddr); err != nil {
+	if _, err := tornet.CanonLoopback(tor.SocksAddr); err != nil {
 		t.Error(err)
 	}
 	dir, err := DefaultDataDir("stagenet")
@@ -162,7 +179,17 @@ func TestFreeLoopbackAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateLoopback(a); err != nil {
+	if _, err := tornet.CanonLoopback(a); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDefaultDataDir(t *testing.T) {
+	d, err := DefaultDataDir("stagenet")
+	if err != nil || !strings.HasSuffix(d, filepath.Join("orama", "onion", "stagenet")) {
+		t.Fatalf("got %q, %v", d, err)
+	}
+	if _, err := DefaultDataDir("../etc"); err == nil {
+		t.Error("a path as a network name was accepted")
 	}
 }

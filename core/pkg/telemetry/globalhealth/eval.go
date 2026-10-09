@@ -204,7 +204,7 @@ func globalIssues(n Node) []Issue {
 				*g.Provider.DiskBytes, *g.Provider.StorageMaxBytes))
 		}
 	}
-	if addUnit(constants.GlobalRelayUnit, "global.relay.down", "relay") == "active" && g.Relay != nil && g.Relay.Error == "" {
+	if addUnit(constants.GlobalTorRelayUnit, "global.relay.down", "relay") == "active" && g.Relay != nil && g.Relay.Error == "" {
 		if g.Relay.InConsensus != nil && !*g.Relay.InConsensus {
 			add(Warning, "global.relay.consensus", "relay reports it is not in the relay set")
 		}

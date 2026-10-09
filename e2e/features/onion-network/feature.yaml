@@ -4,9 +4,11 @@
 # not joined, a missing tor is an error, a network that cannot be joined means
 # the transaction is not sent (and nothing goes to the clearnet). The tests
 # that need a live private Tor network (the stagenet one) read its network file
-# from E2E_ONION_NETWORK and report not applicable without it: `orama vpn
-# check` bootstraps tor on the network's authorities and reaches a validator
-# onion service, and a chain command with --onion-network reads its account
+# (tor-network.json, the one file every role and client reads) from
+# ORAMA_ONION_NETWORK and report not applicable without it: `orama vpn
+# check` bootstraps tor on the network's authorities and reads an account
+# through a validator onion service's tx gate, and a chain command with
+# --onion-network reads its account
 # over the onion service before the run's headless RootWallet agent refuses to
 # sign (ORAMA_TX_REFUSED until RootWallet task 2857), which proves the read
 # went through the network.
@@ -26,9 +28,9 @@ covers:
     - orama vpn up
     - orama vpn check
   claims:
-    - "docs/TOR_NETWORK.md#the-network-file: a network file that is not marked private is refused (the public network is not launched)"
+    - "docs/TOR_NETWORK.md#the-network-file: a network file that is not marked private is refused (the public network is not launched), whether it is named by the flag or by ORAMA_ONION_NETWORK"
     - "docs/TOR_NETWORK.md#the-client-orama-vpn: orama vpn up exits with an error when tor stops; nothing is routed around the network"
     - "docs/TOR_NETWORK.md#onion-transaction-submission: a network that cannot be joined returns the error and the transaction is not sent"
     - "docs/TOR_NETWORK.md#onion-transaction-submission: --node with --onion-network is a usage error"
-    - "docs/TOR_NETWORK.md#the-client-orama-vpn: orama vpn check reaches a validator onion service through the network (needs E2E_ONION_NETWORK)"
-    - "docs/TOR_NETWORK.md#onion-transaction-submission: the account read and the broadcast go over the validator onion service (needs E2E_ONION_NETWORK)"
+    - "docs/TOR_NETWORK.md#the-client-orama-vpn: orama vpn check reads an account through a validator onion service's tx gate over the network (needs ORAMA_ONION_NETWORK)"
+    - "docs/TOR_NETWORK.md#onion-transaction-submission: the account read and the broadcast go over the validator onion service (needs ORAMA_ONION_NETWORK)"

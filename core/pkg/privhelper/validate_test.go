@@ -22,6 +22,8 @@ func TestValidate_globalUnitsAreExact(t *testing.T) {
 		"orama-global-txgate.service",
 		"orama-global-tor-archive.service",
 		"orama-global-tor-archive.timer",
+		"orama-global-tor-monitor.service",
+		"orama-global-tor-monitor.timer",
 		"orama-global-archiver.service",
 		"orama-global-repair.service",
 		"orama-global-relay.service",

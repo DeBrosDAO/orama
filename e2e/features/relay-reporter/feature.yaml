@@ -5,7 +5,9 @@
 # the run may not have, and report not applicable without them: an
 # orama-global binary on the chain node (the stagenet install has one) and, for
 # the report itself, E2E_REPORTER_VOTES, a directory on that node holding the
-# authority's archived votes (*.vote) with the file authority-id's identity.
+# authority's archived votes (*.vote) with the file authority-id's identity,
+# which is the v3_ident of an authority in the Tor network file named by
+# ORAMA_ONION_NETWORK (the one file every role and client reads).
 # What they prove on a live chain: the reporter will not start without its
 # identity, and a closed epoch's report is accepted by x/relay (the epoch's
 # result query shows the report counted, or the epoch was not settled yet and
@@ -23,4 +25,5 @@ requires:
 covers:
   claims:
     - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: the reporter refuses to start without its operator and authority identity"
-    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, and x/relay takes the report (needs E2E_REPORTER_VOTES and a reporter key in x/relay's set)"
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, during the epoch after it (x/relay's report window), and x/relay takes the report (needs E2E_REPORTER_VOTES and a reporter key in x/relay's set)"
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: the authority-id of the reporter's home is the v3_ident of an authority in the network file (needs ORAMA_ONION_NETWORK and E2E_REPORTER_HOME)"

@@ -13,6 +13,7 @@ const (
 	relayUnit    = "orama-global-tor-relay.service"
 	dirauthUnit  = "orama-global-tor-dirauth.service"
 	archiveTimer = "orama-global-tor-archive.timer"
+	monitorTimer = "orama-global-tor-monitor.timer"
 	onionUnit    = "orama-global-tor-onion.service"
 	gateUnit     = "orama-global-txgate.service"
 )
@@ -24,7 +25,7 @@ func TestLifecycle_torRelayIsStandalone(t *testing.T) {
 	if err := l.Start(context.Background(), nil); err != nil {
 		t.Fatalf("a relay host with no chain: %v", err)
 	}
-	if !slices.Equal(f.calls, []string{"start " + relayUnit}) {
+	if !slices.Equal(f.calls, []string{"start " + relayUnit, "start " + monitorTimer}) {
 		t.Fatalf("calls = %v", f.calls)
 	}
 }

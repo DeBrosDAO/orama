@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +21,8 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/onionnet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
+	"github.com/DeBrosOfficial/network/pkg/txgate"
 )
 
 const (
@@ -28,18 +33,19 @@ const (
 
 func networkFile(t *testing.T, private bool, onions ...string) string {
 	t.Helper()
-	n := onionnet.Network{Name: "stagenet", Private: private, ValidatorOnions: onions}
-	for i, ip := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
-		n.Authorities = append(n.Authorities, onionnet.Authority{
-			Nickname: "auth" + string(rune('a'+i)), Address: ip + ":31021", ORPort: 31020,
-			V3Ident: strings.Repeat(string(rune('a'+i)), 40), Fingerprint: strings.Repeat("0", 40),
+	n := tornet.Network{Name: "stagenet", Private: private, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300, ValidatorOnions: onions}
+	for i, ip := range []string{"57.129.166.16", "57.129.166.17", "161.97.184.199"} {
+		n.Authorities = append(n.Authorities, tornet.Authority{
+			Nickname: fmt.Sprintf("OramaAuth%d", i+1), Address: ip, ORPort: 31020, DirPort: 31021,
+			V3Ident: fmt.Sprintf("%040X", 0xA0+i), Fingerprint: fmt.Sprintf("%040X", 0xB0+i),
+			Ed25519ID: base64.RawStdEncoding.EncodeToString(append(make([]byte, 31), byte(i+1))),
 		})
 	}
 	body, err := json.Marshal(n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "network.json")
+	path := filepath.Join(t.TempDir(), "tor-network.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -189,23 +195,32 @@ func TestCheck_aNetworkThatCannotBeJoinedFails(t *testing.T) {
 
 // socksServer is a SOCKS5 proxy that records the target of each CONNECT and
 // the credential the client authenticated with, then answers the HTTP request
-// that follows with status.
+// that follows with handler.
 type socksServer struct {
-	addr   string
-	mu     sync.Mutex
-	hosts  []string
-	atyps  []byte
-	users  []string
-	status int
+	addr    string
+	mu      sync.Mutex
+	hosts   []string
+	atyps   []byte
+	users   []string
+	handler http.Handler
 }
 
+// newSOCKSServer answers every request with status and an empty JSON object.
 func newSOCKSServer(t *testing.T, status int) *socksServer {
+	t.Helper()
+	return newSOCKSServerFor(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = io.WriteString(w, "{}")
+	}))
+}
+
+func newSOCKSServerFor(t *testing.T, handler http.Handler) *socksServer {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &socksServer{addr: ln.Addr().String(), status: status}
+	s := &socksServer{addr: ln.Addr().String(), handler: handler}
 	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
@@ -258,9 +273,15 @@ func (s *socksServer) serve(c net.Conn) {
 	port := make([]byte, 2)
 	binary.BigEndian.PutUint16(port, 0)
 	c.Write(append([]byte{5, 0, 0, 1, 0, 0, 0, 0}, port...))
-	http.ReadRequest(r)
-	body := "{}"
-	resp := &http.Response{StatusCode: s.status, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{}, ContentLength: int64(len(body)), Body: io.NopCloser(strings.NewReader(body))}
+	httpReq, err := http.ReadRequest(r)
+	if err != nil {
+		return
+	}
+	rec := httptest.NewRecorder()
+	s.handler.ServeHTTP(rec, httpReq)
+	resp := rec.Result()
+	resp.ProtoMajor, resp.ProtoMinor = 1, 1
+	resp.ContentLength = int64(rec.Body.Len())
 	resp.Write(c)
 }
 
@@ -313,5 +334,90 @@ func TestProbeAll_needsOneAnswerAndSaysWhichFailed(t *testing.T) {
 	err := probeAll(context.Background(), cmd, &onionnet.Tor{SocksAddr: bad.addr}, "stagenet", []string{testOnion})
 	if err == nil || clierr.CodeOf(err) != clierr.CodeUnavailable || !strings.Contains(out.String(), "FAIL  "+testOnion) {
 		t.Errorf("err = %v, output:\n%s", err, out.String())
+	}
+}
+
+// chainAPI stands in for a validator's chain REST API: the account read of an
+// address with no account answers the chain's own "not found", and it records
+// every path it was asked.
+func chainAPI(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"code":5,"message":"rpc error: code = NotFound desc = account not found","details":[]}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), paths...)
+	}
+}
+
+func realGate(t *testing.T, upstream string) *txgate.Gate {
+	t.Helper()
+	g, err := txgate.New(txgate.Config{Upstream: upstream, Rate: 100, Burst: 100, InFlight: 4, UpstreamTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// The check must only ask what the gate serves: the account read passes
+// through the real gate to the chain API, and /status, which the old probe
+// used, is refused by the gate.
+func TestProbe_usesOnlyWhatTheTxGateServes(t *testing.T) {
+	api, asked := chainAPI(t)
+	srv := newSOCKSServerFor(t, realGate(t, api.URL))
+	if err := probe(context.Background(), &onionnet.Tor{SocksAddr: srv.addr}, testOnion); err != nil {
+		t.Fatalf("the account route through the gate: %v", err)
+	}
+	if got := asked(); len(got) != 1 || got[0] != probePath {
+		t.Fatalf("the chain API was asked %v, want only %s", got, probePath)
+	}
+	rec := httptest.NewRecorder()
+	realGate(t, api.URL).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/status", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("the gate answered /status with %d; the contract is that it refuses it", rec.Code)
+	}
+	if err := checkAnswer(rec.Code, rec.Body.Bytes()); err == nil {
+		t.Fatal("the gate's own refusal passed the check")
+	}
+}
+
+func TestProbe_aGateThatCannotReachTheChainFails(t *testing.T) {
+	dead := httptest.NewServer(http.NotFoundHandler())
+	dead.Close()
+	srv := newSOCKSServerFor(t, realGate(t, dead.URL))
+	if err := probe(context.Background(), &onionnet.Tor{SocksAddr: srv.addr}, testOnion); err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("a gate with no chain behind it: %v", err)
+	}
+}
+
+func TestCheckAnswer(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+		ok     bool
+	}{
+		"the account exists":            {200, `{"account":{}}`, true},
+		"the chain's account not found": {404, `{"code":5,"message":"not found","details":[]}`, true},
+		"the gate's refusal":            {404, `{"error":"not served over the onion service"}`, false},
+		"a 404 that is not JSON":        {404, `<html>`, false},
+		"the gate is busy":              {429, `{"error":"busy, try another validator"}`, false},
+		"the chain is down":             {502, `{"error":"the chain API did not answer"}`, false},
+		"a bad request":                 {400, `{"code":3,"message":"decoding bech32 failed"}`, false},
+		"an empty body":                 {404, ``, false},
+	}
+	for name, c := range cases {
+		if err := checkAnswer(c.status, []byte(c.body)); (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%t", name, err, c.ok)
+		}
 	}
 }

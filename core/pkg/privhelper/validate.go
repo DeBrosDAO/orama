@@ -98,6 +98,8 @@ var globalUnits = map[string]bool{
 	"orama-global-txgate.service":      true,
 	"orama-global-tor-archive.service": true,
 	"orama-global-tor-archive.timer":   true,
+	"orama-global-tor-monitor.service": true,
+	"orama-global-tor-monitor.timer":   true,
 	"orama-global-archiver.service":    true,
 	"orama-global-repair.service":      true,
 }

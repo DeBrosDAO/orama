@@ -1,6 +1,7 @@
 package tornet
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -231,22 +232,60 @@ func TestOnionTorrc(t *testing.T) {
 }
 
 func TestClientTorrc(t *testing.T) {
-	got, err := ClientTorrc(ClientConfig{Network: testNetwork(), Home: "/var/lib/orama-tornet", SOCKSPort: 9051})
+	got, err := ClientTorrc(ClientConfig{Network: testNetwork(), Home: "/var/lib/orama-tornet", SOCKSAddr: "127.0.0.1:9051", DNSAddr: "127.0.0.1:9153"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	has(t, got, "SocksPort 127.0.0.1:9051 IsolateSOCKSAuth")
+	has(t, got, "DNSPort 127.0.0.1:9153")
+	has(t, got, "ControlPort 0")
 	has(t, got, "ClientOnly 1")
 	has(t, got, "ExitRelay 0")
+	has(t, got, "UseBridges 0")
+	has(t, got, "UseDefaultFallbackDirs 0")
 	has(t, got, "ClientRejectInternalAddresses 1")
 	for _, l := range testNetwork().DirAuthorityLines() {
 		has(t, got, l)
 	}
-	if _, err := ClientTorrc(ClientConfig{Network: testNetwork(), Home: "/h", SOCKSPort: 0}); err == nil {
-		t.Fatal("port 0 accepted")
+	if n := strings.Count(got, "DirAuthority "); n != 3 {
+		t.Errorf("want exactly the network's three authorities, got %d:\n%s", n, got)
 	}
-	if _, err := ClientTorrc(ClientConfig{Network: Network{}, Home: "/h", SOCKSPort: 9051}); err == nil {
+	plain, err := ClientTorrc(ClientConfig{Network: testNetwork(), Home: "/h", SOCKSAddr: "127.0.0.1:9051"})
+	if err != nil || strings.Contains(plain, "DNSPort") {
+		t.Errorf("no DNS address means no DNSPort: %v\n%s", err, plain)
+	}
+}
+
+func TestClientTorrc_refusesWhatCouldInjectOrExpose(t *testing.T) {
+	bad := []ClientConfig{
+		{Home: "relative/dir", SOCKSAddr: "127.0.0.1:9150"},
+		{Home: "/tmp/a b", SOCKSAddr: "127.0.0.1:9150"},
+		{Home: "/tmp/a\nSocksPort 0.0.0.0:1", SOCKSAddr: "127.0.0.1:9150"},
+		{Home: "/tmp/a\x01b", SOCKSAddr: "127.0.0.1:9150"},
+		{Home: "/h", SOCKSAddr: "0.0.0.0:9150"},
+		{Home: "/h", SOCKSAddr: "example.com:9150"},
+		{Home: "/h", SOCKSAddr: "127.0.0.1:0"},
+		{Home: "/h", SOCKSAddr: "127.0.0.1:09150"},
+		{Home: "/h", SOCKSAddr: ""},
+		{Home: "/h", SOCKSAddr: "127.0.0.1:9150", DNSAddr: "10.0.0.1:53"},
+		// netip accepts any text as an IPv6 zone and calls ::1%zone loopback; the
+		// zone would add lines to the torrc.
+		{Home: "/h", SOCKSAddr: "[::1%a\nClientTransportPlugin x exec /bin/sh]:9150"},
+		{Home: "/h", SOCKSAddr: "127.0.0.1:9150", DNSAddr: "[::1%a\nControlPort 9051]:53"},
+	}
+	for _, c := range bad {
+		c.Network = testNetwork()
+		if _, err := ClientTorrc(c); err == nil {
+			t.Errorf("%+v was accepted", c)
+		}
+	}
+	if _, err := ClientTorrc(ClientConfig{Network: Network{}, Home: "/h", SOCKSAddr: "127.0.0.1:9051"}); err == nil {
 		t.Fatal("an empty network was accepted")
+	}
+	public := testNetwork()
+	public.Private = false
+	if _, err := ClientTorrc(ClientConfig{Network: public, Home: "/h", SOCKSAddr: "127.0.0.1:9051"}); !errors.Is(err, ErrPublicNetwork) {
+		t.Errorf("a torrc for a public network: %v", err)
 	}
 }
 
@@ -311,7 +350,7 @@ func TestTorrc_smallNetworkOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	has(t, got, "EnforceDistinctSubnets 0")
-	client, _ := ClientTorrc(ClientConfig{Network: c.Network, Home: "/h", SOCKSPort: 9052})
+	client, _ := ClientTorrc(ClientConfig{Network: c.Network, Home: "/h", SOCKSAddr: "127.0.0.1:9052"})
 	has(t, client, "EnforceDistinctSubnets 0")
 	onion, _ := OnionTorrc(OnionConfig{Network: c.Network, Home: "/h", Target: "127.0.0.1:1"})
 	has(t, onion, "EnforceDistinctSubnets 0")

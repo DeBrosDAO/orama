@@ -2,7 +2,9 @@ package globalcmd
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,25 +12,26 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
-	"github.com/DeBrosOfficial/network/pkg/onionnet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 const secondOnion = "bbcdefghijklmnopqrstuvwxyz234567abcdefghijklmnopqrstuvwx.onion"
 
 func networkFile(t *testing.T, onions ...string) string {
 	t.Helper()
-	n := onionnet.Network{Name: "stagenet", Private: true, ValidatorOnions: onions}
-	for i, ip := range []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"} {
-		n.Authorities = append(n.Authorities, onionnet.Authority{
-			Nickname: "auth" + string(rune('a'+i)), Address: ip + ":31021", ORPort: 31020,
-			V3Ident: strings.Repeat(string(rune('a'+i)), 40), Fingerprint: strings.Repeat("0", 40),
+	n := tornet.Network{Name: "stagenet", Private: true, VotingIntervalMinutes: 30, VoteDelaySeconds: 300, DistDelaySeconds: 300, ValidatorOnions: onions}
+	for i, ip := range []string{"57.129.166.16", "57.129.166.17", "161.97.184.199"} {
+		n.Authorities = append(n.Authorities, tornet.Authority{
+			Nickname: fmt.Sprintf("OramaAuth%d", i+1), Address: ip, ORPort: 31020, DirPort: 31021,
+			V3Ident: fmt.Sprintf("%040X", 0xA0+i), Fingerprint: fmt.Sprintf("%040X", 0xB0+i),
+			Ed25519ID: base64.RawStdEncoding.EncodeToString(append(make([]byte, 31), byte(i+1))),
 		})
 	}
 	body, err := json.Marshal(n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "network.json")
+	path := filepath.Join(t.TempDir(), "tor-network.json")
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}

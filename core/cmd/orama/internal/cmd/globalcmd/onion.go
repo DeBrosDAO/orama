@@ -10,6 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/chainonion"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/onionnet"
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +23,7 @@ const (
 	// --onion, --onion-socks and --onion-network. A flag wins over its variable.
 	OnionEnv        = "ORAMA_CHAIN_ONION"
 	OnionSOCKSEnv   = "ORAMA_ONION_SOCKS"
-	OnionNetworkEnv = onionnet.NetworkEnv
+	OnionNetworkEnv = tornet.NetworkEnv
 )
 
 // AddOnionFlags registers --onion, --onion-socks, --onion-network and
@@ -33,7 +34,7 @@ func AddOnionFlags(f interface {
 }) {
 	f.String(onionFlag, "", "Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($"+OnionEnv+")")
 	f.String(onionSOCKSFlag, "", "Tor SOCKS5 address for --onion, a loopback host:port (default "+chainonion.DefaultSOCKS+", $"+OnionSOCKSEnv+")")
-	f.String(onionNetworkFlag, "", "Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($"+OnionNetworkEnv+")")
+	f.String(onionNetworkFlag, "", "Start a Tor client for this Orama Tor network file (tor-network.json) and submit through it; without --onion a validator onion from the file is picked at random ($"+OnionNetworkEnv+")")
 	f.String(onionTorFlag, onionnet.DefaultTorBinary, "The tor binary --onion-network starts")
 }
 
@@ -104,7 +105,7 @@ func onionClient(onion, socks string) (string, *http.Client, error) {
 // function that stops it.
 func startNetworkTor(cmd *cobra.Command, ctx context.Context, netFile, onion string) (string, string, func(), error) {
 	noop := func() {}
-	network, err := onionnet.Load(netFile)
+	network, err := tornet.Load(netFile)
 	if err != nil {
 		return "", "", noop, clierr.Usage("--onion-network: %v", err)
 	}
