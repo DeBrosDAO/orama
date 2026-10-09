@@ -8,6 +8,7 @@ import (
 
 	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 
 	// Command groups
@@ -218,8 +219,12 @@ func classifyRequiredFlags(cmd *cobra.Command) {
 // tell a mistyped flag from a cluster that had lost quorum.
 // needsEnvironmentCAs reports whether cmd may talk to a gateway. `orama env`
 // manages the CA files themselves, so a missing one must not lock it out of
-// the command that fixes it; `version` talks to nobody.
+// the command that fixes it; `version` talks to nobody; a node-local command
+// (cmdmeta) runs from a systemd unit with no home and no operator environment.
 func needsEnvironmentCAs(cmd *cobra.Command) bool {
+	if cmdmeta.IsNodeLocal(cmd) {
+		return false
+	}
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
 		case "env", "version", "serve-ipfs-cluster":

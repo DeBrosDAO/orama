@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/tornet"
@@ -301,6 +302,6 @@ func init() {
 	a.StringVar(&archiveFlags.archiveDir, "archive-dir", "", "Where the archive is written [required]")
 	a.StringVar(&archiveFlags.bandwidthFile, "bandwidth-file", "", "The bandwidth file the authority votes with")
 	a.StringVar(&archiveFlags.exportVotesDir, "export-votes-dir", "", "Also copy the authority's own vote to <dir>/<valid-after>.vote for the bandwidth reporter (the directory must exist)")
-	torCmd.AddCommand(ceremonyCmd, archiveCmd, infoCmd)
+	torCmd.AddCommand(ceremonyCmd, cmdmeta.MarkNodeLocal(archiveCmd), infoCmd)
 	Cmd.AddCommand(torCmd)
 }

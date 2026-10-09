@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/pkg/txgate"
 	"github.com/spf13/cobra"
 )
@@ -102,5 +103,5 @@ func init() {
 	f.Float64Var(&txgateFlags.rate, "rate", txgate.DefaultRate, "Requests per second the gate forwards, in total")
 	f.IntVar(&txgateFlags.burst, "burst", txgate.DefaultBurst, "Requests that may arrive at once")
 	f.IntVar(&txgateFlags.inFlight, "max-in-flight", txgate.DefaultInFlight, "Most requests asked of the chain API at once")
-	Cmd.AddCommand(txgateCmd)
+	Cmd.AddCommand(cmdmeta.MarkNodeLocal(txgateCmd))
 }

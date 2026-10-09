@@ -1,6 +1,7 @@
 package node
 
 import (
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/updateagent"
 	"github.com/spf13/cobra"
 )
@@ -49,5 +50,5 @@ policy now says. One agent runs at a time on a machine.`,
 }
 
 func init() {
-	autoupdateCmd.AddCommand(autoupdateRunCmd)
+	autoupdateCmd.AddCommand(cmdmeta.MarkNodeLocal(autoupdateRunCmd))
 }

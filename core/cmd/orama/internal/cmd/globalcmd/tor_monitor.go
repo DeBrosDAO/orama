@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/pkg/tornet"
 	"github.com/spf13/cobra"
 )
@@ -40,5 +41,5 @@ DataDirectory and writes only monitor.json there.`,
 
 func init() {
 	monitorCmd.Flags().StringVar(&monitorFlags.home, "home", "", "The relay's or directory authority's tor DataDirectory [required]")
-	torCmd.AddCommand(monitorCmd)
+	torCmd.AddCommand(cmdmeta.MarkNodeLocal(monitorCmd))
 }
