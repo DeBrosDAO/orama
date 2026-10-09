@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"go.uber.org/zap"
 )
 
@@ -72,7 +73,7 @@ func (h *SQLiteHandler) forwardToHome(w http.ResponseWriter, r *http.Request, bo
 		h.logger.Warn("sqlite forward did not reach the home node",
 			zap.String("home_node", homeNodeID),
 			zap.String("overlay", ip),
-			zap.Error(err),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 		writeJSONError(w, http.StatusBadGateway, "Database home node did not answer")
 		return true

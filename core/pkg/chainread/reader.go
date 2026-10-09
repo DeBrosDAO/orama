@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 const (
@@ -104,12 +106,12 @@ func (r *Reader) get(ctx context.Context, target string) (json.RawMessage, error
 func (r *Reader) do(req *http.Request) (json.RawMessage, error) {
 	resp, err := r.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", req.URL.Redacted(), err)
+		return nil, fmt.Errorf("read %s: %w", httputil.WithoutQuery(req.URL.String()), httputil.WithoutURL(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", req.URL.Redacted(), err)
+		return nil, fmt.Errorf("read %s: %w", httputil.WithoutQuery(req.URL.String()), httputil.WithoutURL(err))
 	}
 	if len(body) > responseLimit {
 		return nil, fmt.Errorf("response from %s is over %d bytes", req.URL.Host, responseLimit)

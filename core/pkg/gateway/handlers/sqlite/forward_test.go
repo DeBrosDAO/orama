@@ -3,6 +3,7 @@ package sqlite
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func fillStringField(dest interface{}, field, value string) {
@@ -208,5 +210,41 @@ func TestQueryDatabase_namespaceGatewayWithoutAPortIsMisdirected(t *testing.T) {
 	h.QueryDatabase(rr, queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false))
 	if rr.Code != http.StatusMisdirectedRequest || *hits != 0 {
 		t.Fatalf("status %d hits %d", rr.Code, *hits)
+	}
+}
+
+// A home that does not answer is logged without the request's query string: a
+// ?api_key= parameter travels in the forwarded URI and the client's error
+// quotes the whole URL.
+func TestQueryDatabase_failedForwardDoesNotLogTheQueryString(t *testing.T) {
+	h, home, _ := forwardFixture(t, "127.0.0.1")
+	home.Close()
+	core, logs := observer.New(zap.DebugLevel)
+	h.logger = zap.New(core)
+
+	req := queryRequest(`{"database_name":"proofdb","query":"SELECT 1"}`, false)
+	req.URL.RawQuery = "api_key=SECRETKEY"
+	rr := httptest.NewRecorder()
+	h.QueryDatabase(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	entries := logs.FilterMessage("sqlite forward did not reach the home node").All()
+	if len(entries) != 1 {
+		t.Fatalf("want one failed-hop log entry, got %d", len(entries))
+	}
+	rendered := entries[0].Message
+	for _, f := range entries[0].Context {
+		rendered += " " + f.Key + "=" + f.String
+		if f.Interface != nil {
+			rendered += " " + fmt.Sprint(f.Interface)
+		}
+	}
+	if strings.Contains(rendered, "SECRETKEY") || strings.Contains(rendered, "api_key") {
+		t.Fatalf("the failed hop logged the query string: %s", rendered)
+	}
+	if !strings.Contains(rendered, "connect") && !strings.Contains(rendered, "refused") {
+		t.Fatalf("the log should still say why the hop failed: %s", rendered)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/deployments"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"go.uber.org/zap"
 )
 
@@ -229,7 +230,7 @@ func (hc *HealthChecker) checkDeployment(ctx context.Context, dep deploymentRow)
 	if err != nil {
 		hc.logger.Error("Failed to create health check request",
 			zap.String("deployment", dep.Name),
-			zap.Error(err),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 		return false
 	}
@@ -240,8 +241,8 @@ func (hc *HealthChecker) checkDeployment(ctx context.Context, dep deploymentRow)
 		hc.logger.Warn("Health check failed",
 			zap.String("deployment", dep.Name),
 			zap.String("namespace", dep.Namespace),
-			zap.String("url", url),
-			zap.Error(err),
+			zap.String("url", httputil.WithoutQuery(url)),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 		return false
 	}

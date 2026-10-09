@@ -1951,7 +1951,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			candidateCB.Abandon()
 			g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
-				zap.String("namespace", namespaceName), zap.String("error", failureReason(err)))
+				zap.String("namespace", namespaceName), zap.String("error", httputil.FailureReason(err)))
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -1970,11 +1970,11 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 			candidateCB.Abandon()
 			break
 		}
-		candidateCB.RecordFailure(failureReason(err))
+		candidateCB.RecordFailure(httputil.FailureReason(err))
 		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
 			zap.String("namespace", namespaceName),
 			zap.String("target", candidate.ip),
-			zap.String("error", failureReason(err)),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 		if !isDialFailure(err) || (undialed != nil && undialed.read) {
 			break
@@ -2134,7 +2134,7 @@ serveLocal:
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "local proxy request failed",
 			zap.String("target", target),
-			zap.String("error", failureReason(err)),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 
 		// Local process is down — try other replica nodes before giving up
@@ -2237,7 +2237,7 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 	body, tracked := hopBody(r)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
-		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", failureReason(err)))
+		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", httputil.FailureReason(err)))
 		return false
 	}
 	keepBodyLength(proxyReq, r)
@@ -2272,7 +2272,7 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
-			zap.String("error", failureReason(err)))
+			zap.String("error", httputil.FailureReason(err)))
 		return false
 	}
 	defer resp.Body.Close()
@@ -2369,7 +2369,7 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 	body, tracked := hopBody(r)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
-		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", failureReason(err)))
+		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", httputil.FailureReason(err)))
 		return false
 	}
 	keepBodyLength(proxyReq, r)
@@ -2400,7 +2400,7 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 		recordHopError(cb, r, tracked, err)
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
-			zap.String("error", failureReason(err)),
+			zap.String("error", httputil.FailureReason(err)),
 		)
 		return false
 	}

@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
@@ -93,18 +92,6 @@ func (g *Gateway) retainBreakers(namespace string, targets []namespaceGatewayTar
 	}
 }
 
-// failureReason is err as a circuit breaker records it. The client's error
-// quotes the whole request URL, query string included, and a credential may be
-// in it (an `api_key` or `token` parameter); the breaker's reason goes to the
-// log and to the node report, so only the cause is kept.
-func failureReason(err error) string {
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) {
-		return urlErr.Err.Error()
-	}
-	return err.Error()
-}
-
 // copyProxiedHeaders copies a proxied response's headers to w, leaving out the
 // tenant-origin marker, which is for the gateway that forwarded the request and
 // not for its client.
@@ -138,5 +125,5 @@ func recordHopError(cb *CircuitBreaker, r *http.Request, body *undialedBody, err
 		cb.Abandon()
 		return
 	}
-	cb.RecordFailure(failureReason(err))
+	cb.RecordFailure(httputil.FailureReason(err))
 }

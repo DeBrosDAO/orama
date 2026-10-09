@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 const (
@@ -99,12 +101,12 @@ func (r *Reader) gatewayPostTx(ctx context.Context, route string, txRaw []byte) 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.client().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", route, req.URL.Redacted(), err)
+		return nil, fmt.Errorf("%s %s: %w", route, httputil.WithoutQuery(req.URL.String()), httputil.WithoutURL(err))
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s %s: %w", route, req.URL.Redacted(), err)
+		return nil, fmt.Errorf("%s %s: %w", route, httputil.WithoutQuery(req.URL.String()), httputil.WithoutURL(err))
 	}
 	if len(body) > responseLimit {
 		return nil, fmt.Errorf("response from %s is over %d bytes", req.URL.Host, responseLimit)
