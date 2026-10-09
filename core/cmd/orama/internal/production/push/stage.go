@@ -37,6 +37,14 @@ const (
 	// once every current entry is aside, and before the first new one moves in:
 	// from then on, whatever is in base is the new release's.
 	stagedSwapping = "swapping"
+	// stagedKeep is a file in a staging directory, written before the swap,
+	// that says the release the swap replaces is to be kept. A run killed
+	// after the swap and before the keep finished leaves it beside old/, and
+	// the next run completes the keep (completePendingKeep) instead of
+	// deleting the only copy of the release.
+	stagedKeep = "keep"
+	// stagedAside receives the release kept before while a new one is kept.
+	stagedAside = "aside"
 	// binPerm is /opt/orama/bin and every binary in it: root writes, the
 	// orama group runs them, nobody else reads them (as lockOramaBinDir).
 	binPerm = 0o750
@@ -237,6 +245,11 @@ func stageArchive(t stageTarget, opts StageOptions) (err error) {
 		return err
 	}
 	oldDir := filepath.Join(staging, stagedOld)
+	if opts.KeepPrevious {
+		if err := markKeep(staging); err != nil {
+			return err
+		}
+	}
 	if err := swapArchive(t.base, newDir, oldDir); err != nil {
 		return err
 	}

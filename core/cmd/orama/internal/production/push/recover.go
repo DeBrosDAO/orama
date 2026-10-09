@@ -44,7 +44,9 @@ func recoverUnderLock(base string) (err error) {
 // one in last, so a tree with no manifest, beside a staging directory whose
 // old/ holds one, was caught between the two. Without this the next run would
 // delete that staging directory and the machine would have no release at all.
-// It runs under the archive lock, before leftovers are removed.
+// It runs under the archive lock, before leftovers are removed. A tree that
+// has its manifest had its swap finish; if that swap was to keep the release it
+// replaced, a kill before the keep did is completed (completePendingKeep).
 //
 // The entries the swap had already moved in are not deleted: a stage moves them
 // back into its staging copy of the new release, and a restore (which has no
@@ -54,7 +56,7 @@ func recoverUnderLock(base string) (err error) {
 // what is in base is still the current release.
 func recoverInterruptedSwap(base string) error {
 	if _, err := os.Lstat(filepath.Join(base, archivetrust.ManifestName)); err == nil {
-		return nil
+		return completePendingKeep(base)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("stat the installed manifest: %w", err)
 	}
