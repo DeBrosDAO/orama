@@ -229,5 +229,5 @@ func TestPayUsesReassembledChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Minted.Equal(math.NewInt(40)))
 	require.True(t, f.Earnings.balance(op1).Equal(math.NewInt(15)))
-	require.True(t, f.Earnings.balance(op2).Equal(math.NewInt(25)))
+	require.True(t, f.Earnings.balance(op2).Equal(math.NewInt(23)))
 }

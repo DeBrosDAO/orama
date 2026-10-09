@@ -26,6 +26,7 @@ type Keeper struct {
 	nodes        types.NodeView
 	emission     types.EmissionKeeper
 	earnings     types.EarningsKeeper
+	service      types.ServiceSplit
 
 	Schema       collections.Schema
 	Params       collections.Item[types.Params]
@@ -46,6 +47,7 @@ func NewKeeper(
 	nodes types.NodeView,
 	emission types.EmissionKeeper,
 	earnings types.EarningsKeeper,
+	service types.ServiceSplit,
 ) Keeper {
 	sb := collections.NewSchemaBuilder(storeService)
 	k := Keeper{
@@ -53,6 +55,7 @@ func NewKeeper(
 		nodes:        nodes,
 		emission:     emission,
 		earnings:     earnings,
+		service:      service,
 		Params:       collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		Reporters:    collections.NewMap(sb, types.ReportersPrefix, "reporters", collections.StringKey, collections.BoolValue),
 		Relays:       collections.NewMap(sb, types.RelaysPrefix, "relays", collections.BytesKey, codec.CollValue[types.Relay](cdc)),

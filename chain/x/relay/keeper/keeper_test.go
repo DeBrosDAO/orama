@@ -24,6 +24,7 @@ import (
 	chainparams "github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/relay/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/relay/types"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 func init() {
@@ -147,6 +148,37 @@ func (e *fakeEarnings) CreditEarnings(_ context.Context, senderModule string, ad
 	return nil
 }
 
+// fakeService is the C2 service split with the real split function, recording what is burned and
+// what funds the archive.
+type fakeService struct {
+	burned  math.Int
+	archive math.Int
+}
+
+func newFakeService() *fakeService {
+	return &fakeService{burned: math.ZeroInt(), archive: math.ZeroInt()}
+}
+
+func (s *fakeService) SplitServicePayment(amount math.Int) (math.Int, math.Int, math.Int) {
+	return storagetypes.SplitServicePayment(amount)
+}
+
+func (s *fakeService) BurnService(_ context.Context, senderModule string, amt math.Int) error {
+	if senderModule != types.ModuleName || !amt.IsPositive() {
+		return errNotFound("burn")
+	}
+	s.burned = s.burned.Add(amt)
+	return nil
+}
+
+func (s *fakeService) FundArchive(_ context.Context, senderModule string, amt math.Int) error {
+	if senderModule != types.ModuleName || !amt.IsPositive() {
+		return errNotFound("archive")
+	}
+	s.archive = s.archive.Add(amt)
+	return nil
+}
+
 type relayKey struct {
 	nodeID   string
 	fp       []byte
@@ -170,6 +202,7 @@ type testFixture struct {
 	Nodes    *fakeNodes
 	Emission *fakeEmission
 	Earnings *fakeEarnings
+	Service  *fakeService
 	Msg      types.MsgServer
 }
 
@@ -185,13 +218,15 @@ func newTestFixture(t *testing.T) *testFixture {
 	nodes := newFakeNodes()
 	emission := newFakeEmission()
 	earnings := newFakeEarnings()
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, emission, earnings)
+	service := newFakeService()
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, emission, earnings, service)
 	return &testFixture{
 		Ctx:      ctx,
 		Keeper:   k,
 		Nodes:    nodes,
 		Emission: emission,
 		Earnings: earnings,
+		Service:  service,
 		Msg:      keeper.NewMsgServerImpl(k),
 	}
 }

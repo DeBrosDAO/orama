@@ -276,7 +276,7 @@ contract may hold ORAMA and issue a public IOU for it, and the genesis token wra
 
 | Parameter | Locked value | Source |
 |---|---|---|
-| `min_reporters_quorum` | `2` | track-c C8: a majority of the initial 3 dirauths |
+| `min_reporters_quorum` | `3` | owner decision on track-c C8: all 3 initial dirauths, so one lying reporter cannot move a relay's pay |
 | `min_uptime_fraction` | `0.9` | track-c C8 (structure only); G1 launch default (see note below) |
 | `exit_multiplier` | `2` | track-c C8 (structure only); G1 launch default (see note below) |
 | `per_relay_cap` | `100000000000 (100 ORAMA)` | track-c C8 (structure only); G1 launch default (see note below) |
@@ -386,12 +386,19 @@ runs before `x/emission`'s) settles the oldest epoch that has a stored report or
 in epoch `e+2` or later, one epoch per block; an epoch nobody reported on is never written. Settling takes the
 per-relay median over the reporters (at least `min_reporters_quorum`), applies the per-relay cap, the uptime
 minimum, the exit multiplier on the median Exit flag and the per-operator and per-/16 caps, mints the total
-pro rata against the epoch's relay ceiling and credits each operator's earnings account (not the bank
+pro rata against the epoch's relay ceiling and pays each operator (below) into its earnings account (not the bank
 balance). The first epoch with quorum only activates rewards and mints nothing; payment starts with the
 next. An unfinished chunked report is deleted when its epoch settles, and so is any report an imported genesis
 left behind for an epoch that already has a result. A genesis that carries a report for an epoch older than
-`x/emission`'s ceiling window would stop the chain at settlement; a genesis exported by this binary cannot. The relay payout is the emission
-subsidy, so the 90/5/5 service-payment split does not apply to it. The operator of a registered relay cannot
+`x/emission`'s ceiling window would stop the chain at settlement; a genesis exported by this binary cannot.
+
+Each operator's total for the epoch is paid through the C2 service split, the same function
+(`storagetypes.SplitServicePayment`) and archive fund `x/storage` uses: 90% to the operator's earnings
+account, 5% burned out of the `relay` module account (which holds the burner permission for this) and 5%
+to the `storage_archive` module account, with `x/storage`'s `archive_fund` counter raised by the same
+amount (`Keeper.FundArchive`). The operator receives the rounding remainder, so the three parts sum to the
+operator's total; the payout rows and the epoch's `minted` stay gross. The default quorum is 3, so a
+relay is paid on the median of at least three reports and one lying reporter cannot move it. The operator of a registered relay cannot
 be a reporter: `MsgRegisterRelay` refuses a reporter's address, `MsgUpdateReporters` (and so a reporter
 proposal) refuses a set naming a relay operator, and genesis validation rejects both together. The relay
 bond is not escrowed by `x/relay`; it belongs to `x/nodes`.

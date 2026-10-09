@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -715,18 +716,31 @@ func (k Keeper) payService(ctx sdk.Context, source string, operator sdk.AccAddre
 		}
 	}
 	if archive.IsPositive() {
-		if err := k.bank.SendCoinsFromModuleToModule(ctx, source, types.ArchiveModuleName, coins(archive)); err != nil {
-			return math.ZeroInt(), fmt.Errorf("failed to fund archive: %w", err)
-		}
-		fund, err := k.ArchiveFund.Get(ctx)
-		if err != nil {
-			return math.ZeroInt(), err
-		}
-		if err := k.ArchiveFund.Set(ctx, fund.Add(archive)); err != nil {
+		if err := k.FundArchive(ctx, source, archive); err != nil {
 			return math.ZeroInt(), err
 		}
 	}
 	return toProvider, nil
+}
+
+// FundArchive moves amount from senderModule into the archive-fund module account and adds it to
+// the fund's counter, the one place the archive fund grows. x/storage's own service payments and
+// x/relay's reward split both fund it here.
+func (k Keeper) FundArchive(ctx context.Context, senderModule string, amount math.Int) error {
+	if amount.IsNil() || !amount.IsPositive() {
+		return fmt.Errorf("archive fund amount must be positive, got %s", amount)
+	}
+	if err := k.bank.SendCoinsFromModuleToModule(ctx, senderModule, types.ArchiveModuleName, coins(amount)); err != nil {
+		return fmt.Errorf("failed to fund archive from %s: %w", senderModule, err)
+	}
+	fund, err := k.ArchiveFund.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load archive fund: %w", err)
+	}
+	if err := k.ArchiveFund.Set(ctx, fund.Add(amount)); err != nil {
+		return fmt.Errorf("failed to record archive fund: %w", err)
+	}
+	return nil
 }
 
 // noteService records that the node served. paid is what the settlement credited to the operator's

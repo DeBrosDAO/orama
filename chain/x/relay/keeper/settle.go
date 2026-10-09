@@ -22,9 +22,9 @@ import (
 // deactivate rewards. A repeat call returns the stored result and does not
 // mint again.
 //
-// Pay is the full settled norama, credited to the operator's earnings account.
-// The C2 90/5/5 service-payment split is not applied: there is no archive fund
-// in this binary, and this module has no burn path.
+// Each operator's settled total is paid through the C2 90/5/5 service split
+// (payOperator): 90% to its earnings account, 5% burned, 5% to the archive fund.
+// The payout rows and the epoch's minted amount stay gross.
 func (k Keeper) SettleEpoch(ctx sdk.Context, epoch uint64) (types.EpochResult, error) {
 	if epoch == 0 {
 		return types.EpochResult{}, fmt.Errorf("settle epoch: epoch must be positive")
@@ -185,12 +185,38 @@ func (k Keeper) payEpoch(ctx sdk.Context, params types.Params, epoch uint64, rep
 		if err != nil {
 			return nil, math.Int{}, math.Int{}, fmt.Errorf("settle epoch: operator %q: %w", operator, err)
 		}
-		coin := sdk.NewCoin(chainparams.BaseDenom, operatorTotals[operator])
-		if err := k.earnings.CreditEarnings(ctx, types.ModuleName, addr, coin); err != nil {
-			return nil, math.Int{}, math.Int{}, fmt.Errorf("settle epoch: failed to credit %s to %s: %w", coin, operator, err)
+		if err := k.payOperator(ctx, addr, operatorTotals[operator]); err != nil {
+			return nil, math.Int{}, math.Int{}, fmt.Errorf("settle epoch: %w", err)
 		}
 	}
 	return payouts, minted, ceiling, nil
+}
+
+// payOperator pays one operator's settled total through the C2 service split: the operator's part
+// goes to its earnings account, the burn share is burned and the archive share funds the archive.
+// The operator receives the rounding remainder, so the three parts sum to total exactly.
+func (k Keeper) payOperator(ctx sdk.Context, operator sdk.AccAddress, total math.Int) error {
+	toOperator, burn, archive := k.service.SplitServicePayment(total)
+	if !toOperator.Add(burn).Add(archive).Equal(total) {
+		return fmt.Errorf("service split of %s summed to %s", total, toOperator.Add(burn).Add(archive))
+	}
+	if toOperator.IsPositive() {
+		coin := sdk.NewCoin(chainparams.BaseDenom, toOperator)
+		if err := k.earnings.CreditEarnings(ctx, types.ModuleName, operator, coin); err != nil {
+			return fmt.Errorf("failed to credit %s to %s: %w", coin, operator, err)
+		}
+	}
+	if burn.IsPositive() {
+		if err := k.service.BurnService(ctx, types.ModuleName, burn); err != nil {
+			return fmt.Errorf("failed to burn the service share of %s: %w", operator, err)
+		}
+	}
+	if archive.IsPositive() {
+		if err := k.service.FundArchive(ctx, types.ModuleName, archive); err != nil {
+			return fmt.Errorf("failed to fund the archive from the payment to %s: %w", operator, err)
+		}
+	}
+	return nil
 }
 
 func (k Keeper) scoreRelays(ctx sdk.Context, params types.Params, reports []types.CompleteReport) ([]claim, error) {

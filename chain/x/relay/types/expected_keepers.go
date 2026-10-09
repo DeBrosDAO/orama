@@ -35,3 +35,14 @@ type EmissionKeeper interface {
 type EarningsKeeper interface {
 	CreditEarnings(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
 }
+
+// ServiceSplit is the C2 service-payment split x/relay pays every operator through, the same
+// split and the same destinations x/storage uses. SplitServicePayment returns the operator's
+// part, the burned part and the archive-fund part, which sum to amount; the operator receives
+// the rounding remainder. BurnService burns amt from senderModule. FundArchive moves amt from
+// senderModule into the archive fund and records it there. x/relay does not import x/storage.
+type ServiceSplit interface {
+	SplitServicePayment(amount math.Int) (toOperator, burn, archive math.Int)
+	BurnService(ctx context.Context, senderModule string, amt math.Int) error
+	FundArchive(ctx context.Context, senderModule string, amt math.Int) error
+}

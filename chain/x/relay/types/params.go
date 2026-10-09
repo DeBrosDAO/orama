@@ -10,8 +10,8 @@ import (
 // (plans/open-network/track-g-token-legal-security.md); a production genesis
 // overrides them. Nothing in this module can change them later.
 const (
-	// DefaultMinReportersQuorum is a majority of the initial 3 dirauths (E1).
-	DefaultMinReportersQuorum uint32 = 2
+	// DefaultMinReportersQuorum is all 3 initial dirauths (owner decision), so one lying reporter cannot move the median.
+	DefaultMinReportersQuorum uint32 = 3
 	// DefaultMinUptimeFraction pays a relay only when median uptime is at least 90%.
 	DefaultMinUptimeFraction = "0.9"
 	// DefaultExitMultiplier pays an exit twice its capped weight.

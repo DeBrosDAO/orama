@@ -67,9 +67,41 @@ func TestEndBlock_settlesAnEpochOnlyAfterItsReportWindow(t *testing.T) {
 	require.NoError(t, f.submit(t, reporter, 2, []types.RelayObservation{obs(rk, 40, "1", false)}))
 	f.Emission.current = 2 + types.ReportWindowEpochs + 1
 	require.NoError(t, f.Keeper.EndBlock(f.Ctx))
-	require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(40)))
+	require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(36)))
 	require.True(t, f.Emission.mintedOf(2).Equal(math.NewInt(40)))
 	require.Empty(t, f.reportsOf(t, 2), "settlement deletes the epoch's reports")
+}
+
+func TestSettle_paysThroughTheServiceSplitAndTheOperatorGetsTheRemainder(t *testing.T) {
+	f := newTestFixture(t)
+	reporter := acc(1)
+	opA, opB, opC := acc(2), acc(3), acc(4)
+	f.init(t, 1, []sdk.AccAddress{reporter}, nil)
+	a := newRelayKey(t, "node-a", 0x11, opA, "10.1.0.1")
+	b := newRelayKey(t, "node-b", 0x22, opB, "10.2.0.1")
+	c := newRelayKey(t, "node-c", 0x33, opC, "10.3.0.1")
+	for _, rk := range []relayKey{a, b, c} {
+		f.register(t, rk, false)
+	}
+	f.activate(t, []sdk.AccAddress{reporter}, []types.RelayObservation{obs(a, 1, "1", false)})
+
+	f.Emission.setCeiling(2, math.NewInt(100_000))
+	// 1001 splits 50 burned, 50 archive, 901 to the operator (the 1 left by rounding);
+	// 19 is below the first whole unit of either 5% share, so the operator keeps all of it;
+	// 1999 splits 99 / 99 / 1801.
+	require.NoError(t, f.submit(t, reporter, 2, []types.RelayObservation{obs(a, 1001, "1", false), obs(b, 19, "1", false), obs(c, 1999, "1", false)}))
+	result, err := f.Keeper.SettleEpoch(f.Ctx, 2)
+	require.NoError(t, err)
+	require.True(t, result.Minted.Equal(math.NewInt(1001+19+1999)))
+
+	require.True(t, f.Earnings.balance(opA).Equal(math.NewInt(901)))
+	require.True(t, f.Earnings.balance(opB).Equal(math.NewInt(19)))
+	require.True(t, f.Earnings.balance(opC).Equal(math.NewInt(1801)))
+	require.True(t, f.Service.burned.Equal(math.NewInt(50+0+99)))
+	require.True(t, f.Service.archive.Equal(math.NewInt(50+0+99)))
+	total := f.Earnings.balance(opA).Add(f.Earnings.balance(opB)).Add(f.Earnings.balance(opC)).Add(f.Service.burned).Add(f.Service.archive)
+	require.True(t, total.Equal(result.Minted), "everything minted is paid, burned or in the archive fund")
+	require.True(t, payoutFor(f.payouts(t, 2), a.fp).Equal(math.NewInt(1001)), "payout rows stay gross")
 }
 
 func TestEndBlock_anIdleChainWritesNothing(t *testing.T) {

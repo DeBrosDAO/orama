@@ -128,9 +128,10 @@ set and nothing more), so a compromise today means a compromised reporter key.
 
 **What can be seen**
 - `oramad query relay reporters`, `params`, `epoch <n>`, `relay <fingerprint>` and `invariants`.
-- A reporter that lies moves the median only when there are at least three reporters. With the default
-  quorum of 2 and two reports, the median of two values is their average, so one bad reporter can
-  skew a relay's paid weight by half the difference.
+- A reporter that lies moves the median only when there are fewer than three reports. The default
+  quorum is 3, so a relay is paid on the median of at least three reports and one liar is ignored. A
+  genesis that lowers the quorum to 2 makes the median of two values their average, and one bad
+  reporter then skews a relay's paid weight by half the difference.
 
 **What can be done**
 - Remove or replace a reporter with a structural proposal: `oramad tx houses submit-proposal` with a
