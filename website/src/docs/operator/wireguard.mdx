@@ -46,7 +46,7 @@ The WireGuard unit (`orama-namespace-wireguard@index`) is **independent of the s
 
 ### No peer-management API
 
-There is no HTTP endpoint for adding, listing or removing mesh peers. A node joins only through the invite-gated join (or OramaOS enrolment, which also needs an invite), and peers converge through the 60-second self-repair above. The former `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes were removed because they let anyone holding the cluster secret add a machine to the mesh without an invite; an upgraded node answers them with `404`.
+There is no HTTP endpoint for adding, listing or removing mesh peers. A node joins only through the invite-gated join (or OramaOS enrolment, which also needs an invite), and peers converge through the 60-second self-repair above. The former `/v1/internal/wg/peer`, `/peers` and `/peer/remove` routes were removed because they let anyone holding the cluster secret add a machine to the mesh without an invite; an upgraded node answers them exactly as a path that never existed: `404` to a valid credential, `401` to none.
 
 ## Key Management
 

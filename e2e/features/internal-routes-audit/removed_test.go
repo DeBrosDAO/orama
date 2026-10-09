@@ -73,26 +73,45 @@ var removedWireGuard = []string{
 	"/v1/internal/wg/peer/remove",
 }
 
-// TestRemovedWireGuardRoutes_answer404OverTheOverlay: from every node's
-// shell, over the overlay to another node, each removed peer-exchange path
-// answers 404 to every method, as a path that never existed does, whatever
-// secret it carries.
+// TestRemovedWireGuardRoutes_answer404OverTheOverlay: each removed
+// peer-exchange path answers every method exactly as a path that never
+// existed does. With a valid session that is 404; with no credential it is
+// the gateway's plain refusal, which it gives every unregistered /v1/internal
+// path too, so nothing tells a caller the routes were ever there. From every
+// node's shell, over the overlay, carrying a cluster secret, the answer is the
+// missing route's and never 2xx.
 func TestRemovedWireGuardRoutes_answer404OverTheOverlay(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
+	n := tenancy.Namespace(t, f, ns.Options{})
+	c := harness.GW(t)
+	methods := []string{http.MethodGet, http.MethodPost, http.MethodDelete}
+	for _, m := range methods {
+		for what, cred := range map[string]tenancy.Cred{"no credential": {}, "owner session": tenancy.Owner(n)} {
+			base := send(t, c, route{path: neverRoute, method: m, body: `{}`}, cred, nil)
+			if cred.Bearer != "" && base.Status != http.StatusNotFound {
+				t.Fatalf("%s %s with %s: HTTP %d, want 404 for a path that never existed", m, neverRoute, what, base.Status)
+			}
+			for _, path := range removedWireGuard {
+				resp := send(t, c, route{path: path, method: m, body: `{}`}, cred, nil)
+				if resp.Status != base.Status || resp.ErrorCode() != base.ErrorCode() {
+					t.Errorf("%s %s with %s: HTTP %d %q, want what a missing route gets (%d %q): %.200s",
+						m, path, what, resp.Status, resp.ErrorCode(), base.Status, base.ErrorCode(), resp.Body)
+				}
+			}
+		}
+	}
+	secret := []string{headerClusterSecret + ": " + notTheSecret}
+	body := `{"cluster_secret":"` + notTheSecret + `"}`
 	for _, from := range f.State.Nodes {
 		to := otherNode(t, f, from)
-		for _, path := range removedWireGuard {
-			for _, m := range []string{http.MethodGet, http.MethodPost, http.MethodDelete} {
-				p := edge.NodeCurl{
-					Method:  m,
-					URL:     edge.OverlayGateway(to, path),
-					Headers: []string{headerClusterSecret + ": " + notTheSecret},
-					Body:    `{"cluster_secret":"` + notTheSecret + `"}`,
-				}.Run(t, f, from)
-				if p.Status != http.StatusNotFound {
-					t.Errorf("%s -> %s %s over the overlay: HTTP %d (curl exit %d), want 404: %.200s",
-						from.Name, m, path, p.Status, p.Exit, p.Body)
+		for _, m := range methods {
+			base := edge.NodeCurl{Method: m, URL: edge.OverlayGateway(to, neverRoute), Headers: secret, Body: body}.Run(t, f, from)
+			for _, path := range removedWireGuard {
+				p := edge.NodeCurl{Method: m, URL: edge.OverlayGateway(to, path), Headers: secret, Body: body}.Run(t, f, from)
+				if p.Status != base.Status || p.Status/100 == 2 {
+					t.Errorf("%s -> %s %s over the overlay: HTTP %d (curl exit %d), want %d as a missing route, never 2xx: %.200s",
+						from.Name, m, path, p.Status, p.Exit, base.Status, p.Body)
 				}
 			}
 		}
