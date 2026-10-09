@@ -9,15 +9,15 @@ Cluster health, from your machine. Three parts work together:
 ## Quick start
 
 ```bash
-orama status                          # one line per node and a verdict
-orama monitor                         # live view, a snapshot every 5 seconds
-orama monitor cluster                 # verdict, components, a row per node, top alerts
-orama monitor alerts                  # alerts with what to do about each
-orama monitor report                  # full JSON (pipe to jq, or feed to an LLM)
-orama monitor cluster --ssh           # gateways are down: read the nodes directly
+orama status --env <env>                    # one line per node and a verdict
+orama monitor --env <env>                   # live view, a snapshot every 5 seconds
+orama monitor cluster --env <env>           # verdict, components, a row per node, top alerts
+orama monitor alerts --env <env>            # alerts with what to do about each
+orama monitor report --env <env>            # full JSON (pipe to jq, or feed to an LLM)
+orama monitor cluster --env <env> --ssh     # gateways are down: read the nodes directly
 ```
 
-You need to be signed in as an operator of the cluster (`orama auth login`). Add `--env <name>` to name a cluster other than the active one.
+You need to be signed in as an operator of the cluster (`orama auth login`). `--env` is required on every `orama monitor` command; it does not fall back to the active environment. (`orama status` does fall back to the active environment when you leave `--env` out.)
 
 ## How the data flows
 
@@ -76,7 +76,7 @@ orama monitor [subcommand] --env <environment> [flags]
 |---|---|
 | `live` | The live view (default) |
 | `cluster` | Verdict, component states, a row per node (health, raft, gateway, load, CPU steal, memory, disk, version, report age), unreachable nodes, top alerts |
-| `node` | Per-node summary of every subsystem (system, RQLite, WireGuard, Olric, IPFS, Tor, chain, traffic). `--json` gives each node's full report |
+| `node` | Per-node summary of every subsystem (system, RQLite, WireGuard, Olric, IPFS, Tor, chain, global, traffic). `--json` gives each node's full report. The Global line appears only on a node with a global unit installed: the public Kubo's repo use against `StorageMax`, the storage provider's deal slots held and pending, proof misses and hot-key balance, and whether the Tor relay is in the relay set. A figure the node's status file does not carry is left out |
 | `service` | Service by node matrix of systemd states, restart loops, failed units |
 | `mesh` | WireGuard interfaces (peers against the N-1 a full mesh needs) and each peer link's handshake age and traffic |
 | `dns` | Nameservers: CoreDNS, Caddy, SOA, NS and wildcard resolution, TLS days left |
@@ -120,14 +120,20 @@ Derived from cross-node analysis of all reports by the cluster gateway (or by th
 | Severity | Examples |
 |---|---|
 | **critical** | Expired TLS certificate; clock skew over 60 seconds; node unreachable; no RQLite leader; split brain; RQLite unresponsive; a Raft snapshot term above the node's term; WireGuard interface down or peer never handshaked; OOM kills in the last hour; service failed; UFW inactive; chain RPC not answering while its unit is active; validator jailed or tombstoned; missed-block ratio at the downtime threshold; storage-provider hot-key balance 0 |
-| **warning** | Memory over 90 percent; disk over 85 percent; stale WireGuard handshake (over 3 minutes); Raft term inconsistency; a follower silent over 2 seconds; commit-applied gap over 100; restart loop; TLS certificate under 14 days; DNS down; namespace gateway down; Tor SOCKS port not bound or not bootstrapped; clock skew over 5 seconds; internet unreachable; chain height more than 20 blocks behind the median, or a block older than 60 seconds; provider proof misses |
+| **warning** | Memory over 90 percent; disk over 85 percent; stale WireGuard handshake (over 3 minutes); Raft term inconsistency; a follower silent over 2 seconds; commit-applied gap over 100; restart loop; TLS certificate under 14 days; DNS down; namespace gateway down; Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers; clock skew over 5 seconds; internet unreachable; chain height more than 20 blocks behind the median, or a block older than 60 seconds; provider proof misses; on a global node, an installed `orama-global-ipfs`, `orama-global-provider` or `orama-global-tor-relay` unit that is not active, the public Kubo repo over `StorageMax`, provider disk over its declared maximum, a relay reporting it is not in the relay set; a release refused or an install rolled back |
 | **warning (contention)** | CPU steal over 20 percent (an oversubscribed host, which load average does not show); CPU pressure over 50 percent |
 | **warning (security)** | systemd without `+BPF_FRAMEWORK` (tenant deployments' socket-bind restrictions are ignored on that node; Debian 12's systemd 252 lacks it); RAM hardening drift (`fs.suid_dumpable`, `kernel.core_pattern`, `kernel.yama.ptrace_scope`, swap in use, `apport.service` loaded and not masked) |
-| **info** | Zombie processes; orphan orama processes; swap over 30 percent; tenant deployment OOM kills |
+| **info** | Zombie processes; orphan orama processes; swap over 30 percent; tenant deployment OOM kills; a newer release found and not installed |
 
 Cross-node checks: exactly one RQLite leader; all nodes agree on it; Raft terms within 1; each follower has heard from the leader within 2 seconds; every node has N-1 WireGuard peers; clocks within 5 seconds; all nodes on the same binary version; chain height not far behind the median.
 
 `alerts`, `cluster` and the live view print a next step under each critical and warning alert, for example `orama inspect --env <env> --subsystem rqlite` or `orama ssh <host> --env <env> 'sudo orama node status'`.
+
+## Global nodes
+
+A node with `orama-global-ipfs`, `orama-global-provider` or `orama-global-tor-relay` installed adds a `global` section to its report (see [Global nodes](/docs/operator/global-nodes)). It holds each unit's state and, while the public Kubo is active, its repo size against `StorageMax`. The storage provider and the Tor relay each write a status file, `/var/lib/orama-global/provider/monitor.json` and `/var/lib/orama-global/tor-relay/monitor.json`, and the section adds the fields that file carries.
+
+The Tor relay's file holds only `in_consensus`: whether the consensus the relay holds lists it. `orama-global-tor-monitor.timer` runs `orama global tor monitor` on the relay every five minutes to write it, and leaves the field out while the relay has no valid consensus, so a relay without a consensus is not alerted as missing from the relay set. The node report, the inspector and the health checks follow the Tor relay unit, so a relay that is installed and not active is an alert on its own.
 
 ## Components
 

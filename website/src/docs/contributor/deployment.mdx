@@ -20,9 +20,25 @@ orama rollout --env <env> --no-build --archive <path> --yes
 
 RootWallet must be open and unlocked for the whole run. The first run after a rebuild asks you to approve the new `orama` binary once (approval is keyed on the binary's hash).
 
+## Reproducible builds
+
+Two `orama build` runs of one commit produce the same archive byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. A release build sets the date from the commit: `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. Go binaries are built with `-trimpath`, `-buildvcs=false`, a stripped linker and `-mod=readonly`. The third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a `go.sum`, and CoreDNS, Kubo and RQLite are refused unless they match a pinned commit or SHA-256. The archive lists its entries in a fixed order with fixed owners, modes and times. A change to a pinned program means changing its version constant and its module together; a test holds the two. CI builds each published release's archive twice per architecture, fails if the two differ, and attaches the archive and its SHA-256 to the release. CI holds no signing key.
+
+## Releases, TUF and auto-update
+
+A cluster can also trust a **TUF release root** in addition to its wallet signer. A release is then trusted only when the release signers have signed the metadata that names its hash.
+
+- The root is adopted on a node with `orama node trust add-root`, by an archive built with `orama build --release-root <root.json>`, or by `orama node setup --release <version> --release-repo <https url> --release-root <root.json>`, which fetches a published release, verifies it and has your wallet sign the manifest. Nothing fetches a root by itself; the operator names it out of band.
+- Releases live in a static HTTPS repository with `stable` and `nightly` as delegated channels, each with its own keys and threshold, trusted only for its own path. A client refuses metadata signed under another root or below a threshold, an expired timestamp, a snapshot older than the newest one it has accepted (rollback protection), and a target whose bytes differ.
+- Every node runs `orama-autoupdate.timer`, which does nothing until the cluster stored a release repository and the node adopted a root. The cluster settings `auto-update` (`off`, `notify` by default, `auto`), `update-channel`, `update-window` and `release-repo` set the policy. With `auto` inside the window, nodes install the newest verified release one at a time under a cluster lock, behind the same health gate as a manual rolling upgrade; if the upgrade or the gate fails, the node puts the previous release back and the release is marked bad for the whole cluster, which stops the rollout.
+- A machine that runs the chain is never `auto`. Its binary goes in through `orama global stage-oramad --upgrade <plan>`.
+- Auto-update installs only what the release root's signers signed; it never signs anything. Publishing a release is the signers' ceremony.
+
+See [Upgrades](/docs/operator/upgrades#automatic-updates) and [Build and sign](/docs/operator/build-and-sign).
+
 ## Versions and releases
 
-`VERSION` at the repository root is the single version. `make -C core bump VER=<x.y.z>` updates it everywhere; a release tag `v<version>` must match it or the release workflow fails. GoReleaser builds the CLI and node binaries for GitHub releases, Homebrew (stable only) and apt packages. The signed **install archive** that nodes use is not a release artifact: you build it from a checkout with `orama build`, signed by your own wallet.
+`VERSION` at the repository root is the single version. `make -C core bump VER=<x.y.z>` updates it everywhere; a release tag `v<version>` must match it or the release workflow fails. GoReleaser builds the CLI and node binaries for GitHub releases, Homebrew (stable only) and apt packages. The signed **install archive** that nodes use is built from a checkout with `orama build`, signed by your own wallet. CI also attaches an unsigned, reproducible archive to each release; it becomes installable through the TUF path above, not by being attached.
 
 ## Before rolling out
 

@@ -26,14 +26,12 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 | Node.js | 22.12 or newer (the repo pins 24 in `.nvmrc`) | The SDK and the website |
 | pnpm | Current | TypeScript packages |
 | Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama build` (it builds the vault), the vault |
-| xcaddy | Any recent | `orama build` (it builds Caddy with the Orama modules) |
 | git, make | Current | Version stamps, the Makefiles |
 
 ```bash
 # macOS
 brew install go node pnpm git make
 # Zig 0.15.x from https://ziglang.org/download/ (the build checks the minor release)
-go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
 go version        # 1.27.1 or newer
 zig version       # 0.15.x
 ```
@@ -64,7 +62,7 @@ make lint
 | The vault | `cd vault && zig build && zig build test` |
 | This website | `cd website && pnpm install && pnpm dev` (build: `pnpm build`; docs check: `node scripts/check-docs.mjs`) |
 
-`make build` writes an `orama` into `core/bin/`. A signed archive for a cluster is `orama build` from `core/` ([Build and sign](/docs/operator/build-and-sign)).
+`make build` writes an `orama` into `core/bin/`. A signed archive for a cluster is `orama build` from `core/` ([Build and sign](/docs/operator/build-and-sign)); it builds Caddy from the repository's `caddy/` module, so no xcaddy is needed. Set `SOURCE_DATE_EPOCH` to get a reproducible archive ([Release and rollout](/docs/contributor/deployment#reproducible-builds)).
 
 ## Run against a cluster
 

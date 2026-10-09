@@ -1,6 +1,6 @@
 # Global nodes
 
-A global node runs the public Orama chain (`oramad`) and, optionally, the services beside it: the storage provider, the history archiver, the chain indexer and the repair delegate. It needs no domain, no WireGuard and no cluster. Every command on the node runs as root. None needs raw `systemctl`.
+A global node runs the public Orama chain (`oramad`) and, optionally, the services beside it: the storage provider, the history archiver, the chain indexer and the repair delegate, or a role of the Orama Tor network (directory authority, relay, exit, validator onion service). It needs no domain, no WireGuard and no cluster. Every command on the node runs as root. None needs raw `systemctl`.
 
 A machine can also be a cluster node and a global node at once ([Sharing a machine](#sharing-a-machine-with-a-cluster-node)).
 
@@ -35,7 +35,7 @@ sudo orama global install \
   --enable-firewall --ssh-port 22
 ```
 
-- `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`, `repair`. The chain is required: the others reach it only through its RPC on `127.0.0.1:31001`. `provider` needs `ipfs` beside it, since it pins public deals through this host's public Kubo. **`provider` and `repair` are never on the same host:** a repair delegate holds repair seeds and a provider must not. `indexer` is optional (loopback 31015, proxied by a gateway).
+- `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`, `repair`; the Tor roles `dirauth`, `relay` (with `exit` for an exit) and `onion` are described under [The Tor network roles](#the-tor-network-roles). The chain is required: the others reach it only through its RPC on `127.0.0.1:31001`. A `dirauth` or `relay` host needs no chain, and `onion` joins a chain that is already installed. `provider` needs `ipfs` beside it, since it pins public deals through this host's public Kubo. **`provider` and `repair` are never on the same host:** a repair delegate holds repair seeds and a provider must not. `indexer` is optional (loopback 31015, proxied by a gateway).
 - Each service gets its own system account (`orama-chain`, `orama-ipfs-pub`, `orama-provider`, `orama-archiver`, `orama-indexer`, `orama-repair`). Binaries go to `/usr/lib/orama-global/bin`, root-owned, 0755.
 - Units are written to `/etc/systemd/system/orama-global-*.service` and enabled, not started. None is part of `orama-node.service`. They start after the chain unit and want it.
 - The chain unit runs **cosmovisor v1.7.3** with downloads disabled. The chain home must already have a genesis, so use `--init-chain` on the first install. A second install with the same `oramad` changes nothing; different bytes are refused. To change the chain binary use `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the plan's height.
@@ -45,6 +45,33 @@ sudo orama global install \
 - `ufw`: the chain's 31000 tcp and udp, Kubo's 31010 tcp and udp and the provider's 31013 tcp are allowed with the comment `orama-global`. An inactive `ufw` is refused unless `--enable-firewall` is given; then incoming is denied by default, the SSH port allowed and `ufw` enabled. `--ssh-port` must be a port `sshd -T` says sshd listens on. Loopback listeners (31001 to 31004) are not opened.
 - `oramad start` refuses `query-gas-limit = "0"` on any non-localnet chain id. `--init-chain` writes `"2000000"`; a home from an earlier build must be edited by hand, and this release is state-breaking, so such a home cannot be carried over at all: the chain restarts from a new genesis.
 - Running the command again with the same flags changes nothing but the binaries' bytes. A service left out of `--services` is not removed.
+
+## The Tor network roles
+
+Orama runs its own anonymity network from unmodified upstream Tor (the node's separate public-Tor client is described in [Tor](/docs/privacy/tor)). Its roles are installed with `orama global install --services dirauth`, `relay`, `relay,exit` or `onion`:
+
+| Role | Installed with | Units | Public ports |
+|---|---|---|---|
+| Directory authority | `dirauth` | `orama-global-tor-dirauth.service`, `orama-global-tor-archive.timer` | 31020/tcp (ORPort), 31021/tcp (DirPort) |
+| Relay | `relay` | `orama-global-tor-relay.service`, `orama-global-tor-monitor.timer` | 31020/tcp |
+| Exit (opt-in) | `relay,exit` | the relay's unit with an exit policy | 31020/tcp |
+| Validator onion service | `onion` | `orama-global-tor-onion.service`, `orama-global-txgate.service` | none |
+
+A directory authority is a relay already, so a host runs `dirauth` or `relay`, never both. An exit is refused unless the network file says `allow_exit`.
+
+**One network file.** `tor-network.json` is the only network file and `tornet.ParseNetwork` the only parser. The key ceremony (`orama global tor ceremony`, run on an offline machine) writes it; you stage it beside the release binaries, and it ships unchanged to clients. It lists at least three directory authorities and the validator onion services that take transaction submissions (`validator_onions`), and it must say `"private": true`: the public Orama Tor network is not launched, and every role and client refuses a file that says otherwise. The parser rejects unknown fields. A validator's onion address exists only once its onion role has started, after the ceremony wrote the file, so add it afterwards:
+
+```bash
+orama global tor onions add --network-file tor-network.json <addr.onion> [<addr.onion>...]
+```
+
+It validates every address, lists none twice, keeps the file's mode and replaces it atomically. Re-install the roles that read the file to pick up the change.
+
+**Relay health.** On a relay, `orama-global-tor-monitor.timer` runs `orama global tor monitor` every five minutes. It writes `in_consensus` (whether the consensus the relay holds lists it) to `/var/lib/orama-global/tor-relay/monitor.json`, and leaves it out while the relay has no valid consensus. The node report, the inspector and the health checks follow `orama-global-tor-relay.service`; `orama monitor node --env <env>` shows `relay active (in the relay set)` or `(not in the relay set)`. See [Monitoring](/docs/operator/monitoring#global-nodes).
+
+**Relay pay.** A relay is paid only once it is registered on chain (`MsgRegisterRelay`, which `orama global install` does not send) and reported. Each epoch, `x/relay` pays the median across reporters, with a default reporter quorum of 3. An operator's total goes through the 90/5/5 service split: 90% to the operator's earnings, 5% burned, 5% to the storage archive fund. The bandwidth reporter (`orama-global reporter`) runs on a directory-authority host and reports epoch `e` while the chain is in epoch `e+1`; it drops an epoch whose report window has passed (`ErrWindowClosed`) or that is already settled (`ErrEpochSettled`) instead of retrying it. `orama global install` does not set the reporter up.
+
+**Check a client's view.** `orama vpn check --network tor-network.json` joins the network and reads an account through each validator onion service in the file. It passes when at least one answers.
 
 ## Start, stop, status
 
@@ -150,5 +177,6 @@ Run it on a machine where `orama node setup` has already installed the cluster n
 - An `orama` command for `MsgRegisterOperator`.
 - Staging the shielded verifier: `orama global install` does not place `orama-orchard-verifier`; a node without it accepts no shielded bundle.
 - Removing a service, or its firewall rule, that a later install leaves out.
-- The relay and Tor units.
+- An installer for the relay bandwidth reporter (`orama-global reporter` runs from a home you prepare), and on-chain relay registration from `orama global install`.
+- An independent set of directory authorities: Orama runs them all, and the public Tor network is not launched.
 - A remote signer (TMKMS, Horcrux) or a sentry topology.

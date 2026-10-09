@@ -38,7 +38,7 @@ At one epoch a day the five brackets are ten years and their maximum adds up to 
 |---|---|---|
 | Validators and delegators | 60% | Minted at epoch close and paid by `x/power` |
 | Storage | 25% | A **ceiling**. Minted only when `x/storage` settles a payment, never beyond the ceiling |
-| Relay | 10% | A **ceiling**. Minted only when `x/relay` pays a relay (see [Relay rewards](/docs/blockchain/relay-rewards)) |
+| Relay | 10% | A **ceiling**. Minted only when `x/relay` settles an epoch (see [Relay rewards](/docs/blockchain/relay-rewards)) |
 | Development | 5% | A **ceiling**. Minted only when a governance-approved spend asks for it |
 
 Remainders from rounding fold into the validator share. In the first year the per-epoch shares are 8,908.8, 3,712, 1,484.8 and 742.4 ORAMA.
@@ -52,7 +52,7 @@ The split can move, but only through governance and only within bounds: each sha
 | Source | Where | Bound |
 |---|---|---|
 | Storage service payments and the PRIVATE-deal subsidy | `x/storage` at epoch close | The epoch's storage ceiling |
-| Relay rewards | `x/relay` settlement | The epoch's relay ceiling. No production code calls the settlement yet |
+| Relay rewards | `x/relay` end block | The epoch's relay ceiling. Of each operator's total, 5% is burned and 5% goes to the archive fund |
 | Development spend | A passed `x/houses` proposal | The epoch's development ceiling minus what was already minted |
 | Test-network faucet | `MsgFaucet` | Only on a chain id containing `-devnet-`, `-stagenet-` or `-localnet-`. Off by default. Max drip 1,000 ORAMA, 100,000 ORAMA per epoch, 24 hour recipient cooldown |
 | Token factory | `x/token` | Mints only its own `factory/…` denoms. A mint of `norama` is refused |

@@ -48,7 +48,7 @@ make e2e-lint                                        # go vet with and without t
 make e2e-test-unit                                   # the harness's own unit tests
 ```
 
-The owner runs the fleet suite. As a contributor you write the feature package and run the gate, lint and unit targets. The full contract is `e2e/README.md`.
+`e2e-fleet target stagenet --out state.json` followed by `E2E_FLEET_STATE=state.json e2e-fleet test --stage N` runs one stage against the existing stagenet cluster instead of fresh servers; the runner only tests there and never provisions or destroys. The owner runs the fleet suite. As a contributor you write the feature package and run the gate, lint and unit targets. The full contract is `e2e/README.md`.
 
 ### The coverage gate
 

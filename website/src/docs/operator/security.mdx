@@ -12,7 +12,7 @@ You do not configure these. Install and upgrade write them, and `orama monitor` 
 |---|---|
 | Network | Firewall `ufw` with only 22, 53 (nameservers), 80, 443, 51820/udp, plus TURN ports when WebRTC is on; the mesh admitted on `wg0` only; IPv6 disabled system-wide; every Orama rule tagged `orama` |
 | Listeners | RQLite, Olric, gateways, pub/sub, Kubo and IPFS Cluster on loopback or the WireGuard address only |
-| Authentication | RQLite always started with `-auth` (a missing auth file refuses to start); every internal endpoint requires an overlay source address and a MAC |
+| Authentication | RQLite always started with `-auth` (a missing auth file refuses to start); every internal endpoint requires an overlay source address and a MAC made from the cluster secret. Coordination stamps (v3) bind the method, path, body, a nonce and the destination port, so a stamp for the index gateway is no good at a namespace gateway on the same node; node-api and ACME stamps carry a single-use nonce that the receiver remembers for two minutes. Stamps from the previous release (v2, un-nonced) are still accepted for one release during a rolling upgrade, and a captured one can be replayed once inside that window |
 | Accounts | Services as `orama` (CoreDNS as `orama-coredns`, the SFU as `orama-sfu`, Tor as `debian-tor`, ntfy as `ntfy`); `/opt/orama/bin` is `root:orama` 0750 |
 | systemd | `ProtectSystem=strict`, `NoNewPrivileges`, `PrivateDevices` and more on the namespace units |
 | Memory | `MemorySwapMax=0` on secret-bearing units, swap off, suid core dumps off, core dumps discarded, apport masked, `kernel.yama.ptrace_scope=1` |
@@ -33,7 +33,7 @@ Anything else on a public interface is a finding. Rules without the `orama` comm
 
 ```bash
 sudo wg show wg0                   # one peer per other node, recent handshakes
-orama monitor mesh                 # from your computer: peers against the N-1 a full mesh needs
+orama monitor mesh --env <env>     # from your computer: peers against the N-1 a full mesh needs
 ```
 
 ### The archive trust anchor
@@ -81,7 +81,7 @@ sudo ss -tlnp | grep 9050          # bound on 127.0.0.1 only
 ### Certificates and DNS
 
 ```bash
-orama monitor dns                  # certificate days left, resolution
+orama monitor dns --env <env>      # certificate days left, resolution
 ```
 
 ### Time
@@ -95,6 +95,7 @@ Clocks must agree: the certificate store's lease, MACs (one minute either side),
 - **Use the CLI, not `systemctl`**, on nodes. The CLI checks quorum and ordering.
 - **Keep the RootWallet account that signs archives offline-safe.** Its recovery phrase is the cluster's upgrade key. Rotate signers with two builds when a key may be exposed.
 - **Rotate the index gateway signing key** after upgrading from 0.122.x, and `orama operator rotate-secrets --rotate` after any suspicion that a node's disk was read ([Cluster administration](/docs/operator/cluster-admin#key-rotation)).
+- **Run `orama operator rotate-secrets` once every gateway is upgraded.** A deployment's environment is sealed to its namespace and deployment id (`enc:v2`), so a ciphertext copied onto another row does not open. A cluster created on this release has that from its first row; an upgraded cluster keeps writing the unbound form, because a gateway from before the change cannot open `enc:v2`, until `rotate-secrets` turns bound writes on.
 - **Back up the registry** and test a restore ([Upgrades](/docs/operator/upgrades#back-up-the-registry-first)).
 - **Remove nodes properly.** `orama node remove` revokes the node's key at once; `wipe` does not tell the cluster anything.
 

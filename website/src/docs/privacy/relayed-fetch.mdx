@@ -35,7 +35,7 @@ sequenceDiagram
 
 `POST /v1/storage/fetch-caps` needs a device-bound session, the storage read grant, and ownership of the CID. One call mints up to 64 capabilities with a lifetime of 1 hour to 7 days. Each returns a `revoke_key`. A serverless function can mint through the `storage_fetch_cap_mint` host function.
 
-A capability is bound to the exact canonical CID and namespace, derived under its own key-derivation purpose, with the issuing device sealed in an opaque tag. Revoking takes the `revoke_key` returned at mint, so nobody can fill the revocation list with invented ids. S limits a leaked capability by its expiry, its CID, revocation, 4 concurrent downloads per token, and the namespace's rate limit.
+A capability is bound to the exact canonical CID and namespace, derived under its own key-derivation purpose, with the issuing device sealed in an opaque tag. Revoking takes the `revoke_key` returned at mint, so nobody can fill the revocation list with invented ids. A leaked capability is limited by its expiry, its CID, revocation, 4 concurrent downloads per token, and the namespace's rate limit.
 
 A sender should use **one capability per fetch**: S can link two fetches made with the same one.
 

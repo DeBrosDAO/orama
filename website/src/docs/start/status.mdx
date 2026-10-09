@@ -31,6 +31,7 @@ This page is the honest inventory. It is written against the code on the `nightl
 | Install a cluster of 3 or more nodes with `orama node setup` | Live |
 | One-machine evaluation cluster | Live, not highly available |
 | Rolling upgrades with signed archives | Live |
+| Releases through a TUF release root, with reproducible builds and opt-in auto-update (`notify` by default) | Live |
 | Monitoring from your own machine (`orama monitor`, `orama status`) | Live |
 | Public `/status` page, telemetry API | Live |
 | Node replacement runbook | Live |
@@ -49,13 +50,13 @@ The chain is implemented and tested in the repository. It is not what `orama nod
 | ORAMA token, emission schedule, fees, voting power | Implemented |
 | Staking, delegation, slashing | Implemented |
 | Two-house governance (`x/houses`) | Implemented, gated closed at genesis |
-| Storage deals with proofs | Implemented |
-| Relay registry and reporting | Implemented. The epoch settlement that pays relays has no caller yet, so no relay is paid |
-| Token factory | Implemented |
+| Storage deals with proofs and repair | Implemented. A lost piece is rebuilt by the deal's repair delegate or by the owner with `orama storage repair` |
+| Relay registry, reporting and payout | Implemented. The end block settles each reported epoch and splits pay 90/5/5. No relay is registered or running yet |
+| Token factory | Implemented, including a CosmWasm contract as a token's transfer hook |
 | Compressed NFTs and market | Implemented |
 | Shielded pool | Implemented. A node accepts shielded bundles only when both verifiers are present |
 | CosmWasm contracts | Implemented in builds with cgo. Five standard contracts in genesis |
-| Block explorer | The page ships with seeded demo data. No live adapter yet |
+| Block explorer | The page reads the chain through the gateway's `/v1/chain/` routes and the chain indexer, with no demo data |
 | Public chain | Not built. Devnet, stagenet and localnet only |
 
 Details are in the [Blockchain](/docs/blockchain/what-it-is) section.
@@ -66,9 +67,10 @@ Details are in the [Blockchain](/docs/blockchain/what-it-is) section.
 |---|---|
 | Tor client on every node, anonymity proxy, tunnel, `anon_fetch` | Live |
 | Relayed fetch over Tor | Live (Node.js clients) |
-| Submitting chain transactions to a validator over an onion address | Client side live. The server-side onion service is not installed by anything yet |
-| A private Orama Tor network (directory authorities, relays, exits) | Not built. Only parameter validation and unit renderers exist, and exits refuse to start by design |
-| VPN | Not built. `chain/x/vpnlaunch` is a launch-gate predicate with no users |
+| Submitting chain transactions to a validator over an onion address | Client and server side built (`--onion`, `--onion-network`, `orama global install --services onion`). Never run against a real Tor network |
+| A private Orama Tor network (directory authorities, relays, opt-in exits) | Code and installer built, one `tor-network.json`. Never run on a real network; Orama runs every authority |
+| `orama vpn up` and `orama vpn check` | A loopback SOCKS5 proxy client for a private network. Not a system-wide tunnel |
+| Public VPN | Not built. The launch gate (`chain/x/vpnlaunch`) is off in every build |
 
 ## RootWallet
 

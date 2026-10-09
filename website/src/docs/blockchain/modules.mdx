@@ -10,9 +10,9 @@ Every module in `chain/x/`, what it does and whether it is live. "Live" means wi
 | `nodes` | Registry of operators, nodes, roles, bonds and optional public cluster rows. | Live. See [Nodes](/docs/blockchain/nodes) |
 | `storage` | Storage deals, provider slots, challenges, proofs, settlement, subsidy. | Live. See [Storage deals](/docs/blockchain/storage-deals) |
 | `archive` | Registry of archived block ranges so validators can prune history. | Live. See [History archive](/docs/blockchain/archive) |
-| `relay` | Registry of Tor relays and exits and the per-epoch report that decides rewards. | Registration and reports live. The settlement that pays relays has no caller yet. See [Relay rewards](/docs/blockchain/relay-rewards) |
+| `relay` | Registry of Tor relays and exits and the per-epoch report that decides rewards. | Registration, reports and settlement live: the end block pays each operator's epoch total through the 90/5/5 service split. No relay is running yet. See [Relay rewards](/docs/blockchain/relay-rewards) |
 | `houses` | Two-house governance. | Live, gated closed at genesis. See [Governance](/docs/blockchain/governance) |
-| `token` | Token factory: `factory/<creator>/<subdenom>` denoms with optional mint, freeze, pause and transfer-fee capabilities. | Live. See [Token factory](/docs/blockchain/token-factory) |
+| `token` | Token factory: `factory/<creator>/<subdenom>` denoms with optional mint, freeze, pause, transfer-fee and transfer-hook (a contract) capabilities. | Live. See [Token factory](/docs/blockchain/token-factory) |
 | `cnft` | Compressed NFTs in concurrent Merkle trees. | Live. See [NFTs and market](/docs/blockchain/nfts-and-market) |
 | `market` | Fixed-price listings and bids for cNFTs with creator royalties. | Live. Same page |
 | `shielded` | The Ironwood shielded pool. | Implemented. Accepts bundles only on nodes with both verifiers. See [Shielded](/docs/blockchain/shielded) |
@@ -21,7 +21,7 @@ Every module in `chain/x/`, what it does and whether it is live. "Live" means wi
 | `wasmbindings` | The Orama calls a contract may make (tokens, NFTs, market, storage deals, earnings). | Linked in cgo builds |
 | `inclusion` | Inclusion lists through vote extensions so a proposer cannot censor a transaction. | Wired, off until genesis sets a start height |
 | `confidential` | Attestation boundary for confidential compute. | Fails closed on every input. Not wired |
-| `vpnlaunch` | A predicate that says when a VPN beta could open. | No chain state, nothing uses it |
+| `vpnlaunch` | A predicate that says when a public VPN beta could open. | No chain state, not linked into `oramad`. Its launch switch is off in every build |
 
 ## How the modules connect
 
@@ -30,6 +30,7 @@ flowchart LR
   emission -->|mint 60%| power
   emission -->|mint up to ceiling| storage
   emission -->|mint up to ceiling| relay
+  relay -->|5% burn, 5% archive fund| storage
   emission -->|spend mint| houses
   power -->|credit| fees
   storage -->|credit provider| fees

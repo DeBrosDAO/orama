@@ -15,7 +15,10 @@ Private blobs are encrypted before they are added. A node serves content it hold
 ```ts
 import { createClient } from "@debros/orama";
 
-const client = createClient({ baseURL: "https://ns-myapp.cluster.example.com", apiKey });
+const client = createClient({
+  baseURL: "https://ns-myapp.cluster.example.com",
+  jwt: accessToken,      // the signed-in user's token: a key on its own is refused here
+});
 
 const { cid, name, size } = await client.storage.upload(file, file.name);   // File, Blob, ArrayBuffer, Uint8Array or ReadableStream
 const status = await client.storage.status(cid);
@@ -95,4 +98,4 @@ interface StorageStatus {
 
 ## CLI
 
-There are no `orama` commands for gateway file storage; use the SDK or REST. `orama db backup` stores a database backup into IPFS ([Databases](/docs/developer/databases)), and `orama namespace backup` makes a sealed backup ([Backups](/docs/developer/backups)). `orama storage …` is for on-chain deals.
+There are no `orama` commands for gateway file storage; use the SDK or REST. `orama db backup` stores a database backup into IPFS ([Databases](/docs/developer/databases)), and `orama namespace backup` makes a sealed backup ([Backups](/docs/developer/backups)). `orama storage …` is for on-chain deals. `orama storage repair --deal-id <id> --repair-seed-file <file>` restores the replicas a deal lost: it fetches an accepted replica from another provider, checks it against its on-chain root, re-seals it for the new provider and uploads it, never recovering the plaintext. A deal that names a repair delegate is repaired by the delegate while you are away; without one it runs with fewer replicas until you run the command ([Storage deals](/docs/blockchain/storage-deals)).

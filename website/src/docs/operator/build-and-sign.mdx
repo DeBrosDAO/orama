@@ -1,8 +1,8 @@
 # Build and sign
 
-Orama nodes never compile anything. You build one **archive** on your own computer, and every node unpacks it. The archive is signed with your RootWallet key, and a node installs it only if the signer is in its trust list.
+Orama nodes never compile anything. You build one **archive** on your own computer (or take a published release, below), and every node unpacks it. The archive is signed with your RootWallet key, and a node installs it only if the signer is in its trust list.
 
-This page covers the build, the signature, the trust anchor, and how to rotate who is trusted.
+This page covers the build, the signature, the trust anchor, how to rotate who is trusted, and the published-release path that needs no build.
 
 ## Build
 
@@ -13,20 +13,23 @@ cd orama/core
 orama build
 ```
 
-The first thing it does is ask RootWallet for the active account (a locked or missing wallet fails in seconds, before anything compiles). Then it cross-compiles:
+The first thing it does is ask RootWallet for the active account (a locked or missing wallet fails in seconds, before anything compiles; the approval prompt at signing waits up to two and a half minutes). Then it cross-compiles:
 
 1. the Orama binaries (CLI, node, privileged helper, gateway, identity, SFU, TURN, SNI router, pubsub)
 2. the vault guardian (Zig)
 3. Olric
 4. IPFS Cluster
 5. CoreDNS with the RQLite plugin
-6. Caddy with the Orama DNS and storage modules (needs `xcaddy`)
+6. Caddy with the Orama DNS and certificate-storage modules, from the repository's `caddy/` module
 7. downloads the pinned IPFS Kubo and RQLite releases
 8. copies the systemd unit templates
 
 It then writes `manifest.json` (the SHA-256 of every file in the archive), signs it, and creates the archive. A build takes several minutes the first time.
 
 ```text
+  Signed.
+
+Build complete in 6m12s
 Archive: /tmp/orama-0.3.0-linux-amd64.tar.gz
 ```
 
@@ -39,12 +42,13 @@ Archive: /tmp/orama-0.3.0-linux-amd64.tar.gz
 | `--arch` | `amd64` | `amd64` or `arm64`. Must match the nodes |
 | `--output` | `/tmp/orama-<version>-linux-<arch>.tar.gz` | Where to write the archive |
 | `--signers` | none | Rotate the trusted signers (below) |
-| `--unsigned` | false | Make an archive no node will install. For local inspection only |
+| `--release-root` | none | Put a TUF release root, from a `root.json`, in the signed manifest. A node that installs the build adopts it (below) |
+| `--unsigned` | false | Make an archive without a wallet signature: the CI build that release signers sign. A node installs it only through its adopted release root; otherwise it is for local inspection only |
 | `--verbose` | false | Show the underlying build output |
 
 ### Prerequisites
 
-Go 1.27.1 or newer, Zig 0.15.x (the vault builds with exactly the minor release named in `vault/build.zig.zon`; `ORAMA_ZIG` points at a specific binary), `xcaddy`, `git`, internet access, and the RootWallet desktop app unlocked. See [What you need](/docs/operator/getting-started#3-your-own-computer).
+Go 1.27.1 or newer, Zig 0.15.x (the vault builds with exactly the minor release named in `vault/build.zig.zon`; `ORAMA_ZIG` points at a specific binary), `git` (CoreDNS is fetched at its pinned commit), internet access, and the RootWallet desktop app unlocked. See [What you need](/docs/operator/getting-started#3-your-own-computer).
 
 Common build failures:
 
@@ -52,8 +56,11 @@ Common build failures:
 |---|---|
 | `could not find project root (no go.mod with cmd/orama found)` | Run from inside `core/` of the checkout |
 | `zig not found in PATH` | Install Zig 0.15.x, or set `ORAMA_ZIG` |
-| `xcaddy not found in PATH` | `go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest` |
-| the rootwallet agent is not reachable | Open the RootWallet desktop app and unlock it |
+| `the archive is signed with your RootWallet, and its agent did not answer` | Open the RootWallet desktop app and unlock it |
+
+### Reproducible builds
+
+Two builds of one commit give the same archive, byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. Set `SOURCE_DATE_EPOCH` to the commit's time, `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`; without it the build date is the time of the build. The Go binaries are built with `-trimpath` and no build id; the third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a pinned `go.sum`, and `go build -mod=readonly` refuses a module the `go.sum` does not list. CoreDNS is cloned at its tag and refused unless the checkout is the commit pinned in the source. Kubo and RQLite are downloaded and refused unless their SHA-256 equals the pinned digest. The environment cannot switch verification off: `GOFLAGS`, `GOSUMDB`, `GOPRIVATE` and similar variables are removed from every `go` command the build runs. The details are in the repository's `docs/DEV_DEPLOY.md`, "Reproducible builds".
 
 ## What gets signed
 
@@ -78,6 +85,7 @@ Every node keeps the list of trusted addresses in `/etc/orama/archive-signers`: 
 - On the **genesis** node the file is created from `--operator-wallet` (which `orama node setup` fills in with your active RootWallet account) before the archive is verified. So the first archive must be signed by that same account.
 - On a **joining** node the list comes from the cluster in the join response. If the cluster trusts more, or other, signers than you expect, the join is refused with a 409 and the invite is not used. Joining with `orama node setup --join-via` reads the expectation from that node.
 - `orama node setup` verifies the archive on your machine against the operator account **before** uploading anything, because a new machine has no verified binary of its own to check with.
+- A node can also trust a **release root**: the TUF key set of a release's signers, adopted into `/etc/orama/release-root.json`. It arrives in an archive built with `--release-root` (a node that installs it adopts the root the way it takes a signer rotation), or with `sudo orama node trust add-root root.json` on one node. With a root, a node accepts an unsigned release whose TUF metadata verifies against it (`orama node stage-archive --release-only`), and records in `/etc/orama/release-staged.json` that it did. A release that names signers or a root of its own is never accepted this way.
 
 Each node verifies an archive with its installed `orama` before anything under `/opt/orama` changes: the signature must recover to a trusted address and every file must match the manifest.
 
@@ -98,16 +106,20 @@ Rules:
 
 Nodes installed before archives were signed have no anchor. Push once with `orama push --trust-signers <your address>`, which creates the anchor and never changes an existing one.
 
+## Install a published release
+
+`orama node setup --release <version> --release-repo <url> --release-root <root.json>` needs no build. Setup fetches the release's metadata on your computer, verifies it against the root you name (every role at its threshold, an unexpired timestamp, a snapshot no older than the newest your machine has accepted, recorded in `~/.orama/release-seen.json`), downloads the archive and checks its length and hashes. Then your RootWallet signs it, with the root in the manifest, so the cluster installs it like any archive its operator built and every node adopts the root. The root is the one thing that has to reach you by another road than the repository. `--channel` picks a channel other than `stable`. Installing a release in place of an archive is the only difference; everything above about the trust anchor still applies.
+
 ## Errors a node can give
 
 | Message | Meaning and fix |
 |---|---|
-| `is unsigned` | Built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama build` |
+| `is unsigned` | Built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama build`, unless the node accepts it as a release through its release root |
 | `signed by 0x…, which this node does not trust` | The signing account is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate |
 | `does not match the signed manifest` / `not in its signed manifest` | The archive was changed after signing. Rebuild. If it happens only on fanned-out nodes, suspect the hub |
 | `no archive trust anchor` | The node predates signed archives. Push once with `--trust-signers` |
 | `a genesis install needs --operator-wallet` | Pass the wallet that signed the archive |
-| `linux/… and this node is linux/…` | Build with `--arch` matching the node |
+| `the archive is built for linux/X and the node is linux/Y: build with --arch Y` | `orama node setup` prints this in its own check before uploading. A node's push, rotation and join print `… and this node is linux/Y` instead. Either way, build with `--arch` matching the node |
 | `no build archive at /opt/orama` | Nothing was pushed or set up there. Install and upgrade never compile on the node |
 
 More in [Troubleshooting](/docs/operator/troubleshooting#binary-signature-verification-fails).

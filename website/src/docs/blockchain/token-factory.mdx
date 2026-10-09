@@ -8,7 +8,8 @@
 
 - `subdenom`, 2 to 44 characters
 - `name` (up to 64), `symbol` (up to 16), `description` (up to 256)
-- capability flags: `mint`, `freeze`, `permanent_delegate`, `transfer_fee_bps` (0 to 10,000), `non_transferable`, `pause`, `transfer_hook`
+- capability flags: `mint`, `freeze`, `permanent_delegate`, `transfer_fee_bps` (0 to 10,000), `non_transferable`, `pause`
+- `transfer_hook`, the bech32 address of an existing CosmWasm contract (`--transfer-hook` on the command line), or empty for none
 
 It burns a **10 ORAMA** creation fee and locks a **metadata deposit** of 68,359 norama per byte of the text fields (about 0.07 ORAMA per KiB). Deleting the token returns 99% of the deposit to earnings and burns 1%.
 
@@ -29,8 +30,18 @@ Capabilities can only be dropped, never added or reassigned. There is no module-
 ## What it cannot do
 
 - A token cannot mint `norama`. Only `x/emission` can, and a mint of a `norama`-named denom here is refused.
-- The transfer hook is a Go interface limited to 100,000 gas. The hook wired in the binary does nothing.
 - A contract can create, mint and burn tokens through the `token` binding, again never `norama`. See [Contracts](/docs/blockchain/contracts).
+
+## The transfer hook
+
+A token can name a contract as its *transfer hook*. The address is checked when the token is created (it must already be a contract), is fixed from then on, and can only be renounced. On every `Transfer` of that token the chain calls the contract's `sudo` entry with `{"transfer_hook":{"denom","from","to","amount"}}` under a gas cap of 100,000.
+
+- If the contract returns an error, the transfer is refused.
+- If it needs more than the cap, the transfer fails with "transfer hook exceeded gas cap".
+- Either way nothing moves, and whatever the contract wrote is dropped. Its writes are kept only when the transfer succeeds.
+- A build without the contract VM ([Contracts](/docs/blockchain/contracts)) refuses to create a token with a hook.
+
+Because the hook and the transfer fee run only inside `Transfer`, a bank send of such a token (`MsgSend`, `MsgMultiSend`, a contract's `BankMsg`) is refused. Use `Transfer`.
 
 ## Queries
 

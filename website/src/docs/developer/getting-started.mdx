@@ -64,29 +64,52 @@ orama db query appdb "INSERT INTO notes (text) VALUES ('hello')"
 orama db query appdb "SELECT * FROM notes"
 ```
 
-This is a per-namespace SQLite database. The namespace also has a replicated SQL database (RQLite) you reach from code. See [Databases](/docs/developer/databases).
+This is a per-namespace SQLite database, reached from the CLI. The namespace also has a replicated SQL database (RQLite) that your code reaches through the SDK, shown next. See [Databases](/docs/developer/databases).
 
 ## 7. Call it from code
 
-Mint a key for your app. A key meant to ship in a browser or mobile bundle gets the data plane only:
+What a key may do depends on its grants. Two keys cover a typical app.
+
+**On a server, in CI or in a script:** an `admin` key. It reaches the control plane, including the namespace's RQLite database, so it never goes in a browser or mobile bundle.
 
 ```bash
-orama namespace keys create --scope app-runtime --label web
+orama namespace keys create --scope admin --label server
 ```
+
+The command prints the key once, after a short report. Copy the line under `API KEY` into your secret store; it cannot be shown again.
 
 ```ts
 import { createClient } from "@debros/orama";
 
-const client = createClient({
+const server = createClient({
   baseURL: "https://ns-myapp.cluster.example.com",
   apiKey: process.env.ORAMA_API_KEY,
 });
 
-await client.db.exec("INSERT INTO messages (room, body) VALUES (?, ?)", ["general", "hi"]);
-const rows = await client.db.query("SELECT * FROM messages WHERE room = ?", ["general"]);
+await server.db.createTable("CREATE TABLE messages (id INTEGER PRIMARY KEY, room TEXT, body TEXT)");
+await server.db.exec("INSERT INTO messages (room, body) VALUES (?, ?)", ["general", "hi"]);
+const rows = await server.db.query("SELECT * FROM messages WHERE room = ?", ["general"]);
+```
+
+**In a browser or mobile app:** a key with data-plane grants only, named explicitly. The `app-runtime` profile does not include `pubsub` or `cache`, so ask for them.
+
+```bash
+orama namespace keys create --scope invoke,pubsub,cache --label web
+```
+
+```ts
+const client = createClient({
+  baseURL: "https://ns-myapp.cluster.example.com",
+  apiKey: process.env.ORAMA_WEB_KEY,      // injected at build time
+});
 
 await client.cache.put("sessions", "alice", { seen: Date.now() }, "1h");
 await client.pubsub.publish("room:general", "hello");
+```
+
+Storage is different: the gateway refuses a key on its own and wants the signed-in user as well, so upload after the user has signed in with their wallet ([Wallet login](/docs/developer/sdk-reference#wallet-login)):
+
+```ts
 const { cid } = await client.storage.upload(new Blob(["file contents"]), "hello.txt");
 ```
 
@@ -94,10 +117,14 @@ Where a key may live, and what each profile can do: [Access control and keys](/d
 
 ## CI and scripts
 
-Set `ORAMA_TOKEN` to an API key or a token. A key is exchanged for a session once per run:
+Set `ORAMA_TOKEN` to an API key or a token. A key is exchanged for a session once per run. Mint the key once on your machine (add `--expires-in-days` to shorten its life, 90 days is the default), put it in your CI system's secret store, and expose it to the job:
 
 ```bash
-export ORAMA_TOKEN="$(orama namespace keys create --scope admin --label ci)"
+orama namespace keys create --scope admin --label ci      # prints the key once; store it
+```
+
+```bash
+export ORAMA_TOKEN="$CI_ORAMA_KEY"      # from the CI secret store
 orama deploy static ./dist --name www --update
 ```
 

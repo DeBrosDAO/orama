@@ -28,11 +28,11 @@ Replacing a nameserver touches: the registry Raft group (add a voter, remove a v
 
 ## Preflight
 
-1. **Who are the nameservers, and who leads?** `orama status` and `orama monitor cluster` show roles and the RQLite state of each node.
+1. **Who are the nameservers, and who leads?** `orama status` and `orama monitor cluster --env mycluster` show roles and the RQLite state of each node.
 2. **Pick the victim** (a follower) and a **join hub** (the leader or any healthy nameserver).
-3. **Check cluster health:** `orama monitor report` shows quorum `ok`, one leader, a full mesh. Check the critical namespaces answer: `curl https://ns-<name>.<base-domain>/v1/health`.
-4. **Find the namespaces on the victim.** `orama monitor namespaces` shows each namespace's services per node. For each namespace the victim hosts you will need its replacement before the removal.
-5. **Have the same signed archive** the cluster runs, or build a new one and plan to upgrade after.
+3. **Check cluster health:** `orama monitor report --env mycluster` shows quorum `ok`, one leader, a full mesh. Check the critical namespaces answer: `curl https://ns-<name>.<base-domain>/v1/health`.
+4. **Find the namespaces on the victim.** `orama monitor namespaces --env mycluster` shows each namespace's services per node. For each namespace the victim hosts you will need its replacement before the removal.
+5. **Have the same build** the cluster runs: the signed archive, or, for a cluster that follows a release channel, the same published release (`--release`, `--release-repo`, `--release-root` in place of `--archive`). Or build a new one and plan to upgrade after.
 6. **Read what removal would cost:**
 
 ```bash
@@ -50,11 +50,11 @@ orama node setup --ip <new-ip> --password --env mycluster --archive $ARCHIVE \
 
 See [Joining nodes](/docs/operator/joining-nodes). While it joins you briefly have four registry voters: quorum is three, still safe.
 
-**Gate: do not continue until the new node is a healthy voter with a non-zero applied index.** For the first minutes it can show as not a voter, or empty, while it takes a snapshot; on a large database this takes several minutes. Check with `orama monitor node --node <new-ip>`: RQLite `Follower`, a leader known, applied index close to the leader's, and `orama status` healthy.
+**Gate: do not continue until the new node is a healthy voter with a non-zero applied index.** For the first minutes it can show as not a voter, or empty, while it takes a snapshot; on a large database this takes several minutes. Check with `orama monitor node --env mycluster --node <new-ip>`: RQLite `Follower`, a leader known, applied index close to the leader's, and `orama status` healthy.
 
 ## Phase B: DNS
 
-The nameserver slot is the thing that has to move. `orama node dns delegation --env mycluster` shows which address holds each `nsN`. Slots are claimed by the nodes themselves and stay with a machine until it is removed, so the new node takes the next free slot while the old one still holds its own. After the old node is removed (Phase D) its slot is released. Then update the parent zone to match what `orama node dns delegation` prints ([DNS and nameservers](/docs/operator/nameserver)). A glue record at a registrar can take hours.
+The nameserver slot is the thing that has to move. `orama node dns delegation --env mycluster` shows which address holds each `nsN`. Slots are claimed by the nodes themselves and stay with a machine until it is removed, so the new node takes the next free slot while the old one still holds its own. After the old node is removed (Phase D) its slot is released. Then update the parent zone to match what `orama node dns delegation --env mycluster` prints ([DNS and nameservers](/docs/operator/nameserver)). A glue record at a registrar can take hours.
 
 ## Phase C: namespaces
 
@@ -69,7 +69,7 @@ Nodes now handle most of this themselves:
 So this phase is **verification**. For each namespace the victim hosts:
 
 ```bash
-orama monitor namespaces                       # which nodes run it, and are they healthy
+orama monitor namespaces --env mycluster       # which nodes run it, and are they healthy
 curl https://ns-<name>.cluster.example.com/v1/health
 ```
 
@@ -79,7 +79,9 @@ If a namespace would be left with one voter, repair it **before** removing the v
 sudo orama namespace repair <name>             # repair an under-provisioned namespace cluster
 ```
 
-It talks to that node's gateway on its WireGuard address (localhost is where public traffic arrives, so a repair sent there is refused). `orama node remove` refuses to run until every cluster survives, so you cannot skip this by accident.
+It talks to that node's gateway on its WireGuard address (localhost is where public traffic arrives, so a repair sent there is refused), and takes the node's peer id from `node.id` in its `node.yaml`.
+
+Every start of a namespace's units on a node, whether provisioning, a repair or a replacement's spawn, takes that namespace's lock on the node and reads the namespace's cluster from the registry under it. The start is refused with a 409 if the namespace is being deleted or gone, or if the request names a cluster other than the namespace's current one (the same name deleted and created again). A request from a node on the previous release names no cluster and is checked only for deletion, for the length of a rolling upgrade. The wait for the lock is bounded, so a stuck holder cannot stall a namespace for ever. `orama node remove` refuses to run until every cluster survives, so you cannot skip this by accident.
 
 If a namespace's RQLite has already lost quorum (a single survivor), it needs the namespace-level recovery in [Troubleshooting](/docs/operator/troubleshooting#namespace-rqlite-has-no-leader).
 

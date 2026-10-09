@@ -15,6 +15,7 @@ import (
     "context"
     "fmt"
     "log"
+    "os"
     "strings"
 
     "github.com/DeBrosOfficial/network/pkg/client"
@@ -23,7 +24,7 @@ import (
 func main() {
     cfg := client.DefaultClientConfig("my-app")
     cfg.GatewayURL = "https://ns-myapp.cluster.example.com"
-    cfg.APIKey = "<an app-runtime key>"
+    cfg.JWT = os.Getenv("ORAMA_ACCESS_TOKEN") // a signed-in user's token: storage refuses a key on its own
 
     c, err := client.NewClient(cfg)
     if err != nil {
@@ -71,7 +72,7 @@ The client's namespace is derived from its credential. There is no per-request n
 
 ## Authentication
 
-Set `cfg.APIKey` or `cfg.JWT`. Wallet login is not implemented in the Go client: use the gateway directly (`POST /v1/auth/challenge`, then `/v1/auth/verify`, see [Sign-in and sessions](/docs/developer/sign-in)), and `POST /v1/auth/api-key` with the JWT to mint a key.
+Set `cfg.APIKey` or `cfg.JWT`. Which one a call needs depends on its route: storage wants a signed-in user's token (or a deployed app's workload token), and the database routes below want an `admin` key or a wallet holding the `developer` role or above ([Access control](/docs/developer/access-control#api-keys)). Wallet login is not implemented in the Go client: use the gateway directly (`POST /v1/auth/challenge`, then `/v1/auth/verify`, see [Sign-in and sessions](/docs/developer/sign-in)), and `POST /v1/auth/api-key` with the JWT to mint a key.
 
 ## Storage
 

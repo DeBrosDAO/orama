@@ -6,8 +6,8 @@ Named failures, what causes them, and how to fix them. Start with the tools, the
 
 ```bash
 orama status                                   # which node is unhealthy?
-orama monitor alerts                           # what the cluster thinks is wrong, with a next step for each
-orama monitor node --node <ip>                 # everything one node reported
+orama monitor alerts --env <env>               # what the cluster thinks is wrong, with a next step for each
+orama monitor node --env <env> --node <ip>   # everything one node reported
 orama inspect --subsystem rqlite               # deep checks for one subsystem (see Inspector)
 sudo orama node doctor                         # on the node: services, ports, connectivity, Raft state
 sudo orama node logs <service> -n 100 -f       # logs; service aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqlite, turn
@@ -38,7 +38,7 @@ General rules:
 | `PEER_VANISHED` | The `orama` binary changed while the request was open | Run it again |
 | `NOT_FOUND` | No such vault entry | Nothing to do; the CLI creates SSH entries on demand |
 
-**A first run against a locked wallet can take four minutes** (two for approval, two for unlock). If a command seems to hang, look at the desktop app: there is probably a prompt on it. "rootwallet agent is not reachable" means the socket is absent: the desktop app is closed. `orama auth login` does not need the agent: on a machine without a wallet it prints a code, and `orama auth approve <code>` on one that has approves it.
+**A first vault run (SSH keys in `orama node setup`, for example) against a locked wallet can take four minutes** (two for approval, two for unlock); a wallet operation such as signing in `orama build` refuses at once instead. If a command seems to hang, look at the desktop app: there is probably a prompt on it. `rootwallet agent not reachable: … (is the desktop app running?)` means the socket is absent: the desktop app is closed. `rootwallet agent is locked — unlock it in the desktop app first` means unlock it and run the command again. `orama auth login` does not need the agent: on a machine without a wallet it prints a code, and `orama auth approve <code>` on one that has approves it.
 
 ## Binary signature verification fails
 
@@ -100,7 +100,7 @@ The credentials go to `curl` on stdin so they never appear in `ps`.
 ## Raft quorum issues
 
 ```bash
-orama monitor report                       # quorum, leader, indices
+orama monitor report --env <env>              # quorum, leader, indices
 orama inspect --subsystem rqlite
 sudo orama node logs rqlite -n 100
 ```
@@ -133,7 +133,7 @@ The monitor raises a critical "Raft snapshot term N is above the current term M"
 
 ## WireGuard connectivity
 
-Symptoms: `orama monitor mesh` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama monitor mesh`, `orama inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
+Symptoms: `orama monitor mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama monitor mesh --env <env>`, `orama inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
 
 ## Olric cluster split after enabling encryption
 
@@ -149,7 +149,7 @@ Olric memberlist encryption is all-or-nothing: nodes with encryption cannot talk
 
 ## IPFS daemon crash-loops: "error loading plugins: invalid character '\x00'"
 
-The Kubo repo `config` is zero-filled (a crash or reboot before an unsynced rewrite reached disk; fixed in 0.122.113). The node's IPFS identity lives in that file and is lost. `orama node upgrade` refuses the corrupt config and says so. Stop the node, move the repo directory it names aside, run the upgrade on that node again. A new repo and identity are created, the other nodes re-learn it, and IPFS Cluster re-pins this node's replicas from the others.
+The Kubo repo `config` is zero-filled (a crash or reboot before an unsynced rewrite reached disk; fixed in 0.122.113, so every 0.3.0 release has the fix). The node's IPFS identity lives in that file and is lost. `orama node upgrade` refuses the corrupt config and says so. Stop the node, move the repo directory it names aside, run the upgrade on that node again. A new repo and identity are created, the other nodes re-learn it, and IPFS Cluster re-pins this node's replicas from the others.
 
 ## Function WASM timeouts, or deploy 504, after a node replacement
 
@@ -161,9 +161,9 @@ The Kubo repo `config` is zero-filled (a crash or reboot before an unsynced rewr
 
 ## A 504 on a slow client's large upload
 
-A storage upload, pin, function deploy or invocation whose body takes more than a minute to arrive was cut off at 60 seconds before 1.0.0. Every long-budget route now gets five minutes to read and write, in the proxy and on the namespace gateway, once the caller's credential is validated. Both gateways must run this build. A body that still does not arrive in five minutes is a client too slow for the route. An anonymous call to a public function keeps the server's 60 and 120 second limits.
+A storage upload, pin, function deploy or invocation whose body takes more than a minute to arrive was cut off at 60 seconds before 0.3.0. Every long-budget route now gets five minutes to read and write, in the proxy and on the namespace gateway, once the caller's credential is validated. Both gateways must run this build. A body that still does not arrive in five minutes is a client too slow for the route. An anonymous call to a public function keeps the server's 60 and 120 second limits.
 
-## A 0.122.x deployment is down after upgrading
+## A deployment made on 0.122.x is down after upgrading
 
 0.122.x ran each deployment from a unit of its own. The upgrade moves its files to `data/deployments/<ns>-<name>/` and removes the old unit; the template unit that replaces it needs a workload token only the gateway can mint, so nothing starts it by itself. Delete the deployment and create it again. `--update` is not enough.
 
@@ -173,7 +173,7 @@ See [TLS and certificates](/docs/operator/tls-certificates#if-a-node-has-no-cert
 
 ## OramaOS
 
-**LUKS unlock fails after a reboot.** Not enough peer vault guardians are online to meet the Shamir threshold `K = max(2, floor(N/3))`. Make sure enough nodes are online and reachable over WireGuard; the agent retries with backoff. For a genesis node before 5 peers exist, `orama node unlock --genesis --node-ip <wg-ip>`.
+**LUKS unlock fails after a reboot.** Not enough peer vault guardians are online to meet the Shamir threshold `K = max(2, floor(N/3))`. Make sure enough nodes are online and reachable over WireGuard; the agent retries with backoff. For a genesis node before 5 peers exist, `orama node unlock --genesis --node-ip <wg-ip> --key-file <path>` takes a RootWallet-encrypted key file, but nothing produces one yet because key escrow is not built (see "Not yet implemented" in [OramaOS](/docs/operator/orama-os#not-yet-implemented)). The only unlock that works today is the raw-key `curl` to port 9998 described there, and that port is a known issue.
 
 **`orama node enroll` times out.** Port 9999 on the node is not reachable from the gateway, `--code` is missing or wrong, or `--node-ip` is not the node's public IPv4. Read the registration code from the node's console (it is not served on port 9999) and open 9999 in your provider's external firewall.
 
@@ -183,4 +183,4 @@ See [OramaOS](/docs/operator/orama-os).
 
 If a node partially joins (it registers in the registry's Raft group, then fails or is wiped), the remaining cluster can lose quorum permanently: RQLite thinks there are N voters but only N-1 are reachable. The symptom is RQLite stuck in `Candidate`, no leader, every write failing. If the cluster is still healthy, remove the half-joined node with `orama node remove --env <env> --node <ip>` and join again with a **new** invite (invites are single use, and a retry is told the invite was already used). If quorum is already lost, use [`orama node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster); on a young cluster with no data worth keeping, a clean reinstall of the affected nodes from the genesis node is the alternative ([Wipe a node](/docs/operator/clean-node)).
 
-**Prevention.** Make sure a joining node can complete the whole installation before it joins. The installer checks port availability up front so a conflict is caught early. See the pre-install checklist in [What you need](/docs/operator/getting-started#pre-install-checklist).
+**Prevention.** Make sure a joining node can complete the whole installation before it joins. The installer does not check for port conflicts up front, so stop anything holding the ports the node needs (for example 8080 and 4001) before you join. See the pre-install checklist in [What you need](/docs/operator/getting-started#pre-install-checklist).

@@ -40,7 +40,9 @@ orama global stage-oramad --genesis                 # the first binary
 | 31013 | Storage provider | Public |
 | 31014 | Relay metrics | Loopback |
 | 31015 | Chain indexer | Loopback |
-| 31020, 31021 | Tor relay ORPort, directory DirPort | Public (not installed today) |
+| 31020 | Tor ORPort of a relay or directory authority (`--services relay` or `dirauth`) | Public |
+| 31021 | Tor DirPort of a directory authority | Public |
+| 31022 | Onion-service transaction gate (`--services onion`) | Loopback |
 
 A co-located node runs the global services in the `orama-global` network namespace at `198.18.0.2`. The namespace cannot reach the WireGuard mesh, so chain peers use public addresses.
 

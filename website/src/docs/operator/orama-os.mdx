@@ -54,7 +54,7 @@ The CLI sends the console code, invite and public IP to the gateway, which prove
 
 4. **Verify:** `orama monitor report --env <env>`.
 
-Port 9999 must be open in your provider's external firewall (Hetzner firewall, AWS security groups). OramaOS opens it internally.
+Port 9999 must be open in your provider's external firewall (Hetzner firewall, AWS security groups). The agent installs no firewall rule of its own, so nothing on the node opens it for you.
 
 ## Disk encryption and reboot
 
@@ -62,12 +62,14 @@ The data partition is LUKS2 (AES-XTS-Plain64). The key is never stored on the no
 
 **Normal reboot.** The agent starts and brings up WireGuard, contacts peer guardians, fetches K shares, reconstructs the key by Lagrange interpolation, mounts the data partition, zeros the key from memory and starts the services. If not enough peers are reachable it retries with backoff (1, 2, 4, 8, 16 seconds, at most 5 retries), then falls back to **genesis unlock mode**.
 
-**Genesis unlock mode.** The agent opens an HTTP server on the WireGuard interface, port 9998, and waits for an operator to supply the raw key:
+**Genesis unlock mode.** The agent opens an HTTP server on port 9998 and waits for an operator to supply the raw key:
 
 ```bash
-curl -X POST "http://<wg-ip>:9998/v1/agent/unlock" \
+curl -X POST "http://<node-ip>:9998/v1/agent/unlock" \
   -H "Content-Type: application/json" -d '{"key":"<base64 32-byte LUKS key>"}'
 ```
+
+**Known issue (bugboard #89).** This server is plain HTTP with no credential, and it binds `:9998`, which is every network interface, including the public one. Nothing in the agent or the image restricts it: the agent installs no firewall rule (the image ships `iptables`, but no code configures it), so it is reachable from wherever your provider's firewall lets port 9998 through. Only the command receiver, which starts after the node is unlocked, is deliberately bound to the overlay address. Until the unlock server is bound to the overlay address too, block port 9998 in your provider's firewall except from the operator machine. The same applies to the enrollment port 9999, which the agent also binds on every interface (it is protected by the sealed registration code, not by the network).
 
 ## Not yet implemented
 
@@ -75,7 +77,7 @@ Do not rely on any of this:
 
 - **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers. A genesis OramaOS node cannot currently complete enrollment.
 - **Key escrow.** The agent never creates or stores a RootWallet-encrypted copy of the LUKS key and serves no `genesis-key` endpoint.
-- **`orama node unlock --genesis`.** It needs `--key-file` holding a RootWallet-encrypted key, and nothing produces one.
+- **`orama node unlock --genesis`.** It needs `--key-file` holding a RootWallet-encrypted key, and nothing produces one. The `curl` call under "Genesis unlock mode" is the only unlock path that works today.
 - **The 5-peer transition.** No code distributes Shamir shares once five or more peers join, or moves from escrow to normal unlock.
 - **dm-verity at boot.** The hashes can be built into the image but boot does not enforce them.
 - **Syscall filtering.** Seccomp runs in audit mode: disallowed syscalls are logged, not blocked.
@@ -83,7 +85,7 @@ Do not rely on any of this:
 
 ## Managing a node
 
-Since OramaOS has no SSH, all management is through the gateway API, which proxies to the agent over WireGuard (port 9998). The agent is never reachable from the public internet. These calls need an **admin** API key (or the owner's JWT):
+Since OramaOS has no SSH, all management is through the gateway API, which proxies to the agent over WireGuard (port 9998). The command receiver binds only the node's overlay address and requires the node's agent token, so on an unlocked node it is not reachable from the public internet (the genesis unlock server above is the exception while a node waits for its key). These calls need an **admin** API key (or the owner's JWT):
 
 ```bash
 curl "https://cluster.example.com/v1/node/status?node_id=<id>"           -H "Authorization: Bearer <admin key>"
@@ -113,15 +115,16 @@ Updates are staged automatically; activating one needs a reboot. Failed updates 
 
 ## Service sandboxing
 
-Each service runs in its own mount namespace (only its own data directory writable), UTS namespace, dedicated UID and GID, and a per-service seccomp allow-list (audit mode today). PID namespaces are deliberately omitted: they make a service PID 1, which changes signal semantics.
+Each service runs in its own mount namespace, UTS namespace and dedicated UID and GID, with a per-service seccomp allow-list (audit mode today). The root filesystem is a read-only SquashFS. The code names one writable `DataDir` per service but does not bind-mount or remount it: the mount namespace is created empty of changes, so what a service can write is decided by the read-only rootfs and by file ownership for its UID, not by a per-service mount. PID namespaces are deliberately omitted: they make a service PID 1, which changes signal semantics.
 
-| Service | Writable path | Extra syscalls |
+| Service | `DataDir` | Extra syscalls |
 |---|---|---|
 | RQLite | `/opt/orama/.orama/data/rqlite` | fsync, fdatasync (Raft and SQLite WAL) |
-| Olric | `/opt/orama/.orama/data/olric` | sendmmsg, recvmmsg (gossip) |
+| Olric | `/opt/orama/.orama/data` | sendmmsg, recvmmsg (gossip) |
 | IPFS | `/opt/orama/.orama/data/ipfs` | sendfile, splice (data transfer) |
-| Gateway | `/opt/orama/.orama/data/gateway` | sendfile, splice (HTTP) |
-| CoreDNS | `/opt/orama/.orama/data/coredns` | sendmmsg, recvmmsg (DNS) |
+| IPFS Cluster | `/opt/orama/.orama/data/ipfs-cluster` | fsync, fdatasync, sendfile (CRDT datastore, libp2p) |
+| Gateway | `/opt/orama/.orama` | sendfile, splice (HTTP) |
+| CoreDNS | `/opt/orama/.orama` | sendmmsg, recvmmsg (DNS) |
 
 ## Removing or resetting a node
 

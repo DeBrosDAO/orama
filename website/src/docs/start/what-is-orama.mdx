@@ -37,7 +37,7 @@ This site documents the whole thing: how to build on it, how to install and run 
 | DNS | CoreDNS, backed by a table in the replicated database |
 | TLS | Caddy |
 | Mesh | WireGuard |
-| Anonymity | Tor (client only) |
+| Anonymity | Tor (client only on a cluster node) |
 | Ledger | Cosmos SDK and CometBFT (`oramad`) |
 
 A Go control layer ties these together into a multi-tenant platform. The same software runs on every node. Nodes differ only in configuration and in which tenants have been placed on them.

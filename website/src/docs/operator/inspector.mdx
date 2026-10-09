@@ -45,7 +45,7 @@ Nodes are resolved the way every other command does: the network API for the nod
 | `namespace` | Per namespace: RQLite up with raft state and readiness, Olric memberlist, gateway health; cross namespace: all healthy, RQLite quorum. A namespace being provisioned or deprovisioned for under 15 minutes is not judged |
 | `tor` | `orama-namespace-tor@index` active, SOCKS `:9050` bound, bootstrap percentage, Anyone-network leftovers |
 | `webrtc` | Per namespace SFU and TURN active, cross-node SFU coverage (3 nodes), TURN redundancy (2 nodes). Only namespaces with WebRTC |
-| `global` | Chain unit and RPC (height lag, peers, block age, jailed or tombstoned, missed-block ratio), and the public Kubo, provider and relay units when installed |
+| `global` | Chain unit and RPC (height lag, peers, block age, jailed or tombstoned, missed-block ratio), and, when installed, the public Kubo, provider and Tor relay units: unit down, Kubo repo over `StorageMax`, provider hot-key balance 0, proof misses, provider disk over its declared maximum, and a relay reporting it is not in the relay set. The last four come from each unit's `monitor.json`. The relay's holds `in_consensus`, written every five minutes by `orama-global-tor-monitor.timer`, and the check stays quiet while the relay has no valid consensus ([Global nodes](/docs/operator/global-nodes#the-tor-network-roles)) |
 
 ## Collection failures
 

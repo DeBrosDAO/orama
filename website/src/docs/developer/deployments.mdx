@@ -76,7 +76,7 @@ npm run build
 orama deploy static ./dist --name my-app
 ```
 
-Your app is live at a URL like `my-app-f3o4if.orama-devnet.network`.
+Your app is live at a URL like `my-app-f3o4if.cluster.example.com`.
 
 To update an existing deployment:
 
@@ -244,10 +244,10 @@ Every deployment is assigned a domain automatically:
 For example, deploying `my-app` on devnet:
 
 ```
-my-app-f3o4if.orama-devnet.network
+my-app-f3o4if.cluster.example.com
 ```
 
-The random suffix ensures uniqueness. You can also specify a custom subdomain with `--subdomain`.
+The random suffix ensures uniqueness across every namespace. You can also specify a custom subdomain with `--subdomain`. The bare `<name>.<base-domain>` is only the address of a deployment created before subdomains existed; a deployment that has a subdomain is not served at its bare name, and when two namespaces each still hold a subdomain-less deployment of the same name, the bare host answers `404` for both until one is deleted.
 
 ### Cross-Node Routing
 
@@ -371,6 +371,8 @@ const res = await fetch(`${process.env.ORAMA_GATEWAY_URL}/v1/auth/renew`, {
 const { access_token, expires_in } = await res.json();
 ```
 
+`orama app grants set` names a deployment that exists in the namespace: a name a deployment cannot have (it contains `/` or `:`) is refused `400`, and a name nobody has deployed `404`, so deploy first and grant after. The grant decides what the app may do wherever its token is read, not only at renewal, so narrowing or revoking it applies to a token already minted. A token whose subject names one namespace and whose claim names another is refused wherever it is verified.
+
 In the SDK use `createWorkloadClient()`. A deployment cannot be granted the control plane. See [Access control](/docs/developer/access-control#a-deployed-app-s-identity).
 
 ### Where your app may write
@@ -379,7 +381,7 @@ Your app's own directory is read-only: its files are its build output, and a pro
 
 ### How values are handled
 
-Values are held encrypted in the cluster database (AES-256-GCM, key derived from the cluster secret). On the node they are written to a file only the system can read, which systemd hands to your process; they are not written into the unit and are removed when the deployment stops. A value may contain any valid UTF-8 except NUL (a PEM key or a JSON blob goes in as it is), one value is at most 64 KiB, and the whole rendered environment at most 224 KiB (larger is refused `400`).
+Values are held encrypted in the cluster database (AES-256-GCM, key derived from the cluster secret) and sealed to the deployment's namespace and id, so a copy of the stored value in another deployment's row does not open. On a cluster upgraded from an earlier release the sealing starts when an operator runs `orama operator rotate-secrets`; a new cluster has it from its first row. On the node they are written to a file only the system can read, which systemd hands to your process; they are not written into the unit and are removed when the deployment stops. A value may contain any valid UTF-8 except NUL (a PEM key or a JSON blob goes in as it is), one value is at most 64 KiB, and the whole rendered environment at most 224 KiB (larger is refused `400`).
 
 ### What your app runs as
 
@@ -491,7 +493,7 @@ orama deploy go ./app --name todo-api
 Configure the API URL to point at your Go deployment:
 
 ```typescript
-const API_URL = "https://todo-api-k8x2mq.orama-devnet.network"; // URL from orama app get
+const API_URL = "https://todo-api-k8x2mq.cluster.example.com"; // URL from orama app get
 
 async function fetchTodos() {
   const res = await fetch(`${API_URL}/api/todos`);
@@ -523,7 +525,7 @@ For CI/CD pipelines, use the CLI directly. Deployments are managed via the REST 
 
 ```bash
 # In CI/CD, set credentials via environment variable
-export ORAMA_TOKEN=your-api-key
+export ORAMA_TOKEN="$CI_ORAMA_KEY"   # an admin key kept in your CI secret store
 
 # Deploy
 orama deploy static ./dist --name my-app --update

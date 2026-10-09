@@ -57,12 +57,13 @@ Some state is paid for with a deposit that is locked as long as the state exists
 | Create a token | 10 ORAMA | Burned |
 | Open a storage deal | 1,000 norama (`deal_fee`) plus the escrow | Fee burned, escrow held until settled |
 | Storage service payment | 90% provider, 5% burn, 5% archive fund | See [Storage deals](/docs/blockchain/storage-deals) |
+| Relay pay | Same split: 90% operator earnings, 5% burn, 5% archive fund | See [Relay rewards](/docs/blockchain/relay-rewards) |
 | Shielded nullifier | 0.001 ORAMA per nullifier | Burned |
 | Shielded gas | `action_gas` 250,000 per action at the base fee | Burned, remainder to the proposer as a tip |
 
 ## Queries
 
-`params`, `base-fee`, `earnings [address]`, `deposit [id]` and `invariants`. The invariants check that earnings plus fee-only balances equal the `fees` module balance, that open deposits equal the deposits module balance, and that burned plus distributed equals collected.
+`params`, `base-fee`, `earnings [address]`, `deposit [id]` and `invariants` on `oramad query fees`, plus the public `FeeBalance` query (a hot key's fee-only balance, by address): `orama chain query orama.fees.v1.Query/FeeBalance '{"address":"orama1…"}'`. The gateway serves every one of them except `Invariants`. The invariants check that earnings plus fee-only balances equal the `fees` module balance, that open deposits equal the deposits module balance, and that burned plus distributed equals collected.
 
 ## What fees are not
 

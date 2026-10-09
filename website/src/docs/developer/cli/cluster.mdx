@@ -137,7 +137,9 @@ The fee is an explicit amount of norama. There is no default.
 | `--id` | — | Cluster id [required] |
 | `--metadata-uri` | — | HTTPS metadata URI |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (tor-network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex; required when the account has not signed before |
@@ -163,7 +165,9 @@ the sign document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Cluster id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (tor-network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -171,7 +175,7 @@ the sign document and does not submit it.
 
 ## orama cluster settings
 
-Show or change namespace-creation settings
+Show or change the cluster's settings
 
 ```
 orama cluster settings
@@ -181,7 +185,7 @@ Subcommands: `set`, `show`
 
 ## orama cluster settings set
 
-Change namespace creation or the per-wallet cap
+Change namespace creation, the per-wallet cap or the update policy
 
 ```
 orama cluster settings set <setting> <value>
@@ -197,9 +201,22 @@ open        any signed-in wallet
 
 max-namespaces-per-wallet is an integer from 1 to 10000. The default is 10.
 
+The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+
+```
+auto-update      off, notify (the default) or auto. notify reports a newer
+                 release in 'orama monitor'; auto installs it, one node at a
+                 time, when the cluster is healthy and the hour is in the window
+update-channel   the release channel to follow: stable (the default) or nightly
+update-window    start-end hours UTC when auto may install, for example 1-5;
+                 empty for any hour
+release-repo     the https URL of the release repository; empty (the default)
+                 means no updates are looked up
+```
+
 ## orama cluster settings show
 
-Show who may create namespaces, and the per-wallet cap
+Show who may create namespaces, the per-wallet cap and the update policy
 
 ```
 orama cluster settings show
@@ -254,6 +271,10 @@ orama operator rotate-secrets [flags]
 
 Rewrite function secrets, push tokens, TURN secrets, deployment
 environments and agent tokens onto the versioned envelope (enc:v1:&lt;id>:).
+A deployment's environment is written as enc:v2:&lt;id>:, sealed to its namespace
+and deployment id, so a copy of the ciphertext in another deployment's row does
+not open. This is also what turns on bound writes: until it has run, gateways
+keep writing deployment environments in the envelope an older gateway reads.
 
 Without --rotate the IKM does not change: leftover plaintext and the legacy
 enc: form are rewritten so a captured snapshot of the old format is no longer
@@ -263,7 +284,7 @@ With --rotate a new encryption root is generated. Existing ciphertext is
 re-encrypted under it. A disk that holds only the previous root cannot open
 the new rows. IPFS-Cluster and the mesh bearer are not touched.
 
-Do not run this until every gateway is on a binary that can read enc:v1:.
+Do not run this until every gateway is on a binary that can read enc:v2:.
 The walker is idempotent; if it is interrupted, run it again.
 
 | Flag | Default | Description |

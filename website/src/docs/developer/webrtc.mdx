@@ -114,16 +114,17 @@ ws.onmessage = (event) => {
 
 The `userId` in a client's `join` frame is **ignored**: a client cannot say who it is. The identity in a room is the token's subject, and the device id (`did`) when the session is device-bound.
 
-### 4. Rooms (REST)
+### 4. Rooms
+
+There is no call to create or close a room. A room exists while peers are joined to it: the first `join` for a `roomId` creates it on the room's SFU, and an empty room is cleaned up 60 seconds after its last peer leaves. The only room route is a read:
 
 ```js
-const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
-await fetch("/v1/webrtc/rooms", { method: "POST", headers, body: JSON.stringify({ room_id: "my-room" }) });
-const rooms = await fetch("/v1/webrtc/rooms", { headers });
-await fetch("/v1/webrtc/rooms?room_id=my-room", { method: "DELETE", headers });
+const res = await fetch("https://ns-myapp.cluster.example.com/v1/webrtc/rooms", {
+  headers: { Authorization: `Bearer ${accessToken}` },
+});
 ```
 
-Creating and closing rooms needs namespace ownership. `GET /v1/webrtc/rooms` reports the health of the SFU on the gateway's own node only.
+`GET /v1/webrtc/rooms` relays the health answer (including the room count) of the SFU on the gateway's own node only, 503 if that SFU does not answer. Any other method is refused with 405.
 
 ## REST and signalling reference
 
@@ -132,8 +133,7 @@ Creating and closing rooms needs namespace ownership. `GET /v1/webrtc/rooms` rep
 | POST | `/v1/webrtc/turn/credentials` | User token | TURN relay credentials |
 | GET (WebSocket) | `/v1/webrtc/signal` | User token | Signalling |
 | GET, PUT | `/v1/webrtc/config` | Owner or admin | `{"require_admission": bool}` |
-| GET | `/v1/webrtc/rooms` | User token | List rooms |
-| POST, DELETE | `/v1/webrtc/rooms` | Owner | Create, close |
+| GET | `/v1/webrtc/rooms` | User token | The local SFU's health, with its room count |
 
 | Message | Direction | Meaning |
 |---|---|---|

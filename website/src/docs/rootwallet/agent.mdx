@@ -25,6 +25,8 @@ Unlock attempts are throttled after 5 failures, with lockouts of 30 seconds doub
 |---|---|
 | `vault:ssh` | Read, create or delete an SSH key entry |
 | `vault:password` | Read a stored password for a site and user |
+| `vault:read` | List vault entries. An approved external tool gets the view with sensitive fields stripped |
+| `vault:write` | Add, replace, update or delete vault entries |
 | `wallet:address` | Read your address for a chain |
 | `wallet:sign` | Sign an EVM message (EIP-191), HD accounts only |
 | `wallet:sign:orama-archive` | Sign an Orama build archive manifest |
@@ -40,14 +42,16 @@ Unlock attempts are throttled after 5 failures, with lockouts of 30 seconds doub
 | `GET /v1/wallet/address?chain=…` (evm, solana, bitcoin or orama) | `wallet:address` | |
 | `POST /v1/wallet/sign` | `wallet:sign` | Body `{message, chain?, purpose?}`. EVM only |
 | `POST /v1/orama/tx/sign` | `wallet:sign:orama-tx` | Body `{signDoc}`. Approved per request |
-| `GET /v1/orama/account`, `GET /v1/orama/release/key` | | ORAMA account and the release public key |
+| `GET /v1/orama/account` | `wallet:address` | The ORAMA account |
+| `GET /v1/orama/release/key` | `wallet:address` | The release public key. Not in the headless agent |
 | `GET /v1/vault/ssh/:host/:user?format=…` (priv, pub or both) | `vault:ssh` | |
-| `POST` and `DELETE /v1/vault/ssh` | `vault:ssh` | Create or delete an SSH entry |
+| `POST /v1/vault/ssh`, `DELETE /v1/vault/ssh/:host/:user` | `vault:ssh` | Create or delete an SSH entry |
 | `GET /v1/vault/password/:domain/:user` | `vault:password` | |
+| `GET` and `PUT /v1/vault/entries`, `POST /v1/vault/entry`, `PUT` and `DELETE /v1/vault/entry/:id` | `vault:read` for the list, `vault:write` for the rest | The routes the desktop app edits the vault through. An approved external binary reaches them too, and the list it gets has sensitive fields stripped |
 
-Responses are `{"ok":true,"data":…}` or `{"ok":false,"error":"…","code":"…"}`. Branch on `code`: `AGENT_LOCKED`, `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `NOT_APPROVED`, `PERMISSION_DENIED`, `SIGN_PURPOSE_REQUIRED`, `ORAMA_TX_REFUSED`, `UNSUPPORTED_ACCOUNT`, `TOO_MANY_ATTEMPTS`, `NOT_FOUND`, `INVALID_REQUEST`, `PEER_UNIDENTIFIED`. Vault endpoints return stored entries; they never derive keys, and a missing entry is `NOT_FOUND`.
+Responses are `{"ok":true,"data":…}` or `{"ok":false,"error":"…","code":"…"}`. Branch on `code`: `AGENT_LOCKED`, `APPROVAL_DENIED`, `APPROVAL_TIMEOUT`, `NOT_APPROVED`, `PERMISSION_DENIED`, `SIGN_PURPOSE_REQUIRED`, `ORAMA_TX_REFUSED`, `UNSUPPORTED_ACCOUNT`, `TOO_MANY_ATTEMPTS`, `NOT_FOUND`, `INVALID_REQUEST`, `PEER_UNIDENTIFIED`, `PEER_VANISHED` (the caller's process is gone, or is no longer the one that connected) and `INTERNAL_ERROR`. Vault endpoints return stored entries; they never derive keys, and a missing entry is `NOT_FOUND`.
 
-Other endpoints (`/v1/unlock`, `/v1/lock`, `/v1/events`, `/v1/apps*`, `/v1/approvals/*`, `/v1/vault-sync`, vault entry editing) are for the desktop UI only: the caller's PID must be the agent's own.
+Other endpoints (`/v1/unlock`, `/v1/lock`, `/v1/events`, `/v1/apps*`, `/v1/approvals/*`, `/v1/vault-sync`) are for the desktop UI only: the caller's PID must be the agent's own.
 
 ## Signing for Orama: domain separation
 
