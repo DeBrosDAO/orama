@@ -2003,11 +2003,17 @@ holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
 signatures.
 
+With --export-votes-dir it also copies the authority's own vote of that period
+to <dir>/<valid-after>.vote, the files the bandwidth reporter reads. The
+directory must exist (the install makes it, shared read-only with the
+reporter's group); nothing else of the data directory is copied there.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--archive-dir` | — | Where the archive is written [required] |
 | `--bandwidth-file` | — | The bandwidth file the authority votes with |
 | `--data-dir` | — | The authority's tor DataDirectory [required] |
+| `--export-votes-dir` | — | Also copy the authority's own vote to <dir>/<valid-after>.vote for the bandwidth reporter (the directory must exist) |
 
 ### orama global tor ceremony
 

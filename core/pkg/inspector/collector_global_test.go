@@ -126,6 +126,83 @@ func TestGlobalCollectScript_monitorReadsRefuseLinksAndFIFOs(t *testing.T) {
 	}
 }
 
+// The public Kubo token is read the same way as the monitor files, in a
+// directory the Kubo account owns: no link is followed (so no `sudo cat`, and no
+// `test -r`, which follows one), and a token that cannot be read gives the
+// section's "token-unreadable" and no request.
+func TestGlobalCollectScript_kuboTokenReadRefusesLinksAndFIFOs(t *testing.T) {
+	script := globalCollectScript()
+	token := constants.GlobalIPFSHome + "/" + constants.GlobalIPFSAPITokenFile
+	want := "tok=$({ " + nofollowRead(token, kuboTokenReadLimit) + "; } | tr -d '\\n')"
+	if !strings.Contains(script, want) {
+		t.Errorf("the script does not read the token with %q", want)
+	}
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, token) && (strings.Contains(line, "cat ") || strings.Contains(line, "test -r") || strings.Contains(line, "head ")) {
+			t.Errorf("the token is read in a way that follows a link: %q", line)
+		}
+	}
+	if !strings.Contains(script, "else\n    echo token-unreadable") {
+		t.Error("an unreadable token is not reported")
+	}
+}
+
+func TestKuboTokenRead_behaviour(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	probeDir := t.TempDir()
+	probeTarget := filepath.Join(probeDir, "t")
+	if err := os.WriteFile(probeTarget, []byte("ROOT-ONLY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(probeTarget, filepath.Join(probeDir, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := exec.Command(bash, "-c", "dd if="+filepath.Join(probeDir, "l")+" bs=16 count=1 iflag=nofollow 2>&1").CombinedOutput(); strings.Contains(string(out), "ROOT-ONLY") || strings.Contains(string(out), "invalid") || strings.Contains(string(out), "unrecognized") {
+		t.Skipf("this dd has no working iflag=nofollow: %s", out)
+	}
+	// The script's own token command, with the host's sudo -n dropped (the test is its own user).
+	read := func(path string) string {
+		cmd := "tok=$({ " + strings.Replace(nofollowRead(path, kuboTokenReadLimit), "sudo -n ", "", 1) + "; } | tr -d '\\n'); printf %s \"$tok\""
+		out, _ := exec.Command(bash, "-c", cmd).Output()
+		return string(out)
+	}
+	dir := t.TempDir()
+	good := filepath.Join(dir, "api-token")
+	if err := os.WriteFile(good, []byte("s3cret-token\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(good); got != "s3cret-token" {
+		t.Errorf("a regular token read as %q", got)
+	}
+	if got := read(filepath.Join(dir, "absent")); got != "" {
+		t.Errorf("a missing token read as %q", got)
+	}
+	link := filepath.Join(dir, "linked")
+	if err := os.Symlink(probeTarget, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(link); got != "" {
+		t.Errorf("a link to a file the account cannot read was followed: %q", got)
+	}
+	fifo := filepath.Join(dir, "pipe")
+	if err := exec.Command("mkfifo", fifo).Run(); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan string, 1)
+	go func() { done <- read(fifo) }()
+	select {
+	case got := <-done:
+		if got != "" {
+			t.Errorf("a FIFO read as %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the token read waited on a FIFO")
+	}
+}
+
 // monitorRead behaves as it says: a regular file is read, a link to a file only
 // root can read gives nothing, and a FIFO is not waited on. dd needs GNU's
 // iflag, which the BSD one lacks, so the test says so and stops there.

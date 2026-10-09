@@ -70,7 +70,6 @@ The server side, an onion service on each validator forwarding to its RPC port, 
 ## What is not built
 
 - **A private Tor network.** `core/pkg/tornet` validates parameters (at least 3 directory authorities, exit policy `reject *:*`, 12-month certificates). It does not generate authority keys, start an authority or open an exit, and its exit start function refuses by design. No fleet node is a relay or runs Tor on a public address.
-- **The bandwidth scanner.** The installer has a unit renderer for sbws, and nothing installs it.
 - **Relay rewards.** See [Relay rewards](/docs/blockchain/relay-rewards).
 - **A CLI command for the proxy routes**, and an SDK wrapper for the tunnel.
 

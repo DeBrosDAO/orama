@@ -217,6 +217,11 @@ type GlobalInstallOptions struct {
 	ChainClientUsers []string
 	// Tor is what the Tor roles (dirauth, relay, onion) and the reporter need beyond the service names.
 	Tor TorOptions
+
+	// exportVotes makes a directory authority's archive oneshot copy its own
+	// vote to the votes directory: the host runs the reporter, in this install
+	// or an earlier one (InstallGlobal sets it).
+	exportVotes bool
 }
 
 var (
@@ -333,7 +338,7 @@ func (o GlobalInstallOptions) unitFiles(s GlobalService) []globalUnitFile {
 		main.body = RenderGlobalTorDirauthUnit()
 		return []globalUnitFile{
 			main,
-			{name: constants.GlobalTorArchiveUnit, body: RenderGlobalTorArchiveUnit()},
+			{name: constants.GlobalTorArchiveUnit, body: RenderGlobalTorArchiveUnit(o.exportVotes)},
 			{name: constants.GlobalTorArchiveTimer, body: RenderGlobalTorArchiveTimer(), enable: true},
 			{name: constants.GlobalTorMonitorUnit, body: RenderGlobalTorDirauthMonitorUnit()},
 			{name: constants.GlobalTorMonitorTimer, body: RenderGlobalTorMonitorTimer(), enable: true},

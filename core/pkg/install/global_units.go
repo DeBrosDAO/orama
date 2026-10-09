@@ -13,10 +13,9 @@ import (
 // Global unit accounts and paths. `orama global install` (InstallGlobal)
 // writes the chain (RenderGlobalChainUnit, under cosmovisor), public Kubo and
 // its GC timer, provider, archiver, indexer and repair units; the cluster
-// install writes none of them, and the sbws renderer here is not installed by
-// anything yet. The Tor roles (dirauth, relay, onion) are, with their torrc
-// (global_install_tor.go), and so is a directory authority's reporter
-// (global_install_reporter.go).
+// install writes none of them. The Tor roles (dirauth, relay, onion) are
+// installed with their torrc (global_install_tor.go), and so is a directory
+// authority's reporter (global_install_reporter.go).
 // chain/scripts/stagenet/deploy.sh writes its own orama-global-chain unit for
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
@@ -28,7 +27,6 @@ const (
 	globalIPFSUser   = "orama-ipfs-pub"
 
 	globalProviderUser = "orama-provider"
-	globalSBWSUser     = "orama-sbws"
 	globalReporterUser = "orama-reporter"
 	globalArchiverUser = "orama-archiver"
 	globalRepairUser   = "orama-repair"
@@ -335,11 +333,19 @@ var txGateListen = net.JoinHostPort("127.0.0.1", strconv.Itoa(constants.GlobalTx
 
 // RenderGlobalTorArchiveUnit is the oneshot that copies the directory
 // authority's consensus and votes into its archive. Its timer is
-// RenderGlobalTorArchiveTimer.
-func RenderGlobalTorArchiveUnit() string {
+// RenderGlobalTorArchiveTimer. With exportVotes it also copies the authority's
+// own vote of each period into constants.GlobalTorVotesDir, the one place
+// outside its home the unit may write, where the bandwidth reporter reads it.
+func RenderGlobalTorArchiveUnit(exportVotes bool) string {
 	home := constants.GlobalTorDirauthHome
 	exec := fmt.Sprintf("%s/%s global tor archive --data-dir %s --archive-dir %s/%s", globalBinDir, globalOramaCLI, home, home, constants.GlobalTorArchiveDir)
+	if exportVotes {
+		exec += " --export-votes-dir " + constants.GlobalTorVotesDir
+	}
 	unit := renderGlobalOneshot("Orama Tor vote archive", globalTorDirauthUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	if exportVotes {
+		unit = strings.Replace(unit, "StateDirectoryMode=0700\n", "StateDirectoryMode=0700\nReadWritePaths="+constants.GlobalTorVotesDir+"\n", 1)
+	}
 	// It copies files and talks to nobody.
 	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_UNIX\n", 1)
 	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=any\nIPAddressAllow=localhost\n", 1)
@@ -406,18 +412,16 @@ WantedBy=timers.target
 `
 }
 
-// RenderGlobalSBWSUnit measures relay bandwidth. Dirauth hosts only.
-func RenderGlobalSBWSUnit() string {
-	return renderGlobalUnit("Orama sbws", globalSBWSUser, "/var/lib/orama-global/sbws", "/usr/bin/sbws generate", "")
-}
-
 // RenderGlobalReporterUnit reports each closed epoch's relay bandwidth and
 // uptime to x/relay from this authority's votes. Dirauth hosts only. It reads
 // the epoch and signs through the local oramad RPC on loopback, so it starts
-// after the chain; its home (state, hot key, operator, authority-id and the
-// votes directory) is the unit's working directory.
+// after the chain; its home (state, hot key, operator and authority-id) is the
+// unit's working directory. It reads the authority's votes from
+// constants.GlobalTorVotesDir through its own group, and nothing of the
+// authority's home.
 func RenderGlobalReporterUnit() string {
-	exec := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s", globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome)
+	exec := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s --votes-dir %s",
+		globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome, constants.GlobalTorVotesDir)
 	return needsChain(renderGlobalUnit("Orama bandwidth reporter", globalReporterUser, constants.GlobalReporterHome, exec, ""))
 }
 

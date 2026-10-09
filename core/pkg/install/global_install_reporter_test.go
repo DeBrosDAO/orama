@@ -44,14 +44,15 @@ func TestInstallGlobal_reporterPreparesItsHomeFromTheNetworkFile(t *testing.T) {
 			t.Errorf("%s was not given to the reporter's account", name)
 		}
 	}
-	for _, dir := range []string{home, filepath.Join(home, "votes")} {
-		info, err := os.Stat(dir)
-		if err != nil || info.Mode().Perm() != 0o700 {
-			t.Errorf("%s: %v %v, want mode 0700", dir, info, err)
-		}
-		if !slices.Contains(tf.chowns, chownCall{dir, 990, 991}) {
-			t.Errorf("%s was not given to the reporter's account", dir)
-		}
+	info, err := os.Stat(home)
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("%s: %v %v, want mode 0700", home, info, err)
+	}
+	if !slices.Contains(tf.chowns, chownCall{home, 990, 991}) {
+		t.Errorf("%s was not given to the reporter's account", home)
+	}
+	if _, err := os.Stat(filepath.Join(home, "votes")); !os.IsNotExist(err) {
+		t.Error("the reporter's home holds a votes directory: it reads the authority's from the shared one")
 	}
 	if _, err := os.Stat(filepath.Join(home, "hot-key")); !os.IsNotExist(err) {
 		t.Error("the install made a hot key: the reporter creates its own on first start")
@@ -227,9 +228,108 @@ func TestReporterFileNamesMatchTheReporterCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", src, err)
 	}
-	for _, name := range []string{reporterOperatorFile, reporterAuthorityFile, reporterVotesDir} {
+	for _, name := range []string{reporterOperatorFile, reporterAuthorityFile} {
 		if !strings.Contains(string(data), `filepath.Join(fl.home, "`+name+`")`) {
 			t.Errorf("reporter.go does not read %q from its home", name)
 		}
+	}
+	if !strings.Contains(string(data), `"votes-dir"`) {
+		t.Error("reporter.go has no --votes-dir flag, which the reporter unit passes")
+	}
+}
+
+// The authority's own vote reaches the reporter through a directory only the
+// two of them share: the authority's account owns and writes it, the reporter's
+// group reads it (setgid so a file made in it has that group), and neither
+// account is given the other's home.
+func TestInstallGlobal_reporterGetsTheAuthoritysVoteThroughASharedDirectory(t *testing.T) {
+	tf := newTorFixture(t)
+	if err := InstallGlobal(tf.reporterOptions(t), tf.host); err != nil {
+		t.Fatal(err)
+	}
+	votes := tf.state("tor-votes")
+	info, err := os.Stat(votes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 || info.Mode()&os.ModeSetgid == 0 {
+		t.Errorf("%s mode = %v, want 0750 and setgid", votes, info.Mode())
+	}
+	// uid 990 is every fixture account; the group is the fixture's 995.
+	if !slices.Contains(tf.chowns, chownCall{votes, 990, 995}) {
+		t.Errorf("%s was not given to the authority's account and the reporter's group: %v", votes, tf.chowns)
+	}
+	archive := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorArchiveUnit))
+	if archive != RenderGlobalTorArchiveUnit(true) {
+		t.Errorf("the archive oneshot does not export the vote:\n%s", archive)
+	}
+	if !strings.Contains(mustDirective(t, archive, "ExecStart"), "--export-votes-dir "+constants.GlobalTorVotesDir) ||
+		mustDirective(t, archive, "ReadWritePaths") != constants.GlobalTorVotesDir {
+		t.Errorf("archive unit:\n%s", archive)
+	}
+	if rep := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalReporterUnit)); !strings.Contains(mustDirective(t, rep, "ExecStart"), "--votes-dir "+constants.GlobalTorVotesDir) {
+		t.Errorf("the reporter does not read the shared directory:\n%s", rep)
+	}
+}
+
+// An authority with no reporter exports nothing and has no shared directory,
+// and re-installing it beside a reporter that is already installed keeps the
+// export.
+func TestInstallGlobal_voteExportFollowsTheReporter(t *testing.T) {
+	tf := newTorFixture(t)
+	plain := tf.options(GlobalServiceDirauth)
+	plain.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)}
+	if err := InstallGlobal(plain, tf.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorArchiveUnit)); got != RenderGlobalTorArchiveUnit(false) {
+		t.Errorf("an authority with no reporter exports its vote:\n%s", got)
+	}
+	if _, err := os.Stat(tf.state("tor-votes")); !os.IsNotExist(err) {
+		t.Error("a votes directory was made for an authority with no reporter")
+	}
+	if err := InstallGlobal(tf.reporterOptions(t), tf.host); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(plain, tf.host); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorArchiveUnit)); got != RenderGlobalTorArchiveUnit(true) {
+		t.Errorf("re-installing the authority beside its reporter dropped the vote export:\n%s", got)
+	}
+}
+
+func TestRenderGlobalTorArchiveUnit_exportWritesOnlyTheVotesDirectory(t *testing.T) {
+	plain, export := RenderGlobalTorArchiveUnit(false), RenderGlobalTorArchiveUnit(true)
+	if strings.Contains(plain, "export-votes-dir") || strings.Contains(plain, "ReadWritePaths") {
+		t.Errorf("the plain archive unit exports:\n%s", plain)
+	}
+	if got := mustDirective(t, export, "ReadWritePaths"); got != constants.GlobalTorVotesDir {
+		t.Errorf("ReadWritePaths = %q, want only the votes directory", got)
+	}
+	for _, unit := range []string{plain, export} {
+		if got := mustDirective(t, unit, "User"); got != globalTorDirauthUser {
+			t.Errorf("the archive runs as %s", got)
+		}
+		if !strings.Contains(unit, "IPAddressDeny=any\nIPAddressAllow=localhost\n") || mustDirective(t, unit, "RestrictAddressFamilies") != "AF_UNIX" {
+			t.Errorf("the archive may reach the network:\n%s", unit)
+		}
+	}
+}
+
+// A unit directory that cannot be read is an error, not "no reporter yet": the
+// archive unit would otherwise be rewritten without its export.
+func TestInstallGlobal_unreadableUnitDirectoryRefusesTheInstall(t *testing.T) {
+	tf := newTorFixture(t)
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tf.host.UnitDir = filepath.Join(blocker, "units")
+	if err := InstallGlobal(tf.reporterOptions(t), tf.host); err == nil || !strings.Contains(err.Error(), constants.GlobalReporterUnit) {
+		t.Fatalf("err = %v, want the unreadable unit named", err)
+	}
+	if tf.torInstalled != 0 || len(tf.node.calls) > 1 {
+		t.Errorf("the host changed before the refusal: tor installs %d, commands %v", tf.torInstalled, tf.node.calls)
 	}
 }

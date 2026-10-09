@@ -161,7 +161,7 @@ func runProgram(ctx context.Context, stdin []byte, name string, args ...string) 
 	return c.CombinedOutput()
 }
 
-var archiveFlags struct{ dataDir, archiveDir, bandwidthFile string }
+var archiveFlags struct{ dataDir, archiveDir, bandwidthFile, exportVotesDir string }
 
 var archiveCmd = &cobra.Command{
 	Use:   "archive",
@@ -172,7 +172,12 @@ var archiveCmd = &cobra.Command{
 consensus and bandwidth file of the network is then recomputable by anyone who
 holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
-signatures.`,
+signatures.
+
+With --export-votes-dir it also copies the authority's own vote of that period
+to <dir>/<valid-after>.vote, the files the bandwidth reporter reads. The
+directory must exist (the install makes it, shared read-only with the
+reporter's group); nothing else of the data directory is copied there.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		f := archiveFlags
@@ -191,6 +196,16 @@ signatures.`,
 			votes = " (the votes of this period are not held)"
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "%s: valid-after %s root %s%s\n", state, m.ValidAfter, m.Root, votes)
+		if f.exportVotesDir == "" {
+			return nil
+		}
+		exported, err := tornet.ExportOwnVote(f.dataDir, f.exportVotesDir)
+		if err != nil {
+			return clierr.Failure("export the authority's own vote: %v", err)
+		}
+		if exported {
+			fmt.Fprintf(cmd.OutOrStdout(), "exported the authority's own vote to %s\n", f.exportVotesDir)
+		}
 		return nil
 	},
 }
@@ -285,6 +300,7 @@ func init() {
 	a.StringVar(&archiveFlags.dataDir, "data-dir", "", "The authority's tor DataDirectory [required]")
 	a.StringVar(&archiveFlags.archiveDir, "archive-dir", "", "Where the archive is written [required]")
 	a.StringVar(&archiveFlags.bandwidthFile, "bandwidth-file", "", "The bandwidth file the authority votes with")
+	a.StringVar(&archiveFlags.exportVotesDir, "export-votes-dir", "", "Also copy the authority's own vote to <dir>/<valid-after>.vote for the bandwidth reporter (the directory must exist)")
 	torCmd.AddCommand(ceremonyCmd, archiveCmd, infoCmd)
 	Cmd.AddCommand(torCmd)
 }

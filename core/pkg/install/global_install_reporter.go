@@ -2,6 +2,7 @@ package install
 
 import (
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -16,8 +17,11 @@ import (
 const (
 	reporterOperatorFile  = "operator"
 	reporterAuthorityFile = "authority-id"
-	// reporterVotesDir is where the reporter looks for the authority's archived votes.
-	reporterVotesDir = "votes"
+	// votesDirMode is the votes directory: the authority's account writes, the
+	// reporter's group reads and enters, nobody else does, and a file made in it
+	// takes the reporter's group (setgid), so the archive oneshot, which cannot
+	// change a file's group to one it is not in, hands the reporter its votes.
+	votesDirMode = 0o750 | fs.ModeSetgid
 )
 
 // operatorAddress is the shape of an account address, which is written into a
@@ -50,8 +54,9 @@ func planGlobalReporter(opts GlobalInstallOptions, tor *torPlan) (*reporterPlan,
 }
 
 // applyGlobalReporter prepares the reporter's home: owned by its account with
-// mode 0700, the operator and authority-id files, and an empty votes directory
-// for the archive. An existing hot key, state and report are left as they are.
+// mode 0700, and the operator and authority-id files. An existing hot key,
+// state and report are left as they are. It also makes the votes directory the
+// authority's archive oneshot writes its own vote to (see votesDirMode).
 func applyGlobalReporter(h GlobalHost, plan *reporterPlan) error {
 	uid, gid, err := h.Lookup(globalReporterUser)
 	if err != nil {
@@ -61,7 +66,7 @@ func applyGlobalReporter(h GlobalHost, plan *reporterPlan) error {
 	if err := ownedDir(h, home, uid, gid); err != nil {
 		return err
 	}
-	if err := ownedDir(h, filepath.Join(home, reporterVotesDir), uid, gid); err != nil {
+	if err := votesDir(h); err != nil {
 		return err
 	}
 	for _, f := range []struct{ name, value string }{{reporterOperatorFile, plan.operator}, {reporterAuthorityFile, plan.authorityID}} {
@@ -70,5 +75,31 @@ func applyGlobalReporter(h GlobalHost, plan *reporterPlan) error {
 		}
 	}
 	h.Logf("  ✓ %s configured for authority %s", constants.GlobalReporterHome, plan.authorityID)
+	return nil
+}
+
+// votesDir makes the directory the authority's oneshot writes its vote to and
+// the reporter reads: the authority's account owns it, the reporter's group
+// reads it. Neither account is given anything of the other's home.
+func votesDir(h GlobalHost) error {
+	authorityUID, _, err := h.Lookup(globalTorDirauthUser)
+	if err != nil {
+		return fmt.Errorf("look up the %s account: %w", globalTorDirauthUser, err)
+	}
+	reporterGID, err := h.LookupGroup(globalReporterUser)
+	if err != nil {
+		return fmt.Errorf("look up the %s group: %w", globalReporterUser, err)
+	}
+	dir := filepath.Join(h.StateDir, filepath.Base(constants.GlobalTorVotesDir))
+	if err := h.StateRoot.MkdirAll(dir, votesDirMode.Perm()); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	if err := h.Chown(h.StateRoot, dir, authorityUID, reporterGID); err != nil {
+		return fmt.Errorf("chown %s: %w", dir, err)
+	}
+	// After the chown, which clears the setgid bit on some systems.
+	if err := h.StateRoot.Chmod(dir, votesDirMode); err != nil {
+		return fmt.Errorf("chmod %s: %w", dir, err)
+	}
 	return nil
 }

@@ -91,7 +91,6 @@ var globalUnits = map[string]bool{
 	"orama-global-provider.service":    true,
 	"orama-global-tor-relay.service":   true,
 	"orama-global-tor-dirauth.service": true,
-	"orama-global-sbws.service":        true,
 	"orama-global-reporter.service":    true,
 	"orama-global-tor-onion.service":   true,
 	"orama-global-txgate.service":      true,
