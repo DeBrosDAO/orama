@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,14 +24,25 @@ const PreviousRelease = ".release-previous"
 // keepRename is os.Rename; a test fails it to exercise keepPrevious's caller.
 var keepRename = os.Rename
 
+// keepRemoveAll is os.RemoveAll; a test fails it to exercise keepPrevious's
+// cleanup after the commit point.
+var keepRemoveAll = os.RemoveAll
+
+// keepLog receives what keepPrevious reports about a keep that succeeded.
+var keepLog io.Writer = os.Stderr
+
 // keepPrevious moves the entries a stage replaced (oldDir, which swapArchive
 // made 0700: only root reads a kept release) to base's PreviousRelease,
 // replacing the one kept before. The release kept before is moved aside, into
 // the staging directory oldDir is in, and deleted only once oldDir is in its
 // place, so a kill at any step leaves a whole kept release (or oldDir, which
-// completePendingKeep keeps). When it fails, oldDir still holds the replaced
-// entries, so the caller can put them back, and the release kept before is
-// where it was.
+// completePendingKeep keeps). When it returns an error, oldDir still holds the
+// replaced entries, so the caller can put them back, and the release kept
+// before is where it was. The rename of oldDir to PreviousRelease is the commit
+// point: after it the keep has happened, so a failure to delete the release
+// kept before is reported on keepLog and is not an error (a caller that rolled
+// back on it would move the new release out and delete it); the stage's
+// cleanup and removeLeftoverStaging remove the copy.
 func keepPrevious(base, oldDir string) error {
 	kept := filepath.Join(base, PreviousRelease)
 	aside := filepath.Join(filepath.Dir(oldDir), stagedAside)
@@ -52,8 +64,11 @@ func keepPrevious(base, oldDir string) error {
 		}
 		return err
 	}
-	if err := os.RemoveAll(aside); err != nil {
-		return fmt.Errorf("remove the release kept before, at %s: %w", aside, err)
+	if asideKept {
+		if err := keepRemoveAll(aside); err != nil {
+			fmt.Fprintf(keepLog, "  ✗ the replaced release is kept at %s, but the release kept before could not be deleted from %s: %v "+
+				"(the next stage removes it)\n", kept, aside, err)
+		}
 	}
 	return nil
 }

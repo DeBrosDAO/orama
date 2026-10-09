@@ -119,6 +119,42 @@ func TestStageKeepPrevious_putsTheOldReleaseBackWhenItCannotBeKept(t *testing.T)
 	}
 }
 
+// Deleting the release kept before happens after the replaced release is kept.
+// Failing it is not a failed install: rolling back there would move the new
+// release out of /opt/orama while nothing moves in, and the staging cleanup
+// would delete it.
+func TestStageKeepPrevious_aFailedDeleteOfTheOlderKeptReleaseIsNotAFailedStage(t *testing.T) {
+	n := newReleaseOnlyNode(t)
+	key, addr := newSigner(t)
+	n.anchor = []string{addr}
+	first := writeTarball(t, signedEntries(t, key, map[string]string{"bin/orama": "first cli"}))
+	if err := stageArchive(n.stageTarget, StageOptions{Archive: first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.stageUnsigned(t, newBuild, true); err != nil {
+		t.Fatal(err)
+	}
+	prevRemove, prevLog := keepRemoveAll, keepLog
+	t.Cleanup(func() { keepRemoveAll, keepLog = prevRemove, prevLog })
+	keepRemoveAll = func(string) error { return errors.New("device busy") }
+	var logged strings.Builder
+	keepLog = &logged
+
+	newer := map[string]string{"bin/orama": "newer cli", "systemd/orama-namespace-x.service": "[Unit]\n"}
+	if err := n.stageUnsigned(t, newer, true); err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "newer cli" {
+		t.Fatalf("the new release is not installed: bin/orama = %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(n.base, PreviousRelease, "bin", "orama")); string(b) != "new cli" {
+		t.Fatalf("the replaced release was not kept: %q", b)
+	}
+	if !strings.Contains(logged.String(), "device busy") || !strings.Contains(logged.String(), stagedAside) {
+		t.Fatalf("the failed delete was not reported with its path: %q", logged.String())
+	}
+}
+
 // copyTree copies the tree at from to to, as a crash would leave it.
 func copyTree(t *testing.T, from, to string) {
 	t.Helper()
