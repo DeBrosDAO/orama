@@ -1619,7 +1619,18 @@ app's requests there.
   node whose proxy could not reach the app answers its own unmarked 503, and
   that, a refused or reset connection and a timeout are what open an app's
   breaker. A node on an older release does not mark, so its apps' 5xx still
-  count, against that app's breaker only.
+  count, against that app's breaker only. During a rolling upgrade the same
+  holds for functions: the marker was renamed from `X-Orama-Function-Origin`,
+  so a namespace gateway still on the old release sets a header the upgraded
+  index gateway does not read, and that function's 502, 503 or 504 counts until
+  the namespace gateway is upgraded too. A function cannot set the marker or
+  blank it: its raw HTTP response drops every `x-orama-` header, and a marker
+  present with an empty value still counts as marked.
+- **What is logged and what the client is told:** the log line of a failed hop
+  and the breaker's reason carry the cause without the request URL (a
+  credential may be in its query string). When no member of a namespace could
+  be reached the client gets a fixed `503` message, not the member's address,
+  port or the request's path and query; those stay in the node's log.
 - **States:** a breaker opens after 5 consecutive failures and refuses requests
   for 30 s. It then goes half-open and admits exactly one probe; every other
   request is refused (503 "all upstream circuits are open" when no other member
