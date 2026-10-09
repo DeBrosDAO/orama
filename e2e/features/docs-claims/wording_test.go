@@ -3,6 +3,9 @@
 package docsclaims
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -93,11 +96,30 @@ func TestSupplyInvariant_statedInChainDoc(t *testing.T) {
 
 // TestOpenNetworkPlan_isAPlanNotADoc: plans/open-network.md is a design plan
 // and lives outside docs/, which describe running code (CLAUDE.md "Docs
-// describe what the code does today"); it must say so, the docs that cite it
-// must cite it as a plan, and its status must not deny code CHAIN.md
-// documents as built (bugboard 2855).
+// describe what the code does today"); the docs that cite it must cite it as
+// a plan, and its status must not deny code CHAIN.md documents as built
+// (bugboard 2855). plans/ is gitignored (.gitignore: scratch plans), so the
+// plan exists only in the author's checkout and not in a worktree, a clone
+// or a release checkout: its header is checked where it is present, and the
+// citation rule, which needs only the tracked docs, always.
 func TestOpenNetworkPlan_isAPlanNotADoc(t *testing.T) {
 	t.Parallel()
+	if _, err := os.Stat(filepath.Join(cliconf.RepoRoot(t), filepath.FromSlash(openNetPlan))); err == nil {
+		checkPlanHeader(t)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed to stat %s: %v", openNetPlan, err)
+	}
+	for _, doc := range docs(t) {
+		for _, l := range grep(t, doc, regexp.MustCompile(`docs/open-network`)) {
+			t.Errorf("%s\n  cites the plan under docs/; it is %s", l, openNetPlan)
+		}
+	}
+}
+
+// checkPlanHeader asserts the plan says it is a plan and does not deny the
+// code CHAIN.md documents.
+func checkPlanHeader(t *testing.T) {
+	t.Helper()
 	plan := lines(t, openNetPlan)
 	var status line
 	for _, l := range plan[:min(len(plan), 10)] {
@@ -110,10 +132,5 @@ func TestOpenNetworkPlan_isAPlanNotADoc(t *testing.T) {
 	}
 	if strings.Contains(status.Text, "Nothing in this plan has been built") && strings.Contains(cliconf.ReadRepoFile(t, chainDoc), "chain/` actually does today") {
 		t.Errorf("%s\n  says nothing is built, while %s documents the chain code that implements parts of it", status, chainDoc)
-	}
-	for _, doc := range docs(t) {
-		for _, l := range grep(t, doc, regexp.MustCompile(`docs/open-network`)) {
-			t.Errorf("%s\n  cites the plan under docs/; it is %s", l, openNetPlan)
-		}
 	}
 }

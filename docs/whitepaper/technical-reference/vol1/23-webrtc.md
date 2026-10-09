@@ -188,7 +188,7 @@ Three credential paths exist, with different lifetimes because they have differe
 
 | Path | TTL | Refreshed? | Why |
 |---|---|---|---|
-| `POST /v1/webrtc/turn/credentials` and the `turn_credentials` host function | 24 h (`turn.DefaultCredentialTTL`) | No | They mint once at call setup; once the credential expires the TURN server rejects the allocation refresh and a relay-only call dies. A 10-minute value tore down calls at 10 minutes (bugboard #155) |
+| `POST /v1/webrtc/turn/credentials` and the `turn_credentials` host function | 24 h (`turn.DefaultCredentialTTL`) | No | They mint once at call setup; once the credential expires the TURN server rejects the allocation refresh and a relay-only call dies. A lifetime shorter than a call tore the call down when it ran out (bugboard #155) |
 | SFU `turn-credentials` and `refresh-credentials` frames | `turn_credential_ttl`, 600 s by default | Yes, at 80 % of the TTL (480 s) over the signalling socket | A short life bounds replay of a leaked credential, and the refresh path is under the SFU's control |
 | The SFU's own PeerConnection | 24 h | Yes, at 80 % (19.2 h) | It never leaves the SFU |
 

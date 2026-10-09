@@ -51,7 +51,7 @@ Two further constraints shaped the design. The process runs unprivileged as the 
 
 `core/cmd/node/main.go` takes one flag, `--config` (default `node.yaml`). The systemd unit passes an absolute path to `configs/node.yaml` under the orama directory. The sequence is fixed:
 
-1. Resolve and require the file. A missing file prints the `orama config init` hint and exits 1.
+1. Resolve and require the file. A missing file prints a hint that `orama node install` writes `node.yaml` and exits 1.
 2. Decode it with `config.DecodeStrict`, which sets `KnownFields(true)` (`core/pkg/config/yaml.go:DecodeStrict`). An unknown key fails the whole parse. This is why every key a template renders must exist as a struct field, even when nothing reads it. The struct comments record the v0.122.42 incident in which a rendered `secrets_encryption_key` that the struct lacked crash-looped every node at boot (`core/pkg/config/gateway_config.go:HTTPGatewayConfig`).
 3. Run `Config.Validate`, which aggregates every error from the per-section validators in `core/pkg/config/validate/` and prints them all before exiting 1. It requires a non-empty `node.id`, `discovery.http_adv_address` and `discovery.raft_adv_address` (no defaults: rqlited binds the HTTP advertise host and every on-node client reaches it there), a valid data directory, valid listen multiaddrs, a positive `node.max_connections` and `discovery.discovery_interval`, an odd `database.replication_factor` (an even one is an error, not a warning), distinct RQLite HTTP and Raft ports, and `database.rqlite_auth_file` whenever `rqlite_enforce_auth` is set.
 4. Create the data and `rqlite` directories (mode 0755), build the `Node`, and call `Node.Start`.
