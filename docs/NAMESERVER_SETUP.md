@@ -58,9 +58,16 @@ written any other way is brought back to the slots within one sweep. Install
 and upgrade write no zone records at all: a new nameserver's zone appears on its
 first sweep after `orama-node` starts. There are at most 13 slots.
 
-A negative answer (NXDOMAIN) carries the zone's own SOA from `dns_records` in
-its authority section — the one naming the lowest glued slot. A zone with no SOA
+A negative answer carries the zone's own SOA from `dns_records` in its
+authority section — the one naming the lowest glued slot. A zone with no SOA
 yet (no slot glued) answers SERVFAIL rather than inventing one.
+
+A name that exists answers NOERROR with no records (NODATA) for a type it has
+none of: an AAAA, TXT or NS query for `ns-<name>.<base>`, which owns only A
+records, is NODATA, and so is any name a wildcard covers or that has names below
+it. NXDOMAIN is for a name with nothing at all. The two are not interchangeable:
+a resolver that is told the name does not exist stops resolving it, for every
+type and everything below it, until the negative TTL runs out.
 
 ### Seeing which address holds which slot
 

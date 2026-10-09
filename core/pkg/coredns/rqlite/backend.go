@@ -120,6 +120,49 @@ func (b *Backend) Query(ctx context.Context, fqdn string, qtype uint16) ([]*DNSR
 	return records, nil
 }
 
+// NameExists reports whether the zone holds anything at qname, whatever the
+// record type: an active record owned by qname itself, by one of the wildcard
+// names that would answer for it, or by a name below it (qname is then an empty
+// non-terminal, which exists without owning a record).
+//
+// It is what separates NXDOMAIN ("no such name", for every type) from NODATA
+// ("the name exists, with no record of this type", RFC 2308 section 2.2). One
+// round trip, so a miss costs the database one more query rather than one per
+// candidate. The exact names hit the (fqdn, type, value) index; the descendant
+// test is a suffix match over the table, which only a name that is about to be
+// answered NXDOMAIN or NODATA pays — and that answer is cached.
+func (b *Backend) NameExists(ctx context.Context, qname string, wildcards []string) (bool, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	qname = dns.Fqdn(strings.ToLower(qname))
+	names := make([]string, 0, 1+len(wildcards))
+	names = append(names, qname)
+	for _, w := range wildcards {
+		names = append(names, dns.Fqdn(strings.ToLower(w)))
+	}
+
+	suffix := "." + qname
+	args := make([]interface{}, 0, len(names)+2)
+	for _, n := range names {
+		args = append(args, n)
+	}
+	args = append(args, -len(suffix), suffix)
+
+	query := `
+		SELECT 1
+		FROM dns_records
+		WHERE is_active = TRUE
+		  AND (fqdn IN (` + strings.TrimSuffix(strings.Repeat("?,", len(names)), ",") + `) OR substr(fqdn, ?) = ?)
+		LIMIT 1
+	`
+	rows, err := b.client.Query(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("query failed: %w", err)
+	}
+	return len(rows) > 0, nil
+}
+
 // parseValue parses a DNS record value based on its type
 func (b *Backend) parseValue(recordType, value string) (interface{}, error) {
 	switch strings.ToUpper(recordType) {
