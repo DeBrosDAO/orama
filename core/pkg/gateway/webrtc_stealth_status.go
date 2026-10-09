@@ -51,3 +51,15 @@ func stealthToggleOutcome(enable bool, err error) (status int, message string) {
 		return http.StatusInternalServerError, "failed to change WebRTC stealth; see the gateway log"
 	}
 }
+
+// clusterStatusFailure maps an error from reading a namespace cluster's status
+// to the status and message /v1/namespace/status answers with. Only a cluster
+// that does not exist is a 404; a registry that could not be read says nothing
+// about the cluster, so it is a 503 the client can retry, and its detail stays
+// in the log.
+func clusterStatusFailure(err error) (status int, message string) {
+	if errorCode(err) == codeClusterNotFound {
+		return http.StatusNotFound, "cluster not found"
+	}
+	return http.StatusServiceUnavailable, "cluster status is temporarily unavailable; retry in a few seconds, and if it persists ask the cluster operator to check the namespace registry"
+}

@@ -1336,14 +1336,16 @@ func (cm *ClusterManager) DeprovisionCluster(ctx context.Context, namespaceID in
 	return nil
 }
 
-// GetClusterStatus returns the current status of a namespace cluster
+// GetClusterStatus returns the current status of a namespace cluster. A cluster
+// that does not exist is ErrClusterNotFound; any other error is a failed read of
+// the registry, and says nothing about whether the cluster exists.
 func (cm *ClusterManager) GetClusterStatus(ctx context.Context, clusterID string) (*ClusterProvisioningStatus, error) {
 	cluster, err := cm.GetCluster(ctx, clusterID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read namespace cluster %s: %w", clusterID, err)
 	}
 	if cluster == nil {
-		return nil, fmt.Errorf("cluster not found")
+		return nil, ErrClusterNotFound
 	}
 
 	status := &ClusterProvisioningStatus{

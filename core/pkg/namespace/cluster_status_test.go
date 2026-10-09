@@ -137,3 +137,23 @@ func TestGetClusterStatus_nodeReadErrorIsReturned(t *testing.T) {
 		t.Errorf("err = %q, want it to name the cluster", err)
 	}
 }
+
+// A cluster that is not in the registry is ErrClusterNotFound, which callers
+// tell from a registry that could not be read.
+func TestGetClusterStatus_missingClusterIsErrClusterNotFound(t *testing.T) {
+	cm := &ClusterManager{db: &recoveryMockDB{}, logger: zap.NewNop()}
+	if _, err := cm.GetClusterStatus(context.Background(), "nope"); !errors.Is(err, ErrClusterNotFound) {
+		t.Fatalf("err = %v, want ErrClusterNotFound", err)
+	}
+}
+
+func TestGetClusterStatus_clusterReadErrorIsNotNotFound(t *testing.T) {
+	errDB := errors.New("rqlite: connection refused")
+	db := &recoveryMockDB{}
+	db.queryFunc = func(any, string, ...any) error { return errDB }
+	cm := &ClusterManager{db: db, logger: zap.NewNop()}
+	_, err := cm.GetClusterStatus(context.Background(), "c1")
+	if !errors.Is(err, errDB) || errors.Is(err, ErrClusterNotFound) {
+		t.Fatalf("err = %v, want the read failure and not ErrClusterNotFound", err)
+	}
+}

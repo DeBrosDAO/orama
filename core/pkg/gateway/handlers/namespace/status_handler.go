@@ -3,6 +3,8 @@ package namespace
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -54,11 +56,7 @@ func (h *StatusHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	status, err := h.clusterManager.GetClusterStatus(ctx, clusterID)
 	if err != nil {
-		h.logger.Error("Failed to get cluster status",
-			zap.String("cluster_id", clusterID),
-			zap.Error(err),
-		)
-		writeError(w, http.StatusNotFound, "cluster not found")
+		h.writeStatusError(w, clusterID, err)
 		return
 	}
 
@@ -83,6 +81,21 @@ func (h *StatusHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// writeStatusError answers a failed GetClusterStatus: 404 for a cluster that
+// does not exist, 503 for a registry that could not be read (logged with the
+// cluster id and the cause, never sent to the client).
+func (h *StatusHandler) writeStatusError(w http.ResponseWriter, clusterID string, err error) {
+	if errors.Is(err, ns.ErrClusterNotFound) {
+		writeError(w, http.StatusNotFound, "cluster not found")
+		return
+	}
+	h.logger.Error("Failed to get cluster status",
+		zap.String("cluster_id", clusterID),
+		zap.Error(err),
+	)
+	writeError(w, http.StatusServiceUnavailable, "cluster status is temporarily unavailable; retry in a few seconds, and if it persists ask the cluster operator to check the namespace registry")
+}
+
 // HandleByName handles GET /v1/namespace/status/name/{namespace}
 func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -104,18 +117,21 @@ func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cluster, err := h.clusterManager.GetClusterByNamespace(r.Context(), namespace)
+	if err == nil && cluster == nil {
+		err = ns.ErrClusterNotFound
+	}
 	if err != nil {
-		h.logger.Debug("Cluster not found for namespace",
-			zap.String("namespace", namespace),
-			zap.Error(err),
-		)
-		writeError(w, http.StatusNotFound, "cluster not found for namespace")
+		if errors.Is(err, ns.ErrClusterNotFound) {
+			writeError(w, http.StatusNotFound, "cluster not found for namespace")
+			return
+		}
+		h.writeStatusError(w, namespace, fmt.Errorf("failed to read the cluster of namespace %s: %w", namespace, err))
 		return
 	}
 
 	status, err := h.clusterManager.GetClusterStatus(r.Context(), cluster.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to get cluster status")
+		h.writeStatusError(w, cluster.ID, err)
 		return
 	}
 

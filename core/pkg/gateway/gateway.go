@@ -1452,7 +1452,12 @@ func (g *Gateway) namespaceClusterStatusHandler(w http.ResponseWriter, r *http.R
 
 	status, err := g.clusterProvisioner.GetClusterStatusByID(r.Context(), clusterID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "cluster not found")
+		code, message := clusterStatusFailure(err)
+		if code != http.StatusNotFound {
+			g.logger.ComponentError(logging.ComponentGeneral, "Failed to get namespace cluster status",
+				zap.String("cluster_id", clusterID), zap.Error(err))
+		}
+		writeError(w, code, message)
 		return
 	}
 
