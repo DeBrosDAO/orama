@@ -20,10 +20,20 @@ func readUnit(t *testing.T, name string) string {
 
 // GC must go through the running daemon's API; a bare `ipfs repo gc` fell
 // back to an offline GC during daemon start-up and failed on the repo lock.
+// The unit runs `orama node ipfs-gc`, which takes the daemon's address and
+// bearer from the environment file written here, and not Kubo's own CLI: that
+// answered the SIGTERM of a planned stop by waiting for the collection, so the
+// stop timed out and the unit stayed failed.
 func TestIPFSGC_GoesThroughTheDaemonAPI(t *testing.T) {
 	unit := readUnit(t, "orama-namespace-ipfs-gc@.service")
-	if !strings.Contains(unit, "ExecStart=/usr/local/bin/ipfs --api=${IPFS_API} --api-auth=${IPFS_API_AUTH} repo gc") {
-		t.Errorf("GC does not authenticate to the daemon API:\n%s", unit)
+	if !strings.Contains(unit, "\nExecStart=/opt/orama/bin/orama node ipfs-gc\n") {
+		t.Errorf("GC is not run by orama's own command:\n%s", unit)
+	}
+	if strings.Contains(unit, "\nExecStart=/usr/local/bin/ipfs") {
+		t.Errorf("GC runs Kubo's CLI, which does not stop on SIGTERM:\n%s", unit)
+	}
+	if !strings.Contains(unit, "\nEnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-gc.env\n") {
+		t.Errorf("GC does not read the daemon address and bearer from its environment file:\n%s", unit)
 	}
 	env := ipfsGCEnv("/repo", "n1", "bearer:abc")
 	if env["IPFS_API"] == "" || !strings.HasPrefix(env["IPFS_API"], "/ip4/127.0.0.1/tcp/") {

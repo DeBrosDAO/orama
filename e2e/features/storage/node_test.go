@@ -19,6 +19,7 @@ import (
 const (
 	gcTimer   = "orama-namespace-ipfs-gc@index.timer"
 	gcEnv     = "/var/lib/orama-unit-env/index/ipfs-gc.env"
+	gcService = "orama-namespace-ipfs-gc@index.service"
 	svcJSON   = "/opt/orama/.orama/data/ipfs-cluster/service.json"
 	ownerUser = "orama"
 	// storageMaxFraction and storageMaxFloorGB: Datastore.StorageMax is half
@@ -152,6 +153,29 @@ func TestGC_timerAndBearer(t *testing.T) {
 		}
 		if c := strings.TrimSpace(f.Exec(t, node, "grep -c '^IPFS_API_AUTH=bearer:' "+gcEnv).Stdout); c != "1" {
 			t.Errorf("%s: %s does not carry IPFS_API_AUTH=bearer:", node.Name, gcEnv)
+		}
+	}
+}
+
+// TestGC_runsThroughTheDaemonAndEndsSuccessful: the oneshot is `orama node
+// ipfs-gc`, which collects through the daemon's RPC with the bearer in the
+// environment file. `systemctl start` on a oneshot returns when it has ended,
+// so its result is the run's. A planned stop of it (orama node restart) is not
+// a failure either; that exit path is the command's unit test, a collection
+// being too short on a test node to stop in the middle.
+func TestGC_runsThroughTheDaemonAndEndsSuccessful(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	for _, node := range f.State.Nodes {
+		f.MustExec(t, node, "systemctl start "+gcService)
+		show := f.MustExec(t, node, "systemctl show -p Result -p ExecMainStatus -p ExecStart "+gcService).Stdout
+		for _, want := range []string{"Result=success", "ExecMainStatus=0", "node ipfs-gc"} {
+			if !strings.Contains(show, want) {
+				t.Errorf("%s: %s after a run: %s; want %q", node.Name, gcService, show, want)
+			}
+		}
+		if s := f.Unit(t, node, gcService); s == "failed" {
+			t.Errorf("%s: %s is failed after a run", node.Name, gcService)
 		}
 	}
 }

@@ -24,10 +24,16 @@ ReadWritePaths=/opt/orama/.orama/data/namespaces/%i /opt/orama/.orama/logs /opt/
 InaccessiblePaths=/opt/orama/.orama/secrets
 EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-gc.env
 Environment=HOME=/opt/orama
-# --api: always the running daemon. Without it the CLI looks for the repo's api
-# file, and while the daemon is starting (lock held, api file not yet written)
-# it fell back to an offline GC and failed on "someone else has the lock".
-ExecStart=/usr/local/bin/ipfs --api=${IPFS_API} --api-auth=${IPFS_API_AUTH} repo gc
+# `orama node ipfs-gc` collects through the running daemon's RPC API (IPFS_API
+# and IPFS_API_AUTH in the environment file), never the repo directly: while the
+# daemon is starting (lock held, api file not yet written) `ipfs repo gc` fell
+# back to an offline GC and failed on "someone else has the lock". It is not
+# `ipfs repo gc` itself because that CLI answers SIGTERM by waiting for the
+# collection, and this unit is stopped with the daemon it requires and with the
+# node (orama node restart, an upgrade): the stop ran into TimeoutStopSec and
+# left the unit failed until the next run. `orama node ipfs-gc` exits 0 on
+# SIGTERM; any other failure still fails the unit.
+ExecStart=/opt/orama/bin/orama node ipfs-gc
 TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal

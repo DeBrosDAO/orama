@@ -55,6 +55,7 @@ func TestTemplateUnits_hostStackAdoptsExistingPaths(t *testing.T) {
 			"127.0.0.1:10107",
 			"127.0.0.1:10110",
 		},
+		"orama-namespace-ipfs-gc@.service":    {"ExecStart=/opt/orama/bin/orama node ipfs-gc", "EnvironmentFile=/var/lib/orama-unit-env/%i/ipfs-gc.env"},
 		"orama-namespace-vault@.service":      {"data/vault/vault.yaml"},
 		"orama-namespace-caddy@.service":      {"/etc/caddy/Caddyfile", "XDG_CONFIG_HOME=/var/lib/caddy/config", "orama-namespace-coredns@nameserver.service"},
 		"orama-namespace-tor@.service":        {"/etc/orama/tor/torrc", "StateDirectory=orama-tor"},

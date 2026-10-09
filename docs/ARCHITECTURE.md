@@ -97,16 +97,25 @@ Olric or the SFU against an address that does not exist yet.
 **Unit dependencies express ordering, not lifecycle.** `Requires=` propagates
 stop *and* restart, so it is reserved for the cases where one unit is genuinely
 useless without another. Two qualify: `ipfs-cluster@` and `ipfs-gc@` on
-`ipfs@` — a controller with no daemon has nothing to control, and `ipfs repo gc`
-works through the running daemon's API. `ipfs-cluster@`'s process is
+`ipfs@` — a controller with no daemon has nothing to control, and the GC works through
+the running daemon's API. `ipfs-cluster@`'s process is
 `orama serve-ipfs-cluster`: ipfs-cluster v1.1.6 cannot send Kubo's bearer, so
 that process proxies `127.0.0.1:10110` to the RPC and adds it
 (`pkg/ipfs.ServeCluster`), admitting only connections whose socket the
 `orama` user owns (asked of the kernel by `sock_diag`). It is TCP rather than a unix
 socket because ipfs-cluster's transport for a `/unix` address ignores request
 cancellation: `pin_timeout` never fired, a pin of content no peer had held
-Kubo's pin lock indefinitely, and every `ipfs repo gc` timed out behind it.
-The GC oneshot passes the same bearer as `--api-auth`.
+Kubo's pin lock indefinitely, and every `repo gc` timed out behind it.
+The GC oneshot is `orama node ipfs-gc` (hidden; the unit's `ExecStart`): it calls
+Kubo's `repo/gc` RPC with the same bearer, taken from `IPFS_API_AUTH` in the
+unit's environment file, not from a command line. A stop of the unit (it is
+stopped with `ipfs@` and with `orama-node`, so by `orama node restart` and an
+upgrade) sends SIGTERM; the command cancels the request and exits 0, because
+`ipfs repo gc` answered SIGTERM by waiting for the collection, and the stop ran
+into `TimeoutStopSec` and left the unit failed until the next timer run. Any
+other failure (daemon unreachable, bearer refused, a block that could not be
+removed) exits non-zero and fails the unit. The next run continues a stopped
+collection.
 
 Every other unit `orama-node` manages uses `Wants=` + `After=`. In particular
 `gateway@` no longer

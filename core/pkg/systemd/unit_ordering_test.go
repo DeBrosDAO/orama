@@ -193,7 +193,7 @@ func TestIPFSControllersKeepTheirHardDependency(t *testing.T) {
 // one of these or it is supervised, and the test makes you say which.
 var oneshotUnits = []string{
 	"orama-namespace-wireguard@.service", // adopts wg0 in place, RemainAfterExit
-	"orama-namespace-ipfs-gc@.service",   // `ipfs repo gc`, fired by its timer
+	"orama-namespace-ipfs-gc@.service",   // `orama node ipfs-gc`, fired by its timer
 	"orama-namespace-ipfs-gc@.timer",
 	"orama-deploy-build@.service", // one npm install, started and waited for by the gateway
 	"orama-deploy-clean@.service", // removes that install's output

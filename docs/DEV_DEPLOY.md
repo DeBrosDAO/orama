@@ -1084,7 +1084,7 @@ the `memberlist.bindAddr:bindPort` its config names — the node's WireGuard
 address, not localhost. It used to dial localhost, which never connected and
 cost 30 s per namespace per node. `ipfs-gc` is listed as its timer,
 `orama-namespace-ipfs-gc@<ns>.timer`: restarting the timer reschedules the GC
-(`OnActiveSec=20min`), while restarting the oneshot ran `ipfs repo gc` inside
+(`OnActiveSec=20min`), while restarting the oneshot ran the garbage collection inside
 the upgrade — failing with "cannot connect to the api" straight after the IPFS
 restart, or holding the upgrade for the whole GC. `orama node
 start|stop|restart|status` use the same unit list.

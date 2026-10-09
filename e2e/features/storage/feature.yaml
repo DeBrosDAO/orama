@@ -39,6 +39,7 @@ covers:
     - "docs/SECURITY.md: private blobs are AES-256-GCM sealed (ORMAW1) before Add; tarballs are not"
     - "docs/SECURITY.md#network-isolation: Kubo requires its bearer; IPFS Cluster REST requires basic auth; service.json is 0600; all bind loopback"
     - "docs/ARCHITECTURE.md#node-process-model: serve-ipfs-cluster admits only sockets owned by the orama user"
+    - "docs/ARCHITECTURE.md#node-process-model: the GC oneshot is orama node ipfs-gc, which collects through the daemon's RPC with the bearer from its environment file and exits 0 when it is stopped"
     - "docs/MONITORING.md#ipfs: Datastore.StorageMax is 50% of the disk, floored at 10GB"
     - "docs/MONITORING.md#ipfs: the collector reads Kubo, the cluster and the pin-lock list with their credentials"
     - "docs/API_SURFACE.md#storage: unpin is idempotent; immediate=true reclaims everywhere; shared content is kept"
