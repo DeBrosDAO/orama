@@ -18,6 +18,9 @@ import type { Context, IndexTx } from "./tx";
 import { arr, digits, iso, optArr, optDigits, rec, uint } from "./wire";
 
 const NORAMA = "norama";
+const BANK_ALL_BALANCES = "cosmos.bank.v1beta1.Query/AllBalances";
+const STAKING_DELEGATIONS = "cosmos.staking.v1beta1.Query/DelegatorDelegations";
+const STAKING_UNBONDING = "cosmos.staking.v1beta1.Query/DelegatorUnbondingDelegations";
 /** The indexer's page size for an account's transactions, and the most pages one activity call reads. */
 const INDEX_PAGE_SIZE = 100;
 const MAX_SCAN_PAGES = 5;
@@ -30,13 +33,18 @@ function noramaOf(coin: unknown, what: string): bigint {
   return c.denom === NORAMA ? BigInt(digits(c.amount, what)) : 0n;
 }
 
+/** One address's read of a cosmos-sdk Query method, through the proxy's module-query route. */
+export function addressQuery(method: string, field: string, address: string): string {
+  return withQuery(`query/${method}`, { json: JSON.stringify({ [field]: address }) });
+}
+
 async function bankBalance(client: ChainClient, address: string): Promise<bigint> {
-  const body = rec(await client.get(chainPath("bank", "balances", address)), "balance");
+  const body = rec(await client.get(addressQuery(BANK_ALL_BALANCES, "address", address)), "balance");
   return optArr(body.balances, "balance").reduce<bigint>((n, c) => n + noramaOf(c, "balance"), 0n);
 }
 
 async function stakedBalance(client: ChainClient, address: string): Promise<bigint> {
-  const body = rec(await client.get(chainPath("staking", "delegations", address)), "delegations");
+  const body = rec(await client.get(addressQuery(STAKING_DELEGATIONS, "delegator_addr", address)), "delegations");
   return optArr(body.delegation_responses, "delegations").reduce<bigint>(
     (n, d) => n + noramaOf(rec(d, "delegation").balance, "delegation balance"),
     0n,
@@ -44,7 +52,7 @@ async function stakedBalance(client: ChainClient, address: string): Promise<bigi
 }
 
 async function unbondingBalance(client: ChainClient, address: string): Promise<bigint> {
-  const body = rec(await client.get(chainPath("staking", "unbonding", address)), "unbonding");
+  const body = rec(await client.get(addressQuery(STAKING_UNBONDING, "delegator_addr", address)), "unbonding");
   let total = 0n;
   for (const u of optArr(body.unbonding_responses, "unbonding")) {
     for (const entry of optArr(rec(u, "unbonding delegation").entries, "unbonding entries")) {

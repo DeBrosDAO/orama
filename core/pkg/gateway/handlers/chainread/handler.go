@@ -1,4 +1,5 @@
-// Package chainread is a read-only HTTP proxy for the website explorer.
+// Package chainread is an HTTP proxy for the website explorer and for wallets: reads, plus
+// simulating and broadcasting a signed transaction.
 //
 // Register mounts it at /v1/chain/. The browser calls that prefix and never
 // talks to CometBFT, the SDK REST API, or the chain indexer itself. Those
@@ -71,6 +72,9 @@ const (
 	statusMaxBody = 64 << 10
 
 	upstreamTimeout = 10 * time.Second
+
+	// txNotFoundRetryAfter is the Retry-After, in seconds, of a 404 for a transaction: about a block.
+	txNotFoundRetryAfter = "2"
 )
 
 // Config is the upstream set. Empty URLs are not filled in here;
@@ -134,6 +138,9 @@ type Proxy struct {
 
 	// querySlots bounds the module queries in flight (query.go).
 	querySlots chan struct{}
+	// simulateSlots and broadcastSlots bound the transaction calls in flight, each route apart (tx.go).
+	simulateSlots  chan struct{}
+	broadcastSlots chan struct{}
 	// heightMu guards the cached latest height the query window check reads.
 	heightMu  sync.Mutex
 	heightVal int64
@@ -165,7 +172,9 @@ func New(cfg Config) (*Proxy, error) {
 		maxBody: defaultMaxBody,
 		timeout: upstreamTimeout,
 
-		querySlots: make(chan struct{}, queryMaxConcurrent),
+		querySlots:     make(chan struct{}, queryMaxConcurrent),
+		simulateSlots:  make(chan struct{}, simulateMaxConcurrent),
+		broadcastSlots: make(chan struct{}, broadcastMaxConcurrent),
 	}, nil
 }
 
@@ -251,6 +260,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p.serveREST(w, r, rest) {
+		return
+	}
+	switch rest {
+	case simulatePath:
+		p.serveSimulate(w, r)
+		return
+	case broadcastPath:
+		p.serveBroadcast(w, r)
 		return
 	}
 	if !knownRoute(rest) {
@@ -474,6 +491,11 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, base *url.URL, p
 	// An upstream failure is answered with a fixed body of this proxy's own, never the
 	// upstream's: the node's message can carry paths, store details and internal addresses.
 	if code, failed := upstreamFailure(resp.StatusCode, base == p.rpc, body); failed {
+		if code == http.StatusNotFound && path == upstreamTx {
+			// A transaction that is not found yet may only not be in a block or in this node's index
+			// yet: a client that has just broadcast one asks again.
+			w.Header().Set("Retry-After", txNotFoundRetryAfter)
+		}
 		writeErr(w, code, failureBody(code))
 		return
 	}
@@ -560,29 +582,43 @@ func failureBody(code int) string {
 
 // upstreamFailure reports whether an upstream answer is an error, and the status to answer with:
 // 404 when the thing asked for does not exist, 502 for everything else. CometBFT reports an error
-// as a JSON-RPC error object, sometimes under a 200, so an RPC body is checked as well as the
-// status.
+// as a JSON-RPC error object, under a 200 for a POST and under a 500 for a GET (its URI handler
+// answers every error from a route with 500, a transaction that is not there included), so an RPC
+// body is read whatever its status: a 500 that says "not found" is a 404, not a bad gateway.
 func upstreamFailure(status int, rpc bool, body []byte) (int, bool) {
 	if status == http.StatusNotFound {
 		return http.StatusNotFound, true
 	}
+	if rpc {
+		if e, ok := rpcErrorIn(body); ok {
+			if strings.Contains(strings.ToLower(e.Message+" "+e.Data), "not found") {
+				return http.StatusNotFound, true
+			}
+			return http.StatusBadGateway, true
+		}
+	}
 	if status >= 400 {
 		return http.StatusBadGateway, true
 	}
-	if !rpc || !bytes.Contains(body, []byte(`"error"`)) {
-		return 0, false
+	return 0, false
+}
+
+// rpcError is the error member of a CometBFT JSON-RPC answer.
+type rpcError struct {
+	Message string `json:"message"`
+	Data    string `json:"data"`
+}
+
+// rpcErrorIn returns the JSON-RPC error object in body, if it has one.
+func rpcErrorIn(body []byte) (rpcError, bool) {
+	if !bytes.Contains(body, []byte(`"error"`)) {
+		return rpcError{}, false
 	}
 	var env struct {
-		Error *struct {
-			Message string `json:"message"`
-			Data    string `json:"data"`
-		} `json:"error"`
+		Error *rpcError `json:"error"`
 	}
 	if json.Unmarshal(body, &env) != nil || env.Error == nil {
-		return 0, false
+		return rpcError{}, false
 	}
-	if strings.Contains(strings.ToLower(env.Error.Message+" "+env.Error.Data), "not found") {
-		return http.StatusNotFound, true
-	}
-	return http.StatusBadGateway, true
+	return *env.Error, true
 }

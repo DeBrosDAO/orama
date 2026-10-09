@@ -283,6 +283,25 @@ func TestRoutePolicy_chainIndexReadsArePublic(t *testing.T) {
 	}
 }
 
+// A wallet simulates and broadcasts without a credential: the routes are public POSTs under the
+// reviewed /v1/chain/ prefix, and the wallet queries sit under it too.
+func TestRoutePolicy_chainWalletRoutesArePublic(t *testing.T) {
+	for _, path := range []string{
+		"/v1/chain/simulate",
+		"/v1/chain/broadcast",
+		"/v1/chain/query/cosmos.bank.v1beta1.Query/Balance",
+		"/v1/chain/query/cosmwasm.wasm.v1.Query/ContractInfo",
+	} {
+		method := http.MethodPost
+		if strings.Contains(path, "/query/") {
+			method = http.MethodGet
+		}
+		if !policyOf(method, path).Access.Anonymous() {
+			t.Errorf("%s %q is not reachable without a credential", method, path)
+		}
+	}
+}
+
 // Registering the real routes is what proves the declaration and the wiring
 // agree: routepolicy.Mux panics on a pattern with no policy, so a gateway that
 // builds its routes at all has one for every route it serves.

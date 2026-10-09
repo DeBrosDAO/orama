@@ -33,6 +33,12 @@ func read(t *testing.T, path string, query url.Values) *gw.Response {
 	return harness.GW(t).MustSend(t, gw.Req{Path: chainPrefix + path, Query: query})
 }
 
+// addressJSON is the `json=` request of a query on one address.
+func addressJSON(field, address string) string {
+	raw, _ := json.Marshal(map[string]string{field: address})
+	return string(raw)
+}
+
 func decode(t *testing.T, resp *gw.Response, v any) {
 	t.Helper()
 	if resp.Status != http.StatusOK {
@@ -56,7 +62,7 @@ func TestExplorerReads_balanceIsTheNodesBankBalance(t *testing.T) {
 	var out struct {
 		Balances []struct{ Denom, Amount string } `json:"balances"`
 	}
-	decode(t, read(t, "/bank/balances/"+k.Address, nil), &out)
+	decode(t, read(t, "/query/cosmos.bank.v1beta1.Query/AllBalances", url.Values{"json": {addressJSON("address", k.Address)}}), &out)
 	if len(out.Balances) != 1 || out.Balances[0].Denom != chain.Denom || out.Balances[0].Amount != funded.String() {
 		t.Errorf("balances of %s: %+v, want %s %s", k.Address, out.Balances, funded.String(), chain.Denom)
 	}
@@ -65,7 +71,7 @@ func TestExplorerReads_balanceIsTheNodesBankBalance(t *testing.T) {
 	}
 
 	stranger := c.NewKey(t, c.Node(t, 1), "e2e-explorer-empty")
-	decode(t, read(t, "/bank/balances/"+stranger.Address, nil), &out)
+	decode(t, read(t, "/query/cosmos.bank.v1beta1.Query/AllBalances", url.Values{"json": {addressJSON("address", stranger.Address)}}), &out)
 	if len(out.Balances) != 0 {
 		t.Errorf("an unfunded key holds %+v", out.Balances)
 	}
@@ -112,21 +118,22 @@ func TestExplorerReads_validatorsAreTheRunsBondedSet(t *testing.T) {
 			} `json:"delegation"`
 		} `json:"delegation_responses"`
 	}
-	decode(t, read(t, "/staking/delegations/"+owner, nil), &delegations)
+	decode(t, read(t, "/query/cosmos.staking.v1beta1.Query/DelegatorDelegations", url.Values{"json": {addressJSON("delegator_addr", owner)}}), &delegations)
 	if len(delegations.DelegationResponses) == 0 {
 		t.Errorf("%s has no delegation", owner)
 	}
 	var unbonding struct {
 		UnbondingResponses []json.RawMessage `json:"unbonding_responses"`
 	}
-	decode(t, read(t, "/staking/unbonding/"+owner, nil), &unbonding)
+	decode(t, read(t, "/query/cosmos.staking.v1beta1.Query/DelegatorUnbondingDelegations", url.Values{"json": {addressJSON("delegator_addr", owner)}}), &unbonding)
 	if len(unbonding.UnbondingResponses) != 0 {
 		t.Errorf("%s is unbonding %d entries on a run that unbonds nothing", owner, len(unbonding.UnbondingResponses))
 	}
 }
 
-// TestExplorerReads_refusals: a malformed address is not a route (404), a caller
-// query is refused (400) before the node sees it, and only GET is served.
+// TestExplorerReads_refusals: a page limit above 100 is refused (400) before the node sees it, a
+// query the proxy does not serve is a 404, a caller query on the validator list is refused, and
+// only GET is served.
 func TestExplorerReads_refusals(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -136,11 +143,9 @@ func TestExplorerReads_refusals(t *testing.T) {
 		query url.Values
 		want  int
 	}{
-		{"/bank/balances/notanaddress", nil, http.StatusNotFound},
-		{"/bank/balances/" + strings.ToUpper(addr), nil, http.StatusNotFound},
-		{"/staking/delegations/x", nil, http.StatusNotFound},
-		{"/staking/unbonding/x", nil, http.StatusNotFound},
-		{"/bank/balances/" + addr, url.Values{"pagination.limit": {"100000"}}, http.StatusBadRequest},
+		{"/query/cosmos.bank.v1beta1.Query/AllBalances", url.Values{"json": {`{"address":"` + strings.ToUpper(addr) + `","pagination":{"limit":"1000"}}`}}, http.StatusBadRequest},
+		{"/query/cosmos.bank.v1beta1.Query/TotalSupply", nil, http.StatusNotFound},
+		{"/bank/balances/" + addr, nil, http.StatusNotFound},
 		{"/staking/validators", url.Values{"pagination.limit": {"100000"}}, http.StatusBadRequest},
 		{"/staking/validators", url.Values{"status": {"BOND_STATUS_UNBONDED"}}, http.StatusBadRequest},
 	} {
@@ -154,11 +159,12 @@ func TestExplorerReads_refusals(t *testing.T) {
 	}
 }
 
-// requireIndexer reports the test not covered when the target has no indexer.
+// requireIndexer fails unless the gateway reaches a chain indexer: the run's chain deploy installs one
+// beside every node (e2e/scripts/chain-deploy.sh), so a 502 here is a fault.
 func requireIndexer(t *testing.T) {
 	t.Helper()
 	if resp := read(t, "/index/status", nil); resp.Status != http.StatusOK {
-		harness.SkipNotApplicable(t, fmt.Sprintf("the target's /v1/chain/index/status answers HTTP %d: no chain indexer runs there (orama global install --services chain,indexer)", resp.Status))
+		t.Fatalf("/v1/chain/index/status answers HTTP %d: %.200s", resp.Status, resp.Body)
 	}
 }
 

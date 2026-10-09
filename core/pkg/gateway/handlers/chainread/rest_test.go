@@ -19,45 +19,30 @@ func restProxy(t *testing.T) (*Proxy, *indexUpstream) {
 	return p, up
 }
 
-func TestRESTRoutes_buildEachUpstreamURL(t *testing.T) {
-	cases := []struct{ path, want string }{
-		{"/v1/chain/bank/balances/" + testAccount, "/cosmos/bank/v1beta1/balances/" + testAccount + "?pagination.limit=100"},
-		{"/v1/chain/staking/validators", "/cosmos/staking/v1beta1/validators?pagination.limit=200"},
-		{"/v1/chain/staking/delegations/" + testAccount, "/cosmos/staking/v1beta1/delegations/" + testAccount + "?pagination.limit=100"},
-		{"/v1/chain/staking/unbonding/" + testAccount, "/cosmos/staking/v1beta1/delegators/" + testAccount + "/unbonding_delegations?pagination.limit=100"},
+func TestRESTValidators_buildsTheUpstreamURL(t *testing.T) {
+	p, up := restProxy(t)
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/staking/validators", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
 	}
-	for _, tc := range cases {
-		p, up := restProxy(t)
-		rec := httptest.NewRecorder()
-		p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
-		if rec.Code != http.StatusOK {
-			t.Errorf("%s: status %d body %q", tc.path, rec.Code, rec.Body.String())
-			continue
-		}
-		if got := up.seen(); len(got) != 1 || got[0] != tc.want {
-			t.Errorf("%s: upstream saw %v, want %s", tc.path, got, tc.want)
-		}
+	want := "/cosmos/staking/v1beta1/validators?pagination.limit=200"
+	if got := up.seen(); len(got) != 1 || got[0] != want {
+		t.Fatalf("upstream saw %v, want %s", got, want)
 	}
 }
 
-func TestRESTRoutes_refuseBadRequestsWithoutCallingTheNode(t *testing.T) {
+func TestRESTValidators_refuseBadRequestsWithoutCallingTheNode(t *testing.T) {
 	cases := []struct {
 		method, path string
 		code         int
 	}{
-		{http.MethodGet, "/v1/chain/bank/balances/", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/bank/balances/notanaddress", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/bank/balances/" + strings.ToUpper(testAccount), http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/bank/balances/cosmos1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqnrql8a", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/bank/balances/" + testAccount + "/extra", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/staking/delegations/x", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/staking/unbonding/x", http.StatusNotFound},
-		{http.MethodGet, "/v1/chain/bank/balances/" + testAccount + "?pagination.limit=1000", http.StatusBadRequest},
 		{http.MethodGet, "/v1/chain/staking/validators?pagination.limit=1000", http.StatusBadRequest},
 		{http.MethodGet, "/v1/chain/staking/validators?status=x", http.StatusBadRequest},
 		{http.MethodPost, "/v1/chain/staking/validators", http.StatusMethodNotAllowed},
-		{http.MethodPost, "/v1/chain/bank/balances/" + testAccount, http.StatusMethodNotAllowed},
-		{http.MethodGet, "/v1/chain/bank/supply", http.StatusNotFound},
+		{http.MethodGet, "/v1/chain/staking/validators/extra", http.StatusNotFound},
+		{http.MethodGet, "/v1/chain/bank/balances/" + testAccount, http.StatusNotFound},
+		{http.MethodGet, "/v1/chain/staking/delegations/" + testAccount, http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		p, up := restProxy(t)
@@ -72,7 +57,7 @@ func TestRESTRoutes_refuseBadRequestsWithoutCallingTheNode(t *testing.T) {
 	}
 }
 
-func TestRESTRoutes_aNodeFailureGetsAFixedBody(t *testing.T) {
+func TestRESTValidators_aNodeFailureGetsAFixedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"message":"open /var/lib/oramad/data: leveldb corrupted"}`))
@@ -83,7 +68,7 @@ func TestRESTRoutes_aNodeFailureGetsAFixedBody(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	rec := httptest.NewRecorder()
-	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/bank/balances/"+testAccount, nil))
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/staking/validators", nil))
 	if rec.Code != http.StatusBadGateway || strings.Contains(rec.Body.String(), "leveldb") {
 		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
 	}

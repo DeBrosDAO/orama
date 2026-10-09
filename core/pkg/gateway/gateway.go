@@ -230,6 +230,10 @@ type Gateway struct {
 	// chainQueryRateLimiter caps the public module-query route (/v1/chain/query/),
 	// per client address, far below the general limit. See isChainQueryPath.
 	chainQueryRateLimiter *RateLimiter
+	// chainSimulateLimiter and chainBroadcastLimiter cap the wallet transaction routes
+	// (/v1/chain/simulate, /v1/chain/broadcast), per client network and per route.
+	chainSimulateLimiter  *chainTxLimiter
+	chainBroadcastLimiter *chainTxLimiter
 	// webrtcJoinRateLimiter caps the signalling sockets one identity opens. See webrtcJoinAllowed.
 	webrtcJoinRateLimiter *RateLimiter
 	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
@@ -1659,6 +1663,11 @@ func configureRateLimiters(gw *Gateway) {
 
 	gw.chainQueryRateLimiter = NewRateLimiter(chainQueriesPerMinute, chainQueryBurst)
 	gw.chainQueryRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)
+
+	gw.chainSimulateLimiter = newChainTxLimiter(chainSimulatePerAddressPerMinute, chainSimulatePerAddressBurst,
+		chainSimulateRoutePerMinute, chainSimulateRouteBurst)
+	gw.chainBroadcastLimiter = newChainTxLimiter(chainBroadcastPerAddressPerMinute, chainBroadcastPerAddressBurst,
+		chainBroadcastRoutePerMinute, chainBroadcastRouteBurst)
 
 	gw.webrtcJoinRateLimiter = NewRateLimiter(webrtcJoinsPerMinute, webrtcJoinBurst)
 	gw.webrtcJoinRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)

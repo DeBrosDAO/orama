@@ -988,7 +988,6 @@ that truncation would erase a real move, steps by one norama, floored at `Params
 `chain/x/token` is the tokenfactory-style module from
 plans/open-network/track-c-chain.md C10. It is registered in `chain/app/app.go`. The module
 account may mint and burn. Creation-fee burns and metadata deposits go through `x/fees`.
-The transfer hook wired today does nothing.
 
 Denoms are `factory/{creator bech32}/{subdenom}`. Balances live in x/bank, not in this module.
 `Token.issued` is the module's running total. `CheckInvariants` requires that total to equal
@@ -1014,8 +1013,14 @@ message that adds or reassigns one, and no module admin key:
 - transfer fee is a basis-point share of the token itself, burned on `MsgTransfer`;
 - non-transferable blocks every transfer, including the permanent delegate;
 - pause blocks transfers only (mint and burn still work) until the creator unpauses;
-- transfer hook calls a Go `TransferHook`, not CosmWasm, under a gas meter capped at 100_000.
-  Asking for more gas fails the transfer and moves nothing.
+- transfer hook names a CosmWasm contract (`MsgCreateToken.transfer_hook`, a bech32 address that must
+  already be a contract; a build without the contract VM refuses a hook). On every `MsgTransfer` of the
+  token the chain calls the contract's `sudo` entry point with
+  `{"transfer_hook":{"denom","from","to","amount"}}` under a gas meter capped at 100_000
+  (`types.TransferHookGasCap`). The contract returning an error refuses the transfer; asking for more gas
+  fails it with "transfer hook exceeded gas cap"; either way nothing moves, and what the contract wrote is
+  dropped. Its state writes are kept only when the transfer succeeds. The address is fixed at creation and
+  can only be renounced.
 
 Renouncing freeze or pause does not clear an existing freeze or the paused flag. Only the
 permanent delegate can renounce that capability. `MsgSetShieldable` may be signed by anyone. It
@@ -2263,7 +2268,7 @@ What each page reads, and from where:
 | Validators, voting power, committee seats, λ, the Nakamoto coefficient, total bonded | the node's staking validators, CometBFT's `/validators`, `orama.power.v1.Query/BootstrapCommittee` and `Lambda`, `/staking/pool`. A validator's consensus address is the first 20 bytes of the SHA-256 of its ed25519 key, computed in the browser |
 | Blocks | CometBFT's `/blocks` and `/block`, and the indexer's block (gas, burned base fee, transaction hashes). A block's signatures are the next block's last commit, so the head has none yet |
 | A transaction | the indexer's record: signer, memo, the body as JSON, events, code and log. The fee is the `base_fee` and `tip` of the `tx` event the fee handler emits. "Balances before → after" is built from the `coin_spent`, `coin_received` and `burn` events, so it has the change and not the before and after, and it leaves out what moved through an earnings account |
-| A wallet | the node's bank balances, delegations and unbonding delegations (norama only), and the indexer's account summary (count, first and last time). A wallet with no transaction and no funds is not found |
+| A wallet | the bank `AllBalances`, staking `DelegatorDelegations` and `DelegatorUnbondingDelegations` queries of the wallet-query route (norama only), and the indexer's account summary (count, first and last time). A wallet with no transaction and no funds is not found |
 | A wallet's activity | the indexer's per-address transactions, 100 a page, filtered in the browser; the cursor is `page:position` |
 | Who a wallet deals with | its 100 newest transactions only: successful transfers, by volume |
 
@@ -2295,8 +2300,9 @@ anyone:
 
 ### The gateway's chain proxy
 
-`core/pkg/gateway/routes.go` mounts the read-only `core/pkg/gateway/handlers/chainread` proxy
-at `/v1/chain/` (an open route in `route_policy.go`). The website explorer reads only this proxy. The upstream bases are
+`core/pkg/gateway/routes.go` mounts the `core/pkg/gateway/handlers/chainread` proxy at `/v1/chain/`
+(an open route in `route_policy.go`): reads for the explorer and for wallets, plus two POST routes that
+take a signed transaction (below). The website explorer reads only this proxy. The upstream bases are
 `ORAMA_CHAIN_RPC_URL`, `ORAMA_CHAIN_REST_URL` and `ORAMA_CHAIN_INDEX_URL`, defaulting to those
 three loopback URLs, or, on a co-located machine (the `orama-global` namespace layout is installed), to the
 same ports on the namespace address `198.18.0.2`, where the chain and indexer listen there and only the
@@ -2305,7 +2311,12 @@ from values it has validated. Anything outside this list is refused. A healthy u
 copied unchanged (at most 8 MiB, the largest being one block on `/block`), except on `/v1/chain/query/`
 below, which decodes the answer. An upstream failure is never copied: a 404 or a CometBFT "not found"
 error is answered `404 not found on chain`, and any other error status, or a JSON-RPC error object under a
-200, is answered `502 chain request failed`, because the node's message can carry paths and store details:
+200, is answered `502 chain request failed`, because the node's message can carry paths and store details.
+CometBFT answers an error from a GET route, a transaction that is not in its index included, with HTTP
+500 and the JSON-RPC error object in the body, so the body is read whatever the status: `tx (HASH) not
+found` is a 404, never a 502. `GET /v1/chain/tx?hash=` answers that 404 with `Retry-After: 2`, because a
+transaction a wallet has just broadcast is not found until it is in a block and the node it asks (any
+gateway answers; each asks its own node) has indexed it:
 
 | Gateway path | Upstream |
 |---|---|
@@ -2316,10 +2327,7 @@ error is answered `404 not found on chain`, and any other error status, or a JSO
 | `GET /v1/chain/validators` | CometBFT `GET /validators` (`page` and `per_page` optional; default 1 and 100, capped at 100) |
 | `GET /v1/chain/supply/norama` | REST `GET /cosmos/bank/v1beta1/supply/by_denom?denom=norama` |
 | `GET /v1/chain/staking/pool` | REST `GET /cosmos/staking/v1beta1/pool` |
-| `GET /v1/chain/staking/validators` | REST `GET /cosmos/staking/v1beta1/validators` (page size fixed at 200, no query) |
-| `GET /v1/chain/bank/balances/{address}` | REST `GET /cosmos/bank/v1beta1/balances/{address}` (page size fixed at 100, no query) |
-| `GET /v1/chain/staking/delegations/{address}` | REST `GET /cosmos/staking/v1beta1/delegations/{address}` (page size 100, no query) |
-| `GET /v1/chain/staking/unbonding/{address}` | REST `GET /cosmos/staking/v1beta1/delegators/{address}/unbonding_delegations` (page size 100, no query) |
+| `GET /v1/chain/staking/validators` | REST `GET /cosmos/staking/v1beta1/validators` (page size fixed at 200, no query; the wallet queries below serve one validator, not the list) |
 | `GET /v1/chain/index/status` | indexer `GET /index/v1/status` |
 | `GET /v1/chain/index/blocks/{height}` | indexer `GET /index/v1/blocks/{height}` |
 | `GET /v1/chain/index/txs/{hash}` | indexer `GET /index/v1/txs/{hash}` (32-byte hex, `0x` optional on the gateway path, sent lowercase) |
@@ -2330,8 +2338,10 @@ error is answered `404 not found on chain`, and any other error status, or a JSO
 | `GET /v1/chain/index/cnft/assets/{id}` | indexer `GET /index/v1/cnft/assets/{id}` (32-byte hex, sent lowercase) |
 | `GET /v1/chain/index/cnft/owners/{address}/assets` | indexer `GET /index/v1/cnft/owners/{address}/assets` (`page`, `limit` as above) |
 | `GET /v1/chain/query/{package.Service}/{Method}` | CometBFT `GET /abci_query?path="/{package.Service}/{Method}"&prove=false` (see "Module queries") |
+| `POST /v1/chain/simulate` | CometBFT JSON-RPC `abci_query` of `/cosmos.tx.v1beta1.Service/Simulate`, and x/fees `BaseFee` (see "Simulate and broadcast") |
+| `POST /v1/chain/broadcast` | CometBFT JSON-RPC `broadcast_tx_sync` (see "Simulate and broadcast") |
 
-On the REST account routes a malformed address is `404` (it is no route) and any query is `400`. On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
+The validator list takes no query (`400`). On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
 characters) and the indexer checks its checksum. A route that takes no query refuses one.
 What the indexer holds, and what it does not, is under "Chain indexer" above.
 
@@ -2348,7 +2358,8 @@ height (a positive integer; 0 or absent is the latest), and must be within the l
 (`queryMaxHeightAge`; the gateway reads the latest height from `/status`, cached for a second, and answers
 400 for an older one): an old height makes the node open an old state version. Any other query key, a
 repeated key, a non-GET method and a response over 4 MiB are refused. A key the chain does not have is a
-404; any other chain error is a 502 without the node's message. The gateway decodes with the same
+404; a request the chain judges malformed (an address that is not one, ABCI code 18 of codespace `sdk`) is a
+400 `the chain refused the request`; any other chain error is a 502 without the node's message. The gateway decodes with the same
 `dynamicpb`/`protojson` code `orama chain` uses (`core/pkg/chainread`), which links no chain code.
 
 The public route serves an explicit list of methods (`publicQuery` in `handlers/chainread/query.go`), not
@@ -2375,6 +2386,68 @@ withheld from the public route above, so only a caller that can reach the node's
 The route's rate-limit bucket is per client address, except that an IPv6 client is limited by its /64
 (a subscriber is routinely handed a whole /64 and can source a request from any address in it). The
 Reporters query is capped at the size of the reporter set (`MaxReporters`, 128) on the server.
+
+**Wallet queries.** A wallet with no node of its own reads one address through the same route. The
+cosmos-sdk and wasmd `Query` services of bank, auth, staking, distribution and `cosmwasm.wasm.v1` are embedded
+in `queries.binpb` whole (`gen.sh` builds them from the versions `chain/go.mod` pins), and `walletQuery`
+(`handlers/chainread/query_wallet.go`) names the 15 methods served, the rest being a 404 (so bank's
+`TotalSupply`, staking's `Validators` and wasm's `AllContractState` are not reachable):
+
+| Service | Methods |
+|---|---|
+| `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
+| `cosmos.auth.v1beta1.Query` | `Account`, `AccountInfo` (an address the chain has never seen is a 404) |
+| `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
+| `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
+| `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a `404 not found on chain`) |
+
+A request for `AllBalances`, `SpendableBalances`, `DelegatorDelegations` or `DelegatorUnbondingDelegations`
+may set `pagination.limit` up to 100 (`queryMaxPageLimit`; unset is the SDK's default of 100) and `pagination.key`
+to continue; a larger limit is a 400 before the node is asked. wasmd returns an address that is no contract as
+a plain error, which baseapp reports as code 6 of codespace `sdk` with the message `no such contract`; the wasm
+code is lost on the way out, so `chainread` recognises that code, codespace and message for `ContractInfo`
+alone (`core/pkg/chainread/grpc.go`) and nowhere else. The existing routes a wallet already reads,
+`/v1/chain/index/accounts/{address}/txs` and the staking `Params` query, are unchanged.
+
+**Simulate and broadcast.** A wallet with no tunnel to a node prices and submits a transaction through two POST
+routes (`handlers/chainread/tx.go`). Both take `Content-Type: application/json` and the body
+`{"tx_bytes":"<base64 TxRaw>"}` (a signed `cosmos.tx.v1beta1.TxRaw`; unknown members, a second object, an empty
+or non-base64 value are 400; at most 1 MiB of transaction, CometBFT's default mempool `max_tx_bytes`, which the
+chain does not change, and a larger one is 413). They take no query and any other method is 405 with
+`Allow: POST`. Answers are `Cache-Control: no-store`.
+
+- `POST /v1/chain/simulate` runs the transaction through the ante handlers and messages without keeping
+  anything. Success is 200 `{"gas_wanted":N,"gas_used":N,"fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`:
+  `fee` is x/fees' current base fee times `gas_used`, and `base_fee` (norama per unit of gas) lets a caller that pads the
+  gas limit price the padded limit; the on-chain rule is `fee >= base_fee * gas_limit`
+  ([x/fees](#xfees-base-fee-earnings-accounts-and-state-deposits)). A transaction the chain refuses is 422 `{"code":N,"codespace":"…","log":"…"}`.
+- `POST /v1/chain/broadcast` submits the transaction with CometBFT `broadcast_tx_sync`, which answers after
+  `CheckTx` and never waits for a block (`broadcast_tx_commit` is never called). It answers
+  `{"code":N,"codespace":"…","log":"…","tx_hash":"<64 hex, upper case>"}`: 200 when `code` is 0, and 422 when the
+  mempool refused it. Sending bytes the mempool has already seen is 422 with `code` 19, codespace `sdk`, log
+  `tx already in mempool cache` and the hash, so a client that retried after a timeout has the hash to read. A full
+  mempool is 503 with `Retry-After`. The caller then reads `GET /v1/chain/tx?hash=` until the transaction is in a
+  block (404 until it is).
+
+The `log` of a refusal is sanitised (`sanitize.go`): a stack trace, source locations, filesystem paths and
+IP addresses are replaced with `[redacted]`, control characters dropped, and it is cut to 512 characters; the
+codespace must look like one. What is left is the SDK's reason ("insufficient fees; got … required …"). Any
+other failure is a fixed text body, 502 `chain unreachable` or `chain request failed`, never the node's message.
+
+The chain charges a spam transaction's sender its fee, so the gateway bounds only the load. Each route has
+its own limits, apart from the general bucket and from the module-query bucket: at most 8 simulates and 16
+broadcasts in flight (the rest are 503 with `Retry-After`), and two rate-limit buckets in the gateway
+(`chain_tx_limit.go`), one per client network (an IPv6 client is its /64) and one for the whole route on that gateway,
+answered 429 with the retryable `RATE_LIMITED` envelope and `Retry-After: 10`:
+
+| Route | Per client network | Whole route, per gateway |
+|---|---|---|
+| `simulate` | 30 a minute, burst 10 | 1200 a minute, burst 200 |
+| `broadcast` | 12 a minute, burst 4 | 600 a minute, burst 100 |
+
+The SDK calls are `simulateTx`, `broadcastTx` and the wallet reads of `OramaChainClient`
+([TS_SDK.md](TS_SDK.md#the-chain-module)); the Go client is `chainread.Reader.Simulate` and `Broadcast`
+(a refused transaction is a `*TxRefusedError`). Fleet e2e: `e2e/features/chain-wallet-routes`.
 
 The explorer shows what these routes serve and nothing else: where the chain has no source for a figure
 (a wallet's balance over time, a validator's uptime history, the number of delegators), the page leaves
@@ -2449,7 +2522,8 @@ Tor SOCKS5 proxy at `--onion-socks` (default `127.0.0.1:9050`, or `ORAMA_ONION_S
 environment proxy, no redirects. Each command run uses one new SOCKS credential, which Tor maps to its own
 circuit, so two transactions never share one. A failed onion path returns the error ("the transaction was not
 sent, and nothing was tried outside Tor") and never falls back to the clearnet. Reads (`orama chain`) do not
-go through Tor yet.
+go through Tor yet. A wallet that cannot use Tor or reach a validator submits through the gateway instead
+(`POST /v1/chain/broadcast`, above).
 
 ## `x/wasm`: contracts
 

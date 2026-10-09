@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addr, chainFixture, FakeGateway, HEAD, HEAD_TIME, hashOf, indexTx, rpc, valoper } from "./fake-gateway";
 import { createChainSource } from "./source";
+import { addressQuery } from "./wallet";
 
 async function setup() {
   const gw = await chainFixture();
@@ -226,9 +227,9 @@ describe("transactions", () => {
 
 describe("wallets", () => {
   const holds = (gw: FakeGateway, who: string, bank: string, staked: string, unbonding: string) => {
-    gw.on(`bank/balances/${who}`, { balances: bank === "0" ? [] : [{ denom: "norama", amount: bank }, { denom: "factory/x/gold", amount: "99" }] });
-    gw.on(`staking/delegations/${who}`, { delegation_responses: staked === "0" ? [] : [{ delegation: {}, balance: { denom: "norama", amount: staked } }] });
-    gw.on(`staking/unbonding/${who}`, { unbonding_responses: unbonding === "0" ? [] : [{ entries: [{ balance: unbonding }, { balance: "1" }] }] });
+    gw.on(addressQuery("cosmos.bank.v1beta1.Query/AllBalances", "address", who), { balances: bank === "0" ? [] : [{ denom: "norama", amount: bank }, { denom: "factory/x/gold", amount: "99" }] });
+    gw.on(addressQuery("cosmos.staking.v1beta1.Query/DelegatorDelegations", "delegator_addr", who), { delegation_responses: staked === "0" ? [] : [{ delegation: {}, balance: { denom: "norama", amount: staked } }] });
+    gw.on(addressQuery("cosmos.staking.v1beta1.Query/DelegatorUnbondingDelegations", "delegator_addr", who), { unbonding_responses: unbonding === "0" ? [] : [{ entries: [{ balance: unbonding }, { balance: "1" }] }] });
   };
 
   it("TestGetWallet_an_address_nothing_names_and_nothing_holds_is_null", async () => {
