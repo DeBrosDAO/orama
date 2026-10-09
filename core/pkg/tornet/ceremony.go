@@ -176,9 +176,14 @@ func (r CeremonyRequest) createAuthority(ctx context.Context, run Runner, s Auth
 		}
 	}
 	torBin, gencert := orDefault(r.TorBinary, "tor"), orDefault(r.GencertBinary, "tor-gencert")
-	out, err := run(ctx, nil, torBin, "--defaults-torrc", "/dev/null", "-f", "/dev/null",
+	torrc, removeTorrc, err := emptyTorrc()
+	if err != nil {
+		return Authority{}, time.Time{}, err
+	}
+	out, err := run(ctx, nil, torBin, "--defaults-torrc", torrc, "-f", torrc,
 		"--DisableNetwork", "1", "--list-fingerprint", "--hush",
 		"--DataDirectory", deploy, "--Nickname", s.Nickname, "--ORPort", fmt.Sprint(s.ORPort))
+	removeTorrc()
 	if err != nil {
 		return Authority{}, time.Time{}, fmt.Errorf("tor --list-fingerprint: %w\n%s", err, strings.TrimSpace(string(out)))
 	}
@@ -300,4 +305,22 @@ func transcript(n Network, expires map[string]time.Time, now time.Time) string {
 			a.Nickname, a.Address, a.ORPort, a.DirPort, a.Fingerprint, a.V3Ident, a.Ed25519ID, expires[a.Nickname].Format(time.RFC3339))
 	}
 	return b.String()
+}
+
+// emptyTorrc is an empty configuration file for a tor run that takes all its
+// options from the command line. It is a regular file because tor refuses a
+// character device as its configuration on some systems (macOS: "Unable to open
+// configuration file /dev/null"), and it lives outside the ceremony's
+// directories so it is never shipped in a bundle. The returned func removes it.
+func emptyTorrc() (string, func(), error) {
+	f, err := os.CreateTemp("", "orama-ceremony-torrc-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create an empty torrc for tor --list-fingerprint: %w", err)
+	}
+	name := f.Name()
+	if err := f.Close(); err != nil {
+		os.Remove(name)
+		return "", nil, fmt.Errorf("close the empty torrc %s: %w", name, err)
+	}
+	return name, func() { os.Remove(name) }, nil
 }

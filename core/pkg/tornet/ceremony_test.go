@@ -304,3 +304,39 @@ func TestRunCeremony_aFailureSaysWhereTheLeftoversAreAndWhatToDo(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// tor refuses a character device as its configuration on macOS ("Unable to
+// open configuration file /dev/null"), so --list-fingerprint must be given a
+// regular empty file, and that file must not end up in a bundle.
+func TestRunCeremony_givesTorARegularEmptyConfigOutsideTheBundle(t *testing.T) {
+	f := &fakeTor{t: t}
+	req := ceremonyRequest(t)
+	var configs []string
+	run := func(ctx context.Context, stdin []byte, name string, args ...string) ([]byte, error) {
+		if name == "tor" {
+			for _, flag := range []string{"-f", "--defaults-torrc"} {
+				path := argAfter(args, flag)
+				st, err := os.Lstat(path)
+				if err != nil || !st.Mode().IsRegular() || st.Size() != 0 {
+					t.Errorf("tor %s %q: want an existing regular empty file, got %v, %v", flag, path, st, err)
+				}
+				if strings.HasPrefix(path, req.OutDir) {
+					t.Errorf("tor %s %q is inside the ceremony output", flag, path)
+				}
+				configs = append(configs, path)
+			}
+		}
+		return f.run(ctx, stdin, name, args...)
+	}
+	if _, err := RunCeremony(context.Background(), run, req); err != nil {
+		t.Fatal(err)
+	}
+	if len(configs) == 0 {
+		t.Fatal("tor was never run")
+	}
+	for _, path := range configs {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("the empty torrc %s was left behind (%v)", path, err)
+		}
+	}
+}
