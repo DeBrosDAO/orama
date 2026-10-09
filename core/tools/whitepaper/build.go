@@ -296,8 +296,7 @@ func printPageCount(pdf string) {
 // gitCommit is the short commit the book was built from, printed on the
 // title page.
 func gitCommit(root string) (string, error) {
-	cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
-	cmd.Dir = root
+	cmd := gitCommand(root, "rev-parse", "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to read the commit with git rev-parse in %s: %w", root, err)

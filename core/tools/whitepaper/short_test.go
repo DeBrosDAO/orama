@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -81,13 +80,13 @@ func TestRunChecks_ownershipOffSkipsGate(t *testing.T) {
 	files := map[string]string{"c.md": "# C\n\n> **At a glance.**\n\nBody words.\n"}
 	b := testBook(t, "1.0.0", chapters, files)
 	b.Manifest.Ownership = new(bool)
-	if out, err := exec.Command("git", "-C", b.Root, "init", "-q").CombinedOutput(); err != nil {
+	if out, err := gitCommand(b.Root, "init", "-q").CombinedOutput(); err != nil {
 		t.Skipf("git is unavailable: %v: %s", err, out)
 	}
 	if err := os.WriteFile(filepath.Join(b.Root, "untracked-owner-less.go"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command("git", "-C", b.Root, "add", "-A").CombinedOutput(); err != nil {
+	if out, err := gitCommand(b.Root, "add", "-A").CombinedOutput(); err != nil {
 		t.Fatalf("git add: %v: %s", err, out)
 	}
 	probs, err := runChecks(b)

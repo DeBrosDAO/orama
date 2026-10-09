@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 )
@@ -27,8 +26,7 @@ const unownedGroupDepth = 3
 
 // trackedFiles lists the repository's tracked files.
 func trackedFiles(root string) ([]string, error) {
-	cmd := exec.Command("git", "ls-files", "-z")
-	cmd.Dir = root
+	cmd := gitCommand(root, "ls-files", "-z")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
