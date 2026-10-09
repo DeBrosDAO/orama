@@ -56,7 +56,14 @@ func TestWalletRoutes_balanceSimulateBroadcastAndSeenOnChain(t *testing.T) {
 	if acct, _ := info["info"].(map[string]any); acct["address"] != k.Address || acct["sequence"] != "0" {
 		t.Errorf("AccountInfo: %v", info)
 	}
-	queryOK(t, g, auth, "Account", map[string]any{"address": k.Address})
+	// Account packs a BaseAccount in an Any; the gateway resolves it from its embedded descriptors.
+	// account_number is a uint64 and so a JSON string.
+	full := queryOK(t, g, auth, "Account", map[string]any{"address": k.Address})
+	if acct, _ := full["account"].(map[string]any); acct["@type"] != "/cosmos.auth.v1beta1.BaseAccount" || acct["address"] != k.Address {
+		t.Errorf("Account: %v", full)
+	} else if number, ok := acct["account_number"].(string); !ok || number == "" {
+		t.Errorf("Account account_number %v (%T), want a uint64 string", acct["account_number"], acct["account_number"])
+	}
 	queryOK(t, g, staking, "Params", nil)
 	queryOK(t, g, staking, "Pool", nil)
 

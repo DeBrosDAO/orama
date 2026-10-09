@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates queries.binpb: the descriptors of every orama module's Query
 # service plus the cosmos-sdk and wasmd Query services a wallet reads (bank,
-# auth, staking, distribution, cosmwasm.wasm), with their imports. core/ links
+# auth, staking, distribution, cosmwasm.wasm), with their imports, and the
+# messages those answers pack in a google.protobuf.Any (the account types and
+# the public-key types), so the response resolves every Any itself. core/ links
 # no chain code, so the embedded descriptors are how `orama chain` and the
 # gateway's /v1/chain/query/ route encode a gRPC query request and decode its
 # response without a generated Go type. The Orama protos come from chain/proto;
@@ -29,4 +31,6 @@ protoc \
   --include_imports --descriptor_set_out="${OUT:-$here/queries.binpb}" \
   "$chain_dir"/proto/orama/*/v1/query.proto \
   "$sdk_mod"/proto/cosmos/{bank,auth,staking,distribution}/v1beta1/query.proto \
-  "$wasm_mod"/proto/cosmwasm/wasm/v1/query.proto
+  "$wasm_mod"/proto/cosmwasm/wasm/v1/query.proto \
+  "$sdk_mod"/proto/cosmos/vesting/v1beta1/vesting.proto \
+  "$sdk_mod"/proto/cosmos/crypto/{secp256k1,ed25519,secp256r1,bls12_381,multisig}/keys.proto

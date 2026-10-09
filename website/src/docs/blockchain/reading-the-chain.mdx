@@ -32,10 +32,12 @@ A wallet with no node of its own reads one address through the same `query/…` 
 | Service | Methods |
 |---|---|
 | `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
-| `cosmos.auth.v1beta1.Query` | `Account`, `AccountInfo` |
+| `cosmos.auth.v1beta1.Query` | `Account` (a typed account: `@type` names it, for example `/cosmos.auth.v1beta1.BaseAccount`), `AccountInfo` |
 | `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
 | `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
 | `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a 404) |
+
+Numbers that need 64 bits are JSON strings: an account's `account_number` and `sequence` are read as `uint64`, never as a JavaScript `number`. An account number is not a counter: the chain derives it from a hash when the account is created, with the top bit set, so it is always between 2^63 and 2^64-1. Keep it as a string or a BigInt, and sign with the exact value.
 
 The list methods take `pagination.limit` up to 100. The explorer's wallet page uses `AllBalances`, `DelegatorDelegations` and `DelegatorUnbondingDelegations` here; the duplicate REST routes for them are gone, and only the staking validator list stays REST.
 

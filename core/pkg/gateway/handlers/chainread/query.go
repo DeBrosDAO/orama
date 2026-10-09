@@ -12,7 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/DeBrosOfficial/network/pkg/chainread"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 // Module queries: GET /v1/chain/query/<package.Service>/<Method> runs one gRPC query of an Orama
@@ -185,7 +188,7 @@ func (p *Proxy) serveQuery(w http.ResponseWriter, r *http.Request, name string) 
 	}
 	out, err := m.DecodeRPC(body)
 	if err != nil {
-		writeQueryFailure(w, err)
+		p.writeQueryFailure(w, name, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -250,8 +253,10 @@ func queryRequestBytes(q url.Values, m *chainread.Method) ([]byte, bool) {
 }
 
 // writeQueryFailure answers a query the node refused. A key that is not on chain is a 404. The
-// node's own message is not repeated: it can carry paths and store details.
-func writeQueryFailure(w http.ResponseWriter, err error) {
+// node's own message is not repeated to the caller: it can carry paths and store details. A
+// failure that is neither a not-found nor a malformed request is a 502 with a generic body, and
+// its error is logged here with the method so the 502 can be diagnosed.
+func (p *Proxy) writeQueryFailure(w http.ResponseWriter, name string, err error) {
 	if errors.Is(err, chainread.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "not found on chain")
 		return
@@ -259,6 +264,9 @@ func writeQueryFailure(w http.ResponseWriter, err error) {
 	if errors.Is(err, chainread.ErrInvalidRequest) {
 		writeErr(w, http.StatusBadRequest, "the chain refused the request")
 		return
+	}
+	if p.logger != nil {
+		p.logger.ComponentError(logging.ComponentGeneral, "chain query failed", zap.String("method", name), zap.Error(err))
 	}
 	writeErr(w, http.StatusBadGateway, "chain query failed")
 }

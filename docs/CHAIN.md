@@ -2446,10 +2446,22 @@ in `queries.binpb` whole (`gen.sh` builds them from the versions `chain/go.mod` 
 | Service | Methods |
 |---|---|
 | `cosmos.bank.v1beta1.Query` | `Balance`, `AllBalances`, `SpendableBalances` |
-| `cosmos.auth.v1beta1.Query` | `Account`, `AccountInfo` (an address the chain has never seen is a 404) |
+| `cosmos.auth.v1beta1.Query` | `Account` (the account as a `google.protobuf.Any`: `@type` names the account type and its fields follow), `AccountInfo` (an address the chain has never seen is a 404) |
 | `cosmos.staking.v1beta1.Query` | `Delegation`, `DelegatorDelegations`, `UnbondingDelegation`, `DelegatorUnbondingDelegations`, `Validator`, `Pool`, `Params` |
 | `cosmos.distribution.v1beta1.Query` | `DelegationRewards`, `DelegationTotalRewards` |
 | `cosmwasm.wasm.v1.Query` | `ContractInfo` (an address that is not a contract is a `404 not found on chain`) |
+
+Every `google.protobuf.Any` in an answer (the account in `Account`, its `pub_key`, a validator's
+`consensus_pubkey`) is resolved from the same embedded descriptors, which `gen.sh` extends with the account
+types (`cosmos.auth.v1beta1` base and module accounts, `cosmos.vesting.v1beta1`) and the key types (secp256k1,
+ed25519, secp256r1, bls12_381, multisig). An `Any` of a type outside them cannot be encoded: the answer is a
+502 `chain query failed`, and the gateway log has the `chain query failed` error entry with the `method` and the
+error that names the type URL. 64-bit integers are JSON strings, `account_number` and `sequence` included.
+An `account_number` is not a counter: cosmos-sdk v0.54's x/auth assigns it when the account is created as the
+first 8 bytes of a SHA-256 over the block height, app hash, tx index and address, with the top bit forced to 1
+(`x/auth/types.GenerateID`), so every account on this chain has a number from 2^63 to 2^64-1 (for example
+`16083108751219634649`). The chain does not override it. A wallet must hold it as a `uint64` (a string or a
+BigInt), never as a JavaScript `number`, which loses precision above 2^53, and sign with the exact value.
 
 A request for `AllBalances`, `SpendableBalances`, `DelegatorDelegations` or `DelegatorUnbondingDelegations`
 may set `pagination.limit` up to 100 (`queryMaxPageLimit`; unset is the SDK's default of 100) and `pagination.key`

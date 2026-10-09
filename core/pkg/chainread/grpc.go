@@ -32,6 +32,8 @@ var (
 	filesOnce sync.Once
 	files     *protoregistry.Files
 	filesErr  error
+	// types resolves Any type URLs over files; dynamicpb.Types is safe for concurrent use.
+	types *dynamicpb.Types
 )
 
 func queryFiles() (*protoregistry.Files, error) {
@@ -42,8 +44,21 @@ func queryFiles() (*protoregistry.Files, error) {
 			return
 		}
 		files, filesErr = protodesc.NewFiles(&set)
+		if filesErr == nil {
+			types = dynamicpb.NewTypes(files)
+		}
 	})
 	return files, filesErr
+}
+
+// anyResolver resolves the type URL of every google.protobuf.Any in a request or response against
+// the embedded descriptors. protojson's default is protoregistry.GlobalTypes, where core links no
+// chain type, so an Account answer (a BaseAccount in an Any) could not be encoded to JSON.
+func anyResolver() (*dynamicpb.Types, error) {
+	if _, err := queryFiles(); err != nil {
+		return nil, err
+	}
+	return types, nil
 }
 
 // ErrNotFound is a query for a key the chain does not have: the SDK's ErrKeyNotFound, which
@@ -111,7 +126,11 @@ func Lookup(name string) (*Method, error) {
 func (m *Method) EncodeRequest(requestJSON string) ([]byte, error) {
 	msg := dynamicpb.NewMessage(m.input)
 	if strings.TrimSpace(requestJSON) != "" {
-		if err := protojson.Unmarshal([]byte(requestJSON), msg); err != nil {
+		types, err := anyResolver()
+		if err != nil {
+			return nil, err
+		}
+		if err := (protojson.UnmarshalOptions{Resolver: types}).Unmarshal([]byte(requestJSON), msg); err != nil {
 			return nil, fmt.Errorf("request for %s: %w", m.Path, err)
 		}
 	}
@@ -124,7 +143,11 @@ func (m *Method) DecodeResponse(data []byte) (json.RawMessage, error) {
 	if err := proto.Unmarshal(data, msg); err != nil {
 		return nil, fmt.Errorf("response of %s: %w", m.Path, err)
 	}
-	out, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(msg)
+	types, err := anyResolver()
+	if err != nil {
+		return nil, err
+	}
+	out, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true, Resolver: types}.Marshal(msg)
 	if err != nil {
 		return nil, fmt.Errorf("response of %s: %w", m.Path, err)
 	}

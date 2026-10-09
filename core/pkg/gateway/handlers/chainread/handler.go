@@ -36,6 +36,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
+	"github.com/DeBrosOfficial/network/pkg/logging"
 )
 
 const (
@@ -84,6 +85,8 @@ type Config struct {
 	RESTURL  string
 	IndexURL string
 	Client   *http.Client
+	// Logger receives the error behind a 502 the proxy answers with a generic body. Nil logs nothing.
+	Logger *logging.ColoredLogger
 }
 
 // ConfigFromEnv reads ORAMA_CHAIN_RPC_URL, ORAMA_CHAIN_REST_URL and
@@ -135,6 +138,7 @@ type Proxy struct {
 	client  *http.Client
 	maxBody int64
 	timeout time.Duration
+	logger  *logging.ColoredLogger
 
 	// querySlots bounds the module queries in flight (query.go).
 	querySlots chan struct{}
@@ -171,6 +175,7 @@ func New(cfg Config) (*Proxy, error) {
 		client:  newClient(cfg.Client),
 		maxBody: defaultMaxBody,
 		timeout: upstreamTimeout,
+		logger:  cfg.Logger,
 
 		querySlots:     make(chan struct{}, queryMaxConcurrent),
 		simulateSlots:  make(chan struct{}, simulateMaxConcurrent),
