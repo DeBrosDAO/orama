@@ -1,0 +1,26 @@
+# Stage 8, track E5 of the Open Network plan: the relay bandwidth reporter
+# (`orama-global reporter`, docs/TOR_NETWORK.md#the-relay-bandwidth-reporter).
+# It runs on a directory-authority host, and a run chain has none: the fleet
+# has no dirauth, no votes and no relays. The tests therefore need two things
+# the run may not have, and report not applicable without them: an
+# orama-global binary on the chain node (the stagenet install has one) and, for
+# the report itself, E2E_REPORTER_VOTES, a directory on that node holding the
+# authority's archived votes (*.vote) with the file authority-id's identity.
+# What they prove on a live chain: the reporter will not start without its
+# identity, and a closed epoch's report is accepted by x/relay (the epoch's
+# result query shows the report counted, or the epoch was not settled yet and
+# the reporter's state records it as reported).
+id: relay-reporter
+title: Relay bandwidth reporter (x/relay MsgReportEpoch from a dirauth's votes)
+area: chain
+subtasks: [2788]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  claims:
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: the reporter refuses to start without its operator and authority identity"
+    - "docs/TOR_NETWORK.md#the-relay-bandwidth-reporter: a closed epoch is reported once, in chunks, and x/relay takes the report (needs E2E_REPORTER_VOTES and a reporter key in x/relay's set)"

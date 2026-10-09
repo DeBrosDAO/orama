@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -265,6 +266,27 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 		if strings.HasPrefix(wd, "/home/") {
 			t.Errorf("%s: WorkingDirectory %s is under /home, which ProtectHome hides", name, wd)
 		}
+	}
+}
+
+// The reporter reads the epoch and signs through the local oramad, so it starts
+// after the chain, and it runs in its own state directory with the RPC address
+// the chain listens on.
+func TestRenderGlobalReporterUnit_startsAfterTheChainAndUsesItsHome(t *testing.T) {
+	unit := RenderGlobalReporterUnit()
+	if !strings.Contains(unit, "After=network-online.target "+constants.ChainServiceUnit+"\n") {
+		t.Errorf("the reporter does not start after the chain:\n%s", unit)
+	}
+	exec := mustDirective(t, unit, "ExecStart")
+	want := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s", globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome)
+	if exec != want {
+		t.Errorf("ExecStart = %q, want %q", exec, want)
+	}
+	if wd := mustDirective(t, unit, "WorkingDirectory"); wd != constants.GlobalReporterHome {
+		t.Errorf("WorkingDirectory = %q", wd)
+	}
+	if !strings.Contains(unit, "User="+globalReporterUser+"\n") {
+		t.Errorf("the reporter does not run as %s", globalReporterUser)
 	}
 }
 

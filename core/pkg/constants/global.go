@@ -72,6 +72,7 @@ const (
 	GlobalArchiverHome = "/var/lib/orama-global/archiver"
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
 	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
+	GlobalReporterHome = "/var/lib/orama-global/reporter"
 
 	// The Tor roles' DataDirectories, each the state directory of its unit.
 	GlobalTorDirauthHome = "/var/lib/orama-global/tor-dirauth"

@@ -101,7 +101,7 @@ func ValidateSOCKS(addr string) error {
 	}
 	if host != "localhost" {
 		ip, err := netip.ParseAddr(host)
-		if err != nil || !ip.IsLoopback() {
+		if err != nil || !ip.IsLoopback() || ip.Zone() != "" {
 			return fmt.Errorf("tor SOCKS address %q: %q is not a loopback address (127.0.0.0/8, ::1 or localhost)", addr, host)
 		}
 	}

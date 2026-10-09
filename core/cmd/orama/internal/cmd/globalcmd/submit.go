@@ -33,10 +33,11 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, node, err := chainTarget(cmd, ctx, node)
+	ctx, node, stopTor, err := chainTarget(cmd, ctx, node)
 	if err != nil {
 		return err
 	}
+	defer stopTor()
 	if node != "" {
 		acct, err := clusterreg.FetchAccount(ctx, node, operator)
 		if err != nil {

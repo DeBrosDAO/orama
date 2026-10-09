@@ -242,6 +242,9 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage rewrap`](#orama-storage-rewrap) — Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
 - [`orama version`](#orama-version) — Show version information
+- [`orama vpn`](#orama-vpn) — Route traffic through an Orama Tor network
+  - [`orama vpn check`](#orama-vpn-check) — Join an Orama Tor network and reach a validator onion service through it
+  - [`orama vpn up`](#orama-vpn-up) — Run a SOCKS5 proxy into an Orama Tor network
 
 ---
 
@@ -912,7 +915,9 @@ The fee is an explicit amount of norama. There is no default.
 | `--id` | — | Cluster id [required] |
 | `--metadata-uri` | — | HTTPS metadata URI |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex; required when the account has not signed before |
@@ -938,7 +943,9 @@ the sign document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Cluster id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1615,7 +1622,9 @@ document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1646,7 +1655,9 @@ submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1798,7 +1809,9 @@ this --chain-id and --operator.
 | `--hot-key` | — | Hot key account, not the operator [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -1837,7 +1850,9 @@ not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -2061,7 +2076,9 @@ prints the sign document and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -2117,7 +2134,9 @@ max-change-rate. Without --node the command prints the sign document.
 | `--identity` | — | New identity (for example a keybase id) |
 | `--moniker` | — | New moniker |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Validator operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -2272,7 +2291,9 @@ not submit it; with --node the RootWallet agent signs and it is broadcast.
 | `--fee` | — | Fee in norama [required] |
 | `--gas` | `0` | Gas limit [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--operator` | — | Validator operator account (orama1...) [required] |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -4142,7 +4163,9 @@ Accept one slot of a deal. The signer is the node's hot key. Without --node the 
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -4177,7 +4200,9 @@ prints the sign document and does not submit it.
 | `--granter` | — | Account whose deal allowance pays, when the signer is the grantee |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
 | `--nonce` | — | 32-byte deal nonce hex [required] |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--piece` | — | Piece as <64-hex-root>:<bytes> [required] |
 | `--price` | — | Price per epoch per replica, in norama [required] |
@@ -4206,7 +4231,9 @@ Decline one slot of a deal. The signer is the node's hot key. Without --node the
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--reason` | — | Why the slot is declined |
@@ -4233,7 +4260,9 @@ Add epochs to a user deal. Without --node the command prints the sign document a
 | `--fee` | — | Fee in norama [required] |
 | `--gas` | `0` | Gas limit [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -4283,7 +4312,9 @@ count. Without --node the command prints the sign document and does not submit i
 | `--max-duration-epochs` | `0` | Longest deal the grant allows [required] |
 | `--max-piece-bytes` | `0` | Largest piece the grant allows [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--period-epochs` | `0` | Epochs in one spend period |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
@@ -4338,7 +4369,9 @@ and does not submit it.
 | `--gas` | `0` | Gas limit [required] |
 | `--id` | — | Node id [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -4385,7 +4418,9 @@ Revoke a deal allowance. Without --node the command prints the sign document and
 | `--gas` | `0` | Gas limit [required] |
 | `--grantee` | — | Grantee account (orama1...) [required] |
 | `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
 | `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
 | `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
@@ -4443,4 +4478,80 @@ Show version information
 ```
 orama version
 ```
+
+### orama vpn
+
+Route traffic through an Orama Tor network
+
+```
+orama vpn
+```
+
+Join an Orama Tor network from this machine.
+
+A network is described by a network.json file: its directory authorities, a
+fallback list and, optionally, validator onion services. up starts an unmodified
+upstream tor on it and offers a SOCKS5 proxy on loopback; check joins the
+network and proves a circuit reaches a validator's onion service.
+
+The client has one route: the tor it starts, configured with the network's
+authorities and no others. It never falls back to the public Tor network or to
+a direct connection. When tor stops, the proxy port closes and whatever was
+using it fails; nothing is routed around it. This is a proxy, not a system-wide
+tunnel: only applications pointed at the SOCKS port, with names resolved by the
+proxy (socks5h), use the network.
+
+Only a private network can be joined: the public Orama network is not launched.
+
+Subcommands: `check`, `up`
+
+### orama vpn check
+
+Join an Orama Tor network and reach a validator onion service through it
+
+```
+orama vpn check [flags]
+```
+
+Start tor on the network (stopped again when the check ends) and request the status
+route of a validator onion service through the proxy, over a fresh circuit each.
+
+By default every validator onion service the network file lists is tried, and the check
+passes when at least one answers; --onion tries only the one given. It fails when tor
+cannot bootstrap on the network's authorities, when none of the onion services answers, and
+when the network file lists none and no --onion is given. Nothing is tried outside the
+network.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--data-dir` | — | Tor state directory (default: the user cache directory, per network) |
+| `--network` | — | Orama Tor network file (network.json) [required] ($ORAMA_ONION_NETWORK) |
+| `--onion` | — | Check only this validator onion service (addr.onion[:port]) |
+| `--tor` | `tor` | The tor binary to run |
+
+### orama vpn up
+
+Run a SOCKS5 proxy into an Orama Tor network
+
+```
+orama vpn up [flags]
+```
+
+Start tor on the network and keep it running until interrupted.
+
+The SOCKS5 proxy listens on loopback only (--socks). Point an application at it
+as socks5h, so the proxy resolves names, and each distinct SOCKS username gets
+its own circuit. --dns also offers a DNS resolver on loopback that answers
+through the network.
+
+If tor stops, up exits with an error and the proxy port closes; applications
+using it fail instead of connecting some other way.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--data-dir` | — | Tor state directory (default: the user cache directory, per network) |
+| `--dns` | — | Loopback address for a DNS resolver that answers through the network (off by default) |
+| `--network` | — | Orama Tor network file (network.json) [required] ($ORAMA_ONION_NETWORK) |
+| `--socks` | `127.0.0.1:9150` | Loopback address for the SOCKS5 proxy |
+| `--tor` | `tor` | The tor binary to run |
 

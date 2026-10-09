@@ -124,10 +124,11 @@ chain-id is not settled. Rehearse it on stagenet first. Not possible: adding a s
 `x/relay` pays relays from reports signed by a reporter set. The set is separate from the `DIRAUTH`
 role in `x/nodes`, which is only a registered, bonded role. Nothing on chain links a reporter to a
 `DIRAUTH` node. A directory authority of the Orama Tor network is installed with
-`orama global install --services dirauth` ([TOR_NETWORK.md](TOR_NETWORK.md#directory-authorities)); the
-reporter service that feeds `x/relay` from its votes is not built, so a compromise of the reporter
-set means a compromised reporter key, and a compromise of an authority host means its signing key and
-relay identity (the authority identity key is offline).
+`orama global install --services dirauth` ([TOR_NETWORK.md](TOR_NETWORK.md#directory-authorities)); a
+reporter is `orama-global reporter` on a dirauth host, signing with its own hot key
+([TOR_NETWORK.md](TOR_NETWORK.md#the-relay-bandwidth-reporter)). A compromise of the reporter set means a
+compromised reporter key, and a compromise of an authority host means its signing key and relay identity
+(the authority identity key is offline).
 
 **A compromised authority host.** Its identity key is offline, so the host's compromise cannot mint
 new certificates. Remove the authority from `tor-network.json`, ship the file in an emergency release

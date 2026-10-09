@@ -1927,6 +1927,9 @@ The storage commands:
   ([TOR_NETWORK.md](TOR_NETWORK.md)). Its network file is refused with fewer than
   three authorities, and an exit is installed only on a network file that says
   `allow_exit`.
+- `chain/x/vpnlaunch` is the public-VPN launch gate: every threshold on each of the last 30 days and a launch
+  switch that is off in every build. Nothing links it into `oramad`
+  ([TOR_NETWORK.md](TOR_NETWORK.md#the-public-launch-gate)).
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
@@ -2410,6 +2413,11 @@ to the node's REST API and answers 404 to the rest. The service lives on the **O
 `--onion-socks` must point at a client of that network (`tornet.ClientTorrc`, SOCKS port
 `constants.TorNetSOCKSPort`, 9052 by convention); the default `127.0.0.1:9050` is the node's client of the public
 Tor network, which cannot resolve it. No unit on a node runs a client of the Orama network.
+
+`--onion-network <network.json>` (or `ORAMA_ONION_NETWORK`) makes the command start its own Tor client on an
+Orama Tor network, with that network's directory authorities and no others, and submit through it; without
+`--onion` it picks a validator onion service from the file at random for the transaction. The network file, the
+client and the failure behaviour are in [TOR_NETWORK.md](TOR_NETWORK.md#onion-transaction-submission).
 
 ## `x/wasm`: contracts
 
