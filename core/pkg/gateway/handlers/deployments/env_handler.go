@@ -334,7 +334,7 @@ var errEnvChangedConcurrently = errors.New("the environment was changed by anoth
 // encrypted: the row is read as plaintext and written back encrypted, so the
 // plaintext form is not a permanent second format.
 func (h *EnvHandler) persistEnv(ctx context.Context, deployment *deployments.Deployment, env map[string]string, expected string, at time.Time) error {
-	encoded, err := h.service.EncodeEnvironment(env)
+	encoded, err := h.service.EncodeEnvironment(deployment.Namespace, deployment.ID, env)
 	if err != nil {
 		return fmt.Errorf("encode environment: %w", err)
 	}

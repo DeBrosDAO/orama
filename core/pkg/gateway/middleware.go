@@ -1512,7 +1512,17 @@ func (g *Gateway) domainRoutingMiddleware(next http.Handler) http.Handler {
 
 		// Try to find deployment by domain
 		deployment, err := g.getDeploymentByDomain(r.Context(), host)
+		if errors.Is(err, ErrAmbiguousLegacyHost) {
+			// Answered as an unknown host: which namespaces share the name is
+			// not the visitor's to learn.
+			g.logger.ComponentWarn(logging.ComponentGeneral, "refused an ambiguous legacy deployment host",
+				zap.String("host", host), zap.Error(err))
+			http.NotFound(w, r)
+			return
+		}
 		if err != nil {
+			g.logger.ComponentError(logging.ComponentGeneral, "deployment host lookup failed",
+				zap.String("host", host), zap.Error(err))
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -1963,116 +1973,6 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	// Write status code and body
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
-}
-
-// getDeploymentByDomain looks up a deployment by its domain
-// Supports formats like:
-//   - {name}-{random}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space) - new format with random suffix
-//   - {name}.{baseDomain} (e.g., myapp.dbrs.space) - legacy format (backwards compatibility)
-//   - {name}.node-{shortID}.{baseDomain} (legacy format for backwards compatibility)
-//   - custom domains via deployment_domains table
-func (g *Gateway) getDeploymentByDomain(ctx context.Context, domain string) (*deployments.Deployment, error) {
-	if g.deploymentService == nil {
-		return nil, nil
-	}
-
-	// Strip trailing dot if present
-	domain = strings.TrimSuffix(domain, ".")
-
-	baseDomain := g.cfg.BaseDomain
-
-	db := g.client.Database()
-	internalCtx := client.WithInternalAuth(ctx)
-
-	// Parse domain to extract deployment subdomain/name
-	suffix := "." + baseDomain
-	if strings.HasSuffix(domain, suffix) {
-		subdomain := strings.TrimSuffix(domain, suffix)
-		parts := strings.Split(subdomain, ".")
-
-		// Primary format: {subdomain}.{baseDomain} (e.g., myapp-f3o4if.dbrs.space)
-		// The subdomain can be either:
-		// - {name}-{random} (new format)
-		// - {name} (legacy format)
-		if len(parts) == 1 {
-			subdomainOrName := parts[0]
-
-			// First, try to find by subdomain (new format: name-random)
-			query := `
-				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
-				FROM deployments
-				WHERE subdomain = ?
-				AND status IN ('active', 'degraded')
-				LIMIT 1
-			`
-			result, err := db.Query(internalCtx, query, subdomainOrName)
-			if err == nil && len(result.Rows) > 0 {
-				row := result.Rows[0]
-				return &deployments.Deployment{
-					ID:         getString(row[0]),
-					Namespace:  getString(row[1]),
-					Name:       getString(row[2]),
-					Type:       deployments.DeploymentType(getString(row[3])),
-					Port:       getInt(row[4]),
-					ContentCID: getString(row[5]),
-					Status:     deployments.DeploymentStatus(getString(row[6])),
-					HomeNodeID: getString(row[7]),
-					Subdomain:  getString(row[8]),
-				}, nil
-			}
-
-			// Fallback: try by name for legacy deployments (without random suffix)
-			query = `
-				SELECT id, namespace, name, type, port, content_cid, status, home_node_id, subdomain
-				FROM deployments
-				WHERE name = ?
-				AND status IN ('active', 'degraded')
-				LIMIT 1
-			`
-			result, err = db.Query(internalCtx, query, subdomainOrName)
-			if err == nil && len(result.Rows) > 0 {
-				row := result.Rows[0]
-				return &deployments.Deployment{
-					ID:         getString(row[0]),
-					Namespace:  getString(row[1]),
-					Name:       getString(row[2]),
-					Type:       deployments.DeploymentType(getString(row[3])),
-					Port:       getInt(row[4]),
-					ContentCID: getString(row[5]),
-					Status:     deployments.DeploymentStatus(getString(row[6])),
-					HomeNodeID: getString(row[7]),
-					Subdomain:  getString(row[8]),
-				}, nil
-			}
-		}
-
-	}
-
-	// Try custom domain from deployment_domains table
-	query := `
-		SELECT d.id, d.namespace, d.name, d.type, d.port, d.content_cid, d.status, d.home_node_id
-		FROM deployments d
-		JOIN deployment_domains dd ON d.id = dd.deployment_id
-		WHERE dd.domain = ? AND dd.verified_at IS NOT NULL
-		AND d.status IN ('active', 'degraded')
-		LIMIT 1
-	`
-	result, err := db.Query(internalCtx, query, domain)
-	if err == nil && len(result.Rows) > 0 {
-		row := result.Rows[0]
-		return &deployments.Deployment{
-			ID:         getString(row[0]),
-			Namespace:  getString(row[1]),
-			Name:       getString(row[2]),
-			Type:       deployments.DeploymentType(getString(row[3])),
-			Port:       getInt(row[4]),
-			ContentCID: getString(row[5]),
-			Status:     deployments.DeploymentStatus(getString(row[6])),
-			HomeNodeID: getString(row[7]),
-		}, nil
-	}
-
-	return nil, nil
 }
 
 // proxyToDynamicDeployment proxies requests to a dynamic deployment's local port

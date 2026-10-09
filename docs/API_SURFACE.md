@@ -246,7 +246,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/operator/invite` | CLI | Mint a node invite. `orama invite`. Optional body `{"expiry_seconds": N}` (or `expiry_minutes` from an older CLI); default and cap one hour. |
 | `/v1/operator/node/register` | CLI | Record a node in the inventory. |
 | `/v1/operator/rotate-signing-key` | CLI | Generate a new signing key for this gateway, publish it, and leave the outgoing one verifying what it already signed for one access-token lifetime. Admin grant **and** a wallet on the operator list. `orama operator rotate-signing-key`. |
-| `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:`. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama operator rotate-secrets`. |
+| `/v1/operator/rotate-secrets` | CLI | Rewrite stored ciphertext onto `enc:v1:<id>:` (a deployment's environment onto `enc:v2:<id>:`, sealed to its row) and enable bound writes. `--rotate` generates a new encryption root first. Admin grant **and** operator list. `orama operator rotate-secrets`. |
 | `/v1/operator/nodes` | CLI | Fleet inventory. |
 | `/v1/operator/operators` | CLI | List the operator wallets (`GET`) or add one (`POST` `{"wallet":"0x…"}`). Admin grant and a wallet already on the list. `orama operator list`, `orama operator add`. |
 | `/v1/operator/operators/` | CLI | `DELETE /v1/operator/operators/{wallet}` takes one wallet off the list and refuses to remove the last. `orama operator remove`. |

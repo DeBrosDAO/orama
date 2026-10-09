@@ -75,6 +75,10 @@ var rotateSecretsCmd = &cobra.Command{
 	Short: "Re-encrypt stored secrets, optionally under a new encryption root",
 	Long: `Rewrite function secrets, push tokens, TURN secrets, deployment
 environments and agent tokens onto the versioned envelope (enc:v1:<id>:).
+A deployment's environment is written as enc:v2:<id>:, sealed to its namespace
+and deployment id, so a copy of the ciphertext in another deployment's row does
+not open. This is also what turns on bound writes: until it has run, gateways
+keep writing deployment environments in the envelope an older gateway reads.
 
 Without --rotate the IKM does not change: leftover plaintext and the legacy
 enc: form are rewritten so a captured snapshot of the old format is no longer
@@ -84,7 +88,7 @@ With --rotate a new encryption root is generated. Existing ciphertext is
 re-encrypted under it. A disk that holds only the previous root cannot open
 the new rows. IPFS-Cluster and the mesh bearer are not touched.
 
-Do not run this until every gateway is on a binary that can read enc:v1:.
+Do not run this until every gateway is on a binary that can read enc:v2:.
 The walker is idempotent; if it is interrupted, run it again.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

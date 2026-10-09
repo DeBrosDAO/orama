@@ -712,7 +712,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		// of these tables is empty, so every deployment call made on a
 		// namespace host answered "Deployment not found". On the main gateway
 		// GlobalORMClient is ORMClient.
-		deploymentDB := deploymentRegistry(deps)
+		deploymentDB := scopedDeploymentRegistry(gw.cfg, deps)
 		// Convert rqlite.Client to health.Database for the deployment checker
 		dbAdapter := &deploymentDatabaseAdapter{client: deploymentDB}
 

@@ -110,15 +110,16 @@ func (s *DeploymentService) RecordAudit(r *http.Request, namespace, action, reso
 	})
 }
 
-// EncodeEnvironment returns the stored form of a deployment's environment.
-func (s *DeploymentService) EncodeEnvironment(env map[string]string) (string, error) {
-	return s.envCodec.Encode(env)
+// EncodeEnvironment returns the stored form of the environment of deployment
+// deploymentID in namespace.
+func (s *DeploymentService) EncodeEnvironment(namespace, deploymentID string, env map[string]string) (string, error) {
+	return s.envCodec.Encode(namespace, deploymentID, env)
 }
 
 // DecodeEnvironment reads a stored environment back, for a caller that loaded
 // the column itself.
-func (s *DeploymentService) DecodeEnvironment(namespace, name, stored string) (map[string]string, error) {
-	return s.decodeEnvironment(namespace, name, stored)
+func (s *DeploymentService) DecodeEnvironment(namespace, deploymentID, name, stored string) (map[string]string, error) {
+	return s.decodeEnvironment(namespace, deploymentID, name, stored)
 }
 
 // decodeEnvironment reads a stored environment back.
@@ -126,8 +127,8 @@ func (s *DeploymentService) DecodeEnvironment(namespace, name, stored string) (m
 // A failure here is returned, not swallowed. An environment that cannot be read
 // is not an empty one: starting the app without its database URL looks like the
 // tenant's own bug and is far harder to diagnose than a refusal.
-func (s *DeploymentService) decodeEnvironment(namespace, name, stored string) (map[string]string, error) {
-	env, err := s.envCodec.Decode(stored)
+func (s *DeploymentService) decodeEnvironment(namespace, deploymentID, name, stored string) (map[string]string, error) {
+	env, err := s.envCodec.Decode(namespace, deploymentID, stored)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the environment of deployment %s/%s: %w", namespace, name, err)
 	}
@@ -286,7 +287,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, deployment *de
 	}
 
 	// Seal the environment before it is stored.
-	storedEnv, err := s.EncodeEnvironment(deployment.Environment)
+	storedEnv, err := s.EncodeEnvironment(deployment.Namespace, deployment.ID, deployment.Environment)
 	if err != nil {
 		return fmt.Errorf("failed to encode the environment of %s/%s: %w", deployment.Namespace, deployment.Name, err)
 	}
@@ -478,7 +479,7 @@ func (s *DeploymentService) SetupDynamicReplica(ctx context.Context, deployment 
 	// Call the internal API on the target node. The environment goes over as
 	// the sealed form: every node derives the same key from the cluster
 	// secret, so there is no reason to put it back in the clear on the wire.
-	storedEnv, envErr := s.EncodeEnvironment(deployment.Environment)
+	storedEnv, envErr := s.EncodeEnvironment(deployment.Namespace, deployment.ID, deployment.Environment)
 	if envErr != nil {
 		s.recordReplicaSetupFailure(ctx, deployment, nodeID, fmt.Errorf("failed to encode the environment: %w", envErr))
 		return
@@ -681,7 +682,7 @@ func (s *DeploymentService) getDeploymentSealed(ctx context.Context, namespace, 
 	}
 
 	row := rows[0]
-	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	env, err := s.decodeEnvironment(row.Namespace, row.ID, row.Name, row.Environment)
 	if err != nil {
 		return nil, "", err
 	}
@@ -751,7 +752,7 @@ func (s *DeploymentService) GetDeploymentByID(ctx context.Context, namespace, id
 	}
 
 	row := rows[0]
-	env, err := s.decodeEnvironment(row.Namespace, row.Name, row.Environment)
+	env, err := s.decodeEnvironment(row.Namespace, row.ID, row.Name, row.Environment)
 	if err != nil {
 		return nil, err
 	}

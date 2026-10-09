@@ -159,7 +159,7 @@ func (h *ReplicaHandler) HandleSetup(w http.ResponseWriter, r *http.Request) {
 	// every node derives identically. An environment that cannot be read is
 	// not an empty environment: starting the replica without its database URL
 	// would look like the tenant's own bug.
-	env, envErr := h.service.decodeEnvironment(req.Namespace, req.Name, req.Environment)
+	env, envErr := h.service.decodeEnvironment(req.Namespace, req.DeploymentID, req.Name, req.Environment)
 	if envErr != nil {
 		h.logger.Error("Failed to read the replica's environment", zap.Error(envErr))
 		writeReplicaError(w, http.StatusBadRequest, "Failed to read the deployment environment")

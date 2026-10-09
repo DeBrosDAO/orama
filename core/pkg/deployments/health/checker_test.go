@@ -838,11 +838,11 @@ type mockProvisioner struct {
 
 // DecodeEnvironment reads the column with the real codec when the test gave
 // one, and treats it as empty otherwise.
-func (m *mockProvisioner) DecodeEnvironment(_, _, stored string) (map[string]string, error) {
+func (m *mockProvisioner) DecodeEnvironment(namespace, deploymentID, _, stored string) (map[string]string, error) {
 	if m.codec == nil {
 		return map[string]string{}, nil
 	}
-	return m.codec.Decode(stored)
+	return m.codec.Decode(namespace, deploymentID, stored)
 }
 
 func (m *mockProvisioner) SetupDynamicReplica(_ context.Context, dep *deployments.Deployment, nodeID string) {
@@ -889,7 +889,7 @@ func TestReconcileDeployments_replicaGetsTheSealedEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored, err := codec.Encode(map[string]string{"STORE_FN": "todo-store"})
+	stored, err := codec.Encode("test", "dep-env", map[string]string{"STORE_FN": "todo-store"})
 	if err != nil {
 		t.Fatal(err)
 	}

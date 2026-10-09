@@ -6,6 +6,11 @@ import (
 	"testing"
 )
 
+const (
+	testNS = "acme"
+	testID = "dep-1"
+)
+
 func newTestCodec(t *testing.T) *EnvCodec {
 	t.Helper()
 	c, err := NewEnvCodec("a-cluster-secret")
@@ -23,11 +28,11 @@ func TestEnvCodec_roundTrip(t *testing.T) {
 		"EMPTY":        "",
 	}
 
-	stored, err := c.Encode(env)
+	stored, err := c.Encode(testNS, testID, env)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	got, err := c.Decode(stored)
+	got, err := c.Decode(testNS, testID, stored)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -44,7 +49,7 @@ func TestEnvCodec_roundTrip(t *testing.T) {
 // The whole point: what lands in the database must not be the tenant's secrets.
 func TestEnvCodec_theStoredFormDoesNotContainTheValues(t *testing.T) {
 	c := newTestCodec(t)
-	stored, err := c.Encode(map[string]string{"STRIPE_KEY": "sk_live_supersecret"})
+	stored, err := c.Encode(testNS, testID, map[string]string{"STRIPE_KEY": "sk_live_supersecret"})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -62,11 +67,11 @@ func TestEnvCodec_theStoredFormDoesNotContainTheValues(t *testing.T) {
 func TestEnvCodec_encryptsDifferentlyEachTime(t *testing.T) {
 	c := newTestCodec(t)
 	env := map[string]string{"K": "v"}
-	first, err := c.Encode(env)
+	first, err := c.Encode(testNS, testID, env)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	second, err := c.Encode(env)
+	second, err := c.Encode(testNS, testID, env)
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -83,7 +88,7 @@ func TestEnvCodec_readsALegacyPlaintextRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	got, err := c.Decode(string(legacy))
+	got, err := c.Decode(testNS, testID, string(legacy))
 	if err != nil {
 		t.Fatalf("Decode of a legacy row: %v", err)
 	}
@@ -98,7 +103,7 @@ func TestEnvCodec_readsALegacyPlaintextRow(t *testing.T) {
 func TestEnvCodec_emptyStoredValues(t *testing.T) {
 	c := newTestCodec(t)
 	for _, stored := range []string{"", "   ", "null", "{}"} {
-		got, err := c.Decode(stored)
+		got, err := c.Decode(testNS, testID, stored)
 		if err != nil {
 			t.Fatalf("Decode(%q): %v", stored, err)
 		}
@@ -113,10 +118,10 @@ func TestEnvCodec_emptyStoredValues(t *testing.T) {
 // the tenant's own bug.
 func TestEnvCodec_refusesWhatItCannotRead(t *testing.T) {
 	c := newTestCodec(t)
-	if _, err := c.Decode("not json at all"); err == nil {
+	if _, err := c.Decode(testNS, testID, "not json at all"); err == nil {
 		t.Error("a corrupt row decoded to an environment instead of an error")
 	}
-	if _, err := c.Decode("enc:not-base64!!"); err == nil {
+	if _, err := c.Decode(testNS, testID, "enc:not-base64!!"); err == nil {
 		t.Error("an undecodable sealed row decoded to an environment instead of an error")
 	}
 
@@ -124,11 +129,11 @@ func TestEnvCodec_refusesWhatItCannotRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEnvCodec: %v", err)
 	}
-	stored, err := c.Encode(map[string]string{"K": "v"})
+	stored, err := c.Encode(testNS, testID, map[string]string{"K": "v"})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if _, err := other.Decode(stored); err == nil {
+	if _, err := other.Decode(testNS, testID, stored); err == nil {
 		t.Error("a row sealed with another cluster's key decoded without error")
 	}
 }
@@ -143,31 +148,31 @@ func TestNewEnvCodec_refusesAnEmptyClusterSecret(t *testing.T) {
 
 func TestEnvCodec_nilCodecRefusesInsteadOfStoringPlaintext(t *testing.T) {
 	var c *EnvCodec
-	if _, err := c.Encode(map[string]string{"K": "v"}); err == nil {
+	if _, err := c.Encode(testNS, testID, map[string]string{"K": "v"}); err == nil {
 		t.Error("a nil codec encoded an environment")
 	}
-	if _, err := c.Decode("{}"); err == nil {
+	if _, err := c.Decode(testNS, testID, "{}"); err == nil {
 		t.Error("a nil codec decoded an environment")
 	}
 }
 
 func TestEnvCodec_refusesAValueItCouldNotDeliver(t *testing.T) {
 	c := newTestCodec(t)
-	if _, err := c.Encode(map[string]string{"K": "\xff"}); err == nil {
+	if _, err := c.Encode(testNS, testID, map[string]string{"K": "\xff"}); err == nil {
 		t.Error("the codec stored a value systemd would discard at runtime")
 	}
-	if _, err := c.Encode(map[string]string{"1BAD": "x"}); err == nil {
+	if _, err := c.Encode(testNS, testID, map[string]string{"1BAD": "x"}); err == nil {
 		t.Error("the codec stored an unusable variable name")
 	}
 }
 
 func TestEnvCodec_encodesNilAsAnEmptyEnvironment(t *testing.T) {
 	c := newTestCodec(t)
-	stored, err := c.Encode(nil)
+	stored, err := c.Encode(testNS, testID, nil)
 	if err != nil {
 		t.Fatalf("Encode(nil): %v", err)
 	}
-	got, err := c.Decode(stored)
+	got, err := c.Decode(testNS, testID, stored)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

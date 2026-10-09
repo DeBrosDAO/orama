@@ -15,6 +15,28 @@ type Column struct {
 	Column  string
 	IDCols  []string
 	Purpose string
+	// BoundCols, when set, name the columns of the same row the ciphertext is
+	// sealed to (see BoundAAD). The column is written as an enc:v2: envelope
+	// once the root allows bound writes.
+	BoundCols []string
+}
+
+// BoundAAD is the additional data a row's ciphertext is sealed to: the purpose
+// and the row's values, length-prefixed so no two different rows can produce the
+// same bytes. It returns nil when there is no value or any of them is empty, so
+// an unbound seal cannot be mistaken for a bound one.
+func BoundAAD(purpose string, values ...string) []byte {
+	if len(values) == 0 {
+		return nil
+	}
+	aad := []byte(purpose)
+	for _, v := range values {
+		if v == "" {
+			return nil
+		}
+		aad = append(aad, fmt.Sprintf("\x00%d:%s", len(v), v)...)
+	}
+	return aad
 }
 
 // NamespaceColumns are the tenant-DB columns sealed with the encryption root.
@@ -37,7 +59,7 @@ func IndexColumns() []Column {
 		// Deployments live in the registry. Listed with the tenant columns, a
 		// rotation re-sealed an empty tenant copy of the table and left every
 		// deployment's environment under the root being retired.
-		{Table: "deployments", Column: "environment", IDCols: []string{"id"}, Purpose: "orama-deployment-environment-v1"},
+		{Table: "deployments", Column: "environment", IDCols: []string{"id"}, Purpose: "orama-deployment-environment-v1", BoundCols: []string{"namespace", "id"}},
 	}
 }
 
@@ -80,7 +102,7 @@ func walkColumn(ctx context.Context, db WalkDB, root Root, col Column) (WalkResu
 		return out, err
 	}
 
-	selectCols := strings.Join(append(append([]string{}, col.IDCols...), col.Column), ", ")
+	selectCols := strings.Join(append(append(append([]string{}, col.IDCols...), col.BoundCols...), col.Column), ", ")
 	query := fmt.Sprintf("SELECT %s FROM %s", selectCols, col.Table)
 
 	var rows []map[string]any
@@ -103,16 +125,17 @@ func walkColumn(ctx context.Context, db WalkDB, root Root, col Column) (WalkResu
 		}
 		out.Scanned++
 
-		if alreadyOnTarget(ks, raw) {
+		aad := boundAADOf(col, row)
+		if alreadyOnTarget(ks, raw, aad != nil) {
 			out.Skipped++
 			continue
 		}
-		plain, err := decryptForWalk(ks, raw)
+		plain, err := decryptForWalk(ks, raw, aad)
 		if err != nil {
 			out.Failures = append(out.Failures, fmt.Sprintf("%s.%s %v: %v", col.Table, col.Column, idsOf(row, col.IDCols), err))
 			continue
 		}
-		sealed, err := ks.Encrypt(plain)
+		sealed, err := sealForWalk(ks, plain, aad)
 		if err != nil {
 			out.Failures = append(out.Failures, fmt.Sprintf("%s.%s %v: %v", col.Table, col.Column, idsOf(row, col.IDCols), err))
 			continue
@@ -129,10 +152,31 @@ func walkColumn(ctx context.Context, db WalkDB, root Root, col Column) (WalkResu
 	return out, nil
 }
 
-func alreadyOnTarget(ks Keyset, raw string) bool {
+func boundAADOf(col Column, row map[string]any) []byte {
+	if len(col.BoundCols) == 0 {
+		return nil
+	}
+	values := make([]string, 0, len(col.BoundCols))
+	for _, c := range col.BoundCols {
+		values = append(values, stringify(row[c]))
+	}
+	return BoundAAD(col.Purpose, values...)
+}
+
+func sealForWalk(ks Keyset, plain string, aad []byte) (string, error) {
+	if aad == nil {
+		return ks.Encrypt(plain)
+	}
+	return ks.EncryptBound(plain, aad)
+}
+
+func alreadyOnTarget(ks Keyset, raw string, bound bool) bool {
 	env, err := ParseEnvelope(raw)
 	if err != nil {
 		return false
+	}
+	if bound && ks.WriteBound {
+		return env.Version == 2 && env.KeyID == ks.CurrentID
 	}
 	if ks.WriteVersioned {
 		return env.Version == 1 && env.KeyID == ks.CurrentID
@@ -140,11 +184,11 @@ func alreadyOnTarget(ks Keyset, raw string) bool {
 	return env.Version == 0
 }
 
-func decryptForWalk(ks Keyset, raw string) (string, error) {
+func decryptForWalk(ks Keyset, raw string, aad []byte) (string, error) {
 	if !IsEncrypted(raw) {
 		return raw, nil
 	}
-	return ks.Decrypt(raw)
+	return ks.DecryptBound(raw, aad)
 }
 
 func stringify(v any) string {

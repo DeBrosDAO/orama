@@ -269,6 +269,19 @@ deployment it is named after if the gateway handling the request has that
 deployment, and refused otherwise — the files may be another gateway's, and
 until an operator removes them the name cannot be used.
 
+### Deployment addresses
+
+A deployment is served at `https://<name>-<random>.<base domain>`, the
+`subdomain` in `orama app get`: the name, a hyphen and a random suffix, unique
+across every namespace. A verified custom domain is served too.
+
+The bare `https://<name>.<base domain>` is only the address of a deployment
+created before subdomains existed, which has none. A deployment that has a
+subdomain is not served at its bare name: names are unique per namespace, not
+across them, so the bare host would not say whose deployment it is. If two
+namespaces still have a subdomain-less deployment of the same name, that bare
+host answers `404` for both until one of them is deleted.
+
 ### Replicas
 
 A dynamic deployment (Next.js SSR, Node.js, Go) runs on its home node and on a
@@ -864,7 +877,10 @@ restarts, or `$ORAMA_CACHE_DIR` for anything you can regenerate.
 ### How the values are handled
 
 Values are held encrypted in the cluster database, with a key derived from the
-cluster secret. On the node they are written to a file only the system can read,
+cluster secret, and sealed to the deployment's namespace and id, so a copy of
+the stored value in another deployment's row does not open (on a cluster
+upgraded from an earlier release this starts when an operator runs
+`orama operator rotate-secrets`; a new cluster has it from the start). On the node they are written to a file only the system can read,
 which systemd hands to your process — they are not written into the app's
 systemd unit, and they are removed from the node when the deployment stops.
 
