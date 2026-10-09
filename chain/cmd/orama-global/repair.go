@@ -90,7 +90,11 @@ func repairPass(ctx context.Context, d *repair.Delegate, dir string) error {
 		start := time.Now()
 		done, err := d.RepairDeal(ctx, id, seeds[id])
 		for _, r := range done {
-			slog.Info("replica restored", "deal", r.DealID, "slot", r.Slot, "from", r.From, "provider", r.Provider, "took", time.Since(start), "blocks_since_assigned", r.BlocksSinceAssigned)
+			attrs := []any{"deal", r.DealID, "slot", r.Slot, "from", r.From, "provider", r.Provider, "took", time.Since(start)}
+			if r.BlocksKnown {
+				attrs = append(attrs, "blocks_since_assigned", r.BlocksSinceAssigned)
+			}
+			slog.Info("replica restored", attrs...)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("deal %d: %w", id, err))

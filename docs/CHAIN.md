@@ -1678,7 +1678,9 @@ Each pass, for every such deal:
 - Each restored slot is logged (`replica restored`) with `blocks_since_assigned`: the blocks between
   the chain assigning the replacement slot (the eviction) and the delegate's upload. That is the
   delegate's part of the time to restore the full replica count; the new provider's acceptance
-  follows in a later block. There is no metrics endpoint and no SLO threshold is enforced.
+  follows in a later block. The height is read after the upload: if it cannot be read, the restore
+  stands, the failure is logged as an error and `blocks_since_assigned` is left out of the line.
+  There is no metrics endpoint and no SLO threshold is enforced.
 
 `TestRepairChaos_killedProviderIsEvictedAndTheDelegateRestoresTheReplica`
 runs the whole path against the x/storage keeper: a provider stops, misses

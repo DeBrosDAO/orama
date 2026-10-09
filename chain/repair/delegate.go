@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/DeBrosOfficial/network/chain/piece"
 	"github.com/DeBrosOfficial/network/chain/storagekey"
@@ -51,6 +52,7 @@ type Delegate struct {
 	chain    Chain
 	net      Transport
 	operator string
+	log      *slog.Logger
 }
 
 // New returns a delegate acting for operator, the address deals name as
@@ -59,7 +61,7 @@ func New(chain Chain, net Transport, operator string) (*Delegate, error) {
 	if chain == nil || net == nil || operator == "" {
 		return nil, errors.New("repair delegate needs a chain, a transport, and its operator")
 	}
-	return &Delegate{chain: chain, net: net, operator: operator}, nil
+	return &Delegate{chain: chain, net: net, operator: operator, log: slog.Default()}, nil
 }
 
 // Repaired is one slot the delegate uploaded.
@@ -71,8 +73,12 @@ type Repaired struct {
 	// BlocksSinceAssigned is how many blocks passed between the chain
 	// assigning the replacement slot (the eviction) and the upload that
 	// restores the replica. It is the delegate's share of the time to restore
-	// the full replica count; the new provider's acceptance follows.
+	// the full replica count; the new provider's acceptance follows. It is
+	// only meaningful when BlocksKnown: the chain height is read after the
+	// upload, and a failed read leaves the metric out without undoing the
+	// restore.
 	BlocksSinceAssigned int64
+	BlocksKnown         bool
 }
 
 // RepairDeal uploads every assigned-but-unaccepted slot of dealID that it
@@ -133,15 +139,18 @@ func (d *Delegate) repairSlot(ctx context.Context, deal types.Deal, seed []byte,
 			errs = append(errs, fmt.Errorf("from slot %d: %w", src.Index, err))
 			continue
 		}
-		height, err := d.chain.Height(ctx)
-		if err != nil {
-			return Repaired{}, fmt.Errorf("read chain height: %w", err)
-		}
 		if err := d.net.Upload(ctx, dest, target.PieceRoot, body); err != nil {
 			return Repaired{}, fmt.Errorf("upload to %s: %w", target.NodeId, err)
 		}
-		return Repaired{DealID: deal.Id, Slot: target.Index, From: src.Index, Provider: target.NodeId,
-			BlocksSinceAssigned: height - target.AssignHeight}, nil
+		r := Repaired{DealID: deal.Id, Slot: target.Index, From: src.Index, Provider: target.NodeId}
+		// The replica is restored; the height only measures how long it took.
+		if height, err := d.chain.Height(ctx); err != nil {
+			d.log.Error("the replica was restored but the chain height could not be read, so its restore latency is not reported",
+				"deal", deal.Id, "slot", target.Index, "err", err)
+		} else {
+			r.BlocksSinceAssigned, r.BlocksKnown = height-target.AssignHeight, true
+		}
+		return r, nil
 	}
 	return Repaired{}, fmt.Errorf("%w: %w", ErrNoSource, errors.Join(errs...))
 }
