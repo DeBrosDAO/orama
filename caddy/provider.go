@@ -6,7 +6,7 @@ package orama
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -86,15 +86,34 @@ func (p *Provider) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-// sign stamps req the way the gateway's auth.VerifyACME checks it: the MAC
-// covers the body, so a captured stamp cannot be replayed with another record.
-func sign(key []byte, req *http.Request, body []byte, now time.Time) {
-	ts := strconv.FormatInt(now.Unix(), 10)
+// sign stamps req the way the gateway's auth.SignACME does: a MAC over the body
+// and a single-use nonce, so a captured stamp can be neither replayed with
+// another record nor used twice, and beside it the MAC without the nonce that a
+// gateway built before the nonce reads.
+func sign(key []byte, req *http.Request, body []byte, now time.Time) error {
+	raw := make([]byte, nonceBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Errorf("draw an ACME nonce: %w", err)
+	}
+	nonce, ts := hex.EncodeToString(raw), now.Unix()
+	req.Header.Set(acmeNonceHeader, nonce)
+	req.Header.Set(acmeMACV2Header, strconv.FormatInt(ts, 10)+"."+acmeNoncedMAC(key, req.Method, req.URL.Path, req.URL.RawQuery, body, nonce, ts))
+	req.Header.Set(acmeMACHeader, strconv.FormatInt(ts, 10)+"."+acmeUnnoncedMAC(key, req.Method, req.URL.Path, req.URL.RawQuery, body, ts))
+	return nil
+}
+
+// acmeUnnoncedMAC is the MAC core/pkg/auth's acmePayload covers.
+func acmeUnnoncedMAC(key []byte, method, path, query string, body []byte, ts int64) string {
 	sum := sha256.Sum256(body)
-	payload := strings.Join([]string{"orama-coordination-v2", strings.ToUpper(req.Method), req.URL.Path, req.URL.RawQuery, hex.EncodeToString(sum[:]), ts}, "\n")
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(payload))
-	req.Header.Set(acmeMACHeader, ts+"."+hex.EncodeToString(mac.Sum(nil)))
+	return hmacHex(key, strings.Join([]string{"orama-coordination-v2", strings.ToUpper(method), path, query,
+		hex.EncodeToString(sum[:]), strconv.FormatInt(ts, 10)}, "\n"))
+}
+
+// acmeNoncedMAC is the MAC core/pkg/auth's acmePayloadNonced covers.
+func acmeNoncedMAC(key []byte, method, path, query string, body []byte, nonce string, ts int64) string {
+	sum := sha256.Sum256(body)
+	return hmacHex(key, strings.Join([]string{"orama-acme-v2", strings.ToUpper(method), path, query,
+		hex.EncodeToString(sum[:]), nonce, strconv.FormatInt(ts, 10)}, "\n"))
 }
 
 // call posts one record to the gateway's present or cleanup endpoint.
@@ -112,7 +131,9 @@ func (p *Provider) call(ctx context.Context, op string, zone string, rr libdns.R
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	sign(p.key, req, body, time.Now())
+	if err := sign(p.key, req, body, time.Now()); err != nil {
+		return fmt.Errorf("orama DNS provider: %w", err)
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

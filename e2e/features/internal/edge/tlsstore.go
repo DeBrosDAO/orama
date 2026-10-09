@@ -18,12 +18,18 @@ const TLSStorePath = "/v1/internal/tls-store"
 // tlsStoreScript signs a store call the way Caddy's storage module does and
 // sends it: argv is url, key mode (real|random|none), body, and "replay" to
 // send the same signed request twice. The MAC key is HKDF-Expand of the
-// node's store master key with "orama-tls-store-mac-v1"; the stamp is the
-// coordination v2 payload for the audience "caddy-tls-store"
-// (core/pkg/tlsstore/keys.go, core/pkg/auth/coordination_v2.go). It prints
-// "STATUS <code>" then the body, once per send.
+// node's store master key with "orama-tls-store-mac-v1"; the stamps are the
+// coordination v2 payload and the v3 payload (the same with the port of the
+// process the call is for after the audience) for the audience
+// "caddy-tls-store" (core/pkg/tlsstore/keys.go,
+// core/pkg/auth/coordination_v2.go, coordination_v3.go). argv[5] says which
+// are sent: "both" (as Caddy's module does), "v3" (only the v3 stamp) or
+// "v3-other-port" (only a v3 stamp scoped to the next port up, as one made
+// for a sibling process on the node would be). It prints "STATUS <code>" then
+// the body, once per send.
 const tlsStoreScript = `import hashlib,hmac,os,sys,time,urllib.request,urllib.error
-url,mode,body,replay=sys.argv[1:5]
+import urllib.parse
+url,mode,body,replay,stamps=sys.argv[1:6]
 h={"Content-Type":"application/json"}
 if mode!="none":
     master=bytes.fromhex(open("` + TLSStoreKeyPath + `").read().strip()) if mode=="real" else os.urandom(32)
@@ -31,7 +37,11 @@ if mode!="none":
     ts=str(int(time.time()));nonce=os.urandom(16).hex()
     p="\n".join(["orama-coordination-v2","POST","caddy-tls-store","` + TLSStorePath + `","",hashlib.sha256(body.encode()).hexdigest(),nonce,ts])
     h["X-Orama-Coordination-Nonce"]=nonce
-    h["X-Orama-Coordination-MAC-V2"]=ts+"."+hmac.new(key,p.encode(),hashlib.sha256).hexdigest()
+    if stamps=="both":
+        h["X-Orama-Coordination-MAC-V2"]=ts+"."+hmac.new(key,p.encode(),hashlib.sha256).hexdigest()
+    port=urllib.parse.urlparse(url).port+(1 if stamps=="v3-other-port" else 0)
+    p="\n".join(["orama-coordination-v3","POST","caddy-tls-store",str(port),"` + TLSStorePath + `","",hashlib.sha256(body.encode()).hexdigest(),nonce,ts])
+    h["X-Orama-Coordination-MAC-V3"]=ts+"."+hmac.new(key,p.encode(),hashlib.sha256).hexdigest()
 for _ in range(2 if replay=="replay" else 1):
     req=urllib.request.Request(url+"` + TLSStorePath + `",data=body.encode(),headers=h,method="POST")
     try:
@@ -47,6 +57,9 @@ type TLSStoreCall struct {
 	Body   map[string]any
 	Key    string // KeyReal, KeyRandom or KeyNone
 	Replay bool
+	// Stamps is "both" (the default: v2 and v3, as Caddy's module sends them),
+	// "v3" or "v3-other-port".
+	Stamps string
 }
 
 // Run makes the call on n and returns one probe per send.
@@ -60,8 +73,12 @@ func (c TLSStoreCall) Run(t testing.TB, f *fleet.Fleet, n fleet.Node) []Probe {
 	if c.Replay {
 		replay = "replay"
 	}
+	stamps := c.Stamps
+	if stamps == "" {
+		stamps = "both"
+	}
 	cmd := "python3 -c " + fleet.ShellQuote(tlsStoreScript)
-	for _, a := range []string{LocalGateway(""), c.Key, string(body), replay} {
+	for _, a := range []string{LocalGateway(""), c.Key, string(body), replay, stamps} {
 		cmd += " " + fleet.ShellQuote(a)
 	}
 	out := f.Exec(t, n, cmd)

@@ -47,6 +47,23 @@ const (
 	// NodeStampHeader carries "<unix seconds>.<hex signature>".
 	NodeStampHeader = "X-Orama-Node-Stamp"
 
+	// NodeStampV2Header carries "<unix seconds>.<hex signature>" over the
+	// nonced payload. SignNodeAPI sets it beside NodeStampHeader, which a
+	// gateway on the previous build reads.
+	NodeStampV2Header = "X-Orama-Node-Stamp-V2"
+
+	// NodeNonceHeader carries the hex of the single-use random value the nonced
+	// stamp covers.
+	NodeNonceHeader = "X-Orama-Node-Nonce"
+
+	// AcceptLegacyNodeStamp lets a request stamped only with the unnonced
+	// stamp verify, for a node on the previous build. While it is set, a
+	// captured register, heartbeat or enrol-key can be replayed inside the
+	// stamp's window (a stale heartbeat or register re-records an address the
+	// node has since left). It is removed in the release after the one that
+	// introduced the nonce (docs/SECURITY.md, "A node recording itself").
+	AcceptLegacyNodeStamp = true
+
 	// nodeAPIMaxSkew bounds replay. These calls are one request to the gateway
 	// on the node's own host; a minute covers clock drift rather than network
 	// delay.
@@ -208,7 +225,8 @@ func nodeAPIPayload(method, path, query, nodeID string, body []byte, ts int64) s
 	}, "\n")
 }
 
-// SignNodeAPI stamps a request as coming from a named node.
+// SignNodeAPI stamps a request as coming from a named node: with the nonced
+// stamp and, beside it, the unnonced one a gateway on the previous build reads.
 //
 // The body is passed rather than read off the request: the caller has it in
 // hand, and reading r.Body here would consume the reader the transport is about
@@ -220,13 +238,24 @@ func SignNodeAPI(signer NodeStampSigner, r *http.Request, nodeID string, body []
 	if strings.TrimSpace(nodeID) == "" {
 		return fmt.Errorf("no node id: a node-api request says which node it is about, and this one does not")
 	}
+	raw := make([]byte, coordinationNonceBytes)
+	if _, err := rand.Read(raw); err != nil {
+		return fmt.Errorf("cannot draw a node-api nonce: %w", err)
+	}
+	nonce := hex.EncodeToString(raw)
 	ts := now.Unix()
-	sig, err := signer.Sign([]byte(nodeAPIPayload(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, ts)))
+	v1, err := signer.Sign([]byte(nodeAPIPayload(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, ts)))
+	if err != nil {
+		return err
+	}
+	v2, err := signer.Sign([]byte(nodeAPIPayloadNonced(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, nonce, ts)))
 	if err != nil {
 		return err
 	}
 	r.Header.Set(NodeIDHeader, nodeID)
-	r.Header.Set(NodeStampHeader, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(sig))
+	r.Header.Set(NodeNonceHeader, nonce)
+	r.Header.Set(NodeStampHeader, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(v1))
+	r.Header.Set(NodeStampV2Header, strconv.FormatInt(ts, 10)+"."+hex.EncodeToString(v2))
 	return nil
 }
 
@@ -253,17 +282,15 @@ func VerifyNodeAPI(verifierFor NodeVerifierFor, r *http.Request, body []byte, no
 	if nodeID == "" {
 		return "", nil, false
 	}
-	stamp, sig, ok := strings.Cut(strings.TrimSpace(r.Header.Get(NodeStampHeader)), ".")
+	nonced := r.Header.Get(NodeStampV2Header) != ""
+	header := NodeStampHeader
+	if nonced {
+		header = NodeStampV2Header
+	} else if !AcceptLegacyNodeStamp {
+		return "", nil, false
+	}
+	ts, presented, ok := parseStamp(r.Header.Get(header), now, nodeAPIMaxSkew)
 	if !ok {
-		return "", nil, false
-	}
-	ts, err := strconv.ParseInt(stamp, 10, 64)
-	if err != nil {
-		return "", nil, false
-	}
-	// Both directions: a future timestamp is as much a sign of a forged stamp
-	// as an old one.
-	if skew := now.Sub(time.Unix(ts, 0)); skew > nodeAPIMaxSkew || skew < -nodeAPIMaxSkew {
 		return "", nil, false
 	}
 	verifier, err := verifierFor(nodeID)
@@ -277,9 +304,11 @@ func VerifyNodeAPI(verifierFor NodeVerifierFor, r *http.Request, body []byte, no
 	if verifier == nil {
 		return "", nil, false
 	}
-	presented, err := hex.DecodeString(sig)
-	if err != nil {
-		return "", nil, false
+	if nonced {
+		if !verifyNodeAPINonced(verifier, r, body, nodeID, presented, ts, now) {
+			return "", nil, false
+		}
+		return nodeID, nil, true
 	}
 	if !verifier.Verify([]byte(nodeAPIPayload(r.Method, r.URL.Path, r.URL.RawQuery, nodeID, body, ts)), presented) {
 		return "", nil, false

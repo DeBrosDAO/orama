@@ -44,6 +44,25 @@ func TestACME_badStampsRefusedOnTheNode(t *testing.T) {
 	}
 }
 
+// TestACME_aStampIsGoodForOneCall: a signed present, sent a second time
+// byte for byte inside its window, is refused (404), so a captured cleanup
+// cannot delete a TXT record mid-challenge (docs/SECURITY.md "ACME DNS-01":
+// the stamp carries a single-use nonce). The first present is real and is
+// cleaned up with a fresh stamp.
+func TestACME_aStampIsGoodForOneCall(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	n := f.State.Nodes[0]
+	body := edge.ACMEBody(t, "_acme-challenge."+under(t, f.State.BaseDomain)+".", edge.ChallengeValue(t))
+	t.Cleanup(func() { cleanupChallenge(t, f, n, body) })
+	for _, path := range []string{edge.ACMEPresent, edge.ACMECleanup} {
+		call := edge.ACMECall{Path: path, Body: body, Key: edge.KeyReal, Replay: true}
+		if p := call.Run(t, f, n); p.Status != http.StatusNotFound {
+			t.Errorf("a replay of a signed %s: %d, want 404: %.200s", path, p.Status, p.Body)
+		}
+	}
+}
+
 // TestACME_badStampsRefusedOverTheOverlay: another node on the mesh is no
 // more trusted than loopback: the source address is not consulted.
 func TestACME_badStampsRefusedOverTheOverlay(t *testing.T) {

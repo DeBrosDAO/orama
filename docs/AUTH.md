@@ -1284,9 +1284,15 @@ path or query (network status, telemetry, repair, evict). Every namespace spawn
 action, the secrets re-encrypt and the deployment replica routes
 (`/v1/internal/deployments/replica/*`) carry parameters in the body and require
 v2, and the spawn handler also refuses a `node_id` that is not its own node's.
-A re-encrypt whose root is older than the gateway's is refused. The v1
-acceptance is removed in the next release. It proves cluster membership, not
-which node signed. Details: SECURITY.md, "Coordination MAC v2".
+A re-encrypt whose root is older than the gateway's, more than one generation
+ahead of it, or at its generation with a previous root it does not hold is
+refused. The v3 MAC (`X-Orama-Coordination-MAC-V3`) adds the port of the
+process the request is for (read from the connection on the receiving side), so
+a stamp for the index gateway is not good at a namespace gateway on the same
+node; v2 stays accepted beside it while the fleet is mixed
+(`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances are removed in
+the next release. It proves cluster membership, not which node signed.
+Details: SECURITY.md, "Coordination MAC v2" and "Coordination MAC v3".
 
 The source IP is not consulted, and must not be: every public request arrives
 from `127.0.0.1`, because Caddy terminates TLS and proxies to localhost.

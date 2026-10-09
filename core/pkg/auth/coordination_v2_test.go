@@ -33,8 +33,8 @@ func TestCheckCoordination_signedRequestIsV2AndBodyIsRestored(t *testing.T) {
 	key, now := v2Key(t), time.Now()
 	r := signedPost(t, key, `{"action":"stop-rqlite"}`, now)
 	ver, ok := CheckCoordination(key, r, now, testAudience)
-	if !ok || ver != CoordinationV2 {
-		t.Fatalf("got version %d ok=%v, want v2 true", ver, ok)
+	if !ok || ver != CoordinationV3 {
+		t.Fatalf("got version %d ok=%v, want v3 true", ver, ok)
 	}
 	got, _ := io.ReadAll(r.Body)
 	if string(got) != `{"action":"stop-rqlite"}` {
@@ -78,6 +78,7 @@ func TestCheckCoordination_v1OnlyStampIsV1(t *testing.T) {
 	key, now := v2Key(t), time.Now()
 	r := signedPost(t, key, `{}`, now)
 	r.Header.Del(CoordinationMACV2Header)
+	r.Header.Del(CoordinationMACV3Header)
 	r.Header.Del(CoordinationNonceHeader)
 	ver, ok := CheckCoordination(key, r, now, testAudience)
 	if !ok || ver != CoordinationV1 {
@@ -135,7 +136,7 @@ func TestSignCoordination_emptyBodyRoundTrips(t *testing.T) {
 	if err := SignCoordination(key, r, now, testAudience); err != nil {
 		t.Fatal(err)
 	}
-	if ver, ok := CheckCoordination(key, r, now, testAudience); !ok || ver != CoordinationV2 {
+	if ver, ok := CheckCoordination(key, r, now, testAudience); !ok || ver != CoordinationV3 {
 		t.Fatalf("got %d %v", ver, ok)
 	}
 }
@@ -172,6 +173,7 @@ func TestVerifyCoordinationV2_refusesV1Only(t *testing.T) {
 	r2 := httptest.NewRequest(http.MethodPost, "/v1/internal/secrets/reencrypt", bytes.NewReader([]byte(`{"root":"attacker"}`)))
 	r2.Header = r.Header.Clone()
 	r2.Header.Del(CoordinationMACV2Header)
+	r2.Header.Del(CoordinationMACV3Header)
 	r2.Header.Del(CoordinationNonceHeader)
 	if !VerifyCoordination(key, r2, time.Now(), testAudience) {
 		t.Fatal("v1 stamp no longer verifies under VerifyCoordination")

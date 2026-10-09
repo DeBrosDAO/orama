@@ -41,25 +41,45 @@ type ACMECall struct {
 	SkewSec int
 	// URL overrides the target (default: this node's loopback gateway).
 	URL string
+	// Unnonced signs only the MAC without the nonce, as a Caddy built before
+	// the nonce does (auth.AcceptLegacyACMEMAC); by default the call carries
+	// both stamps, as auth.SignACME and the current Caddy module write them.
+	Unnonced bool
+	// Replay sends the same signed request a second time and returns that
+	// answer; the first must be 200 or the call cannot be made.
+	Replay bool
 }
 
 // acmeScript signs and sends: argv is url, path, key mode, skew, body,
-// signed body. It prints "STATUS <code>" then the response body. The payload
-// is auth.acmePayload: "orama-coordination-v2", method, path, query, the
-// SHA-256 of the body, the timestamp, joined by newlines.
+// signed body, stamps (both|unnonced) and replay (once|replay). It prints
+// "STATUS <code>" then the response body, of the last send. The payloads are
+// auth.acmePayloadNonced ("orama-acme-v2", method, path, query, the SHA-256 of
+// the body, the nonce, the timestamp, joined by newlines) in
+// X-Orama-ACME-MAC-V2 with the nonce in X-Orama-ACME-Nonce, and
+// auth.acmePayload (the same without the nonce, labelled
+// "orama-coordination-v2") in X-Orama-Coordination-MAC.
 const acmeScript = `import hashlib,hmac,os,sys,time,urllib.request,urllib.error
-url,path,mode,skew,body,signed=sys.argv[1:7]
+url,path,mode,skew,body,signed,stamps,replay=sys.argv[1:9]
 h={"Content-Type":"application/json"}
 if mode!="none":
     key=bytes.fromhex(open("` + ACMEKeyPath + `").read().strip()) if mode=="real" else os.urandom(32)
     ts=str(int(time.time())+int(skew))
-    p="\n".join(["orama-coordination-v2","POST",path,"",hashlib.sha256(signed.encode()).hexdigest(),ts])
+    digest=hashlib.sha256(signed.encode()).hexdigest()
+    p="\n".join(["orama-coordination-v2","POST",path,"",digest,ts])
     h["` + MACHeader + `"]=ts+"."+hmac.new(key,p.encode(),hashlib.sha256).hexdigest()
-req=urllib.request.Request(url+path,data=body.encode(),headers=h,method="POST")
-try:
-    r=urllib.request.urlopen(req,timeout=20);code=r.status;out=r.read()
-except urllib.error.HTTPError as e:
-    code=e.code;out=e.read()
+    if stamps=="both":
+        nonce=os.urandom(16).hex()
+        p="\n".join(["orama-acme-v2","POST",path,"",digest,nonce,ts])
+        h["X-Orama-ACME-Nonce"]=nonce
+        h["X-Orama-ACME-MAC-V2"]=ts+"."+hmac.new(key,p.encode(),hashlib.sha256).hexdigest()
+for i in range(2 if replay=="replay" else 1):
+    req=urllib.request.Request(url+path,data=body.encode(),headers=h,method="POST")
+    try:
+        r=urllib.request.urlopen(req,timeout=20);code=r.status;out=r.read()
+    except urllib.error.HTTPError as e:
+        code=e.code;out=e.read()
+    if replay=="replay" and i==0 and code!=200:
+        print("first send answered",code,file=sys.stderr);sys.exit(3)
 print("STATUS",code);sys.stdout.write(out.decode(errors="replace"))
 `
 
@@ -73,7 +93,14 @@ func (c ACMECall) Command() string {
 	if signed == nil {
 		signed = c.Body
 	}
-	args := []string{url, c.Path, c.Key, strconv.Itoa(c.SkewSec), string(c.Body), string(signed)}
+	stamps, replay := "both", "once"
+	if c.Unnonced {
+		stamps = "unnonced"
+	}
+	if c.Replay {
+		replay = "replay"
+	}
+	args := []string{url, c.Path, c.Key, strconv.Itoa(c.SkewSec), string(c.Body), string(signed), stamps, replay}
 	cmd := "python3 -c " + fleet.ShellQuote(acmeScript)
 	for _, a := range args {
 		cmd += " " + fleet.ShellQuote(a)

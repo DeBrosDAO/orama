@@ -4,7 +4,7 @@
 # TURN host records, the NXDOMAIN cache (authority SOA, never stale, gone in
 # 30s) driven through real signed ACME present/cleanup calls made on a node,
 # every refusal of those endpoints (unsigned, foreign key, stale or replayed
-# stamp, out-of-zone or malformed record), the base and wildcard certificates
+# stamp, a signed call sent twice, out-of-zone or malformed record), the base and wildcard certificates
 # on every node (staging on a provisioned fleet, production on stagenet), one
 # certificate for the whole cluster through the shared store, the store's
 # refusals and sealed values, the wildcard exported for TURN, TLS versions,
@@ -43,6 +43,8 @@ covers:
     - "docs/NAMESERVER_SETUP.md#seeing-which-address-holds-which-slot: orama node dns delegation prints the records the zone publishes"
     - "docs/NAMESERVER_SETUP.md#seeing-which-address-holds-which-slot: the delegation check says delegated or names each missing or misdirected NS and glue record"
     - "docs/SECURITY.md#acme-dns-01: present/cleanup need a MAC over method, path and body under the ACME key; source address grants nothing"
+    - "docs/SECURITY.md#acme-dns-01: a signed present or cleanup is good for one call; a replay inside its window is refused (404)"
+    - "docs/SECURITY.md#certificates: a coordination v3 stamp is good only at the port it was made for, so one made for a sibling gateway process on the node is refused (404)"
     - "docs/SECURITY.md#acme-dns-01: a signed call writes only an _acme-challenge record under the base domain with a 43-char DNS-01 value"
     - "docs/ARCHITECTURE.md#tlshttps: ACME DNS-01 certificates for the base and wildcard, TLS 1.2+, HTTP/1.1 only"
     - "docs/ARCHITECTURE.md#tlshttps: the TLS check allows only the base domain and its subdomains"
