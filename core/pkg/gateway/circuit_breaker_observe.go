@@ -57,14 +57,59 @@ func (g *Gateway) breakersReport() *report.BreakersReport {
 	}
 	unhealthy := g.circuitBreakers.Unhealthy(breakerReportIdle)
 	out := &report.BreakersReport{Tracked: tracked, NotClosed: len(unhealthy)}
-	if len(unhealthy) > report.MaxBreakersReported {
-		unhealthy = unhealthy[:report.MaxBreakersReported]
-	}
+	unhealthy = fairBreakerSample(unhealthy, report.MaxBreakersReported)
 	for _, b := range unhealthy {
 		out.Unhealthy = append(out.Unhealthy, report.BreakerReport{
 			Namespace: b.Namespace, Deployment: b.Deployment, Node: b.Node, State: b.State.String(),
 			Failures: b.Failures, LastError: b.LastError, LastFailure: b.LastFailure,
 		})
+	}
+	return out
+}
+
+// fairBreakerSample picks at most limit of the breakers, keeping their order.
+// The list was cut at its first limit entries, ordered by namespace, so one
+// tenant with limit failing deployments hid every later namespace's breakers
+// from the report and the alert. A namespace gateway's breaker (one that
+// refuses a whole namespace) goes before a deployment's; within each of the two
+// kinds the namespaces take turns, one breaker each, until limit is reached.
+func fairBreakerSample(all []BreakerStatus, limit int) []BreakerStatus {
+	if len(all) <= limit {
+		return all
+	}
+	chosen := make([]bool, len(all))
+	left := limit
+	for _, deployments := range []bool{false, true} {
+		byNamespace := map[string][]int{}
+		var namespaces []string
+		for i, b := range all {
+			if (b.Deployment != "") != deployments {
+				continue
+			}
+			if _, seen := byNamespace[b.Namespace]; !seen {
+				namespaces = append(namespaces, b.Namespace)
+			}
+			byNamespace[b.Namespace] = append(byNamespace[b.Namespace], i)
+		}
+		for round := 0; left > 0; round++ {
+			progressed := false
+			for _, ns := range namespaces {
+				if left > 0 && round < len(byNamespace[ns]) {
+					chosen[byNamespace[ns][round]] = true
+					left--
+					progressed = true
+				}
+			}
+			if !progressed {
+				break
+			}
+		}
+	}
+	out := make([]BreakerStatus, 0, limit)
+	for i, b := range all {
+		if chosen[i] {
+			out = append(out, b)
+		}
 	}
 	return out
 }
