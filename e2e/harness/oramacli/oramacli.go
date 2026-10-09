@@ -47,9 +47,6 @@ type Runner struct {
 	Test     string
 	// RealHome finds the real home directory; secrets.RealHome by default.
 	RealHome func() (string, error)
-	// GatewayHost is the host of the environment's gateway, which the CLI's
-	// credential calls are paced against (ForState sets it).
-	GatewayHost string
 	// Wallet is the address the agent signs with, for the per-wallet
 	// challenge bucket (ForState sets the run's operator address).
 	Wallet string

@@ -1,16 +1,24 @@
 // Package pace keeps a whole fleet run under the gateway's credential rate
 // limits. The gateway allows 30 credential operations a minute (burst 10) per
-// client address, per gateway, and 10 challenges a minute (burst 5) per
-// wallet. The runner is one address and runs many feature packages in
-// parallel processes, so without pacing every sign-in would race for the same
-// budget and fail with 429 RATE_LIMITED for a reason that is not a bug.
+// client address, and 10 challenges a minute (burst 5) per wallet. The
+// per-address limiter is the edge's: it runs on the cluster gateway of the
+// node that takes the request, whichever host the request names (the
+// cluster's own, a namespace's ns-<name>, an app's), because a namespace
+// gateway only sees the overlay, which is exempt (core/pkg/gateway/
+// rate_limit_key.go, package clientkey). The runner is one address running
+// many packages and many namespaces at once, and DNS decides which node
+// answers it, so without pacing every sign-in would race for the same budget
+// and fail with 429 RATE_LIMITED for a reason that is not a bug.
 //
-// A Pacer is a token bucket per (gateway host, bucket) whose state lives in
-// one small file in the run's work dir, beside state.json, guarded by flock:
-// every feature process and every CLI invocation of the run draws from the
-// same buckets. The budgets sit slightly under the product's limits, so a 429
-// on a paced call means something real (an unpaced caller on the same
-// address, or a limiter regression), never contention inside the harness.
+// A Pacer is a token bucket per bucket name (the address, or one wallet's
+// challenges) for the whole run, whatever host a call goes to: any call may
+// land on any node, so the budget of one node's limiter is what the whole run
+// may spend. Its state lives in one small file in the run's work dir, beside
+// state.json, guarded by flock: every feature process and every CLI
+// invocation of the run draws from the same buckets. The budgets sit slightly
+// under the product's limits, so a 429 on a paced call means something real
+// (an unpaced caller on the same address, or a limiter regression), never
+// contention inside the harness.
 package pace
 
 import (
@@ -54,7 +62,7 @@ const (
 const FileName = "pace-state.json"
 
 // BucketCred is the per-address credential bucket (challenge, verify,
-// api-key, token, refresh and the device endpoints).
+// api-key, token, refresh and the device endpoints) of the whole run.
 const BucketCred = "cred"
 
 // challengePrefix starts every per-wallet challenge bucket.

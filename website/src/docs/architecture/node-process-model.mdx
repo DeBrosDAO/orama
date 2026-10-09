@@ -69,7 +69,7 @@ On one node, every path that starts or stops a namespace's units takes that name
 
 ## DNS degrades rather than failing
 
-The CoreDNS RQLite plugin serves stale answers when the backend is unreachable: an entry stays usable for 24 hours past its TTL and is returned with a 30-second TTL so a resolver comes back promptly. A negative answer is cached for 30 seconds and never served stale. A name that exists but has no record of the type asked (an AAAA query for a name that only has A records) answers NODATA, not NXDOMAIN, so a resolver does not conclude the name is gone. Without this, an index RQLite with no leader would take every name in the fleet offline, including the names an operator needs to reach the machines and fix it.
+The CoreDNS RQLite plugin serves stale answers when the backend is unreachable: an entry stays usable for 24 hours past its TTL and is returned with a 30-second TTL so a resolver comes back promptly. A negative answer is cached for 30 seconds and never served stale. A name that exists but has no record of the type asked (an AAAA query for a name that only has A records) answers NODATA, not NXDOMAIN, so a resolver does not conclude the name is gone; a name exists when it owns a record, has names below it, or the nearest wildcard covers it, and a name that owns a record or has names below it is never covered by a wildcard. A negative answer costs three indexed database queries however deep the name is (which names have names below them is held in memory), and a failed query is SERVFAIL, never a guessed NXDOMAIN. Without this, an index RQLite with no leader would take every name in the fleet offline, including the names an operator needs to reach the machines and fix it.
 
 ## A one-node and two-node fleet
 

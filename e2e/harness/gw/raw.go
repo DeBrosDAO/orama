@@ -41,7 +41,7 @@ func (c *Client) Raw(ctx context.Context, request []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.paceRaw(ctx, u.Hostname(), request); err != nil {
+	if err := c.paceRaw(ctx, request); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, RawBudget)

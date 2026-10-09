@@ -54,13 +54,20 @@ func requireAuthoritative(t *testing.T, server, what string, a *edge.Answer) {
 	}
 }
 
-// requireNoData fails unless a is an authoritative NODATA: NOERROR, no answer
-// records, and the zone's SOA in the authority section for negative caching.
-func requireNoData(t *testing.T, server, what string, a *edge.Answer) {
+// requireNegative fails unless a is the negative answer to a name under the
+// base domain for a type it lacks: authoritative NOERROR with no answer and
+// the apex SOA in the authority section (NODATA; docs/NAMESERVER_SETUP.md
+// "Nameserver slots"). Every name under the base exists, because *.<base>
+// covers it, so the zone never answers NXDOMAIN there.
+func requireNegative(t *testing.T, server, what, base string, a *edge.Answer) {
 	t.Helper()
-	if a.RCode != dnsmessage.RCodeSuccess || !a.Authoritative || len(a.Answers) != 0 || len(a.Authority) != 1 || a.Authority[0].Type != dnsmessage.TypeSOA {
-		t.Fatalf("%s @%s: rcode %v, authoritative %v, answers %v, authority %v; want an authoritative NOERROR with no records and the zone SOA (NODATA, never NXDOMAIN for a name that exists)",
+	if a.RCode != dnsmessage.RCodeSuccess || !a.Authoritative || len(a.Answers) != 0 ||
+		len(a.Authority) != 1 || a.Authority[0].Type != dnsmessage.TypeSOA || a.Authority[0].Name != edge.Fqdn(base) {
+		t.Fatalf("%s @%s: rcode %v, authoritative %v, answers %v, authority %v; want an authoritative NOERROR with no answer and the apex SOA (NODATA)",
 			what, server, a.RCode, a.Authoritative, a.Answers, a.Authority)
+	}
+	if soa := a.Authority[0]; soa.TTL > edge.SystemRecordTTL {
+		t.Errorf("%s @%s: negative authority TTL %d, want at most %d", what, server, soa.TTL, edge.SystemRecordTTL)
 	}
 }
 

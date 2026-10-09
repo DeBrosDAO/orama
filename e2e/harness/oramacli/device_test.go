@@ -83,13 +83,13 @@ func TestDeviceLogin_approvedAndPaced(t *testing.T) {
 		t.Fatalf("slept %s within the burst", clk.total())
 	}
 	ctx := context.Background()
-	if err := approver.Pacer.Wait(ctx, testGatewayHost, pace.ChallengeBucket(approver.Wallet)); err != nil || clk.total() != time.Minute {
+	if err := approver.Pacer.Wait(ctx, pace.ChallengeBucket(approver.Wallet)); err != nil || clk.total() != time.Minute {
 		t.Fatalf("the approval's challenge was not paced (slept %s, err %v)", clk.total(), err)
 	}
 	// The address bucket was empty at the start of that minute: it earned one
 	// token, and the next takes another minute.
 	for i := 0; i < 2; i++ {
-		if err := approver.Pacer.Wait(ctx, testGatewayHost, pace.BucketCred); err != nil {
+		if err := approver.Pacer.Wait(ctx, pace.BucketCred); err != nil {
 			t.Fatal(err)
 		}
 	}

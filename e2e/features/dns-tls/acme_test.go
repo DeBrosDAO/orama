@@ -27,8 +27,7 @@ const propagationSlack = 20 * time.Second
 const acmeTXTTTL = 60
 
 // txtEverywhere reports whether every nameserver answers name/TXT with value
-// (want) or answers NODATA for it (!want): the name is covered by the base
-// wildcard, so it exists, with no TXT record.
+// (want) or answers it with no TXT record, NODATA (!want).
 func txtEverywhere(ctx context.Context, servers []fleet.Node, name, value string, want bool) (bool, error) {
 	for _, n := range servers {
 		a, err := edge.Query(ctx, "udp", n.PublicIP, name, dnsmessage.TypeTXT)
@@ -39,16 +38,16 @@ func txtEverywhere(ctx context.Context, servers []fleet.Node, name, value string
 		if want && !has {
 			return false, nil
 		}
-		if !want && (has || a.RCode != dnsmessage.RCodeSuccess) {
+		if !want && (has || a.RCode != dnsmessage.RCodeSuccess || len(a.Answers) != 0) {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// TestACME_presentCleanupThroughTheNegativeCache: a challenge name is
-// NODATA (the base wildcard covers the name, which has no TXT record) with
-// the zone's SOA in the authority section; a signed present
+// TestACME_presentCleanupThroughTheNegativeCache: a challenge name has no TXT
+// record, and is NODATA with the zone's SOA in the authority section (the
+// base wildcard covers the name, so it exists); a signed present
 // makes it resolve on every nameserver within the 30s negative-cache TTL (a
 // negative answer is never served stale), and a signed cleanup removes it
 // within the plugin's 30s cache (docs/NAMESERVER_SETUP.md "A negative
@@ -61,11 +60,7 @@ func TestACME_presentCleanupThroughTheNegativeCache(t *testing.T) {
 	name := "_acme-challenge." + under(t, f.State.BaseDomain)
 	value := edge.ChallengeValue(t)
 	for _, n := range servers {
-		a := ask(t, n.PublicIP, name, dnsmessage.TypeTXT)
-		requireNoData(t, n.Name, name, a)
-		if soa := a.Authority[0]; soa.Name != edge.Fqdn(f.State.BaseDomain) || soa.TTL > edge.SystemRecordTTL {
-			t.Errorf("%s: negative authority %s TTL %d, want the apex SOA with TTL at most %d", n.Name, soa.Name, soa.TTL, edge.SystemRecordTTL)
-		}
+		requireNegative(t, n.Name, name, f.State.BaseDomain, ask(t, n.PublicIP, name, dnsmessage.TypeTXT))
 	}
 	cached := time.Now()
 	caller := f.State.Nodes[0]
@@ -78,7 +73,7 @@ func TestACME_presentCleanupThroughTheNegativeCache(t *testing.T) {
 		return txtEverywhere(t.Context(), servers, name, value, true)
 	})
 	if waited := time.Since(cached); waited > edge.NegativeTTL+propagationSlack {
-		t.Errorf("the record took %s to replace a cached NODATA, want at most %s", waited, edge.NegativeTTL+propagationSlack)
+		t.Errorf("the record took %s to replace a cached negative answer, want at most %s", waited, edge.NegativeTTL+propagationSlack)
 	}
 	a := ask(t, servers[0].PublicIP, name, dnsmessage.TypeTXT)
 	requireTTL(t, servers[0].Name, name, a, dnsmessage.TypeTXT, acmeTXTTTL)

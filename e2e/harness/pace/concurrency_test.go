@@ -57,7 +57,7 @@ func TestWait_manyGoroutinesNeverExceedBudget(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < each; i++ {
-				if err := p.Wait(context.Background(), "gw.example", BucketCred); err != nil {
+				if err := p.Wait(context.Background(), BucketCred); err != nil {
 					errs <- err
 					return
 				}
@@ -92,7 +92,7 @@ func TestWaitHelper_subprocess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), helperBudget)
 	defer cancel()
 	for i := 0; i < helperWaits; i++ {
-		if err := p.Wait(ctx, "gw.example", BucketCred); err != nil {
+		if err := p.Wait(ctx, BucketCred); err != nil {
 			t.Fatal(err)
 		}
 		fmt.Println(time.Now().UnixNano())

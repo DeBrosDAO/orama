@@ -54,7 +54,7 @@ const (
 const (
 	// PollEvery paces waits on DNS, telemetry and units.
 	PollEvery = 5 * time.Second
-	// NegativeTTL is how long CoreDNS caches a negative answer (NXDOMAIN or NODATA)
+	// NegativeTTL is how long CoreDNS caches a negative answer
 	// (core/pkg/coredns/rqlite/cache.go NegativeTTL).
 	NegativeTTL = 30 * time.Second
 	// StaleTTL is the TTL of an answer served stale while the backend is down.

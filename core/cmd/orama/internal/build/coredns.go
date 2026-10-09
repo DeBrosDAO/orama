@@ -122,7 +122,10 @@ func cloneCoreDNS(dir string) error {
 }
 
 // installRQLitePlugin copies the plugin's Go files from src into the CoreDNS
-// tree at dir.
+// tree at dir. Test files stay behind: they import what the plugin's tests need
+// (an SQLite driver, zap's observer), and `go mod tidy` in the CoreDNS tree
+// resolves the test imports of every package it holds, so copying them would
+// make the build fetch dependencies the binary never links.
 func installRQLitePlugin(src, dir string) error {
 	dst := filepath.Join(dir, "plugin", "rqlite")
 	if err := os.MkdirAll(dst, 0o755); err != nil {
@@ -133,7 +136,7 @@ func installRQLitePlugin(src, dir string) error {
 		return fmt.Errorf("failed to read rqlite plugin source at %s: %w", src, err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(src, entry.Name()))

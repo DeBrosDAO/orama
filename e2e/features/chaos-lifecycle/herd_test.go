@@ -65,9 +65,8 @@ func (h *herdCount) add(resp *gw.Response, err error) {
 // and quiesces the run's pacer before and after).
 func TestChaosLifecycle_authChallengeThunderingHerd(t *testing.T) {
 	f := harness.Fleet(t)
-	host := harness.CLI(t).GatewayHost
-	quiesce(t, host)
-	t.Cleanup(func() { quiesce(t, host) })
+	quiesce(t)
+	t.Cleanup(func() { quiesce(t) })
 	c := harness.GW(t).Unpaced()
 	var h herdCount
 	var wg sync.WaitGroup
@@ -95,17 +94,17 @@ func TestChaosLifecycle_authChallengeThunderingHerd(t *testing.T) {
 		t.Errorf("%d 429s carried no Retry-After", h.limitedWithoutRetryAfter)
 	}
 	harness.GW(t).MustSend(t, gw.Req{Path: "/v1/health"}).Expect(t, http.StatusOK)
-	quiesce(t, host)
+	quiesce(t)
 	gw.NewUser(t, f, gw.LobbyNamespace)
 }
 
 // quiesce holds the run pacer's whole credential burst, so the product's
 // bucket on every gateway has refilled.
-func quiesce(t testing.TB, host string) {
+func quiesce(t testing.TB) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), quiesceLimit)
 	defer cancel()
-	if err := edge.Quiesce(ctx, host); err != nil {
-		t.Errorf("quiescing the credential budget of %s: %v", host, err)
+	if err := edge.Quiesce(ctx); err != nil {
+		t.Errorf("quiescing the credential budget: %v", err)
 	}
 }

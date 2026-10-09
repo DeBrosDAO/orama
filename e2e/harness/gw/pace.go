@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/e2e/harness/pace"
@@ -79,13 +78,9 @@ func (c *Client) Unpaced() *Client {
 // caller must send at most n credential requests through the returned client.
 func (c *Client) Prepay(ctx context.Context, n int) (*Client, error) {
 	if c.pacer != nil && !c.unpaced {
-		u, err := url.Parse(c.BaseURL)
-		if err != nil || u.Hostname() == "" {
-			return nil, fmt.Errorf("client base URL %q has no host", c.BaseURL)
-		}
 		for range n {
-			if err := c.pacer.Wait(ctx, u.Hostname(), pace.BucketCred); err != nil {
-				return nil, fmt.Errorf("prepay %d credential requests to %s: %w", n, u.Hostname(), err)
+			if err := c.pacer.Wait(ctx, pace.BucketCred); err != nil {
+				return nil, fmt.Errorf("prepay %d credential requests: %w", n, err)
 			}
 		}
 	}
@@ -107,15 +102,14 @@ func (c *Client) paceRequest(ctx context.Context, req *http.Request, body []byte
 	if c.unpaced || c.pacer == nil || !credentialPaths[req.URL.Path] {
 		return false, nil
 	}
-	host := req.URL.Hostname()
 	if req.URL.Path == PathChallenge {
 		if w := challengeWallet(body); w != "" {
-			if err := c.pacer.Wait(ctx, host, pace.ChallengeBucket(w)); err != nil {
+			if err := c.pacer.Wait(ctx, pace.ChallengeBucket(w)); err != nil {
 				return true, fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
 			}
 		}
 	}
-	if err := c.pacer.Wait(ctx, host, pace.BucketCred); err != nil {
+	if err := c.pacer.Wait(ctx, pace.BucketCred); err != nil {
 		return true, fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
 	}
 	return true, nil
@@ -147,12 +141,12 @@ func rawRequestPath(request []byte) string {
 
 // paceRaw waits for an address token when a raw request goes to a credential
 // route (the per-wallet bucket is not parsed out of raw bytes).
-func (c *Client) paceRaw(ctx context.Context, host string, request []byte) error {
+func (c *Client) paceRaw(ctx context.Context, request []byte) error {
 	if c.unpaced || c.pacer == nil || !credentialPaths[rawRequestPath(request)] {
 		return nil
 	}
-	if err := c.pacer.Wait(ctx, host, pace.BucketCred); err != nil {
-		return fmt.Errorf("raw request to %s: %w", host, err)
+	if err := c.pacer.Wait(ctx, pace.BucketCred); err != nil {
+		return fmt.Errorf("raw request: %w", err)
 	}
 	return nil
 }

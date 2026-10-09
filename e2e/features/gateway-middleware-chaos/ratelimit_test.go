@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,26 +49,16 @@ type rpcError struct {
 // run's paced clients (edge.Quiesce).
 func quiet(t *testing.T) {
 	t.Helper()
-	host := gatewayHost(t)
-	if err := edge.Quiesce(t.Context(), host); err != nil {
+	if err := edge.Quiesce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := fleet.CleanupContext(t)
 		defer cancel()
-		if err := edge.Quiesce(ctx, host); err != nil {
+		if err := edge.Quiesce(ctx); err != nil {
 			t.Errorf("cleanup: %v", err)
 		}
 	})
-}
-
-func gatewayHost(t *testing.T) string {
-	t.Helper()
-	u, err := url.Parse(harness.Fleet(t).State.GatewayURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u.Hostname()
 }
 
 // flood sends req unpaced to c until the first 429 and returns it, with how

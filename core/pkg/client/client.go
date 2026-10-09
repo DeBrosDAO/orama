@@ -45,6 +45,11 @@ type Client struct {
 
 	// resolvedNamespace is the namespace derived from JWT/APIKey.
 	resolvedNamespace string
+
+	// stopPeers ends the bootstrap-peer maintenance loop and peersDone closes
+	// when it has returned (peer_maintenance.go); both nil when no loop runs.
+	stopPeers context.CancelFunc
+	peersDone chan struct{}
 }
 
 // NewClient creates a new network client
@@ -239,7 +244,7 @@ func (c *Client) Connect() error {
 	}
 
 	if peersConnected == 0 {
-		c.logger.Warn("No peers connected, continuing anyway")
+		c.logger.Warn("No bootstrap peer connected yet, redialing in the background")
 	} else {
 		c.logger.Info("Peer connections completed", zap.Int("connected_count", peersConnected))
 	}
@@ -258,13 +263,12 @@ func (c *Client) Connect() error {
 	}
 	c.logger.Info("Peers added to peerstore")
 
-	c.logger.Info("Starting connection monitoring...")
-
 	// Client is a lightweight P2P participant - no discovery needed
 	// We only connect to known peers and let nodes handle discovery
 	c.logger.Debug("Client configured as lightweight P2P participant (no discovery)")
 
-	// Start minimal connection monitoring
+	c.logger.Info("Starting connection monitoring...")
+	c.startPeerMaintenance(c.host)
 	c.logger.Info("Connection monitoring started")
 
 	c.logger.Info("Setting connected state...")
@@ -316,6 +320,8 @@ func (c *Client) Disconnect() error {
 	if !c.connected {
 		return nil
 	}
+
+	c.stopPeerMaintenance()
 
 	// Close pubsub adapter
 	if c.pubsub != nil && c.pubsub.adapter != nil {

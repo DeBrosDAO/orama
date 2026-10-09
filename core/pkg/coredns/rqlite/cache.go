@@ -1,6 +1,7 @@
 package rqlite
 
 import (
+	"container/list"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,18 @@ const (
 	// comes back promptly once the backend recovers.
 	StaleTTL = 30 * time.Second
 
+	// WildcardStaleWindow is how long past its TTL an answer a wildcard
+	// synthesised may still be served when the backend cannot be reached.
+	//
+	// Shorter than StaleWindow on purpose. Any name under a wildcard gets an
+	// answer, so a flood of random names fills the cache with wildcard answers,
+	// and a 24-hour window would let them outlive (and, at the size limit,
+	// displace) the entries for names that really exist. Eviction goes by the
+	// stale deadline, so these leave first. The cost is that a wildcard-covered
+	// name (turn.ns-<name>.<base>) survives a database outage for minutes, not
+	// a day.
+	WildcardStaleWindow = 5 * time.Minute
+
 	// NegativeTTL is how long a negative answer (NXDOMAIN or NODATA) is cached.
 	//
 	// Without it, a flood of random subdomains is a query amplifier pointed
@@ -46,9 +59,27 @@ type CacheEntry struct {
 	// answer is served only when the backend cannot be reached.
 	staleUntil time.Time
 
-	// negative marks a cached NXDOMAIN.
+	// negative marks a cached negative answer, whose rcode is its message's.
 	negative bool
+
+	// key, class and elem place the entry in its class's eviction queue.
+	key   string
+	class cacheClass
+	elem  *list.Element
 }
+
+// cacheClass is the kind of an entry, which decides how long it stays usable.
+// Within a class every entry has the same window, so the order of insertion is
+// the order of the stale deadline and the queue's front is always the next to
+// go.
+type cacheClass int
+
+const (
+	classAnswer   cacheClass = iota // an answer from the name's own records
+	classWildcard                   // an answer a wildcard synthesised
+	classNegative                   // NXDOMAIN or NODATA
+	cacheClasses
+)
 
 // Fresh reports whether the entry may be served without qualification.
 func (e *CacheEntry) Fresh(now time.Time) bool { return now.Before(e.expiresAt) }
@@ -59,6 +90,10 @@ func (e *CacheEntry) Usable(now time.Time) bool { return now.Before(e.staleUntil
 // Cache implements a simple in-memory DNS response cache with serve-stale.
 type Cache struct {
 	entries map[string]*CacheEntry
+	// queues hold each class's entries, oldest stale deadline first, so
+	// evicting the entry closest to being unusable is a comparison of the
+	// queues' fronts rather than a scan of the cache.
+	queues  [cacheClasses]*list.List
 	mu      sync.RWMutex
 	maxSize int
 	ttl     time.Duration
@@ -77,16 +112,18 @@ func NewCache(maxSize int, ttl time.Duration) *Cache {
 		maxSize: maxSize,
 		ttl:     ttl,
 	}
+	c.resetQueues()
 	go c.cleanup()
 	return c
 }
 
-// Get returns a FRESH cached message and whether it is a cached NXDOMAIN.
+// Get returns a FRESH cached message and whether it is a cached negative
+// answer.
 //
 // The caller needs the second value: a cached negative answer must be replied
-// with RcodeNameError, and returning it as a success would turn every cached
-// NXDOMAIN into an empty NOERROR — a different answer, which resolvers cache
-// differently.
+// with the rcode it was cached with (the message's own), and returning an
+// NXDOMAIN as a success would turn it into an empty NOERROR — a different
+// answer, which resolvers cache differently.
 func (c *Cache) Get(qname string, qtype uint16) (msg *dns.Msg, negative bool) {
 	entry := c.lookup(qname, qtype)
 	if entry == nil || !entry.Fresh(time.Now()) {
@@ -129,20 +166,28 @@ func (c *Cache) lookup(qname string, qtype uint16) *CacheEntry {
 
 // Set stores a DNS message.
 func (c *Cache) Set(qname string, qtype uint16, msg *dns.Msg) {
-	c.store(qname, qtype, msg, c.ttl, false)
+	c.store(qname, qtype, msg, c.ttl, classAnswer)
 }
 
-// SetNegative caches a negative answer — NXDOMAIN or NODATA, told apart by the
-// response code the message carries — for a short time.
+// SetWildcard stores an answer a wildcard synthesised for qname, which stays
+// usable as a stale answer only for WildcardStaleWindow.
+func (c *Cache) SetWildcard(qname string, qtype uint16, msg *dns.Msg) {
+	c.store(qname, qtype, msg, c.ttl, classWildcard)
+}
+
+// SetNegative caches a negative answer (NXDOMAIN or NODATA) for a short time.
 func (c *Cache) SetNegative(qname string, qtype uint16, msg *dns.Msg) {
-	c.store(qname, qtype, msg, NegativeTTL, true)
+	c.store(qname, qtype, msg, NegativeTTL, classNegative)
 }
 
-func (c *Cache) store(qname string, qtype uint16, msg *dns.Msg, ttl time.Duration, negative bool) {
+func (c *Cache) store(qname string, qtype uint16, msg *dns.Msg, ttl time.Duration, class cacheClass) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if len(c.entries) >= c.maxSize {
+	key := c.key(qname, qtype)
+	if old, ok := c.entries[key]; ok {
+		c.remove(old)
+	} else if len(c.entries) >= c.maxSize {
 		c.evictOldest()
 	}
 
@@ -150,20 +195,26 @@ func (c *Cache) store(qname string, qtype uint16, msg *dns.Msg, ttl time.Duratio
 	entry := &CacheEntry{
 		msg:       msg.Copy(),
 		expiresAt: now.Add(ttl),
-		negative:  negative,
+		key:       key,
+		class:     class,
+		negative:  class == classNegative,
 	}
 
 	// A negative answer is never served stale. "This name does not exist" is
 	// exactly the answer most likely to be wrong later — a namespace being
 	// provisioned right now — and serving it for a day would keep a new record
 	// invisible long after it appeared.
-	if !negative {
+	switch class {
+	case classAnswer:
 		entry.staleUntil = now.Add(StaleWindow)
-	} else {
+	case classWildcard:
+		entry.staleUntil = now.Add(WildcardStaleWindow)
+	default:
 		entry.staleUntil = entry.expiresAt
 	}
 
-	c.entries[c.key(qname, qtype)] = entry
+	entry.elem = c.queues[class].PushBack(entry)
+	c.entries[key] = entry
 }
 
 // key generates a cache key from qname and qtype.
@@ -171,26 +222,38 @@ func (c *Cache) key(qname string, qtype uint16) string {
 	return fmt.Sprintf("%s:%d", qname, qtype)
 }
 
-// evictOldest removes the entry closest to being unusable.
+// remove takes an entry out of the cache and its queue. The caller holds mu.
+func (c *Cache) remove(entry *CacheEntry) {
+	c.queues[entry.class].Remove(entry.elem)
+	delete(c.entries, entry.key)
+}
+
+// resetQueues empties the eviction queues. The caller holds mu, or owns c.
+func (c *Cache) resetQueues() {
+	for i := range c.queues {
+		c.queues[i] = list.New()
+	}
+}
+
+// evictOldest removes the entry closest to being unusable, in constant time:
+// the oldest of the three queues' fronts.
 //
 // Ordered on staleUntil, not expiresAt: an entry past its TTL is still the
 // thing standing between a backend outage and SERVFAIL, so evicting it while
-// something genuinely dead is still held would be backwards.
+// something genuinely dead is still held would be backwards. It used to scan
+// every entry under the cache's write lock on each insert into a full cache,
+// which a flood of distinct names turned into a stall of every lookup.
 func (c *Cache) evictOldest() {
-	var oldestKey string
-	var oldestTime time.Time
-	first := true
-
-	for key, entry := range c.entries {
-		if first || entry.staleUntil.Before(oldestTime) {
-			oldestKey = key
-			oldestTime = entry.staleUntil
-			first = false
+	var oldest *CacheEntry
+	for _, queue := range c.queues {
+		if front := queue.Front(); front != nil {
+			if entry := front.Value.(*CacheEntry); oldest == nil || entry.staleUntil.Before(oldest.staleUntil) {
+				oldest = entry
+			}
 		}
 	}
-
-	if oldestKey != "" {
-		delete(c.entries, oldestKey)
+	if oldest != nil {
+		c.remove(oldest)
 	}
 }
 
@@ -203,9 +266,9 @@ func (c *Cache) cleanup() {
 	for range ticker.C {
 		c.mu.Lock()
 		now := time.Now()
-		for key, entry := range c.entries {
+		for _, entry := range c.entries {
 			if !entry.Usable(now) {
-				delete(c.entries, key)
+				c.remove(entry)
 			}
 		}
 		c.mu.Unlock()
@@ -229,4 +292,5 @@ func (c *Cache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[string]*CacheEntry)
+	c.resetQueues()
 }

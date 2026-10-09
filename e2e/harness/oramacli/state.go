@@ -3,7 +3,6 @@ package oramacli
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -20,20 +19,10 @@ const (
 )
 
 // ForState returns the runner for the run's CLI under test, signing as the
-// run's operator wallet and paced against the run's gateway host.
+// run's operator wallet.
 func ForState(st *fleet.State, rec *evidence.Recorder) *Runner {
 	return &Runner{Bin: st.OramaBin, Home: st.Home, AgentSock: st.RWSock, Target: st.Target, Recorder: rec,
-		GatewayHost: gatewayHost(st.GatewayURL), Wallet: st.OperatorAddress}
-}
-
-// gatewayHost is the host name of gatewayURL, or "" when it has none (the
-// runner then refuses to run in a fleet run, where pacing needs it).
-func gatewayHost(gatewayURL string) string {
-	u, err := url.Parse(gatewayURL)
-	if err != nil {
-		return ""
-	}
-	return u.Hostname()
+		Wallet: st.OperatorAddress}
 }
 
 // ForPreviousRelease returns the runner for the previous release's CLI, for
@@ -44,7 +33,7 @@ func ForPreviousRelease(t testing.TB, st *fleet.State, rec *evidence.Recorder) *
 		t.Fatal("the run has no previous release CLI (state.previous_orama_bin is empty)")
 	}
 	return &Runner{Bin: st.PreviousOramaBin, Home: st.Home, AgentSock: st.RWSock, Target: st.Target, Recorder: rec,
-		GatewayHost: gatewayHost(st.GatewayURL), Wallet: st.OperatorAddress}
+		Wallet: st.OperatorAddress}
 }
 
 // Isolated returns a runner with a fresh HOME that holds a copy of the

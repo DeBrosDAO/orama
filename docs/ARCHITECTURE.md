@@ -325,15 +325,28 @@ whole zone, so an index rqlite with no leader took every name in the fleet
 offline — including the names an operator needs to reach the machines and fix
 it.
 
-A negative answer is cached for 30 seconds and never served stale. Without the
-cache a flood of random subdomains was a query amplifier pointed straight at
-index rqlite; without the "never stale" rule, a name that appeared moments later
-would stay invisible for a day. A name that exists (a record of another type, a
-covering wildcard, or names below it) answers NODATA, NOERROR with the zone's
-SOA; only a name with nothing at all is NXDOMAIN. AAAA, NS and TXT queries for a
-name that has only A records used to answer NXDOMAIN, and resolvers that
-minimise query names or follow RFC 8020 then answered "no such host" for the A
-record too.
+A negative answer — NXDOMAIN for a name that does not exist, NODATA (NOERROR,
+empty, with the zone's SOA) for a name that exists without a record of the type
+asked — is cached for 30 seconds with its own rcode and never served stale.
+Without the cache a flood of random subdomains was a query amplifier pointed
+straight at index rqlite; without the "never stale" rule, a name that appeared
+moments later would stay invisible for a day. A name exists when it owns any
+record, has names below it (an empty non-terminal), or is covered by the nearest
+wildcard that owns a record; such a name is never NXDOMAIN, because resolvers
+cache an NXDOMAIN for the whole name (RFC 8020). A name that owns a record or has
+names below it is not covered by a wildcard (RFC 4592). Whatever the depth of the
+name, a negative answer costs three indexed rqlite queries (the typed read, one
+read of the name and its wildcard candidates, and the zone SOA; an answer from
+the name's own records costs one, from a wildcard two). Which names have names
+below them is held in memory, rebuilt from the table on the plugin's refresh
+tick and extended by every record a lookup finds, because the question is a
+suffix match with no index and the queries come from the internet: asking the
+table would let a flood of random names scan it. When a query fails the answer
+is SERVFAIL (or a stale entry), never a guessed NXDOMAIN. Concurrent identical
+misses share one resolution, wildcard answers are stale-usable for 5 minutes
+rather than a day so a flood of random names cannot displace the entries for
+real ones, and a dead rqlite logs one line per 10 seconds with a count rather
+than one per query.
 
 Wildcard lookup walks outward — `*.b.c.d.`, `*.c.d.`, `*.d.` — most specific
 first, stopping at the edge of the zone. It used to rebuild only the first three

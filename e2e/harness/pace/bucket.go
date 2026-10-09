@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -19,21 +18,18 @@ const fileMode = 0o600
 // minDelay is the shortest wait Wait sleeps, so rounding never spins.
 const minDelay = time.Millisecond
 
-// keySep joins host and bucket in a state key; neither contains it.
-const keySep = "|"
-
 // bucketState is one bucket in the state file.
 type bucketState struct {
 	Tokens float64 `json:"tokens"`
 	Last   int64   `json:"last_unix_nano"`
 }
 
-// fileState is the whole state file: key -> bucket.
+// fileState is the whole state file: bucket name -> bucket.
 type fileState map[string]bucketState
 
-// Wait blocks until a token of bucket for host is available and takes it. It
-// returns ctx's error (wrapped) when ctx ends first.
-func (p *Pacer) Wait(ctx context.Context, host, bucket string) error {
+// Wait blocks until a token of bucket is available and takes it. It returns
+// ctx's error (wrapped) when ctx ends first.
+func (p *Pacer) Wait(ctx context.Context, bucket string) error {
 	if p == nil {
 		return nil
 	}
@@ -41,12 +37,11 @@ func (p *Pacer) Wait(ctx context.Context, host, bucket string) error {
 	if err != nil {
 		return err
 	}
-	key := stateKey(host, bucket)
 	for {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("waiting for a %s token for %s: %w", bucket, host, err)
+			return fmt.Errorf("waiting for a %s token: %w", bucket, err)
 		}
-		delay, err := p.take(key, b, false)
+		delay, err := p.take(bucket, b, false)
 		if err != nil {
 			return err
 		}
@@ -54,16 +49,16 @@ func (p *Pacer) Wait(ctx context.Context, host, bucket string) error {
 			return nil
 		}
 		if err := p.sleep(ctx, delay); err != nil {
-			return fmt.Errorf("waiting %s for a %s token for %s: %w", delay, bucket, host, err)
+			return fmt.Errorf("waiting %s for a %s token: %w", delay, bucket, err)
 		}
 	}
 }
 
-// Charge takes a token of bucket for host without waiting, driving the
+// Charge takes a token of bucket without waiting, driving the
 // bucket negative when it is empty. It accounts for a credential call made
 // by something the harness cannot pace beforehand (the CLI's own polling or
 // session renewal): later Waits then wait for it.
-func (p *Pacer) Charge(host, bucket string) error {
+func (p *Pacer) Charge(bucket string) error {
 	if p == nil {
 		return nil
 	}
@@ -71,28 +66,24 @@ func (p *Pacer) Charge(host, bucket string) error {
 	if err != nil {
 		return err
 	}
-	_, err = p.take(stateKey(host, bucket), b, true)
+	_, err = p.take(bucket, b, true)
 	return err
 }
 
-func stateKey(host, bucket string) string {
-	return strings.ToLower(strings.TrimSpace(host)) + keySep + bucket
-}
-
-// take refills key's bucket to now and takes a token when one is there (or
-// always, with force). It returns 0 when it took one, else how long until
-// one will be there.
-func (p *Pacer) take(key string, b Budget, force bool) (time.Duration, error) {
+// take refills bucket to now and takes a token when one is there (or always,
+// with force). It returns 0 when it took one, else how long until one will be
+// there.
+func (p *Pacer) take(bucket string, b Budget, force bool) (time.Duration, error) {
 	var delay time.Duration
 	err := p.update(func(st fileState, now time.Time) {
-		cur := refill(st[key], b, now)
+		cur := refill(st[bucket], b, now)
 		if force || cur.Tokens >= 1 {
 			cur.Tokens--
 		} else {
 			delay = untilOne(cur.Tokens, b)
 		}
-		st[key] = cur
-		prune(st, p.budgets, now, key)
+		st[bucket] = cur
+		prune(st, p.budgets, now, bucket)
 	})
 	return delay, err
 }
@@ -125,17 +116,16 @@ func untilOne(tokens float64, b Budget) time.Duration {
 // prune drops buckets that have refilled to full: absent means full, so the
 // file stays as small as the set of recently used buckets.
 func prune(st fileState, budgets Budgets, now time.Time, keep string) {
-	for key, cur := range st {
-		if key == keep {
+	for bucket, cur := range st {
+		if bucket == keep {
 			continue
 		}
-		_, bucket, _ := strings.Cut(key, keySep)
 		b := budgets.Challenge
 		if bucket == BucketCred {
 			b = budgets.Cred
 		}
 		if refill(cur, b, now).Tokens >= float64(b.Burst) {
-			delete(st, key)
+			delete(st, bucket)
 		}
 	}
 }
