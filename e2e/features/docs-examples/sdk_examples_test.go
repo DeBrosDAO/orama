@@ -3,7 +3,6 @@
 package docsexamples
 
 import (
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +45,7 @@ func TestDocsExamples_sdkExamplesRun(t *testing.T) {
 			if !ok {
 				t.Fatalf("sdk/examples/%s has no expected completion line here: add it to exampleDone", name)
 			}
-			chargeKeyExchange(t, n.URL)
+			chargeKeyExchange(t)
 			out, err := runTool(t, sdk, env, "pnpm", "--dir", sdk, "exec", "tsx", file)
 			out = f.Redact(out)
 			if err != nil || !strings.Contains(out, done) {
@@ -58,17 +57,13 @@ func TestDocsExamples_sdkExamplesRun(t *testing.T) {
 
 // chargeKeyExchange draws the one credential token an example's API-key
 // exchange (/v1/auth/token) spends: the SDK's request is not paced itself.
-func chargeKeyExchange(t testing.TB, nsURL string) {
+func chargeKeyExchange(t testing.TB) {
 	t.Helper()
 	p, err := pace.FromEnv(os.LookupEnv)
 	if err != nil {
 		t.Fatalf("the run's pacer: %v", err)
 	}
-	u, err := url.Parse(nsURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := p.Wait(t.Context(), u.Hostname(), pace.BucketCred); err != nil {
-		t.Fatalf("pacing %s: %v", u.Hostname(), err)
+	if err := p.Wait(t.Context(), pace.BucketCred); err != nil {
+		t.Fatalf("pacing the key exchange: %v", err)
 	}
 }

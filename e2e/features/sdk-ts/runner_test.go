@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -177,20 +176,9 @@ func preCharge(t *testing.T, f *fleet.Fleet, n *ns.Namespace) {
 	if err != nil {
 		t.Fatalf("the run's pacer: %v", err)
 	}
-	for host, calls := range map[string]int{hostOf(t, f.State.GatewayURL): mainCredentialCalls, hostOf(t, n.URL): nsCredentialCalls} {
-		for range calls {
-			if err := p.Wait(t.Context(), host, pace.BucketCred); err != nil {
-				t.Fatalf("pacing %s: %v", host, err)
-			}
+	for range mainCredentialCalls + nsCredentialCalls {
+		if err := p.Wait(t.Context(), pace.BucketCred); err != nil {
+			t.Fatalf("pacing the TypeScript tests' credential calls: %v", err)
 		}
 	}
-}
-
-func hostOf(t *testing.T, raw string) string {
-	t.Helper()
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		t.Fatalf("%q is not a URL with a host: %v", raw, err)
-	}
-	return u.Hostname()
 }

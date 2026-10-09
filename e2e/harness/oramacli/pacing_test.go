@@ -15,8 +15,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/auth"
 )
 
-const testGatewayHost = "e2e-x.dbrsteting.bid"
-
 // clock is a fake clock whose sleep advances it.
 type clock struct {
 	mu    sync.Mutex
@@ -45,7 +43,7 @@ func pacedRunner(t *testing.T, credBurst, challengeBurst int) (*Runner, *clock) 
 		t.Fatal(err)
 	}
 	clk := &clock{t: time.Unix(1_700_000_000, 0)}
-	r.Pacer, r.GatewayHost, r.Wallet = p.WithClock(clk.now, clk.sleep), testGatewayHost, "0xOperator"
+	r.Pacer, r.Wallet = p.WithClock(clk.now, clk.sleep), "0xOperator"
 	return r, clk
 }
 
@@ -89,11 +87,6 @@ func TestRun_walletLoginWaitsOnBothBuckets(t *testing.T) {
 
 func TestRun_refusesUnpaceableRunner(t *testing.T) {
 	r, _ := pacedRunner(t, 2, 1)
-	r.GatewayHost = ""
-	if _, err := r.Run(context.Background(), "version"); err == nil || !strings.Contains(err.Error(), "GatewayHost") {
-		t.Fatalf("err %v", err)
-	}
-	r, _ = pacedRunner(t, 2, 1)
 	r.Wallet = ""
 	if _, err := r.Run(context.Background(), "auth", "approve", "X"); err == nil || !strings.Contains(err.Error(), "Wallet") {
 		t.Fatalf("err %v", err)
@@ -117,7 +110,7 @@ func TestRun_sessionRenewalChargedAfterwards(t *testing.T) {
 	}
 	// Only the first renewal changed the file: one charge, which took the
 	// only token, so the next Wait sleeps a minute.
-	if err := r.Pacer.Wait(ctx, testGatewayHost, pace.BucketCred); err != nil {
+	if err := r.Pacer.Wait(ctx, pace.BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	if clk.total() != time.Minute {
@@ -128,10 +121,6 @@ func TestRun_sessionRenewalChargedAfterwards(t *testing.T) {
 func TestRun_pacerFromFleetEnv(t *testing.T) {
 	t.Setenv(config.EnvState, filepath.Join(t.TempDir(), "state.json"))
 	r, _ := newRunner(t)
-	if _, err := r.Run(context.Background(), "version"); err == nil {
-		t.Fatal("a fleet-mode runner without GatewayHost ran")
-	}
-	r.GatewayHost = testGatewayHost
 	if res, err := r.Run(context.Background(), "version"); err != nil || res.Exit != 0 {
 		t.Fatalf("res %+v err %v", res, err)
 	}
@@ -157,16 +146,13 @@ func TestPollCounter_feed(t *testing.T) {
 	}
 }
 
-func TestForState_setsPacingFields(t *testing.T) {
-	st := &fleet.State{OramaBin: "/b", Home: "/h", RWSock: "/s", GatewayURL: "https://" + testGatewayHost, OperatorAddress: "0xOp",
+func TestForState_setsTheOperatorWallet(t *testing.T) {
+	st := &fleet.State{OramaBin: "/b", Home: "/h", RWSock: "/s", GatewayURL: "https://e2e-x.dbrsteting.bid", OperatorAddress: "0xOp",
 		PreviousOramaBin: "/p"}
 	for _, r := range []*Runner{ForState(st, nil), ForPreviousRelease(t, st, nil)} {
-		if r.GatewayHost != testGatewayHost || r.Wallet != "0xOp" {
+		if r.Wallet != "0xOp" {
 			t.Fatalf("runner %+v", r)
 		}
-	}
-	if gatewayHost("::bad") != "" {
-		t.Fatal("unparseable URL has a host")
 	}
 }
 

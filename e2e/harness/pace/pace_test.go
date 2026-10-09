@@ -89,10 +89,10 @@ func TestFromEnv_outsideFleetIsNil(t *testing.T) {
 	if err != nil || p != nil {
 		t.Fatalf("p %v err %v", p, err)
 	}
-	if err := p.Wait(context.Background(), "gw", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatalf("nil pacer waited: %v", err)
 	}
-	if err := p.Charge("gw", BucketCred); err != nil {
+	if err := p.Charge(BucketCred); err != nil {
 		t.Fatalf("nil pacer charged: %v", err)
 	}
 }
@@ -128,7 +128,7 @@ func TestChallengeBucket_normalizesWallet(t *testing.T) {
 func TestWait_burstThenRate(t *testing.T) {
 	p, c := newTestPacer(t, Budgets{Cred: Budget{PerMinute: 6, Burst: 3}, Challenge: Budget{1, 1}})
 	for i := 0; i < 3; i++ {
-		if err := p.Wait(context.Background(), "gw.example", BucketCred); err != nil {
+		if err := p.Wait(context.Background(), BucketCred); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -136,7 +136,7 @@ func TestWait_burstThenRate(t *testing.T) {
 		t.Fatalf("the burst waited: %v", c.slept)
 	}
 	start := c.now()
-	if err := p.Wait(context.Background(), "gw.example", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.now().Sub(start); got != 10*time.Second {
@@ -147,27 +147,27 @@ func TestWait_burstThenRate(t *testing.T) {
 func TestWait_bucketsAreIndependent(t *testing.T) {
 	p, c := newTestPacer(t, Budgets{Cred: Budget{PerMinute: 1, Burst: 1}, Challenge: Budget{PerMinute: 1, Burst: 1}})
 	ctx := context.Background()
-	for _, k := range [][2]string{{"a.example", BucketCred}, {"B.example", BucketCred}, {"a.example", ChallengeBucket("0x1")}, {"a.example", ChallengeBucket("0x2")}} {
-		if err := p.Wait(ctx, k[0], k[1]); err != nil {
+	for _, bucket := range []string{BucketCred, ChallengeBucket("0x1"), ChallengeBucket("0x2")} {
+		if err := p.Wait(ctx, bucket); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if len(c.slept) != 0 {
 		t.Fatalf("distinct buckets shared tokens: %v", c.slept)
 	}
-	if err := p.Wait(ctx, "b.example", BucketCred); err != nil || len(c.slept) == 0 {
-		t.Fatalf("host case made a new bucket (slept %v, err %v)", c.slept, err)
+	if err := p.Wait(ctx, BucketCred); err != nil || len(c.slept) == 0 {
+		t.Fatalf("the spent address bucket did not make a caller wait (slept %v, err %v)", c.slept, err)
 	}
 }
 
 func TestWait_contextEnds(t *testing.T) {
 	p, _ := newTestPacer(t, Budgets{Cred: Budget{PerMinute: 1, Burst: 1}, Challenge: Budget{1, 1}})
-	if err := p.Wait(context.Background(), "gw", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := p.Wait(ctx, "gw", BucketCred); !errors.Is(err, context.Canceled) {
+	if err := p.Wait(ctx, BucketCred); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -177,12 +177,12 @@ func TestWait_realTimerHonoursContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Wait(context.Background(), "gw", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := p.Wait(ctx, "gw", BucketCred); !errors.Is(err, context.DeadlineExceeded) {
+	if err := p.Wait(ctx, BucketCred); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -190,7 +190,7 @@ func TestWait_realTimerHonoursContext(t *testing.T) {
 func TestWait_unknownBucket(t *testing.T) {
 	p, _ := newTestPacer(t, DefaultBudgets())
 	for _, b := range []string{"", "challenge:", "other"} {
-		if err := p.Wait(context.Background(), "gw", b); err == nil {
+		if err := p.Wait(context.Background(), b); err == nil {
 			t.Fatalf("bucket %q accepted", b)
 		}
 	}
@@ -199,12 +199,12 @@ func TestWait_unknownBucket(t *testing.T) {
 func TestCharge_debtDelaysLaterWaits(t *testing.T) {
 	p, c := newTestPacer(t, Budgets{Cred: Budget{PerMinute: 60, Burst: 1}, Challenge: Budget{1, 1}})
 	for i := 0; i < 3; i++ {
-		if err := p.Charge("gw", BucketCred); err != nil {
+		if err := p.Charge(BucketCred); err != nil {
 			t.Fatal(err)
 		}
 	}
 	start := c.now()
-	if err := p.Wait(context.Background(), "gw", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	// Burst 1 minus three charges is -2; one token more needs 3s at 1/s.
@@ -218,7 +218,7 @@ func TestUpdate_corruptStateIsAnError(t *testing.T) {
 	if err := os.WriteFile(p.path, []byte("{not json"), fileMode); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Wait(context.Background(), "gw", BucketCred); err == nil || !strings.Contains(err.Error(), "corrupt") {
+	if err := p.Wait(context.Background(), BucketCred); err == nil || !strings.Contains(err.Error(), "corrupt") {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -226,18 +226,19 @@ func TestUpdate_corruptStateIsAnError(t *testing.T) {
 func TestTake_prunesFullBuckets(t *testing.T) {
 	p, c := newTestPacer(t, Budgets{Cred: Budget{PerMinute: 60, Burst: 2}, Challenge: Budget{60, 2}})
 	ctx := context.Background()
-	if err := p.Wait(ctx, "old.example", BucketCred); err != nil {
+	old, current := ChallengeBucket("0xold"), ChallengeBucket("0xnew")
+	if err := p.Wait(ctx, old); err != nil {
 		t.Fatal(err)
 	}
 	c.t = c.t.Add(time.Minute)
-	if err := p.Wait(ctx, "new.example", BucketCred); err != nil {
+	if err := p.Wait(ctx, current); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(p.path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "old.example") || !strings.Contains(string(raw), "new.example") {
+	if strings.Contains(string(raw), old) || !strings.Contains(string(raw), current) {
 		t.Fatalf("state %s", raw)
 	}
 	info, err := os.Stat(p.path)

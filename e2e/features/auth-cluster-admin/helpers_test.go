@@ -5,7 +5,6 @@ package authclusteradmin
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -160,18 +159,13 @@ func perNode(t testing.TB, f *fleet.Fleet, c *gw.Client) []nodeClient {
 // and leaves one behind for the run's paced clients (edge.Quiesce).
 func quiesce(t *testing.T, f *fleet.Fleet) {
 	t.Helper()
-	u, err := url.Parse(f.State.GatewayURL)
-	if err != nil {
-		t.Fatalf("failed to parse the run's gateway URL %q: %v", f.State.GatewayURL, err)
-	}
-	host := u.Hostname()
-	if err := edge.Quiesce(t.Context(), host); err != nil {
+	if err := edge.Quiesce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := fleet.CleanupContext(t)
 		defer cancel()
-		if err := edge.Quiesce(ctx, host); err != nil {
+		if err := edge.Quiesce(ctx); err != nil {
 			t.Errorf("cleanup: %v", err)
 		}
 	})

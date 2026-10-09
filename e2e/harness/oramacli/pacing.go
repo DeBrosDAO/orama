@@ -15,7 +15,7 @@ import (
 
 // Pacing the CLI (e2e/README.md, "Pacing"). The CLI calls the gateway's
 // credential routes itself, so the runner spends the run's pacer tokens for
-// it, against GatewayHost:
+// it:
 //
 //   - `auth login` with a wallet: challenge + verify: the Wallet's challenge
 //     bucket once, the address bucket twice, before the command runs.
@@ -78,7 +78,6 @@ func commandCost(args []string, noWallet bool) cost {
 // what to charge while and after it runs. A nil plan paces nothing.
 type pacePlan struct {
 	pacer       *pace.Pacer
-	host        string
 	cost        cost
 	credsPath   string
 	credsBefore [sha256.Size]byte
@@ -123,10 +122,7 @@ func (r *Runner) paceBefore(ctx context.Context, args, extraEnv []string) (*pace
 		return nil, err
 	}
 	cmdline := strings.Join(RedactArgs(args), " ")
-	if r.GatewayHost == "" {
-		return nil, fmt.Errorf("refusing to run orama %s: the runner has no GatewayHost to pace its credential calls against (build it with ForState)", cmdline)
-	}
-	plan := &pacePlan{pacer: p, host: r.GatewayHost, cost: commandCost(args, r.noWallet),
+	plan := &pacePlan{pacer: p, cost: commandCost(args, r.noWallet),
 		credsPath: filepath.Join(r.Home, ConfigDirName, CredentialsFile)}
 	if exchangesEnvToken(append(append([]string{}, r.Env...), extraEnv...)) {
 		plan.cost.cred++
@@ -135,12 +131,12 @@ func (r *Runner) paceBefore(ctx context.Context, args, extraEnv []string) (*pace
 		if r.Wallet == "" {
 			return nil, fmt.Errorf("refusing to run orama %s: it signs a challenge, and the runner has no Wallet to pace the per-wallet challenge bucket (set Runner.Wallet to the address its agent signs with)", cmdline)
 		}
-		if err := p.Wait(ctx, r.GatewayHost, pace.ChallengeBucket(r.Wallet)); err != nil {
+		if err := p.Wait(ctx, pace.ChallengeBucket(r.Wallet)); err != nil {
 			return nil, fmt.Errorf("orama %s: %w", cmdline, err)
 		}
 	}
 	for i := 0; i < plan.cost.cred; i++ {
-		if err := p.Wait(ctx, r.GatewayHost, pace.BucketCred); err != nil {
+		if err := p.Wait(ctx, pace.BucketCred); err != nil {
 			return nil, fmt.Errorf("orama %s: %w", cmdline, err)
 		}
 	}
@@ -158,7 +154,7 @@ func (pl *pacePlan) observe(chunk []byte) error {
 		return nil
 	}
 	for n := pl.polls.feed(chunk); n > 0; n-- {
-		if err := pl.pacer.Charge(pl.host, pace.BucketCred); err != nil {
+		if err := pl.pacer.Charge(pace.BucketCred); err != nil {
 			return fmt.Errorf("failed to charge a device-login poll: %w", err)
 		}
 	}
@@ -175,7 +171,7 @@ func (pl *pacePlan) after() error {
 	if err != nil || d == pl.credsBefore {
 		return err
 	}
-	if err := pl.pacer.Charge(pl.host, pace.BucketCred); err != nil {
+	if err := pl.pacer.Charge(pace.BucketCred); err != nil {
 		return fmt.Errorf("failed to charge a session renewal: %w", err)
 	}
 	return nil

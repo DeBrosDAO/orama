@@ -8,14 +8,14 @@ import (
 
 func TestWaitFull_fullBucketTakenAtOnce(t *testing.T) {
 	p, c := newTestPacer(t, DefaultBudgets())
-	if err := p.WaitFull(context.Background(), "gw.example", BucketCred); err != nil {
+	if err := p.WaitFull(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.slept) != 0 {
 		t.Fatalf("a fresh (full) bucket waited %v", c.slept)
 	}
 	// The whole burst is held: the next paced call waits a token's refill.
-	if err := p.Wait(context.Background(), "gw.example", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	perToken := time.Minute / time.Duration(DefaultCredPerMin)
@@ -27,12 +27,12 @@ func TestWaitFull_fullBucketTakenAtOnce(t *testing.T) {
 func TestWaitFull_waitsForAWholeRefill(t *testing.T) {
 	p, c := newTestPacer(t, DefaultBudgets())
 	for range 3 {
-		if err := p.Wait(context.Background(), "gw.example", BucketCred); err != nil {
+		if err := p.Wait(context.Background(), BucketCred); err != nil {
 			t.Fatal(err)
 		}
 	}
 	start := c.now()
-	if err := p.WaitFull(context.Background(), "gw.example", BucketCred); err != nil {
+	if err := p.WaitFull(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	waited := c.now().Sub(start)
@@ -42,15 +42,12 @@ func TestWaitFull_waitsForAWholeRefill(t *testing.T) {
 	}
 }
 
-func TestWaitFull_otherHostAndBucketIndependent(t *testing.T) {
+func TestWaitFull_otherBucketIndependent(t *testing.T) {
 	p, c := newTestPacer(t, DefaultBudgets())
-	if err := p.WaitFull(context.Background(), "a.example", BucketCred); err != nil {
+	if err := p.WaitFull(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.WaitFull(context.Background(), "b.example", BucketCred); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.WaitFull(context.Background(), "a.example", ChallengeBucket("0xAbC")); err != nil {
+	if err := p.WaitFull(context.Background(), ChallengeBucket("0xAbC")); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.slept) != 0 {
@@ -60,35 +57,35 @@ func TestWaitFull_otherHostAndBucketIndependent(t *testing.T) {
 
 func TestWaitFull_errors(t *testing.T) {
 	var nilPacer *Pacer
-	if err := nilPacer.WaitFull(context.Background(), "h", BucketCred); err != nil {
+	if err := nilPacer.WaitFull(context.Background(), BucketCred); err != nil {
 		t.Fatalf("nil pacer: %v", err)
 	}
 	p, _ := newTestPacer(t, DefaultBudgets())
-	if err := p.WaitFull(context.Background(), "h", "bogus"); err == nil {
+	if err := p.WaitFull(context.Background(), "bogus"); err == nil {
 		t.Fatal("unknown bucket accepted")
 	}
-	if err := p.Wait(context.Background(), "h", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := p.WaitFull(ctx, "h", BucketCred); err == nil {
+	if err := p.WaitFull(ctx, BucketCred); err == nil {
 		t.Fatal("a cancelled wait succeeded")
 	}
 }
 
 func TestWaitFull_cancelGivesTheTokensBack(t *testing.T) {
 	p, c := newTestPacer(t, DefaultBudgets())
-	if err := p.Wait(context.Background(), "h", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := p.WaitFull(ctx, "h", BucketCred); err == nil {
+	if err := p.WaitFull(ctx, BucketCred); err == nil {
 		t.Fatal("a cancelled wait succeeded")
 	}
 	slept := len(c.slept)
-	if err := p.Wait(context.Background(), "h", BucketCred); err != nil {
+	if err := p.Wait(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.slept) != slept {
@@ -99,12 +96,12 @@ func TestWaitFull_cancelGivesTheTokensBack(t *testing.T) {
 func TestWaitFull_chargedDebtIsWaitedOut(t *testing.T) {
 	p, c := newTestPacer(t, DefaultBudgets())
 	for range DefaultCredBurst + 2 {
-		if err := p.Charge("h", BucketCred); err != nil {
+		if err := p.Charge(BucketCred); err != nil {
 			t.Fatal(err)
 		}
 	}
 	start := c.now()
-	if err := p.WaitFull(context.Background(), "h", BucketCred); err != nil {
+	if err := p.WaitFull(context.Background(), BucketCred); err != nil {
 		t.Fatal(err)
 	}
 	perToken := time.Minute / time.Duration(DefaultCredPerMin)

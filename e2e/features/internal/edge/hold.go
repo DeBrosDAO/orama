@@ -44,14 +44,14 @@ func Hold(t testing.TB, interval, d time.Duration, what string, cond func() (boo
 // (core/pkg/gateway/gateway.go configureRateLimiters).
 const credBurstRefill = 20 * time.Second
 
-// Quiesce blocks until the run's shared credential pacer bucket for host is
-// full and holds its whole burst (pace.(*Pacer).WaitFull): nothing paced has
-// spent this address's product budget for a refill period, so the product
-// bucket of every gateway is full again. A rate-limiter test calls it before
+// Quiesce blocks until the run's shared credential pacer bucket is full and
+// holds its whole burst (pace.(*Pacer).WaitFull): nothing paced has spent this
+// address's product budget for a refill period, so the product bucket of every
+// gateway is full again. A rate-limiter test calls it before
 // it floods (so the first 429 it sees is its own) and again in a cleanup
 // after (so the next paced request of the run finds a refilled bucket
 // instead of a *gw.PacingError).
-func Quiesce(ctx context.Context, host string) error {
+func Quiesce(ctx context.Context) error {
 	p, err := pace.FromEnv(os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("the run's pacer: %w", err)
@@ -61,8 +61,8 @@ func Quiesce(ctx context.Context, host string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*credBurstRefill)
 	defer cancel()
-	if err := p.WaitFull(ctx, host, pace.BucketCred); err != nil {
-		return fmt.Errorf("waiting for the credential budget of %s to be free: %w", host, err)
+	if err := p.WaitFull(ctx, pace.BucketCred); err != nil {
+		return fmt.Errorf("waiting for the run's credential budget to be free: %w", err)
 	}
 	return nil
 }

@@ -172,16 +172,21 @@ rejects other `Test*` names and flags a `func(*testing.T)` that is not named
 The gateway rate-limits the credential routes (`/v1/auth/challenge`,
 `/verify`, `/api-key`, `/token`, `/refresh`, `/device`, `/device/token`,
 `/device/approve`, `/devices/approve`) at **30 a minute, burst 10, per client
-address, per gateway** (a namespace gateway has a limiter of its own), and
-challenges at **10 a minute, burst 5, per wallet**
+address, per node**: the limiter runs on the cluster gateway of the node that
+takes the request, whichever host it names (`ns-<name>` included; a namespace
+gateway only sees the overlay, which is exempt), and DNS picks the node. The
+product limits challenges at **10 a minute, burst 5, per wallet**
 (`core/pkg/gateway/gateway.go` `configureRateLimiters`,
 `core/pkg/gateway/handlers/auth/wallet_rate_limit.go`). The runner is one
 address running many packages at once, so the product defaults stay (the
 limiter is itself under test) and the harness paces itself client side
-(`harness/pace`): a token bucket per (gateway host, bucket), bucket `cred`
-(the address) or `challenge:<wallet>`, shared by every feature process and
-every CLI invocation of the run through `pace-state.json` beside `state.json`,
-guarded by `flock`.
+(`harness/pace`): one token bucket per bucket name for the whole run, whatever
+host a call names (any call may land on any node, and every namespace of the
+fleet reaches the same nodes), bucket `cred` (the address) or
+`challenge:<wallet>`, shared by every feature process and every CLI invocation
+of the run through `pace-state.json` beside `state.json`, guarded by `flock`.
+A bucket per host let several namespaces set up at once send a burst each to
+one node's limiter, which answered 429.
 
 | Variable | Default | Product limit |
 |----------|---------|---------------|
@@ -207,9 +212,9 @@ the package starts. Pacing is automatic:
   `/v1/auth/token`, which changes no file. Any other command may renew its
   session (refresh or API-key exchange): when the HOME's
   `.orama/credentials.json` changed, one address token is charged afterwards.
-  Pacing targets `Runner.GatewayHost` (the env's gateway host) and
-  `Runner.Wallet` (the address the runner's agent signs with); `ForState`
-  sets both, and a fleet-mode runner without them refuses to run.
+  Pacing uses `Runner.Wallet` (the address the runner's agent signs with)
+  for the challenge bucket; `ForState` sets it, and a fleet-mode runner
+  without it refuses to run a command that signs a challenge.
 
 **Rate-limiter tests** (floods that expect 429) use `client.Unpaced()` or
 `gw.NewUser(t, f, ns, gw.Unpaced())`, and nothing else does: an unpaced
@@ -311,7 +316,7 @@ an allowlist: `PATH`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ` from the
 runner, then `HOME` (isolated), `RW_AGENT_SOCK` (the throwaway agent),
 `ORAMA_E2E=1` and `Env`. Nothing else reaches it (no run secret, no
 `SSH_AUTH_SOCK`, no `XDG_*`). It refuses to run when the socket is empty or
-inside the real home. `GatewayHost`, `Wallet` and `Pacer` (nil: the run's
+inside the real home. `Wallet` and `Pacer` (nil: the run's
 pacer) drive credential pacing (see "Pacing credential calls"). Without `SSH_AUTH_SOCK` the CLI's own SSH (node
 commands) uses the run's key and must verify hosts against the run's pinned
 `known_hosts`, never trust on first use.
@@ -449,7 +454,7 @@ report the real code wrote).
 
 ### pace
 
-`(*pace.Pacer).WaitFull(ctx, host, bucket)` collects a whole burst of the
+`(*pace.Pacer).WaitFull(ctx, bucket)` collects a whole burst of the
 run's shared bucket (draining it as it refills, so a busy run cannot starve
 it) and holds it: nothing paced reaches the gateway meanwhile, and because the
 pacer's budgets sit under the product's, the product's bucket for this

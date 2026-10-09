@@ -89,6 +89,28 @@ func TestDo_credentialRoutesWaitOnPacer(t *testing.T) {
 	}
 }
 
+// The product's credential limiter is the edge's, per client address and per
+// node, whichever host the request names: a namespace's gateway only sees the
+// overlay, which is exempt. Two hosts that reach the same nodes (every ns-<name>
+// of a fleet does) therefore spend one budget, and the pacer must count them
+// together. Paced per host, three namespaces setting up at once sent three
+// bursts to one node's bucket and drew a 429 from the gateway.
+func TestDo_hostsShareOneCredentialBudget(t *testing.T) {
+	srvA, _ := statusServer(t, http.StatusOK)
+	srvB, _ := statusServer(t, http.StatusOK)
+	a, clk, _ := pacedClient(t, srvA.URL)
+	b := a.WithBase(srvB.URL)
+	ctx := context.Background()
+	for _, c := range []*Client{a, b} {
+		if _, err := c.Send(ctx, Req{Method: http.MethodPost, Path: PathToken}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if clk.total() != time.Minute {
+		t.Fatalf("a credential request to each of two hosts at 1/min slept %s, want 1m: the hosts have separate budgets", clk.total())
+	}
+}
+
 func TestChallenge_pacesTheWalletBucket(t *testing.T) {
 	srv, _ := statusServer(t, http.StatusOK)
 	c, clk, path := pacedClient(t, srv.URL)
@@ -97,7 +119,7 @@ func TestChallenge_pacesTheWalletBucket(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil || !strings.Contains(string(raw), "challenge:0xabc") || !strings.Contains(string(raw), "|cred") {
+	if err != nil || !strings.Contains(string(raw), "challenge:0xabc") || !strings.Contains(string(raw), `"cred"`) {
 		t.Fatalf("state %s err %v", raw, err)
 	}
 	// A garbage body names no wallet: only the address bucket is spent.
@@ -177,7 +199,7 @@ func TestRaw_credentialRequestLinePaced(t *testing.T) {
 	if _, err := c.Raw(context.Background(), []byte("POST /v1/auth/verify?x=1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")); err != nil {
 		t.Fatal(err)
 	}
-	if raw, err := os.ReadFile(path); err != nil || !strings.Contains(string(raw), "|cred") {
+	if raw, err := os.ReadFile(path); err != nil || !strings.Contains(string(raw), `"cred"`) {
 		t.Fatalf("raw credential request not paced: %s %v", raw, err)
 	}
 }
