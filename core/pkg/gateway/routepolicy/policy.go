@@ -213,6 +213,14 @@ func (t *Table) Patterns() []string {
 	return out
 }
 
+// Static returns the policy declared for a pattern with Add. It reports false
+// for a pattern declared with AddDynamic, whose policy depends on the request,
+// and for one that is not declared.
+func (t *Table) Static(pattern string) (Policy, bool) {
+	p, ok := t.static[pattern]
+	return p, ok
+}
+
 // For returns the policy of the route this request matches.
 //
 // A request that matches nothing gets the zero policy: a credential is

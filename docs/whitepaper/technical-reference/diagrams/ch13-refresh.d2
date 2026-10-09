@@ -1,0 +1,40 @@
+direction: down
+
+start: "POST /v1/auth/refresh\nrefresh_token, namespace, device_proof?" {shape: oval}
+look: "SELECT row by SHA-256(token)\nrevoked_at IS NULL and not expired\n(3 tries, 250 ms apart on error)"
+found: "live row?" {shape: diamond}
+grace: "revoked within 60 s and\ngrace_used_at IS NULL?" {shape: diamond}
+spent: "token was issued and is\nrevoked?" {shape: diamond}
+replay: "401, audit auth.refresh.replay" {shape: oval}
+bad: "401 invalid or expired" {shape: oval}
+transient: "503 Retry-After 1\n(registry error, no leader)" {shape: oval}
+dev: "row bound to a device?" {shape: diamond}
+proof: "device active, proof fresh (60 s),\nsignature valid, id spent once"
+policy: "device policy still optional for this wallet?\ngrantless wallet and namespace not open?"
+refuse: "401 DEVICE_PROOF_*, 403 DEVICE_*,\nDEVICE_REQUIRED, SIGN_IN_CLOSED\n(nothing spent)" {shape: oval}
+claimgrace: "grace path: UPDATE grace_used_at\nWHERE NULL (rows affected = 1)"
+cas: "normal path: UPDATE revoked_at\nWHERE revoked_at IS NULL (rows affected = 1)"
+lost: "rows affected 0: concurrent rotation\nor replay" {shape: oval}
+mint: "mint access token (same sid, did,\nstored custom claims)\nINSERT new refresh row (+30 days)"
+done: "200 access_token, rotated refresh_token" {shape: oval}
+
+start -> look
+look -> found
+look -> transient: "error x3"
+found -> dev: "yes"
+found -> grace: "no"
+grace -> dev: "yes (graceRecovery)"
+grace -> spent: "no"
+spent -> replay: "yes"
+spent -> bad: "no"
+dev -> proof: "yes"
+dev -> policy: "no"
+proof -> policy
+policy -> refuse: "fails"
+policy -> claimgrace: "ok, graceRecovery"
+policy -> cas: "ok, live row"
+claimgrace -> mint: "won"
+claimgrace -> bad: "lost"
+cas -> mint: "won"
+cas -> lost: "lost"
+mint -> done

@@ -1,0 +1,28 @@
+direction: right
+
+secret: "cluster secret\n(secrets/cluster-secret, 64 hex, same on every node)" {shape: cylinder}
+nodekey: "node-key.pem\n(Ed25519, per node, never leaves the host)" {shape: cylinder}
+ident: "identity.key\n(libp2p Ed25519, its peer id = node id)" {shape: cylinder}
+
+membership: "Proves cluster membership" {
+  coord: "coordination MAC v1/v2\nnode to node, over the overlay"
+  hop: "internal-auth hop MAC v1/v2/v3\nindex gateway to namespace gateway"
+  wg: "X-Cluster-Secret bearer\nWireGuard peer endpoints"
+  acme: "ACME and TLS-store MACs\nCaddy to its own gateway"
+}
+
+which: "Proves which node" {
+  stamp: "node stamp\nX-Orama-Node-ID + X-Orama-Node-Stamp"
+  enrol: "enrol-key\nsigned by identity.key"
+}
+
+reg: "node_credentials\n(index RQLite, public keys only)" {shape: cylinder}
+
+secret -> membership.coord: "HKDF internal-coordination"
+secret -> membership.hop: "HKDF internal-auth-hop"
+secret -> membership.acme: "HKDF acme-challenge,\ncaddy-tls-store"
+secret -> membership.wg: "raw value, constant-time compare"
+nodekey -> which.stamp: "signs every call"
+ident -> which.enrol: "signs the first call"
+which.enrol -> reg: "INSERT ... WHERE NOT EXISTS"
+reg -> which.stamp: "verifier lookup"

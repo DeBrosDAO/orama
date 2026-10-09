@@ -1,9 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Link, useLocation } from "react-router";
 import { Menu, X } from "lucide-react";
 import { cn } from "../../lib/utils";
-import { NAV_ROUTES, ROUTES } from "../../content/routes";
+import { SUPPORT_LINK, NAV, isActiveEntry, isGroup } from "../../content/navigation";
 import { MobileMenu } from "./mobile-menu";
+import { NavMenu } from "./nav-menu";
 import { Button } from "../ui/button";
 import oramaIcon from "../../assets/orama-icon.png";
 
@@ -14,8 +15,11 @@ const inactiveClass = "text-muted hover:text-fg hover:bg-white/[0.04]";
 
 export function Navbar() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
   const { pathname } = useLocation();
   const handleMobileClose = useCallback(() => setMobileOpen(false), []);
+
+  useEffect(() => setOpenMenu(null), [pathname]);
 
   return (
     <>
@@ -40,20 +44,33 @@ export function Navbar() {
           <span className="hidden lg:block w-px h-4 bg-border/70 mx-1" aria-hidden="true" />
 
           <div className="hidden lg:flex items-center gap-0.5">
-            {NAV_ROUTES.map((route) => (
-              <Link
-                key={route.path}
-                to={route.path}
-                className={cn(linkClass, pathname.startsWith(route.path) ? activeClass : inactiveClass)}
-              >
-                {route.nav}
-              </Link>
-            ))}
+            {NAV.map((entry) => {
+              const active = isActiveEntry(pathname, entry);
+              return isGroup(entry) ? (
+                <NavMenu
+                  key={entry.label}
+                  group={entry}
+                  open={openMenu === entry.label}
+                  active={active}
+                  onOpenChange={(open) => setOpenMenu((cur) => (open ? entry.label : cur === entry.label ? null : cur))}
+                  triggerClass={cn(linkClass, active ? activeClass : inactiveClass)}
+                />
+              ) : (
+                <Link
+                  key={entry.path}
+                  to={entry.path}
+                  aria-current={active ? "page" : undefined}
+                  className={cn(linkClass, active ? activeClass : inactiveClass)}
+                >
+                  {entry.label}
+                </Link>
+              );
+            })}
           </div>
 
           <div className="hidden lg:flex items-center ml-1">
             <Button variant="primary" size="sm" className="rounded-full" asChild>
-              <Link to={ROUTES.investors.path}>Investors</Link>
+              <Link to={SUPPORT_LINK.path}>{SUPPORT_LINK.label}</Link>
             </Button>
           </div>
 

@@ -1,0 +1,19 @@
+direction: down
+
+reg: "index registry\nnamespace_port_allocations,\nnamespace_cluster_nodes, dns_nodes" {shape: cylinder}
+tr: "tenant reconciler\n(every 60 s, every node,\nunit active)"
+build: "buildOlricConfig\nserver, memberlist (lan, peers),\npartitionCount (top level, ignored by Olric),\ndmaps LRU 256 MiB"
+disk: "olric-NODE.yaml\ndata/namespaces/NS/configs/" {shape: cylinder}
+env: "olric.env\nOLRIC_SERVER_CONFIG=path" {shape: cylinder}
+unit: "orama-namespace-olric@NS\nExecStart olric-server\nMemoryMax 2G"
+live: "running olric-server\nconfig read once at start"
+
+reg -> tr: "live peers"
+tr -> build: "desired config"
+build -> tr: "olricConfigInSync? (peers as a set)"
+tr -> disk: "drift: rewrite (SpawnOlric)\nno restart"
+disk -> live: "applies at the next\nrolling restart"
+build -> disk: "first spawn"
+disk -> env
+env -> unit
+unit -> live

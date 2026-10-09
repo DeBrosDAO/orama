@@ -1,12 +1,12 @@
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router";
 import { X } from "lucide-react";
-import { NAV_ROUTES, ROUTES } from "../../content/routes";
+import { SUPPORT_LINK, NAV, isActivePath, isGroup } from "../../content/navigation";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
 const menuLinkClass =
-  "py-3 text-2xl font-display font-semibold tracking-tight transition-colors duration-150";
+  "py-2 text-xl font-display font-semibold tracking-tight transition-colors duration-150";
 
 export interface MobileMenuProps {
   open: boolean;
@@ -58,24 +58,35 @@ export function MobileMenu({ open, onClose }: MobileMenuProps) {
         </button>
       </div>
 
-      <nav aria-label="Mobile" className="flex flex-col px-6 gap-1">
-        {[...NAV_ROUTES, ROUTES.whitepaper, ROUTES.donate].map((route) => (
-          <Link
-            key={route.path}
-            to={route.path}
-            className={cn(
-              menuLinkClass,
-              location.pathname.startsWith(route.path) ? "text-fg" : "text-muted hover:text-fg",
-            )}
-          >
-            {"nav" in route ? route.nav : route.title}
-          </Link>
-        ))}
+      <nav aria-label="Mobile" className="flex flex-col gap-6 px-6 overflow-y-auto">
+        {NAV.map((entry) => {
+          const items = isGroup(entry) ? entry.items : [entry];
+          return (
+            <div key={entry.label} className="flex flex-col">
+              {isGroup(entry) && (
+                <span className="mb-1 font-mono text-[11px] tracking-[0.2em] uppercase text-muted/70">{entry.label}</span>
+              )}
+              {items.map((item) => {
+                const current = isActivePath(location.pathname, item.path);
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    aria-current={current ? "page" : undefined}
+                    className={cn(menuLinkClass, current ? "text-fg" : "text-muted hover:text-fg")}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
+            </div>
+          );
+        })}
       </nav>
 
-      <div className="mt-auto px-6 pb-8">
+      <div className="mt-auto px-6 pt-6 pb-8">
         <Button variant="primary" size="lg" className="w-full rounded-full" asChild>
-          <Link to={ROUTES.investors.path}>Investors</Link>
+          <Link to={SUPPORT_LINK.path}>{SUPPORT_LINK.label}</Link>
         </Button>
       </div>
     </div>

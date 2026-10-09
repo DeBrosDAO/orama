@@ -1,0 +1,30 @@
+direction: right
+
+main: "main.zig\nconfig, signals, heartbeat thread, HTTP server"
+
+wired: "Linked into vault-guardian" {
+  http: "server/listener, router,\nhandler_health / status / guardians / auth / push / pull / secrets"
+  auth: "auth/challenge, session, ownership"
+  store: "storage/file_store, vault_store"
+  hmac: "crypto/hmac"
+  guard: "guardian.zig\nserver_secret, integrity_key, NodeList"
+  mem: "membership/node_list (fetchFromRqlite stub), quorum"
+  hb: "peer/heartbeat (evaluateNodeStates,\nsendHeartbeat, countShares), peer/protocol"
+}
+
+test: "Compiled only by zig build test" {
+  sss: "sss/field, polynomial, split, combine,\ncommitment, reshare"
+  crypto: "crypto/aes, hkdf, secure_mem,\npq_kem, pq_sig, hybrid"
+  peer: "peer/listener, verify, repair"
+  disc: "membership/discovery"
+  mig: "storage/migrate_v1_v2"
+}
+
+main -> wired.http
+main -> wired.guard
+main -> wired.hb
+wired.http -> wired.auth
+wired.http -> wired.store
+wired.store -> wired.hmac
+wired.guard -> wired.mem
+wired.hb -> wired.mem

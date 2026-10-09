@@ -1,0 +1,16 @@
+direction: right
+
+pending: "pending\neligible, not converged"
+ready: "ready\nlast Reconcile succeeded"
+blocked: "blocked\nsome dependency is not ready"
+
+start: "registered" {shape: circle}
+start -> pending: "Add"
+pending -> ready: "Reconcile returns nil\nbackoff reset to 1 s"
+pending -> pending: "Reconcile fails\nwait the backoff, then double it,\ncapped at 60 s"
+ready -> pending: "Health fails\nretry at once, backoff reset"
+ready -> ready: "Health ok\nnext check in 30 s"
+pending -> blocked: "a dependency leaves ready"
+ready -> blocked: "a dependency leaves ready\nreadySince cleared"
+blocked -> ready: "dependencies ready again,\nReconcile runs at once and succeeds"
+blocked -> pending: "dependencies ready again,\nReconcile runs at once and fails"

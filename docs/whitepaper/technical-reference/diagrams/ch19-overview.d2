@@ -1,0 +1,31 @@
+direction: right
+
+client: "tenant client\n(SDK, CLI, function)" {shape: person}
+
+node: "one cluster node (index plane)" {
+  caddy: "Caddy :443"
+  gw: "namespace gateway\nhandlers/storage"
+  proxy: "serve-ipfs-cluster\nKubo bearer proxy\n127.0.0.1:10110"
+  cluster: "ipfs-cluster peer\nREST 127.0.0.1:10108 (basic auth)\nswarm WG-IP:10114"
+  kubo: "Kubo\nRPC 127.0.0.1:10107 (bearer)\nHTTP gateway 127.0.0.1:8080 (no auth, unused)\nswarm WG-IP:4101 (swarm.key)"
+  gc: "ipfs-gc timer\nrepo gc every 6 h"
+  repo: "Kubo repo\nStorageMax = 50% of disk" {shape: cylinder}
+}
+
+ns_db: "namespace RQLite\nipfs_content_ownership\nnamespace_quotas" {shape: cylinder}
+reg: "index RQLite (registry)\nipfs_cid_refs, dns_nodes\ncluster_locks" {shape: cylinder}
+peers: "other nodes\nKubo + ipfs-cluster" {shape: cloud}
+
+client -> node.caddy: "HTTPS /v1/storage/*"
+node.caddy -> node.gw: "reverse proxy (a namespace host reaches\nits namespace gateway through the index gateway)"
+node.gw -> node.kubo: "add, cat, refs, block rm\nBearer (API token)"
+node.gw -> node.cluster: "pins, allocations\nbasic auth (orama:password)"
+node.gw -> ns_db: "ownership, quota"
+node.gw -> reg: "register, release, count"
+node.cluster -> node.proxy: "pin, unpin, id"
+node.proxy -> node.kubo: "adds Bearer"
+node.kubo -> node.repo
+node.gc -> node.kubo: "ipfs repo gc"
+node.cluster <-> peers: "CRDT pinset\nWireGuard 10.0.0.x"
+node.kubo <-> peers: "bitswap, private swarm\nWireGuard 10.0.0.x"
+node.gw -> peers: "POST /v1/internal/storage/evict\ncoordination MAC"

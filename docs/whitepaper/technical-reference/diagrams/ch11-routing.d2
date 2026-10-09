@@ -1,0 +1,34 @@
+direction: down
+
+req: "HTTPS request for HOST" {shape: oval}
+base: "HOST is BASE or ends .BASE?"
+other: "other host (a custom domain):\nnormal gateway routes,\nno deployment lookup"
+nsgw: "ns-NAME.BASE:\nnamespace gateway proxy\n(chapter 12), except deployment\nroutes served here"
+api: "path starts /v1/ or /.well-known/\nor apex platform page:\nnormal gateway routes"
+lookup: "getDeploymentByDomain (never errors):\n1 subdomain = label, status active or degraded\n2 else name = label, any namespace\n3 else verified custom domain (unreachable)"
+none: "no row: 404" {shape: oval}
+static: "Port = 0: static / nextjs-static\nHandleServe from IPFS\non this node"
+dyn: "Port > 0: proxyToDynamicDeployment"
+home: "home node == this node,\nor request already forwarded?"
+replica: "this node holds an active\nreplica with a port?"
+local: "reverse proxy to\nlocalhost:PORT (30 s)\nPORT = registry port (home's),\nalso for a forwarded request\non a replica node"
+rport: "reverse proxy to\nlocalhost:replica port (30 s)"
+cross: "proxyCrossNodeWithReplicas:\nactive replicas, skip self,\nWireGuard :10104, 5 s each,\ncircuit breaker per node"
+fail: "503 Service unavailable" {shape: oval}
+
+req -> base
+base -> other: "no"
+base -> nsgw: "ns- prefix"
+base -> api: "API path"
+base -> lookup: "otherwise"
+lookup -> none
+lookup -> static
+lookup -> dyn
+dyn -> home
+home -> local: "yes"
+home -> replica: "no"
+replica -> rport: "yes"
+replica -> cross: "no"
+cross -> fail: "all fail"
+local -> cross: "local connect fails"
+rport -> cross: "local connect fails"

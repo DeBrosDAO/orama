@@ -1,0 +1,20 @@
+direction: right
+
+t0: "T0 before push\nall nodes old"
+t1: "push done\nnew files on disk everywhere,\nrunning processes still old"
+t2: "followers upgraded one by one\nupgraded + old nodes mixed"
+t3: "leader upgraded last\nlast old node gone"
+t4: "after the roll\nexpand-only schema contracted\nby a later release"
+
+t0 -> t1: "orama node push"
+t1 -> t2: "first upgrade step"
+t2 -> t3: "plan reaches the leader"
+t3 -> t4: "all nodes new"
+
+rules: "rules that hold in every window" {
+  r1: "schema: new binary applies migrations under the lock;\nold binary keeps working (expand-only)"
+  r2: "MACs: signers stamp every version;\nverifiers judge by the newest present"
+  r3: "gateway: schema below the binary's version = blocked,\nnot ready; DNS stops advertising it"
+  r4: "stateful units are never restarted\nby a reconcile, only by the roll"
+}
+t2 -> rules

@@ -1,0 +1,31 @@
+direction: down
+
+op: operator machine {
+  rollout: "orama node rollout --env E"
+  build: "1 build: orama build\n(skipped by --no-build --archive)"
+  push: "2 push: stage-archive on every node,\none node at a time"
+  upgrade: "3 upgrade: upgrade.RemoteUpgrader"
+  read: "ReadRoles: probe every node\n(raft state, gateway code)"
+  plan: "rollout.Build:\nfollowers first, leader last"
+  yes: "--yes given?" {shape: diamond}
+  loop: "for each step in plan"
+  gate: "rollout.WaitReady\n(budget --delay, default 5 min)"
+  rollout -> build -> push -> upgrade -> read -> plan -> yes
+  stop: "no: print the plan,\nexit with an error"
+  yes -> stop: "no"
+  yes -> loop: "yes"
+  loop -> gate: "after the node returns,\nexcept after the last step"
+  gate -> loop: "ready: next node"
+}
+
+node: one node (ssh, staged CLI as root) {
+  guard: "guard script:\ntrust anchor present, tree root-owned,\nnot a symlink"
+  cli: "/opt/orama/bin/orama node upgrade --restart"
+  pre: "pre-stop: raft id, quorum check,\nmaintenance flag, leadership hand-over"
+  swap: "stop, swap binaries, re-exec"
+  restart: "restart: orama-node, node-side nodehealth gate,\ntenant units"
+  guard -> cli -> pre -> swap -> restart
+}
+
+op.loop -> node.guard: "ssh, base64 script on stdin"
+op.gate -> node.restart: "ssh: rqlite /status +\ngateway /health, every 5 s"

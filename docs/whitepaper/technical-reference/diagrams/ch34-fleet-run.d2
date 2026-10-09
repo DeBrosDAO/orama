@@ -1,0 +1,26 @@
+direction: down
+
+up: "provision.Up (18 phases)" {
+  a: "workdir, preflight, binaries,\nagent, archives, ssh-key"
+  b: "hetzner-access, servers, host-keys"
+  c: "environment, genesis, delegation,\ncertificate, joins"
+  d: "health, wireguard, chain, state"
+  a -> b -> c -> d
+}
+
+st: "stages.Runner: 11 stages in order" {
+  p: "non-destructive packages in parallel"
+  x: "destructive packages, one at a time\n+ restore iptables and NTP after each"
+  p -> x
+}
+
+re: "Targeted re-run of each failed test\n(labels deterministic or flaky; verdict ignores it)"
+col: "Collect journals and node state\n(redacted)"
+rep: "report.html, report.json,\nreport.junit.xml, summary.txt"
+down: "provision.Down (deferred)\nalways runs when the run owns a fleet"
+
+up -> st
+st -> re
+re -> col
+col -> rep
+rep -> down

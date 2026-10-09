@@ -1,0 +1,22 @@
+direction: down
+
+snap: "ClusterSnapshot\nnodes + reports + alerts" {shape: cylinder}
+probes: "eight component probes\ngateway, database, cache, storage,\nvault, dns, mesh, chain"
+count: "per component:\nhealthy / total nodes\n(unknown nodes skipped,\nsilent nodes count against)"
+db: "database outage rule:\nno leader known, or leader sees\nvoters reachable at most half" {shape: diamond}
+state: "component state\noperational | degraded | outage"
+worst: "worst component state"
+crit: "any critical alert?" {shape: diamond}
+verdict_op: "operator verdict\n(Summarize)"
+verdict_pub: "public verdict\n(serviceVerdict)"
+
+snap -> probes
+probes -> count
+count -> state
+snap -> db
+db -> state: "forces outage"
+state -> worst
+worst -> crit
+crit -> verdict_op: "yes: at least degraded"
+crit -> verdict_op: "no"
+worst -> verdict_pub: "alerts ignored"

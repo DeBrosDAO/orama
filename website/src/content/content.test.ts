@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { APPS } from "./apps";
 import { FACTS } from "./facts";
 import { MILESTONES } from "./roadmap";
-import { NAV_ROUTES, ROUTE_LIST, documentTitle, normalizePath } from "./routes";
+import { ROUTE_LIST, documentTitle, normalizePath } from "./routes";
 import { SERVICES } from "./services";
 import { USE_CASES, USE_CASE_TAG_LABEL } from "./use-cases";
 
@@ -36,11 +36,6 @@ describe("routes", () => {
     const paths = ROUTE_LIST.map((r) => r.path);
     expect(new Set(paths).size).toBe(paths.length);
     for (const p of paths) expect(p.startsWith("/")).toBe(true);
-  });
-
-  it("TestRoutes_docs_not_in_navigation", () => {
-    expect(NAV_ROUTES.some((r) => r.path.startsWith("/docs"))).toBe(false);
-    expect(ROUTE_LIST.some((r) => r.path.startsWith("/docs"))).toBe(false);
   });
 
   it("TestRoutes_descriptions_fit_search_snippets", () => {

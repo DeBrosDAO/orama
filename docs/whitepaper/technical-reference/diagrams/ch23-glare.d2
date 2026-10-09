@@ -1,0 +1,12 @@
+shape: sequence_diagram
+
+c: "client"
+s: "SFU peer"
+
+s -> c: "offer (new track, SFU mids sfuN)"
+c -> s: "offer (client publishes)\nglare: SFU is in have-local-offer"
+s -> s: "stand-in answer to its own offer:\nclient's ufrag, pwd, fingerprint,\nDTLS role from standInSetup"
+s -> s: "SetRemoteDescription(client offer)"
+s -> c: "answer"
+s -> c: "offer (owed again once stable)"
+c -> s: "answer"

@@ -1,0 +1,46 @@
+direction: down
+
+req: "request" {shape: oval}
+pol: "policy of the matched route\n(no match: credential required, mux answers 404)"
+anon: "Access is open or handler-auth?"
+pass: "pass to handler\n(handler authenticates, or the route is public;\nNarrowedByGrant routes first narrow the set)" {shape: oval}
+reg: "registry gateway, /v1/rqlite*,\ncaller not on the operator list?"
+r403op: "403 NOT_AN_OPERATOR" {shape: oval}
+ns: "credential's namespace equals the\nhost or gateway namespace?"
+r403ns: "403 NAMESPACE_MISMATCH" {shape: oval}
+hop: "signed hop whose forwarded\nidentity already answers the route?"
+own: "route requires Ownership?"
+grant: "live grant in the namespace?\n(wallet, app or key hash;\nany registry error counts as none)"
+r403own: "403 OWNERSHIP_REQUIRED" {shape: oval}
+perms: "callerPermissions:\npermissions from grant, key row or\nNoGrantPermissions\n(unreadable grant on this path: 503)"
+dom: "PermitsDomain(route Domain, Action)?"
+r403scope: "403 INSUFFICIENT_SCOPE\nrequired_scope, required_permission" {shape: oval}
+tok: "route Token requirement met?\n(admin is exempt)"
+r401tok: "401 USER_JWT_REQUIRED" {shape: oval}
+h: "handler runs and names the object"
+obj: "AuthorizeResource(domain, action, object)\ncovered by the permission set?"
+r403obj: "403, no code:\ncredential holds X which does not cover Y" {shape: oval}
+ok: "serve" {shape: oval}
+
+req -> pol
+pol -> anon
+anon -> pass: "yes"
+anon -> reg: "no"
+reg -> r403op: "yes"
+reg -> ns: "no"
+ns -> r403ns: "no"
+ns -> hop: "yes"
+hop -> h: "yes (grant not resolved)"
+hop -> own: "no"
+own -> grant: "yes"
+own -> perms: "no (grant resolved for\ndata-plane and narrowed callers)"
+grant -> r403own: "no"
+grant -> perms: "yes"
+perms -> dom
+dom -> r403scope: "no"
+dom -> tok: "yes"
+tok -> r401tok: "no"
+tok -> h: "yes"
+h -> obj
+obj -> r403obj: "no"
+obj -> ok: "yes"

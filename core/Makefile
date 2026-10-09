@@ -195,7 +195,7 @@ test-netns:
 test-contracts:
 	go test -count=1 -run Contract ./...
 
-# Usage: make bump VER=0.122.9
+# Usage: make bump VER=0.3.1
 bump:
 	@if [ -z "$(VER)" ]; then \
 		echo "Usage: make bump VER=X.Y.Z"; exit 1; \
@@ -205,7 +205,9 @@ bump:
 	@cd ../sdk && npm version $(VER) --no-git-tag-version > /dev/null
 	@cd ../sdk-vault && npm version $(VER) --no-git-tag-version > /dev/null
 	@echo "Bumped VERSION, pkg/version/version.txt, sdk/package.json and sdk-vault/package.json to $(VER)"
-	@echo "Next: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json && git commit -m 'release: $(VER)'"
+	@echo "Next: re-verify the Technical Reference against $(VER) and stamp it; make whitepaper-check fails until you do"
+	@echo "      (docs/whitepaper/technical-reference/README.md, Releasing)"
+	@echo "Then: git add ../VERSION pkg/version/version.txt ../sdk/package.json ../sdk-vault/package.json ../docs/whitepaper/technical-reference && git commit -m 'release: $(VER)'"
 
 # Interactive release workflow (tag + push)
 release:

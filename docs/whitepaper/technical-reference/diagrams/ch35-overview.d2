@@ -1,0 +1,37 @@
+direction: right
+
+op: "Operator or tenant" {shape: person}
+
+bin: "orama binary (core/cmd/orama)" {
+  root: "root.go\nnewRootCmd, runCLI"
+  groups: "28 visible top-level groups\n(tenant, fleet, chain, local)"
+  clierr: "clierr\nexit codes 0-7"
+  printer: "printer\n--json, tty, stderr"
+  shared: "shared + pkg/auth\ngateway URL + bearer"
+  resolver: "noderesolver\nAPI, environment, nodes.conf"
+  envs: "environments.json\ncredentials.json" {shape: cylinder}
+  root -> groups
+  groups -> clierr: "return error"
+  groups -> printer: "output"
+  groups -> shared: "gateway calls"
+  groups -> resolver: "fleet commands"
+  shared -> envs
+  resolver -> envs
+}
+
+ssh: "pkg/remotessh\nPrepareNodeKeys, ssh, scp" 
+rw: "pkg/rwagent\nUnix socket client"
+agent: "RootWallet agent\n~/.rootwallet/agent.sock\n(separate program)"
+gw: "Gateway\n(index or namespace)"
+nodes: "Nodes\n(public IP, SSH)"
+chain: "Chain REST / RPC\n(gateway proxy, --node, --rpc)"
+
+op -> bin.root: "argv"
+bin.shared -> gw: "HTTPS, Bearer"
+bin.resolver -> gw: "GET /v1/operator/nodes"
+bin.groups -> ssh: "push, rollout, inspect, ssh, setup"
+ssh -> rw: "GetSSHKey, KeepUnlocked"
+bin.groups -> rw: "sign: login, build, tx"
+rw -> agent: "HTTP over Unix socket"
+ssh -> nodes: "ssh -i tmpkey, host key policy"
+bin.groups -> chain: "orama chain, global, storage"

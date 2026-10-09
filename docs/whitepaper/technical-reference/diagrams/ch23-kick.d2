@@ -1,0 +1,19 @@
+direction: down
+
+t: "Join ticket arrives at SFU\n(room, user, iat, agen)"
+none: "no kick record in the\nlast 40 s (30 s + 10 s)"
+gen: "ticket and kick both carry a generation?"
+cmpgen: "refuse iff ticket generation\nis not newer than the kick's"
+clock: "refuse iff iat is not later than\nkick time + 10 s margin"
+ok: "accept"
+no: "refuse 403"
+
+t -> none
+none -> ok: "yes"
+none -> gen: "no"
+gen -> cmpgen: "yes"
+gen -> clock: "no"
+cmpgen -> no: "refuse"
+cmpgen -> ok: "newer"
+clock -> no: "refuse"
+clock -> ok: "later"

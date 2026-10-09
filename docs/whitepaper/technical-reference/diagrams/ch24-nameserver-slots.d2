@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+n: "Nameserver node (every 30 s)"
+db: "Index RQLite"
+o: "Other nameservers"
+cz: "CoreDNS"
+
+n -> n: "ensureBaseDNSRecords\n(edge serving, base domain set)"
+n -> db: "INSERT apex + * A (300), nameserver nodes only"
+n -> db: "SELECT slot for (node_id, domain)"
+db -> n: "none held"
+n -> db: "INSERT dns_nameservers ns1..ns13\nON CONFLICT(hostname) DO NOTHING\nfirst slot with 1 row affected"
+n -> db: "INSERT glue nsN.base A = public_ip (300)\nthen DELETE other system A values of that name"
+n -> db: "SELECT glued slots"
+n -> db: "if NS set differs: INSERT NS per glued slot,\nthen DELETE NS not glued (only while one is glued)"
+n -> db: "lowest glued slot's node only:\nINSERT or UPDATE SOA (mname = that slot)"
+o -> db: "same reconcile, set-based, idempotent"
+cz -> db: "SELECT NS / SOA / A for each query"

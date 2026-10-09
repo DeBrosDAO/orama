@@ -1,0 +1,45 @@
+direction: right
+
+op: "operator\n(CLI host)" {
+  shape: person
+}
+
+cmds: "orama commands (core/cmd/orama/internal/)" {
+  rr: "node recover-raft\nproduction/recover"
+  mig: "node migrate-raft-id\nproduction/raftid"
+  rm: "node remove\nproduction/decommission"
+  wipe: "node wipe\nproduction/decommission"
+  nsr: "namespace restore\ncmd/namespacecmd"
+}
+
+ops: "clusterops (shared by remove and migrate-raft-id)\nquorum rule, raft remove, tombstone, SQL over SSH" 
+
+survivor: "survivor node" {
+  idx: "index RQLite\ndata/rqlite/"
+  reg: "registry tables\ndns_nodes, wireguard_peers,\nnamespace_*, node_credentials,\nraft_evicted_nodes" {
+    shape: cylinder
+  }
+}
+
+target: "target node" {
+  files: "/opt/orama, units, wg0,\nfirewall rules, Caddy store"
+  rdata: "raft.db, raft/, db.sqlite,\nsnapshots, markers"
+}
+
+gw: "namespace gateway\n/v1/namespace/restore" 
+nsdb: "namespace RQLite\n(replaced by the backup)" {
+  shape: cylinder
+}
+
+op -> cmds: "SSH key from RootWallet"
+cmds.rm -> ops
+cmds.mig -> ops
+ops -> survivor.idx: "SSH: curl /nodes /remove\n/db/execute on overlay"
+survivor.idx -> survivor.reg: "raft writes"
+cmds.rr -> survivor.idx: "stop, peers.json, start (kept node)"
+cmds.rr -> target.rdata: "wipe on every other node"
+cmds.mig -> target.rdata: "reset under peer id"
+cmds.rm -> cmds.wipe: "then, unless --offline"
+cmds.wipe -> target.files: "erase"
+cmds.nsr -> gw: "HTTPS, owner token\nre-sealed secrets"
+gw -> nsdb: "POST /db/load"

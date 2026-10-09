@@ -1,0 +1,25 @@
+direction: down
+
+dev: "release.sh\n(interactive)"
+tag: "git tag vX.Y.Z or vX.Y.Z-nightly\ngit push origin TAG"
+rel: "release.yaml"
+chk: "strip v and -nightly;\nmust equal /VERSION"
+gr: "GoReleaser: orama + orama-node,\nlinux/darwin, amd64/arm64,\ntar.gz, .deb, checksums.txt"
+ghrel: "GitHub Release\n(prerelease: auto)"
+brew: "Homebrew tap\n(stable only)"
+apt: "release-apt.yml\n(on release published)"
+sdk: "publish-sdk.yml\n(on release published)"
+npm: "npm: @debros/orama, @debros/orama-vault\ndist-tag from prerelease suffix"
+
+dev -> tag
+tag -> rel
+rel -> chk
+chk -> gr: "equal"
+chk -> tag: "differ: job fails" {
+  style.stroke-dash: 3
+}
+gr -> ghrel
+gr -> brew
+ghrel -> apt: "needs RELEASE_PAT\nfor the event to fire"
+ghrel -> sdk
+sdk -> npm

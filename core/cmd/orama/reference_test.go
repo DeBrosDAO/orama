@@ -36,6 +36,9 @@ func TestCLIReferenceMatchesTheCommandTree(t *testing.T) {
 			t.Fatalf("write reference: %v", err)
 		}
 		t.Logf("wrote %s", path)
+		if err := os.WriteFile(bookReferencePath(t), []byte(renderBookReference(newRootCmd())), 0644); err != nil {
+			t.Fatalf("write book reference: %v", err)
+		}
 		return
 	}
 

@@ -1,0 +1,20 @@
+shape: sequence_diagram
+
+gw: "index gateway\n(orama user)"
+helper: "orama-privhelper\n(root)"
+fs: "root-owned files and drop-ins"
+pid1: "systemd PID 1"
+app: "deployment unit\n(dynamic user)"
+
+gw -> helper: "deploy set-env / set-token (input: contents)"
+helper -> fs: "/var/lib/orama-deploy/orama-deploy-INSTANCE.env, .token (0600, tmp + rename)"
+gw -> helper: "deploy bind-port INSTANCE RUNTIME PORT"
+helper -> helper: "port in 10200-19999? flock bind lock"
+helper -> fs: "orama-bind.conf: User=, SocketBindAllow=tcp:PORT (via rootfs, anchor /etc)"
+helper -> pid1: "daemon-reload (restore previous drop-in on failure)"
+gw -> helper: "systemctl start orama-deploy-RUNTIME@INSTANCE.service"
+helper -> helper: "DirOwner: no symlink below /opt/orama, owned by orama"
+helper -> pid1: "systemctl start"
+pid1 -> pid1: "ExecStartPre=+ verify-deploy-dir (root)"
+pid1 -> fs: "read EnvironmentFile and LoadCredential as PID 1"
+pid1 -> app: "drop to User=orama-deploy-HASH, bind own dir read-only"

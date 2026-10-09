@@ -1,0 +1,26 @@
+direction: down
+
+call: "contract call succeeds\nMeteredStore counted grew and shrank"
+net: "grew vs shrank" {shape: diamond}
+nothing: "no ledger change"
+payer: "payer = message sender if a plain account,\nelse the tx's first signer"
+mine: "payer already has a chunk\non this contract?" {shape: diamond}
+topup: "top up the chunk's x/fees deposit\nby n x per_byte"
+full: "contract at 32 chunks?" {shape: diamond}
+newchunk: "new chunk: lock (n + 512) x per_byte"
+refuse: "contract error:\nstate deposit ... (call reverted)"
+budget: "tx budget over 10 ORAMA?" {shape: diamond}
+shrink: "release newest chunk first,\nrefund 99% to its payer's earnings, burn 1%"
+
+call -> net
+net -> nothing: "equal"
+net -> payer: "grew more"
+net -> shrink: "shrank more"
+payer -> mine
+mine -> budget: "yes"
+mine -> full: "no"
+full -> refuse: "yes"
+full -> newchunk: "no"
+budget -> refuse: "yes"
+budget -> topup: "no"
+newchunk -> budget

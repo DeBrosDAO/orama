@@ -1,0 +1,26 @@
+direction: right
+
+dd: "Authority DataDirectory" {
+  c: "cached-consensus" {shape: page}
+  v: "v3-status-votes\n(votes of the latest round)" {shape: page}
+  bw: "bandwidth file (if configured)" {shape: page}
+}
+timer: "orama-global-tor-archive.timer\nevery 1 min" 
+arch: "ArchiveVotingPeriod"
+dir: "archive/valid-after stamp/" {
+  f1: "consensus"
+  f2: "votes (only documents with this valid-after)"
+  f3: "bandwidth"
+  m: "MANIFEST.json\nsha256 of each file\nroot = sha256 over lines 'name sha256' in name order"
+}
+rep: "chain/reporter\ninputs_root commits to root"
+
+timer -> arch
+dd.c -> arch
+dd.v -> arch
+dd.bw -> arch
+arch -> dir.f1: "first copy wins; replaced only by same body\nwith more signatures"
+arch -> dir.f2: "first copy wins"
+arch -> dir.f3: "first copy wins"
+arch -> dir.m
+dir.m -> rep: "root"

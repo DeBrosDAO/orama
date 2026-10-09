@@ -1,0 +1,42 @@
+direction: right
+
+ts: "TypeScript SDK  @debros/orama" {
+  core: "createClient\nauth, db, pubsub, cache,\nstorage, functions, network" 
+  wl: "createWorkloadClient\n(token file, renewal timer)"
+  chain: "./chain subpath\nOramaChainClient, signers,\nMSG registry, describeTx"
+  relay: "./relay subpath (Node only)\nRelayedFetch"
+}
+
+go: "Go client  core/pkg/client" {
+  nc: "Client (NetworkClient)\nDatabase, PubSub, Storage, Network"
+  gdb: "gatewayDatabaseClient\n(no DatabaseEndpoints)"
+  ddb: "DatabaseClientImpl\n(DatabaseEndpoints set)"
+  host: "libp2p host\nNoise + TCP, no listener"
+}
+
+gw: "Namespace gateway or index gateway" {
+  api: "/v1/auth, /v1/rqlite, /v1/pubsub,\n/v1/cache, /v1/storage, /v1/invoke,\n/v1/network, /v1/proxy"
+  chainp: "/v1/chain/ (open read proxy,\nsimulate, broadcast)"
+  relayp: "/v1/proxy/relay (open)"
+}
+
+nodes: "On the node, inside the mesh" {
+  rq: "RQLite HTTP" {shape: cylinder}
+  ps: "pubsub unix socket\n/run/orama-pubsub/pubsub.sock"
+  peers: "libp2p bootstrap peers"
+}
+
+restnode: "Chain node REST (restURL)"
+tor: "Tor exit -> storage node"
+
+ts.core -> gw.api: "HTTPS JSON, WSS /v1/pubsub/ws\nBearer token"
+ts.wl -> gw.api: "same client, JWT from file"
+ts.chain -> gw.chainp: "reads, simulate, broadcast\n(no credential)"
+ts.chain -> restnode: "account, broadcast"
+ts.relay -> gw.relayp: "WSS byte stream,\nTLS inside it"
+gw.relayp -> tor
+go.gdb -> gw.api: "HTTPS JSON /v1/rqlite/*\nBearer key or JWT + X-API-Key"
+go.nc -> gw.api: "HTTPS /v1/storage/*"
+go.ddb -> nodes.rq: "gorqlite, DSN credentials"
+go.nc -> nodes.ps: "HTTP over unix socket"
+go.host -> nodes.peers: "dial"

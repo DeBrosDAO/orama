@@ -9,24 +9,16 @@
 //
 // Runs after prerender.mjs (reads dist/ and dist-server/).
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, extname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import puppeteer from "puppeteer-core";
 import { distFileFor } from "./dist-file.mjs";
+import { findChrome } from "./chrome.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(HERE, "../dist");
 const SERVER_ENTRY = resolve(HERE, "../dist-server/entry-server.js");
-
-const CHROME_CANDIDATES = [
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-];
 
 const PAPER = "A4";
 const MARGIN = { top: "12mm", bottom: "14mm", left: "12mm", right: "12mm" };
@@ -53,22 +45,6 @@ const CONTENT_TYPES = {
   ".txt": "text/plain; charset=utf-8",
   ".xml": "application/xml",
 };
-
-function findChrome() {
-  const fromEnv = process.env.CHROME_PATH;
-  if (fromEnv) {
-    if (!existsSync(fromEnv)) throw new Error(`build-pdf: CHROME_PATH=${fromEnv} does not exist`);
-    return fromEnv;
-  }
-  const found = CHROME_CANDIDATES.find((p) => existsSync(p));
-  if (!found) {
-    throw new Error(
-      `build-pdf: no Chrome or Chromium found (looked in ${CHROME_CANDIDATES.join(", ")}). ` +
-        "Install one, or set CHROME_PATH to its executable.",
-    );
-  }
-  return found;
-}
 
 /** Answers the page's requests from dist/; anything else is recorded as a problem. */
 function serveFromDist(page, siteOrigin, problems) {
@@ -153,7 +129,7 @@ async function main() {
   const outFile = resolve(DIST, `.${INVESTOR_PDF.path}`);
 
   const browser = await puppeteer.launch({
-    executablePath: findChrome(),
+    executablePath: findChrome("build-pdf"),
     headless: true,
     args: [`--user-agent=${PDF_CREATOR}`],
   });

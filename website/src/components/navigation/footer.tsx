@@ -1,6 +1,8 @@
 import { Link } from "react-router";
 import { CrosshairDivider } from "../ui/crosshair-divider";
-import { DOCS_PATH, ROUTES } from "../../content/routes";
+import { ROUTES } from "../../content/routes";
+import { DOCS_PATH, EXPLORER_PATH } from "../../content/pages";
+import { BLOG_FEED_PATH, BLOG_PATH } from "../../blog/posts";
 import { ANCHAT_GROUP_URL, CONTACT_EMAIL, GITHUB_URL, X_URL } from "../../content/site";
 import { LICENSE } from "../../content/facts";
 import oramaIcon from "../../assets/orama-icon.png";
@@ -13,19 +15,21 @@ interface FooterLink {
 
 const COLUMNS: { title: string; links: FooterLink[] }[] = [
   {
-    title: "Explore",
+    title: "Network",
     links: [
-      { label: ROUTES.platform.nav, to: ROUTES.platform.path },
-      { label: ROUTES.howItWorks.nav, to: ROUTES.howItWorks.path },
-      { label: ROUTES.useCases.nav, to: ROUTES.useCases.path },
+      { label: ROUTES.platform.title, to: ROUTES.platform.path },
+      { label: ROUTES.howItWorks.title, to: ROUTES.howItWorks.path },
+      { label: ROUTES.useCases.title, to: ROUTES.useCases.path },
       { label: ROUTES.apps.title, to: ROUTES.apps.path },
+      { label: "Explorer", to: EXPLORER_PATH },
     ],
   },
   {
     title: "Project",
     links: [
-      { label: ROUTES.roadmap.nav, to: ROUTES.roadmap.path },
+      { label: ROUTES.roadmap.title, to: ROUTES.roadmap.path },
       { label: ROUTES.whitepaper.title, to: ROUTES.whitepaper.path },
+      { label: "Blog", to: BLOG_PATH },
       { label: ROUTES.investors.title, to: ROUTES.investors.path },
       { label: ROUTES.donate.title, to: ROUTES.donate.path },
     ],
@@ -34,6 +38,7 @@ const COLUMNS: { title: string; links: FooterLink[] }[] = [
     title: "Resources",
     links: [
       { label: "Docs", to: DOCS_PATH },
+      { label: "RSS feed", to: BLOG_FEED_PATH, external: true },
       { label: "GitHub", to: GITHUB_URL, external: true },
       { label: "X", to: X_URL, external: true },
       { label: "AnChat group", to: ANCHAT_GROUP_URL, external: true },
@@ -77,6 +82,15 @@ export function Footer() {
             <a href={`mailto:${CONTACT_EMAIL}`} className="font-mono text-xs text-accent hover:text-fg transition-colors w-fit">
               {CONTACT_EMAIL}
             </a>
+            <a
+              href={ANCHAT_GROUP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 font-mono text-xs text-muted hover:text-fg transition-colors w-fit"
+            >
+              <img src="/images/apps/anchat-mark.png" alt="" className="w-3.5 h-3.5" />
+              Join the Orama group on AnChat
+            </a>
           </div>
 
           {COLUMNS.map((column) => (
@@ -118,7 +132,7 @@ export function Footer() {
               href={ANCHAT_GROUP_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="opacity-50 hover:opacity-100 transition-opacity"
+              className="opacity-70 hover:opacity-100 transition-opacity"
               aria-label="Orama group on AnChat"
             >
               <img src="/images/apps/anchat-mark.png" alt="" className="w-4 h-4" />

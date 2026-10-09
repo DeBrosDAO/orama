@@ -1,0 +1,40 @@
+direction: right
+
+node: "Cluster node (every node)" {
+  gw: "Index gateway\n/v1/proxy/anon, /tunnel, /relay"
+  fn: "serverless anon_fetch"
+  tor: "orama-namespace-tor@index\nclient only, SOCKS 127.0.0.1:9050" {shape: hexagon}
+  gw -> tor: "SOCKS5 (per-user isolation credential)"
+  fn -> tor: "SOCKS5 (no credential)"
+}
+
+pub: "Public Tor network" {
+  exits: "public relays and exits"
+}
+dest: "Destination on the internet" {shape: cloud}
+node.tor -> pub.exits: "circuits"
+pub.exits -> dest: "exit traffic"
+
+otn: "Orama Tor network (private, own authorities)" {
+  auth: "Directory authorities (3 or more)\nORPort 31020, DirPort 31021" {shape: hexagon}
+  relay: "Relays and opt-in exits\nORPort 31020"
+  auth -> relay: "consensus (vote every voting_interval_minutes)"
+  onion: "Validator onion service\norama-global-tor-onion"
+  relay -> onion: "rendezvous circuit"
+}
+
+val: "Validator host" {
+  gate: "txgate 127.0.0.1:31022\n3 calls, 512 KiB, no logging" {shape: hexagon}
+  chain: "Chain REST API :31003" {shape: cylinder}
+  onion2: "tor, HiddenServicePort 80" 
+  onion2 -> gate
+  gate -> chain: "http, 3 paths only"
+}
+otn.onion -> val.onion2: "same process"
+
+client: "Wallet / orama vpn / orama CLI" {shape: person}
+file: "tor-network.json\n(one file, one parser)" {shape: page}
+file -> client
+file -> otn.auth: "DirAuthority lines"
+client -> otn.relay: "own tor (onionnet), SOCKS 9052 by convention\nmust be a client of this network"
+client -> val.onion2: "chainonion: http over SOCKS, fresh circuit per transaction"

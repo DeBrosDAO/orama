@@ -1,0 +1,44 @@
+direction: right
+
+clients: "Clients\n(browser, mobile)" {shape: person}
+
+edge: "Public edge" {
+  dns: "CoreDNS\nturn.ns-NS.BASE, turn-NS.BASE,\nns-NS.BASE"
+  cg: "Cluster gateway\n(Caddy + index gateway)"
+}
+
+node: "Each of the namespace's 3 nodes" {
+  nsgw: "Namespace gateway\n/v1/webrtc/*\nadmission, placement, tickets" 
+  sfu: "orama-namespace-sfu@NS\npion SFU\nsignalling on WireGuard IP\n30000-30099"
+  nsgw -> sfu: "WebSocket + X-Orama-SFU-Ticket\n(rendezvous-ranked owner)"
+  sfu -> nsgw: "POST /v1/internal/webrtc/events\n(MAC v2)"
+  nsgw -> sfu: "POST /admin/kick, /admin/mute\n(MAC v2, every SFU)"
+}
+
+turn: "Shared TURN, 2 of the 3 nodes\norama-turn.service\n3478 udp/tcp, 5349 tls,\nrelay 49152-65535" {
+  cfg: "data/turn/turn.yaml\n(0600, all tenant secrets,\nre-read every 2 s)" {shape: cylinder}
+  served: "/run/orama-turn/served-tenants.json" {shape: cylinder}
+}
+
+reg: "Index RQLite (registry)" {
+  alloc: "webrtc_port_allocations" {shape: cylinder}
+  cfgt: "namespace_webrtc_config" {shape: cylinder}
+  dnsr: "dns_records" {shape: cylinder}
+}
+
+nsdb: "Namespace RQLite" {
+  adm: "webrtc_settings\nwebrtc_admissions" {shape: cylinder}
+}
+
+ps: "Namespace pubsub\n_orama/webrtc/ROOM" {shape: queue}
+
+clients -> edge.dns: "resolve"
+clients -> edge.cg: "HTTPS / WSS"
+edge.cg -> node.nsgw: "proxy to a namespace gateway"
+clients -> turn: "TURN / TURNS over the public internet"
+node.sfu -> turn: "SFU's own relay-only ICE\n(public TURN address)"
+node.nsgw -> reg.alloc: "which nodes run an SFU"
+node.nsgw -> nsdb.adm: "policy and admission, per join"
+node.nsgw -> ps: "publish join / leave"
+reg.cfgt -> turn.cfg: "host reconciler renders\ntenant list"
+turn.cfg -> turn.served: "server publishes\nwhat it loaded"

@@ -1,0 +1,21 @@
+shape: sequence_diagram
+
+c: "client (wallet signer)"
+g: "gateway"
+r: "registry RQLite"
+
+c -> g: "POST /v1/auth/challenge\nwallet, namespace, chain_type, device_id?"
+g -> g: "per-network auth bucket (30/min, burst 10)\nper-wallet bucket (10/min, burst 5)"
+g -> r: "namespace exists? count unanswered nonces (limit 10)"
+g -> r: "INSERT nonces (expires now+5 min)"
+g -> c: "EIP-4361 / SIWS message\n(domain, namespace URN, nonce, expiry)"
+c -> c: "wallet signs the text byte for byte"
+c -> g: "POST /v1/auth/verify\nmessage, signature, device_key?, device_signature?"
+g -> g: "parse, domain = request host, issued/expiry window,\nrecover signer (EIP-191 or ed25519)"
+g -> r: "UPDATE nonces SET used_at WHERE used_at IS NULL\nAND expires_at > now (rows affected = 1)"
+g -> r: "RequireSignInAllowed: grant, owner, sign-in policy"
+g -> g: "device policy and device proofs (if any)"
+g -> r: "INSERT refresh_tokens (SHA-256 hash, +30 days, sid, did)"
+g -> g: "sign EdDSA access token (15 min)"
+g -> r: "GetOrCreateAPIKey (members with a key-capable role only)"
+g -> c: "access_token, refresh_token, api_key?, device_id?"

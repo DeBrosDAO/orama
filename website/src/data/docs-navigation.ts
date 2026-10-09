@@ -176,6 +176,8 @@ export const BLOCKCHAIN_DOCS: DocLink[] = [
   { title: "Shielded pool", slug: "blockchain/shielded", icon: EyeOff, description: "Private ORAMA", group: "Assets" },
   { title: "Contracts", slug: "blockchain/contracts", icon: FileCode, description: "CosmWasm and bindings", group: "Assets" },
   { title: "Running a chain node", slug: "blockchain/running", icon: Terminal, description: "Ports, build, localnet", group: "Run" },
+  { title: "Run a global node", slug: "blockchain/run-a-global-node", icon: Server, description: "The L1 and its services on one machine", group: "Run" },
+  { title: "Security disclosure", slug: "blockchain/security-disclosure", icon: FileCode, description: "Scope, severity and how to report", group: "Run" },
 ];
 
 export const PRIVACY_DOCS: DocLink[] = [

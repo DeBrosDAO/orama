@@ -1,0 +1,23 @@
+shape: sequence_diagram
+
+dev: "orama function deploy"
+gw: "namespace gateway\nDeployFunction"
+reg: "serverless.Registry"
+ipfs: "IPFS + Cluster"
+db: "namespace RQLite"
+disp: "dispatcher + cron store"
+
+dev -> gw: "POST /v1/functions (multipart: wasm, form fields, metadata)"
+gw -> gw: "managedNamespace: credential's namespace only\nlimits: memory 1-256, timeout 1-60, retry 0-5"
+gw -> reg: "Register(def, wasmBytes)"
+reg -> ipfs: "AddLocal (sealed ORMAW1 envelope)"
+reg -> ipfs: "Pin replication -1"
+reg -> ipfs: "PinStatus every 2 s until pinned on every peer (30 s)"
+reg -> db: "INSERT functions row, version = previous + 1"
+reg -> db: "function_env_vars"
+reg -> db: "tx: move trigger rows to the new row,\nprune beyond 10 versions"
+reg -> reg: "invalidate metadata cache (this gateway)"
+reg -> gw: "previous version"
+gw -> gw: "Invalidate compiled module of the old CID"
+gw -> disp: "pubsub_topics: replace triggers + Refresh\ncron_expressions: always delete all cron rows, re-add"
+gw -> dev: "201 {function}"

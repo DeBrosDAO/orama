@@ -1,0 +1,35 @@
+direction: right
+
+mk: "make test (root Makefile)" {
+  a: "core: go test -v ./...\n(no race, no vet)"
+  b: "caddy: go vet + go test"
+  c: "e2e: go vet (both tags),\nlint, harness unit tests"
+  d: "e2e coverage gate\n(enforcing by default)"
+  e: "whitepaper-check\n(all book gates)"
+}
+
+both: "Both" {
+  x: "core Go tests\n(CI adds -race, -timeout 5m, go vet)"
+  y: "CLI reference test\n(CI forces -count=1)"
+}
+
+ci: "CI (.github/workflows)" {
+  a: "core: go vet, race tests,\nContract tests -count=1"
+  b: "os/agent: vet, race, seal vector,\nlinux build"
+  c: "sdk and sdk-vault:\nlint, typecheck, build, unit"
+  d: "vault: zig build, zig build test"
+  e: "version-sanity (warns only)"
+  f: "security.yml: govulncheck,\npnpm audit (main, weekly)"
+}
+
+none: "No automated gate" {
+  a: "chain/ tests (make -C chain test)"
+  b: "website tests"
+  c: "core/e2e tagged suites"
+  d: "the fleet suite (owner runs it)"
+}
+
+mk.a -> both.x
+ci.a -> both.x
+mk.a -> both.y
+ci.a -> both.y

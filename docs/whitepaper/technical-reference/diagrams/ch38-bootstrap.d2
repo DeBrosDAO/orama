@@ -1,0 +1,15 @@
+direction: right
+
+ceremony: "Ceremony\nbootstrap = true"
+installed: "Installed\nAssumeReachable 1 on\nauthorities and relays"
+voting: "Authorities up within minutes\nof each other, vote"
+consensus: "First consensus signed\n(about one voting interval\nplus delays)"
+onions: "Validator onions added to\ntor-network.json\n(orama global tor onions add)"
+steady: "bootstrap = false\nre-install, serial restart,\nauthorities first\nreachability tested"
+
+ceremony -> installed: "stage file, install"
+installed -> voting: "global start dirauth, relay, onion"
+voting -> consensus: "majority signs"
+consensus -> onions
+onions -> steady: "stage file, re-run install, restart one node at a time"
+voting -> voting: "fewer than a majority: no consensus"

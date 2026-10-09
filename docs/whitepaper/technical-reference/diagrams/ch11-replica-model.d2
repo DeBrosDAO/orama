@@ -1,0 +1,25 @@
+direction: right
+
+home: "Home node A (deployments.home_node_id, fixed)" {
+  hu: "unit, port P_A" {shape: hexagon}
+  hl: "per-deployment lock\n+ env version counter"
+}
+rep: "Replica node B" {
+  ru: "unit, port P_B" {shape: hexagon}
+  rv: "applied versions\nINSTANCE.deploy-version\nINSTANCE.env-version"
+}
+other: "Node C (candidate)"
+
+reg: "Registry" {
+  r1: "deployment_replicas\n(deployment_id, node_id) PK\nstatus, port, is_primary" {shape: cylinder}
+  r2: "port_allocations\n(node_id, port) PK" {shape: cylinder}
+  r3: "dns_records\none A record per replica" {shape: cylinder}
+}
+
+home.hl -> rep.ru: "setup / update / rollback / env / teardown\nPOST :10104, MAC v2 stamp for B's peer id\n180 s (env 30 s)"
+rep.ru -> rep.rv: "refuse version older than applied (409)"
+home.hu -> reg.r1: "primary row"
+rep.ru -> reg.r1: "active + port after setup"
+rep.ru -> reg.r2: "AllocatePort on B"
+home.hu -> reg.r3: "home A record\nreplica A record after setup"
+reg.r1 -> other: "leader, every 5 min:\nactive < 2 -> SelectReplicaNodes,\nsetup on a best-scoring node other than A"

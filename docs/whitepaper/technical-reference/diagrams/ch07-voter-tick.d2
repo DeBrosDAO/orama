@@ -1,0 +1,27 @@
+direction: down
+
+tick: membership tick (leader only,\nevery 2 min, first after 3 min)
+status: read /status and /nodes once
+notleader: not Leader:\nreturn, no work
+term: noteTerm: record the term;\nstable = unchanged on 3 ticks
+dead: evictDeadVoters:\nvoter unreachable for 10 ticks?\n(deferred while the term is unstable)
+gates: all must hold:\n1 safeToEvict (quorum survives)\n2 discovery forgot the address (2 h)\n3 two observers recorded dead in 30 min
+tomb: write tombstone\nin raft_evicted_nodes
+rm: DELETE /remove
+one: one change made:\nend of tick
+rec: reconcileVoters:\nmore than 5 members?
+quorum: live quorum of voters?\nterm stable?
+fix: fix one mismatch:\ndemote excess voter or promote\nvia POST /join with voter flag
+
+tick -> status
+status -> notleader
+status -> term
+term -> dead
+dead -> gates: expired candidate
+gates -> tomb
+tomb -> rm
+rm -> one
+dead -> rec: none expired
+gates -> rec: a gate refuses: next candidate;\nfailed corroboration holds it off 10 min
+rec -> quorum: yes
+quorum -> fix

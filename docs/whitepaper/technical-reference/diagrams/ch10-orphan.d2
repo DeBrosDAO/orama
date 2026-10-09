@@ -1,0 +1,33 @@
+direction: down
+
+start: "reapOrphanedTenants (every sweep)"
+list: "list tenant namespaces with state on this node\n(platform instances excluded)"
+none: "no tenants:\nclear streaks, return"
+reg: "read registry:\nnamespaces assigned to this node,\ntotal cluster count" 
+regerr: "registry read failed:\nreset streaks, return the error"
+empty: "registry holds 0 clusters?" {shape: diamond}
+disown: "node holds 2 or more tenants\nand the registry assigns none?" {shape: diamond}
+alert: "log, remember the tenants;\nafter 2 sweeps telemetry carries\nregistry_disowned_tenants"
+orph: "orphan = not registered\nand not provisioning on this process"
+streak: "seen orphaned on 2 consecutive sweeps?" {shape: diamond}
+wait: "keep the streak,\nwait for next sweep"
+cap: "order by least recently failed;\ntake at most 2 per pass"
+purge: "registry holds any cluster\nof that name?" {shape: diamond}
+keep: "teardown units and state,\nkeep tenant data\n(lives on other nodes)"
+wipe: "teardown and purge tenant data\n(namespace was deleted)"
+
+start -> list
+list -> none: "empty"
+list -> reg: "non-empty"
+reg -> regerr: "error"
+reg -> empty
+empty -> alert: "yes"
+empty -> disown: "no"
+disown -> alert: "yes"
+disown -> orph: "no"
+orph -> streak
+streak -> wait: "no"
+streak -> cap: "yes"
+cap -> purge
+purge -> keep: "yes"
+purge -> wipe: "no"

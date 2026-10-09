@@ -1,0 +1,34 @@
+direction: down
+
+q: "Query (qname lower-cased, qtype)"
+zone: "qname inside a configured zone?"
+next: "next plugin\n(the zone block has none: SERVFAIL)"
+fresh: "fresh cache entry\n(TTL 30 s)?"
+hit: "answer from cache\n(negative entry: NXDOMAIN)"
+exact: "SELECT exact name + type\nis_active = TRUE"
+berr: "backend error"
+stale: "stale entry within 24 h?"
+servestale: "serve stale answer, TTL 30 s"
+servfail: "SERVFAIL"
+wild: "walk wildcards outward:\n*.b.c.d, *.c.d, *.d\nstop at zone edge"
+found: "rows found?"
+answer: "authoritative answer,\nowner = qname, cache 30 s"
+nx: "NXDOMAIN + zone SOA in authority\ncache 30 s, never served stale"
+soa: "SOA lookup for the zone\n(error: stale or SERVFAIL)"
+
+q -> zone
+zone -> next: "no"
+zone -> fresh: "yes"
+fresh -> hit: "yes"
+fresh -> exact: "no"
+exact -> berr: "error"
+berr -> stale
+stale -> servestale: "yes"
+stale -> servfail: "no"
+exact -> found: "ok"
+exact -> wild: "no rows"
+wild -> found
+wild -> berr: "error"
+found -> answer: "yes"
+found -> soa: "no"
+soa -> nx

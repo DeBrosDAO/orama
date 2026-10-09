@@ -1,0 +1,26 @@
+direction: down
+
+opts: "GlobalInstallOptions.validate\n(services, staged dir, peers, Tor, storage budget, ssh port)"
+plan: "Plan before changing the host" {
+  tor: "planGlobalTor:\nnetwork file, torrc, key bundle"
+  onion: "onion requires an installed chain"
+  col: "planColocation: netns layout or refusal"
+  fw: "checkGlobalFirewall: ufw active\nor --enable-firewall + sshd port"
+  chain: "preflightChain: cosmovisor pin,\ngenesis, staged oramad"
+}
+apply: "Apply" {
+  tor: "Install Tor package"
+  acc: "ensureGlobalAccounts: one system account per service"
+  bin: "installGlobalBinaries: root 0755 under GlobalBinDir"
+  cv: "installCosmovisor (pinned SHA-256)"
+  home: "chain home: oramad init as chain account,\nnetwork genesis (--init-chain only)"
+  ns: "writeNetns (co-located)"
+  gen: "stage oramad as genesis binary"
+  kubo: "public Kubo repo, token, GC environment"
+  torw: "write torrc and keys"
+  units: "write units, daemon-reload, enable (not start)"
+  ufw: "ufw rules tagged orama-global"
+  role: "record role in preferences.yaml"
+}
+opts -> plan -> apply
+apply.tor -> apply.acc -> apply.bin -> apply.cv -> apply.home -> apply.ns -> apply.gen -> apply.kubo -> apply.torw -> apply.units -> apply.ufw -> apply.role

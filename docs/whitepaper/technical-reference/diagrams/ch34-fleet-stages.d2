@@ -1,0 +1,15 @@
+direction: right
+
+s1: "1 bootstrap\n30 min\n2 packages"
+s2: "2 namespaces\n90 min\n1"
+s3: "3 auth\n45 min\n11 (1 destructive)"
+s4: "4 data-plane\n90 min\n10"
+s5: "5 deployments-\nserverless\n45 min, 3"
+s6: "6 realtime\n45 min\n3"
+s7: "7 security-audit\n30 min\n4"
+s8: "8 chain\n45 min\n15"
+s9: "9 ops\n90 min\n12 (3 destructive)"
+s10: "10 upgrade\n60 min\n3 (1 destructive)"
+s11: "11 chaos-soak\n180 min\n23 (22 destructive)"
+
+s1 -> s2 -> s3 -> s4 -> s5 -> s6 -> s7 -> s8 -> s9 -> s10 -> s11

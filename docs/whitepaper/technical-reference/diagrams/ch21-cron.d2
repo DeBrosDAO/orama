@@ -1,0 +1,17 @@
+shape: sequence_diagram
+
+a: "gateway A\nscheduler tick"
+b: "gateway B\nscheduler tick"
+db: "function_cron_triggers"
+inv: "Invoker (A)"
+
+a -> db: "ListDue(now, 100): enabled, function active, next_run_at at or before now"
+b -> db: "ListDue(now, 100): same row"
+a -> a: "ParseCron(expr).Next(now)"
+a -> db: "UPDATE next_run_at = next, status running\nWHERE id = ? AND next_run_at = old"
+db -> a: "1 row: lease won"
+b -> db: "same UPDATE, same old next_run_at"
+db -> b: "0 rows: ErrAlreadyRan, skip"
+a -> inv: "Invoke {trigger: cron}, SystemOriginated"
+inv -> a: "response"
+a -> db: "UPDATE last_status ok or error\nWHERE next_run_at = next"

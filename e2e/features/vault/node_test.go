@@ -13,15 +13,15 @@ import (
 const (
 	vaultUnit = "orama-namespace-vault@index.service"
 	// guardianPort is the guardian's client port in the code
-	// (core/pkg/constants VaultHTTPPort = 10106); docs/vault/API.md says 7500.
+	// (core/pkg/constants VaultHTTPPort = 10106); vault/docs/API.md says 7500.
 	guardianPort = 10106
-	// peerPort is the peer protocol port docs/vault/API.md says nothing
+	// peerPort is the peer protocol port vault/docs/API.md says nothing
 	// listens on yet.
 	peerPort = 7501
 )
 
 // TestGuardian_unitAndOverlayOnly: every node runs the guardian, which is
-// not reachable on a public address (docs/vault/API.md: overlay only).
+// not reachable on a public address (vault/docs/API.md: overlay only).
 func TestGuardian_unitAndOverlayOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -45,7 +45,7 @@ func TestGuardian_unitAndOverlayOnly(t *testing.T) {
 	}
 }
 
-// TestGuardian_documentedNotDone: what docs/vault/API.md says is not built
+// TestGuardian_documentedNotDone: what vault/docs/API.md says is not built
 // yet is not: guardian health is "degraded" (no peer discovery), the
 // guardian list is empty, and nothing listens on the peer port 7501.
 func TestGuardian_documentedNotDone(t *testing.T) {
@@ -70,7 +70,7 @@ func TestGuardian_documentedNotDone(t *testing.T) {
 }
 
 // TestGuardian_directPushNeedsSession: a guardian refuses a push without an
-// X-Session-Token from the node itself (docs/vault/API.md: 401).
+// X-Session-Token from the node itself (vault/docs/API.md: 401).
 func TestGuardian_directPushNeedsSession(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

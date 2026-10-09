@@ -1,0 +1,29 @@
+direction: down
+
+reg: "upgrade authorized with a token:\nRegister(claims, close) - checkedAt = now"
+tick: "every 5 s (SweepInterval)\nskip the pass if no socket is open" {shape: oval}
+refresh: "RefreshRevocations (bounded to 5 s)"
+exp: "now after exp + 120 s?" {shape: diamond}
+c4401: "close 4401\ntoken expired, reconnect with a fresh token" {shape: oval}
+usable: "revocation list usable\n(copy under 10 s)?" {shape: diamond}
+rev: "Revoked(claims)?" {shape: diamond}
+c4403: "close 4403\nsession revoked, sign in again" {shape: oval}
+mark: "markChecked(now)"
+stale: "last check older than 2 min?" {shape: diamond}
+c4503: "close 4503\ncannot check, reconnect shortly" {shape: oval}
+keep: "socket stays open" {shape: oval}
+auth: "frame auth.refresh with a new jwt:\nsame subject, same device, verified token\n-> claims replaced, checkedAt = now"
+
+reg -> tick
+tick -> refresh
+refresh -> exp
+exp -> c4401: "yes (closed without asking the list)"
+exp -> usable: "no"
+usable -> rev: "yes"
+usable -> stale: "no"
+rev -> c4403: "yes"
+rev -> mark: "no"
+mark -> keep
+stale -> c4503: "yes"
+stale -> keep: "no"
+auth -> reg: "keeps the socket registered" 

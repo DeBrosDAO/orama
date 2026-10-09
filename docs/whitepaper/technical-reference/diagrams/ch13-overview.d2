@@ -1,0 +1,33 @@
+direction: right
+
+clients: "Callers" {
+  wallet: "wallet app / SDK\nSIWE or SIWS signer" {shape: person}
+  cli: "orama CLI\n~/.orama/credentials.json" {shape: person}
+  waiting: "machine with no wallet\n(CI, SSH, container)" {shape: person}
+  dev: "installation with a\ndevice key (P-256 / Ed25519)" {shape: person}
+}
+
+gw: "Gateways (same code, two roles)" {
+  index: "index gateway (every node)\nkey bound to nothing\nkeys from systemd credential"
+  ns: "namespace gateway\nkey bound to its namespace\nkey in state directory"
+  handlers: "handlers/auth + gateway/auth\nchallenge, verify, refresh, logout,\ndevice, sessions, devices, policy"
+  socks: "function and pub/sub\nWebSocket handlers"
+  ws: "wssession registry\nopen sockets, swept every 5 s"
+}
+
+reg: "Cluster registry (index RQLite)\nnonces, refresh_tokens, session_devices,\ndevice_authorizations, revoked_tokens,\nsigning_keys, namespace_session_policy,\naudit_events" {shape: cylinder}
+
+keys: "Key files" {
+  rootkeys: "/var/lib/orama-gateway-keys/index\nroot:root 0400 (gatewaykeys)"
+  statekeys: "gateway state dir, 0600"
+}
+
+clients.wallet -> gw.handlers: "POST /v1/auth/challenge, verify, refresh (HTTPS)"
+clients.cli -> gw.handlers: "login, refresh, logout, sessions"
+clients.waiting -> gw.handlers: "POST /v1/auth/device, device/token"
+clients.dev -> gw.handlers: "device proof on refresh / approve"
+gw.handlers -> reg: "reads and writes\n(rows-affected CAS)"
+gw.index -> keys.rootkeys: "LoadCredential at start"
+gw.ns -> keys.statekeys: "load or generate"
+gw.socks -> gw.ws: "Register(claims, close)\nat the upgrade"
+gw.ws -> reg: "reload revocations\nevery 5 s"

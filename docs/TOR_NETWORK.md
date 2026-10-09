@@ -279,7 +279,7 @@ loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-comp
 | `bandwidth` | the bandwidth file the authority voted with, when one is configured |
 | `MANIFEST.json` | `valid_after`, the SHA-256 of each file and `root` = SHA-256 over the lines `<name> <sha256>\n` in name order (`tornet.ManifestRoot`) |
 
-`root` is the `inputs_root` a relay report commits to. The archive is local to
+`root` identifies the archived period; a relay report's `inputs_root` is a separate hash over the report entries and is not bound to it. The archive is local to
 the authority host: **publication** (to global storage or a static site) is not
 built, and the archive has no retention policy yet (a period is a few hundred
 kilobytes at stagenet size and grows with the relay count).

@@ -4,10 +4,13 @@ import tailwindcss from "@tailwindcss/vite";
 import mdx from "@mdx-js/rollup";
 import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
+import remarkFrontmatter from "remark-frontmatter";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { Plugin } from "vite";
+import { blogPostsPlugin } from "./src/blog/vite-plugin";
+import { docMeta } from "./src/lib/doc-meta";
 
 /**
  * Repository facts shown on the site (commit count, first commit date). Read
@@ -110,6 +113,78 @@ function docsSearchIndexPlugin(): Plugin {
   };
 }
 
+/** Every docs page's MDX source, keyed by slug ("developer/cache"). */
+function readDocSources(): Map<string, string> {
+  const docsDir = path.resolve(import.meta.dirname, "src/docs");
+  const sources = new Map<string, string>();
+  for (const entry of fs.readdirSync(docsDir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".mdx")) continue;
+    const full = path.join(entry.parentPath, entry.name);
+    sources.set(path.relative(docsDir, full).replace(/\\/g, "/").replace(/\.mdx$/, ""), fs.readFileSync(full, "utf-8"));
+  }
+  return sources;
+}
+
+/**
+ * `virtual:docs-meta`: each docs page's title and search description, read
+ * from its MDX (src/lib/doc-meta.ts). A page without a usable opening
+ * paragraph fails the build.
+ */
+function docsMetaPlugin(): Plugin {
+  const virtualId = "virtual:docs-meta";
+  const resolvedId = "\0" + virtualId;
+  return {
+    name: "docs-meta",
+    resolveId(id) {
+      if (id === virtualId) return resolvedId;
+    },
+    load(id) {
+      if (id !== resolvedId) return;
+      const meta = Object.fromEntries([...readDocSources()].map(([slug, raw]) => [slug, docMeta(slug, raw)]));
+      return `export const DOC_META = ${JSON.stringify(meta)};`;
+    },
+  };
+}
+
+/**
+ * Writes .vite/page-sources.json: for each lazily loaded chunk (a page, a
+ * doc, a post), every source file that ends up in it or in the chunks it
+ * statically imports, the app shell excepted. scripts/prerender.mjs dates each
+ * page in the sitemap by the newest of those files' commits, so a page's
+ * lastmod moves only when something it shows changed.
+ */
+function pageSourcesPlugin(): Plugin {
+  const root = import.meta.dirname;
+  const toRel = (id: string) => path.relative(root, id).replace(/\\/g, "/");
+  return {
+    name: "page-sources",
+    apply: "build",
+    generateBundle(_options, bundle) {
+      if (this.environment.config.build.ssr) return;
+      const chunks = Object.values(bundle).filter((c) => c.type === "chunk");
+      const byFile = new Map(chunks.map((c) => [c.fileName, c]));
+      const sources: Record<string, string[]> = {};
+      for (const chunk of chunks) {
+        if (chunk.isEntry || !chunk.facadeModuleId) continue;
+        const files = new Set<string>();
+        const seen = new Set<string>();
+        const visit = (fileName: string) => {
+          const c = byFile.get(fileName);
+          if (!c || c.isEntry || seen.has(fileName)) return;
+          seen.add(fileName);
+          for (const id of c.moduleIds) {
+            if (!id.startsWith("\0") && !id.includes("/node_modules/")) files.add(toRel(id.split("?")[0]));
+          }
+          c.imports.forEach(visit);
+        };
+        visit(chunk.fileName);
+        sources[toRel(chunk.facadeModuleId)] = [...files].sort();
+      }
+      this.emitFile({ type: "asset", fileName: ".vite/page-sources.json", source: JSON.stringify(sources, null, 1) });
+    },
+  };
+}
+
 export default defineConfig({
   define: {
     __REPO_COMMITS__: JSON.stringify(repoStats.commits),
@@ -132,11 +207,17 @@ export default defineConfig({
   },
   plugins: [
     docsSearchIndexPlugin(),
+    docsMetaPlugin(),
+    blogPostsPlugin({
+      dir: path.resolve(import.meta.dirname, "blog"),
+      publicDir: path.resolve(import.meta.dirname, "public"),
+    }),
+    pageSourcesPlugin(),
     {
       enforce: 'pre' as const,
       ...mdx({
         providerImportSource: '@mdx-js/react',
-        remarkPlugins: [remarkGfm],
+        remarkPlugins: [remarkGfm, remarkFrontmatter],
         rehypePlugins: [rehypeSlug],
       }),
     },

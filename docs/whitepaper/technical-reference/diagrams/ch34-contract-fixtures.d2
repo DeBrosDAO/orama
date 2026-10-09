@@ -1,0 +1,31 @@
+direction: right
+
+fx: "contracts/ fixtures" {
+  route: "route fixtures (18)\nrequest, response, returns, call" {shape: document}
+  seal: "enrollment/seal.json\n(crypto vector, no route)" {shape: document}
+}
+
+gosd: "Go half (core)" {
+  ct: "pkg/contracttest\nLoad, For, DecodeStrict"
+  h: "contract_test.go in\nrqlite, cache, auth,\nstorage, pubsub handlers"
+  ct -> h: "request decoded into the handler struct,\nunknown fields refused"
+}
+
+ts: "TypeScript half (sdk)" {
+  t: "tests/unit/contracts.test.ts\ndrives call, compares body,\nfeeds response, checks returns"
+}
+
+live: "Fleet e2e" {
+  l: "features/contracts-live (stage 4)\nrequest sent to the live gateway,\nanswer shape compared"
+}
+
+agent: "Seal vector, two Go modules" {
+  gw: "core: gateway/handlers/enroll\nsealed_contract_test.go"
+  oa: "os/agent: internal/enroll\nsealed_contract_test.go"
+}
+
+fx.route -> gosd.ct
+fx.route -> ts.t: "fixtures without a route are skipped"
+fx.route -> live.l: "a fixture without a live case\nfails the package"
+fx.seal -> agent.gw
+fx.seal -> agent.oa

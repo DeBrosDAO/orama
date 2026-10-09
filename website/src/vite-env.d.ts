@@ -36,3 +36,18 @@ declare module "*.jpg" {
   export default value;
 }
 declare const __BUILD_YEAR__: number;
+
+declare module "virtual:blog-posts" {
+  import type { ComponentType } from "react";
+  import type { BlogPost } from "./blog/parse-post";
+  /** Published posts, newest first (src/blog/vite-plugin.ts). */
+  export const POSTS: BlogPost[];
+  /** The body of each post in POSTS, as a lazily loaded component. */
+  export const LOADERS: Record<string, () => Promise<{ default: ComponentType }>>;
+}
+
+declare module "virtual:docs-meta" {
+  import type { DocMeta } from "./lib/doc-meta";
+  /** Title and search description of every docs page, keyed by slug. */
+  export const DOC_META: Record<string, DocMeta>;
+}

@@ -1,0 +1,34 @@
+direction: right
+
+in: "Inputs" {
+  by: "book.yaml\nowns, exclude, verified" {shape: document}
+  ch: "vol1/, vol2/ chapters\nappendices/" {shape: document}
+  d2: "diagrams/*.d2 and *.svg" {shape: document}
+  git: "git ls-files"
+  code: "the code: ports, schema,\nproto, config, Known gaps"
+}
+
+gates: "whitepaper check" {
+  v: "version: book and chapters\nstamped with /VERSION"
+  o: "ownership: every tracked file\nowned or excluded"
+  a: "anchors: path and identifier exist"
+  s: "structure: title, At a glance,\n11 sections in order"
+  m: "markdown: MDX-safe"
+  l: "links: files and headings exist"
+  g: "diagrams: SVG matches the\nD2 source hash, is embedded"
+  n: "generated: appendices equal\nwhat the code produces"
+  f: "manifest: listed files exist,\nbook files are listed"
+}
+
+in.by -> gates.v
+in.by -> gates.o
+in.git -> gates.o
+in.ch -> gates.a
+in.ch -> gates.s
+in.ch -> gates.m
+in.ch -> gates.l
+in.d2 -> gates.g
+in.code -> gates.n
+in.by -> gates.f
+gates -> make: "exit 1 on any problem" 
+make: "make test (whitepaper-check)"

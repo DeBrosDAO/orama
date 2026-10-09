@@ -1,0 +1,34 @@
+direction: right
+
+app: "Application or RootWallet\n(outside the mesh)" {shape: person}
+ops: "Overlay tooling\n(node agents, operators)" {shape: person}
+
+edge: "Caddy :443 (TLS)"
+
+node: "One node (every node runs one guardian)" {
+  gw: "Index gateway\ncore/pkg/gateway/handlers/vault" {
+    verify: "verify Ed25519 ownership\nper-IP and per-identity limits"
+    shamir: "core/pkg/shamir\nsplit on push, combine on pull"
+    fan: "fan out to every guardian,\nchallenge, session, then the call"
+    verify -> shamir -> fan
+  }
+  g: "vault-guardian (Zig)\nWireGuard IP :10106" {
+    http: "single-threaded HTTP\n120 requests / 60 s per IP"
+    auth: "challenge, session (HMAC)\nEd25519 ownership"
+    store: "file_store (V1)\nvault_store (V2)"
+    http -> auth -> store
+  }
+  disk: "data/vault\nshares/ vaults/ integrity.key" {shape: cylinder}
+  g.store -> disk
+}
+
+dns: "dns_nodes (index RQLite)\nstatus = active" {shape: cylinder}
+peers: "All other guardians\n(10.0.0.x:10106)"
+
+app -> edge: "HTTPS POST /v1/vault/push, pull"
+edge -> node.gw.verify: "reverse proxy :10104"
+node.gw.fan -> dns: "SELECT COALESCE(internal_ip, ip_address)"
+node.gw.fan -> node.g.http: "HTTP, one share each (WireGuard)"
+node.gw.fan -> peers: "HTTP, one share each (WireGuard)"
+ops -> peers: "V2 CRUD, split on the client\n(sdk-vault)"
+ops -> node.g.http: "V2 CRUD"

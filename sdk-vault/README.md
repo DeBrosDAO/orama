@@ -16,7 +16,7 @@ An application reaches the vault through the gateway instead. `POST
 /v1/vault/push` and `POST /v1/vault/pull` are served over HTTPS, do the Shamir
 split and combine server-side, and authenticate each request with a per-request
 Ed25519 ownership signature. That path is documented in
-[docs/vault](../docs/vault) and on the website under Vault.
+[vault/docs](../vault/docs) and on the website under Vault.
 
 This package used to be a directory inside `@debros/orama`, where it added two
 cryptography dependencies and twenty top-level primitives to every application's

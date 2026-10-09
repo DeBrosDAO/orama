@@ -1,0 +1,18 @@
+shape: sequence_diagram
+
+cli: "operator\norama node recover-raft"
+k: "kept node\n(highest applied index)"
+f: "every other node"
+
+cli -> k: "GET /status over SSH, all nodes in parallel\n(applied_index, state), 5 s each"
+cli -> cli: "pick max applied index,\nties to the lowest host string;\nprint all, ask 'yes' (unless --force)"
+cli -> k: "phase 1: systemctl stop orama-node on ALL nodes"
+cli -> f: "wait until no orama-node or rqlited\nprocess runs (60 s, poll 3 s); abort if not"
+cli -> k: "phase 2: as orama: rm recovery.db*, write raft/peers.json\n(one voter: its id and address), keep raft.db,\nwrite raft-adv-addr and cluster-membership.json"
+cli -> k: "phase 3: systemctl start orama-node"
+k -> k: "rqlited RecoverNode: snapshot + replay log,\nrecovery snapshot at last index and term"
+cli -> k: "poll /status for Leader (120 s, poll 10 s),\nthen strong read: count(sqlite_master) greater than 0"
+cli -> f: "phase 4: as orama: rm raft.db, raft/, db.sqlite*,\nsnapshots, discovery-peers.json;\nwrite cluster-membership.json naming the kept node"
+cli -> f: "phase 5: start one node at a time; wait for Follower\n(180 s, poll 10 s); each pulls a full snapshot"
+f -> k: "join (recorded member), snapshot install"
+cli -> k: "phase 6: poll every node for Leader or Follower (180 s)"

@@ -1,0 +1,32 @@
+direction: down
+
+cc: "createClient(config)" 
+http: "HttpClient\nbaseURL, timeout 60 s, maxRetries 3, retryDelayMs 1000\ncredential state, retry, renewal, error normalisation"
+auth: "AuthClient\nstorage adapter, key exchanger,\ntoken refresher, device signer"
+ws: "WSClient (one per subscription)\nreconnect policy, ?jwt= URL"
+subs: "Sub-clients" {
+  db: "DBClient\nQueryBuilder, Repository"
+  ps: "PubSubClient\nSubscription"
+  cache: "CacheClient"
+  st: "StorageClient\nFetchCapsClient"
+  fn: "FunctionsClient"
+  net: "NetworkClient"
+}
+fetch: "fetch (platform or config.fetch)"
+cb: "onNetworkError callback\n(application failover)"
+
+cc -> http: "builds one"
+cc -> auth: "builds, hands it http"
+cc -> subs: "each gets the same http"
+auth -> http: "setKeyExchanger\nsetTokenRefresher\nsetJwt / setApiKey"
+subs.db -> http: "post /v1/rqlite/*"
+subs.cache -> http
+subs.st -> http: "post, getBinary, uploadFile"
+subs.fn -> http: "post /v1/invoke/ns/fn"
+subs.net -> http
+subs.ps -> http: "publish, topics, ensureCredential"
+subs.ps -> ws: "subscribe"
+http -> fetch
+ws -> http: "token from ensureCredential"
+http -> cb: "every failure except ABORTED"
+ws -> cb: "WS_ERROR, WS_TIMEOUT"

@@ -1,0 +1,41 @@
+direction: right
+
+src: "Sources of the universe" {
+  cli: "docs/CLI_REFERENCE.md\nheadings: orama ..." {shape: document}
+  api: "docs/API_SURFACE.md\nroute rows" {shape: document}
+  proto: "chain/proto tx.proto, query.proto\nservice Msg, service Query" {shape: document}
+  sd: "core/systemd\n*.service, *.timer" {shape: document}
+}
+
+gen: "kept true by"
+gen: {
+  t1: "TestCLIReferenceMatchesTheCommandTree"
+  t2: "api_surface_test.go (both directions)"
+}
+
+uni: "coverage.Universe\n555 items" 
+
+man: "e2e/features/*/feature.yaml\ncovers: cli routes msgs queries units\n(config and claims are only listed)" {shape: document}
+w: "e2e/waivers.yaml\nid, reason, trigger" {shape: document}
+
+ev: "coverage.Evaluate"
+
+res: "Result" {
+  ok: "covered or waived"
+  bad: "UNCOVERED\nUNKNOWN COVERS\nSTALE WAIVERS\nINVALID WAIVERS"
+}
+
+out: "Consumers" {
+  mk: "make e2e-coverage\n(in make test, exit 1)"
+  rep: "fleet report: coverage matrix,\nverdict INCOMPLETE on failure"
+}
+
+gen.t1 -> src.cli
+gen.t2 -> src.api
+src -> uni
+uni -> ev
+man -> ev
+w -> ev
+ev -> res
+res.bad -> out.mk
+res -> out.rep

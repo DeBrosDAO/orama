@@ -1,0 +1,19 @@
+direction: down
+
+v: "1. validate options\n(services, staged dir, peers, chain id, moniker, ssh port)"
+t: "2. plan Tor roles; onion needs an installed chain"
+c: "3. plan co-location\n(apt-get tools, Preflight, preferences.yaml)"
+f: "4. ufw status; sshd -T confirms --ssh-port"
+p: "5. preflight chain\ncosmovisor tarball SHA-256 pin,\ngenesis present or --init-chain,\nstaged oramad vs installed genesis binary"
+a: "6. Tor package (Tor roles only);\nsystem accounts and groups"
+b: "7. copy staged binaries to\n/usr/lib/orama-global/bin (root 0755)"
+cv: "8. install cosmovisor"
+h: "9. state root; --init-chain:\noramad init as orama-chain + network genesis"
+n: "10. co-located: netns files, unit, ruleset reload"
+g: "11. stage oramad as genesis binary\n(cosmovisor/genesis/bin, current -> genesis)"
+k: "12. public Kubo repo, config, token"
+u: "13. write units; daemon-reload; enable (never start)"
+w: "14. ufw rules tagged orama-global"
+r: "15. record role in preferences.yaml\n(global, or both written last)"
+
+v -> t -> c -> f -> p -> a -> b -> cv -> h -> n -> g -> k -> u -> w -> r

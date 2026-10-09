@@ -1,8 +1,10 @@
 # Running a chain node
 
-`orama node install` does not start the chain. The chain has its own install command, `orama global install`, which sets up `oramad` under cosmovisor next to (or instead of) a cluster node. The step-by-step guide for a real machine is [Global nodes](/docs/operator/global-nodes). This page is the reference: the process, ports, files, build targets, and the two ways to try a chain without a public machine.
+`orama node install` does not start the chain. A machine runs it as a global node, installed with `sudo orama global install --services chain,...`: see [Run a global node](/docs/blockchain/run-a-global-node) for the install, the start and stop commands, validators, the double-sign guard and removal. The development networks are also stood up by `chain/scripts/stagenet/deploy.sh`, which refuses to run unless the chain id contains `-stagenet-` or `-devnet-` (the default chain id is `orama-stagenet-1`) and uses an unencrypted test keyring. That is a devnet convenience. It is not acceptable once the token has value outside a test.
 
-## The process
+The chain's own epoch on that script is 300 seconds and 10 blocks. Production parameters require 24 hours and 14,400 blocks unless `--allow-bootstrap-stake` is set, which that devnet path does set.
+
+## Process
 
 | | |
 |---|---|
@@ -10,91 +12,23 @@
 | Unit | `orama-global-chain.service` |
 | User | `orama-chain` |
 | Home | `/var/lib/orama-global/chain` |
-| Supervisor | cosmovisor v1.7.3 (tarball SHA-256 pinned in the installer) |
 
-The unit runs `cosmovisor run start` with `DAEMON_NAME=oramad`, `DAEMON_ALLOW_DOWNLOAD_BINARIES=false` and `DAEMON_RESTART_AFTER_UPGRADE=true`. Cosmovisor never downloads a binary: when the chain halts at an upgrade height with no binary staged, it stays halted until you stage one. Before every start the unit runs the double-sign guard (`orama global validator check-sign-floor`). `GOMEMLIMIT` is 1 GiB.
-
-The unit is not one of the `orama-namespace-*` services. Stopping the node supervisor does not stop the chain.
-
-### Upgrades
-
-```bash
-orama global stage-oramad --upgrade <plan-name>     # TUF-verified binary into cosmovisor/upgrades/<plan-name>/bin
-orama global stage-oramad --genesis                 # the first binary
-```
-
-`<plan-name>` is lowercase letters, digits, `.`, `-` or `_`. The binary is copied into a root-only staging directory, verified against the adopted TUF release root (`/etc/orama/release-root.json`) through its open file descriptor, and only then hard-linked into place. Nothing is replaced. A validator's auto-update role refuses `auto`: an operator stages every upgrade.
+The unit runs `oramad` under cosmovisor. It is not one of the `orama-namespace-*` services. Stopping the Orama node supervisor does not stop the chain, and the chain installer does not touch the cluster's other services.
 
 ## Ports
 
-| Port | What | Listens on |
+| Port | What | Where it listens |
 |---|---|---|
-| 31000 | CometBFT peer-to-peer | Public |
-| 31001 | CometBFT RPC | Loopback (the namespace address when co-located) |
-| 31002 | Cosmos gRPC | Loopback (same) |
-| 31003 | Cosmos REST | Loopback (same) |
-| 31004 | Prometheus | Loopback |
-| 31010 | Public Kubo swarm | Public |
-| 31011 | Kubo API | Loopback |
-| 31012 | Kubo gateway | Loopback |
-| 31013 | Storage provider | Public |
-| 31014 | Relay metrics | Loopback |
-| 31015 | Chain indexer | Loopback |
-| 31020 | Tor ORPort of a relay or directory authority (`--services relay` or `dirauth`) | Public |
-| 31021 | Tor DirPort of a directory authority | Public |
-| 31022 | Onion-service transaction gate (`--services onion`) | Loopback |
+| 31000 | CometBFT peers | The WireGuard address |
+| 31001 | CometBFT RPC | 127.0.0.1 only |
+| 31002 | Cosmos gRPC | Local |
+| 31003 | Cosmos REST | Local |
+| 31004 | Prometheus | 127.0.0.1 only |
 
-A co-located node runs the global services in the `orama-global` network namespace at `198.18.0.2`. The namespace cannot reach the WireGuard mesh, so chain peers use public addresses.
-
-## `app.toml` settings that matter
-
-- `app-db-backend = "pebbledb"`. With GoLevelDB every height-versioned query fails with "version does not exist". If you see `failed to load state at height N; version does not exist`, check this setting first.
-- `query-gas-limit = "2000000"`. `oramad start` refuses 0 on any chain id that does not contain `-localnet-`. A new `app.toml` gets it; nothing rewrites an old one, so a home created by an earlier build needs the line added by hand.
-- `iavl-cache-size = 100000`.
-- `minimum-gas-prices = "0.000001norama"`.
-- `min-retain-blocks` lets a node prune archived history ([History archive](/docs/blockchain/archive)).
-
-## Building `oramad`
-
-From the `chain/` directory:
-
-| Target | Produces |
-|---|---|
-| `make build` | `oramad` for linux/amd64, darwin/amd64, darwin/arm64 with no cgo. No CosmWasm, no shielded verifier |
-| `make build-wasm` | A host build with CosmWasm (cgo and libwasmvm) |
-| `make build-linux-amd64-full` | A static musl binary with CosmWasm and the Orchard verifier, plus the pinned `orama-orchard-verifier` |
-| `make build-linux-amd64-orchard`, `make build-linux-amd64-global` | The Orchard-only binary, and `orama-global` with its helper |
-| `make contracts-verify` | Checks the five standard contract hashes |
-| `make test`, `make lint` | `go test ./...`, `go vet ./...` |
-
-`oramad version --long` reports the git version.
-
-## Try it on your laptop: localnet
-
-```bash
-cd chain
-make localnet              # builds oramad and starts a fresh 4-validator localnet
-make localnet N=6          # or any number of validators (up to ten)
-./scripts/localnet/localnet.sh status
-make localnet-stop         # stop every node, keep data
-make localnet-clean        # stop and delete data
-```
-
-The script builds a genesis with exactly zero supply, makes every node a bootstrap committee member (`oramad genesis add-bootstrap-validator`), uses 30-second epochs of 5 blocks, patches a finite block `max_gas` (`BLOCK_MAX_GAS`, default 100,000,000), and starts every node on localhost in the 31000-31099 block (ten ports per node). `CHAIN_ID` must contain `-localnet-`, `-devnet-` or `-stagenet-`. `WITH_WASM=1` adds CosmWasm and the standard contracts. `VOTE_EXTENSIONS_ENABLE_HEIGHT` greater than 0 turns on inclusion lists.
-
-## Test network: the stagenet script
-
-`chain/scripts/stagenet/deploy.sh reset|up|start|status|invariants|register|smoke|gen-shielded` deploys a stagenet through the product's own install path (`orama global install --colocated`, `orama global bind`, `register`, `bond`, `capacity`). It refuses a chain id that does not contain `-stagenet-` or `-devnet-`. Genesis has zero supply, a committee of the listed nodes, the five standard contracts, 300-second epochs of 10 blocks and inclusion lists from height 2. Its operator keys use `keyring-backend test`, which is unencrypted: fine for a test chain, never for a key that holds value. Because this release is state-breaking, upgrading a stagenet means `deploy.sh reset` then `deploy.sh up`.
-
-## Genesis helpers
-
-| Command | Does |
-|---|---|
-| `oramad genesis add-bootstrap-validator` | Adds a committee member from a consensus pubkey, file or home |
-| `oramad genesis set-emission-params` | Rewrites emission params in `genesis.json` (only before first start) |
-| `oramad genesis add-standard-contracts` | Stores the five standard contracts |
-| `oramad genesis validate` | Validates, including the locked-parameter check for production chain ids |
+The Orama node reads height, block time, and whether this machine is a validator from the RPC on 127.0.0.1:31001. It does not import the chain's Go types.
 
 ## What a running chain is not
 
 Installing this unit does not put ORAMA in front of apps. Gateway requests stay on the gateway. Whether `orama-global-chain` is up on a given machine is a fact about that machine, not a consequence of installing Orama.
+
+Queries against the chain use `oramad query`. The platform CLI `orama` does not wrap them.

@@ -1,0 +1,29 @@
+direction: right
+
+net: "Public network" {shape: cloud}
+
+host: "Root network namespace (cluster node: orama-node, WireGuard 10.0.0.x, gateway, Kubo 10107)" {
+  nft: "table ip orama_global\nDNAT published ports -> 198.18.0.2\nMASQUERADE 198.18.0.0/30\nforward: drop private ranges,\nonly DNAT + replies into the namespace\ninput from veth: drop\noutput to 198.18.0.2 host-only ports:\nonly root + allowed uids"
+  veth_h: "ogl-host\n198.18.0.1/30"
+  gw: "cluster gateway /v1/chain/ proxy,\nnode report, inspector\n(run as account orama)"
+  nft -> veth_h
+}
+
+ns: "Network namespace orama-global (own loopback, own port space, IPv6 off)" {
+  veth_n: "ogl-ns\n198.18.0.2/30"
+  rules: "table ip orama_global_ns\ninput: drop except lo, replies,\npublished ports,\nhost-only ports from 198.18.0.1\nforward: drop\noutput: drop private ranges"
+  chain: "oramad\nP2P 31000 (published)\nRPC 31001, REST 31003\n(host-only, on 198.18.0.2)"
+  kubo: "public Kubo\nswarm 31010 (published)\nRPC 31011 (host-only)"
+  prov: "provider 31013 (published)"
+  idx: "indexer 31015 (host-only)"
+  rules -> veth_n
+  veth_n -> chain
+  veth_n -> kubo
+  veth_n -> prov
+  veth_n -> idx
+}
+
+net -> host.nft: "31000, 31010, 31013"
+host.veth_h -> ns.veth_n: "veth pair"
+host.gw -> ns.veth_n: "RPC / REST / indexer\n(allowed uids only)"
+ns.chain -> host.nft: "outbound peers\n(masqueraded)"

@@ -1,0 +1,16 @@
+shape: sequence_diagram
+
+mw: "namespaceRateLimitMiddleware"
+mgr: "ratelimit.Manager"
+store: "ConfigStore (RQLite)"
+lim: "bucketLimiter"
+
+mw -> mgr: "Allow(ctx, ns)"
+mgr -> mgr: "cache hit younger than 30 s?"
+mgr -> lim: "hit: allow()"
+mgr -> store: "miss or expired: Get(ns)"
+store -> mgr: "override row, or nil, or error"
+mgr -> lim: "build with override or defaults\n(a store error uses the defaults)\ntokens start at burst"
+mgr -> mgr: "insert at LRU front; evict tail beyond 1024"
+lim -> mw: "true / false"
+mw -> mw: "false: 429 RATE_LIMITED, Retry-After 60"

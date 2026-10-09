@@ -1,126 +1,79 @@
-import { useState, useEffect, type ComponentType } from "react";
+import { Suspense, lazy } from "react";
+import type { ComponentType, LazyExoticComponent } from "react";
 import { useLocation } from "react-router";
+import { MDXProvider } from "@mdx-js/react";
 import { Page } from "../components/layout/page";
+import { Breadcrumbs } from "../components/navigation/breadcrumbs";
 import { DocsSidebar } from "../components/navigation/docs-sidebar";
 import { TableOfContents } from "../components/navigation/table-of-contents";
 import { mdxComponents } from "../components/mdx-components";
-import { MDXProvider } from "@mdx-js/react";
 import { LoadingSpinner } from "../components/ui/loading-spinner";
-import { DOCS_SECTIONS } from "../data/docs-navigation";
-
-const DEFAULT_SLUG = "start/what-is-orama";
-
-/** All known doc slugs for resolving titles */
-const SLUG_TITLE_MAP = new Map(
-  DOCS_SECTIONS.flatMap((section) =>
-    section.links.map((link) => [link.slug, link.title]),
-  ),
-);
+import { DOCS_PATH, pageFor } from "../content/pages";
+import { normalizePath } from "../content/routes";
 
 /* Vite requires the glob pattern to be a literal string for static analysis.
-   We pre-resolve all MDX modules and select the matching one at runtime. */
-const modules = import.meta.glob("../docs/**/*.mdx");
+   Every doc is its own chunk, loaded when its page is shown. */
+const modules = import.meta.glob<{ default: ComponentType }>("../docs/**/*.mdx");
 
-function getDocModule(slug: string) {
-  const key = `../docs/${slug}.mdx`;
-  return modules[key];
-}
+const docs = new Map<string, LazyExoticComponent<ComponentType>>();
 
-function DocLoadFailed() {
-  return (
-    <div className="flex flex-col items-center justify-center py-20 gap-4">
-      <p className="font-mono text-xs tracking-wider uppercase text-muted">Couldn't load this page</p>
-      <p className="text-sm text-muted">Reload the page to get the latest version.</p>
-    </div>
-  );
+/** The doc's content as a lazy component, so prerendering waits for it. */
+function docComponent(slug: string): LazyExoticComponent<ComponentType> | null {
+  const load = modules[`../docs/${slug}.mdx`];
+  if (!load) return null;
+  let doc = docs.get(slug);
+  if (!doc) {
+    doc = lazy(load);
+    docs.set(slug, doc);
+  }
+  return doc;
 }
 
 function DocNotFound({ slug }: { slug: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 gap-4">
-      <p className="font-mono text-xs tracking-wider uppercase text-muted">
-        Doc not found
-      </p>
+      <h1 className="font-mono text-xs tracking-wider uppercase text-muted">Doc not found</h1>
       <p className="text-sm text-muted">
         No documentation found for{" "}
-        <code className="font-mono text-accent bg-surface-2 px-1.5 py-0.5 rounded text-sm">
-          {slug}
-        </code>
+        <code className="font-mono text-accent bg-surface-2 px-1.5 py-0.5 rounded text-sm">{slug}</code>
       </p>
     </div>
   );
 }
 
 export default function DocsPage() {
-  const { pathname } = useLocation();
-
-  // Extract slug from /docs/... path, fall back to default
-  const effectiveSlug = pathname.replace(/^\/docs\/?/, "") || DEFAULT_SLUG;
-  const pageTitle = SLUG_TITLE_MAP.get(effectiveSlug) ?? "Documentation";
-
-  const [Content, setContent] = useState<ComponentType | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-
-  useEffect(() => {
-    setLoading(true);
-    setNotFound(false);
-
-    const loader = getDocModule(effectiveSlug);
-    if (!loader) {
-      setContent(null);
-      setNotFound(true);
-      setLoading(false);
-      return;
-    }
-
-    loader()
-      .then((mod) => {
-        setContent(() => (mod as { default: ComponentType }).default);
-        setLoading(false);
-      })
-      .catch((err: unknown) => {
-        // Usually a stale tab after a deploy: the chunk it asks for is gone.
-        console.error(`docs: failed to load ${effectiveSlug}`, err);
-        setContent(() => DocLoadFailed);
-        setLoading(false);
-      });
-  }, [effectiveSlug]);
+  const path = normalizePath(useLocation().pathname);
+  const slug = path.slice(DOCS_PATH.length + 1);
+  const meta = pageFor(path);
+  const Doc = meta ? docComponent(slug) : null;
 
   return (
     <Page
-      route={{
-        path: pathname,
-        title: `${pageTitle} · Docs`,
-        description: "Orama Network documentation.",
-      }}
-      noindex
+      route={{ path, title: meta?.crumbs.at(-1)?.name ?? "Doc not found", description: meta?.description ?? "" }}
+      noindex={!Doc}
+      breadcrumbs="none"
     >
       <DocsSidebar />
       <TableOfContents />
       <div className="lg:ml-56 min-h-screen">
         <div className="flex justify-center">
           <article className="w-full max-w-3xl px-6 py-8 sm:px-8 sm:py-12">
+            {meta && <Breadcrumbs crumbs={meta.crumbs} className="mb-8" />}
             <p className="mb-6 font-mono text-xs text-muted">
-              <a
-                href="https://orama.network/llms.txt"
-                className="text-accent hover:underline"
-              >
+              <a href="/llms.txt" className="text-accent hover:underline">
                 Agent index (llms.txt)
               </a>
               <span> — fetch this first, then the page it names.</span>
             </p>
-            <MDXProvider components={mdxComponents}>
-              {loading ? (
-                <div className="flex items-center justify-center py-20">
-                  <LoadingSpinner />
-                </div>
-              ) : Content ? (
-                <Content />
-              ) : notFound ? (
-                <DocNotFound slug={effectiveSlug} />
-              ) : null}
-            </MDXProvider>
+            {Doc ? (
+              <MDXProvider components={mdxComponents}>
+                <Suspense fallback={<div className="flex items-center justify-center py-20"><LoadingSpinner /></div>}>
+                  <Doc />
+                </Suspense>
+              </MDXProvider>
+            ) : (
+              <DocNotFound slug={slug} />
+            )}
           </article>
         </div>
       </div>

@@ -1,0 +1,49 @@
+direction: right
+
+client: "CLI / SDK / browser" {shape: person}
+
+entry: "Index gateway (any node)" {
+  routes: "/v1/deployments/*\nMainGateway routes"
+  hostroute: "Host routing\ngetDeploymentByDomain"
+}
+
+home: "Home node (the node that took the create)" {
+  handlers: "Upload, update, rollback,\nenv, delete handlers"
+  pm: "process.Manager"
+  hc: "Health checker\n30 s probe, 5 min reconcile,\n2 min orphan sweep, 20 min token"
+  unit: "orama-deploy-RUNTIME@INSTANCE\n(DynamicUser, own port 10200-19999)" {shape: hexagon}
+  dir: "data/deployments/INSTANCE\n(.orama-owner)" {shape: cylinder}
+}
+
+replica: "Replica node" {
+  rh: "Replica handler\n/v1/internal/deployments/replica/*"
+  runit: "orama-deploy-RUNTIME@INSTANCE" {shape: hexagon}
+}
+
+helper: "orama-privhelper (root)\nenv, token, bind drop-in,\nsystemctl, journal"
+
+reg: "Index RQLite (registry)" {
+  deployments: "deployments, deployment_replicas,\nport_allocations, deployment_domains,\ndeployment_history, deployment_events" {shape: cylinder}
+  dns: "dns_records, dns_nodes" {shape: cylinder}
+}
+
+ipfs: "IPFS / IPFS Cluster\nartifact CIDs" {shape: cylinder}
+
+client -> entry.routes: "HTTPS upload / manage"
+client -> entry.hostroute: "HTTPS app.BASE or custom domain"
+entry.routes -> home.handlers: "in process, or proxied to the\nhome node over WireGuard :10104"
+home.handlers -> reg.deployments: "rows, ports, replicas"
+home.handlers -> ipfs: "Add / Get artifact"
+home.handlers -> home.dir: "extract tarball"
+home.handlers -> home.pm
+home.pm -> helper: "unix socket"
+helper -> home.unit: "stage files, systemctl"
+home.unit -> home.dir: "reads (bind, read-only)"
+home.handlers -> replica.rh: "setup / update / rollback /\nteardown / env (MAC v2 stamp)"
+replica.rh -> replica.runit
+replica.rh -> ipfs: "Get artifact"
+home.hc -> reg.deployments: "status, replicas, events"
+entry.hostroute -> reg.deployments: "lookup by subdomain / domain"
+entry.hostroute -> home.unit: "reverse proxy localhost:PORT"
+entry.hostroute -> replica.runit: "proxy to a replica\nover :10104"
+home.handlers -> reg.dns: "A records (public IPs)"

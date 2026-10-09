@@ -1,0 +1,12 @@
+direction: right
+
+minted: "active\nexpires_at = now + 90 d (1 to 365 d)"
+overlap: "active, shortened\nexpires_at = now + overlap (7 d default, 1 to 30 d; 0 means the default)"
+expired: "expired\nexpires_at in the past: lookup finds no row"
+revoked: "revoked\nrevoked_at set, grant revoked,\nsubject on the revocation list for 1 h"
+
+minted -> overlap: "RotateKey: successor minted\nwith the same scopes and label"
+minted -> revoked: "RevokeKey"
+overlap -> revoked: "RevokeKey"
+minted -> expired: "lifetime ends"
+overlap -> expired: "overlap ends"
