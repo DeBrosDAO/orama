@@ -61,3 +61,16 @@ func TestSetAppGrant_needsADeploymentName(t *testing.T) {
 func withNamespace(r *http.Request, namespace string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), CtxKeyNamespaceOverride, namespace))
 }
+
+// A grant is read where the token is read (#729), so the answer must not tell an
+// operator to wait for a renewal or to redeploy (it is cached for ten seconds).
+func TestSetAppGrant_saysTheGrantNeedsNeitherRenewalNorRedeploy(t *testing.T) {
+	if !strings.HasPrefix(appGrantApplies, "within seconds") || !strings.Contains(appGrantApplies, "without a redeploy or a new token") {
+		t.Fatalf("applies = %q", appGrantApplies)
+	}
+	for _, stale := range []string{"next token renewal", "immediately on redeploy"} {
+		if strings.Contains(appGrantApplies, stale) {
+			t.Errorf("applies = %q still says %q", appGrantApplies, stale)
+		}
+	}
+}

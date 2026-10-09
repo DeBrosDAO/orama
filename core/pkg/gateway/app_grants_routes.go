@@ -14,6 +14,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// appGrantApplies says when a grant written by setAppGrant takes effect. A
+// workload's grant is read where its token is read, not copied into the token
+// (#729): what was written decides the deployment's next request, on a node
+// within the grant cache's ten seconds. The running app needs neither a new
+// token nor a redeploy.
+const appGrantApplies = "within seconds, without a redeploy or a new token: the grant is read wherever the deployment's token is checked (cached for 10 seconds on each node)"
+
 // deploymentQuerier is the part of the cluster registry a grant needs to know a
 // deployment exists. The registry client satisfies it.
 type deploymentQuerier interface {
@@ -202,10 +209,7 @@ func (g *Gateway) setAppGrant(w http.ResponseWriter, r *http.Request) {
 		"namespace":  ns,
 		"deployment": body.Name,
 		"role":       string(role),
-		// The token is minted at start and renewed hourly, so a grant written
-		// now reaches the running deployment on its next renewal rather than
-		// immediately.
-		"applies":  "on the deployment's next token renewal, or immediately on redeploy",
-		"resource": body.Resource,
+		"applies":    appGrantApplies,
+		"resource":   body.Resource,
 	})
 }
