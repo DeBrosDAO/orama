@@ -87,6 +87,13 @@ interface (for example a node's WireGuard address, `/ip4/10.0.0.3/tcp/0`);
 `Connect` refuses an unspecified address such as `/ip4/0.0.0.0/...`, which is
 every interface, the public one included.
 
+`Connect` dials the bootstrap peers once and returns even when none answers;
+the client then redials every bootstrap peer that is not connected every five
+seconds until `Disconnect`, so a peer that was not listening yet (a gateway
+starts in the same second as the node it bootstraps from), or that restarted,
+is connected as soon as it is back. The first failure of each peer is logged at
+warn level and its recovery at info level, not every attempt.
+
 ### Creating a Client
 
 ```go
