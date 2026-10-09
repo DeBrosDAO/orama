@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.27.1+ (see `go.mod`)
+- Go 1.27.2+ (see `go.mod`)
 - [Zig](https://ziglang.org/download/) — `orama build` cross-compiles the vault
   with it, and the gateway with cgo through `zig cc` (static musl): the gateway
   links `mattn/go-sqlite3` for namespace SQLite databases, which does not work

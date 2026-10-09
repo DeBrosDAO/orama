@@ -27,7 +27,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.2"
           cache-dependency-path: core/go.sum
 
       - name: Vet
@@ -61,7 +61,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.2"
           cache-dependency-path: os/agent/go.sum
 
       - name: Vet

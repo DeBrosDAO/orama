@@ -5,7 +5,7 @@ are is [CLIENT_SURFACE.md](CLIENT_SURFACE.md): humans use the CLI, programs use
 the SDK and this HTTP API, and there is no Orama dashboard.
 
 The TypeScript SDK's coverage is a decision rather than an accident: it reaches
-39 of 172 routes, and the other 133 are here with a reason.
+43 of 174 routes, and the other 131 are here with a reason.
 
 `core/pkg/gateway/api_surface_test.go` keeps this document honest in both
 directions. A route registered in the gateway and missing here fails the Go
@@ -14,10 +14,10 @@ route therefore means deciding who calls it.
 
 | Owner | Meaning | Count |
 |-------|---------|-------|
-| `SDK` | `@debros/orama` calls it | 39 |
-| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 80 |
-| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 28 |
-| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 25 |
+| `SDK` | `@debros/orama` calls it | 43 |
+| `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 81 |
+| `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 27 |
+| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 23 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures
 in [`contracts/`](../contracts), which both a Go handler test and a TypeScript

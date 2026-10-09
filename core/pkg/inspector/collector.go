@@ -1303,7 +1303,7 @@ SEP="===INSPECTOR_SEP==="
 echo "$SEP"
 systemctl list-units --type=service --all --no-pager --no-legend 'orama-namespace-gateway@*.service' 2>/dev/null | awk '{print $1}' | sed 's/orama-namespace-gateway@//;s/\.service//'
 echo "$SEP"
-` + rqlite.NodeShellCurl(inspectorSudo, `-sf -H 'Content-Type: application/json' -d '[["SELECT namespace_name, status, CAST(strftime('%s','now') - strftime('%s', CASE status WHEN 'deprovisioning' THEN deprovisioning_at ELSE provisioned_at END) AS INTEGER) FROM namespace_clusters"]]'`, "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
+` + rqlite.NodeShellCurl(inspectorSudo, namespaceRegistryCurlOpts(), "/db/query") + ` 2>/dev/null || echo '{"error":"unreachable"}'
 echo "$SEP"
 `
 	res := RunSSH(ctx, node, cmd)

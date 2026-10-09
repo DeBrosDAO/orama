@@ -21,7 +21,6 @@ const (
 	pollEvery   = 5 * time.Second
 	exitOK      = infra.ExitOK
 	exitFailure = infra.ExitFailure
-	exitUsage   = infra.ExitUsage
 )
 
 // verifyRefusals are what the node's TUF check (core/pkg/releaseverify

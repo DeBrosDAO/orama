@@ -370,12 +370,13 @@ The policy is four `cluster_settings` rows whose keys, defaults and validation l
 
 `Decide` is a pure function (`core/pkg/autoupdate/decide.go:Decide`). In order:
 
-1. Validate settings: mode `off`, `notify` or `auto`; role `cluster` or `validator`; `auto` refused for a validator; `max_parallel` exactly 1 ("a second node upgrading at the same time is how a rollout loses quorum"); a channel; window hours 0 to 23.
+1. Validate settings: mode `off`, `notify` or `auto`; role `cluster` or `validator`; `max_parallel` exactly 1 ("a second node upgrading at the same time is how a rollout loses quorum"); a channel; window hours 0 to 23.
 2. Refuse on a verification failure (rollback, freeze, below-threshold signatures, hash mismatch).
 3. Refuse a candidate marked bad, on another channel, or older than the current version.
 4. `none` for an equal version or mode `off`.
-5. Refuse when the cluster is degraded or healthy voters are not a strict majority.
-6. `notify` for mode `notify`; for `auto`, `upgrade` inside the window (hours, wrapping midnight, equal hours meaning always), else `notify`.
+5. `skip` for a validator on mode `auto`: the release is not installed here, upgrade it by hand with `orama global stage-oramad`. The command exits 0 and the agent records the release as skipped, which the rollout counts as done.
+6. Refuse when the cluster is degraded or healthy voters are not a strict majority.
+7. `notify` for mode `notify`; for `auto`, `upgrade` inside the window (hours, wrapping midnight, equal hours meaning always), else `notify`.
 
 `Compare` orders dotted numeric versions and errors on a non-numeric or zero-padded segment, so a version it cannot order is never newer.
 

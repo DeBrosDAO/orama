@@ -181,7 +181,7 @@ func Load(path string) (Network, error) {
 		return Network{}, fmt.Errorf("read the Tor network file: %w", err)
 	}
 	if len(raw) > NetworkFileLimit {
-		return Network{}, fmt.Errorf("Tor network file %s is larger than %d bytes", path, NetworkFileLimit)
+		return Network{}, fmt.Errorf("the Tor network file %s is larger than %d bytes", path, NetworkFileLimit)
 	}
 	n, err := ParseNetwork(raw)
 	if err != nil {

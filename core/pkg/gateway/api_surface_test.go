@@ -186,3 +186,46 @@ func TestEveryDocumentedRouteHasAnOwner(t *testing.T) {
 		}
 	}
 }
+
+// The counts the document states (the owner table and the "reaches N of M
+// routes" sentence) are the number of rows it has, per owner. They drifted
+// whenever a route was added and only the row was written.
+func TestDocumentedOwnerCountsMatchRows(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRootFor(t), "docs/API_SURFACE.md"))
+	if err != nil {
+		t.Fatalf("read API_SURFACE.md: %v", err)
+	}
+	rows := map[string]int{}
+	for _, owner := range documentedRoutes(t) {
+		rows[owner]++
+	}
+	total := 0
+	for _, n := range rows {
+		total += n
+	}
+
+	ownerRow := regexp.MustCompile("(?m)^\\| `(SDK|CLI|direct|internal)` \\|.*\\| (\\d+) \\|$")
+	stated := ownerRow.FindAllStringSubmatch(string(body), -1)
+	if len(stated) != 4 {
+		t.Fatalf("found %d owner-table rows, want 4: the document's shape changed", len(stated))
+	}
+	for _, m := range stated {
+		n, _ := strconv.Atoi(m[2])
+		if rows[m[1]] != n {
+			t.Errorf("owner table says %d %s routes, the rows are %d", n, m[1], rows[m[1]])
+		}
+	}
+
+	header := regexp.MustCompile(`reaches\s+(\d+)\s+of\s+(\d+)\s+routes,\s+and\s+the\s+other\s+(\d+)`).
+		FindStringSubmatch(string(body))
+	if header == nil {
+		t.Fatal("the \"reaches N of M routes\" sentence is gone: the document's shape changed")
+	}
+	sdk, _ := strconv.Atoi(header[1])
+	all, _ := strconv.Atoi(header[2])
+	rest, _ := strconv.Atoi(header[3])
+	if sdk != rows["SDK"] || all != total || rest != total-rows["SDK"] {
+		t.Errorf("the sentence says the SDK reaches %d of %d routes and %d are elsewhere; the rows are %d SDK of %d",
+			sdk, all, rest, rows["SDK"], total)
+	}
+}

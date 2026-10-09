@@ -233,7 +233,7 @@ func parseWeight(rt *Router, rest string) error {
 		}
 		n, err := strconv.ParseUint(v, 10, 64)
 		if err != nil {
-			return fmt.Errorf("Measured=%q: %w", v, err)
+			return fmt.Errorf("the Measured value %q is not a number: %w", v, err)
 		}
 		rt.Measured, rt.HasMeasured = n, true
 	}

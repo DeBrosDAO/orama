@@ -16,6 +16,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// missingConfigHint says who writes a gateway's YAML: the node, never an
+// operator command (there is no config subcommand).
+const missingConfigHint = "The node writes this file when it installs or starts the gateway ('orama node install'\n" +
+	"for the index gateway, the namespace provisioning for a namespace gateway);\n" +
+	"this gateway was started without it.\n"
+
 // parseGatewayConfig loads gateway.yaml from ~/.orama exclusively.
 // It accepts an optional --config flag for absolute paths (used by systemd services).
 func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
@@ -120,7 +126,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 			zap.String("path", configPath),
 			zap.Error(err))
 		fmt.Fprintf(os.Stderr, "\nConfig file not found at %s\n", configPath)
-		fmt.Fprintf(os.Stderr, "Generate it using: orama config init --type gateway\n")
+		fmt.Fprint(os.Stderr, missingConfigHint)
 		os.Exit(1)
 	}
 

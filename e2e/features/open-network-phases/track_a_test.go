@@ -132,9 +132,10 @@ func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 
 // TestPhaseA5_notifyByDefaultValidatorNeverAuto: the update decision
 // reports a newer release without installing it unless the cluster chose
-// auto, and a validator cannot be auto (A5; the unattended agent that would
-// act on the decision is not in this release, docs/CLI_REFERENCE.md "orama
-// node autoupdate": "The install itself ... is not performed by this command").
+// auto, and a validator on auto is told to upgrade by hand: the decision is a
+// skip that exits 0 and names 'orama global stage-oramad', not a refusal, so a
+// rollout counts the validator as done (A5; docs/DEV_DEPLOY.md "A machine that
+// runs the chain (a validator) is never auto").
 func TestPhaseA5_notifyByDefaultValidatorNeverAuto(t *testing.T) {
 	phase(t, "A5", "docs/CLI_REFERENCE.md", "### orama node autoupdate", trackA+" A5")
 	cli := harness.CLI(t)
@@ -143,7 +144,12 @@ func TestPhaseA5_notifyByDefaultValidatorNeverAuto(t *testing.T) {
 		t.Errorf("the default decision: exit %d %q", def.Exit, out(def))
 	}
 	v := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "auto", "--role", "validator")
-	if v.Exit != exitUsage {
-		t.Errorf("auto for a validator: exit %d %q, want the usage refusal", v.Exit, out(v))
+	if got := strings.TrimSpace(out(v)); v.Exit != exitOK || !strings.HasPrefix(got, "skip: ") ||
+		!strings.Contains(got, "validator") || !strings.Contains(got, "orama global stage-oramad") {
+		t.Errorf("auto for a validator: exit %d %q, want exit 0 and a skip that points at 'orama global stage-oramad'", v.Exit, out(v))
+	}
+	n := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "notify", "--role", "validator")
+	if n.Exit != exitOK || strings.TrimSpace(out(n)) != "notify: newer release 1.0.1 (notify)" {
+		t.Errorf("notify for a validator: exit %d %q, want it reported like any node", n.Exit, out(n))
 	}
 }

@@ -1,6 +1,6 @@
 module github.com/DeBrosOfficial/network/thirdparty/ipfs-cluster
 
-go 1.27.1
+go 1.27.2
 
 tool github.com/ipfs-cluster/ipfs-cluster/cmd/ipfs-cluster-service
 

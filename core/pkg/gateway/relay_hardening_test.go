@@ -100,7 +100,7 @@ func TestRelayTarget_onlyLDHAsciiAndItDialsTheCheckedString(t *testing.T) {
 		"ns-a b." + relayBase:                     false,
 		"ns-a\t." + relayBase:                     false,
 		"ns-a\x7f." + relayBase:                   false,
-		"ns-a​." + relayBase:                      false, // zero width space
+		"ns-a\u200b." + relayBase:                 false, // zero width space
 		"-ns." + relayBase:                        false,
 		"ns-." + relayBase:                        false,
 		"ns..a." + relayBase:                      false,
