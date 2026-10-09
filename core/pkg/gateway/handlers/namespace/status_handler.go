@@ -56,7 +56,7 @@ func (h *StatusHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	status, err := h.clusterManager.GetClusterStatus(ctx, clusterID)
 	if err != nil {
-		h.writeStatusError(w, clusterID, err)
+		h.writeStatusError(w, err, zap.String("cluster_id", clusterID))
 		return
 	}
 
@@ -83,16 +83,14 @@ func (h *StatusHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 // writeStatusError answers a failed GetClusterStatus: 404 for a cluster that
 // does not exist, 503 for a registry that could not be read (logged with the
-// cluster id and the cause, never sent to the client).
-func (h *StatusHandler) writeStatusError(w http.ResponseWriter, clusterID string, err error) {
+// what identifies the cluster (fields: its id, or the namespace it was looked up
+// by) and the cause, never sent to the client).
+func (h *StatusHandler) writeStatusError(w http.ResponseWriter, err error, fields ...zap.Field) {
 	if errors.Is(err, ns.ErrClusterNotFound) {
 		writeError(w, http.StatusNotFound, "cluster not found")
 		return
 	}
-	h.logger.Error("Failed to get cluster status",
-		zap.String("cluster_id", clusterID),
-		zap.Error(err),
-	)
+	h.logger.Error("Failed to get cluster status", append(fields, zap.Error(err))...)
 	writeError(w, http.StatusServiceUnavailable, "cluster status is temporarily unavailable; retry in a few seconds, and if it persists ask the cluster operator to check the namespace registry")
 }
 
@@ -125,13 +123,14 @@ func (h *StatusHandler) HandleByName(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "cluster not found for namespace")
 			return
 		}
-		h.writeStatusError(w, namespace, fmt.Errorf("failed to read the cluster of namespace %s: %w", namespace, err))
+		h.writeStatusError(w, fmt.Errorf("failed to read the cluster of namespace %s: %w", namespace, err),
+			zap.String("namespace", namespace))
 		return
 	}
 
 	status, err := h.clusterManager.GetClusterStatus(r.Context(), cluster.ID)
 	if err != nil {
-		h.writeStatusError(w, cluster.ID, err)
+		h.writeStatusError(w, err, zap.String("cluster_id", cluster.ID))
 		return
 	}
 

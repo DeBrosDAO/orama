@@ -127,7 +127,10 @@ func TestStatusHandleByName_nodeReadFailureIs503(t *testing.T) {
 	}
 	assertNoInternals(t, w.Body.String())
 	if logs.Len() != 1 {
-		t.Errorf("logged %d entries, want 1", logs.Len())
+		t.Fatalf("logged %d entries, want 1", logs.Len())
+	}
+	if fields := logs.All()[0].ContextMap(); fields["cluster_id"] != "c1" {
+		t.Errorf("log fields = %v, want the cluster's id", fields)
 	}
 }
 
@@ -143,6 +146,11 @@ func TestStatusHandleByName_registryReadFailureIs503(t *testing.T) {
 	}
 	assertNoInternals(t, w.Body.String())
 	if logs.Len() != 1 {
-		t.Errorf("logged %d entries, want 1", logs.Len())
+		t.Fatalf("logged %d entries, want 1", logs.Len())
+	}
+	// The namespace name was logged as the cluster id.
+	fields := logs.All()[0].ContextMap()
+	if _, mislabelled := fields["cluster_id"]; mislabelled || fields["namespace"] != "acme" {
+		t.Errorf("log fields = %v, want the namespace named as namespace and no cluster_id", fields)
 	}
 }
