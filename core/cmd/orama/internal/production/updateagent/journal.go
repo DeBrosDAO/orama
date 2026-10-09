@@ -54,7 +54,7 @@ func (j fileJournal) Replace(i autoupdate.Intent) error {
 }
 
 func (j fileJournal) Pending() (*autoupdate.Intent, error) {
-	f, err := os.Open(j.path)
+	f, err := openNoFollow(j.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

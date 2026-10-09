@@ -34,6 +34,9 @@ func swapArchive(base, newDir, oldDir string) error {
 			movedOut = append(movedOut, p)
 		}
 	}
+	if err := markSwapping(oldDir); err != nil {
+		return errors.Join(err, restore(base, oldDir, movedOut))
+	}
 	var movedIn []string
 	for _, p := range slices.Backward(archivetrust.OwnedPaths) {
 		ok, err := moveIfPresent(filepath.Join(newDir, p), filepath.Join(base, p))
@@ -44,6 +47,17 @@ func swapArchive(base, newDir, oldDir string) error {
 		if ok {
 			movedIn = append(movedIn, p)
 		}
+	}
+	return nil
+}
+
+// markSwapping records, beside oldDir, that every current entry is aside, so
+// that recoverInterruptedSwap can tell what is in base from then on is the new
+// release's and not the one it has yet to move aside.
+func markSwapping(oldDir string) error {
+	path := filepath.Join(filepath.Dir(oldDir), stagedSwapping)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		return fmt.Errorf("record that the new release is being moved in: %w", err)
 	}
 	return nil
 }

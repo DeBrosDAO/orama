@@ -29,7 +29,7 @@ type machine struct {
 	// stage and restore are push.Stage and push.RestorePrevious; a test
 	// replaces them.
 	stage   func(push.StageOptions) error
-	restore func() error
+	restore func(version string) error
 	recover func() error
 }
 
@@ -96,7 +96,7 @@ func (m *machine) Upgrade(ctx context.Context) error {
 	return nil
 }
 
-func (m *machine) Restore(context.Context) error { return m.restore() }
+func (m *machine) Restore(_ context.Context, version string) error { return m.restore(version) }
 
 // Recover undoes a release swap a killed run left half-done.
 func (m *machine) Recover(context.Context) error { return m.recover() }

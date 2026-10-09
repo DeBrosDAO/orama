@@ -174,7 +174,7 @@ func TestStageKeepPrevious_andRestorePreviousPutTheReplacedReleaseBack(t *testin
 		t.Fatalf("the kept release's bin/orama = %q", b)
 	}
 
-	if err := restorePrevious(n.stageTarget); err != nil {
+	if err := restorePrevious(n.stageTarget, builtVersion); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "first cli" {
@@ -188,9 +188,32 @@ func TestStageKeepPrevious_andRestorePreviousPutTheReplacedReleaseBack(t *testin
 	}
 }
 
+func TestRestorePrevious_aKeptReleaseThatIsNotTheOneToGoBackToIsRefused(t *testing.T) {
+	n := newReleaseOnlyNode(t)
+	key, addr := newSigner(t)
+	n.anchor = []string{addr}
+	first := writeTarball(t, signedEntries(t, key, map[string]string{"bin/orama": "first cli"}))
+	if err := stageArchive(n.stageTarget, StageOptions{Archive: first}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.stageUnsigned(t, newBuild, true); err != nil {
+		t.Fatal(err)
+	}
+	err := restorePrevious(n.stageTarget, "1.9.9")
+	if err == nil || !strings.Contains(err.Error(), "the release to go back to is 1.9.9") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "new cli" {
+		t.Fatalf("a refused restore changed bin/orama to %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(n.base, PreviousRelease, "bin", "orama")); string(b) != "first cli" {
+		t.Fatalf("a refused restore changed the kept release: %q", b)
+	}
+}
+
 func TestRestorePrevious_refusals(t *testing.T) {
 	n := newReleaseOnlyNode(t)
-	if err := restorePrevious(n.stageTarget); err == nil || !strings.Contains(err.Error(), "no kept release") {
+	if err := restorePrevious(n.stageTarget, builtVersion); err == nil || !strings.Contains(err.Error(), "no kept release") {
 		t.Fatalf("nothing kept: err = %v", err)
 	}
 	if err := n.stageUnsigned(t, newBuild, true); err != nil {
@@ -199,7 +222,7 @@ func TestRestorePrevious_refusals(t *testing.T) {
 	kept := filepath.Join(n.base, PreviousRelease)
 	// installedNode's old build has a manifest that is not one: it must not be
 	// put back as the running release.
-	if err := restorePrevious(n.stageTarget); err == nil {
+	if err := restorePrevious(n.stageTarget, builtVersion); err == nil {
 		t.Fatal("a kept tree that does not verify was restored")
 	}
 	if b, _ := os.ReadFile(filepath.Join(n.base, "bin", "orama")); string(b) != "new cli" {

@@ -33,6 +33,10 @@ const (
 	// stagedBack receives the new release when a stage that cannot keep the old
 	// one puts it back.
 	stagedBack = "back"
+	// stagedSwapping is a file in a staging directory that swapArchive creates
+	// once every current entry is aside, and before the first new one moves in:
+	// from then on, whatever is in base is the new release's.
+	stagedSwapping = "swapping"
 	// binPerm is /opt/orama/bin and every binary in it: root writes, the
 	// orama group runs them, nobody else reads them (as lockOramaBinDir).
 	binPerm = 0o750

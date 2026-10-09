@@ -175,9 +175,18 @@ type fakeNode struct {
 	// stagedThenFailed makes Stage swap the release in and then fail, as a
 	// step after the swap does.
 	stagedThenFailed bool
+	// stageBreaksTree makes a failed Stage leave the tree unreadable, as a swap
+	// killed half-way, whose own undo also failed, does.
+	stageBreaksTree bool
 	// restoreKilled makes Restore put the release back and then report a kill,
 	// as a run killed between the two steps of a rollback.
 	restoreKilled bool
+	// restoreLeaves, when set, is what the tree holds after Restore instead of
+	// the kept release: a restore that put back another release, or that was
+	// killed half-way and left a tree whose manifest cannot be read ("").
+	restoreLeaves *string
+	// restoredFor is the version Restore was asked to put back.
+	restoredFor string
 }
 
 func (n *fakeNode) Current() string {
@@ -200,6 +209,9 @@ func (n *fakeNode) Stage(_ context.Context, rel Release) error {
 	if n.stageErr == nil || n.stagedThenFailed {
 		n.previous, n.current = n.current, rel.Version
 	}
+	if n.stageErr != nil && n.stageBreaksTree {
+		n.unreadable = true
+	}
 	return n.stageErr
 }
 
@@ -212,10 +224,17 @@ func (n *fakeNode) Upgrade(context.Context) error {
 	return nil
 }
 
-func (n *fakeNode) Restore(context.Context) error {
+func (n *fakeNode) Restore(_ context.Context, version string) error {
 	n.calls = append(n.calls, "restore")
+	n.restoredFor = version
+	if n.previous != version && n.restoreLeaves == nil {
+		return fmt.Errorf("the kept release is %s, not %s", n.previous, version)
+	}
 	n.restored = true
 	n.current = n.previous
+	if n.restoreLeaves != nil {
+		n.current = *n.restoreLeaves
+	}
 	if n.restoreKilled {
 		return errors.New("killed")
 	}

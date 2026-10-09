@@ -54,3 +54,21 @@ func TestAcquireOwnClusterLock_takesBackItsOwnLeaseAtOnceAndNotAnothers(t *testi
 		t.Fatal("a lock with no TTL was taken")
 	}
 }
+
+func TestAcquireOwnClusterLock_anEmptyHolderIsRefusedAndTakesNothing(t *testing.T) {
+	db := lockDB(t)
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "", time.Hour); err == nil {
+		t.Fatal("a lock was taken in no one's name")
+	}
+	// The refusal must not have left the lock looking held, or free for a
+	// second empty holder to "take back".
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n1", time.Hour); err != nil {
+		t.Fatalf("n1 could not take the lock after an empty holder was refused: %v", err)
+	}
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "", time.Hour); err == nil {
+		t.Fatal("an empty holder took n1's lease")
+	}
+	if _, err := AcquireOwnClusterLock(context.Background(), db, "rollout", "n2", time.Hour); !errors.Is(err, ErrClusterLockHeld) {
+		t.Fatalf("n2 took n1's lease: %v", err)
+	}
+}

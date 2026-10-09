@@ -672,7 +672,10 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
    frees it, and a node that finds a lease of its own left over takes it back),
    and judges again: the cluster can have changed in between. A machine runs one
    agent at a time (a lock on `/var/lib/orama-autoupdate/run.lock`; a second run
-   says so and exits 0).
+   says so and exits 0). The lock is taken back only in a non-empty node id, and
+   the agent refuses to run when `/var/lib/orama-autoupdate` is not a directory
+   owned by root and writable by root alone; it reads the intent without
+   following a symlink.
 3. It records the intent (`/var/lib/orama-autoupdate/install-intent.json`:
    the release and the one it replaces), then downloads the archive and checks
    its length and hashes (this is what raises `release-seen.json`).
@@ -713,11 +716,26 @@ installed (staging never completed) is discarded. A stage killed half-way
 through its swap is undone by the next stage or restore before it removes its
 leftovers, and the agent does that recovery before it reads the installed
 version, so a node is not left without a release and an unreadable manifest is
-never taken for a stale intent. A stage that fails after its swap is not "the
-node unchanged": the install goes on to the health gate. The rollback is
-journaled before it begins (the intent says it is rolling back, and whether the
-release is to blame), so a run killed in the middle of it is finished by the
-next, which also marks the release bad. A run that is stopped by a signal rolls
+never taken for a stale intent. The recovery deletes nothing it moved in: once
+a swap has every current entry aside (`swapping` beside its `old/`), what it
+had moved in goes back to where it came from, a stage's copy of the new release
+or `.release-previous` for a restore, which swaps the kept release itself in. A
+restore killed at any step therefore leaves the kept release whole, and the
+rollback runs again. A stage that fails after its swap is not "the node
+unchanged": the install goes on to the health gate, and the stage's error is
+kept (joined into a failure, or logged when the release installs). A stage that
+fails and leaves a tree whose manifest cannot be read, or one that is neither
+the old release nor the new, is not "unchanged" either: the intent stays and
+the next run recovers it. The rollback is journaled before it begins (the
+intent says it is rolling back, and whether the release is to blame), so a run
+killed in the middle of it is finished by the next, which also marks the
+release bad. If the journal cannot record that, the rollback still runs and the
+error says it is not crash-safe: a run killed before it ends leaves an intent a
+later run takes for a stage that changed nothing. The restore names the release
+it goes back to and refuses a kept release that is another one (a stage killed
+between its swap and the keep leaves an older one); after it the node must
+hold the previous release, or the run fails without calling it rolled back and
+without starting the node on it. A run that is stopped by a signal rolls
 nothing back and blames nobody. The `orama node upgrade --restart` child of a
 killed run can outlive it; nothing in the agent stops it.
 

@@ -61,7 +61,7 @@ func TestInstall_anUpgradeThatStoppedNothingRestoresTheTreeAndDoesNotRestartAnyt
 // brokenRestore cannot put the previous release back.
 type brokenRestore struct{ fakeNode }
 
-func (b *brokenRestore) Restore(context.Context) error { return errors.New("disk full") }
+func (b *brokenRestore) Restore(context.Context, string) error { return errors.New("disk full") }
 
 func TestInstall_aRestoreThatFailsIsReportedWithTheOriginalFailure(t *testing.T) {
 	n := &brokenRestore{fakeNode{current: "0.3.0", badRelease: true}}
@@ -137,5 +137,106 @@ func TestFinish_aRollbackIsJournaledBeforeItBegins(t *testing.T) {
 	_, _ = Finish(t.Context(), n, j, intent031)
 	if j.intent == nil || !j.intent.RollingBack || !j.intent.Blame {
 		t.Fatalf("intent %+v", j.intent)
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// A restore that leaves another release (the kept one was older than the
+// previous), or a tree that cannot be read, is not a rollback: the node is not
+// reported back, and the health gate is not asked to bless it.
+func TestRollBack_aRestoreThatLeavesAnotherReleaseIsAnErrorNotARollback(t *testing.T) {
+	for name, leaves := range map[string]*string{"an older release": ptr("0.2.9"), "an unreadable tree": ptr("")} {
+		t.Run(name, func(t *testing.T) {
+			n := &fakeNode{current: "0.3.1", previous: "0.3.0", badRelease: true, restoreLeaves: leaves}
+			res, err := Finish(t.Context(), n, &memJournal{}, intent031)
+			if err == nil || res.RolledBack || res.Settled() || !res.ReleaseBad {
+				t.Fatalf("result %+v, err %v", res, err)
+			}
+			if !strings.Contains(err.Error(), "not on the previous release 0.3.0") {
+				t.Fatalf("the error does not say what is wrong: %v", err)
+			}
+			if got := n.calls[len(n.calls)-1]; got != "restore" {
+				t.Fatalf("the node was started on a tree that is not the previous release: %v", n.calls)
+			}
+		})
+	}
+}
+
+func TestRollBack_restoresWhatTheNodeIsNotOnEvenIfItIsNotTheFailedRelease(t *testing.T) {
+	n := &fakeNode{current: "0.2.9", previous: "0.3.0"}
+	res, err := RollBack(t.Context(), n, Intent{Version: "0.3.1", Previous: "0.3.0", RollingBack: true}, nil)
+	if err == nil || !res.RolledBack {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	if n.restoredFor != "0.3.0" || n.current != "0.3.0" {
+		t.Fatalf("restored for %q, node on %q", n.restoredFor, n.current)
+	}
+}
+
+func TestRollBack_aNodeAlreadyOnThePreviousReleaseIsNotRestored(t *testing.T) {
+	n := &fakeNode{current: "0.3.0", previous: "0.3.0"}
+	res, _ := RollBack(t.Context(), n, Intent{Version: "0.3.1", Previous: "0.3.0", RollingBack: true}, nil)
+	if !res.RolledBack || slices.Contains(n.calls, "restore") {
+		t.Fatalf("result %+v, calls %v", res, n.calls)
+	}
+}
+
+func TestInstall_aStageThatFailsLeavingAnUnreadableTreeIsNotUnchanged(t *testing.T) {
+	n := &fakeNode{current: "0.3.0", stageErr: errors.New("swap failed"), unreadable: true}
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
+	if err == nil || res.Unchanged || res.Settled() {
+		t.Fatalf("result %+v, err %v: the intent must stay for the next run to recover", res, err)
+	}
+	if !errors.Is(err, n.stageErr) {
+		t.Fatalf("the stage error was dropped: %v", err)
+	}
+	if want := []string{"stage"}; !slices.Equal(n.calls, want) {
+		t.Fatalf("calls %v", n.calls)
+	}
+}
+
+func TestInstall_aStageThatFailsLeavingAThirdReleaseIsNotUnchanged(t *testing.T) {
+	n := &fakeNode{current: "0.2.9", stageErr: errors.New("swap failed")}
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
+	if err == nil || res.Settled() || !errors.Is(err, n.stageErr) {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+// The stage's error survives a failure after it: it is part of what the person
+// reading the failure needs.
+func TestInstall_aStageErrorAfterTheSwapIsKeptWhenTheGateFails(t *testing.T) {
+	n := &fakeNode{current: "0.3.0", stageErr: errors.New("sync failed"), stagedThenFailed: true, badRelease: true}
+	_, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
+	if err == nil || !errors.Is(err, n.stageErr) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestInstall_aStageErrorAfterTheSwapIsReportedInTheResultWhenTheGatePasses(t *testing.T) {
+	n := &fakeNode{current: "0.3.0", stageErr: errors.New("sync failed"), stagedThenFailed: true}
+	res, err := Install(t.Context(), n, &memJournal{}, intent031, Release{Version: "0.3.1"})
+	if err != nil || !res.Installed || !errors.Is(res.StageErr, n.stageErr) {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+}
+
+// A journal that cannot record the rollback does not stop it, and the error
+// says the rollback can no longer be finished by a later run.
+type failingReplace struct{ memJournal }
+
+func (failingReplace) Replace(Intent) error { return errors.New("read-only file system") }
+
+func TestFinish_aJournalThatCannotRecordTheRollbackSaysItIsNotCrashSafe(t *testing.T) {
+	n := &fakeNode{current: "0.3.1", previous: "0.3.0", badRelease: true}
+	res, err := Finish(t.Context(), n, &failingReplace{}, intent031)
+	if err == nil || !res.RolledBack {
+		t.Fatalf("result %+v, err %v", res, err)
+	}
+	for _, want := range []string{"not crash-safe", "read-only file system"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error lacks %q: %v", want, err)
+		}
 	}
 }

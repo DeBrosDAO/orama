@@ -2,6 +2,7 @@ package push
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,8 @@ func TestStage_aSwapKilledHalfWayIsRecoveredBeforeLeftoversAreRemoved(t *testing
 		"old/" + archivetrust.ManifestName: "old manifest",
 		"old/manifest.sig":                 "old sig",
 		"old/bin/orama":                    "old cli",
+		"new/systemd/unit.service":         "the new release's copy",
+		stagedSwapping:                     "",
 	})
 	for _, gone := range []string{"manifest.json", "manifest.sig", "bin"} {
 		if err := os.RemoveAll(filepath.Join(base, gone)); err != nil {
@@ -113,5 +116,165 @@ func TestStageKeepPrevious_putsTheOldReleaseBackWhenItCannotBeKept(t *testing.T)
 	leftovers, _ := filepath.Glob(filepath.Join(n.base, stagingPrefix+"*"))
 	if len(leftovers) != 0 {
 		t.Fatalf("staging directories left behind: %v", leftovers)
+	}
+}
+
+// copyTree copies the tree at from to to, as a crash would leave it.
+func copyTree(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(to, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o700)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o600)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotBeforeEveryRename copies base before each rename the swap and the
+// keep make, and once more when they are done: each copy is the tree a run
+// killed at that step leaves.
+func snapshotBeforeEveryRename(t *testing.T, base string, run func() error) []string {
+	t.Helper()
+	var snaps []string
+	snap := func() {
+		dir := t.TempDir()
+		copyTree(t, base, dir)
+		snaps = append(snaps, dir)
+	}
+	prevRename, prevKeep := renameEntry, keepRename
+	t.Cleanup(func() { renameEntry, keepRename = prevRename, prevKeep })
+	renameEntry = func(o, n string) error { snap(); return os.Rename(o, n) }
+	keepRename = func(o, n string) error { snap(); return os.Rename(o, n) }
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	snap()
+	return snaps
+}
+
+// A restore killed at any step must leave a node that recovers to the release
+// it was running with the kept release whole, or already on the kept one. The
+// kept release is the only copy of what the node is rolling back to: recovery
+// deleting what the restore had moved out of it made the rollback impossible
+// for ever.
+func TestRecoverInterruptedSwap_aRestoreKilledAtAnyStepCanBeRunAgain(t *testing.T) {
+	n := newReleaseOnlyNode(t)
+	key, addr := newSigner(t)
+	n.anchor = []string{addr}
+	first := map[string]string{"bin/orama": "first cli", "bin/helper": "h", "systemd/orama-namespace-x.service": "[Unit]\n", "packages/p.deb": "pkg"}
+	if err := stageArchive(n.stageTarget, StageOptions{Archive: writeTarball(t, signedEntries(t, key, first))}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.stageUnsigned(t, newBuild, true); err != nil {
+		t.Fatal(err)
+	}
+
+	snaps := snapshotBeforeEveryRename(t, n.base, func() error { return restorePrevious(n.stageTarget, builtVersion) })
+	// The running release has 3 entries to move aside (manifest, bin, systemd),
+	// the kept one 5 to move in, then the keep and the finished tree.
+	if want := 3 + 5 + 1 + 1; len(snaps) != want {
+		t.Fatalf("%d kill points, want %d", len(snaps), want)
+	}
+	for i, snap := range snaps {
+		target := n.stageTarget
+		target.base = snap
+		if err := removeLeftoverStaging(snap); err != nil {
+			t.Fatalf("kill point %d: recover: %v", i, err)
+		}
+		if read(t, filepath.Join(snap, "bin", "orama")) != "first cli" {
+			if err := restorePrevious(target, builtVersion); err != nil {
+				t.Fatalf("kill point %d: the restore cannot be run again: %v", i, err)
+			}
+		}
+		v, err := archivetrust.VerifyTree(snap, []string{addr})
+		if err != nil {
+			t.Fatalf("kill point %d: the node is not on a whole previous release: %v", i, err)
+		}
+		if v.Manifest.Version == "" || read(t, filepath.Join(snap, "bin", "helper")) != "h" ||
+			read(t, filepath.Join(snap, "packages", "p.deb")) != "pkg" {
+			t.Fatalf("kill point %d: the previous release is incomplete: %+v", i, v.Manifest)
+		}
+	}
+}
+
+// A stage killed half-way discards what it had moved in; it does not need it.
+func TestRecoverInterruptedSwap_aStageKilledHalfWayKeepsNothingOfTheNewRelease(t *testing.T) {
+	n := newReleaseOnlyNode(t)
+	snaps := snapshotBeforeEveryRename(t, n.base, func() error { return n.stageUnsigned(t, newBuild, false) })
+	for i, snap := range snaps {
+		if err := removeLeftoverStaging(snap); err != nil {
+			t.Fatalf("kill point %d: %v", i, err)
+		}
+		if _, err := os.Lstat(filepath.Join(snap, PreviousRelease)); err == nil {
+			t.Fatalf("kill point %d: a stage with nothing to keep left %s", i, PreviousRelease)
+		}
+		_, retiredErr := os.Stat(filepath.Join(snap, "bin", "retired-binary"))
+		_, unitErr := os.Stat(filepath.Join(snap, "systemd", "orama-namespace-x.service"))
+		switch cli := read(t, filepath.Join(snap, "bin", "orama")); {
+		case cli == "old cli" && retiredErr == nil && unitErr != nil:
+		case cli == "new cli" && retiredErr != nil && unitErr == nil:
+		default:
+			t.Fatalf("kill point %d: a mix of the two releases (bin/orama %q, retired binary %v, unit %v)", i, cli, retiredErr, unitErr)
+		}
+	}
+}
+
+func TestRecoverUnderLock_putsTheReleaseBackAndFreesTheLock(t *testing.T) {
+	base := installedNode(t)
+	writeTree(t, filepath.Join(base, stagingPrefix+"dead"), map[string]string{
+		"old/" + archivetrust.ManifestName: "old manifest",
+		"old/bin/orama":                    "old cli",
+		"new/placeholder":                  "",
+		stagedSwapping:                     "",
+	})
+	if err := os.Remove(filepath.Join(base, archivetrust.ManifestName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverUnderLock(base); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(base, archivetrust.ManifestName)); got != "old manifest" {
+		t.Fatalf("manifest = %q", got)
+	}
+	unlock, err := archivetrust.LockArchiveDir(base)
+	if err != nil {
+		t.Fatalf("the archive lock was not freed: %v", err)
+	}
+	_ = unlock()
+}
+
+func TestRecoverUnderLock_nothingToRecoverIsNotAnError(t *testing.T) {
+	if err := recoverUnderLock(installedNode(t)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecoverUnderLock_aMissingBaseIsAnError(t *testing.T) {
+	if err := recoverUnderLock(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("a base that does not exist was recovered")
+	}
+}
+
+func TestCheckBaseOwnedByRoot_refusesABaseAnotherUserOwns(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("the test directory is root's")
+	}
+	if err := checkBaseOwnedByRoot(t.TempDir()); err == nil {
+		t.Fatal("a directory owned by a user was accepted as root's")
 	}
 }

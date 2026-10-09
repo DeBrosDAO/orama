@@ -111,6 +111,9 @@ func AcquireOwnClusterLock(ctx context.Context, db *sql.DB, name, holder string,
 	if db == nil {
 		return nil, fmt.Errorf("cluster lock %q: nil database handle", name)
 	}
+	if holder == "" {
+		return nil, fmt.Errorf("cluster lock %q: a holder id is required (an empty one means the lock is free)", name)
+	}
 	if ttl <= 0 {
 		return nil, fmt.Errorf("cluster lock %q: a TTL is required, or a dead holder blocks it for ever", name)
 	}

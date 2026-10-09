@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,72 @@ func TestFileJournal_beginPendingClear(t *testing.T) {
 	}
 	if got, _ := j.Pending(); got != nil {
 		t.Fatal("a cleared intent is still pending")
+	}
+}
+
+func TestFileJournal_replaceWritesOverTheIntentThereAndCreatesTheDirectory(t *testing.T) {
+	j := fileJournal{path: filepath.Join(t.TempDir(), "not", "yet", journalName)}
+	first := autoupdate.Intent{Version: "0.3.1", Previous: "0.3.0"}
+	if err := j.Replace(first); err != nil {
+		t.Fatalf("replace with no intent there: %v", err)
+	}
+	second := first
+	second.RollingBack, second.Blame = true, true
+	if err := j.Replace(second); err != nil {
+		t.Fatal(err)
+	}
+	got, err := j.Pending()
+	if err != nil || got == nil || *got != second {
+		t.Fatalf("pending = %+v, %v, want %+v", got, err, second)
+	}
+	info, err := os.Stat(j.path)
+	if err != nil || info.Mode().Perm() != journalPerm {
+		t.Fatalf("intent file: %v, %v", info, err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(j.path), "*"))
+	if len(leftovers) != 1 {
+		t.Fatalf("a replace left more than the intent behind: %v", leftovers)
+	}
+}
+
+func TestFileJournal_replaceInADirectoryThatCannotBeWrittenIsAnError(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := fileJournal{path: filepath.Join(blocker, journalName)}
+	if err := j.Replace(autoupdate.Intent{Version: "1"}); err == nil {
+		t.Fatal("an intent that could not be written was reported written")
+	}
+}
+
+func TestFileJournal_beginRefusesAnIntentThatIsPendingAndKeepsIt(t *testing.T) {
+	j := fileJournal{path: filepath.Join(t.TempDir(), journalName)}
+	pending := autoupdate.Intent{Version: "0.3.1", Previous: "0.3.0", RollingBack: true}
+	if err := j.Replace(pending); err != nil {
+		t.Fatal(err)
+	}
+	err := j.Begin(autoupdate.Intent{Version: "0.3.2", Previous: "0.3.1"})
+	if err == nil || !strings.Contains(err.Error(), "0.3.1") {
+		t.Fatalf("err = %v, want one naming the unfinished install", err)
+	}
+	if got, _ := j.Pending(); got == nil || *got != pending {
+		t.Fatalf("the unfinished intent was overwritten: %+v", got)
+	}
+}
+
+func TestFileJournal_aSymlinkWhereTheIntentShouldBeIsNotFollowed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.json")
+	if err := os.WriteFile(target, []byte(`{"version":"9.9.9"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j := fileJournal{path: filepath.Join(dir, journalName)}
+	if err := os.Symlink(target, j.path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := j.Pending(); err == nil || got != nil {
+		t.Fatalf("pending = %+v, %v: a symlink was followed", got, err)
 	}
 }
 
@@ -95,8 +162,8 @@ func TestMachineStage_isAReleaseOnlyStageThatKeepsThePreviousRelease(t *testing.
 
 func TestMachineRestore_putsThePreviousReleaseBack(t *testing.T) {
 	called := false
-	m := &machine{restore: func() error { called = true; return nil }}
-	if err := m.Restore(context.Background()); err != nil || !called {
+	m := &machine{restore: func(string) error { called = true; return nil }}
+	if err := m.Restore(context.Background(), "0.3.0"); err != nil || !called {
 		t.Fatalf("called=%v err=%v", called, err)
 	}
 }
@@ -104,5 +171,29 @@ func TestMachineRestore_putsThePreviousReleaseBack(t *testing.T) {
 func TestPrintable_dropsWhatATerminalWouldActOn(t *testing.T) {
 	if got := printable("refused\x1b[31m red ‮\nnext"); got != "refused[31m red next" {
 		t.Fatalf("printable = %q", got)
+	}
+}
+
+func TestMachineRecover_runsTheSwapRecovery(t *testing.T) {
+	called := 0
+	m := &machine{recover: func() error { called++; return nil }}
+	if err := m.Recover(context.Background()); err != nil || called != 1 {
+		t.Fatalf("called=%d err=%v", called, err)
+	}
+}
+
+func TestMachineRecover_reportsAFailedRecovery(t *testing.T) {
+	cause := errors.New("disk error")
+	m := &machine{recover: func() error { return cause }}
+	if err := m.Recover(context.Background()); !errors.Is(err, cause) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMachineRestore_namesTheReleaseToGoBackTo(t *testing.T) {
+	var got string
+	m := &machine{restore: func(v string) error { got = v; return errors.New("refused") }}
+	if err := m.Restore(context.Background(), "0.3.0"); err == nil || got != "0.3.0" {
+		t.Fatalf("version %q, err %v", got, err)
 	}
 }

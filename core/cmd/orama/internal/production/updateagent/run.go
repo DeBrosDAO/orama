@@ -33,6 +33,8 @@ const (
 	workDir = "/var/lib/orama-autoupdate"
 	// workDirPerm: only root reads what the agent keeps.
 	workDirPerm = 0o700
+	// rootUID owns workDir.
+	rootUID = 0
 	// dbPingBudget bounds the first contact with the index RQLite.
 	dbPingBudget = 10 * time.Second
 	// readStrong makes every read go through the leader: the install record and
@@ -46,6 +48,9 @@ const (
 // finished by the next run.
 func Run(ctx context.Context, out io.Writer) error {
 	if err := clierr.RequireRoot("the auto-update agent"); err != nil {
+		return err
+	}
+	if err := checkWorkDir(workDir, rootUID); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)

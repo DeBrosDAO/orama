@@ -38,19 +38,22 @@ func keepPrevious(base, oldDir string) error {
 
 // RestorePrevious puts back the archive the last KeepPrevious stage
 // replaced. The kept release is verified as a stage verifies one before it is
-// swapped in, so a tree someone changed meanwhile is not restored. The release
-// that was running becomes the kept one.
-func RestorePrevious() error {
+// swapped in, so a tree someone changed meanwhile is not restored, and it must
+// be version: the caller names the release it is rolling back to, and a kept
+// release that is another one (a stage killed before it kept the release it
+// replaced leaves an older one) is refused. The release that was running
+// becomes the kept one.
+func RestorePrevious(version string) error {
 	if err := clierr.RequireRoot("restoring the previous release"); err != nil {
 		return err
 	}
 	if err := checkBaseOwnedByRoot(install.OramaBase); err != nil {
 		return err
 	}
-	return restorePrevious(nodeTarget())
+	return restorePrevious(nodeTarget(), version)
 }
 
-func restorePrevious(t stageTarget) (err error) {
+func restorePrevious(t stageTarget, version string) (err error) {
 	unlock, err := archivetrust.LockArchiveDir(t.base)
 	if err != nil {
 		return err
@@ -61,8 +64,13 @@ func restorePrevious(t stageTarget) (err error) {
 	if _, err := os.Lstat(kept); err != nil {
 		return fmt.Errorf("there is no kept release to restore at %s: %w", kept, err)
 	}
-	if _, err := t.verify(kept); err != nil {
+	verified, err := t.verify(kept)
+	if err != nil {
 		return fmt.Errorf("refusing to restore the kept release, nothing under %s was changed: %w", t.base, err)
+	}
+	if verified.Manifest.Version != version {
+		return fmt.Errorf("refusing to restore the kept release, nothing under %s was changed: it is release %s and the release to go back to is %s",
+			t.base, verified.Manifest.Version, version)
 	}
 	staging, err := os.MkdirTemp(t.base, stagingPrefix)
 	if err != nil {

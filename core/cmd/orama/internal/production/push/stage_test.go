@@ -30,7 +30,7 @@ type tarEntry struct {
 // key the way the RootWallet agent signs (EIP-191, v in 27/28).
 func signedEntries(t *testing.T, key *ecdsa.PrivateKey, files map[string]string) []tarEntry {
 	t.Helper()
-	m := archivetrust.Manifest{Version: "2.0.0", Commit: "def", Date: "2026-09-26T00:00:00Z", Arch: "amd64", Checksums: map[string]string{}}
+	m := archivetrust.Manifest{Version: builtVersion, Commit: "def", Date: "2026-09-26T00:00:00Z", Arch: "amd64", Checksums: map[string]string{}}
 	entries := []tarEntry{{name: "bin/", typeflag: tar.TypeDir}, {name: "systemd/", typeflag: tar.TypeDir}}
 	for name, body := range files {
 		sum := sha256.Sum256([]byte(body))
@@ -94,6 +94,9 @@ func newSigner(t *testing.T) (*ecdsa.PrivateKey, string) {
 }
 
 // installedNode is a /opt/orama holding an older build and the node's data.
+// builtVersion is the version every test archive's manifest names.
+const builtVersion = "2.0.0"
+
 func installedNode(t *testing.T) string {
 	t.Helper()
 	base := t.TempDir()
@@ -171,7 +174,7 @@ func TestStage_verifiedArchiveReplacesWhatAnArchiveOwns(t *testing.T) {
 	}
 	if v, err := archivetrust.VerifyTree(base, []string{addr}); err != nil {
 		t.Errorf("what was put in place does not verify: %v", err)
-	} else if v.Manifest.Version != "2.0.0" {
+	} else if v.Manifest.Version != builtVersion {
 		t.Errorf("installed manifest %+v", v.Manifest)
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(base, stagingPrefix+"*"))

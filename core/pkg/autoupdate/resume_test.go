@@ -266,3 +266,22 @@ func TestAgent_aRollbackKilledHalfWayIsFinishedByTheNext(t *testing.T) {
 		t.Fatalf("intent %+v survived the finished rollback", h.jrnl.intent)
 	}
 }
+
+// A stage that failed and left a tree whose manifest cannot be read is not a
+// node nothing happened to: the intent stays, and the next run recovers the
+// tree and judges the install.
+func TestAgent_aStageThatLeftAnUnreadableTreeKeepsTheIntent(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	h.node.stageErr, h.node.stageBreaksTree = fmt.Errorf("swap failed"), true
+	if _, err := h.run(t); err == nil {
+		t.Fatal("a node with an unreadable tree was reported fine")
+	}
+	if h.jrnl.intent == nil {
+		t.Fatal("the intent was cleared for a node that is not settled")
+	}
+	if got := installState(t, db, testVersion, "n2"); got != "" {
+		t.Fatalf("n2 recorded %q", got)
+	}
+}

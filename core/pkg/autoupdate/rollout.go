@@ -89,6 +89,9 @@ func (a *Agent) settle(ctx context.Context, s Settings, version string, self Mem
 	var err error
 	switch {
 	case res.Installed:
+		if res.StageErr != nil {
+			a.Logf("release %s is installed and healthy; %v", version, res.StageErr)
+		}
 		out, err = a.installed(ctx, version, self)
 	case res.ReleaseBad:
 		out, err = a.markBad(ctx, s, version, self, installErr)
