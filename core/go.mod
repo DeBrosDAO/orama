@@ -1,6 +1,6 @@
 module github.com/DeBrosOfficial/network
 
-go 1.27.1
+go 1.27.2
 
 require (
 	filippo.io/edwards25519 v1.2.0
@@ -41,7 +41,7 @@ require (
 	go.etcd.io/bbolt v1.5.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/tools v0.50.0

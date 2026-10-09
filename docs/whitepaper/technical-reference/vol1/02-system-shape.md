@@ -84,7 +84,7 @@ An update or rollback has a longer chain because a replica fetches the artifact 
 
 **Capacity.** `capacity.go` caps what the placement code will put on one node: 100 deployments, 8,192 MB of memory, 400 % CPU, 9,800 ports. `core/pkg/namespace/node_selector.go` and `core/pkg/deployments/home_node.go` read them.
 
-**Versions and digests.** `versions.go` names the toolchain and the bundled components: Go 1.27.1, Olric v0.7.4, Kubo v0.43.1, IPFS Cluster v1.1.6, RQLite 10.4.0, CoreDNS 1.14.7, Caddy 2.11.4. `release_digests.go` and `cosmovisor.go` hold the SHA-256 of the Kubo, RQLite and Cosmovisor tarballs for amd64 and arm64 (Cosmovisor is v1.7.3). [Build, signing and release](29-build-signing-and-release.md) shows how the builder uses them.
+**Versions and digests.** `versions.go` names the toolchain and the bundled components: Go 1.27.2, Olric v0.7.4, Kubo v0.43.1, IPFS Cluster v1.1.6, RQLite 10.4.0, CoreDNS 1.14.7, Caddy 2.11.4. `release_digests.go` and `cosmovisor.go` hold the SHA-256 of the Kubo, RQLite and Cosmovisor tarballs for amd64 and arm64 (Cosmovisor is v1.7.3). [Build, signing and release](29-build-signing-and-release.md) shows how the builder uses them.
 
 **Global layer.** `global.go`, `chain.go` and `cosmovisor.go` name the global units, state directories under `/var/lib/orama-global`, the chain daemon `oramad`, the chain home and key paths, the denomination `norama`, and the veth addresses `198.18.0.1` and `198.18.0.2` that join a co-located node's network namespace to the host.
 

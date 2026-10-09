@@ -3552,10 +3552,7 @@ What the script does that the docs of the individual commands do not say:
   version - the block gas/size limits live in the top-level `consensus` field of `genesis.json`,
   outside every module's `AppModuleBasic.DefaultGenesis` - so the finite block `max_gas` described
   above is set by a small script-level JSON patch rather than in Go.
-- **Known, accepted `govulncheck` findings**, none fixable without breaking a pinned dependency
-  this task requires: `GO-2024-2584` (a slashing-evasion advisory against `cosmos-sdk`, pinned at
-  v0.54.4 per this task's spec, with no fixed version yet); `GO-2026-5932` (`golang.org/x/crypto`'s
-  unmaintained `openpgp` package, pulled in transitively by the SDK's keyring code, with no fix
-  available); and `GO-2026-6443` (a `grpc-go` server panic on malformed headers, fixed only in an
-  unreleased `v1.85.0` dev pseudo-version as of this writing, not a stable tag). `govulncheck`
+- **Known, accepted `govulncheck` finding**, not fixable without breaking a pinned dependency
+  this task requires: `GO-2026-5932` (`golang.org/x/crypto`'s unmaintained `openpgp` package,
+  pulled in transitively by the SDK's keyring code, with no fix available). `govulncheck`
   found no other reachable vulnerabilities.

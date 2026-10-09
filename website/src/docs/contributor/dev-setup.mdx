@@ -6,7 +6,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 
 | Path | What | Language |
 |---|---|---|
-| `core/` | Node software: gateway, CLI (`orama`), supervisor, install, monitor | Go 1.27.1+ |
+| `core/` | Node software: gateway, CLI (`orama`), supervisor, install, monitor | Go 1.27.2+ |
 | `chain/` | The Orama chain (`oramad`, `orama-global`). Its own Go module; `core/` does not import it | Go |
 | `caddy/` | The Caddy modules built into every node's Caddy | Go |
 | `sdk/` | `@debros/orama`, the TypeScript SDK | TypeScript |
@@ -22,7 +22,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 
 | Tool | Version | Needed for |
 |---|---|---|
-| Go | 1.27.1 or newer | Everything in Go |
+| Go | 1.27.2 or newer | Everything in Go |
 | Node.js | 22.12 or newer (the repo pins 24 in `.nvmrc`) | The SDK and the website |
 | pnpm | Current | TypeScript packages |
 | Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama build` (it builds the vault), the vault |
@@ -32,7 +32,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 # macOS
 brew install go node pnpm git make
 # Zig 0.15.x from https://ziglang.org/download/ (the build checks the minor release)
-go version        # 1.27.1 or newer
+go version        # 1.27.2 or newer
 zig version       # 0.15.x
 ```
 

@@ -1,6 +1,6 @@
 module github.com/DeBrosOfficial/network/e2e
 
-go 1.27.1
+go 1.27.2
 
 replace github.com/DeBrosOfficial/network => ../core
 
@@ -15,7 +15,7 @@ require (
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.22
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 )
