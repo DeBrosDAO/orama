@@ -169,6 +169,27 @@ func TestAgent_aNewerReleaseIsNotHeldByTheWaitOfAnOlderOne(t *testing.T) {
 	}
 }
 
+// A wait longer than the longest one ever recorded was written by a clock that
+// has since gone back: it does not hold the release off, and the longest wait
+// there is still holds.
+func TestAgent_aWaitFromAClockThatWentBackIsOver(t *testing.T) {
+	db, rel := newClusterDB(t), newRelease(t)
+	h := newHarness(t, db, rel, "10.0.0.2")
+	auto(t, h)
+	clock := time.Now()
+	h.agent.Now = func() time.Time { return clock }
+
+	h.retry.retry = &Retry{Version: testVersion, Attempts: 7, Until: clock.Add(retryMax)}
+	if out, err := h.run(t); err != nil || out.Action != OutcomeWait {
+		t.Fatalf("the longest wait there is did not hold: %+v, %v", out, err)
+	}
+
+	h.retry.retry = &Retry{Version: testVersion, Attempts: 7, Until: clock.Add(retryMax + time.Hour)}
+	if out, err := h.run(t); err != nil || out.Action != OutcomeInstalled {
+		t.Fatalf("a wait from a clock that went back held the release: %+v, %v", out, err)
+	}
+}
+
 func TestRetryDelay_doublesAndIsCapped(t *testing.T) {
 	for attempts, want := range map[int]time.Duration{1: retryBase, 2: 2 * retryBase, 3: 4 * retryBase, 4: 8 * retryBase, 5: 16 * retryBase, 6: 32 * retryBase, 7: retryMax, 40: retryMax} {
 		if got := retryDelay(attempts); got != want {

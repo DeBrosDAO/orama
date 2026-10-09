@@ -75,8 +75,15 @@ func (a *Agent) deferRetry(in Intent, cause error) error {
 // set for version: nothing is fetched, locked or touched.
 func (a *Agent) backedOff(version string) (Outcome, bool, error) {
 	r, err := a.Retries.Current()
-	if err != nil || r == nil || r.Version != version || !a.Now().Before(r.Until) {
+	if err != nil || r == nil || r.Version != version {
 		return Outcome{}, false, err
+	}
+	// A wait is never longer than retryMax. One that ends later than that was
+	// recorded by a clock that has since gone back (a clock set wrong at boot
+	// and corrected), and would hold the release off for as long as the jump:
+	// it counts as over.
+	if now := a.Now(); !now.Before(r.Until) || r.Until.After(now.Add(retryMax)) {
+		return Outcome{}, false, nil
 	}
 	return Outcome{
 		Action:  OutcomeWait,

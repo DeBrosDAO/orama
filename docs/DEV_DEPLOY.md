@@ -697,8 +697,9 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
    holds the release, the attempts and the time before which it is not tried
    again (15 minutes, doubling per failure in a row up to 12 hours); the notice
    says when the next try is, a tick inside the wait exits 0 having fetched
-   nothing, a different release is not held back, and an install that succeeds
-   removes the record. Each run starts by removing the `fetch-*` directories a
+   nothing, a different release is not held back, a wait that ends more than 12
+   hours from now (written by a clock that has since gone back) counts as over,
+   and an install that succeeds removes the record. Each run starts by removing the `fetch-*` directories a
    killed run left in the work directory.
 4. `orama node stage-archive --release-only` places it under `/opt/orama` and
    keeps the release it replaced in `/opt/orama/.release-previous`. If the old
