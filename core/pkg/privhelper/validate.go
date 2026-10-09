@@ -95,6 +95,9 @@ var globalUnits = map[string]bool{
 	"orama-global-sbws.service":        true,
 	"orama-global-reporter.service":    true,
 	"orama-global-tor-onion.service":   true,
+	"orama-global-txgate.service":      true,
+	"orama-global-tor-archive.service": true,
+	"orama-global-tor-archive.timer":   true,
 	"orama-global-archiver.service":    true,
 	"orama-global-repair.service":      true,
 }

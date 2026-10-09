@@ -24,6 +24,21 @@ const (
 	TorConfigPath = "/etc/orama/tor/torrc"
 )
 
+// The Orama Tor network is a second, separate Tor network built from upstream
+// Tor code (docs/TOR_NETWORK.md). The node's client above stays on the public
+// Tor network, because the anon proxy needs public exits.
+const (
+	// TorNetworkFile is the name of the network description (directory
+	// authorities and voting schedule) in a release's staged directory and in
+	// the clients that ship it.
+	TorNetworkFile = "tor-network.json"
+
+	// TorNetSOCKSPort is the SOCKS port a client of the Orama network binds on
+	// loopback. It is an edge port beside TorSOCKSPort, outside every block.
+	// (9051, the retired Anyone ControlPort, is not reused.)
+	TorNetSOCKSPort = 9052
+)
+
 // TorSOCKSAddr is the host:port of the node's Tor SOCKS5 listener.
 func TorSOCKSAddr() string {
 	return net.JoinHostPort(TorSOCKSHost, strconv.Itoa(TorSOCKSPort))

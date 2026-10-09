@@ -91,7 +91,11 @@ func planNetns(g GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 	if prefs.Role == roleGlobal {
 		return nil, fmt.Errorf("this machine's role is global: it has no cluster node to share with; drop --colocated")
 	}
-	layout := globalnetns.Layout{Ports: opts.firewall().Ports(), HostPorts: opts.hostPorts(), Tools: tools}
+	// The rulesets describe every service of the machine, not only the ones this
+	// install adds: they replace the last install's, and a Tor role added later
+	// must not unpublish the chain.
+	all := opts.withInstalled(g)
+	layout := globalnetns.Layout{Ports: all.firewall().Ports(), HostPorts: all.hostPorts(), Tools: tools}
 	var users []string
 	if len(layout.HostPorts) > 0 {
 		uid, _, err := g.Lookup(supervisorUser)
@@ -117,6 +121,21 @@ func planNetns(g GlobalHost, opts GlobalInstallOptions) (*netnsPlan, error) {
 		return nil, err
 	}
 	return &netnsPlan{layout: layout, prefs: prefs, clientUsers: users}, nil
+}
+
+// withInstalled is opts with the services whose units are already in the unit
+// directory added: the services a machine runs are the ones it was installed
+// with before and the ones this install adds.
+func (o GlobalInstallOptions) withInstalled(h GlobalHost) GlobalInstallOptions {
+	for _, s := range GlobalServiceOrder {
+		if slices.Contains(o.Services, s) {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(h.UnitDir, globalServiceSpecs[s].unit)); err == nil {
+			o.Services = append(slices.Clone(o.Services), s)
+		}
+	}
+	return o
 }
 
 // readClusterPreferences reads the cluster node's preferences.yaml. Its
@@ -369,6 +388,14 @@ func colocatedListeners(s GlobalService, body string) (string, error) {
 		swaps = [][2]string{
 			{fmt.Sprintf("--rpc.laddr tcp://127.0.0.1:%d", constants.ChainRPCPort), "--rpc.laddr " + rpcFlag},
 			{fmt.Sprintf("--api.address tcp://127.0.0.1:%d", constants.ChainAPIPort), fmt.Sprintf("--api.address tcp://%s:%d", ns, constants.ChainAPIPort)},
+		}
+	case GlobalServiceOnion:
+		// The onion service has two units; only the tx gate names the chain.
+		if !strings.Contains(body, "global txgate") {
+			return body, nil
+		}
+		swaps = [][2]string{
+			{"--upstream " + constants.LocalChainAPIURL(), "--upstream " + constants.ColocatedChainAPIURL()},
 		}
 	case GlobalServiceIndexer:
 		swaps = [][2]string{

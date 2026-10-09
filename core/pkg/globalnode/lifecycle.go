@@ -21,8 +21,8 @@ import (
 const unitDir = constants.SystemdUnitDir
 
 // Lifecycle starts, stops and reports the installed orama-global-* units.
-// The chain starts first and stops last: every other service reaches it only
-// through its loopback RPC.
+// The chain starts first and stops last: the services that use it reach it only
+// through its loopback RPC. The Tor relay and directory authority do not.
 type Lifecycle struct {
 	// Systemctl runs systemctl as root and returns its combined output.
 	Systemctl func(args ...string) ([]byte, error)
@@ -115,8 +115,10 @@ func (l Lifecycle) Start(ctx context.Context, only []install.GlobalService) erro
 		if err := l.startChain(ctx); err != nil {
 			return err
 		}
-	} else if err := l.requireChainActive(); err != nil {
-		return err
+	} else if slices.ContainsFunc(targets, install.GlobalServiceNeedsChain) {
+		if err := l.requireChainActive(); err != nil {
+			return err
+		}
 	}
 	for _, s := range targets {
 		if s == install.GlobalServiceChain {
@@ -125,11 +127,24 @@ func (l Lifecycle) Start(ctx context.Context, only []install.GlobalService) erro
 		if err := l.unit("start", s); err != nil {
 			return err
 		}
-		if err := l.timers("start", s); err != nil {
+		if err := l.companions("start", s); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// withChainDependents is the chain and the installed services that reach it, in
+// start order. A relay or a directory authority does not use the chain, so a
+// chain restart leaves it serving.
+func withChainDependents(installed []install.GlobalService) []install.GlobalService {
+	var out []install.GlobalService
+	for _, s := range installed {
+		if s == install.GlobalServiceChain || install.GlobalServiceNeedsChain(s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (l Lifecycle) startChain(ctx context.Context) error {
@@ -157,10 +172,10 @@ func (l Lifecycle) Stop(only []install.GlobalService) error {
 		return err
 	}
 	if slices.Contains(targets, install.GlobalServiceChain) {
-		targets = installed
+		targets = withChainDependents(installed)
 	}
 	for i := len(targets) - 1; i >= 0; i-- {
-		if err := l.timers("stop", targets[i]); err != nil {
+		if err := l.companions("stop", targets[i]); err != nil {
 			return err
 		}
 		if err := l.unit("stop", targets[i]); err != nil {
@@ -178,7 +193,7 @@ func (l Lifecycle) Restart(ctx context.Context, only []install.GlobalService) er
 		return err
 	}
 	if slices.Contains(targets, install.GlobalServiceChain) {
-		targets = installed
+		targets = withChainDependents(installed)
 	}
 	if err := l.Stop(targets); err != nil {
 		return err
@@ -261,14 +276,15 @@ func (l Lifecycle) unit(verb string, s install.GlobalService) error {
 	return nil
 }
 
-// timers runs verb on the timer units that go with s (the public Kubo's GC),
+// companions runs verb on the units that go with s (the public Kubo's GC
+// timer, a directory authority's archive timer, the onion service's tx gate),
 // so a stopped service is not collected and a started one is.
-func (l Lifecycle) timers(verb string, s install.GlobalService) error {
-	for _, timer := range install.GlobalServiceTimers(s) {
-		if out, err := l.Systemctl(verb, timer); err != nil {
-			return fmt.Errorf("systemctl %s %s: %w\n%s", verb, timer, err, strings.TrimSpace(string(out)))
+func (l Lifecycle) companions(verb string, s install.GlobalService) error {
+	for _, unit := range install.GlobalServiceCompanions(s) {
+		if out, err := l.Systemctl(verb, unit); err != nil {
+			return fmt.Errorf("systemctl %s %s: %w\n%s", verb, unit, err, strings.TrimSpace(string(out)))
 		}
-		fmt.Fprintf(l.Out, "  %s: %s\n", verb, timer)
+		fmt.Fprintf(l.Out, "  %s: %s\n", verb, unit)
 	}
 	return nil
 }

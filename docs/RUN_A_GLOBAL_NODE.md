@@ -55,8 +55,13 @@ sudo orama global install \
 ```
 
 - `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`,
-  `repair`. The chain is required: the other services reach it only through its
-  RPC on `127.0.0.1:31001`. `provider` needs `ipfs` beside it, since it pins
+  `repair`; the Tor roles `dirauth`, `relay` (with `exit` for an exit) and `onion`
+  are described in [TOR_NETWORK.md](TOR_NETWORK.md). The chain is required: the
+  other services reach it only through its RPC on `127.0.0.1:31001`. A `dirauth`
+  or `relay` host needs no chain, and `onion` joins a chain that is installed
+  already (the chain unit is not rewritten when `chain` is not named). Adding a
+  service to a co-located machine later keeps the ports of the services already
+  installed. `provider` needs `ipfs` beside it, since it pins
   public deals through this host's public Kubo. `provider` and `repair` are never
   on the same host: a repair delegate holds repair seeds, and a provider must
   not. `indexer` is optional; add it on a node that serves the chain read API

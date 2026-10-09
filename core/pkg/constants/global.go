@@ -30,6 +30,10 @@ const (
 	GlobalTorORPort = 31020
 	// GlobalTorDirPort is a dirauth's DirPort.
 	GlobalTorDirPort = 31021
+	// GlobalTxGatePort is the validator tx gate (orama global txgate), on 127.0.0.1 (the
+	// namespace's own loopback when co-located). The validator onion service forwards to it,
+	// and only it: nothing else of the chain is reachable through the onion.
+	GlobalTxGatePort = 31022
 
 	// GlobalPortBase is the first port of the block. GlobalPortEnd is the last.
 	GlobalPortBase = 31000
@@ -47,6 +51,16 @@ const (
 	GlobalIndexerUnit  = "orama-global-indexer.service"
 	GlobalRepairUnit   = "orama-global-repair.service"
 
+	// The Orama Tor network's units (docs/TOR_NETWORK.md). A directory
+	// authority is also a relay, so GlobalTorDirauthUnit and GlobalTorRelayUnit
+	// are never installed on one host.
+	GlobalTorDirauthUnit  = "orama-global-tor-dirauth.service"
+	GlobalTorRelayUnit    = "orama-global-tor-relay.service"
+	GlobalTorOnionUnit    = "orama-global-tor-onion.service"
+	GlobalTxGateUnit      = "orama-global-txgate.service"
+	GlobalTorArchiveUnit  = "orama-global-tor-archive.service"
+	GlobalTorArchiveTimer = "orama-global-tor-archive.timer"
+
 	// GlobalStateRoot is the root-owned parent of every global state
 	// directory. Root keeps its own files for the global role here (the
 	// validator sign floor, a migration's recipient key, quarantined keys),
@@ -59,6 +73,12 @@ const (
 	GlobalRepairHome   = "/var/lib/orama-global/repair"
 	GlobalIndexerHome  = "/var/lib/orama-global/indexer"
 
+	// The Tor roles' DataDirectories, each the state directory of its unit.
+	GlobalTorDirauthHome = "/var/lib/orama-global/tor-dirauth"
+	GlobalTorRelayHome   = "/var/lib/orama-global/tor-relay"
+	GlobalTorOnionHome   = "/var/lib/orama-global/tor-onion"
+	GlobalTxGateHome     = "/var/lib/orama-global/txgate"
+
 	// GlobalNetnsPriorForwardFile, in GlobalStateRoot, holds the value net.ipv4.ip_forward had
 	// (0 or 1) before the first `orama global install --colocated` turned it on. Removing the
 	// co-located layout puts that value back.
@@ -67,6 +87,20 @@ const (
 	// GlobalNetnsChainClientsFile, in GlobalStateRoot, lists the extra local accounts (one per line)
 	// allowed to connect to the chain's host-only ports on a co-located machine.
 	GlobalNetnsChainClientsFile = "netns-chain-clients"
+
+	// GlobalTorAuthoritiesFile, in GlobalStateRoot, is the Orama Tor network's authority list
+	// as installed: the file the install read from the staged directory under the name
+	// TorNetworkFile. Root writes it; the torrc files are rendered from it.
+	GlobalTorAuthoritiesFile = "tor-network.json"
+
+	// GlobalTorArchiveDir is the directory below a directory authority's
+	// DataDirectory that holds the archive of its votes and consensuses.
+	GlobalTorArchiveDir = "archive"
+
+	// GlobalTorExitRejectFile, in GlobalStateRoot, is the exit operator's list of destinations
+	// the exit refuses (one CIDR or address, optionally with :port, per line). It is how an
+	// abuse complaint about a destination is answered; an install keeps it.
+	GlobalTorExitRejectFile = "tor-exit-reject"
 
 	// GlobalBinDir holds the binaries the global units run: root-owned, 0755,
 	// outside /opt/orama so the units' tmpfs over /opt/orama does not hide them.
@@ -78,6 +112,12 @@ const (
 	// The node report reads it. The provider writes its file; nothing writes the relay's yet.
 	GlobalMonitorFile = "monitor.json"
 )
+
+// GlobalTorrcFor is the torrc of the Tor role whose DataDirectory is home. It is
+// beside the DataDirectory, in the root-owned state root, not inside it: the
+// Tor account owns its DataDirectory and could rewrite a file there (its own
+// exit policy, say) and have the change survive a restart.
+func GlobalTorrcFor(home string) string { return home + ".torrc" }
 
 // ColocatedGlobalIPFSAPIURL is the public Kubo RPC on a co-located machine.
 func ColocatedGlobalIPFSAPIURL() string { return hostPortURL(GlobalNetnsAddr, GlobalIPFSAPIPort) }

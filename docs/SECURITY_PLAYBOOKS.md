@@ -123,8 +123,19 @@ chain-id is not settled. Rehearse it on stagenet first. Not possible: adding a s
 
 `x/relay` pays relays from reports signed by a reporter set. The set is separate from the `DIRAUTH`
 role in `x/nodes`, which is only a registered, bonded role. Nothing on chain links a reporter to a
-`DIRAUTH` node. No code runs a directory authority yet (`core/pkg/tornet` validates a parameter
-set and nothing more), so a compromise today means a compromised reporter key.
+`DIRAUTH` node. A directory authority of the Orama Tor network is installed with
+`orama global install --services dirauth` ([TOR_NETWORK.md](TOR_NETWORK.md#directory-authorities)); the
+reporter service that feeds `x/relay` from its votes is not built, so a compromise of the reporter
+set means a compromised reporter key, and a compromise of an authority host means its signing key and
+relay identity (the authority identity key is offline).
+
+**A compromised authority host.** Its identity key is offline, so the host's compromise cannot mint
+new certificates. Remove the authority from `tor-network.json`, ship the file in an emergency release
+(install re-reads it; wallets receive it with their update), and run a ceremony for the replacement
+(`orama global tor ceremony`). The other authorities keep voting meanwhile; three tolerate one loss
+and two compromised or down lose the consensus. Rotate the signing certificate of a host that is
+suspected, not compromised, with `tor-gencert --reuse` on the offline machine
+([TOR_NETWORK.md](TOR_NETWORK.md#rotating-a-signing-certificate-before-month-12)).
 
 **What can be seen**
 - `oramad query relay reporters`, `params`, `epoch <n>`, `relay <fingerprint>` and `invariants`.
@@ -150,7 +161,8 @@ set and nothing more), so a compromise today means a compromised reporter key.
   reaches it. There is no unjail.
 - Slashing or unbonding another operator's `DIRAUTH` node: node messages are signed by the owner only.
 - Changing the quorum, caps or uptime minimum: `x/relay` parameters are genesis-only.
-- Revoking or rotating directory-authority certificates: no code issues them.
+- Revoking a directory-authority certificate on chain or from the network: the certificates are made and
+  rotated offline by hand, and removing an authority is a new network file in a release.
 - Until a majority of authorities is independent, Orama could list only its own relays. That is a
   declared trust point, and the VPN is not public until it is fixed.
 

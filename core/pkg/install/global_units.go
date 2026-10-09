@@ -13,8 +13,9 @@ import (
 // Global unit accounts and paths. `orama global install` (InstallGlobal)
 // writes the chain (RenderGlobalChainUnit, under cosmovisor), public Kubo and
 // its GC timer, provider, archiver, indexer and repair units; the cluster
-// install writes none of them, and the relay, Tor, sbws and reporter
-// renderers here are not installed by anything yet.
+// install writes none of them, and the sbws and reporter renderers
+// here and the relay are not installed by anything yet. The Tor roles (dirauth,
+// relay, onion) are, with their torrc (global_install_tor.go).
 // chain/scripts/stagenet/deploy.sh writes its own orama-global-chain unit for
 // the stagenet mesh; this one is the global-role unit, with no WireGuard
 // dependency and no cluster secret path.
@@ -32,7 +33,13 @@ const (
 	globalArchiverUser = "orama-archiver"
 	globalRepairUser   = "orama-repair"
 	globalIndexerUser  = "orama-indexer"
-	globalTorUser      = "debian-tor"
+	// Each Tor role runs as an account of its own, not as the Tor package's
+	// debian-tor: an onion service reachable by anyone on the network must not
+	// share a uid with an authority's signing key.
+	globalTorDirauthUser = "orama-tor-dirauth"
+	globalTorRelayUser   = "orama-tor-relay"
+	globalTorOnionUser   = "orama-tor-onion"
+	globalTxGateUser     = "orama-txgate"
 
 	globalIPFSHome  = constants.GlobalIPFSHome
 	globalRelayHome = constants.GlobalRelayHome
@@ -268,32 +275,101 @@ ExecStart=%s
 `, description, user, user, state, home, home, exec, globalSandboxTail)
 }
 
-// RenderGlobalTorRelayUnit is the public relay. Tor is the distro binary.
+// RenderGlobalTorRelayUnit is the relay of the Orama Tor network, and its exit
+// when the torrc says so (the unit is the same). Tor is the distro binary.
 // MemoryDenyWriteExecute is safe for tor and is not set on the Go services.
 func RenderGlobalTorRelayUnit() string {
-	return renderTorUnit("Orama Tor relay", "orama-global/tor-relay",
-		fmt.Sprintf("ORPort %d", constants.GlobalTorORPort))
+	return renderTorUnit("Orama Tor relay", globalTorRelayUser, constants.GlobalTorRelayHome)
 }
 
-// RenderGlobalTorDirauthUnit is a directory authority. It is not started on
-// an ordinary global node.
+// RenderGlobalTorDirauthUnit is a directory authority of the Orama Tor
+// network. It is a relay as well, so it publishes the ORPort and the DirPort.
 func RenderGlobalTorDirauthUnit() string {
-	return renderTorUnit("Orama Tor directory authority", "orama-global/tor-dirauth",
-		fmt.Sprintf("ORPort %d\nDirPort %d", constants.GlobalTorORPort, constants.GlobalTorDirPort))
+	return renderTorUnit("Orama Tor directory authority", globalTorDirauthUser, constants.GlobalTorDirauthHome)
 }
 
-// RenderGlobalTorOnionUnit is the validator onion that forwards tx submission
-// to the local chain RPC. It publishes no ORPort.
+// RenderGlobalTorOnionUnit is the validator onion service, a Tor client that
+// publishes one hidden service and forwards it to the tx gate. It publishes no
+// ORPort and relays nothing.
 func RenderGlobalTorOnionUnit() string {
-	return renderTorUnit("Orama validator tx onion", "orama-global/tor-onion",
-		fmt.Sprintf("HiddenServicePort 80 127.0.0.1:%d", constants.ChainRPCPort))
+	unit := renderTorUnit("Orama validator tx onion", globalTorOnionUser, constants.GlobalTorOnionHome)
+	return strings.Replace(unit, "After=network-online.target\nWants=network-online.target\n",
+		"After=network-online.target "+constants.GlobalTxGateUnit+"\nWants=network-online.target "+constants.GlobalTxGateUnit+"\n", 1)
 }
 
-func renderTorUnit(description, state, note string) string {
-	home := "/var/lib/" + state
-	exec := "/usr/bin/tor -f " + home + "/torrc"
-	extra := "MemoryDenyWriteExecute=yes\n# " + note + "\n"
-	return renderGlobalUnitExtra(description, globalTorUser, globalTorUser, "", state, home, exec, extra)
+// renderTorUnit runs tor from the torrc in its own state directory. Tor does
+// not need netlink to publish a configured Address, but its interface
+// enumeration does, so the unit allows it as the public Kubo's does. A syscall
+// the filter refuses returns EPERM instead of killing the daemon.
+func renderTorUnit(description, user, home string) string {
+	state := strings.TrimPrefix(home, "/var/lib/")
+	exec := "/usr/bin/tor -f " + constants.GlobalTorrcFor(home)
+	extra := "MemoryDenyWriteExecute=yes\nSystemCallErrorNumber=EPERM\n"
+	unit := renderGlobalUnitExtra(description, user, user, "", state, home, exec, extra)
+	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK\n", 1)
+	// An exit's own policy keeps it out of the co-located namespace's address
+	// range (the chain's RPC and REST API, Kubo's RPC and the indexer listen
+	// there); this refuses the same range in the kernel, whatever tor does.
+	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny="+torNamespaceRange+"\nIPAddressAllow=localhost\n", 1)
+}
+
+// torNamespaceRange is the benchmarking range the co-located namespace's veth
+// pair lives in (198.18.0.0/30) and its services listen on.
+const torNamespaceRange = "198.18.0.0/15"
+
+// denyLoopback is a relay or authority unit in the co-located namespace: its
+// resolver there is a public one (globalnetns.Resolvers), so it has no use for
+// loopback, and loopback in the namespace holds the chain's gRPC and metrics
+// listeners. IPAddressAllow would win over a deny, so it is dropped.
+func denyLoopback(unit string) (string, error) {
+	const allow = "IPAddressAllow=localhost\n"
+	if strings.Count(unit, allow) != 1 {
+		return "", fmt.Errorf("the unit has no single %q line to replace with a loopback deny", strings.TrimSpace(allow))
+	}
+	return strings.Replace(unit, allow, "IPAddressDeny=127.0.0.0/8\n", 1), nil
+}
+
+// RenderGlobalTxGateUnit is the tx gate behind the validator onion service:
+// the one HTTP listener the onion forwards to, on loopback, which passes three
+// calls to the chain's REST API (pkg/txgate). It has no key and no access to
+// the chain home.
+func RenderGlobalTxGateUnit() string {
+	exec := fmt.Sprintf("%s/%s global txgate --listen %s --upstream %s", globalBinDir, globalOramaCLI, txGateListen, constants.LocalChainAPIURL())
+	return needsChain(renderGlobalUnit("Orama validator tx gate", globalTxGateUser, constants.GlobalTxGateHome, exec, ""))
+}
+
+// txGateListen is where the tx gate listens and the onion torrc forwards to.
+var txGateListen = net.JoinHostPort("127.0.0.1", strconv.Itoa(constants.GlobalTxGatePort))
+
+// RenderGlobalTorArchiveUnit is the oneshot that copies the directory
+// authority's consensus and votes into its archive. Its timer is
+// RenderGlobalTorArchiveTimer.
+func RenderGlobalTorArchiveUnit() string {
+	home := constants.GlobalTorDirauthHome
+	exec := fmt.Sprintf("%s/%s global tor archive --data-dir %s --archive-dir %s/%s", globalBinDir, globalOramaCLI, home, home, constants.GlobalTorArchiveDir)
+	unit := renderGlobalOneshot("Orama Tor vote archive", globalTorDirauthUser, strings.TrimPrefix(home, "/var/lib/"), home, exec)
+	// It copies files and talks to nobody.
+	unit = strings.Replace(unit, "RestrictAddressFamilies=AF_INET AF_UNIX\n", "RestrictAddressFamilies=AF_UNIX\n", 1)
+	return strings.Replace(unit, "IPAddressAllow=localhost\n", "IPAddressDeny=any\nIPAddressAllow=localhost\n", 1)
+}
+
+// RenderGlobalTorArchiveTimer fires the archive. A consensus gains signatures
+// for a few minutes after it is cached and the shortest voting interval is five
+// minutes, so the archive looks every minute: a period cannot pass unseen.
+func RenderGlobalTorArchiveTimer() string {
+	return `[Unit]
+Description=Schedule the Orama Tor vote archive
+# Restarting orama-node must not restart this timer.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=` + constants.GlobalTorArchiveUnit + `
+
+[Install]
+WantedBy=timers.target
+`
 }
 
 // RenderGlobalSBWSUnit measures relay bandwidth. Dirauth hosts only.

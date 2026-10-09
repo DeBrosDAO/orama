@@ -65,6 +65,8 @@ type GlobalFirewall struct {
 	PublicStorage bool
 	// Provider is the storage provider's upload and retrieval HTTP.
 	Provider bool
+	// TorRelay is a Tor relay or exit: the ORPort. Dirauth is a directory
+	// authority, which is a relay too, so it publishes the ORPort and the DirPort.
 	TorRelay bool
 	Dirauth  bool
 	// Netns says the services run in the orama-global network namespace: their
@@ -230,7 +232,7 @@ func (fp *FirewallProvisioner) globalPortSpecs() []string {
 	if fp.config.Global.Provider {
 		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalProviderPort))
 	}
-	if fp.config.Global.TorRelay {
+	if fp.config.Global.TorRelay || fp.config.Global.Dirauth {
 		specs = append(specs, fmt.Sprintf("%d/tcp", constants.GlobalTorORPort))
 	}
 	if fp.config.Global.Dirauth {

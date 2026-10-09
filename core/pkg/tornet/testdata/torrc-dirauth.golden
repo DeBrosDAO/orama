@@ -1,0 +1,26 @@
+# Managed by Orama Network: rewritten on every `orama global install`.
+# Relay of the Orama Tor network orama-teststage (docs/TOR_NETWORK.md).
+DataDirectory /var/lib/orama-global/tor-dirauth
+Log notice stdout
+SafeLogging 1
+UseDefaultFallbackDirs 0
+DirAuthority OramaAuth1 orport=31020 v3ident=00000000000000000000000000000000000000A0 57.129.166.16:31021 00000000000000000000000000000000000000B0
+DirAuthority OramaAuth2 orport=31020 v3ident=00000000000000000000000000000000000000A1 57.129.166.17:31021 00000000000000000000000000000000000000B1
+DirAuthority OramaAuth3 orport=31020 v3ident=00000000000000000000000000000000000000A2 161.97.184.199:31021 00000000000000000000000000000000000000B2
+SocksPort 0
+Nickname OramaAuth1
+ContactInfo ops@example.org 0xabc
+Address 57.129.166.16
+ORPort 31020 IPv4Only
+DirPort 31021
+RelayBandwidthRate 100 Mbits
+RelayBandwidthBurst 100 Mbits
+AuthoritativeDirectory 1
+V3AuthoritativeDirectory 1
+V3AuthVotingInterval 30 minutes
+V3AuthVoteDelay 300 seconds
+V3AuthDistDelay 300 seconds
+# Sybil control: at most one relay per address is listed.
+AuthDirMaxServersPerAddr 1
+ExitRelay 0
+ExitPolicy reject *:*

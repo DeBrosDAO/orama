@@ -1923,9 +1923,10 @@ The storage commands:
     trades, and `MarketplaceLive` is `false`.
   - The tests use a stub verifier that returns a verified report so the checks after verification
     can be tested. It exists only in `_test.go`, and it is not a quote.
-- `core/pkg/tornet` accepts a parameter set only when it names at least three
-  authorities, the exit policy is `reject *:*`, and signing certificates last
-  12 months. `StartExit` refuses to launch an exit.
+- `core/pkg/tornet` is no longer one of these: the Orama Tor network is built
+  ([TOR_NETWORK.md](TOR_NETWORK.md)). Its network file is refused with fewer than
+  three authorities, and an exit is installed only on a network file that says
+  `allow_exit`.
 
 ## A known infrastructure gotcha: use pebbledb, not goleveldb
 
@@ -1981,8 +1982,8 @@ starts every node in the background on distinct localhost ports in the 31000-310
 is localnet only. A production global node uses 31000–31004 for the chain (p2p public, RPC, gRPC,
 REST and Prometheus on loopback), 31010–31013 for public storage (swarm public, Kubo RPC and
 gateway on loopback (the RPC on the namespace address when co-located), provider HTTP public), 31014 for relay metrics on loopback, 31015 for the
-chain indexer's read API on loopback, and 31020–31021
-for a Tor relay and a dirauth. The public Kubo on a global node has no swarm.key,
+chain indexer's read API on loopback, 31020–31021
+for a Tor relay and a dirauth, and 31022 for the validator tx gate on loopback. The public Kubo on a global node has no swarm.key,
 announces only pinned content (`Provide.Strategy=pinned`, which Kubo has read since v0.38), and
 does not dial or announce private ranges, so it cannot join a cluster's mesh.
 Every setup
@@ -2400,6 +2401,15 @@ circuit, so two transactions never share one. A failed onion path returns the er
 sent, and nothing was tried outside Tor") and never falls back to the clearnet. Reads (`orama chain`) do not
 go through Tor yet. A wallet that cannot use Tor or reach a validator submits through the gateway instead
 (`POST /v1/chain/broadcast`, above).
+
+A validator's onion service is installed by `orama global install --services onion`
+([TOR_NETWORK.md](TOR_NETWORK.md#the-validator-onion-service)). It serves port 80 and forwards to
+`orama global txgate`, which passes only the three calls this client makes (`GET
+/cosmos/auth/v1beta1/accounts/{address}`, `POST /cosmos/tx/v1beta1/txs`, `GET /cosmos/tx/v1beta1/txs/{hash}`)
+to the node's REST API and answers 404 to the rest. The service lives on the **Orama Tor network**, so
+`--onion-socks` must point at a client of that network (`tornet.ClientTorrc`, SOCKS port
+`constants.TorNetSOCKSPort`, 9052 by convention); the default `127.0.0.1:9050` is the node's client of the public
+Tor network, which cannot resolve it. No unit on a node runs a client of the Orama network.
 
 ## `x/wasm`: contracts
 

@@ -1,0 +1,68 @@
+package tornet
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestReadNodeInfo_relayListedInTheConsensus(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, dataDirFingerprint), []byte("OramaAuth1 0000 0000 0000 0000 0000 0000 0000 0000 0000 00B0\n"))
+	write(t, filepath.Join(home, dataDirFingerprintEd), []byte("OramaAuth1 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE\n"))
+	write(t, filepath.Join(home, DataDirConsensus), readFixture(t, "consensus-microdesc.txt"))
+	now := time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC)
+	info, err := ReadNodeInfo(home, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Nickname != "OramaAuth1" || info.Fingerprint != "00000000000000000000000000000000000000B0" || info.Onion != "" {
+		t.Fatalf("info = %+v", info)
+	}
+	c := info.Consensus
+	if c == nil || !c.Fresh || !c.Valid || !c.Listed || c.Relays != 3 || c.Exits != 1 || c.Guards != 2 || len(c.ListedFlags) == 0 {
+		t.Fatalf("consensus = %+v", c)
+	}
+	late, err := ReadNodeInfo(home, now.Add(3*time.Hour))
+	if err != nil || late.Consensus.Fresh || late.Consensus.Valid {
+		t.Fatalf("a stale consensus is reported fresh: %+v %v", late.Consensus, err)
+	}
+}
+
+func TestReadNodeInfo_aRelayTheNetworkDoesNotListIsNotListed(t *testing.T) {
+	home := t.TempDir()
+	write(t, filepath.Join(home, dataDirFingerprint), []byte("Newcomer 1111 1111 1111 1111 1111 1111 1111 1111 1111 1111\n"))
+	write(t, filepath.Join(home, dataDirMicrodescConsens), readFixture(t, "consensus-microdesc.txt"))
+	info, err := ReadNodeInfo(home, time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC))
+	if err != nil || info.Consensus == nil || info.Consensus.Listed {
+		t.Fatalf("info = %+v %v", info, err)
+	}
+}
+
+func TestReadNodeInfo_onionAndNothingYet(t *testing.T) {
+	home := t.TempDir()
+	if info, err := ReadNodeInfo(home, time.Now()); err != nil || info.Nickname != "" || info.Consensus != nil {
+		t.Fatalf("a DataDirectory tor has not written to = %+v %v", info, err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "onion"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	onion := strings.Repeat("a", 56) + ".onion"
+	write(t, filepath.Join(home, "onion", "hostname"), []byte(onion+"\n"))
+	info, err := ReadNodeInfo(home, time.Now())
+	if err != nil || info.Onion != onion {
+		t.Fatalf("info = %+v %v", info, err)
+	}
+}
+
+func TestReadNodeInfo_aBrokenFileIsAnErrorNotAnEmptyField(t *testing.T) {
+	for name, file := range map[string]string{dataDirFingerprint: "garbage", dataDirFingerprintEd: "nick short", DataDirConsensus: "garbage\n"} {
+		home := t.TempDir()
+		write(t, filepath.Join(home, name), []byte(file))
+		if _, err := ReadNodeInfo(home, time.Now()); err == nil {
+			t.Errorf("a broken %s was read", name)
+		}
+	}
+}

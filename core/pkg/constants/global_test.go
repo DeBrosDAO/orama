@@ -42,6 +42,7 @@ func TestGlobalPorts_doNotCollideWithClusterOrChain(t *testing.T) {
 		constants.GlobalIndexerPort,
 		constants.GlobalTorORPort,
 		constants.GlobalTorDirPort,
+		constants.GlobalTxGatePort,
 	}
 	seen := map[int]bool{}
 	for _, p := range global {

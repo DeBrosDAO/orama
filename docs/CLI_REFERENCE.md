@@ -118,6 +118,11 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama global start`](#orama-global-start) — Start the installed global services, chain first (run as root)
   - [`orama global status`](#orama-global-status) — Show the state of each installed global service (run as root)
   - [`orama global stop`](#orama-global-stop) — Stop the installed global services, chain last (run as root)
+  - [`orama global tor`](#orama-global-tor) — The Orama Tor network: authority key ceremony, node identity, vote archive
+    - [`orama global tor archive`](#orama-global-tor-archive) — Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
+    - [`orama global tor ceremony`](#orama-global-tor-ceremony) — Generate the directory authorities' keys and the network file (run on an offline machine)
+    - [`orama global tor info`](#orama-global-tor-info) — Show this node's Tor identities and the consensus it holds (run as root)
+  - [`orama global txgate`](#orama-global-txgate) — Serve the validator's transaction gate on loopback (run by orama-global-txgate.service)
   - [`orama global unbond`](#orama-global-unbond) — Start unbonding norama from one role
   - [`orama global validator`](#orama-global-validator) — Back up, move and manage this node's validator key
     - [`orama global validator check-sign-floor`](#orama-global-validator-check-sign-floor) — Fail when the chain must not start: key moved away or state behind its floor
@@ -1569,7 +1574,7 @@ private key stays in its file; the command writes the public key and the
 signature. register, bond, unbond, capacity and retire build the node's chain
 messages.
 
-Subcommands: `bind`, `bond`, `capacity`, `install`, `register`, `restart`, `retire`, `stage-oramad`, `start`, `status`, `stop`, `unbond`, `validator`
+Subcommands: `bind`, `bond`, `capacity`, `install`, `register`, `restart`, `retire`, `stage-oramad`, `start`, `status`, `stop`, `tor`, `txgate`, `unbond`, `validator`
 
 ### orama global bind
 
@@ -1656,8 +1661,10 @@ orama global install [flags]
 ```
 
 Install global services on this machine: chain, and optionally ipfs,
-provider, archiver, indexer or repair. The chain is required: the other
-services reach it only on this host's loopback RPC. provider needs ipfs beside
+provider, archiver, indexer, repair, and the roles of the Orama Tor network
+(dirauth, relay, relay,exit, onion). The chain is required unless the machine
+only runs dirauth or relay: the other services reach it only on this host's
+loopback RPC. provider needs ipfs beside
 it (it pins public deals through the public Kubo). provider and repair are
 never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
@@ -1696,6 +1703,27 @@ denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
 command again with the same flags changes nothing but the binaries' bytes.
 
+The roles of the Orama Tor network (docs/TOR_NETWORK.md) run the distro's tor,
+installed from the Tor Project's repository, with a torrc this command writes
+from the network's tor-network.json, staged beside the binaries; the network file
+is checked before anything on the host changes.
+  relay           a relay (ORPort 31020/tcp). --tor-address, --tor-contact and
+                  --tor-node-id are required; the nickname is derived from the
+                  node id.
+  relay,exit      the same relay as an exit, under a reduced exit policy. Opt-in:
+                  the network file must say allow_exit. Destinations in
+                  /var/lib/orama-global/tor-exit-reject (one CIDR or address, with
+                  an optional :port, per line) are refused first.
+  dirauth         a directory authority (ORPort 31020/tcp, DirPort 31021/tcp). It
+                  is a relay already, so it never goes beside relay. It needs
+                  --tor-address to be one of the network's authorities and
+                  --tor-authority-keys, its bundle from 'orama global tor
+                  ceremony'; a bundle that is not this authority's is refused.
+                  A dirauth or relay host needs no chain.
+  onion           the validator's onion service, forwarding to a tx gate on
+                  loopback that serves only account read, broadcast and tx lookup.
+                  It publishes no port and needs the chain.
+
 --colocated installs the services on a machine that already runs a cluster node
 (orama node setup first). The global units run in their own network namespace,
 orama-global, joined to the root namespace by a veth pair (198.18.0.0/30): they
@@ -1724,9 +1752,15 @@ refuses the install, and the set is kept by later installs.
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
 | `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
-| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair] [required] |
+| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
+| `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
+| `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>) |
+| `--tor-bandwidth-mbit` | `0` | dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited) |
+| `--tor-contact` | — | dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes) |
+| `--tor-family` | — | dirauth, relay: the RSA fingerprints of the operator's other relays |
+| `--tor-node-id` | — | relay: the on-chain node id the relay's nickname is derived from |
 
 ### orama global register
 
@@ -1881,6 +1915,129 @@ orama global stop [service...]
 Stop the installed orama-global-* units, or only the named ones, in reverse
 start order. Stopping the chain stops every installed service that needs it
 first.
+
+### orama global tor
+
+The Orama Tor network: authority key ceremony, node identity, vote archive
+
+```
+orama global tor
+```
+
+The Orama Tor network is a separate anonymity network built from unmodified
+upstream Tor code, run by Orama's own directory authorities (docs/TOR_NETWORK.md).
+The roles are installed by 'orama global install --services dirauth|relay|relay,exit|onion'.
+
+Subcommands: `archive`, `ceremony`, `info`
+
+### orama global tor archive
+
+Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
+
+```
+orama global tor archive [flags]
+```
+
+Copy the consensus the authority holds, the votes that made it and, with
+--bandwidth-file, the bandwidth file it voted with, from --data-dir into
+--archive-dir/<valid-after>/ with a MANIFEST.json of SHA-256 digests. Every vote,
+consensus and bandwidth file of the network is then recomputable by anyone who
+holds the archive. Running it again changes nothing for a period that is
+archived; a consensus is replaced only by the same consensus with more
+signatures.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--archive-dir` | — | Where the archive is written [required] |
+| `--bandwidth-file` | — | The bandwidth file the authority votes with |
+| `--data-dir` | — | The authority's tor DataDirectory [required] |
+
+### orama global tor ceremony
+
+Generate the directory authorities' keys and the network file (run on an offline machine)
+
+```
+orama global tor ceremony [flags]
+```
+
+Generate the keys of a set of directory authorities with the upstream tor and
+tor-gencert, which must be installed on this machine, and write the network file.
+
+Run it on an air-gapped machine. For each --authority NICKNAME=IPv4 it writes,
+below --out:
+  offline/<nickname>/authority_identity_key   the identity key, encrypted with the
+                                              passphrase; it signs certificates and
+                                              nothing else. Move it to offline media
+                                              (encrypted, in two places, or an HSM)
+                                              and delete it from this machine.
+  deploy/<nickname>/keys/                     what the authority host installs: the
+                                              signing key and its 12-month
+                                              certificate, and the relay identity.
+and once tor-network.json (public: the authority list every relay and client
+needs, to stage beside the release) and TRANSCRIPT.txt (the fingerprints to read
+aloud and sign). --out must not exist or be empty: a ceremony never writes over
+keys.
+
+--passphrase-file holds the identity-key passphrase (at least 16 characters, one
+line, mode 0600). Authority ports are fixed at 31020 (ORPort) and 31021 (DirPort),
+the ports the global firewall opens. --bootstrap (default) writes the network file
+with bootstrap true, which a new network needs for its first consensus; set it to
+false in the file once the first consensus is signed. --allow-exit puts allow_exit
+in the file: only a network whose owner runs exits sets it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--allow-exit` | `false` | Let nodes of this network be installed as exits |
+| `--allow-shared-subnets` | `false` | Let circuits use two relays of one /16 (a network with fewer /16 networks than hops needs it) |
+| `--authority` | — | A directory authority, NICKNAME=IPv4 (repeatable, at least three) [required] |
+| `--bootstrap` | `true` | Write bootstrap true: a new network assumes reachability until its first consensus |
+| `--dist-delay-seconds` | `300` | Seconds authorities wait for signatures |
+| `--hsdir-min-uptime-hours` | `0` | Hours of uptime before a relay gets the HSDir flag (0 = Tor's default of 96; a new network sets a few) |
+| `--name` | — | Network name, lowercase letters, digits and dashes [required] |
+| `--out` | — | Output directory; must not exist or be empty [required] |
+| `--passphrase-file` | — | File holding the identity-key passphrase, mode 0600 [required] |
+| `--tor-gencert` | — | The tor-gencert binary (default: tor-gencert on PATH) |
+| `--tor` | — | The tor binary (default: tor on PATH) |
+| `--vote-delay-seconds` | `300` | Seconds authorities wait for votes |
+| `--voting-interval-minutes` | `60` | Minutes between consensuses; must divide 24 hours |
+
+### orama global tor info
+
+Show this node's Tor identities and the consensus it holds (run as root)
+
+```
+orama global tor info
+```
+
+For each Tor role installed on this node (directory authority, relay or exit,
+validator onion service), print the nickname and fingerprints tor made (what
+'MsgRegisterRelay' and a node's onion endpoint need), the onion address, and a
+summary of the consensus the process holds: when it is valid, how many relays
+it lists, and whether it lists this relay. A role that has not started yet shows
+no identity. The root's --json prints the same as a JSON array.
+
+### orama global txgate
+
+Serve the validator's transaction gate on loopback (run by orama-global-txgate.service)
+
+```
+orama global txgate [flags]
+```
+
+Serve the three calls a wallet needs to submit one transaction (read the signer's
+account, broadcast, look the transaction up) from the chain's REST API, and
+nothing else. The validator's onion service forwards to this listener, so the
+rest of the chain API is not reachable over the onion. Requests arrive from the
+local Tor process, so the limits are on the whole gate and no request is logged.
+--listen must be a loopback address.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--burst` | `40` | Requests that may arrive at once |
+| `--listen` | — | Loopback host:port to listen on [required] |
+| `--max-in-flight` | `16` | Most requests asked of the chain API at once |
+| `--rate` | `20` | Requests per second the gate forwards, in total |
+| `--upstream` | — | The chain REST API, http://host:port [required] |
 
 ### orama global unbond
 

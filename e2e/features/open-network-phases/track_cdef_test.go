@@ -18,6 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/monitor"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
 const (
@@ -149,20 +150,26 @@ func TestPhaseD_sealedSlotsOpenOnlyWithTheSeeds(t *testing.T) {
 	}
 }
 
-// TestPhaseE_noNodeIsARelayOrExit: of track E only fail-closed pieces
-// shipped (core/pkg/tornet refuses an exit; docs/CHAIN.md "Other fail-closed
-// pieces"): no node of the fleet runs a relay unit, and the node's Tor client
-// listens on loopback only, so no fleet node relays or exits Tor traffic.
-func TestPhaseE_noNodeIsARelayOrExit(t *testing.T) {
-	phase(t, "E", "docs/CHAIN.md", "`StartExit` refuses to launch an exit", trackE)
+// TestPhaseE_torListensOnlyWhereARoleIsInstalled: track E (the Orama Tor
+// network, docs/TOR_NETWORK.md) is delivered as opt-in roles. A node publishes
+// a Tor listener only for a role it was installed with: the ORPort for a
+// relay or an authority, the DirPort for an authority, and the node's own Tor
+// client stays on loopback. The roles themselves are tor-network.
+func TestPhaseE_torListensOnlyWhereARoleIsInstalled(t *testing.T) {
+	phase(t, "E", "docs/TOR_NETWORK.md", "Orama Tor network", trackE)
 	f := harness.Fleet(t)
 	for _, n := range f.State.Nodes {
-		if s := f.Unit(t, n, "orama-global-relay.service"); s == "active" {
-			t.Errorf("%s runs a Tor relay", n.Name)
-		}
+		dirauth := f.Unit(t, n, constants.GlobalTorDirauthUnit) == "active"
+		relay := f.Unit(t, n, constants.GlobalTorRelayUnit) == "active"
 		for _, l := range f.Listeners(t, n) {
-			if l.Process == "tor" && l.Public() {
-				t.Errorf("%s: tor listens publicly on %s:%d", n.Name, l.Addr, l.Port)
+			if l.Process != "tor" || !l.Public() {
+				continue
+			}
+			switch {
+			case l.Port == constants.GlobalTorORPort && (dirauth || relay):
+			case l.Port == constants.GlobalTorDirPort && dirauth:
+			default:
+				t.Errorf("%s: tor listens publicly on %s:%d with no role installed for it", n.Name, l.Addr, l.Port)
 			}
 		}
 	}
