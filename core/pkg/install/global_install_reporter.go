@@ -17,6 +17,9 @@ import (
 const (
 	reporterOperatorFile  = "operator"
 	reporterAuthorityFile = "authority-id"
+	// reporterVoteIntervalFile holds the network's voting interval as a
+	// duration ("30m"), which the reporter measures an epoch against.
+	reporterVoteIntervalFile = "vote-interval"
 	// votesDirMode is the votes directory: the authority's account writes, the
 	// reporter's group reads and enters, nobody else does, and a file made in it
 	// takes the reporter's group (setgid), so the archive oneshot, which cannot
@@ -35,9 +38,13 @@ type reporterPlan struct {
 	// network file, the dir-source of its votes.
 	authorityID string
 	operator    string
+	// voteInterval is the network file's voting_interval_minutes as a duration
+	// string: the reporter must judge an epoch by the schedule the authorities
+	// run, not by a default.
+	voteInterval string
 }
 
-// planGlobalReporter derives the authority-id from the network file: the
+// planGlobalReporter derives the authority-id and the voting interval from the network file: the
 // reporter is in the chain module and does not import the parser. It returns
 // nil when the install has no reporter. The authority is the one published at
 // --tor-address, which the dirauth role of this install has already matched
@@ -50,11 +57,14 @@ func planGlobalReporter(opts GlobalInstallOptions, tor *torPlan) (*reporterPlan,
 	if !ok {
 		return nil, fmt.Errorf("--tor-address %s is not a directory authority of network %s, so the reporter has no authority identity to report for", opts.Tor.Address, tor.network.Name)
 	}
-	return &reporterPlan{authorityID: auth.V3Ident, operator: opts.Tor.ReporterOperator}, nil
+	return &reporterPlan{
+		authorityID: auth.V3Ident, operator: opts.Tor.ReporterOperator,
+		voteInterval: fmt.Sprintf("%dm", tor.network.VotingIntervalMinutes),
+	}, nil
 }
 
 // applyGlobalReporter prepares the reporter's home: owned by its account with
-// mode 0700, and the operator and authority-id files. An existing hot key,
+// mode 0700, and the operator, authority-id and vote-interval files. An existing hot key,
 // state and report are left as they are. It also makes the votes directory the
 // authority's archive oneshot writes its own vote to (see votesDirMode).
 func applyGlobalReporter(h GlobalHost, plan *reporterPlan) error {
@@ -69,7 +79,7 @@ func applyGlobalReporter(h GlobalHost, plan *reporterPlan) error {
 	if err := votesDir(h); err != nil {
 		return err
 	}
-	for _, f := range []struct{ name, value string }{{reporterOperatorFile, plan.operator}, {reporterAuthorityFile, plan.authorityID}} {
+	for _, f := range []struct{ name, value string }{{reporterOperatorFile, plan.operator}, {reporterAuthorityFile, plan.authorityID}, {reporterVoteIntervalFile, plan.voteInterval}} {
 		if err := ownedFile(h, filepath.Join(home, f.name), []byte(f.value+"\n"), uid, gid); err != nil {
 			return err
 		}

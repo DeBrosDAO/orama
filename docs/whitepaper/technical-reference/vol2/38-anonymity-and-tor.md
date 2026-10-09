@@ -138,7 +138,7 @@ One file, one parser. Every role and every client calls `tornet.ParseNetwork` (`
 | `orama vpn up`, `orama vpn check` | `--network`, or `ORAMA_ONION_NETWORK` |
 | every chain transaction command | `--onion-network`, or `ORAMA_ONION_NETWORK` |
 | `orama global tor onions add` | `--network-file` |
-| the relay reporter | does not read it (the `chain` module cannot import `core`); its `authority-id` file holds the authority's `v3_ident` from this file |
+| the relay reporter | does not read it (the `chain` module cannot import `core`); its `authority-id` file holds the authority's `v3_ident` and its `vote-interval` file the `voting_interval_minutes` from this file |
 
 The parser is strict. Unknown JSON fields are an error, because a misspelt key must not leave a default in place; data after the object is an error; the file is at most 1 MiB. `Validate` then enforces:
 

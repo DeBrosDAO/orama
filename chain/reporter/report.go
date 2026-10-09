@@ -28,9 +28,10 @@ func reportPath(home string, epoch uint64) string {
 }
 
 // reportDue tries every closed epoch still owed. An epoch the chain took is
-// removed from st.Due, and so is one the chain can no longer take a report for
-// (settled, or past its report window); any other failure leaves it owed. cur is
-// the epoch in progress. st is saved when it changed.
+// removed from st.Due, and so is one that can never be reported (settled, past
+// its report window, or shorter than a voting interval); any other failure
+// leaves it owed. Each epoch's failure is an *EpochError. cur is the epoch in
+// progress. st is saved when it changed.
 func (r *Runner) reportDue(ctx context.Context, st *State, cur Epoch) ([]uint64, error) {
 	var done []uint64
 	var errs []error
@@ -41,12 +42,12 @@ func (r *Runner) reportDue(ctx context.Context, st *State, cur Epoch) ([]uint64,
 		case err == nil:
 			done = append(done, d.Epoch)
 			st.Reported = max(st.Reported, d.Epoch)
-		case errors.Is(err, ErrEpochSettled), errors.Is(err, ErrWindowClosed):
-			errs = append(errs, err)
+			continue
+		case errors.Is(err, ErrEpochSettled), errors.Is(err, ErrWindowClosed), errors.Is(err, ErrEpochTooShort):
 		default:
 			owed = append(owed, d)
-			errs = append(errs, err)
 		}
+		errs = append(errs, &EpochError{Epoch: d.Epoch, Err: err})
 	}
 	if len(owed) == len(st.Due) {
 		return done, errors.Join(errs...)
@@ -60,23 +61,25 @@ func (r *Runner) reportDue(ctx context.Context, st *State, cur Epoch) ([]uint64,
 
 // closedEpoch is ErrEpochSettled or ErrWindowClosed when the chain takes no
 // more reports for the epoch given the epoch in progress, nil when it does. The
-// report saved for such an epoch is removed: nothing will send it.
+// report saved for such an epoch is removed: nothing will send it. A report
+// that cannot be removed is an ordinary failure, which leaves the epoch owed so
+// the removal is tried again.
 func (r *Runner) closedEpoch(ctx context.Context, epoch uint64, cur Epoch) error {
 	settled, err := r.chain.EpochSettled(ctx, epoch)
 	if err != nil {
-		return fmt.Errorf("check whether epoch %d is settled: %w", epoch, err)
+		return fmt.Errorf("check whether the epoch is settled: %w", err)
 	}
 	var closed error
 	switch {
 	case settled:
-		closed = fmt.Errorf("%w: epoch %d", ErrEpochSettled, epoch)
+		closed = ErrEpochSettled
 	case cur.Number > epoch && cur.Number-epoch > relaytypes.ReportWindowEpochs:
-		closed = fmt.Errorf("%w: epoch %d was open to reports until epoch %d began and the chain is at epoch %d", ErrWindowClosed, epoch, epoch+relaytypes.ReportWindowEpochs+1, cur.Number)
+		closed = fmt.Errorf("%w: it was open to reports until epoch %d began and the chain is at epoch %d", ErrWindowClosed, epoch+relaytypes.ReportWindowEpochs+1, cur.Number)
 	default:
 		return nil
 	}
 	if rerr := os.Remove(reportPath(r.cfg.Home, epoch)); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-		closed = errors.Join(closed, fmt.Errorf("remove the report of epoch %d: %w", epoch, rerr))
+		return fmt.Errorf("remove the report of the closed epoch: %w", rerr)
 	}
 	return closed
 }
@@ -95,7 +98,7 @@ func (r *Runner) reportEpoch(ctx context.Context, d Due, cur Epoch) error {
 	}
 	for _, m := range msgs {
 		if err := r.chain.Submit(ctx, m); err != nil {
-			return errors.Join(r.refusedSubmit(ctx, d.Epoch), fmt.Errorf("submit chunk %d of %d for epoch %d: %w", m.ChunkIndex+1, m.ChunkCount, d.Epoch, err))
+			return errors.Join(r.refusedSubmit(ctx, d.Epoch), fmt.Errorf("submit chunk %d of %d: %w", m.ChunkIndex+1, m.ChunkCount, err))
 		}
 	}
 	rep.Monitor.Epoch, rep.Monitor.Chunks, rep.Monitor.Relays = d.Epoch, len(msgs), len(rep.Entries)
@@ -103,7 +106,7 @@ func (r *Runner) reportEpoch(ctx context.Context, d Due, cur Epoch) error {
 		return err
 	}
 	if err := os.Remove(reportPath(r.cfg.Home, d.Epoch)); err != nil {
-		return fmt.Errorf("remove the sent report of epoch %d: %w", d.Epoch, err)
+		return fmt.Errorf("remove the sent report: %w", err)
 	}
 	return nil
 }
@@ -138,13 +141,16 @@ func (r *Runner) chosen(ctx context.Context, d Due) (savedReport, error) {
 		return savedReport{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	w := Window{From: time.Unix(0, d.FromUnixNano).UTC(), To: time.Unix(0, d.ToUnixNano).UTC()}
+	if _, err := expectedVotes(w, r.cfg.VoteInterval); err != nil {
+		return savedReport{}, err
+	}
 	votes, err := LoadVotes(r.cfg.VotesDir, r.cfg.Authority, w)
 	if err != nil {
 		return savedReport{}, err
 	}
 	obs, err := Observe(votes, w, r.cfg.VoteInterval)
 	if err != nil {
-		return savedReport{}, fmt.Errorf("epoch %d: %w", d.Epoch, err)
+		return savedReport{}, err
 	}
 	entries, mon, err := r.entries(ctx, obs)
 	if err != nil {

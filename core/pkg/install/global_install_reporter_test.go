@@ -1,6 +1,7 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,7 +36,10 @@ func TestInstallGlobal_reporterPreparesItsHomeFromTheNetworkFile(t *testing.T) {
 	if got := strings.TrimSpace(readFile(t, filepath.Join(home, "operator"))); got != reporterTestOperator {
 		t.Errorf("operator = %q", got)
 	}
-	for _, name := range []string{"authority-id", "operator"} {
+	if got, want := strings.TrimSpace(readFile(t, filepath.Join(home, "vote-interval"))), fmt.Sprintf("%dm", tf.network.VotingIntervalMinutes); got != want {
+		t.Errorf("vote-interval = %q, want the network file's voting interval %q", got, want)
+	}
+	for _, name := range []string{"authority-id", "operator", "vote-interval"} {
 		info, err := os.Stat(filepath.Join(home, name))
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Errorf("%s: %v %v, want mode 0600", name, info, err)
@@ -228,7 +232,7 @@ func TestReporterFileNamesMatchTheReporterCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", src, err)
 	}
-	for _, name := range []string{reporterOperatorFile, reporterAuthorityFile} {
+	for _, name := range []string{reporterOperatorFile, reporterAuthorityFile, reporterVoteIntervalFile} {
 		if !strings.Contains(string(data), `filepath.Join(fl.home, "`+name+`")`) {
 			t.Errorf("reporter.go does not read %q from its home", name)
 		}

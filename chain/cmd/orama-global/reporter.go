@@ -21,7 +21,6 @@ const reporterInterval = 5 * time.Minute
 type reporterFlags struct {
 	rpc, home, votes string
 	interval         time.Duration
-	voteInterval     time.Duration
 	chunk            int
 }
 
@@ -40,7 +39,11 @@ Running. An epoch whose votes the archive holds less than four fifths of is not 
 Relays that belong to this reporter's operator are left out.
 <home>/hot-key is the signing key, created on first start (mode 0600); its address must be
 in x/relay's reporter set. <home>/operator holds the operator address and
-<home>/authority-id the authority's 40-hex v3 identity (the dir-source line of its votes).
+<home>/authority-id the authority's 40-hex v3 identity (the dir-source line of its votes) and
+<home>/vote-interval the voting interval of that Tor network (voting_interval_minutes of
+tor-network.json, for example 30m); "orama global install" writes all three from the network
+file, so the reporter never assumes a schedule the network does not run.
+An epoch shorter than one voting interval holds no vote to judge uptime from and is dropped.
 <home>/state.json and <home>/monitor.json report what the last pass did.
 x/relay takes a report for an epoch only while the chain is in the epoch after it, and settles
 the epoch in the first block after that; a pass that finds the window over (or the epoch
@@ -56,7 +59,6 @@ Observe; the entries sent are those narrowed by the registry as it stood when th
 	f.StringVar(&fl.home, "home", ".", "Reporter state directory")
 	f.StringVar(&fl.votes, "votes-dir", "", "Directory of archived votes (default <home>/votes)")
 	f.DurationVar(&fl.interval, "interval", reporterInterval, "Time between passes")
-	f.DurationVar(&fl.voteInterval, "vote-interval", reporter.DefaultVoteInterval, "The authority's voting interval")
 	f.IntVar(&fl.chunk, "chunk-entries", reporter.DefaultChunkEntries, "Relays per MsgReportEpoch")
 	return cmd
 }
@@ -90,13 +92,14 @@ func runReporter(ctx context.Context, fl reporterFlags) error {
 	}
 	tick := time.NewTicker(fl.interval)
 	defer tick.Stop()
+	plog := newPassLog(slog.Default())
 	for {
 		epochs, err := r.Step(ctx)
 		for _, epoch := range epochs {
 			slog.Info("reported epoch", "epoch", epoch)
 		}
-		if err != nil && ctx.Err() == nil {
-			slog.Error("reporter pass failed", "err", err)
+		if ctx.Err() == nil {
+			plog.pass(err)
 		}
 		select {
 		case <-ctx.Done():
@@ -119,14 +122,34 @@ func reporterConfig(fl reporterFlags, address string) (reporter.Config, error) {
 	if err != nil || len(id) != len(reporter.Config{}.Authority) {
 		return reporter.Config{}, fmt.Errorf("%s is not a 40-hex v3 identity", filepath.Join(fl.home, "authority-id"))
 	}
+	interval, err := readVoteInterval(filepath.Join(fl.home, "vote-interval"))
+	if err != nil {
+		return reporter.Config{}, err
+	}
 	votes := fl.votes
 	if votes == "" {
 		votes = filepath.Join(fl.home, "votes")
 	}
 	cfg := reporter.Config{
 		Home: fl.home, VotesDir: votes, Reporter: address, Operator: operator,
-		VoteInterval: fl.voteInterval, ChunkEntries: fl.chunk,
+		VoteInterval: interval, ChunkEntries: fl.chunk,
 	}
 	copy(cfg.Authority[:], id)
 	return cfg, cfg.Validate()
+}
+
+// readVoteInterval reads the voting interval the install wrote from the Tor
+// network file. A missing or unusable file is an error: the interval is a
+// property of the network the reporter reports on, and a guess would turn a
+// 30-minute network into one that "votes every hour".
+func readVoteInterval(path string) (time.Duration, error) {
+	text, err := readOneLine(path, "the voting interval of the Tor network, for example 30m; re-run 'orama global install' with the reporter service to write it from the network file")
+	if err != nil {
+		return 0, err
+	}
+	d, err := time.ParseDuration(text)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s holds %q, not a positive duration such as 30m", path, text)
+	}
+	return d, nil
 }

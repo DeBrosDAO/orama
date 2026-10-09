@@ -102,7 +102,8 @@ func TestObserve_badParameters(t *testing.T) {
 	_, err := Observe(nil, dayWindow(), 0)
 	require.Error(t, err)
 	_, err = Observe(nil, Window{From: epochStart, To: epochStart.Add(time.Minute)}, time.Hour)
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrEpochTooShort)
+	require.ErrorContains(t, err, "1h0m0s", "the message names the interval the network votes at")
 }
 
 func TestObserve_flags(t *testing.T) {
