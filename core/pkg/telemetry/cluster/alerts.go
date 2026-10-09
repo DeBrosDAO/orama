@@ -135,6 +135,7 @@ func DeriveAlerts(snap *ClusterSnapshot) []Alert {
 		alerts = append(alerts, checkNodeTor(r, host)...)
 		alerts = append(alerts, checkNodeProcesses(r, host)...)
 		alerts = append(alerts, checkNodeNamespaces(r, host)...)
+		alerts = append(alerts, checkNodeBreakers(r, host)...)
 		alerts = append(alerts, checkNodeNetwork(r, host)...)
 		alerts = append(alerts, checkNodeOlric(r, host)...)
 		alerts = append(alerts, checkNodeIPFS(r, host)...)

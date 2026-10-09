@@ -61,7 +61,7 @@ The namespace gateway cannot validate API keys, which live only in the registry.
 
 It finds targets by querying the registry at `level=weak` (the leader), selecting gateway members whose per-node status is `running` and whose DNS node is `active`. Selecting on node status, not the cluster rollup, lets a degraded namespace keep serving from healthy members. A registry error is a retryable 503, never a 404.
 
-Ordering puts this node's WireGuard address first, then an FNV-32a hash of namespace and credential modulo the member count, so one caller's WebSocket subscribe and publish land on one member. The first member whose circuit breaker allows traffic is used. A breaker opens after 5 consecutive failures (502, 503, 504, timeouts), stays open 30 s and then admits one probe.
+Ordering puts this node's WireGuard address first, then an FNV-32a hash of namespace and credential modulo the member count, so one caller's WebSocket subscribe and publish land on one member. The first member whose circuit breaker allows traffic is used. There is one breaker per namespace and member, so a tenant whose gateway fails never refuses another tenant on the same node. A breaker opens after 5 consecutive failures (a refused or timed-out connection, or a 502, 503 or 504 from the gateway itself, never a function's own answer), stays open 30 s and then admits one probe.
 
 Failover is deliberately narrow: another member is tried only on a dial failure while no byte of the request body has been read. A request that reached a member is never retried on another, whatever the method, because it may have taken effect. A timeout answers 504 with a warning that a write may already have happened.
 

@@ -96,3 +96,26 @@ func TestInvokeFunction_anAnonymousCallerIsStillUnauthorized(t *testing.T) {
 		t.Errorf("an anonymous caller: %d %s, want 401 UNAUTHORIZED", rec.Code, rec.Body.String())
 	}
 }
+
+// The index gateway's circuit breaker counts a 502, 503 or 504 against the
+// namespace gateway that sent it, unless the response is a function's own. The
+// marker is what tells them apart, and it is on a function's every outcome,
+// the failure to load it included (503 FUNCTION_UNAVAILABLE).
+func TestInvokeFunction_aFunctionsOutcomeIsMarkedAsTheFunctions(t *testing.T) {
+	rec := refusedInvoke(t, httptest.NewRequest(http.MethodPost, "/v1/functions/store/invoke", nil))
+	if rec.Header().Get(httputil.HeaderFunctionOrigin) == "" {
+		t.Errorf("a refused invocation (%d) carries no %s", rec.Code, httputil.HeaderFunctionOrigin)
+	}
+}
+
+// A refusal made before any function is involved is the gateway's own, and must
+// count against it when it is a 503.
+func TestInvokeFunction_aRefusalBeforeTheFunctionIsNotMarked(t *testing.T) {
+	h := &ServerlessHandlers{}
+	rec := httptest.NewRecorder()
+	h.InvokeFunction(rec, httptest.NewRequest(http.MethodGet, "/v1/functions/store/invoke", nil), "acme/store", 0)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get(httputil.HeaderFunctionOrigin) != "" {
+		t.Errorf("a wrong-method request: %d with %s=%q, want 405 unmarked",
+			rec.Code, httputil.HeaderFunctionOrigin, rec.Header().Get(httputil.HeaderFunctionOrigin))
+	}
+}

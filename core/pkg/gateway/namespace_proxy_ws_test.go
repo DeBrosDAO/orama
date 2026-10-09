@@ -117,9 +117,9 @@ func TestNamespaceProxy_aWebSocketFailoverSkipsAMemberWithAnOpenCircuit(t *testi
 		gatewayTarget{ip: "127.0.0.1", port: dead},
 		gatewayTarget{ip: "localhost", port: serverPort(open)},
 		gatewayTarget{ip: "127.0.0.1", port: serverPort(live)})
-	cb := g.circuitBreakers.Get("ns:localhost")
+	cb := g.circuitBreakers.ForNamespaceGateway("acme", "localhost")
 	for i := 0; i < 50 && cb.Allow(); i++ {
-		cb.RecordFailure()
+		cb.RecordFailure("test")
 	}
 	if cb.Allow() {
 		t.Fatal("could not open the circuit of the second member")
@@ -142,9 +142,9 @@ func TestTunnelWebSocket_dialFailureWritesNothing(t *testing.T) {
 	g := proxyGateway(t)
 	addr := "127.0.0.1:" + strconv.Itoa(freePort(t))
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxied, dialErr := g.tunnelWebSocket(w, r, addr)
-		if proxied || dialErr == nil {
-			t.Errorf("tunnelWebSocket = %v, %v; want a dial error", proxied, dialErr)
+		result, dialErr := g.tunnelWebSocket(w, r, addr, nil)
+		if result == tunnelEstablished || dialErr == nil {
+			t.Errorf("tunnelWebSocket = %v, %v; want a dial error", result, dialErr)
 		}
 		w.WriteHeader(http.StatusTeapot) // still possible: nothing was written
 	})

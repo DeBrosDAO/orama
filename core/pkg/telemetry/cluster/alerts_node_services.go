@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -54,6 +55,57 @@ func checkNodeProcesses(r *report.NodeReport, host string) []Alert {
 			fmt.Sprintf("%d panic/fatal in orama-node logs (1h)", r.Processes.PanicCount)})
 	}
 	return alerts
+}
+
+// breakerAlertNamespaces is how many namespaces one breaker alert names before
+// it says "and N more".
+const breakerAlertNamespaces = 5
+
+// checkNodeBreakers alerts on the cluster gateway's circuit breakers toward
+// namespace gateways that are not closed: requests for that namespace through
+// this node are being refused (or, half-open, probed) while it lasts. One alert
+// per node the gateways are on, so a dead peer is one alert and not one per
+// namespace; the namespaces and the reason of the first are in the message.
+func checkNodeBreakers(r *report.NodeReport, host string) []Alert {
+	if r.Breakers == nil || r.Breakers.NotClosed == 0 {
+		return nil
+	}
+	byNode := map[string][]report.BreakerReport{}
+	var nodes []string
+	for _, b := range r.Breakers.Unhealthy {
+		if _, ok := byNode[b.Node]; !ok {
+			nodes = append(nodes, b.Node)
+		}
+		byNode[b.Node] = append(byNode[b.Node], b)
+	}
+	sort.Strings(nodes)
+	alerts := make([]Alert, 0, len(nodes))
+	for _, node := range nodes {
+		bs := byNode[node]
+		names := make([]string, 0, breakerAlertNamespaces)
+		for i, b := range bs {
+			if i == breakerAlertNamespaces {
+				names = append(names, fmt.Sprintf("and %d more", len(bs)-i))
+				break
+			}
+			names = append(names, b.Namespace)
+		}
+		msg := fmt.Sprintf("Circuit breaker %s toward the namespace gateways on %s (%s): requests for them through this node are refused. First failure: %s",
+			bs[0].State, node, strings.Join(names, ", "), breakerReason(bs[0]))
+		alerts = append(alerts, Alert{AlertWarning, "namespace", host, msg})
+	}
+	if shown := len(r.Breakers.Unhealthy); r.Breakers.NotClosed > shown {
+		alerts = append(alerts, Alert{AlertWarning, "namespace", host,
+			fmt.Sprintf("%d more circuit breakers toward namespace gateways are not closed than the report lists", r.Breakers.NotClosed-shown)})
+	}
+	return alerts
+}
+
+func breakerReason(b report.BreakerReport) string {
+	if b.LastError == "" {
+		return fmt.Sprintf("%d consecutive failures", b.Failures)
+	}
+	return fmt.Sprintf("%d consecutive failures, last: %s", b.Failures, b.LastError)
 }
 
 func checkNodeNamespaces(r *report.NodeReport, host string) []Alert {

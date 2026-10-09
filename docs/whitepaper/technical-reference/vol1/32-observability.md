@@ -27,7 +27,7 @@ The inspector exists because the monitor shows what each node says about itself 
 
 ## The model
 
-**Node report.** One JSON document, `report.NodeReport`, describing one node at one moment: identity (`hostname`, `public_ip`, `wireguard_ip`, `version`), timing (`timestamp`, `collect_ms`), an `errors` list for collectors that panicked, and up to 17 sections (`core/pkg/telemetry/report/types.go:NodeReport`). Two fields are not collected but added by the cluster gateway that serves the report: `traffic` and `registry_disowned_tenants`.
+**Node report.** One JSON document, `report.NodeReport`, describing one node at one moment: identity (`hostname`, `public_ip`, `wireguard_ip`, `version`), timing (`timestamp`, `collect_ms`), an `errors` list for collectors that panicked, and up to 17 sections (`core/pkg/telemetry/report/types.go:NodeReport`). Three fields are not collected but added by the cluster gateway that serves the report: `traffic`, `breakers` (its circuit breakers toward namespace gateways that are not closed, `Gateway.breakersReport`, raised as a warning by `checkNodeBreakers`) and `registry_disowned_tenants`.
 
 **Collector.** A function that fills one section of a report. All 17 run in parallel inside `report.Collect`; a panic is caught per collector and recorded in `errors`, leaving that section nil (`core/pkg/telemetry/report/report.go:Collect`).
 

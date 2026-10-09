@@ -92,6 +92,7 @@ func (g *Gateway) startTelemetry() {
 // decorateNodeReport adds what only this gateway knows to its node's report.
 func (g *Gateway) decorateNodeReport(r *report.NodeReport) {
 	r.Traffic = g.TrafficSnapshot()
+	r.Breakers = g.breakersReport()
 	if g.registryDisownedTenants != nil {
 		r.RegistryDisownedTenants = g.registryDisownedTenants()
 	}

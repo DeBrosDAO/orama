@@ -530,13 +530,26 @@ curl -sS -m 60 -H "Authorization: Bearer ${KUBO_BEARER}" -X POST -F file=@/tmp/b
 
 ### Circuit breakers
 
-Platform gateway tracks `ns:<ip>` breakers. Dead backends open circuits → HTTP 503
-`namespace gateway unavailable: all upstream circuits are open`.
+Platform gateway tracks one breaker per namespace gateway, keyed
+`ns:<namespace>@<node ip>` (docs/ARCHITECTURE.md, "Circuit breakers"). A dead
+backend opens the circuits of the namespaces whose gateways ran there, each on
+its own first failures, and a namespace with no other member answers HTTP 503
+`namespace gateway unavailable: all upstream circuits are open`. A namespace
+whose gateway is healthy on that node is not affected by another's.
+
+**See which are open.** The node report lists them (`breakers`), `orama monitor
+report` raises a warning per target node naming the namespaces and the last
+error, and `orama monitor node` has a Breakers line. The gateway log has every
+transition: `circuit breaker opened` (warning) with the namespace, node,
+consecutive failures and last error, then `half-open`, and `closed` when the
+gateway answers again.
 
 **Breakers now clear themselves.** A breaker opens after 5 consecutive backend
-failures, admits one probe every 30s, and closes on the first success. A probe
-that never reports an outcome falls back to open after 30s instead of holding
-the single probe slot — that latch is what previously made restarting
+failures (a refused or timed-out connection, or a 502/503/504 from the gateway
+itself; never a 4xx or a function's own answer), admits one probe every 30s, and
+closes on the first success. The probe decides as soon as the gateway answers,
+and a probe that never reports an outcome falls back to open after 30s instead
+of holding the single probe slot — that latch is what previously made restarting
 `orama-node` the only cure, and it was reachable through any WebSocket upgrade,
 because the WS path recorded neither success nor failure.
 

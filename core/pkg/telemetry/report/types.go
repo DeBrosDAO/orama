@@ -42,6 +42,10 @@ type NodeReport struct {
 	// requests, not by a collector: it is what the gateway counted in memory.
 	Traffic *TrafficReport `json:"traffic,omitempty"`
 
+	// Breakers is filled in by the cluster gateway: its circuit breakers toward
+	// the namespace gateways, and which of them are not closed.
+	Breakers *BreakersReport `json:"breakers,omitempty"`
+
 	// RegistryDisownedTenants is filled in by the cluster gateway: the tenant
 	// namespaces on this node while the registry assigns it none of them, which
 	// pauses the orphan sweep and the boot restore's teardown.

@@ -140,7 +140,7 @@ func TestNamespaceProxy_aCancelledClientIsNotFailedOver(t *testing.T) {
 	if n := hits.Load(); n != 0 {
 		t.Fatalf("a cancelled request reached a member %d times", n)
 	}
-	if !g.circuitBreakers.Get("ns:127.0.0.1").Allow() {
+	if !g.circuitBreakers.ForNamespaceGateway("acme", "127.0.0.1").Allow() {
 		t.Fatal("a cancelled request opened the members' circuit")
 	}
 }

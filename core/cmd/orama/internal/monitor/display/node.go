@@ -51,6 +51,9 @@ func writeNode(b *strings.Builder, t view.Theme, cs cluster.CollectionStatus) {
 		line(b, t, "Global", globalLine(t, r.Global))
 	}
 	line(b, t, "Traffic", trafficLine(r.Traffic))
+	if r.Breakers != nil && r.Breakers.NotClosed > 0 {
+		line(b, t, "Breakers", breakersLine(t, r.Breakers))
+	}
 }
 
 func line(b *strings.Builder, t view.Theme, label, value string) {
@@ -130,6 +133,24 @@ func trafficLine(tr *report.TrafficReport) string {
 	}
 	return fmt.Sprintf("%.1f rps | %.2f%% 5xx | p50 %.0fms p95 %.0fms p99 %.0fms (last %ds)",
 		tr.RPS, tr.ErrorRate*100, tr.P50Ms, tr.P95Ms, tr.P99Ms, tr.WindowSec)
+}
+
+// breakersLine names the circuit breakers toward namespace gateways that are
+// not closed, as namespace@node with the state; the full list is in the JSON.
+func breakersLine(t view.Theme, br *report.BreakersReport) string {
+	const shown = 3
+	parts := make([]string, 0, shown)
+	for i, b := range br.Unhealthy {
+		if i == shown {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%s@%s %s", b.Namespace, b.Node, b.State))
+	}
+	out := fmt.Sprintf("%d of %d not closed: %s", br.NotClosed, br.Tracked, strings.Join(parts, ", "))
+	if br.NotClosed > len(parts) {
+		out += fmt.Sprintf(" and %d more", br.NotClosed-len(parts))
+	}
+	return t.Warn.Render(out)
 }
 
 func activeLabel(t view.Theme, active bool) string {

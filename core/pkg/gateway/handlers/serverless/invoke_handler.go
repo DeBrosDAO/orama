@@ -105,6 +105,10 @@ func (h *ServerlessHandlers) InvokeFunction(w http.ResponseWriter, r *http.Reque
 		CallerDeviceID:   h.getDeviceIDFromRequest(r),
 	}
 
+	// From here the response is the function's: its output, its own status, or
+	// the failure to run it. The proxy in front does not hold a 502, 503 or 504
+	// that carries this against the gateway.
+	w.Header().Set(httputil.HeaderFunctionOrigin, "1")
 	resp, err := h.invoker.Invoke(ctx, req)
 	if err != nil {
 		// Bug #212: every error path here emits the canonical RPC

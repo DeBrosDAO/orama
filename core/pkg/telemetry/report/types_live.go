@@ -142,6 +142,43 @@ type NamespaceTraffic struct {
 	P95Ms     float64 `json:"p95_ms"`
 }
 
+// --- Breakers ---
+
+// MaxBreakersReported caps BreakersReport.Unhealthy, so a node that lost sight
+// of a whole peer (every namespace's breaker toward it open) does not make its
+// report grow with the number of namespaces.
+const MaxBreakersReported = 50
+
+// Circuit breaker states a BreakerReport carries.
+const (
+	BreakerOpen     = "open"
+	BreakerHalfOpen = "half-open"
+)
+
+// BreakersReport is the state of a cluster gateway's circuit breakers toward
+// the namespace gateways, one per namespace and node: a gateway that fails
+// opens only its own.
+type BreakersReport struct {
+	// Tracked is how many breakers the gateway holds, closed ones included.
+	Tracked int `json:"tracked"`
+	// NotClosed is how many of them are open or half-open.
+	NotClosed int `json:"not_closed"`
+	// Unhealthy lists the breakers that are not closed, by namespace then
+	// node, at most MaxBreakersReported of them.
+	Unhealthy []BreakerReport `json:"unhealthy,omitempty"`
+}
+
+// BreakerReport is one breaker that is not closed.
+type BreakerReport struct {
+	Namespace string `json:"namespace"`
+	// Node is the WireGuard address of the node the namespace's gateway runs on.
+	Node        string    `json:"node"`
+	State       string    `json:"state"`
+	Failures    int       `json:"failures"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastFailure time.Time `json:"last_failure"`
+}
+
 // Raft states an rqlite node reports. Leader and Follower are the settled
 // ones: a node in either is a working member of the cluster.
 const (

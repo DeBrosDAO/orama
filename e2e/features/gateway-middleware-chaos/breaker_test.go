@@ -4,17 +4,21 @@ package gatewaymiddlewarechaos
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/edge"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/tenancy"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
+	"github.com/DeBrosOfficial/network/e2e/harness/monitor"
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
@@ -63,6 +67,72 @@ func TestBreaker_localNamespaceGatewayDownFailsOver(t *testing.T) {
 	if failures > breakerThreshold || lastFailure >= breakerThreshold {
 		t.Errorf("%d failures, the last at request %d: the breaker should open after %d and send the rest elsewhere", failures, lastFailure, breakerThreshold)
 	}
+}
+
+// breakerAlertBudget: the node report is collected every 10s and the snapshot
+// cached 5s; a minute covers a hung collection too.
+const breakerAlertBudget = 2 * time.Minute
+
+// TestBreaker_oneNamespacesFailingGatewayLeavesAnothersCircuitClosed: the
+// namespace proxy keeps one breaker per namespace gateway (namespace and
+// node), not one per node. With one namespace's gateway cut off on a node that
+// hosts another namespace too, the first opens its own breaker, the second is
+// served through that node throughout, and the operator's report names only
+// the first (docs/ARCHITECTURE.md#circuit-breakers).
+func TestBreaker_oneNamespacesFailingGatewayLeavesAnothersCircuitClosed(t *testing.T) {
+	f := harness.Fleet(t)
+	infra.RequireHealthy(t)
+	spaces := tenancy.Namespaces(t, f, 2, ns.Options{})
+	failing, healthy := spaces[0], spaces[1]
+	placed := tenancy.MembersOf(t, f, failing.Name, healthy.Name)
+	node, ok := sharedMember(placed[failing.Name], placed[healthy.Name])
+	if !ok {
+		harness.SkipNotApplicable(t, "needs two namespaces with a member on the same node, which a fleet of three nodes always gives")
+	}
+	edge.CutOff(t, f, node, indexGatewayUser, node.WGIP, namespaceGatewayPort(t, f, failing.Name, node))
+	cf, ch := failing.Client.PinTo(node.PublicIP), healthy.Client.PinTo(node.PublicIP)
+
+	for i := range breakerProbes {
+		// The failing namespace may answer 200 (another member took the request) or
+		// 503 (this node's circuit); either way its attempts fail on this node.
+		tenancy.Post(t, cf, "/v1/rqlite/query", tenancy.Owner(failing), map[string]any{"sql": "SELECT 1", "args": []any{}})
+		resp := tenancy.Post(t, ch, "/v1/rqlite/query", tenancy.Owner(healthy), map[string]any{"sql": "SELECT 1", "args": []any{}})
+		if resp.Status != http.StatusOK {
+			t.Fatalf("request %d for %s through %s: HTTP %d %.200s; %s's failing gateway refused another namespace's request",
+				i, healthy.Name, node.Name, resp.Status, resp.Body, failing.Name)
+		}
+	}
+
+	eventually.Require(t, edge.PollEvery, breakerAlertBudget, "the report to name the failing namespace's open breaker", func() (bool, error) {
+		r, err := monitor.Get(t.Context(), harness.CLI(t), f.State.Env)
+		if err != nil {
+			return false, err
+		}
+		for _, a := range r.Alerts {
+			if a.Node != node.PublicIP || a.Subsystem != "namespace" || !strings.Contains(a.Message, "Circuit breaker") {
+				continue
+			}
+			if strings.Contains(a.Message, healthy.Name) {
+				return false, fmt.Errorf("the alert names %s, whose gateway is fine: %s", healthy.Name, a.Message)
+			}
+			if strings.Contains(a.Message, failing.Name) && strings.Contains(a.Message, node.WGIP) {
+				return true, nil
+			}
+		}
+		return false, fmt.Errorf("no circuit-breaker alert for %s on %s: %+v", failing.Name, node.Name, r.Alerts)
+	})
+}
+
+// sharedMember is a node both member lists contain.
+func sharedMember(a, b []fleet.Node) (fleet.Node, bool) {
+	for _, x := range a {
+		for _, y := range b {
+			if x.Name == y.Name {
+				return x, true
+			}
+		}
+	}
+	return fleet.Node{}, false
 }
 
 // requireUnavailable checks a failed attempt's answer: the coded, retryable

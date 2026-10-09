@@ -574,24 +574,46 @@ func isWebSocketUpgrade(r *http.Request) bool {
 // and tunneling bidirectionally to the backend. A backend that cannot be dialed
 // is answered with a typed, retryable 503 (see tunnelWebSocket).
 func (g *Gateway) proxyWebSocket(w http.ResponseWriter, r *http.Request, targetHost string) bool {
-	proxied, dialErr := g.tunnelWebSocket(w, r, targetHost)
+	result, dialErr := g.tunnelWebSocket(w, r, targetHost, nil)
 	if dialErr != nil {
 		httputil.WriteRPCError(w, http.StatusServiceUnavailable, httputil.ErrCodeServiceUnavailable,
 			"WebSocket backend unavailable, retry", httputil.WithRetryable())
 		return false
 	}
-	return proxied
+	return result == tunnelEstablished
 }
+
+// tunnelResult is how tunnelWebSocket ended when the backend could be dialed.
+type tunnelResult int
+
+const (
+	// tunnelEstablished: the handshake request reached the backend and the
+	// tunnel ran until one side closed it.
+	tunnelEstablished tunnelResult = iota
+	// tunnelBackendFailed: the connection opened but the handshake request
+	// could not be written to it.
+	tunnelBackendFailed
+	// tunnelNotServed: this gateway could not tunnel (the response writer
+	// cannot be hijacked, or the client connection could not be taken over);
+	// the backend did nothing wrong.
+	tunnelNotServed
+)
 
 // tunnelWebSocket does the work of proxyWebSocket. A non-nil dialErr means the
 // backend could not be dialed: nothing was sent to it and nothing was written
 // to w, so the caller may try another backend or answer the client itself.
 // Every other failure has already been answered on w.
-func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, targetHost string) (proxied bool, dialErr error) {
+//
+// onEstablished, when not nil, is called once the handshake request is with the
+// backend and the client connection is taken over, before the tunnel starts to
+// run. A tunnel lasts as long as its connection does - hours - so a caller that
+// waited for it to end before reporting the backend's health would hold a
+// circuit breaker's half-open probe slot that long.
+func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, targetHost string, onEstablished func()) (result tunnelResult, dialErr error) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "WebSocket proxy not supported", http.StatusInternalServerError)
-		return false, nil
+		return tunnelNotServed, nil
 	}
 
 	// Connect to backend
@@ -601,7 +623,7 @@ func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, target
 			zap.String("target", targetHost),
 			zap.Error(err),
 		)
-		return false, fmt.Errorf("failed to dial WebSocket backend %s: %w", targetHost, err)
+		return tunnelBackendFailed, fmt.Errorf("failed to dial WebSocket backend %s: %w", targetHost, err)
 	}
 
 	// Write the original request to backend (this initiates the WebSocket handshake)
@@ -611,7 +633,7 @@ func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, target
 			zap.Error(err),
 		)
 		http.Error(w, "Failed to initiate WebSocket", http.StatusBadGateway)
-		return false, nil
+		return tunnelBackendFailed, nil
 	}
 
 	// Hijack client connection
@@ -621,7 +643,7 @@ func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, target
 		g.logger.ComponentError(logging.ComponentGeneral, "WebSocket hijack failed",
 			zap.Error(err),
 		)
-		return false, nil
+		return tunnelNotServed, nil
 	}
 
 	// Flush any buffered data from the client
@@ -629,6 +651,10 @@ func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, target
 		buffered := make([]byte, clientBuf.Reader.Buffered())
 		clientBuf.Read(buffered)
 		backendConn.Write(buffered)
+	}
+
+	if onEstablished != nil {
+		onEstablished()
 	}
 
 	// Bidirectional copy between client and backend
@@ -650,7 +676,7 @@ func (g *Gateway) tunnelWebSocket(w http.ResponseWriter, r *http.Request, target
 	backendConn.Close()
 	<-done
 
-	return true, nil
+	return tunnelEstablished, nil
 }
 
 // withMiddleware adds CORS, security headers, rate limiting, and logging middleware
@@ -1718,6 +1744,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 				httputil.WithRetryable())
 			return
 		}
+		g.retainBreakers(namespaceName, targets)
 		if len(targets) == 0 {
 			g.logger.ComponentWarn(logging.ComponentGeneral, "namespace gateway not found",
 				zap.String("namespace", namespaceName))
@@ -1788,8 +1815,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	var cb *CircuitBreaker
 	selectedIdx := -1
 	for i, candidate := range orderedTargets {
-		cbKey := "ns:" + candidate.ip
-		candidateCB := g.circuitBreakers.Get(cbKey)
+		candidateCB := g.circuitBreakers.ForNamespaceGateway(namespaceName, candidate.ip)
 		if candidateCB.Allow() {
 			selected = candidate
 			cb = candidateCB
@@ -1842,6 +1868,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 			// so a hop that cannot be signed is refused rather than sent as an
 			// assertion this gateway cannot back.
 			if err := signInternalAuthHeaders(g.internalAuthKey, r.Header, r.Method, r.URL.Path, time.Now()); err != nil {
+				cb.Abandon()
 				g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
 					zap.String("namespace", validatedNamespace), zap.Error(err))
 				writeError(w, http.StatusServiceUnavailable,
@@ -1853,12 +1880,16 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// A request refused here never reached the member, so it says nothing about
+	// it, and must not hold the member's half-open probe slot.
 	if refuseOversizedProxyBody(w, r) {
+		cb.Abandon()
 		return
 	}
 	// Only a caller whose credential the proxy validated gets the long
 	// budget; an anonymous call to a public function keeps the server's.
 	if validatedNamespace != "" && !extendTransferDeadlines(w, r) {
+		cb.Abandon()
 		return
 	}
 
@@ -1898,19 +1929,21 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		candidate := orderedTargets[i]
 		candidateCB := cb
 		if i != selectedIdx {
-			if candidateCB = g.circuitBreakers.Get("ns:" + candidate.ip); !candidateCB.Allow() {
+			if candidateCB = g.circuitBreakers.ForNamespaceGateway(namespaceName, candidate.ip); !candidateCB.Allow() {
 				continue
 			}
 		}
 		proxyReq, err := g.namespaceProxyRequest(r, candidate.ip+":"+strconv.Itoa(candidate.port), body,
 			validatedNamespace, validatedClaims, validatedScopes)
 		if errors.Is(err, errNoClusterSecret) {
+			candidateCB.Abandon()
 			g.logger.ComponentError("gateway", "cannot delegate auth to the namespace gateway",
 				zap.String("namespace", validatedNamespace), zap.Error(err))
 			writeError(w, http.StatusServiceUnavailable, errNoClusterSecret.Error())
 			return
 		}
 		if err != nil {
+			candidateCB.Abandon()
 			g.logger.ComponentError(logging.ComponentGeneral, "failed to create namespace gateway proxy request",
 				zap.String("namespace", namespaceName), zap.Error(err))
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -1924,11 +1957,14 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		lastErr = err
 		// A client that left says nothing about the member: its dial fails
 		// with the cancelled context, and counting that against every member
-		// would let aborted requests open their circuits.
-		if r.Context().Err() != nil {
+		// would let aborted requests open their circuits. Nor does a body the
+		// client failed to deliver: the transport returns the error that
+		// reading it gave, and the member never saw the end of the request.
+		if r.Context().Err() != nil || (undialed != nil && undialed.failedRead(err)) {
+			candidateCB.Abandon()
 			break
 		}
-		candidateCB.RecordFailure()
+		candidateCB.RecordFailure(failureReason(err))
 		g.logger.ComponentError(logging.ComponentGeneral, "namespace gateway proxy request failed",
 			zap.String("namespace", namespaceName),
 			zap.String("target", candidate.ip),
@@ -1957,14 +1993,17 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 	}
 	defer resp.Body.Close()
 
-	if IsResponseFailure(resp.StatusCode) {
-		cb.RecordFailure()
+	if isUpstreamFailure(resp) {
+		cb.RecordFailure(fmt.Sprintf("the namespace gateway answered %d", resp.StatusCode))
 	} else {
 		cb.RecordSuccess()
 	}
 
 	// Copy response headers
 	for key, values := range resp.Header {
+		if key == httputil.HeaderFunctionOrigin {
+			continue
+		}
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
@@ -2197,7 +2236,7 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	httpClient := &http.Client{Timeout: timeout, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
-		cb.RecordFailure()
+		cb.RecordFailure(failureReason(err))
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
@@ -2207,7 +2246,7 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	defer resp.Body.Close()
 
 	if IsResponseFailure(resp.StatusCode) {
-		cb.RecordFailure()
+		cb.RecordFailure(fmt.Sprintf("the node answered %d", resp.StatusCode))
 	} else {
 		cb.RecordSuccess()
 	}
@@ -2321,7 +2360,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	httpClient := &http.Client{Timeout: 5 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
-		cb.RecordFailure()
+		cb.RecordFailure(failureReason(err))
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
 			zap.Error(err),
@@ -2332,7 +2371,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 
 	// If the remote node returned a gateway error, try the next replica
 	if IsResponseFailure(resp.StatusCode) {
-		cb.RecordFailure()
+		cb.RecordFailure(fmt.Sprintf("the replica answered %d", resp.StatusCode))
 		g.logger.Warn("Replica returned gateway error, trying next",
 			zap.String("target_ip", nodeIP),
 			zap.Int("status", resp.StatusCode),

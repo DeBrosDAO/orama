@@ -6,7 +6,9 @@
 # loopback with a forwarding header limited while plain loopback and the
 # overlay are exempt, and the namespace proxy's circuit breaker failing over
 # when a node's own namespace gateway cannot be reached (503 envelope and
-# security headers on the 5xx).
+# security headers on the 5xx), and one namespace's unreachable gateway on a
+# node opening only its own breaker: another namespace on the same node keeps
+# being served through it and the operator's report names only the first.
 id: gateway-middleware-chaos
 title: Gateway rate limits and namespace proxy failover
 area: network-edge
@@ -25,3 +27,4 @@ covers:
     - "docs/ARCHITECTURE.md#middleware-stack: credential endpoints are limited to 30 a minute per address, burst 10; challenges per wallet too"
     - "docs/SECURITY.md#authentication: X-Forwarded-For is honoured only from the local proxy and only its last entry; loopback with a forwarding header is not exempt; the overlay is"
     - "docs/ARCHITECTURE.md#middleware-stack: security headers are set on 429 and 5xx answers too"
+    - "docs/ARCHITECTURE.md#circuit-breakers: the namespace proxy keeps one breaker per namespace gateway, so one namespace's failing gateway never refuses another namespace's requests, and an open breaker is raised as a namespace alert"

@@ -4,6 +4,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/url"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
+	"github.com/DeBrosOfficial/network/pkg/logging"
+	"go.uber.org/zap"
 )
 
 // undialedBody is a proxied request's body that can be offered to another
@@ -14,6 +20,9 @@ import (
 type undialedBody struct {
 	io.ReadCloser
 	read bool
+	// readErr is the error reading the body gave, other than its end: the
+	// client's connection dropped, or the body was over its limit.
+	readErr error
 }
 
 func (b *undialedBody) Read(p []byte) (int, error) {
@@ -21,7 +30,17 @@ func (b *undialedBody) Read(p []byte) (int, error) {
 	if n > 0 {
 		b.read = true
 	}
+	if err != nil && err != io.EOF {
+		b.readErr = err
+	}
 	return n, err
+}
+
+// failedRead reports whether err, from sending the request, is the body's own
+// read error: the client failed to deliver the request, which says nothing
+// about the member it was being sent to.
+func (b *undialedBody) failedRead(err error) bool {
+	return b.readErr != nil && errors.Is(err, b.readErr)
 }
 
 func (b *undialedBody) Close() error { return nil }
@@ -37,3 +56,43 @@ func isDialFailure(err error) bool {
 // errNoClusterSecret is returned by namespaceProxyRequest when the hop cannot
 // be signed.
 var errNoClusterSecret = errors.New("this gateway has no cluster secret, so it cannot authenticate itself to the namespace gateway")
+
+// isUpstreamFailure reports whether resp proves the namespace gateway that sent
+// it unhealthy, which is what a circuit breaker counts: a 502, 503 or 504 the
+// gateway itself answered. The same statuses coming from a function, chosen by
+// the tenant's code or reporting that one function could not be loaded
+// (httputil.HeaderFunctionOrigin), say nothing about the gateway: counting them
+// let one function that returned 503 take its whole namespace out of rotation.
+func isUpstreamFailure(resp *http.Response) bool {
+	return IsResponseFailure(resp.StatusCode) && resp.Header.Get(httputil.HeaderFunctionOrigin) == ""
+}
+
+// retainBreakers drops the breakers of namespace's gateways on nodes the
+// registry no longer lists as its members, so the registry holds one breaker
+// per gateway that exists and a removed namespace or a moved member leaves none
+// behind. targets is the registry's answer, empty for a namespace that is gone.
+func (g *Gateway) retainBreakers(namespace string, targets []namespaceGatewayTarget) {
+	if g.circuitBreakers == nil {
+		return
+	}
+	ips := make([]string, len(targets))
+	for i, t := range targets {
+		ips[i] = t.ip
+	}
+	if dropped := g.circuitBreakers.RetainNamespaceMembers(namespace, ips); dropped > 0 {
+		g.logger.ComponentInfo(logging.ComponentGeneral, "dropped the circuit breakers of namespace gateways that are no longer members",
+			zap.String("namespace", namespace), zap.Int("dropped", dropped))
+	}
+}
+
+// failureReason is err as a circuit breaker records it. The client's error
+// quotes the whole request URL, query string included, and a credential may be
+// in it (an `api_key` or `token` parameter); the breaker's reason goes to the
+// log and to the node report, so only the cause is kept.
+func failureReason(err error) string {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
+}

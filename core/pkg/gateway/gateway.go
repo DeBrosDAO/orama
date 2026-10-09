@@ -439,6 +439,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 			IdleConnTimeout:     90 * time.Second,
 		},
 	}
+	gw.circuitBreakers.SetObserver(gw.logBreakerTransition)
 	// The older inter-node stamps are accepted, and written, only while the
 	// registry says some node may still need them.
 	if store := gw.registryStore(); store != nil {

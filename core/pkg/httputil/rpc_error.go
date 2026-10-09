@@ -29,6 +29,12 @@ import (
 	"net/http"
 )
 
+// HeaderFunctionOrigin marks a namespace gateway's response as the outcome of a
+// tenant's function: its own status, or the failure to load it. The index
+// gateway's circuit breaker does not count a 502, 503 or 504 that carries it,
+// because a function's answer says nothing about the gateway that ran it.
+const HeaderFunctionOrigin = "X-Orama-Function-Origin"
+
 // RPCErrorCode is the typed error-code enum. New codes go here, alphabetic
 // within their class. Codes are stable strings — clients pin to them.
 type RPCErrorCode string

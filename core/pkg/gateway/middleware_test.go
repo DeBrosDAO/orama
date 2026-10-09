@@ -584,7 +584,7 @@ func TestCircuitBreaker(t *testing.T) {
 	t.Run("opens after threshold failures", func(t *testing.T) {
 		cb := NewCircuitBreaker()
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 		if cb.Allow() {
 			t.Fatal("expected Allow() = false after 5 failures (circuit should be open)")
@@ -597,7 +597,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 		// Open the circuit
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 		if cb.Allow() {
 			t.Fatal("expected Allow() = false when circuit is open")
@@ -623,7 +623,7 @@ func TestCircuitBreaker(t *testing.T) {
 
 		// Open the circuit
 		for i := 0; i < 5; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 		}
 
 		// Wait for half-open transition

@@ -168,3 +168,25 @@ func TestMeshNodes_expectsPeersOverEveryMember(t *testing.T) {
 		t.Fatalf("correctly peered nodes shown as mismatched:\n%s", out)
 	}
 }
+
+func TestNodeTable_showsBreakersOnlyWhenSomeAreNotClosed(t *testing.T) {
+	render := func(br *report.BreakersReport) string {
+		snap := contractSnapshot()
+		snap.Nodes[0].Report.Breakers = br
+		var buf bytes.Buffer
+		if err := NodeTable(snap, &buf); err != nil {
+			t.Fatal(err)
+		}
+		return buf.String()
+	}
+	if out := render(&report.BreakersReport{Tracked: 6}); strings.Contains(out, "Breakers:") {
+		t.Errorf("the node view shows a breakers line when every breaker is closed:\n%s", out)
+	}
+	out := render(&report.BreakersReport{Tracked: 6, NotClosed: 4, Unhealthy: []report.BreakerReport{
+		{Namespace: "acme", Node: "10.0.0.2", State: report.BreakerOpen},
+		{Namespace: "beta", Node: "10.0.0.2", State: report.BreakerOpen},
+	}})
+	if !strings.Contains(out, "Breakers:") || !strings.Contains(out, "4 of 6 not closed: acme@10.0.0.2 open, beta@10.0.0.2 open and 2 more") {
+		t.Errorf("the node view does not name the open breakers:\n%s", out)
+	}
+}
