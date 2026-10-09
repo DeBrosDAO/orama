@@ -272,6 +272,10 @@ func tunnelCallerIdentity(r *http.Request) string {
 	return ""
 }
 
+// anonTunnelDial opens the tunnel's stream through Tor. Tests replace it: the
+// real one needs a Tor SOCKS port on a fixed address.
+var anonTunnelDial = anonproxy.DialThrough
+
 // anonTunnelHandler serves GET /v1/proxy/tunnel — a WebSocket carrying one
 // opaque TCP stream to `?host=&port=` through the anonymity network.
 //
@@ -305,7 +309,7 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !anonproxy.Running() {
+	if !anonProxyRunning() {
 		g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel refused: anonymity proxy not available",
 			zap.String("socks_addr", anonproxy.Address()))
 		writeError(w, http.StatusServiceUnavailable,
@@ -324,13 +328,16 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 	// can read, instead of a WebSocket that opens and immediately closes with a
 	// reason most clients surface poorly.
 	dialCtx, cancelDial := context.WithTimeout(r.Context(), tunnelDialTimeout)
-	upstream, dialErr := anonproxy.DialThrough(dialCtx, target.addr(),
+	upstream, dialErr := anonTunnelDial(dialCtx, target.addr(),
 		tunnelIsolationKey(g.tunnelIsolationSecret, identity))
 	cancelDial()
 	if dialErr != nil {
 		release()
+		// The log names no destination: the node must not be able to say who
+		// reached what through the tunnel. The error text names it, so only its
+		// class is kept.
 		g.logger.ComponentWarn(logging.ComponentGeneral, "tunnel dial failed",
-			zap.String("host", target.host), zap.Int("port", target.port), zap.Error(dialErr))
+			zap.String("error_class", anonproxy.ErrorClass(dialErr)))
 		// The destination and the reason are not echoed back: a tunnel that
 		// reports exactly why a dial failed is a probe for whatever the exit
 		// can reach.
@@ -347,16 +354,13 @@ func (g *Gateway) anonTunnelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	g.logger.ComponentInfo(logging.ComponentGeneral, "tunnel opened",
-		zap.String("host", target.host), zap.Int("port", target.port))
+	g.logger.ComponentInfo(logging.ComponentGeneral, "tunnel opened")
 
 	start := time.Now()
 	sent, received := g.relayTunnel(conn, upstream, authenticatedTunnelLimits)
 	release()
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "tunnel closed",
-		zap.String("host", target.host),
-		zap.Int("port", target.port),
 		zap.Int64("bytes_to_destination", sent),
 		zap.Int64("bytes_to_client", received),
 		zap.Duration("duration", time.Since(start)))
