@@ -66,7 +66,8 @@ func TestDeployEnv_boundToItsRowAfterRotateSecrets(t *testing.T) {
 // (docs/DEPLOYMENT_GUIDE.md "Deployment addresses").
 func TestDeployHost_bareNameOfASubdomainedDeploymentIsNotServed(t *testing.T) {
 	const name = "twin"
-	first, second := newTenant(t), newTenant(t)
+	tenants := newTenants(t, 2)
+	first, second := tenants[0], tenants[1]
 	urls := map[*tenant]string{}
 	for _, tn := range []*tenant{first, second} {
 		urls[tn] = tn.deploy(t, "go", tenancy.WriteProbeApp(t, name), name)

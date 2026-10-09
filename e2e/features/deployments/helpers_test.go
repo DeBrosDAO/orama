@@ -57,10 +57,21 @@ type tenant struct {
 
 func newTenant(t testing.TB) *tenant {
 	t.Helper()
+	return newTenants(t, 1)[0]
+}
+
+// newTenants creates count tenants with their namespaces reserved at once: a
+// test that took them one by one would hold a slot while it waited for the
+// next, which the harness refuses.
+func newTenants(t testing.TB, count int) []*tenant {
+	t.Helper()
 	f := harness.Fleet(t)
-	n := tenancy.Namespace(t, f, ns.Options{Via: ns.ViaOperator})
-	admin := tenancy.OperatorMember(t, f, n, tenancy.RoleAdmin)
-	return &tenant{f: f, n: n, cli: n.CLI, admin: tenancy.Cred{Bearer: admin.Token()}}
+	out := make([]*tenant, count)
+	for i, n := range tenancy.Namespaces(t, f, count, ns.Options{Via: ns.ViaOperator}) {
+		admin := tenancy.OperatorMember(t, f, n, tenancy.RoleAdmin)
+		out[i] = &tenant{f: f, n: n, cli: n.CLI, admin: tenancy.Cred{Bearer: admin.Token()}}
+	}
+	return out
 }
 
 // deploy runs `orama deploy <runtime> <dir> --name <name> <extra...>`,
