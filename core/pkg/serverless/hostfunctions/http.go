@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/anonproxy"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/serverless"
 	"go.uber.org/zap"
 )
@@ -46,7 +48,22 @@ func (h *HostFunctions) SetHTTPResponse(ctx context.Context, status int, headers
 // This is the explicit ask in feat-11: a privacy regression must fail
 // loudly, not degrade silently.
 func (h *HostFunctions) AnonFetch(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, error) {
-	return h.doFetch(ctx, "anon_fetch", h.anonHTTPClient, method, url, headers, body)
+	return h.doFetch(ctx, anonFetchName, h.anonHTTPClient, method, url, headers, body)
+}
+
+// anonFetchName is the host function whose destination the node does not log.
+const anonFetchName = "anon_fetch"
+
+// fetchLogFields describe a failed fetch for the node log without the request's
+// query string, where a credential may be, and the client's error, which quotes
+// the whole URL. An anon_fetch caller chose Tor so the node could not say where
+// the function went: its log names neither the URL nor the cause (the cause of
+// a SOCKS failure names the destination), only the class of the failure.
+func fetchLogFields(fnName, rawURL string, err error) []zap.Field {
+	if fnName == anonFetchName {
+		return []zap.Field{zap.String("error_class", anonproxy.ErrorClass(err))}
+	}
+	return []zap.Field{zap.String("url", httputil.WithoutQuery(rawURL)), zap.String("error", httputil.FailureReason(err))}
 }
 
 // doFetch is the shared request/response machinery for HTTPFetch and
@@ -69,7 +86,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, bodyReader)
 	if err != nil {
-		h.logger.Error(fnName+" request creation error", zap.Error(err), zap.String("url", rawURL))
+		h.logger.Error(fnName+" request creation error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  "failed to create request: " + err.Error(),
 			"status": 0,
@@ -83,7 +100,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	resp, err := client.Do(req)
 	if err != nil {
-		h.logger.Error(fnName+" transport error", zap.Error(err), zap.String("url", rawURL))
+		h.logger.Error(fnName+" transport error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  err.Error(),
 			"status": 0, // Transport error
@@ -94,7 +111,7 @@ func (h *HostFunctions) doFetch(ctx context.Context, fnName string, client *http
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		h.logger.Error(fnName+" response read error", zap.Error(err), zap.String("url", rawURL))
+		h.logger.Error(fnName+" response read error", fetchLogFields(fnName, rawURL, err)...)
 		errorResp := map[string]interface{}{
 			"error":  "failed to read response: " + err.Error(),
 			"status": resp.StatusCode,

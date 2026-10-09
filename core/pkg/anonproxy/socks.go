@@ -10,6 +10,7 @@ package anonproxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -112,4 +113,20 @@ func dialSOCKS(ctx context.Context, socksAddr, network, addr string, auth *gopro
 		return nil, fmt.Errorf("dial %s through Tor SOCKS5 at %s: %w", addr, socksAddr, err)
 	}
 	return conn, nil
+}
+
+// ErrorClass names why a request made through Tor failed, in a word that is
+// safe to log. A client error quotes the request URL, and the error of the
+// SOCKS dial names the destination it was asked to reach; a log line that
+// repeats either records where an anonymised request went.
+func ErrorClass(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return "timeout"
+	default:
+		return "transport"
+	}
 }

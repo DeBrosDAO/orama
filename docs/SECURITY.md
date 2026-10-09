@@ -336,6 +336,20 @@ list with invented ids.
   client; a browser or React Native needs a loopback helper. Browser transport,
   a mixnet, paid relay admission and cross-operator relays are not built.
 
+### Logging of anonymised requests
+
+`POST /v1/proxy/anon` and the `anon_fetch` host function exist so that the
+node cannot say who read what, so their log does not name the destination.
+`/v1/proxy/anon` logs one line per request: the method, the status, the
+response size and the duration, or the method, the duration and a class of
+failure (`timeout`, `canceled`, `transport`; `anonproxy.ErrorClass`). It never
+logs the URL, host, path, query, headers or body, nor the text of an error,
+which names the destination. `anon_fetch` logs the class of a failure and
+nothing else about the request. `http_fetch` (the direct host function) logs the
+URL without its query string. `/v1/proxy/tunnel` is documented to log the
+destination host and port with the byte counts and duration, and no identity;
+`/v1/proxy/relay` logs nothing about a stream.
+
 ### Response caching
 
 Every `/v1/*` response carries `Cache-Control: no-store` and `Pragma: no-cache`

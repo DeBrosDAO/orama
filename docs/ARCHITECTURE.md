@@ -1399,6 +1399,10 @@ was `anyone` before Tor replaced the Anyone network.
 - `POST /v1/proxy/anon` - Route a single HTTP request through Tor.
   The gateway performs the request, so it necessarily sees the URL, headers and
   body in cleartext.
+  Its log does not keep them: one line per request with the method, status,
+  response size and duration, or the method, duration and a class of failure
+  (`timeout`, `canceled`, `transport`). See "Logging of anonymised requests" in
+  `docs/SECURITY.md`.
 - `GET /v1/proxy/tunnel` (WebSocket) - Carry an opaque TCP stream to
   `?host=&port=` through Tor. Each end user gets their own circuit (the
   isolation key is passed as SOCKS credentials). TLS is negotiated end-to-end

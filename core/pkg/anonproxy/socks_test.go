@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,3 +286,33 @@ func TestSocksReachable(t *testing.T) {
 		t.Error("a closed port must be reported unreachable")
 	}
 }
+
+func TestErrorClass(t *testing.T) {
+	timeoutNetErr := &net.OpError{Op: "dial", Err: timeoutErr{}}
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"canceled", context.Canceled, "canceled"},
+		{"deadline", fmt.Errorf("Get \"https://dest.example/?k=SECRET\": %w", context.DeadlineExceeded), "timeout"},
+		{"net timeout", timeoutNetErr, "timeout"},
+		{"refused", errors.New("socks connect tcp 127.0.0.1:9050->dest.example:443: refused"), "transport"},
+		{"nil-ish wrapped", fmt.Errorf("wrapped: %w", errors.New("boom")), "transport"},
+	}
+	for _, c := range cases {
+		got := ErrorClass(c.err)
+		if got != c.want {
+			t.Errorf("%s: ErrorClass = %q, want %q", c.name, got, c.want)
+		}
+		if strings.Contains(got, "dest.example") || strings.Contains(got, "SECRET") {
+			t.Errorf("%s: class repeats the destination: %q", c.name, got)
+		}
+	}
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return false }

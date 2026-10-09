@@ -38,6 +38,13 @@ const (
 	maxProxyTimeout     = 60 * time.Second
 )
 
+// The Tor client the proxy goes through. Tests replace them: the real ones
+// need a Tor SOCKS port on a fixed address.
+var (
+	anonProxyRunning = anonproxy.Running
+	anonProxyClient  = anonproxy.NewHTTPClient
+)
+
 // anonProxyHandler handles proxied HTTP requests through the Tor network
 func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST requests
@@ -94,7 +101,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check the Tor SOCKS port is up (after all validation)
-	if !anonproxy.Running() {
+	if !anonProxyRunning() {
 		g.logger.ComponentWarn(logging.ComponentGeneral, "Tor proxy not available",
 			zap.String("socks_addr", anonproxy.Address()))
 		writeJSON(w, http.StatusServiceUnavailable, anonProxyResponse{
@@ -104,7 +111,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Every connection of this client goes through Tor
-	client := anonproxy.NewHTTPClient()
+	client := anonProxyClient()
 	client.Timeout = maxProxyTimeout
 
 	// Create the proxied request
@@ -131,12 +138,6 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 		proxyReq.Header.Set("User-Agent", "Orama-Gateway/1.0")
 	}
 
-	// Log the proxy request
-	g.logger.ComponentInfo(logging.ComponentGeneral, "proxying request through Tor",
-		zap.String("method", method),
-		zap.String("url", req.URL),
-		zap.String("socks_addr", anonproxy.Address()))
-
 	// Execute the request
 	start := time.Now()
 	resp, err := client.Do(proxyReq)
@@ -144,8 +145,8 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "proxy request failed",
-			zap.Error(err),
-			zap.String("url", req.URL),
+			zap.String("method", method),
+			zap.String("error_class", anonproxy.ErrorClass(err)),
 			zap.Duration("duration", duration))
 		writeJSON(w, http.StatusBadGateway, anonProxyResponse{
 			Error: "could not reach the destination through the anonymity network",
@@ -158,7 +159,8 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyRequestSize))
 	if err != nil {
 		g.logger.ComponentError(logging.ComponentGeneral, "failed to read proxy response",
-			zap.Error(err))
+			zap.String("method", method),
+			zap.String("error_class", anonproxy.ErrorClass(err)))
 		writeJSON(w, http.StatusBadGateway, anonProxyResponse{
 			Error: "the destination's response could not be read through the anonymity network",
 		})
@@ -174,7 +176,7 @@ func (g *Gateway) anonProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.logger.ComponentInfo(logging.ComponentGeneral, "proxy request completed",
-		zap.String("url", req.URL),
+		zap.String("method", method),
 		zap.Int("status", resp.StatusCode),
 		zap.Int("bytes", len(respBody)),
 		zap.Duration("duration", duration))
