@@ -64,7 +64,7 @@ func newTargetEnv(t *testing.T, userLines func(env *targetEnv) []string) *target
 	write(config.StagenetRWReadyRel, `{"pid":1,"socket":"x","address":"`+testAddress+`"}`)
 	e.in = targetInput{
 		lay: layout{module: filepath.Join(home, "repo", "e2e"), repo: filepath.Join(home, "repo")}, realHome: home,
-		out: filepath.Join(home, "out", "stagenet-state.json"), chainID: config.StagenetDefaultChainID,
+		out: filepath.Join(home, "out", "stagenet-state.json"), chainID: "orama-stagenet-1",
 		now: time.Date(2026, 9, 30, 10, 15, 0, 0, time.UTC),
 		scan: func(_ context.Context, ip string) ([]ssh.PublicKey, error) {
 			k, ok := e.nodes[ip]

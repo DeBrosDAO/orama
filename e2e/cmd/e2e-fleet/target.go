@@ -56,11 +56,11 @@ type targetInput struct {
 // cmdTarget writes the state file of a target: `target stagenet --out <state.json>`.
 func cmdTarget(parent context.Context, args []string) (int, error) {
 	if len(args) == 0 || args[0] != config.TargetStagenet {
-		return exitUsage, errors.Join(errUsage, fmt.Errorf("expected: target %s --out <state.json> [--chain-id %s]", config.TargetStagenet, config.StagenetDefaultChainID))
+		return exitUsage, errors.Join(errUsage, fmt.Errorf("expected: target %s --out <state.json> [--chain-id ID]", config.TargetStagenet))
 	}
 	fs := flag.NewFlagSet("target "+config.TargetStagenet, flag.ContinueOnError)
 	out := fs.String("out", "", "path of the state file to write")
-	chainID := fs.String("chain-id", config.StagenetDefaultChainID, "the stagenet chain id")
+	chainID := fs.String("chain-id", "", "the stagenet chain id; read from the running chain when omitted, and must match it when given")
 	if err := parseFlags(fs, args[1:]); err != nil {
 		return exitUsage, err
 	}
@@ -81,7 +81,11 @@ func cmdTarget(parent context.Context, args []string) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(parent, keyscanTimeout*time.Duration(len(config.StagenetNodes)))
 	defer cancel()
-	st, err := writeStagenetState(ctx, targetInput{lay: lay, realHome: realHome, out: abs, chainID: *chainID, now: time.Now().UTC(), scan: sshKeyscan})
+	id, err := resolveChainID(ctx, *chainID, gatewayChainID(config.StagenetPath(realHome, config.StagenetCAFileRel)))
+	if err != nil {
+		return exitFail, err
+	}
+	st, err := writeStagenetState(ctx, targetInput{lay: lay, realHome: realHome, out: abs, chainID: id, now: time.Now().UTC(), scan: sshKeyscan})
 	if err != nil {
 		return exitFail, err
 	}

@@ -24,9 +24,6 @@ const (
 	StagenetEnv        = "stagenet"
 	StagenetBaseDomain = "stagenet.dbrsteting.bid"
 	StagenetGatewayURL = "https://stagenet.dbrsteting.bid"
-	// StagenetDefaultChainID is the chain id `e2e-fleet target stagenet` writes unless --chain-id says otherwise:
-	// the CHAIN_ID chain/scripts/stagenet/deploy.sh deploys by default.
-	StagenetDefaultChainID = "orama-stagenet-1"
 	// StagenetChainHost is where a node's co-located chain answers (RPC 31001, REST 31003, indexer 31015):
 	// inside the orama-global netns, reachable from the host's root namespace.
 	StagenetChainHost = "198.18.0.2"
