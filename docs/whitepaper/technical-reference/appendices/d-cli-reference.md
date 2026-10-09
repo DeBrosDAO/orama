@@ -385,8 +385,9 @@ Give a deployment a role in its own namespace.
   runtime  the data plane: invoke, storage, push, webrtc, proxy, pubsub, cache
   reader   nothing beyond the routes that ask for no grant
 
-The change reaches a running app on its next token renewal, or immediately if
-you redeploy.
+The change reaches a running app within seconds: a deployment's grant is read
+wherever its token is checked (cached for 10 seconds on each node), so it needs
+neither a redeploy nor a new token.
 ```
 
 | Flag | Default | Description |
