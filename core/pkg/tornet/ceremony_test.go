@@ -340,3 +340,27 @@ func TestRunCeremony_givesTorARegularEmptyConfigOutsideTheBundle(t *testing.T) {
 		}
 	}
 }
+
+// tor-gencert leaves the identity key 0400 on Linux and 0600 on macOS; the
+// fleet e2e of a Linux ceremony then disagreed with one run on a Mac. The
+// ceremony sets the mode itself, so it is the same on every machine.
+func TestRunCeremony_offlineIdentityKeyIsReadOnlyForItsOwner(t *testing.T) {
+	f := &fakeTor{t: t}
+	req := ceremonyRequest(t)
+	res, err := RunCeremony(context.Background(), f.run, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Expires) == 0 {
+		t.Fatal("the ceremony made no authority")
+	}
+	for nick := range res.Expires {
+		st, err := os.Stat(filepath.Join(req.OutDir, CeremonyOfflineDir, nick, KeyAuthorityIdentity))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.Mode().Perm(); got != CeremonyOfflineKeyMode {
+			t.Errorf("%s: the offline identity key is %o, want %o", nick, got, CeremonyOfflineKeyMode)
+		}
+	}
+}

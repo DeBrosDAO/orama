@@ -19,13 +19,18 @@ import (
 
 // Ceremony output layout, below the output directory.
 const (
-	CeremonyOfflineDir    = "offline"
-	CeremonyDeployDir     = "deploy"
-	CeremonyTranscript    = "TRANSCRIPT.txt"
-	ceremonyKeysDir       = "keys"
-	ceremonyDirMode       = 0o700
-	ceremonyPublicMode    = 0o644
-	ceremonyPassphraseMin = 16
+	CeremonyOfflineDir = "offline"
+	CeremonyDeployDir  = "deploy"
+	CeremonyTranscript = "TRANSCRIPT.txt"
+	ceremonyKeysDir    = "keys"
+	ceremonyDirMode    = 0o700
+	// CeremonyOfflineKeyMode is the mode of the offline authority identity key:
+	// read-only for its owner, so it is not overwritten by accident on its way to
+	// offline media. tor-gencert leaves 0400 on Linux and 0600 on macOS; the
+	// ceremony sets it, so the result does not depend on the machine.
+	CeremonyOfflineKeyMode = 0o400
+	ceremonyPublicMode     = 0o644
+	ceremonyPassphraseMin  = 16
 
 	// Files tor and tor-gencert write below a DataDirectory's keys/ directory.
 	KeyAuthorityIdentity = "authority_identity_key"
@@ -216,6 +221,9 @@ func (r CeremonyRequest) createAuthority(ctx context.Context, run Runner, s Auth
 	}
 	if !bytes.Contains(identity, []byte("ENCRYPTED")) {
 		return Authority{}, time.Time{}, errors.New("tor-gencert left the authority identity key unencrypted, which this ceremony never accepts: the passphrase did not reach it")
+	}
+	if err := os.Chmod(filepath.Join(offline, KeyAuthorityIdentity), CeremonyOfflineKeyMode); err != nil {
+		return Authority{}, time.Time{}, fmt.Errorf("make the authority identity key read-only for its owner: %w", err)
 	}
 	cert, err := os.ReadFile(filepath.Join(keys, KeyAuthorityCert))
 	if err != nil {

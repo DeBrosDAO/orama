@@ -3,6 +3,7 @@
 package tornetwork
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -81,8 +82,8 @@ func TestCeremony_realTorMakesKeysTheNetworkFileNames(t *testing.T) {
 	for _, a := range network.Authorities {
 		offline := dir + "/out/" + tornet.CeremonyOfflineDir + "/" + a.Nickname + "/" + tornet.KeyAuthorityIdentity
 		deploy := dir + "/out/" + tornet.CeremonyDeployDir + "/" + a.Nickname + "/keys/"
-		if st, ok := infra.StatFile(t, f, n, offline); !ok || st.Mode != "600" {
-			t.Errorf("%s: the identity key under offline/ is %+v (present %v), want mode 600", a.Nickname, st, ok)
+		if st, ok := infra.StatFile(t, f, n, offline); !ok || st.Mode != fmt.Sprintf("%o", tornet.CeremonyOfflineKeyMode) {
+			t.Errorf("%s: the identity key under offline/ is %+v (present %v), want mode %o", a.Nickname, st, ok, tornet.CeremonyOfflineKeyMode)
 		}
 		if _, ok := infra.StatFile(t, f, n, deploy+tornet.KeyAuthorityIdentity); ok {
 			t.Errorf("%s: the identity key is in the deploy bundle", a.Nickname)
