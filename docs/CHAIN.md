@@ -1471,8 +1471,10 @@ The files live in `--home` (the unit's state directory):
 - `denylist` (optional).
 - `store/`.
 - `state.json`: the block cursor and the slots waiting for a piece.
-- `monitor.json`: hot-key balance, unanswered challenges, and bytes stored,
-  in the fields `core/pkg/telemetry/report` reads.
+- `monitor.json`: hot-key balance, unanswered challenges, bytes stored, and
+  the deal slots (`held_slots`: bound to a stored piece; `pending_slots`:
+  assigned and still waiting for the piece), in the fields
+  `core/pkg/telemetry/report` reads.
 
 Each step, `chain/provider.Runner`:
 1. Proves every unproved challenge of the current x/emission epoch first.

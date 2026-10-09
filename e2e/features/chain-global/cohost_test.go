@@ -143,7 +143,31 @@ func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
 	}
 }
 
-// TestCoHost_unitsAndMonitorView: the chain unit is among the node's
+// clusterPreferences is the node's preferences.yaml (core/pkg/install/preferences.go).
+const clusterPreferences = "/opt/orama/.orama/preferences.yaml"
+
+// TestCoHost_clusterNodeKeepsItsClusterRole: installing the chain beside a
+// cluster node leaves the node's preferences on the cluster role, so
+// orama-node keeps booting the cluster graph (docs/ARCHITECTURE.md, node
+// roles): the role is neither global nor both, and WireGuard, which only the
+// cluster graph starts, is up.
+func TestCoHost_clusterNodeKeepsItsClusterRole(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	for _, n := range c.Nodes() {
+		prefs := c.F.MustExec(t, n, "cat "+clusterPreferences).Stdout
+		for _, line := range strings.Split(prefs, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "role:") {
+				t.Errorf("%s: %s records %q, want the cluster role (no role line)", n.Name, clusterPreferences, line)
+			}
+		}
+		if s := c.F.Unit(t, n, "orama-node.service"); s != "active" {
+			t.Errorf("%s: orama-node.service is %s", n.Name, s)
+		}
+	}
+}
+
+// TestCoHost_unitsAndMonitorView:the chain unit is among the node's
 // orama-global units, and the operator's monitor sees each node's chain
 // responsive, on the run's chain id, with both other validators as peers.
 func TestCoHost_unitsAndMonitorView(t *testing.T) {

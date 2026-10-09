@@ -237,6 +237,8 @@ func monitorProvider(body string) *report.ProviderReport {
 	r.ProofMisses = mon.ProofMisses
 	r.DiskBytes = mon.DiskBytes
 	r.StorageMaxBytes = mon.StorageMaxBytes
+	r.HeldSlots = mon.HeldSlots
+	r.PendingSlots = mon.PendingSlots
 	return r
 }
 

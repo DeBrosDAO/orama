@@ -47,6 +47,9 @@ func writeNode(b *strings.Builder, t view.Theme, cs cluster.CollectionStatus) {
 	line(b, t, "IPFS", ipfsLine(t, r.IPFS))
 	line(b, t, "Tor", torLine(t, r.Tor))
 	line(b, t, "Chain", chainLine(t, r.Chain))
+	if r.Global != nil {
+		line(b, t, "Global", globalLine(t, r.Global))
+	}
 	line(b, t, "Traffic", trafficLine(r.Traffic))
 }
 
@@ -114,7 +117,11 @@ func chainLine(t view.Theme, c *report.ChainReport) string {
 	if c.CatchingUp {
 		sync = t.Warn.Render("catching up")
 	}
-	return fmt.Sprintf("%s | height %d | last block %.0fs ago | %s | %d peers", c.ChainID, c.LatestHeight, c.BlockAgeSec, sync, c.Peers)
+	out := fmt.Sprintf("%s | height %d | last block %.0fs ago | %s | %d peers", c.ChainID, c.LatestHeight, c.BlockAgeSec, sync, c.Peers)
+	if v := validatorStatus(t, c); v != "" {
+		out += " | " + v
+	}
+	return out
 }
 
 func trafficLine(tr *report.TrafficReport) string {

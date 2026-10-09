@@ -146,7 +146,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 		return err
 	}
 	if plan == nil {
-		return nil
+		return recordGlobalRole(h.Netns)
 	}
 	if err := savePreferencesBoth(h.Netns, plan.prefs); err != nil {
 		return fmt.Errorf("record the co-located role: %w", err)

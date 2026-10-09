@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
+	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
@@ -42,4 +43,31 @@ func TestGlobalServices_binaryAndUnitsOnEveryNode(t *testing.T) {
 			t.Errorf("%s: %s is %s", n.Name, providerUnit, s)
 		}
 	}
+}
+
+// providerMonitorFile is the status file the provider writes every step
+// (core/pkg/constants/global.go GlobalMonitorFile in GlobalProviderHome).
+const providerMonitorFile = "/var/lib/orama-global/provider/monitor.json"
+
+// TestGlobalServices_monitorShowsTheProvidersDealSlots: a node that runs the
+// provider writes held_slots and pending_slots into its monitor.json, and
+// `orama monitor node` prints them on the node's Global line
+// (docs/MONITORING.md, the node report's global section).
+func TestGlobalServices_monitorShowsTheProvidersDealSlots(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	for _, n := range c.Nodes() {
+		if c.F.Exec(t, n, "test -x "+globalBin).Exit != 0 {
+			harness.SkipNotApplicable(t, n.Name+" has no "+globalBin+": e2e/scripts/chain-deploy.sh installs only oramad; "+
+				"deploy orama-global (provider) on the fleet to exercise docs/MONITORING.md \"global\"")
+		}
+		body := c.F.MustExec(t, n, "cat "+providerMonitorFile).Stdout
+		for _, field := range []string{`"held_slots"`, `"pending_slots"`} {
+			if !strings.Contains(body, field) {
+				t.Errorf("%s: %s lacks %s: %s", n.Name, providerMonitorFile, field, body)
+			}
+		}
+	}
+	res := infra.Run(t, harness.CLI(t), "monitor", "node", "--env", c.F.State.Env)
+	infra.ExpectExit(t, res, infra.ExitOK, "Global:", "slots held")
 }
