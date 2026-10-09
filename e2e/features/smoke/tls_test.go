@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -84,20 +86,63 @@ func requireReachable(t *testing.T, host, addr string) {
 	}
 }
 
-// TestTLS_untrustedWithoutPinnedRoots proves the pin is load-bearing: the run
-// uses Let's Encrypt staging, which no system trust store accepts, so a client
-// trusting only the system roots must refuse the certificate as signed by an
-// unknown authority.
+// TestTLS_untrustedWithoutPinnedRoots proves the pin means what the run says
+// it does. A provisioned fleet uses Let's Encrypt staging, which no system trust
+// store accepts, so a client trusting only the system roots must refuse the
+// certificate as signed by an unknown authority: the pin is load-bearing. A
+// target whose pinned roots are themselves public roots (stagenet serves Let's
+// Encrypt production, which RootWallet's apps trust through the system store)
+// must instead handshake with the system roots alone.
 func TestTLS_untrustedWithoutPinnedRoots(t *testing.T) {
 	t.Parallel()
 	host, addr := gatewayHost(t)
 	requireReachable(t, host, addr)
 	_, err := handshake(t, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}, addr)
+	if pinnedRootsArePublic(t) {
+		if err != nil {
+			t.Fatalf("the pinned roots are public roots, so the system roots must accept the certificate: %v", err)
+		}
+		return
+	}
 	var verr *tls.CertificateVerificationError
 	var unknown x509.UnknownAuthorityError
 	if !errors.As(err, &verr) || !errors.As(err, &unknown) {
 		t.Fatalf("with the system roots, want x509.UnknownAuthorityError, got %v", err)
 	}
+}
+
+// pinnedRootsArePublic reports whether every root in the run's CA bundle is a
+// root the system trust store holds.
+func pinnedRootsArePublic(t *testing.T) bool {
+	t.Helper()
+	body, err := os.ReadFile(harness.Fleet(t).State.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := x509.SystemCertPool()
+	if err != nil {
+		t.Fatalf("load the system roots: %v", err)
+	}
+	found := 0
+	for rest := body; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse a certificate of the run's CA bundle: %v", err)
+		}
+		found++
+		if _, err := cert.Verify(x509.VerifyOptions{Roots: system, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
+			return false
+		}
+	}
+	if found == 0 {
+		t.Fatal("the run's CA bundle holds no certificate")
+	}
+	return true
 }
 
 // alertProtocolVersion is TLS alert 70, protocol_version (RFC 8446 6.2).
