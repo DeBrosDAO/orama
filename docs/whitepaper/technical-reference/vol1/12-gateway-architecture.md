@@ -58,7 +58,7 @@ Fourth, the set of routes is a contract. More than a hundred routes each need an
 | Anonymity proxies | `/v1/proxy/anon`, `/v1/proxy/tunnel`, `/v1/proxy/relay` | this chapter, over the Tor client in [anonymity and Tor](../vol2/38-anonymity-and-tor.md) |
 | Auth and sessions | `/v1/auth/*`, `/v1/audit` | [identity](13-identity.md) |
 | Keys, members, grants | `/v1/namespace/keys*`, `/v1/namespace/members*`, `/v1/deployments/grants` | [authorization](14-authorization.md) |
-| Node enrolment and mesh | `/v1/internal/join`, `/v1/internal/wg/*`, `/v1/node/enroll` | [the WireGuard mesh](06-the-wireguard-mesh.md) |
+| Node enrolment and mesh | `/v1/internal/join`, `/v1/node/enroll` | [the WireGuard mesh](06-the-wireguard-mesh.md) |
 | Node self-registration | `/v1/internal/node/*` | [inter-node trust](15-inter-node-trust.md) |
 | Namespace lifecycle | `/v1/namespaces`, `/v1/namespace/list`, `/v1/namespace/delete`, `/v1/internal/namespace/*` | [namespaces](09-namespaces.md) |
 | Deployments | `/v1/deployments/*`, `/v1/internal/deployments/replica/*` | [app deployments](11-app-deployments.md) |
@@ -145,7 +145,7 @@ While not ready, `readinessGate` answers 503 to everything except `readinessPass
 
 Policy fields, as the gateway uses them:
 
-- **`Access`.** `Credential` (the zero value) needs an API key or JWT. `Open` is reachable by anyone: health, version, status, the key set, the login handshake, the chain proxy, the TLS check, the ping and `/v1/invoke/`. `HandlerAuth` means the handler authenticates the caller itself, so the middleware must not resolve a credential first: invite tokens, the cluster secret on `/v1/internal/wg/*`, coordination MACs on the other internal routes, capability-opened WebSockets and the relayed download. Both make `Anonymous()` true.
+- **`Access`.** `Credential` (the zero value) needs an API key or JWT. `Open` is reachable by anyone: health, version, status, the key set, the login handshake, the chain proxy, the TLS check, the ping and `/v1/invoke/`. `HandlerAuth` means the handler authenticates the caller itself, so the middleware must not resolve a credential first: invite tokens, coordination MACs on the other internal routes, capability-opened WebSockets and the relayed download. Both make `Anonymous()` true.
 - **`Domain` and `Action`.** What the route does, for the scope gate (`Domain:Action`, for example `deploy:write`, `operator:read`, `secrets:write`). The wildcard policy `policyUnrestricted` is used only for `/v1/operator/invite`.
 - **`Ownership`.** The caller must hold a live grant in the namespace. This is also what resolves the grant onto the request for the data paths.
 - **`Token`.** `AnyCredential`, `AnyToken` (some JWT, so a leaked bare key is inert), `WalletToken` (a signed-in user) or `PrincipalToken` (a user or a deployed app's workload token, never a key). An admin caller is exempt.
@@ -292,7 +292,6 @@ Routes under `/v1/internal/` are node-to-node. They are not reachable by clients
 | `/v1/internal/deployments/replica/*` | the home node | signed stamp ([app deployments](11-app-deployments.md)) |
 | `/v1/internal/node/register`, `heartbeat`, `enrol-key` | a node | per-node signature ([inter-node trust](15-inter-node-trust.md)) |
 | `/v1/internal/join`, `/v1/node/enroll` | a joining node | invite token ([the WireGuard mesh](06-the-wireguard-mesh.md)) |
-| `/v1/internal/wg/*` | a node | cluster secret ([the WireGuard mesh](06-the-wireguard-mesh.md)) |
 | `/v1/internal/acme/present`, `cleanup` | this node's Caddy | MAC under the ACME challenge key, over the body (`acme_auth.go`); writes only `_acme-challenge` TXT records under the base domain |
 | `/v1/internal/tls-store` | this node's Caddy | coordination v2 stamp under the store's MAC key, loopback only |
 | `/v1/internal/tls/check` | this node's Caddy | none; admits any name equal to or under the base domain |

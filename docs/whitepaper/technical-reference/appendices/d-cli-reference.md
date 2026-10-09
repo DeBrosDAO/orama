@@ -52,9 +52,9 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
     - [`orama cluster namespace remove`](#orama-cluster-namespace-remove) - Remove a namespace whose owner can no longer delete it
   - [`orama cluster register-onchain`](#orama-cluster-register-onchain) - Register this cluster's public name on the Orama chain
   - [`orama cluster retire-onchain`](#orama-cluster-retire-onchain) - Retire this cluster's public row on the Orama chain
-  - [`orama cluster settings`](#orama-cluster-settings) - Show or change namespace-creation settings
-    - [`orama cluster settings set`](#orama-cluster-settings-set) - Change namespace creation or the per-wallet cap
-    - [`orama cluster settings show`](#orama-cluster-settings-show) - Show who may create namespaces, and the per-wallet cap
+  - [`orama cluster settings`](#orama-cluster-settings) - Show or change the cluster's settings
+    - [`orama cluster settings set`](#orama-cluster-settings-set) - Change namespace creation, the per-wallet cap or the update policy
+    - [`orama cluster settings show`](#orama-cluster-settings-show) - Show who may create namespaces, the per-wallet cap and the update policy
 - [`orama db`](#orama-db) - Manage SQLite databases
   - [`orama db backup`](#orama-db-backup) - Backup database to IPFS
   - [`orama db backups`](#orama-db-backups) - List backups for a database
@@ -114,7 +114,7 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
     - [`orama global tor archive`](#orama-global-tor-archive) - Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
     - [`orama global tor ceremony`](#orama-global-tor-ceremony) - Generate the directory authorities' keys and the network file (run on an offline machine)
     - [`orama global tor info`](#orama-global-tor-info) - Show this node's Tor identities and the consensus it holds (run as root)
-    - [`orama global tor monitor`](#orama-global-tor-monitor) - Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)
+    - [`orama global tor monitor`](#orama-global-tor-monitor) - Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)
     - [`orama global tor onions`](#orama-global-tor-onions) - The validator onion services the network file lists
       - [`orama global tor onions add`](#orama-global-tor-onions-add) - Add validator onion services to the network file clients join with
   - [`orama global txgate`](#orama-global-txgate) - Serve the validator's transaction gate on loopback (run by orama-global-txgate.service)
@@ -174,6 +174,7 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
   - [`orama namespace webrtc-status`](#orama-namespace-webrtc-status) - Show WebRTC service status for a namespace
 - [`orama node`](#orama-node) - Node operator commands
   - [`orama node autoupdate`](#orama-node-autoupdate) - Decide whether a newer release should be installed
+    - [`orama node autoupdate run`](#orama-node-autoupdate-run) - Look for a newer release on the cluster's channel and act on it (requires sudo)
   - [`orama node clean`](#orama-node-clean) - Deprecated: use 'orama node wipe' or 'orama node remove'
   - [`orama node dns`](#orama-node-dns) - Cluster DNS: what the outside world needs to reach its nameservers
     - [`orama node dns delegation`](#orama-node-dns-delegation) - Print the NS and glue records to create at the parent zone
@@ -199,6 +200,8 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
   - [`orama node start`](#orama-node-start) - Start all production services (requires sudo)
   - [`orama node status`](#orama-node-status) - Show the service status of the node on this machine
   - [`orama node stop`](#orama-node-stop) - Stop all production services (requires sudo)
+  - [`orama node trust`](#orama-node-trust) - Manage what this node accepts code from, besides its operator's wallet
+    - [`orama node trust add-root`](#orama-node-trust-add-root) - Adopt a TUF release root on this node (requires sudo)
   - [`orama node uninstall`](#orama-node-uninstall) - Remove production services (requires sudo)
   - [`orama node unlock`](#orama-node-unlock) - Unlock an OramaOS genesis node
   - [`orama node upgrade`](#orama-node-upgrade) - Upgrade existing installation (requires sudo)
@@ -233,6 +236,7 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
   - [`orama storage open`](#orama-storage-open) - Open one sealed storage slot
   - [`orama storage prove`](#orama-storage-prove) - Submit storage challenge proofs
   - [`orama storage put`](#orama-storage-put) - Upload sealed slots to the providers a deal assigned
+  - [`orama storage repair`](#orama-storage-repair) - Restore the replicas a deal lost, from the providers that still hold them
   - [`orama storage revoke`](#orama-storage-revoke) - Revoke a deal allowance
   - [`orama storage rewrap`](#orama-storage-rewrap) - Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) - Seal a file into one ciphertext per storage slot
@@ -627,19 +631,31 @@ orama build [flags]
 Cross-compile all Orama binaries and dependencies for Linux,
 then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
-  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy
+  - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy (built from
+    checked-in, checksum-pinned modules; Kubo and RQLite by pinned digest)
   - Systemd namespace templates
   - manifest.json with checksums of every file, and manifest.sig
 
 The manifest is signed with your RootWallet (the agent's active account, through
 its wallet:sign capability). Nodes install only archives signed by an address in
 their trust anchor, /etc/orama/archive-signers, so signing is the default;
---unsigned makes an archive for local inspection that no node will install.
+--unsigned makes an archive without a wallet signature: the CI build that release
+signers sign. A node installs it only when its release root accepted it
+('orama node stage-archive --release-only'); otherwise it is for local inspection.
 
 --signers rotates the trusted signers: nodes that install this build replace
 their list with the given addresses. The build must be signed by a signer the
 nodes trust now, and the list must include that signer; retiring a key takes
 two builds (the old key adds the new one, the new key then drops the old).
+
+--release-root <root.json> puts a TUF release root in the signed manifest. A node that
+installs the build adopts it (/etc/orama/release-root.json) the way it takes a signer
+rotation, and from then on accepts releases signed under that root
+('orama node stage-archive --release-only', the auto-update agent).
+
+The build is reproducible: with SOURCE_DATE_EPOCH set (a release build sets it to
+the commit's time) two builds of one commit produce the same archive, byte for
+byte. See docs/DEV_DEPLOY.md, "Reproducible builds".
 
 The resulting archive can be pushed to nodes with 'orama node push'.
 
@@ -653,8 +669,9 @@ Examples:
 |---|---|---|
 | `--arch` | `amd64` | Target architecture (amd64, arm64) |
 | `--output` | — | Output archive path (default: /tmp/orama-&lt;version>-linux-&lt;arch>.tar.gz) |
+| `--release-root` | — | A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root |
 | `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
-| `--unsigned` | `false` | Do not sign the manifest (a local-only archive: nodes refuse it) |
+| `--unsigned` | `false` | Do not sign the manifest (a node installs it only through its adopted TUF release root) |
 | `--verbose` | `false` | Verbose output |
 
 
@@ -1031,7 +1048,7 @@ the sign document and does not submit it.
 
 ## orama cluster settings
 
-Show or change namespace-creation settings
+Show or change the cluster's settings
 
 ```text
 orama cluster settings
@@ -1041,7 +1058,7 @@ Subcommands: `set`, `show`
 
 ## orama cluster settings set
 
-Change namespace creation or the per-wallet cap
+Change namespace creation, the per-wallet cap or the update policy
 
 ```text
 orama cluster settings set <setting> <value>
@@ -1055,12 +1072,23 @@ namespace-creation is operators, allowlist or open.
   open        any signed-in wallet
 
 max-namespaces-per-wallet is an integer from 1 to 10000. The default is 10.
+
+The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+
+  auto-update      off, notify (the default) or auto. notify reports a newer
+                   release in 'orama monitor'; auto installs it, one node at a
+                   time, when the cluster is healthy and the hour is in the window
+  update-channel   the release channel to follow: stable (the default) or nightly
+  update-window    start-end hours UTC when auto may install, for example 1-5;
+                   empty for any hour
+  release-repo     the https URL of the release repository; empty (the default)
+                   means no updates are looked up
 ```
 
 
 ## orama cluster settings show
 
-Show who may create namespaces, and the per-wallet cap
+Show who may create namespaces, the per-wallet cap and the update policy
 
 ```text
 orama cluster settings show
@@ -1157,7 +1185,8 @@ orama deploy
 
 ```text
 Deploy static sites, Next.js apps, Go backends, and Node.js backends.
-If a deployment with the same name exists, it will be updated.
+A name that is already deployed in the namespace is refused (409) unless you
+redeploy it as an update with --update.
 ```
 
 Subcommands: `go`, `nextjs`, `nodejs`, `static`
@@ -1857,11 +1886,11 @@ orama global install [flags]
 ```text
 Install global services on this machine: chain, and optionally ipfs,
 provider, archiver, indexer, repair, and the roles of the Orama Tor network
-(dirauth, relay, relay,exit, onion). The chain is required unless the machine
-only runs dirauth or relay: the other services reach it only on this host's
-loopback RPC. provider needs ipfs beside
-it (it pins public deals through the public Kubo). provider and repair are
-never installed together. indexer is optional: it serves the chain read API on
+(dirauth, relay, relay,exit, onion) and a directory authority's bandwidth
+reporter (reporter). The chain is required unless the machine only runs dirauth
+or relay: the other services reach it only on this host's loopback RPC. provider
+needs ipfs beside it (it pins public deals through the public Kubo). provider
+and repair are never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
@@ -1914,10 +1943,20 @@ is checked before anything on the host changes.
                   --tor-address to be one of the network's authorities and
                   --tor-authority-keys, its bundle from 'orama global tor
                   ceremony'; a bundle that is not this authority's is refused.
-                  A dirauth or relay host needs no chain.
+                  A dirauth or relay host needs no chain, unless it also runs
+                  the reporter.
   onion           the validator's onion service, forwarding to a tx gate on
                   loopback that serves only account read, broadcast and tx lookup.
                   It publishes no port and needs the chain.
+  reporter        the authority's bandwidth reporter, 'orama-global reporter': it
+                  reports each closed epoch's relay bandwidth and uptime to x/relay
+                  from the authority's votes. It goes beside dirauth and chain, with
+                  --tor-reporter-operator. The install writes the reporter's home
+                  (/var/lib/orama-global/reporter) with its operator and the
+                  authority-id, which is the v3_ident the network file lists for
+                  --tor-address; the hot key is created when the reporter first
+                  starts, and its address still has to be added to x/relay's
+                  reporter set and funded.
 
 --colocated installs the services on a machine that already runs a cluster node
 (orama node setup first). The global units run in their own network namespace,
@@ -1948,7 +1987,7 @@ refuses the install, and the set is kept by later installs.
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
 | `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
-| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required] |
+| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
@@ -1957,6 +1996,7 @@ refuses the install, and the set is kept by later installs.
 | `--tor-contact` | — | dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes) |
 | `--tor-family` | — | dirauth, relay: the RSA fingerprints of the operator's other relays |
 | `--tor-node-id` | — | relay: the on-chain node id the relay's nickname is derived from |
+| `--tor-reporter-operator` | — | reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report |
 
 
 ## orama global register
@@ -2168,6 +2208,11 @@ consensus and bandwidth file of the network is then recomputable by anyone who
 holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
 signatures.
+
+With --export-votes-dir it also copies the authority's own vote of that period
+to <dir>/<valid-after>.vote, the files the bandwidth reporter reads. The
+directory must exist (the install makes it, shared read-only with the
+reporter's group); nothing else of the data directory is copied there.
 ```
 
 | Flag | Default | Description |
@@ -2175,6 +2220,7 @@ signatures.
 | `--archive-dir` | — | Where the archive is written [required] |
 | `--bandwidth-file` | — | The bandwidth file the authority votes with |
 | `--data-dir` | — | The authority's tor DataDirectory [required] |
+| `--export-votes-dir` | — | Also copy the authority's own vote to &lt;dir>/&lt;valid-after>.vote for the bandwidth reporter (the directory must exist) |
 
 
 ## orama global tor ceremony
@@ -2249,24 +2295,24 @@ no identity. The root's --json prints the same as a JSON array.
 
 ## orama global tor monitor
 
-Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)
+Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)
 
 ```text
 orama global tor monitor [flags]
 ```
 
 ```text
-Write <home>/monitor.json with whether the consensus the relay holds lists it:
-{"in_consensus": true|false}. 'orama monitor node' shows it on the Global line and the
-node report raises a warning when the relay is not listed. The field is left out
-(the file is "{}") while the relay has no consensus yet or the one it holds has
-expired, so an unknown state is never reported as a no. It reads only the relay's
-own DataDirectory and writes only monitor.json there.
+Write <home>/monitor.json with whether the consensus the relay or directory authority
+holds lists it: {"in_consensus": true|false}. 'orama monitor node' shows it on the Global
+line and the node report raises a warning when the node is not listed. The field is left
+out (the file is "{}") while the node has no consensus yet or the one it holds has
+expired, so an unknown state is never reported as a no. It reads only the role's own
+DataDirectory and writes only monitor.json there.
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--home` | — | The relay's tor DataDirectory [required] |
+| `--home` | — | The relay's or directory authority's tor DataDirectory [required] |
 
 
 ## orama global tor onions
@@ -3034,7 +3080,7 @@ orama namespace disable <feature> [flags]
 ```
 
 ```text
-Disable a feature for a namespace. Supported features: webrtc
+Disable a feature for a namespace. Supported features: webrtc, webrtc-stealth
 ```
 
 | Flag | Default | Description |
@@ -3051,7 +3097,7 @@ orama namespace enable <feature> [flags]
 ```
 
 ```text
-Enable a feature for a namespace. Supported features: webrtc
+Enable a feature for a namespace. Supported features: webrtc, webrtc-stealth
 ```
 
 | Flag | Default | Description |
@@ -3390,7 +3436,7 @@ The remote commands are the same implementations as the top-level 'orama push',
 'orama rollout' and 'orama nodes'.
 ```
 
-Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `uninstall`, `unlock`, `upgrade`, `wipe`
+Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `trust`, `uninstall`, `unlock`, `upgrade`, `wipe`
 
 ## orama node autoupdate
 
@@ -3403,10 +3449,13 @@ orama node autoupdate [flags]
 ```text
 Report what this cluster should do with a candidate release.
 
+This answers the question for the values you give it and changes nothing. The
+agent that asks it of the cluster's real state, and acts, is 'orama node
+autoupdate run'.
+
 The default mode is notify: a newer verified release is reported and not
 installed. auto means the node may install, and only when the cluster is
-healthy, the release is newer, and the maintenance window is open. The
-install itself is one node at a time and is not performed by this command.
+healthy, the release is newer, and the maintenance window is open.
 
 A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
@@ -3429,6 +3478,53 @@ upgrades are staged explicitly with 'orama global stage-oramad'.
 | `--verify` | — | simulated TUF failure: rollback, freeze, threshold, or hash |
 | `--voters` | `3` | raft voters |
 | `--window` | — | maintenance window as start-end hours, for example 1-5 |
+
+Subcommands: `run`
+
+## orama node autoupdate run
+
+Look for a newer release on the cluster's channel and act on it (requires sudo)
+
+```text
+orama node autoupdate run
+```
+
+```text
+Run this node's auto-update agent once. orama-autoupdate.timer runs it every
+15 minutes on every node; running it by hand does the same thing.
+
+The agent reads the cluster's policy (orama cluster settings show): auto-update
+off, notify or auto; the channel; the maintenance window; the release repository.
+It does nothing unless the cluster stored a release repository and this node
+adopted a release root (orama node trust add-root).
+
+It fetches the channel's metadata and verifies it against the adopted root:
+every role at its threshold, an unexpired timestamp, a snapshot no older than the
+newest this node has accepted, and the channel's own keys for the channel's own
+paths. What does not verify is refused, reported in 'orama monitor', and never
+installed.
+
+With notify (the default) a newer release is reported in 'orama monitor' and
+nothing is installed. With auto the node installs it only when
+
+  - the cluster is not degraded and a majority of the raft voters are up;
+  - the hour is inside the maintenance window, if there is one;
+  - no node has failed the release (a failure anywhere marks the release bad for
+    every node, until a newer release supersedes it);
+  - it is this node's turn in the rollout plan: followers first, the leader
+    last, nameservers spaced, one node at a time;
+  - it holds the cluster-wide rollout lock.
+
+The install is 'orama node stage-archive --release-only', keeping the release it
+replaces, then 'orama node upgrade --restart', then the health gate. If the
+upgrade or the gate fails, the previous release is put back and the node is
+upgraded onto it again; the release is then marked bad for the cluster. A
+validator (a machine that runs the chain) is never installed automatically.
+
+If a run is killed in the middle of an install, the next run finishes it first
+(the intent is in /var/lib/orama-autoupdate/install-intent.json), whatever the
+policy now says. One agent runs at a time on a machine.
+```
 
 
 ## orama node clean
@@ -3607,7 +3703,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
 | `--ssh-user` | — | SSH user for remote management |
 | `--token` | — | Invite from 'orama invite'; it carries the gateway to join and the certificate to pin |
@@ -4040,6 +4136,12 @@ Examples:
     --base-domain orama-devnet.network --role nameserver --genesis \
     --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
+  # From a published release: no checkout, no Go or zig. The root is the
+  # release signers' key set you decided to trust; the cluster adopts it.
+  orama node setup --ip 1.2.3.4 --password --env mycluster \
+    --base-domain cluster.example.com --role nameserver --genesis \
+    --release 0.3.1 --release-repo https://releases.example.org/tuf --release-root ./root.json
+
   # Join existing cluster
   orama node setup --ip 5.6.7.8 --password --env devnet \
     --base-domain orama-devnet.network \
@@ -4063,6 +4165,7 @@ Examples:
 | `--archive` | — | Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
 | `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
+| `--channel` | — | Release channel to read (default stable); with --release |
 | `--env` | — | Target environment (default: active) |
 | `--gateway` | — | Gateway URL of the cluster to join (default: the environment's): its domain, e.g. https://orama-devnet.network; the invite is minted through one of its nodes and pins that node's certificate |
 | `--genesis` | `false` | Create a new cluster (first node) |
@@ -4070,6 +4173,9 @@ Examples:
 | `--ip` | — | Public IP address of the VPS (required) |
 | `--join-via` | — | user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed) |
 | `--password` | `false` | Bootstrap over password login; the password is read from your RootWallet vault login for the IP (rw vault add &lt;ip>), never from the command line |
+| `--release-repo` | — | https URL of the release repository (TUF metadata and archives); with --release |
+| `--release-root` | — | The TUF root.json of the release signers you trust, checked out of band; with --release. The cluster adopts it |
+| `--release` | — | Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet |
 | `--role` | `node` | Node role: node or nameserver |
 | `--user` | `root` | SSH user on the VPS |
 
@@ -4104,12 +4210,20 @@ recorded in /etc/orama/release-seen.json, and the file has the target's length
 and hashes. Any failure refuses the archive; the wallet check is not tried
 instead. An archive that passes is then verified against the trust anchor as
 above: the release root is required in addition to it, not in place of it.
+
+--release-only is the one case where the release root is enough: the archive
+is an unsigned release (the CI build), it must not name signers or a release
+root, and the node records in /etc/orama/release-staged.json that it was staged
+through the release root, which is what lets 'orama node upgrade' install it.
+A channel target ('stable/orama-...') is checked against that channel's
+delegated role.
 ```
 
 | Flag | Default | Description |
 |---|---|---|
 | `--archive` | — | The pushed archive on this node [required] |
 | `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target |
+| `--release-only` | `false` | Accept the archive on the release root's checks alone, without a wallet signature (an installed node; needs --release-metadata and --release-target) |
 | `--release-target` | — | Name the archive has in the release targets metadata; requires --release-metadata |
 | `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
 
@@ -4155,6 +4269,48 @@ Use --force to bypass quorum safety check.
 | Flag | Default | Description |
 |---|---|---|
 | `--force` | `false` | Bypass quorum safety check |
+
+
+## orama node trust
+
+Manage what this node accepts code from, besides its operator's wallet
+
+```text
+orama node trust
+```
+
+Subcommands: `add-root`
+
+## orama node trust add-root
+
+Adopt a TUF release root on this node (requires sudo)
+
+```text
+orama node trust add-root <root.json> [flags]
+```
+
+```text
+Adopt a TUF release root as /etc/orama/release-root.json.
+
+A node trusts its operator's wallet by default (/etc/orama/archive-signers). A
+cluster may also trust a release root: a set of keys whose threshold signature
+on release metadata makes an archive installable without the operator building
+and signing it. The Orama release root is one; a cluster adopts it by choice
+and can drop it by deleting the file.
+
+The root is checked before it is written: well-formed, signed by its own keys at
+its threshold, not expired. Adopting a root other than the one already adopted
+needs --replace. This command changes this node only; 'orama build
+--release-root' puts the root in a signed archive, and every node that installs
+that archive adopts it.
+
+Examples:
+  sudo orama node trust add-root ./root.json
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--replace` | `false` | Replace a different release root that is already adopted |
 
 
 ## orama node uninstall
@@ -4223,7 +4379,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--node` | — | Upgrade a single node IP only |
 | `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
 
 
@@ -4334,6 +4490,10 @@ orama operator rotate-secrets [flags]
 ```text
 Rewrite function secrets, push tokens, TURN secrets, deployment
 environments and agent tokens onto the versioned envelope (enc:v1:<id>:).
+A deployment's environment is written as enc:v2:<id>:, sealed to its namespace
+and deployment id, so a copy of the ciphertext in another deployment's row does
+not open. This is also what turns on bound writes: until it has run, gateways
+keep writing deployment environments in the envelope an older gateway reads.
 
 Without --rotate the IKM does not change: leftover plaintext and the legacy
 enc: form are rewritten so a captured snapshot of the old format is no longer
@@ -4343,7 +4503,7 @@ With --rotate a new encryption root is generated. Existing ciphertext is
 re-encrypted under it. A disk that holds only the previous root cannot open
 the new rows. IPFS-Cluster and the mesh bearer are not touched.
 
-Do not run this until every gateway is on a binary that can read enc:v1:.
+Do not run this until every gateway is on a binary that can read enc:v2:.
 The walker is idempotent; if it is interrupted, run it again.
 ```
 
@@ -4641,7 +4801,7 @@ Storage deals on the Orama chain
 orama storage
 ```
 
-Subcommands: `accept`, `create`, `decline`, `extend`, `get`, `grant`, `open`, `prove`, `put`, `revoke`, `rewrap`, `seal`
+Subcommands: `accept`, `create`, `decline`, `extend`, `get`, `grant`, `open`, `prove`, `put`, `repair`, `revoke`, `rewrap`, `seal`
 
 ## orama storage accept
 
@@ -4924,6 +5084,37 @@ provider endpoint is the node's first http(s) endpoint in x/nodes.
 | `--dir` | — | Directory holding slot-N files from seal |
 | `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
 | `--wait` | `5m0s` | How long to wait for assignment and acceptance |
+
+
+## orama storage repair
+
+Restore the replicas a deal lost, from the providers that still hold them
+
+```text
+orama storage repair [flags]
+```
+
+```text
+Rebuild every slot of a deal that the chain assigned to a new provider but that
+no provider has accepted yet, using the repair seed.
+
+For each such slot the command fetches an accepted replica from another
+provider, checks it against its on-chain piece root, strips that slot's outer
+layer, applies the new slot's layer, checks the result against the new slot's
+on-chain root, and uploads it to the new provider. The plaintext is never
+recovered. A repair seed that is not the deal's makes the result miss the
+root, and nothing is uploaded.
+
+A deal that names a repair delegate is repaired by the delegate while you are
+away. Without one, the deal runs with fewer replicas until you run this.
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--deal-id` | `0` | Deal id |
+| `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
+| `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 |
+| `--wait` | `5m0s` | How long to wait for each new provider to read its assignment |
 
 
 ## orama storage revoke

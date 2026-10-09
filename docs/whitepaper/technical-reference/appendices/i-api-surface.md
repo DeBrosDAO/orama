@@ -3,9 +3,9 @@
 > **At a glance.**
 >
 > - **Hand-written.** Who owns each gateway route: the SDK, the CLI, a direct caller or another node. [Gateway routes](c-gateway-routes.md) is the generated list of the same routes with their policy; this table is the owner of each and the reason a route is not in the SDK.
-> - **Owners:** SDK 43, CLI 81, direct 27, internal 26.
+> - **Owners:** SDK 43, CLI 81, direct 27, internal 23.
 
-Every route the gateway registers, and which client owns it. Humans use the CLI, programs use the SDK and this HTTP API, and there is no Orama dashboard ([the CLI](../vol1/35-the-cli.md), [SDKs](../vol1/36-sdks.md)). The TypeScript SDK's coverage is a decision rather than an accident: it reaches 43 of 177 routes, and the others are here with a reason.
+Every route the gateway registers, and which client owns it. Humans use the CLI, programs use the SDK and this HTTP API, and there is no Orama dashboard ([the CLI](../vol1/35-the-cli.md), [SDKs](../vol1/36-sdks.md)). The TypeScript SDK's coverage is a decision rather than an accident: it reaches 43 of 174 routes, and the others are here with a reason.
 
 The route set in this appendix and the set the gateway registers must be identical. The test `core/pkg/gateway/api_surface_test.go` reads the first two cells of every table row whose first cell is a backticked path, so a registered route missing here fails, and so does a documented route no longer registered. Adding a route means deciding who calls it.
 
@@ -14,7 +14,7 @@ The route set in this appendix and the set the gateway registers must be identic
 | `SDK` | `@debros/orama` calls it | 43 |
 | `CLI` | The `orama` CLI calls it. An application has no reason to: deploying, minting keys and managing nodes are operator actions. | 81 |
 | `direct` | Reachable by a client, but not through the SDK by design. The reason is in the row. | 27 |
-| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 26 |
+| `internal` | Node-to-node over the WireGuard overlay. Never reachable by a client. | 23 |
 
 The request and response shapes of the `SDK` routes are pinned by the fixtures in `contracts/`, which both a Go handler test and a TypeScript unit test read, so a shape change on either side fails without a cluster.
 
@@ -277,6 +277,3 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/internal/tls-store` | internal | The cluster's certificate store, for Caddy on this host (`caddy.storage.orama`): `POST` with an `op` of `load`, `stat`, `store`, `delete`, `list`, `lock`, `renew` or `unlock`. Coordination MAC v2 under the TLS store key install gives Caddy (`/etc/caddy/orama-tls-store.key`), body and nonce covered, from loopback only; anything else is 404. Values arrive sealed and are refused otherwise. Cluster gateway only. See [TLS and certificates](../vol1/25-tls-and-certificates.md). |
 | `/v1/internal/tls/check` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
 | `/v1/internal/webrtc/events` | internal | A namespace's SFU reporting a participant joining or leaving a room, published on `_orama/webrtc/<room>` ([WebRTC](../vol1/23-webrtc.md)). A MAC over the request keyed by the namespace's TURN secret; anything else is refused with 401. |
-| `/v1/internal/wg/peer` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/wg/peer/remove` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |
-| `/v1/internal/wg/peers` | internal | Node-to-node over the WireGuard overlay. Never reachable by a client. |

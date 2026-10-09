@@ -47,7 +47,7 @@ Other processes need the wildcard too. The shared TURN server terminates TLS its
 
 ### How the Caddy binary is built
 
-`orama build` compiles Caddy with xcaddy: `xcaddy build v2.11.4 --with github.com/DeBrosOfficial/caddy-orama=<repo>/caddy --output bin/caddy` (`core/cmd/orama/internal/build/builder.go:buildCaddy`). The version is `constants.CaddyVersion` in `core/pkg/constants/versions.go`. The build fails if `xcaddy` is missing from `PATH` or the `caddy/` directory is absent. The binary lands in the release archive and install puts it at `/usr/bin/caddy` (`core/pkg/install/prebuilt.go`).
+`orama build` compiles Caddy from the repository's `caddy/` module, which links Caddy with the two Orama modules: `go build -mod=readonly ./cmd/caddy` (`core/cmd/orama/internal/build/thirdparty.go:buildCaddy`). The version is `constants.CaddyVersion` in `core/pkg/constants/versions.go`. The build fails if the `caddy/` directory is absent. The binary lands in the release archive and install puts it at `/usr/bin/caddy` (`core/pkg/install/prebuilt.go`).
 
 `caddy/` is its own Go module (`github.com/DeBrosOfficial/caddy-orama`, with `caddy/v2 v2.11.4`, `certmagic v0.25.3`, `libdns v1.1.1`), so it cannot import `core`. That has a cost: the wire formats, the key derivation and the sealing are written twice, in `caddy/crypto.go` and in `core/pkg/tlsstore` and `core/pkg/auth`. Both sides carry the same test vectors, so editing one copy fails the other's tests: `caddy/vectors_test.go` (`TestStoreKeys_matchCore`, `TestOpenValue_theCoreVector`, `TestCoordinationV2MAC_matchesCore`, `TestProviderSign_matchesCore`, `TestMaxLease_matchesCore`) against `core/pkg/tlsstore/vectors_test.go` (`TestDeriveKeys_matchesTheCaddyModule`, `TestOpen_aValueTheCaddyModuleSealed`). The root `make test` runs the `caddy-test` target beside the core tests.
 
@@ -346,7 +346,7 @@ Caddy itself is bounded by `MemoryMax=2G`, `TasksMax=512` and `LimitNOFILE=10485
 
 ### A caddy module, not a sidecar
 
-**Chosen:** two modules compiled into Caddy by xcaddy, in a separate Go module.
+**Chosen:** two modules compiled into Caddy, in a separate Go module.
 **Rejected:** a generic HTTP-01/lego sidecar writing files for Caddy; a core package imported into Caddy.
 **Why:** CertMagic already has the storage and DNS-provider interfaces, including lock-lease renewal, so a module is the narrowest fit. A separate module avoids pulling the whole `core` dependency graph into the Caddy build. The price is duplicated wire formats, bounded by shared test vectors.
 

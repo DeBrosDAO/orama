@@ -182,7 +182,7 @@ The insert is `INSERT ... SELECT ... WHERE NOT EXISTS`, not an upsert. An upsert
 **Admission.** A key proves who holds it, not that the cluster let that node in. Without a further check, a caller that reached the endpoints could invent a libp2p identity, enrol a key for it and register a `dns_nodes` row, entering placement and DNS as a node nobody admitted. `admitted` (`core/pkg/gateway/handlers/nodeapi/admission.go:admitted`) refuses registration with 403 and an audit line unless one of these holds:
 
 1. the node is in `dns_nodes` and not retired, meaning its `last_seen` is not the sentinel `1970-01-01 00:00:00` that `orama node remove` writes (`core/pkg/constants/node_retirement.go:RetiredNodeLastSeen`); this covers every existing node, a restart and a rolling upgrade;
-2. a `wireguard_peers` row exists under its id, which only the join under an operator-minted invite, the OramaOS enrolment under a token, or the peer endpoint over the mesh with the cluster secret create for a new node;
+2. a `wireguard_peers` row exists under its id, which only the join under an operator-minted invite or the OramaOS enrolment under a token create for a new node;
 3. for an OramaOS node, enrolled before it had a libp2p identity: its peer row exists at the overlay address it claims under the placeholder id `node-<overlay address>` (`core/pkg/overlay/alloc.go:PlaceholderNodeID`), the request's source is that address (the sender's over the mesh, this host's on loopback, resolved by `sourceOverlayIP`), and no other live node holds the address;
 4. the registry is empty: the genesis node, which nothing can have admitted.
 
@@ -216,10 +216,6 @@ The installer creates the node's identity once, at `<orama>/data/identity.key` (
 `core/pkg/node/libp2p.go:loadOrCreateIdentity`, which the running node uses, is more permissive than the installer (see Known gaps): it generates and saves a new key whenever the file cannot be loaded, for any reason.
 
 The identity does three jobs: it is the libp2p transport identity, its peer id is the node id in every table, and, through the key the id embeds, it is the root of the enrolment proof. Its gateway-side consumer, `loadNodeIdentity`, derives the audience (`NodePeerID`) every coordination verifier uses from it, which is why the gateway YAML carries `cluster_secret_path`: the secret path locates both the secret and the identity file next to it.
-
-### The WireGuard peer endpoints
-
-`/v1/internal/wg/peer`, `/peers` and `/peer/remove` are the one internal family not covered by a MAC: they take the cluster secret itself, as `cluster_secret` in the registration body or the `X-Cluster-Secret` header, compared with `subtle.ConstantTimeCompare`, and require an overlay source (`core/pkg/gateway/handlers/wireguard/handler.go:validateInternalRequest`). A gateway configured without a cluster secret refuses them with 503; the check once read `if secret != "" && mismatch` and let everything through on such a gateway. The secret crosses only the WireGuard tunnel. The endpoints are chapter 6's subject ([the peer registration endpoints](06-the-wireguard-mesh.md#the-peer-registration-endpoints)); they appear here because they are the membership credential in its plainest form.
 
 ## State it owns
 
@@ -301,7 +297,6 @@ What the secret allows, from the code in this chapter:
 - Sign coordination stamps (v1 and v2, any audience): spawn, stop and tear down any namespace's services on any node, repair a namespace, relay a push message, evict a blob, set up or tear down a deployment replica, push a re-encrypt (`CheckSuccessor` refuses a root older than the gateway's), read telemetry and network status.
 - Sign hop MACs: assert any namespace, JWT subject, scope set, device and session to any namespace gateway. The key is the same for every namespace. A namespace gateway refuses a hop whose asserted namespace is not its own (`CodeNamespaceMismatch` in `core/pkg/gateway/middleware.go`), but that compares the asserted value with the receiver's, and a forger asserts the receiver's, so one namespace's gateway can speak as the index gateway to another's.
 - Derive the ACME, TLS-store, IPFS Cluster, Kubo, blob-wrapping and per-namespace capability keys (the table under [deriving keys](#deriving-keys-from-the-cluster-secret)). The TLS-store seal key decrypts the stored certificates.
-- Call the WireGuard peer endpoints, which take the secret itself: register or remove a mesh peer.
 - With the `encryption-root` files bound beside it, decrypt every stored secret of every namespace (chapter 16).
 
 What it does not allow: signing a node stamp (needs a node's Ed25519 key, and a namespace gateway cannot read `node-key.pem`), enrolling a key for a node that already has a live row, and minting a JWT (each gateway signs with its own key).
@@ -313,7 +308,7 @@ What it does not allow: signing a node stamp (needs a node's Ed25519 key, and a 
 | Internet access only | reach any route through Caddy | reach node-API routes (404 on the reachability filter); forge hop headers (deleted by Caddy for six names, then by the gateway); produce any MAC |
 | A deployed app on a node (loopback; no overlay source where `IPAddressDeny` is enforced) | pass the reachability filter on loopback | produce a coordination, hop or node stamp: it cannot see `secrets/` (see [privilege and filesystem trust](05-privilege-and-filesystem-trust.md)); enrol a key (needs the libp2p identity, which it cannot read) |
 | Code execution in a namespace gateway (a tenant's gateway, which runs tenant WASM) | everything in the next row, from an overlay source address, plus read the node's libp2p `identity.key` | register or heartbeat as its node (`node-key.pem` is not visible to it); replace a live node's key |
-| The cluster secret (any node's disk, or any node) | sign coordination and hop MACs for any audience and namespace; spawn, stop and tear down namespaces on any node; read telemetry; forge hops and so assert any identity to a namespace gateway; reach the WireGuard peer endpoints | register or heartbeat as another node (nothing derived from the secret is accepted); enrol a key for a node that has not booted (needs that node's libp2p identity) |
+| The cluster secret (any node's disk, or any node) | sign coordination and hop MACs for any audience and namespace; spawn, stop and tear down namespaces on any node; read telemetry; forge hops and so assert any identity to a namespace gateway | register or heartbeat as another node (nothing derived from the secret is accepted); enrol a key for a node that has not booted (needs that node's libp2p identity) |
 | One node's `node-key.pem` | speak as that node until it is revoked | speak as another node |
 | One node's `identity.key` and the cluster secret | re-enrol only if the node has no live row (never enrolled or after a join clears it) | replace a live node's key |
 | An operator (invite minting, `orama node remove`) | admit a machine, revoke a node | |

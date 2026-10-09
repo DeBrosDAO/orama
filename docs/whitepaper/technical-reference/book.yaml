@@ -103,7 +103,6 @@ volumes:
               - core/pkg/invite/
               - core/pkg/discovery/
               - core/pkg/gateway/handlers/join/
-              - core/pkg/gateway/handlers/wireguard/
               - core/pkg/gateway/handlers/enroll/
           - file: vol1/07-cluster-state.md
             title: Cluster state
@@ -242,6 +241,7 @@ volumes:
               - core/pkg/serverless/
               - core/pkg/gateway/handlers/serverless/
               - core/sdk/
+              - core/examples/functions/
           - file: vol1/22-push-notifications.md
             title: Push notifications
             template: subsystem
@@ -317,6 +317,9 @@ volumes:
               - core/pkg/releasesign/
               - core/pkg/releaseverify/
               - core/pkg/version/
+              - core/cmd/testtuf/
+              - core/thirdparty/olric/
+              - core/thirdparty/ipfs-cluster/
               - core/cmd/orama/internal/build/
               - core/debian/
               - core/scripts/
@@ -336,6 +339,8 @@ volumes:
             owns:
               - core/pkg/install/
               - core/pkg/autoupdate/
+              - core/pkg/updatenotice/
+              - core/pkg/updatepolicy/
               - core/pkg/legacylayout/
               - core/cmd/orama/internal/production/
           - file: vol1/31-rolling-upgrades.md

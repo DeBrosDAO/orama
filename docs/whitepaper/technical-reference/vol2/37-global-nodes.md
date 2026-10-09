@@ -525,7 +525,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 - The sign floor protects only hosts that ran the migration commands. A key copied by hand carries no floor.
 - `orama global start` reports success for a unit systemd has started but that exits at once (the provider before registration).
 - `core/pkg/globalnetns/enter_linux.go:InNamespace` is called only by an integration test. `core/pkg/globalnode/lifecycle.go:DefaultLifecycle` says the co-located RPC wait probes "from inside" the namespace; it dials the namespace address from the host.
-- The renderers `RenderGlobalRelayUnit`, `RenderGlobalSBWSUnit` and `RenderGlobalReporterUnit` in `core/pkg/install/global_units.go` are installed by nothing; the reporter binary exists in `orama-global`, but no installer role writes its unit. The comment on `core/pkg/constants/chain.go:ChainP2PPort` still says the listener is on the WireGuard address.
+- The comment on `core/pkg/constants/chain.go:ChainP2PPort` still says the listener is on the WireGuard address.
 - `MsgRegisterNode` stores a hot key's public key as a binding but does not require the node's `STORAGE` role to register with a particular hot-key service name beyond `hot-key`; other modules' use of service names (`relay`) is by convention only (`chain/app/relay_view.go:RelayBinding`).
 
 ## Verify it yourself

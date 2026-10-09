@@ -40,7 +40,6 @@ Every integer constant whose name marks it as a port, a port range bound or a po
 | 31011 | `core/pkg/constants/global.go:GlobalIPFSAPIPort` | GlobalIPFSAPIPort is the public Kubo RPC, on 127.0.0.1 (the namespace address on a co-located machine), token-gated. |
 | 31012 | `core/pkg/constants/global.go:GlobalIPFSGatewayPort` | GlobalIPFSGatewayPort is Kubo's HTTP gateway, on 127.0.0.1. |
 | 31013 | `core/pkg/constants/global.go:GlobalProviderPort` | GlobalProviderPort is the storage provider's upload and retrieval HTTP. |
-| 31014 | `core/pkg/constants/global.go:GlobalRelayMetricsPort` | GlobalRelayMetricsPort is the relay's metrics listener, on 127.0.0.1. It is not a public service; it stays in this block so it cannot land on a cluster port. |
 | 31015 | `core/pkg/constants/global.go:GlobalIndexerPort` | GlobalIndexerPort is the chain indexer's read API (orama-global indexer), on 127.0.0.1 only. The gateway proxies /v1/chain/index/ to it. |
 | 31020 | `core/pkg/constants/global.go:GlobalTorORPort` | GlobalTorORPort is the relay's ORPort. |
 | 31021 | `core/pkg/constants/global.go:GlobalTorDirPort` | GlobalTorDirPort is a dirauth's DirPort. |

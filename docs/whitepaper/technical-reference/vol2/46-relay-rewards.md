@@ -162,7 +162,7 @@ The medians are exact rules: for weights the middle value of an odd count and th
 
 **Restart of a reporter.** `state.json` holds the epoch it last saw and the owed spans; `report-EPOCH.json` holds the entries chosen for an epoch in flight. A restart resumes and sends the same messages. A reporter that was down across more than one epoch boundary loses those spans.
 
-**Installation.** `RenderGlobalReporterUnit` exists but nothing calls it: the reporter has no installer, nor does the sbws service that measures relay bandwidth. An operator wires them by hand (`core/pkg/install/global_units.go`).
+**Installation.** The reporter is a service of `orama global install` (`--services chain,dirauth,reporter`; the unit is `RenderGlobalReporterUnit`, installed by `core/pkg/install/global_install.go`). Nothing in the repository measures relay bandwidth; an authority votes a `Measured=` value only from a bandwidth file it is given (`core/pkg/tornet/torrc.go:BandwidthFile`).
 
 **Rolling upgrade.** Settlement is part of oramad ([chain architecture](39-chain-architecture.md)); the reporter reads public queries and signs a message type that does not change between versions. The `inputs_root` encoding carries a version byte.
 
@@ -273,7 +273,7 @@ The medians are exact rules: for weights the middle value of an odd count and th
 - **No way to remove a relay and nothing calls `JailRelay`.** Consequence: a bad relay is never removed or stopped from being paid by anything in the tree. Code: `chain/x/relay/keeper/jail.go:JailRelay`.
 - **The own-operator rule is not enforced by the chain.** The reporter key and the operator account differ. Consequence: an authority operator that also runs relays can report on them with a modified reporter, held only by the median. Code: `chain/reporter/runner.go:Config`, `chain/x/relay/keeper/register.go`.
 - **`inputs_root` commits to the entries, not to the archive.** The code comment says binding it to archived votes is outside the module. Consequence: `docs/TOR_NETWORK.md` and [anonymity and Tor](38-anonymity-and-tor.md) say the root commits to the archive's manifest; it does not, and another party can only recompute the entries from the votes and the registry as it stood. Code: `chain/x/relay/types/hash.go:InputsRoot`.
-- **The reporter and the bandwidth service have no installer.** Consequence: without sbws no relay is measured, so every weight is zero and no relay is paid; the unit renderers exist but nothing calls them. Code: `core/pkg/install/global_units.go:RenderGlobalReporterUnit`.
+- **Relay bandwidth is not measured.** Consequence: without a bandwidth file no relay has a `Measured=` value, so every weight is zero and no relay is paid. Code: `core/pkg/tornet/torrc.go:BandwidthFile`.
 - **No command registers a relay.** The cross-signature and the message are built only in tests. Consequence: an operator needs tooling this repository does not ship. Code: `chain/x/relay/types/crosscert.go:CrossCertMessage`.
 - **A single missing reporter stops all relay pay for the epoch.** Quorum equals the number of initial authorities. Consequence: the epoch's ceiling is not minted and is not carried forward. Code: `chain/x/relay/types/params.go:DefaultMinReportersQuorum`, `chain/x/relay/keeper/settle.go:SettleEpoch`.
 - **The settlement end step is unmetered and scans whole reports.** Consequence: the cost grows with relays times reporters in one block; see Limits. Code: `chain/x/relay/keeper/settle.go:scoreRelays`.

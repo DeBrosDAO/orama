@@ -299,7 +299,7 @@ The cache has three boundaries, from outermost in.
 
 `docs/SECURITY.md` contradicts itself on this. The "Olric Gossip Encryption (Step 1.8)" section says the YAML loader has no `encryptionKey`, the plumbing that shipped a generated key was removed, and the control is the WireGuard overlay. The same file's rollout plan lists "Olric encryption (simultaneous restart)" under Batch 3, and its list of residual risks says "v0.7.0 YAML has no `encryptionKey`". Resolution from code:
 
-1. **The version is v0.7.4, not v0.7.0.** `core/pkg/constants/versions.go:OlricVersion` is `v0.7.4`; the build installs `olric-server@v0.7.4`; `core/go.mod` requires the same. The v0.7.0 text is stale.
+1. **The version is v0.7.4, not v0.7.0.** `core/pkg/constants/versions.go:OlricVersion` is `v0.7.4`; the build compiles `olric-server` from the pinned module `core/thirdparty/olric` at v0.7.4; `core/go.mod` requires the same. The v0.7.0 text is stale.
 2. **The loader has no key field.** The memberlist section of the YAML loader in the pinned library lists environment, bind and advertise address and port, interface, compression, join retry, peers, and the memberlist timing knobs, plus `gossipVerifyIncoming` and `gossipVerifyOutgoing`. It has no secret-key field, and the library never references a keyring. A config of the shape Orama writes, loaded through `config.Load`, yields an empty `MemberlistConfig.SecretKey`. Setting a key needs an embedding program that builds `config.Config` in Go. Orama runs the stock `olric-server`.
 3. **The verify flags do nothing without a key.** Memberlist defaults `GossipVerifyIncoming` and `GossipVerifyOutgoing` to true, but they only govern messages that are or are not encrypted; with no key nothing is encrypted and nothing is checked.
 4. **Dead plumbing remains.** The join response type still declares `olric_encryption_key`, marked unused, and the install orchestrator writes `secrets/olric-encryption-key` if a response ever carries one (`core/pkg/gateway/handlers/join/handler.go:OlricEncryptionKey`, `core/cmd/orama/internal/production/install/orchestrator.go`). Nothing populates the field.
@@ -321,7 +321,7 @@ The isolation between namespaces is therefore enforced at the gateway (credentia
 
 ### Supply chain
 
-The binary is built by `go get` of the pinned tag in a scratch module with `GONOSUMDB=*` and `GOPROXY=https://proxy.golang.org|direct`, then cross-compiled (`core/cmd/orama/internal/build/builder.go:buildOlric`). The module checksum database is not consulted for it, so the integrity of `olric-server` and its dependencies rests on the release signing of the resulting bundle, not on `sum.golang.org` ([build, signing and release](29-build-signing-and-release.md)). The memberlist version in that binary is whatever the Olric tag's `go.mod` requires (v0.5.3 for v0.7.4), which can differ from the memberlist version in `core/go.mod`.
+The binary is built from the module pinned in `core/thirdparty/olric` (its own `go.mod` and `go.sum`, `go build -mod=readonly`), then cross-compiled (`core/cmd/orama/internal/build/thirdparty.go:buildOlric`). The toolchain refuses any module whose checksum `go.sum` does not list, so the integrity of `olric-server` and its dependencies rests on that file and on the release signing of the resulting bundle ([build, signing and release](29-build-signing-and-release.md)). The memberlist version in that binary is whatever the Olric tag's `go.mod` requires (v0.5.3 for v0.7.4), which can differ from the memberlist version in `core/go.mod`.
 
 ## Limits and scale
 

@@ -19,7 +19,7 @@ var (
 	queryShape  = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z0-9_]+)*\.[A-Z][A-Za-z0-9]*$`)
 	unitShape   = regexp.MustCompile(`^orama[a-z0-9-]*(@[a-z0-9-]*)?\.(service|timer)$`)
 	configShape = regexp.MustCompile(`^[a-z0-9_./-]+\.(yaml|yml|json|conf|toml|env):[A-Za-z0-9_.-]+$`)
-	claimShape  = regexp.MustCompile(`^(docs|plans)/[A-Za-z0-9_./-]+\.md(#[a-z0-9-]+)?(: \S.*)?$`)
+	claimShape  = regexp.MustCompile(`^(docs|plans|vault/docs)/[A-Za-z0-9_./-]+\.md(#[a-z0-9-]+)?(: \S.*)?$`)
 )
 
 // Validate checks a manifest and returns every problem at once.

@@ -148,9 +148,6 @@ Access is `credential` (an API key or a JWT, resolved by the middleware), `open`
 | `/v1/internal/tls-store` | `g.tlsStoreHandler` | handler-auth |  | any |  |
 | `/v1/internal/tls/check` | `g.tlsCheckHandler` | open |  | any |  |
 | `/v1/internal/webrtc/events` | `g.webrtcHandlers.EventsHandler` | handler-auth |  | any |  |
-| `/v1/internal/wg/peer` | `g.wireguardHandler.HandleRegisterPeer` | handler-auth |  | any |  |
-| `/v1/internal/wg/peer/remove` | `g.wireguardHandler.HandleRemovePeer` | handler-auth |  | any |  |
-| `/v1/internal/wg/peers` | `g.wireguardHandler.HandleListPeers` | handler-auth |  | any |  |
 
 ## /v1/invoke
 

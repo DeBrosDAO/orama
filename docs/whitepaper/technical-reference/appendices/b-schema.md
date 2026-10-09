@@ -70,6 +70,7 @@ Placement says which database holds a table: `Cluster` tables live only in the c
 | `push_topics` | Namespace | TenantData | the tenant's devices, addressed by rotating topic (FEAT-265) |
 | `raft_evicted_nodes` | Cluster | Platform | tombstones read and written only by the node process on its own index rqlite (eviction.go, the membership reconciler) and by the CLI; a namespace gateway never opens it |
 | `refresh_tokens` | Cluster | Platform | a session must be refreshable and revocable from anywhere |
+| `release_installs` | Cluster | Platform | which node installed or failed which release; a tenant copy would let a tenant mark a release bad or skip a node's turn |
 | `request_logs` | Namespace | Telemetry | this gateway's own request log |
 | `revoked_tokens` | Cluster | Platform | a revocation that reaches one gateway refuses nothing |
 | `rqlite_backups` | Cluster | Platform | written by the node process right after it snapshots its index rqlite (backup_offbox.go); no gateway reads it |
@@ -906,6 +907,16 @@ Placement says which database holds a table: `Cluster` tables live only in the c
 | `grace_used_at` | TIMESTAMP | no | - |  |
 | `device_id` | TEXT | no | - |  |
 | `session_id` | TEXT | no | - |  |
+
+## release_installs
+
+| Column | Type | Not null | Default | Key |
+|---|---|---|---|---|
+| `version` | TEXT | yes | - | primary |
+| `node_id` | TEXT | yes | - | primary |
+| `state` | TEXT | yes | - |  |
+| `detail` | TEXT | yes | `''` |  |
+| `recorded_at` | TIMESTAMP | yes | `CURRENT_TIMESTAMP` |  |
 
 ## request_logs
 

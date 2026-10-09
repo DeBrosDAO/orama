@@ -7,7 +7,6 @@ minting: "Cluster node (the minting node when it is named in an invite)" {
   gw: Index gateway {
     join: "POST /v1/internal/join (invite token)"
     enroll: "POST /v1/node/enroll (invite token)"
-    wgapi: "/v1/internal/wg/* (cluster secret + overlay source)"
   }
   node: orama-node {
     sync: "WireGuard sync, every 60 s"
@@ -29,7 +28,6 @@ operator -> joiner: "orama1_ invite (copy once)"
 joiner -> minting.gw.join: "HTTPS, certificate pinned by SHA-256"
 minting.gw.join -> minting.reg: "overlay.Register: lowest free wg_ip"
 minting.gw.enroll -> minting.reg: "overlay.Register"
-minting.gw.wgapi -> minting.reg: "overlay.Register / delete row"
 minting.gw -> minting.helper: "add-peer / remove-peer (unix socket)"
 minting.node.sync -> minting.reg: "read wireguard_peers (leader, else local replica);\nupsert own row (self-registration)"
 minting.node.sync -> minting.wg0: "wg set (CAP_NET_ADMIN)"

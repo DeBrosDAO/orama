@@ -431,7 +431,7 @@ The gateway's limiters are per gateway process. With G gateways the effective pe
 - **Version strings.** `vault/src/main.zig`, `vault/src/server/handler_health.zig`, `vault/src/server/handler_status.zig` and `vault/build.zig.zon` hard-code 0.1.0; the network is 0.3.0. `--version` and the health body report the former.
 - **Cross-platform vectors are one-sided.** Zig and Go test fixed vectors; `sdk-vault` tests only round trips. The vector file the Zig header names (`rootwallet/core/scripts/generate-test-vectors.ts`) is outside this repository.
 - **The Zig source does not build on macOS.** `vault/src/main.zig` initialises a signal mask as `.{0}`, which is valid only where the mask is an array (Linux). The production build is a Linux cross-compile, so only local runs are affected.
-- **Documentation drift.** `docs/vault/` and `vault/README.md` still describe port 7500 as the production port, a K of 3 for five nodes (the code gives 2), a V2 flow with no ownership proof, a 64 KiB request buffer, Merkle roots in the verify protocol, and a key-wrapping hierarchy that this repository does not implement; `website/src/docs/developer/vault.mdx` says each share is encrypted by the SDK, which it is not.
+- **Documentation drift.** `vault/docs/` and `vault/README.md` still describe port 7500 as the production port, a K of 3 for five nodes (the code gives 2), a V2 flow with no ownership proof, a 64 KiB request buffer, Merkle roots in the verify protocol, and a key-wrapping hierarchy that this repository does not implement; `website/src/docs/developer/vault.mdx` says each share is encrypted by the SDK, which it is not.
 
 ## Verify it yourself
 

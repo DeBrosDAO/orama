@@ -15,7 +15,7 @@ A cluster accumulates secrets of very different kinds: tokens a tenant gave the 
 
 First, every node must compute the same key without asking anybody. There is no external key service and no leader that hands keys out at run time. The first design generated a key file per node and diverged: function secrets written on one node could not be read on another, and `get_secret` was broken for days (bugboard #837, cited in `core/pkg/gateway/secrets_key.go`). The fix was to derive keys from one shared value, so the install only has to copy one secret.
 
-Second, stored secrets must be rotatable. They were encrypted under keys derived from the cluster secret, and the cluster secret is also IPFS Cluster's private-network key, the bearer of the peer-registration API and the root of every inter-node MAC (`core/pkg/ipfs/cluster.go`, `core/pkg/gateway/handlers/wireguard/handler.go`). Rotating it partitions the cluster. In practice it was never rotated (`docs/SECURITY.md`, "Stored secrets"). The encryption root exists to break that coupling.
+Second, stored secrets must be rotatable. They were encrypted under keys derived from the cluster secret, and the cluster secret is also IPFS Cluster's private-network key, and the root of every inter-node MAC (`core/pkg/ipfs/cluster.go`). Rotating it partitions the cluster. In practice it was never rotated (`docs/SECURITY.md`, "Stored secrets"). The encryption root exists to break that coupling.
 
 Third, upgrades are rolling and mixed-version. A new binary must not write a format an old one cannot read, so the new envelope is opt-in per cluster and the operator turns it on after every gateway is upgraded.
 
