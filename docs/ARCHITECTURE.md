@@ -1599,17 +1599,27 @@ namespace and the node (`ns:<namespace>@<node IP>`, `namespaceBreakerKey`), so
 the breaker is the gateway process's. One tenant's gateway crashing or being
 overloaded opens only its own breaker and never refuses another tenant's
 requests on the same node. A dead node is still found out fast: each namespace
-opens its breaker toward it on that namespace's own first failures. A hop of a
-deployment to another node has a breaker per node (`node:<IP>`).
+opens its breaker toward it on that namespace's own first failures. A deployed
+app has the same: the hop from the gateway that was asked for it to a node that
+runs it has a breaker per deployment and node (`dep:<deployment id>@<node IP>`,
+`deploymentBreakerKey`), so one app failing on a node never refuses another
+app's requests there.
 
 - **What counts as a failure:** the proxy request not completing (connection
   refused, reset, timeout) and a 502, 503 or 504 the namespace gateway itself
   answered. A 4xx, a 500, a function's own answer (a status it chose in a raw
   HTTP response, or `FUNCTION_UNAVAILABLE` when its code could not be loaded;
-  the namespace gateway marks these `X-Orama-Function-Origin`, and the proxy
+  the namespace gateway marks these `X-Orama-Tenant-Origin`, and the proxy
   drops the marker before the client sees it), a request body the client failed
   to deliver, and a client that went away count as neither a failure nor a
-  success.
+  success. For an app the node that runs it is the one that knows: when it
+  relays the app's response to a node that forwarded the request (the request
+  carries `X-Orama-Proxy-Node`) it marks it `X-Orama-Tenant-Origin` too, so the
+  app's own 502, 503 or 504 is relayed to the client and counts for nothing. A
+  node whose proxy could not reach the app answers its own unmarked 503, and
+  that, a refused or reset connection and a timeout are what open an app's
+  breaker. A node on an older release does not mark, so its apps' 5xx still
+  count, against that app's breaker only.
 - **States:** a breaker opens after 5 consecutive failures and refuses requests
   for 30 s. It then goes half-open and admits exactly one probe; every other
   request is refused (503 "all upstream circuits are open" when no other member
@@ -1620,19 +1630,22 @@ deployment to another node has a breaker per node (`node:<IP>`).
   re-opens it, and a probe whose request ended without saying anything about
   the member (the client left, the request was refused here) gives the slot
   back immediately.
-- **Memory:** breakers exist only for members of registered namespaces, so the
-  count is at most namespaces x members. Whenever the proxy reads a namespace's
-  members from the registry it drops the breakers of members that are no longer
-  listed (all of them when the namespace is gone), and a breaker with no traffic
-  for 30 minutes is pruned.
+- **Memory:** breakers exist only for members of registered namespaces and for
+  deployments that were asked for, so the count is at most namespaces x members
+  plus the (deployment, node) pairs with traffic. Whenever the proxy reads a
+  namespace's members from the registry it drops the breakers of members that
+  are no longer listed (all of them when the namespace is gone). A deployment
+  that is deleted or moved is told to the node that ran it, not to the nodes
+  that forwarded to it, so those nodes drop its breakers when nothing has asked
+  for them for 30 minutes, which is also the backstop for everything else.
 - **Visibility:** every state change is logged by the cluster gateway with the
   namespace, node, consecutive failures and last error: a warning when a
   breaker opens, information for the half-open probe, a failed probe and the
   close. A breaker that keeps failing its probes says so once every 5 minutes,
   with how many cycles it left out. The breakers that are not closed are in the
-  node report (`breakers`), as a warning alert per target node naming the
-  namespaces and the first reason, and as a line in `orama monitor node`; see
-  [MONITORING.md](MONITORING.md).
+  node report (`breakers`), as a warning alert per kind and target node naming
+  the namespaces, or the `namespace/deployment` apps, and the first reason, and
+  as a line in `orama monitor node`; see [MONITORING.md](MONITORING.md).
 
 ## Security Architecture
 

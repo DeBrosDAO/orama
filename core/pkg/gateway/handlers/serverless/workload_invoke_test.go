@@ -103,8 +103,8 @@ func TestInvokeFunction_anAnonymousCallerIsStillUnauthorized(t *testing.T) {
 // the failure to load it included (503 FUNCTION_UNAVAILABLE).
 func TestInvokeFunction_aFunctionsOutcomeIsMarkedAsTheFunctions(t *testing.T) {
 	rec := refusedInvoke(t, httptest.NewRequest(http.MethodPost, "/v1/functions/store/invoke", nil))
-	if rec.Header().Get(httputil.HeaderFunctionOrigin) == "" {
-		t.Errorf("a refused invocation (%d) carries no %s", rec.Code, httputil.HeaderFunctionOrigin)
+	if rec.Header().Get(httputil.HeaderTenantOrigin) == "" {
+		t.Errorf("a refused invocation (%d) carries no %s", rec.Code, httputil.HeaderTenantOrigin)
 	}
 }
 
@@ -114,8 +114,8 @@ func TestInvokeFunction_aRefusalBeforeTheFunctionIsNotMarked(t *testing.T) {
 	h := &ServerlessHandlers{}
 	rec := httptest.NewRecorder()
 	h.InvokeFunction(rec, httptest.NewRequest(http.MethodGet, "/v1/functions/store/invoke", nil), "acme/store", 0)
-	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get(httputil.HeaderFunctionOrigin) != "" {
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get(httputil.HeaderTenantOrigin) != "" {
 		t.Errorf("a wrong-method request: %d with %s=%q, want 405 unmarked",
-			rec.Code, httputil.HeaderFunctionOrigin, rec.Header().Get(httputil.HeaderFunctionOrigin))
+			rec.Code, httputil.HeaderTenantOrigin, rec.Header().Get(httputil.HeaderTenantOrigin))
 	}
 }

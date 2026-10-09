@@ -650,7 +650,7 @@ func TestCircuitBreaker(t *testing.T) {
 func TestCircuitBreakerRegistry(t *testing.T) {
 	t.Run("creates new breaker if not exists", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb := reg.Get("target-a")
+		cb := reg.ForNamespaceGateway("a", "10.0.0.1")
 		if cb == nil {
 			t.Fatal("expected non-nil circuit breaker")
 		}
@@ -661,8 +661,8 @@ func TestCircuitBreakerRegistry(t *testing.T) {
 
 	t.Run("returns same breaker for same key", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb1 := reg.Get("target-a")
-		cb2 := reg.Get("target-a")
+		cb1 := reg.ForNamespaceGateway("a", "10.0.0.1")
+		cb2 := reg.ForNamespaceGateway("a", "10.0.0.1")
 		if cb1 != cb2 {
 			t.Fatal("expected same circuit breaker instance for same key")
 		}
@@ -670,8 +670,8 @@ func TestCircuitBreakerRegistry(t *testing.T) {
 
 	t.Run("different keys get different breakers", func(t *testing.T) {
 		reg := NewCircuitBreakerRegistry()
-		cb1 := reg.Get("target-a")
-		cb2 := reg.Get("target-b")
+		cb1 := reg.ForNamespaceGateway("a", "10.0.0.1")
+		cb2 := reg.ForNamespaceGateway("b", "10.0.0.1")
 		if cb1 == cb2 {
 			t.Fatal("expected different circuit breaker instances for different keys")
 		}

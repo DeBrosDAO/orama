@@ -57,22 +57,45 @@ func checkNodeProcesses(r *report.NodeReport, host string) []Alert {
 	return alerts
 }
 
-// breakerAlertNamespaces is how many namespaces one breaker alert names before
+// breakerAlertNamespaces is how many namespaces or deployments one breaker alert names before
 // it says "and N more".
 const breakerAlertNamespaces = 5
 
-// checkNodeBreakers alerts on the cluster gateway's circuit breakers toward
-// namespace gateways that are not closed: requests for that namespace through
-// this node are being refused (or, half-open, probed) while it lasts. One alert
-// per node the gateways are on, so a dead peer is one alert and not one per
-// namespace; the namespaces and the reason of the first are in the message.
+// checkNodeBreakers alerts on the cluster gateway's circuit breakers that are
+// not closed, toward namespace gateways and toward the nodes that run deployed
+// apps: requests for that namespace or app through this node are being refused
+// (or, half-open, probed) while it lasts. One alert per kind and per node the
+// targets are on, so a dead peer is one alert and not one per tenant; the names
+// and the reason of the first are in the message.
 func checkNodeBreakers(r *report.NodeReport, host string) []Alert {
 	if r.Breakers == nil || r.Breakers.NotClosed == 0 {
 		return nil
 	}
+	var gateways, apps []report.BreakerReport
+	for _, b := range r.Breakers.Unhealthy {
+		if b.Deployment == "" {
+			gateways = append(gateways, b)
+		} else {
+			apps = append(apps, b)
+		}
+	}
+	alerts := breakerAlerts(gateways, "namespace", "the namespace gateways", host,
+		func(b report.BreakerReport) string { return b.Namespace })
+	alerts = append(alerts, breakerAlerts(apps, "deployment", "the deployments", host,
+		func(b report.BreakerReport) string { return b.Namespace + "/" + b.Deployment })...)
+	if shown := len(r.Breakers.Unhealthy); r.Breakers.NotClosed > shown {
+		alerts = append(alerts, Alert{AlertWarning, "namespace", host,
+			fmt.Sprintf("%d more circuit breakers are not closed than the report lists", r.Breakers.NotClosed-shown)})
+	}
+	return alerts
+}
+
+// breakerAlerts is one warning per target node for the breakers bs, which are
+// all of one kind: what names them in the message, what they guard on the node.
+func breakerAlerts(bs []report.BreakerReport, subsystem, what, host string, name func(report.BreakerReport) string) []Alert {
 	byNode := map[string][]report.BreakerReport{}
 	var nodes []string
-	for _, b := range r.Breakers.Unhealthy {
+	for _, b := range bs {
 		if _, ok := byNode[b.Node]; !ok {
 			nodes = append(nodes, b.Node)
 		}
@@ -81,22 +104,18 @@ func checkNodeBreakers(r *report.NodeReport, host string) []Alert {
 	sort.Strings(nodes)
 	alerts := make([]Alert, 0, len(nodes))
 	for _, node := range nodes {
-		bs := byNode[node]
-		names := make([]string, 0, breakerAlertNamespaces)
-		for i, b := range bs {
+		group := byNode[node]
+		names := make([]string, 0, breakerAlertNamespaces+1)
+		for i, b := range group {
 			if i == breakerAlertNamespaces {
-				names = append(names, fmt.Sprintf("and %d more", len(bs)-i))
+				names = append(names, fmt.Sprintf("and %d more", len(group)-i))
 				break
 			}
-			names = append(names, b.Namespace)
+			names = append(names, name(b))
 		}
-		msg := fmt.Sprintf("Circuit breaker %s toward the namespace gateways on %s (%s): requests for them through this node are refused. First failure: %s",
-			bs[0].State, node, strings.Join(names, ", "), breakerReason(bs[0]))
-		alerts = append(alerts, Alert{AlertWarning, "namespace", host, msg})
-	}
-	if shown := len(r.Breakers.Unhealthy); r.Breakers.NotClosed > shown {
-		alerts = append(alerts, Alert{AlertWarning, "namespace", host,
-			fmt.Sprintf("%d more circuit breakers toward namespace gateways are not closed than the report lists", r.Breakers.NotClosed-shown)})
+		msg := fmt.Sprintf("Circuit breaker %s toward %s on %s (%s): requests for them through this node are refused. First failure: %s",
+			group[0].State, what, node, strings.Join(names, ", "), breakerReason(group[0]))
+		alerts = append(alerts, Alert{AlertWarning, subsystem, host, msg})
 	}
 	return alerts
 }

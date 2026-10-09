@@ -184,9 +184,9 @@ func TestNodeTable_showsBreakersOnlyWhenSomeAreNotClosed(t *testing.T) {
 	}
 	out := render(&report.BreakersReport{Tracked: 6, NotClosed: 4, Unhealthy: []report.BreakerReport{
 		{Namespace: "acme", Node: "10.0.0.2", State: report.BreakerOpen},
-		{Namespace: "beta", Node: "10.0.0.2", State: report.BreakerOpen},
+		{Namespace: "beta", Deployment: "shop", Node: "10.0.0.2", State: report.BreakerOpen},
 	}})
-	if !strings.Contains(out, "Breakers:") || !strings.Contains(out, "4 of 6 not closed: acme@10.0.0.2 open, beta@10.0.0.2 open and 2 more") {
+	if !strings.Contains(out, "Breakers:") || !strings.Contains(out, "4 of 6 not closed: acme@10.0.0.2 open, beta/shop@10.0.0.2 open and 2 more") {
 		t.Errorf("the node view does not name the open breakers:\n%s", out)
 	}
 }

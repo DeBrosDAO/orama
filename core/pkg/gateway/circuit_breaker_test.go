@@ -291,14 +291,14 @@ func TestRetainNamespaceMembers_dropsWhatIsNoLongerAMember(t *testing.T) {
 	keep := r.ForNamespaceGateway("acme", "10.0.0.1")
 	r.ForNamespaceGateway("acme", "10.0.0.2")
 	other := r.ForNamespaceGateway("beta", "10.0.0.2")
-	nodeScoped := r.Get("node:10.0.0.2")
+	nodeScoped := r.ForDeployment("dep1", "acme", "web", "10.0.0.2")
 
 	if dropped := r.RetainNamespaceMembers("acme", []string{"10.0.0.1"}); dropped != 1 {
 		t.Fatalf("dropped %d, want 1 (acme on 10.0.0.2)", dropped)
 	}
 	if r.ForNamespaceGateway("acme", "10.0.0.1") != keep ||
 		r.ForNamespaceGateway("beta", "10.0.0.2") != other ||
-		r.Get("node:10.0.0.2") != nodeScoped {
+		r.ForDeployment("dep1", "acme", "web", "10.0.0.2") != nodeScoped {
 		t.Error("a breaker that was not acme's departed member was dropped")
 	}
 	if dropped := r.RetainNamespaceMembers("acme", nil); dropped != 1 {

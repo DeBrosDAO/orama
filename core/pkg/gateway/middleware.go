@@ -1999,15 +1999,7 @@ func (g *Gateway) proxyToNamespaceGateway(w http.ResponseWriter, r *http.Request
 		cb.RecordSuccess()
 	}
 
-	// Copy response headers
-	for key, values := range resp.Header {
-		if key == httputil.HeaderFunctionOrigin {
-			continue
-		}
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
+	copyProxiedHeaders(w, resp)
 
 	// Write status code and body
 	w.WriteHeader(resp.StatusCode)
@@ -2138,6 +2130,13 @@ serveLocal:
 			w.Header().Add(key, value)
 		}
 	}
+	// The app answered. The node that forwarded this request holds a 502, 503
+	// or 504 against this node's circuit breaker, and what an app returns says
+	// nothing about the node, so it is told whose answer this is. A client's own
+	// request gets no marker.
+	if proxyNode != "" {
+		w.Header().Set(httputil.HeaderTenantOrigin, "1")
+	}
 
 	// Write status code and body
 	w.WriteHeader(resp.StatusCode)
@@ -2185,7 +2184,16 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	// Proxy to the home node over the WireGuard overlay on the index gateway
 	// port. This is node-to-node internal communication - no TLS needed.
 	targetHost := net.JoinHostPort(homeIP, strconv.Itoa(constants.GatewayAPIPort))
+	return g.forwardToHomeNode(w, r, deployment, homeIP, targetHost, timeout)
+}
 
+// forwardToHomeNode sends r to the gateway at targetHost, on the home node
+// homeIP, and relays its answer: even a 502, 503 or 504, which is also held
+// against this deployment's circuit breaker toward that node when the node
+// itself produced it. Returns false only when the request was not sent or the
+// node did not answer.
+func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment,
+	homeIP, targetHost string, timeout time.Duration) bool {
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {
 		// SECURITY (bug #215 follow-up): drop X-Internal-Auth-* headers from
@@ -2204,7 +2212,8 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 
 	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	body, tracked := hopBody(r)
+	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
 		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
 		return false
@@ -2224,11 +2233,12 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID) // Prevent loops
 
-	// Circuit breaker: check if target node is healthy
-	cbKey := "node:" + homeIP
-	cb := g.circuitBreakers.Get(cbKey)
+	// Circuit breaker: one per deployment and node, so one app failing on the
+	// home node never refuses another's requests there.
+	cb := g.circuitBreakers.ForDeployment(deployment.ID, deployment.Namespace, deployment.Name, homeIP)
 	if !cb.Allow() {
-		g.logger.Warn("Cross-node proxy skipped (circuit open)", zap.String("target_ip", homeIP))
+		g.logger.Warn("Cross-node proxy skipped (circuit open)",
+			zap.String("deployment", deployment.Name), zap.String("target_ip", homeIP))
 		return false
 	}
 
@@ -2236,7 +2246,7 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	httpClient := &http.Client{Timeout: timeout, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
-		cb.RecordFailure(failureReason(err))
+		recordHopError(cb, r, tracked, err)
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
@@ -2245,18 +2255,13 @@ func (g *Gateway) proxyCrossNodeWithin(w http.ResponseWriter, r *http.Request, d
 	}
 	defer resp.Body.Close()
 
-	if IsResponseFailure(resp.StatusCode) {
+	if isUpstreamFailure(resp) {
 		cb.RecordFailure(fmt.Sprintf("the node answered %d", resp.StatusCode))
 	} else {
 		cb.RecordSuccess()
 	}
 
-	// Copy response headers
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
+	copyProxiedHeaders(w, resp)
 
 	// Write status code and body
 	w.WriteHeader(resp.StatusCode)
@@ -2317,7 +2322,15 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	)
 
 	targetHost := net.JoinHostPort(nodeIP, strconv.Itoa(constants.GatewayAPIPort))
+	return g.forwardToReplica(w, r, deployment, nodeIP, targetHost)
+}
 
+// forwardToReplica sends r to the gateway at targetHost, on the replica node
+// nodeIP. Returns true when it relayed the node's answer, false when the
+// request was not sent, the node did not answer, or its own proxy failed, so
+// the caller may try the next replica.
+func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deployment *deployments.Deployment,
+	nodeIP, targetHost string) bool {
 	// Handle WebSocket upgrade requests specially
 	if isWebSocketUpgrade(r) {
 		// SECURITY (bug #215 follow-up): see proxyCrossNode for rationale.
@@ -2331,7 +2344,8 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 
 	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
-	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
+	body, tracked := hopBody(r)
+	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
 	if err != nil {
 		g.logger.Error("Failed to create cross-node proxy request", zap.Error(err))
 		return false
@@ -2349,18 +2363,19 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	proxyReq.Header.Set("X-Forwarded-For", getClientIP(r))
 	proxyReq.Header.Set("X-Orama-Proxy-Node", g.nodePeerID)
 
-	// Circuit breaker: skip this replica if it's been failing
-	cbKey := "node:" + nodeIP
-	cb := g.circuitBreakers.Get(cbKey)
+	// Circuit breaker: skip this replica if it's been failing. One per
+	// deployment and node, as in proxyCrossNodeWithin.
+	cb := g.circuitBreakers.ForDeployment(deployment.ID, deployment.Namespace, deployment.Name, nodeIP)
 	if !cb.Allow() {
-		g.logger.Warn("Replica proxy skipped (circuit open)", zap.String("target_ip", nodeIP))
+		g.logger.Warn("Replica proxy skipped (circuit open)",
+			zap.String("deployment", deployment.Name), zap.String("target_ip", nodeIP))
 		return false
 	}
 
 	httpClient := &http.Client{Timeout: 5 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
-		cb.RecordFailure(failureReason(err))
+		recordHopError(cb, r, tracked, err)
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
 			zap.Error(err),
@@ -2369,8 +2384,9 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	}
 	defer resp.Body.Close()
 
-	// If the remote node returned a gateway error, try the next replica
-	if IsResponseFailure(resp.StatusCode) {
+	// If the remote node's own proxy failed, try the next replica. What the
+	// app answered is its answer, whatever the status.
+	if isUpstreamFailure(resp) {
 		cb.RecordFailure(fmt.Sprintf("the replica answered %d", resp.StatusCode))
 		g.logger.Warn("Replica returned gateway error, trying next",
 			zap.String("target_ip", nodeIP),
@@ -2380,11 +2396,7 @@ func (g *Gateway) proxyCrossNodeToIP(w http.ResponseWriter, r *http.Request, dep
 	}
 	cb.RecordSuccess()
 
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
+	copyProxiedHeaders(w, resp)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 

@@ -997,6 +997,8 @@ DNS uses round-robin, so requests may hit any node in the cluster. If a deployme
 
 This is **transparent to users** - your app works regardless of which node handles the initial request.
 
+Each node that forwards keeps a circuit breaker per app and node. Five failures in a row of the node itself (connection refused or reset, a timeout, or a 502/503/504 the platform produced because it could not reach your process) stop that node forwarding your app to that node for 30 seconds, then one request tests it. Your app's own error responses never count, so an app that returns 503 does not affect your other apps or anyone else's on the same node.
+
 ### Custom Domains
 
 Attach a custom domain (e.g. `www.myapp.com`) to a deployment with `orama domain`.

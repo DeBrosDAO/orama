@@ -156,8 +156,9 @@ const (
 )
 
 // BreakersReport is the state of a cluster gateway's circuit breakers toward
-// the namespace gateways, one per namespace and node: a gateway that fails
-// opens only its own.
+// the namespace gateways, one per namespace and node, and toward the nodes that
+// run deployed apps, one per deployment and node: a gateway or an app that
+// fails opens only its own.
 type BreakersReport struct {
 	// Tracked is how many breakers the gateway holds, closed ones included.
 	Tracked int `json:"tracked"`
@@ -170,8 +171,14 @@ type BreakersReport struct {
 
 // BreakerReport is one breaker that is not closed.
 type BreakerReport struct {
+	// Namespace is the namespace whose gateway the breaker guards, or that
+	// owns the deployment.
 	Namespace string `json:"namespace"`
-	// Node is the WireGuard address of the node the namespace's gateway runs on.
+	// Deployment is the deployment's name; empty for a namespace gateway's
+	// breaker.
+	Deployment string `json:"deployment,omitempty"`
+	// Node is the WireGuard address of the node the gateway or the deployment
+	// runs on.
 	Node        string    `json:"node"`
 	State       string    `json:"state"`
 	Failures    int       `json:"failures"`

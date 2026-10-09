@@ -135,8 +135,8 @@ func trafficLine(tr *report.TrafficReport) string {
 		tr.RPS, tr.ErrorRate*100, tr.P50Ms, tr.P95Ms, tr.P99Ms, tr.WindowSec)
 }
 
-// breakersLine names the circuit breakers toward namespace gateways that are
-// not closed, as namespace@node with the state; the full list is in the JSON.
+// breakersLine names the circuit breakers that are not closed, toward
+// namespace gateways and deployments, as namespace@node or namespace/deployment@node with the state; the full list is in the JSON.
 func breakersLine(t view.Theme, br *report.BreakersReport) string {
 	const shown = 3
 	parts := make([]string, 0, shown)
@@ -144,7 +144,11 @@ func breakersLine(t view.Theme, br *report.BreakersReport) string {
 		if i == shown {
 			break
 		}
-		parts = append(parts, fmt.Sprintf("%s@%s %s", b.Namespace, b.Node, b.State))
+		name := b.Namespace
+		if b.Deployment != "" {
+			name += "/" + b.Deployment
+		}
+		parts = append(parts, fmt.Sprintf("%s@%s %s", name, b.Node, b.State))
 	}
 	out := fmt.Sprintf("%d of %d not closed: %s", br.NotClosed, br.Tracked, strings.Join(parts, ", "))
 	if br.NotClosed > len(parts) {

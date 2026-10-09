@@ -60,3 +60,24 @@ func TestCheckNodeBreakers_saysWhenTheReportIsTruncated(t *testing.T) {
 		t.Fatalf("alerts = %v, want one for acme and one counting the 249 not listed", alerts)
 	}
 }
+
+// A deployment's breaker is a different alert from a namespace gateway's, in
+// its own subsystem, and names the app with its namespace.
+func TestCheckNodeBreakers_deploymentsAreTheirOwnAlert(t *testing.T) {
+	app := breaker("acme", "10.0.0.2")
+	app.Deployment = "shop"
+	r := &report.NodeReport{Breakers: &report.BreakersReport{
+		Tracked: 4, NotClosed: 2, Unhealthy: []report.BreakerReport{breaker("acme", "10.0.0.2"), app},
+	}}
+	alerts := checkNodeBreakers(r, "10.0.0.1")
+	if len(alerts) != 2 {
+		t.Fatalf("got %d alerts, want one for the namespace gateway and one for the app: %v", len(alerts), alerts)
+	}
+	if alerts[0].Subsystem != "namespace" || strings.Contains(alerts[0].Message, "shop") {
+		t.Errorf("namespace alert = %+v, want the gateway only", alerts[0])
+	}
+	if alerts[1].Subsystem != "deployment" || !strings.Contains(alerts[1].Message, "acme/shop") ||
+		!strings.Contains(alerts[1].Message, "the deployments on 10.0.0.2") {
+		t.Errorf("deployment alert = %+v, want acme/shop on 10.0.0.2", alerts[1])
+	}
+}

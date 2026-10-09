@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -37,9 +38,10 @@ const (
 	// and the closing are always logged.
 	breakerCycleLogInterval = 5 * time.Minute
 
-	// breakerKeyNamespaceGateway prefixes the key of a namespace gateway's
-	// breaker. It is the only place the format is written.
+	// The prefixes of the two kinds of breaker key. The keys are written only
+	// by namespaceBreakerKey and deploymentBreakerKey.
 	breakerKeyNamespaceGateway = "ns:"
+	breakerKeyDeployment       = "dep:"
 )
 
 // namespaceBreakerKey is the registry key of the breaker for one namespace's
@@ -50,13 +52,26 @@ func namespaceBreakerKey(namespace, nodeIP string) string {
 	return breakerKeyNamespaceGateway + namespace + "@" + nodeIP
 }
 
+// deploymentBreakerKey is the registry key of the breaker for one deployment on
+// one node: the hop from the gateway that was asked for a deployed app to the
+// node that runs it. A node runs many tenants' apps, and one app answering 5xx
+// says nothing about another, so the key names both.
+func deploymentBreakerKey(deploymentID, nodeIP string) string {
+	return breakerKeyDeployment + deploymentID + "@" + nodeIP
+}
+
 // BreakerTransition is one change of a breaker's state, handed to the
 // registry's observer.
 type BreakerTransition struct {
-	Key       string
-	Namespace string // empty for a breaker that is not a namespace gateway's
-	Node      string
-	From, To  CircuitState
+	Key string
+	// Namespace is the namespace the breaker guards a gateway of, or the
+	// namespace of the deployment it guards.
+	Namespace string
+	// Deployment is the deployment's name, empty for a namespace gateway's
+	// breaker.
+	Deployment string
+	Node       string
+	From, To   CircuitState
 	// Failures is the consecutive failure count when the state changed (before
 	// the reset, for a close).
 	Failures int
@@ -70,6 +85,7 @@ type BreakerTransition struct {
 // BreakerStatus is the state of one breaker that is not closed.
 type BreakerStatus struct {
 	Namespace   string
+	Deployment  string
 	Node        string
 	State       CircuitState
 	Failures    int
@@ -82,6 +98,7 @@ type CircuitBreaker struct {
 	mu               sync.Mutex
 	key              string
 	namespace        string
+	deployment       string
 	node             string
 	observer         func(BreakerTransition)
 	state            CircuitState
@@ -123,7 +140,7 @@ func (cb *CircuitBreaker) transitionLocked(to CircuitState, now time.Time) *Brea
 	}
 	cb.state = to
 	tr := &BreakerTransition{
-		Key: cb.key, Namespace: cb.namespace, Node: cb.node,
+		Key: cb.key, Namespace: cb.namespace, Deployment: cb.deployment, Node: cb.node,
 		From: from, To: to, Failures: cb.failures, LastError: cb.lastError,
 	}
 	switch {
@@ -300,18 +317,19 @@ func (r *CircuitBreakerRegistry) SetObserver(fn func(BreakerTransition)) {
 	r.mu.Unlock()
 }
 
-// Get returns (or creates) a circuit breaker for the given target key.
-func (r *CircuitBreakerRegistry) Get(target string) *CircuitBreaker {
-	return r.get(target, "", target)
-}
-
 // ForNamespaceGateway returns (or creates) the breaker for the gateway of
 // namespace on the node nodeIP.
 func (r *CircuitBreakerRegistry) ForNamespaceGateway(namespace, nodeIP string) *CircuitBreaker {
-	return r.get(namespaceBreakerKey(namespace, nodeIP), namespace, nodeIP)
+	return r.get(namespaceBreakerKey(namespace, nodeIP), namespace, "", nodeIP)
 }
 
-func (r *CircuitBreakerRegistry) get(key, namespace, node string) *CircuitBreaker {
+// ForDeployment returns (or creates) the breaker for the deployment with this
+// id, of this namespace and name, on the node nodeIP.
+func (r *CircuitBreakerRegistry) ForDeployment(deploymentID, namespace, name, nodeIP string) *CircuitBreaker {
+	return r.get(deploymentBreakerKey(deploymentID, nodeIP), namespace, name, nodeIP)
+}
+
+func (r *CircuitBreakerRegistry) get(key, namespace, deployment, node string) *CircuitBreaker {
 	r.mu.RLock()
 	cb, ok := r.breakers[key]
 	r.mu.RUnlock()
@@ -326,7 +344,7 @@ func (r *CircuitBreakerRegistry) get(key, namespace, node string) *CircuitBreake
 		return cb
 	}
 	cb = NewCircuitBreaker()
-	cb.key, cb.namespace, cb.node, cb.observer = key, namespace, node, r.observer
+	cb.key, cb.namespace, cb.deployment, cb.node, cb.observer = key, namespace, deployment, node, r.observer
 	cb.lastUsed = time.Now()
 	r.breakers[key] = cb
 	return cb
@@ -342,18 +360,19 @@ func (r *CircuitBreakerRegistry) Len() int {
 // RetainNamespaceMembers drops the breakers of namespace's gateways on nodes
 // that are not in nodeIPs, which is the namespace's current member list: a
 // namespace that was removed (an empty list) loses all of them, one that moved
-// off a node loses that node's. Breakers of other namespaces and of other kinds
-// of target are left alone. Returns how many were dropped.
+// off a node loses that node's. Breakers of other namespaces, and of
+// deployments, are left alone. Returns how many were dropped.
 func (r *CircuitBreakerRegistry) RetainNamespaceMembers(namespace string, nodeIPs []string) int {
 	keep := make(map[string]struct{}, len(nodeIPs))
 	for _, ip := range nodeIPs {
 		keep[namespaceBreakerKey(namespace, ip)] = struct{}{}
 	}
+	prefix := breakerKeyNamespaceGateway + namespace + "@"
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	dropped := 0
-	for k, cb := range r.breakers {
-		if cb.namespace != namespace || cb.namespace == "" {
+	for k := range r.breakers {
+		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
 		if _, ok := keep[k]; !ok {
@@ -367,9 +386,12 @@ func (r *CircuitBreakerRegistry) RetainNamespaceMembers(namespace string, nodeIP
 // Prune drops breakers that have seen no traffic for maxIdle.
 //
 // The registry grew without bound: a node removed from the cluster left its
-// breaker behind forever, as did every namespace ever proxied. RetainNamespaceMembers
-// drops the breakers of a member list that changed as soon as the proxy learns
-// of it; Prune is the backstop for a namespace nobody asks about again. Pruning
+// breaker behind forever, as did every namespace ever proxied.
+// RetainNamespaceMembers drops the breakers of a member list that changed as
+// soon as the proxy learns of it; Prune is the backstop for a namespace nobody
+// asks about again, and the only eviction of a deployment's breakers: a
+// deployment deleted or moved is deleted on its home node, and this node is
+// told of neither, but nothing asks for it any more. Pruning
 // by idleness rather than by "keep exactly this set" means no call site can
 // evict a breaker another path is still using. Returns how many were dropped.
 func (r *CircuitBreakerRegistry) Prune(maxIdle time.Duration) int {
@@ -403,7 +425,7 @@ func (r *CircuitBreakerRegistry) Unhealthy(maxIdle time.Duration) []BreakerStatu
 		cb.mu.Lock()
 		if cb.state != CircuitClosed && !cb.lastUsed.Before(cutoff) {
 			out = append(out, BreakerStatus{
-				Namespace: cb.namespace, Node: cb.node, State: cb.state,
+				Namespace: cb.namespace, Deployment: cb.deployment, Node: cb.node, State: cb.state,
 				Failures: cb.failures, LastError: cb.lastError, LastFailure: cb.lastFailure,
 			})
 		}
@@ -412,6 +434,9 @@ func (r *CircuitBreakerRegistry) Unhealthy(maxIdle time.Duration) []BreakerStatu
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
+		}
+		if out[i].Deployment != out[j].Deployment {
+			return out[i].Deployment < out[j].Deployment
 		}
 		return out[i].Node < out[j].Node
 	})

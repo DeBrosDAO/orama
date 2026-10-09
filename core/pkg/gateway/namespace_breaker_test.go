@@ -93,7 +93,7 @@ func TestNamespaceProxy_aDeadNodeOpensEachNamespacesCircuitOnItsOwnFailures(t *t
 func TestNamespaceProxy_aFunctionsOwnGatewayStatusIsNotAFailureOfTheGateway(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/invoke/") {
-			w.Header().Set(httputil.HeaderFunctionOrigin, "1")
+			w.Header().Set(httputil.HeaderTenantOrigin, "1")
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -105,7 +105,7 @@ func TestNamespaceProxy_aFunctionsOwnGatewayStatusIsNotAFailureOfTheGateway(t *t
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("request %d: status %d, want the function's 503 passed through", i, rec.Code)
 		}
-		if rec.Header().Get(httputil.HeaderFunctionOrigin) != "" {
+		if rec.Header().Get(httputil.HeaderTenantOrigin) != "" {
 			t.Fatal("the internal function-origin marker reached the client")
 		}
 	}
@@ -126,7 +126,7 @@ func TestIsUpstreamFailure_onlyTheGatewaysOwnGatewayErrors(t *testing.T) {
 	mk := func(status int, fn bool) *http.Response {
 		resp := &http.Response{StatusCode: status, Header: http.Header{}}
 		if fn {
-			resp.Header.Set(httputil.HeaderFunctionOrigin, "1")
+			resp.Header.Set(httputil.HeaderTenantOrigin, "1")
 		}
 		return resp
 	}

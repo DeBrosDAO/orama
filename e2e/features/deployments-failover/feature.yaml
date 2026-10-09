@@ -1,6 +1,8 @@
 # Deployments under faults: the app's unit stopped on one of its nodes while
 # every node keeps serving it through the replica, and an app killed for
-# exceeding its memory limit restarted by its unit. Runs alone: it stops
+# exceeding its memory limit restarted by its unit; and the forwarding node's
+# circuit breaker per app: an app answering 503 refuses nothing else and opens
+# no breaker, an app stopped on all its nodes opens only its own. Runs alone: it stops
 # tenant units and exhausts an app's memory.
 id: deployments-failover
 title: Deployment replica failover and OOM restart
@@ -17,4 +19,5 @@ covers:
     - orama-deploy-go@.service
   claims:
     - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: an app is served by name from every node while one of its nodes is down"
+    - "docs/ARCHITECTURE.md#circuit-breakers: a deployment has one breaker per node, an app's own 5xx never counts against the node, and an open breaker is raised as a deployment alert"
     - "docs/SECURITY.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"

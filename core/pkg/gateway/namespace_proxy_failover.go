@@ -61,10 +61,10 @@ var errNoClusterSecret = errors.New("this gateway has no cluster secret, so it c
 // it unhealthy, which is what a circuit breaker counts: a 502, 503 or 504 the
 // gateway itself answered. The same statuses coming from a function, chosen by
 // the tenant's code or reporting that one function could not be loaded
-// (httputil.HeaderFunctionOrigin), say nothing about the gateway: counting them
+// (httputil.HeaderTenantOrigin), say nothing about the gateway: counting them
 // let one function that returned 503 take its whole namespace out of rotation.
 func isUpstreamFailure(resp *http.Response) bool {
-	return IsResponseFailure(resp.StatusCode) && resp.Header.Get(httputil.HeaderFunctionOrigin) == ""
+	return IsResponseFailure(resp.StatusCode) && resp.Header.Get(httputil.HeaderTenantOrigin) == ""
 }
 
 // retainBreakers drops the breakers of namespace's gateways on nodes the
@@ -95,4 +95,40 @@ func failureReason(err error) string {
 		return urlErr.Err.Error()
 	}
 	return err.Error()
+}
+
+// copyProxiedHeaders copies a proxied response's headers to w, leaving out the
+// tenant-origin marker, which is for the gateway that forwarded the request and
+// not for its client.
+func copyProxiedHeaders(w http.ResponseWriter, resp *http.Response) {
+	for key, values := range resp.Header {
+		if key == httputil.HeaderTenantOrigin {
+			continue
+		}
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+}
+
+// hopBody is the body r is forwarded with to another node, and what tells a
+// failure to read it (the client dropped) from one of the node. A request with
+// no body is forwarded as it is.
+func hopBody(r *http.Request) (io.ReadCloser, *undialedBody) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return r.Body, nil
+	}
+	b := &undialedBody{ReadCloser: r.Body}
+	return b, b
+}
+
+// recordHopError records on cb that the hop to a node did not complete. A
+// client that left, or a body the client failed to deliver, says nothing about
+// the node and gives back a half-open probe slot instead.
+func recordHopError(cb *CircuitBreaker, r *http.Request, body *undialedBody, err error) {
+	if r.Context().Err() != nil || (body != nil && body.failedRead(err)) {
+		cb.Abandon()
+		return
+	}
+	cb.RecordFailure(failureReason(err))
 }

@@ -23,6 +23,7 @@ func (g *Gateway) logBreakerTransition(tr BreakerTransition) {
 	fields := []zap.Field{
 		zap.String("breaker", tr.Key),
 		zap.String("namespace", tr.Namespace),
+		zap.String("deployment", tr.Deployment),
 		zap.String("node", tr.Node),
 		zap.String("from", tr.From.String()),
 		zap.String("to", tr.To.String()),
@@ -61,7 +62,7 @@ func (g *Gateway) breakersReport() *report.BreakersReport {
 	}
 	for _, b := range unhealthy {
 		out.Unhealthy = append(out.Unhealthy, report.BreakerReport{
-			Namespace: b.Namespace, Node: b.Node, State: b.State.String(),
+			Namespace: b.Namespace, Deployment: b.Deployment, Node: b.Node, State: b.State.String(),
 			Failures: b.Failures, LastError: b.LastError, LastFailure: b.LastFailure,
 		})
 	}

@@ -29,11 +29,14 @@ import (
 	"net/http"
 )
 
-// HeaderFunctionOrigin marks a namespace gateway's response as the outcome of a
-// tenant's function: its own status, or the failure to load it. The index
-// gateway's circuit breaker does not count a 502, 503 or 504 that carries it,
-// because a function's answer says nothing about the gateway that ran it.
-const HeaderFunctionOrigin = "X-Orama-Function-Origin"
+// HeaderTenantOrigin marks a response as the tenant's code's own answer, not
+// the platform's: a function's status or the failure to load it, written by a
+// namespace gateway, or the response of a deployed app, relayed by its home
+// node to the node that forwarded the request. The circuit breaker of the
+// gateway that forwarded does not count a 502, 503 or 504 that carries it,
+// because what a tenant's code answers says nothing about the node or gateway
+// that ran it. The forwarding gateway removes it before the client sees it.
+const HeaderTenantOrigin = "X-Orama-Tenant-Origin"
 
 // RPCErrorCode is the typed error-code enum. New codes go here, alphabetic
 // within their class. Codes are stable strings — clients pin to them.

@@ -536,6 +536,9 @@ backend opens the circuits of the namespaces whose gateways ran there, each on
 its own first failures, and a namespace with no other member answers HTTP 503
 `namespace gateway unavailable: all upstream circuits are open`. A namespace
 whose gateway is healthy on that node is not affected by another's.
+The hop to a deployed app on another node has the same, one per deployment and
+node (`dep:<deployment id>@<node ip>`); a `deployment` warning names
+`namespace/deployment` and the node.
 
 **See which are open.** The node report lists them (`breakers`), `orama monitor
 report` raises a warning per target node naming the namespaces and the last

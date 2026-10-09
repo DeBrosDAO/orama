@@ -154,6 +154,9 @@ func main() {
 		resp.Body.Close()
 		reply(w, resp.StatusCode == http.StatusOK, resp.Status)
 	})
+	http.HandleFunc("/unavailable", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
 	http.HandleFunc("/crash", func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, true, "exiting")
 		go func() { time.Sleep(100 * time.Millisecond); os.Exit(3) }()
