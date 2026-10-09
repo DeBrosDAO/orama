@@ -110,9 +110,8 @@ func TestGlobalUnits_hideTheClusterTreeAndDenyPrivateNets(t *testing.T) {
 		"dirauth":  RenderGlobalTorDirauthUnit(),
 		"onion":    RenderGlobalTorOnionUnit(),
 		"txgate":   RenderGlobalTxGateUnit(),
-		"archive":  RenderGlobalTorArchiveUnit(),
+		"archive":  RenderGlobalTorArchiveUnit(false),
 		"monitor":  RenderGlobalTorMonitorUnit(),
-		"sbws":     RenderGlobalSBWSUnit(),
 		"reporter": RenderGlobalReporterUnit(),
 		"archiver": RenderGlobalArchiverUnit(),
 		"repair":   RenderGlobalRepairUnit(),
@@ -244,7 +243,6 @@ func TestGlobalUnits_homeIsTheUnitsOwnStateDirectory(t *testing.T) {
 		"tor":      RenderGlobalTorRelayUnit(),
 		"dirauth":  RenderGlobalTorDirauthUnit(),
 		"onion":    RenderGlobalTorOnionUnit(),
-		"sbws":     RenderGlobalSBWSUnit(),
 		"reporter": RenderGlobalReporterUnit(),
 		"archiver": RenderGlobalArchiverUnit(),
 		"repair":   RenderGlobalRepairUnit(),
@@ -270,7 +268,7 @@ func TestRenderGlobalReporterUnit_startsAfterTheChainAndUsesItsHome(t *testing.T
 		t.Errorf("the reporter does not start after the chain:\n%s", unit)
 	}
 	exec := mustDirective(t, unit, "ExecStart")
-	want := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s", globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome)
+	want := fmt.Sprintf("%s/orama-global reporter --rpc tcp://127.0.0.1:%d --home %s --votes-dir %s", globalBinDir, constants.ChainRPCPort, constants.GlobalReporterHome, constants.GlobalTorVotesDir)
 	if exec != want {
 		t.Errorf("ExecStart = %q, want %q", exec, want)
 	}

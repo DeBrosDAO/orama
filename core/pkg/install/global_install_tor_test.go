@@ -557,7 +557,7 @@ func TestRenderGlobalTorUnits(t *testing.T) {
 	if !strings.Contains(mustDirective(t, gate, "After"), constants.ChainServiceUnit) {
 		t.Error("the gate does not start after the chain")
 	}
-	archive := mustDirective(t, RenderGlobalTorArchiveUnit(), "ExecStart")
+	archive := mustDirective(t, RenderGlobalTorArchiveUnit(false), "ExecStart")
 	if !strings.Contains(archive, "global tor archive --data-dir "+constants.GlobalTorDirauthHome+" --archive-dir "+constants.GlobalTorDirauthHome+"/archive") {
 		t.Errorf("archive ExecStart = %s", archive)
 	}
@@ -567,7 +567,7 @@ func TestRenderGlobalTorUnits(t *testing.T) {
 	if !strings.Contains(RenderGlobalTorArchiveTimer(), "OnUnitActiveSec=1min") {
 		t.Error("the archive looks less often than the shortest voting interval allows a period to pass")
 	}
-	if got := mustDirective(t, RenderGlobalTorArchiveUnit(), "User"); got != globalTorDirauthUser {
+	if got := mustDirective(t, RenderGlobalTorArchiveUnit(false), "User"); got != globalTorDirauthUser {
 		t.Errorf("the archive runs as %s, not as the authority's account", got)
 	}
 }
@@ -798,7 +798,7 @@ func TestDenyLoopback_failsWithoutItsAnchor(t *testing.T) {
 
 // The archive copies files and talks to nobody.
 func TestRenderGlobalTorArchiveUnit_touchesNoNetwork(t *testing.T) {
-	unit := RenderGlobalTorArchiveUnit()
+	unit := RenderGlobalTorArchiveUnit(false)
 	if got := mustDirective(t, unit, "RestrictAddressFamilies"); got != "AF_UNIX" {
 		t.Errorf("RestrictAddressFamilies = %q", got)
 	}

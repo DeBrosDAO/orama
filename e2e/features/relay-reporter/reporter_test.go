@@ -35,6 +35,12 @@ const (
 	// passInterval is the reporter's pass interval for the run.
 	passInterval = "5s"
 	pollEvery    = 15 * time.Second
+	// voteBudget is how long a freshly installed authority may take to export its
+	// first vote: its first consensus (one voting interval and the distribution
+	// delays), then the archive timer's next minute.
+	voteBudget = 40 * time.Minute
+	// authorityAccount owns the shared votes directory and writes the votes in it.
+	authorityAccount = "orama-tor-dirauth"
 )
 
 // operatorAddress is the shape the install accepts for the operator file.
@@ -104,8 +110,41 @@ func TestReporter_installPreparedItsHome(t *testing.T) {
 			t.Errorf("%s is %q, want %q", path, got, want)
 		}
 	}
+	// The shared votes directory: the authority's account writes it and the
+	// reporter's group reads it, setgid so a vote made in it has that group.
+	if got := strings.TrimSpace(c.F.MustExec(t, n, "stat -c '%U %G %a' "+fleet.ShellQuote(constants.GlobalTorVotesDir)).Stdout); got != authorityAccount+" "+reporterAccount+" 2750" {
+		t.Errorf("%s is %q, want %q", constants.GlobalTorVotesDir, got, authorityAccount+" "+reporterAccount+" 2750")
+	}
 	if got := strings.TrimSpace(c.F.Exec(t, n, "systemctl is-enabled "+constants.GlobalReporterUnit).Stdout); got != "enabled" {
 		t.Errorf("%s is %q after the install, want enabled", constants.GlobalReporterUnit, got)
+	}
+}
+
+// The authority's archive oneshot hands the reporter the authority's own vote:
+// the reporter's account reads it, it is the vote of the authority in
+// authority-id, and the reporter's account reads nothing of the authority's home
+// (its keys).
+func TestReporter_readsTheAuthoritysOwnVoteAndNothingElseOfItsHome(t *testing.T) {
+	c, n := installedNode(t)
+	votes := fleet.ShellQuote(constants.GlobalTorVotesDir)
+	eventually.Require(t, pollEvery, voteBudget, n.Name+" to export its authority's vote", func() (bool, error) {
+		return strings.TrimSpace(c.F.Exec(t, n, "sudo ls "+votes+" | grep -c '\\.vote$'").Stdout) != "0", nil
+	})
+	id := strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/authority-id")).Stdout)
+	file := strings.TrimSpace(c.F.MustExec(t, n, "sudo ls "+votes+" | grep '\\.vote$' | tail -n 1").Stdout)
+	path := fleet.ShellQuote(constants.GlobalTorVotesDir + "/" + file)
+	body := c.F.MustExec(t, n, "sudo -u "+reporterAccount+" cat "+path).Stdout
+	if !strings.Contains(body, "\nvote-status vote\n") || !strings.Contains(body, "\ndir-source ") || !strings.Contains(strings.ToUpper(body), " "+strings.ToUpper(id)+" ") {
+		t.Errorf("%s is not a vote of authority %s", file, id)
+	}
+	if got := strings.TrimSpace(c.F.MustExec(t, n, "stat -c '%U %G %a' "+path).Stdout); got != authorityAccount+" "+reporterAccount+" 640" {
+		t.Errorf("%s is %q, want %q", file, got, authorityAccount+" "+reporterAccount+" 640")
+	}
+	if c.F.Exec(t, n, "sudo -u "+reporterAccount+" ls "+fleet.ShellQuote(constants.GlobalTorDirauthHome)).Exit == 0 {
+		t.Errorf("the reporter's account lists the authority's home %s, which holds its keys", constants.GlobalTorDirauthHome)
+	}
+	if c.F.Exec(t, n, "sudo -u "+authorityAccount+" ls "+fleet.ShellQuote(reporterHome)).Exit == 0 {
+		t.Errorf("the authority's account lists the reporter's home %s, which holds its hot key", reporterHome)
 	}
 }
 
@@ -121,25 +160,26 @@ type reporterMonitor struct {
 }
 
 // The reporter reports the epoch that closed. It needs what the install does
-// not make: a hot key whose address is in x/relay's reporter set and funded
-// (the reporter creates the key on its first start), and archived votes in the
-// home's votes directory. Without them the run is not applicable. A reporter
-// that is running is read; one that is stopped is run across an epoch close.
+// not make: a hot key whose address is in x/relay's reporter set and funded (the
+// reporter creates the key on its first start); without it the run is not
+// applicable. The votes it reports from are the ones the authority exports, which
+// the test waits for. A reporter that is running is read; one that is stopped is
+// run across an epoch close.
 func TestReporter_reportsAClosedEpoch(t *testing.T) {
 	c, n := installedNode(t)
 	if c.F.Exec(t, n, "sudo test -f "+fleet.ShellQuote(reporterHome+"/hot-key")).Exit != 0 {
 		harness.SkipNotApplicable(t, n.Name+" has no reporter hot key yet: start the reporter once, add its address to x/relay's reporter set and fund it")
 	}
-	if strings.TrimSpace(c.F.Exec(t, n, "sudo ls "+fleet.ShellQuote(reporterHome+"/votes")+" | grep -c '\\.vote$'").Stdout) == "0" {
-		harness.SkipNotApplicable(t, n.Name+" has no archived votes in "+reporterHome+"/votes: the reporter has nothing to report from")
-	}
+	eventually.Require(t, pollEvery, voteBudget, n.Name+" to export its authority's vote", func() (bool, error) {
+		return strings.TrimSpace(c.F.Exec(t, n, "sudo ls "+fleet.ShellQuote(constants.GlobalTorVotesDir)+" | grep -c '\\.vote$'").Stdout) != "0", nil
+	})
 	if c.F.Unit(t, n, constants.GlobalReporterUnit) == infra.UnitActive {
 		eventually.Require(t, pollEvery, runBudget, "the running reporter to report an epoch", func() (bool, error) {
 			st := readJSON[reporterState](t, c, n, "state.json")
 			return st.Reported > 0 && st.Reported < st.Seen, nil
 		})
 	} else {
-		cmd := "sudo -u " + reporterAccount + " timeout " + strconv.Itoa(runMinutes) + "m " + reporterBin + " reporter --home " + fleet.ShellQuote(reporterHome) + " --interval " + passInterval + " --rpc tcp://127.0.0.1:31001"
+		cmd := "sudo -u " + reporterAccount + " timeout " + strconv.Itoa(runMinutes) + "m " + reporterBin + " reporter --home " + fleet.ShellQuote(reporterHome) + " --votes-dir " + fleet.ShellQuote(constants.GlobalTorVotesDir) + " --interval " + passInterval + " --rpc tcp://127.0.0.1:31001"
 		// timeout ends the reporter after the budget (exit 124); that is the expected end.
 		out := c.Run(t, n, runBudget+time.Minute, cmd)
 		if out.Exit != 124 {

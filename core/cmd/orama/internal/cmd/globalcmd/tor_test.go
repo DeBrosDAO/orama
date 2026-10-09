@@ -123,6 +123,49 @@ func TestArchiveCmd_archivesAndReportsTheSecondRunAsDone(t *testing.T) {
 	}
 }
 
+func TestArchiveCmd_exportsTheOwnVoteWhenAsked(t *testing.T) {
+	data, archive, votes := t.TempDir(), t.TempDir(), t.TempDir()
+	for src, dst := range map[string]string{"consensus-microdesc.txt": tornet.DataDirConsensus, "votes.txt": tornet.DataDirVotes} {
+		raw, err := os.ReadFile(filepath.Join(tornetTestdata, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(data, dst), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved := archiveFlags
+	defer func() { archiveFlags = saved }()
+	archiveFlags.dataDir, archiveFlags.archiveDir, archiveFlags.exportVotesDir = data, archive, votes
+	// No certificate yet: the archive is made and the export says why it cannot be.
+	if err := archiveCmd.RunE(&cobra.Command{}, nil); err == nil || !strings.Contains(err.Error(), "export the authority's own vote") {
+		t.Fatalf("an authority with no certificate exported: %v", err)
+	}
+	if entries, _ := os.ReadDir(votes); len(entries) != 0 {
+		t.Errorf("the export wrote %v without a certificate", entries)
+	}
+	keys := filepath.Join(data, "keys")
+	if err := os.MkdirAll(keys, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cert := "fingerprint 00000000000000000000000000000000000000A0\ndir-key-expires 2099-10-08 00:00:00\n"
+	if err := os.WriteFile(filepath.Join(keys, tornet.KeyAuthorityCert), []byte(cert), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&out)
+	if err := archiveCmd.RunE(cmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "exported the authority's own vote to "+votes) {
+		t.Errorf("output: %s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(votes, "20261008T120000Z.vote")); err != nil {
+		t.Errorf("the vote was not exported: %v", err)
+	}
+}
+
 func TestPrintTorInfo(t *testing.T) {
 	infos := []tornet.NodeInfo{{
 		Home: "/var/lib/orama-global/tor-relay", Nickname: "Orama0123", Fingerprint: strings.Repeat("AB", 20),

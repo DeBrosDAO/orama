@@ -66,8 +66,8 @@ mark ipfs_state
 unit_state %s
 mark repo
 if [ "$(systemctl is-active %s 2>/dev/null || true)" = active ]; then
-  if sudo -n test -r %s/%s; then
-    tok=$(sudo -n cat %s/%s | tr -d '\n')
+  tok=$({ %s; } | tr -d '\n')
+  if [ -n "$tok" ]; then
     # On a co-located machine the RPC is on the namespace address, reachable by root only.
     if [ "$chain_host" = %s ]; then kubo_curl="sudo -n curl"; else kubo_curl=curl; fi
     # The bearer goes to curl as a config line on stdin, never on a command line (ps shows those).
@@ -100,8 +100,7 @@ mark dirauth_monitor
 		constants.ChainRPCPort, constants.ChainRPCPort, constants.ChainRPCPort,
 		constants.ChainAPIPort, constants.ChainAPIPort, constants.ChainAPIPort,
 		constants.GlobalIPFSUnit, constants.GlobalIPFSUnit, constants.GlobalIPFSUnit,
-		constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile,
-		constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile,
+		nofollowRead(constants.GlobalIPFSHome+"/"+constants.GlobalIPFSAPITokenFile, kuboTokenReadLimit),
 		constants.GlobalNetnsAddr, constants.GlobalIPFSAPIPort,
 		constants.GlobalProviderUnit, constants.GlobalProviderUnit,
 		monitorRead(constants.GlobalProviderHome),
@@ -112,18 +111,29 @@ mark dirauth_monitor
 	)
 }
 
-// monitorRead is the script line that prints a role's monitor.json as root. The
-// home belongs to the role's unprivileged account, which can replace the file
-// with a link to a file only root can read or with a FIFO: the read refuses a
-// link (nofollow), does not wait on a FIFO (nonblock, which reads nothing from
-// one) and takes one block.
-func monitorRead(home string) string {
-	return fmt.Sprintf("sudo -n dd if=%s/%s bs=%d count=1 iflag=nofollow,nonblock 2>/dev/null || true",
-		home, constants.GlobalMonitorFile, monitorReadLimit)
+// nofollowRead is the script command that prints a file in a role's home as
+// root. The home belongs to the role's unprivileged account, which can replace
+// the file with a link to a file only root can read or with a FIFO: the read
+// refuses a link (nofollow), does not wait on a FIFO (nonblock, which reads
+// nothing from one) and takes one block of at most limit bytes. It prints
+// nothing, and succeeds, when the file cannot be read.
+func nofollowRead(path string, limit int) string {
+	return fmt.Sprintf("sudo -n dd if=%s bs=%d count=1 iflag=nofollow,nonblock 2>/dev/null || true", path, limit)
 }
 
-// monitorReadLimit bounds a monitor file read over SSH.
-const monitorReadLimit = 4096
+// monitorRead is the nofollowRead of a role's monitor.json.
+func monitorRead(home string) string {
+	return nofollowRead(home+"/"+constants.GlobalMonitorFile, monitorReadLimit)
+}
+
+const (
+	// monitorReadLimit bounds a monitor file read over SSH.
+	monitorReadLimit = 4096
+	// kuboTokenReadLimit bounds the public Kubo API token read over SSH; the
+	// token the installer writes is far shorter (the node report reads at most
+	// 256 bytes of it too).
+	kuboTokenReadLimit = 256
+)
 
 func splitGlobalSections(stdout string) map[string]string {
 	const mark = "===ORAMA_GLOBAL "

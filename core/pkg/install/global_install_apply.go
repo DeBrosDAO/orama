@@ -3,6 +3,7 @@ package install
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -98,6 +99,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := opts.validate(); err != nil {
 		return err
 	}
+	reporterInstalled, err := unitInstalled(h, constants.GlobalReporterUnit)
+	if err != nil {
+		return err
+	}
+	opts.exportVotes = reporterInstalled || slices.Contains(opts.Services, GlobalServiceReporter)
 	torPlan, err := planGlobalTor(h, opts)
 	if err != nil {
 		return err
@@ -329,6 +335,19 @@ func lookupGroupID(name string) (int, error) {
 		return 0, fmt.Errorf("the %s group has a non-numeric gid %q: %w", name, g.Gid, err)
 	}
 	return gid, nil
+}
+
+// unitInstalled reports whether the unit file is in the unit directory.
+func unitInstalled(h GlobalHost, unit string) (bool, error) {
+	path := filepath.Join(h.UnitDir, unit)
+	_, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check %s: %w", path, err)
+	}
+	return true, nil
 }
 
 // requireChainForOnion refuses an onion service on a machine with no chain: the

@@ -265,7 +265,9 @@ loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-comp
   authority's own account in its own home: an authority is in the consensus as a
   relay is, so it writes `/var/lib/orama-global/tor-dirauth/monitor.json` too.
 - With `--services chain,dirauth,reporter` the install also sets up the
-  authority's bandwidth reporter ([below](#the-relay-bandwidth-reporter)).
+  authority's bandwidth reporter ([below](#the-relay-bandwidth-reporter)), and the
+  archive oneshot then also exports the authority's own vote for it
+  ([where the votes come from](#the-relay-bandwidth-reporter)).
 
 **Archive.** Every voting period is copied to
 `/var/lib/orama-global/tor-dirauth/archive/<valid-after>/`:
@@ -285,7 +287,7 @@ kilobytes at stagenet size and grows with the relay count).
 **Bandwidth measurement (sbws) is not built.** Without a bandwidth file the
 authorities weight relays by the bandwidth they report, capped by their
 `RelayBandwidthRate`. That is gameable and is the reason the consensus weight
-is not yet a reward basis. `orama-global-sbws` has a unit renderer but no installer.
+is not yet a reward basis.
 
 Look at an authority with `orama global tor info` (as root on the host; `--json`
 for scripts): the nickname, RSA fingerprint, ed25519 id, the consensus it holds
@@ -640,9 +642,10 @@ and finds the authority published at `--tor-address` (the one the `dirauth` role
 install matches against its key bundle). Then it:
 
 - creates the account `orama-reporter` and the home `/var/lib/orama-global/reporter` (0700,
-  that account's) with an empty `votes/` directory;
+  that account's);
 - writes `authority-id` (that authority's `v3_ident`) and `operator`, mode 0600, the account's,
   again on every install, so a changed `--tor-reporter-operator` takes effect;
+- makes the votes directory `/var/lib/orama-global/tor-votes` (see "Where the votes come from");
 - writes and enables `orama-global-reporter.service` under the shared global sandbox (private
   ranges denied, `/opt/orama` and `/etc/orama` hidden, loopback only to the chain's RPC, which
   moves to the namespace address with `--colocated`), after the chain and not part of
@@ -659,10 +662,47 @@ State directory (`/var/lib/orama-global/reporter`):
 | `hot-key` | The reporter's signing key, created on first start (mode 0600). Its address must be in `x/relay`'s reporter set, and funded. |
 | `operator` | The operator address this reporter runs for (`--tor-reporter-operator`, written by the install). |
 | `authority-id` | The authority's v3 identity, 40 hex (the `dir-source` line of its votes): the `v3_ident` of this authority in `tor-network.json`. The reporter lives in the `chain` module and does not import the parser, so `orama global install` writes the file from the network file. |
-| `votes/*.vote` | The archived votes: regular files, each a complete vote (one that ends before its `directory-footer` is still being written and is refused). Other files in the directory (consensus documents, bandwidth files) are ignored. `--votes-dir` overrides the directory. The directory belongs to the reporter's user and the install leaves it empty. **Nothing copies the archive into it yet:** the archive (`archive/<period>/votes`, one file of concatenated votes in the authority's home) is not in the `*.vote` form the reporter reads, and the authority's home is not readable by the reporter's account. Until that sync exists (E2) an install gives a reporter with nothing to report from, and it skips every epoch (fewer than four fifths of the votes). |
+| `votes/*.vote` | Only for a reporter run by hand without `--votes-dir`; the installed unit reads `/var/lib/orama-global/tor-votes` instead (below). The files are regular files, each a complete vote (one that ends before its `directory-footer` is still being written and is refused); other files in the directory are ignored. A link or a FIFO in the directory is an error, never followed. |
 | `state.json` | The epoch in progress at the last pass, and the closed epochs still owed a report with their spans. |
 | `report-<epoch>.json` | The entries chosen for an epoch, from before its first chunk is sent until the chain has all of them. |
 | `monitor.json` | What the last report contained and left out. |
+
+**Where the votes come from.** The authority archives one concatenated `votes` file per period
+in its own home, which holds its keys and which the reporter's account cannot (and must not)
+read. So the archive oneshot also exports the authority's *own* vote of each period into a
+directory the two accounts share and nothing else uses:
+
+| | |
+|---|---|
+| Directory | `/var/lib/orama-global/tor-votes`, owned by `orama-tor-dirauth`, group `orama-reporter`, mode 2750 (setgid) |
+| Writer | `orama-global-tor-archive.service` (`orama global tor archive --export-votes-dir`), as the authority's account; it is allowed to write only this directory besides its own home |
+| File | `<valid-after>.vote` (for example `20261008T120000Z.vote`), mode 0640 and the reporter's group (the setgid directory gives a new file its group), written atomically; a period already exported is left as it is |
+| Content | the authority's own vote of the consensus's period, one complete vote, picked by the `dir-source` identity of the certificate in the authority's `keys/`; the votes of the other authorities are not copied, and neither is anything else of the home |
+| Reader | `orama-global-reporter.service` (`--votes-dir`), through its own group: read-only, and it cannot enter the authority's home |
+
+The export runs only on a host that has the reporter (in the same install or an earlier one: a
+re-install of `dirauth` beside an installed reporter keeps it), so an authority with no reporter
+has no such directory and an unchanged archive unit. An own vote that is not among the votes the
+authority holds for the period, or that has no `directory-footer`, makes the oneshot fail (the
+archive of that period is written first) instead of exporting something the reporter would
+refuse; a period whose votes the authority no longer holds exports nothing, as the archive's
+`votes_missing` says.
+
+Why a copy in a shared directory, and not the archive itself or a root-side copy:
+
+- The reporter parsing the archive directly would need to enter the authority's home (a Tor
+  DataDirectory that must not be readable by others) and read a file that mixes every
+  authority's votes. Opening the home to a second account, even for one subdirectory, puts the
+  signing keys one permission mistake away from the account that holds a hot key.
+- A root-side copy unit would be a second privileged program reading a directory the authority's
+  unprivileged account controls (links and FIFOs), and its own timer to keep running.
+- The archive oneshot already runs as the authority's account on this timer and already reads the
+  votes. Writing one more file, to one directory it is given write access to and that the other
+  account can only read, adds no privilege to either account. The reporter, which signs, opens
+  each file without following a link and without waiting on a FIFO, because the authority's
+  account (which faces the network through Tor) writes the directory it reads. A compromised
+  authority account can already vote anything; what it cannot do is reach the hot key, and what it
+  writes here is one authority's vote among the three or more whose median `x/relay` takes.
 
 What a report contains, for each relay in the epoch's votes:
 
@@ -681,9 +721,15 @@ Rules that keep a node from paying itself:
 
 - Only this authority's own votes are read (by `dir-source` identity), and only those whose
   `valid-after` is inside the epoch.
-- Relays registered to the reporter's own operator are not reported by it. This is the honest
-  reporter's rule: the chain does not enforce it, so a reporter that signs without this binary is
-  held only by the median across reporters.
+- The chain refuses a reporter address that operates a relay: `MsgRegisterRelay` refuses an
+  operator that is in the reporter set, `MsgUpdateReporters` (and so a reporter proposal) refuses a
+  set that names a relay operator, and genesis validation rejects both together
+  (`ErrReporterOperatesRelay`; docs/CHAIN.md, "x/relay"). So the hot key cannot be paid as a
+  relay operator. The chain does not know which operator *account* the hot key reports for, so
+  the reporter itself leaves out the relays registered to the `operator` file's account (the
+  authority's operator, a different address from the hot key). That second rule is the honest
+  reporter's: a reporter that signs without this binary is held only by the median across
+  reporters.
 - Only relays `x/relay` has registered, with the registered ed25519 identity, are reported
   (`x/relay` refuses a whole chunk that holds any other); the monitor file counts the
   unregistered, the key mismatches, the own-operator relays and the relays with no ed25519
@@ -747,13 +793,12 @@ Stated so nothing here reads as more than it is (the spike's list is in
 - **Never run against a real network.** The code was written against Tor's
   manual and dir-spec; no tor process was started while writing it. The first
   stagenet bring-up is the first run, and E0 lists what it must confirm.
-- sbws (E5) has no installer. The bandwidth reporter has one, but its votes directory is empty
-  and nothing fills it from the authority's archive yet (see "The relay bandwidth reporter").
+- Bandwidth measurement (sbws) is not built (see "Directory authorities").
 - No independent authority: Orama runs all of them. While Orama runs a majority,
   Orama could sign a consensus that lists only its own relays and deanonymise
   users. The launch thresholds (a majority of independent authorities, 100
   relays from 40 operators, 15 exits in 5 countries) are plan item E7.
-- The archive is not published and has no retention.
+- The archive is not published, and neither it nor the exported votes have a retention policy.
 - The install does not register a relay on chain: `MsgRegisterRelay` is a separate transaction
   (docs/CHAIN.md, "x/relay"), and a relay is paid only once it is registered and reported.
 - The signed fallback list is not built: clients bootstrap from the

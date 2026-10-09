@@ -81,7 +81,13 @@ const (
 	GlobalTorDirauthHome = "/var/lib/orama-global/tor-dirauth"
 	GlobalTorRelayHome   = "/var/lib/orama-global/tor-relay"
 	GlobalTorOnionHome   = "/var/lib/orama-global/tor-onion"
-	GlobalTxGateHome     = "/var/lib/orama-global/txgate"
+	// GlobalTorVotesDir is where a directory authority's archive oneshot writes
+	// the authority's own vote of each voting period (<valid-after>.vote), for
+	// its bandwidth reporter. It is outside both homes: the authority's holds its
+	// keys and the reporter's its hot key. The authority's account owns it and
+	// writes there, the reporter's group reads it (setgid, 0750, files 0640).
+	GlobalTorVotesDir = "/var/lib/orama-global/tor-votes"
+	GlobalTxGateHome  = "/var/lib/orama-global/txgate"
 
 	// GlobalNetnsPriorForwardFile, in GlobalStateRoot, holds the value net.ipv4.ip_forward had
 	// (0 or 1) before the first `orama global install --colocated` turned it on. Removing the

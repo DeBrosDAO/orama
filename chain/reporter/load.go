@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // VoteSuffix names the archived votes in the votes directory. The archive
@@ -16,6 +17,12 @@ const VoteSuffix = ".vote"
 // authority inside the window. It reads a file's header first and the whole file
 // only for a match. A .vote file that does not parse is an error naming it: an archive
 // with a damaged vote must be repaired, not reported around.
+//
+// The directory is written by the authority's account, which runs a Tor
+// process facing the network, and read here by the account that holds the
+// reporter's signing key. A file is therefore opened without following a link
+// and without waiting on a FIFO, and one that is not a regular file is an
+// error: a link could otherwise point the reader at the hot key.
 func LoadVotes(dir string, authority [fingerprintLen]byte, w Window) ([]Vote, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -44,11 +51,14 @@ func LoadVotes(dir string, authority [fingerprintLen]byte, w Window) ([]Vote, er
 }
 
 func readVote(path string, headerOnly bool) (Vote, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return Vote{}, fmt.Errorf("open vote %s: %w", path, err)
 	}
 	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return Vote{}, fmt.Errorf("vote %s is not a regular file", path)
+	}
 	parse := ParseVote
 	if headerOnly {
 		parse = ParseVoteHeader
