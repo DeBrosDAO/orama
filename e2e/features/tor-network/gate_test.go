@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
@@ -22,30 +23,57 @@ const (
 	account = "orama1tehv5km5e9y706rc2gzk9yyun9dljjjny06dv2"
 )
 
-// startGate runs `orama global txgate` on n in a transient unit and returns
-// its base URL on n's loopback. upstream is the chain REST API to forward to.
-func startGate(t *testing.T, f *fleet.Fleet, n fleet.Node, upstream string) string {
+// gateSpace is the network namespace a test gate runs in and reaches the chain
+// REST API from. A fleet run's validator listens on the node's loopback. On a
+// co-located node (stagenet) the chain is inside the orama-global namespace,
+// at the namespace address: a gate in the node's own namespace would forward
+// to a loopback nothing listens on and answer 502, as the installed gate would
+// if it did not run in the namespace too (core/pkg/install/global_netns.go).
+type gateSpace struct {
+	// upstream is the chain REST API as a process in this space reaches it.
+	upstream string
+	// unitProperty puts a transient unit in the space; empty is the node's own.
+	unitProperty string
+	// prefix runs a command in the space; empty is the node's own.
+	prefix string
+}
+
+func gateSpaceOf(f *fleet.Fleet) gateSpace {
+	if f.State.IsStagenet() {
+		return gateSpace{
+			upstream:     constants.ColocatedChainAPIURL(),
+			unitProperty: "-p NetworkNamespacePath=/run/netns/" + chain.NetnsName,
+			prefix:       "ip netns exec " + chain.NetnsName + " ",
+		}
+	}
+	return gateSpace{upstream: constants.LocalChainAPIURL()}
+}
+
+// startGate runs `orama global txgate` on n in a transient unit in space and
+// returns its base URL on the space's loopback. upstream is the chain REST API
+// to forward to.
+func startGate(t *testing.T, f *fleet.Fleet, n fleet.Node, space gateSpace, upstream string) string {
 	t.Helper()
 	unit := "e2e-txgate-" + randomSuffix(t)
 	listen := fmt.Sprintf("127.0.0.1:%d", gatePort)
-	f.MustExec(t, n, fmt.Sprintf("systemd-run --quiet --unit %s -p User=nobody -p NoNewPrivileges=yes %s global txgate --listen %s --upstream %s",
-		unit, infra.OramaBinOnNode, listen, upstream))
+	f.MustExec(t, n, fmt.Sprintf("systemd-run --quiet --unit %s -p User=nobody -p NoNewPrivileges=yes %s %s global txgate --listen %s --upstream %s",
+		unit, space.unitProperty, infra.OramaBinOnNode, listen, upstream))
 	t.Cleanup(func() {
 		cleanup(t, f, n, "systemctl stop "+unit+" && systemctl reset-failed "+unit+" 2>/dev/null; true")
 	})
 	base := "http://" + listen
 	eventually.Require(t, pollEvery, bootstrapBudget, "the tx gate on "+n.Name+" to listen", func() (bool, error) {
-		out := f.Exec(t, n, fmt.Sprintf("curl -s -o /dev/null -w %%{http_code} %s/", base))
+		out := f.Exec(t, n, fmt.Sprintf("%scurl -s -o /dev/null -w %%{http_code} %s/", space.prefix, base))
 		return strings.TrimSpace(out.Stdout) == "404", nil
 	})
 	return base
 }
 
-// curl runs curl on n and returns the status and body.
-func curl(t *testing.T, f *fleet.Fleet, n fleet.Node, args ...string) (int, string) {
+// curl runs curl on n, in space, and returns the status and body.
+func curl(t *testing.T, f *fleet.Fleet, n fleet.Node, space gateSpace, args ...string) (int, string) {
 	t.Helper()
 	const mark = "\n__STATUS__"
-	out := f.Exec(t, n, "curl -s -w "+fleet.ShellQuote(mark+"%{http_code}")+" "+strings.Join(args, " "))
+	out := f.Exec(t, n, space.prefix+"curl -s -w "+fleet.ShellQuote(mark+"%{http_code}")+" "+strings.Join(args, " "))
 	body, status, _ := strings.Cut(out.Stdout, mark)
 	var code int
 	fmt.Sscanf(strings.TrimSpace(status), "%d", &code)
@@ -63,12 +91,13 @@ func TestTxgate_servesOnlyTheWalletCalls(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
-	upstream := constants.LocalChainAPIURL()
+	space := gateSpaceOf(f)
+	upstream := space.upstream
 	chainUp := f.State.ChainID != ""
 	if !chainUp {
 		upstream = "http://127.0.0.1:1" // nothing listens: the allowed calls reach a dead chain API
 	}
-	base := startGate(t, f, n, upstream)
+	base := startGate(t, f, n, space, upstream)
 
 	const notServed = "not served over the onion service"
 	for _, path := range []string{
@@ -76,28 +105,28 @@ func TestTxgate_servesOnlyTheWalletCalls(t *testing.T) {
 		"/cosmos/tx/v1beta1/txs?query=message.sender%3D%27x%27", "/cosmos/base/tendermint/v1beta1/node_info",
 		"/cosmos/auth/v1beta1/accounts", "/cosmos/tx/v1beta1/txs/short",
 	} {
-		code, body := curl(t, f, n, base+path)
+		code, body := curl(t, f, n, space, base+path)
 		if code != 404 || !strings.Contains(body, notServed) {
 			t.Errorf("GET %s = %d %s, want the gate's 404", path, code, body)
 		}
 	}
-	if code, _ := curl(t, f, n, "-X", "POST", "-H", "'Content-Type: application/json'", "-d", "'{}'", base+"/cosmos/auth/v1beta1/accounts/"+account); code != 405 {
+	if code, _ := curl(t, f, n, space, "-X", "POST", "-H", "'Content-Type: application/json'", "-d", "'{}'", base+"/cosmos/auth/v1beta1/accounts/"+account); code != 405 {
 		t.Errorf("POST to the account read = %d, want 405", code)
 	}
-	if code, _ := curl(t, f, n, base+"/cosmos/tx/v1beta1/txs"); code != 405 {
+	if code, _ := curl(t, f, n, space, base+"/cosmos/tx/v1beta1/txs"); code != 405 {
 		t.Errorf("GET of the broadcast = %d, want 405", code)
 	}
-	if code, _ := curl(t, f, n, "-X", "POST", "-H", "'Content-Type: text/plain'", "-d", "x", base+"/cosmos/tx/v1beta1/txs"); code != 415 {
+	if code, _ := curl(t, f, n, space, "-X", "POST", "-H", "'Content-Type: text/plain'", "-d", "x", base+"/cosmos/tx/v1beta1/txs"); code != 415 {
 		t.Errorf("a broadcast that is not JSON = %d, want 415", code)
 	}
 	huge := "/tmp/e2e-txgate-huge-" + randomSuffix(t)
 	f.MustExec(t, n, "head -c 600000 /dev/zero | tr '\\0' A > "+huge)
 	t.Cleanup(func() { cleanup(t, f, n, "rm -f "+huge) })
-	if code, _ := curl(t, f, n, "-X", "POST", "-H", "'Content-Type: application/json'", "--data-binary", "@"+huge, base+"/cosmos/tx/v1beta1/txs"); code != 413 {
+	if code, _ := curl(t, f, n, space, "-X", "POST", "-H", "'Content-Type: application/json'", "--data-binary", "@"+huge, base+"/cosmos/tx/v1beta1/txs"); code != 413 {
 		t.Errorf("a 600 kB broadcast = %d, want 413", code)
 	}
 
-	code, body := curl(t, f, n, base+"/cosmos/auth/v1beta1/accounts/"+account)
+	code, body := curl(t, f, n, space, base+"/cosmos/auth/v1beta1/accounts/"+account)
 	if chainUp {
 		if strings.Contains(body, notServed) || (code != 200 && code != 404) || !strings.Contains(body, `"`) {
 			t.Errorf("the account read reached the chain as %d %s", code, body)
