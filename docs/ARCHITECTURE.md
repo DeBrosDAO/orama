@@ -607,6 +607,9 @@ it read before waiting for it:
 - `save-cluster-state`, which writes the file a boot restores the namespace from, is
   admitted the same way: a save that landed after the namespace's teardown would bring
   the deleted namespace back at the next boot, so it is refused (409) like a spawn.
+  The coordinator's own save of its local file (`saveAdmittedLocalState`) takes the same
+  admission; the restore paths, which hold the lock and decide on the file under it, write
+  it directly.
   `delete-cluster-state` is not admitted.
 - A spawn names its cluster: every `spawn-*`, `restart-gateway` and `save-cluster-state` request carries
   `cluster_id`, and the spawn is refused (**409**, wrapping `ErrClusterMismatch`) when it is

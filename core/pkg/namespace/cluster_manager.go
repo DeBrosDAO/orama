@@ -2240,8 +2240,8 @@ func (cm *ClusterManager) saveClusterStateToAllNodes(ctx context.Context, cluste
 		}
 
 		if node.NodeID == cm.localNodeID {
-			// Save locally
-			if err := cm.saveLocalState(state); err != nil {
+			// Save locally, under the admission a remote node's save goes through
+			if err := cm.saveAdmittedLocalState(ctx, state); err != nil {
 				cm.logger.Warn("Failed to save local cluster state", zap.String("namespace", cluster.NamespaceName), zap.Error(err))
 			}
 		} else {

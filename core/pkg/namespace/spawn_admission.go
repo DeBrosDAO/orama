@@ -70,3 +70,15 @@ func (cm *ClusterManager) spawnAdmitted(ctx context.Context, namespace, clusterI
 	defer release()
 	return spawn()
 }
+
+// saveAdmittedLocalState writes this node's cluster-state.json under the same
+// admission as a spawn, and as the save-cluster-state a remote coordinator
+// sends. The file is what the next boot starts the namespace's units from, so
+// a save that lands after the namespace's teardown (which removes the file
+// under the lock) brings the deleted namespace back, and a save for an earlier
+// incarnation of a re-created name overwrites the new cluster's file. Callers
+// that already hold the namespace's lock and have decided on the file under it
+// (the restore paths) call saveLocalState directly.
+func (cm *ClusterManager) saveAdmittedLocalState(ctx context.Context, state *ClusterLocalState) error {
+	return cm.spawnAdmitted(ctx, state.NamespaceName, state.ClusterID, func() error { return cm.saveLocalState(state) })
+}

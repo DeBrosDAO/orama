@@ -265,3 +265,88 @@ func TestRestoreClusterFromState_aLockThatStaysHeldFailsTheRestore(t *testing.T)
 		t.Fatalf("err = %v; want context.DeadlineExceeded wrapped", err)
 	}
 }
+
+func savedStatePath(cm *ClusterManager) string {
+	return filepath.Join(cm.baseDataDir, "acme", "cluster-state.json")
+}
+
+// A save of this node's own cluster-state.json that lands after the
+// namespace's teardown would bring the deleted namespace back at boot: it is
+// refused like a remote save, and writes nothing.
+func TestSaveAdmittedLocalState_refusesANamespaceBeingDeletedOrGone(t *testing.T) {
+	for _, st := range []ClusterStatus{ClusterStatusDeprovisioning, ""} {
+		cm, _ := newAdmissionCM(st)
+		cm.baseDataDir = t.TempDir()
+		err := cm.saveAdmittedLocalState(context.Background(), &ClusterLocalState{ClusterID: "c1", NamespaceName: "acme"})
+		if !errors.Is(err, ErrNamespaceBeingDeleted) {
+			t.Fatalf("status %q: err = %v; want ErrNamespaceBeingDeleted", st, err)
+		}
+		if _, statErr := os.Stat(savedStatePath(cm)); !os.IsNotExist(statErr) {
+			t.Fatalf("status %q: a refused save wrote the state file: %v", st, statErr)
+		}
+	}
+}
+
+func TestSaveAdmittedLocalState_refusesAnEarlierIncarnationAndWritesTheCurrentOne(t *testing.T) {
+	cm, reg := newAdmissionCM(ClusterStatusReady)
+	cm.baseDataDir = t.TempDir()
+	reg.id.Store("c2")
+	if err := cm.saveAdmittedLocalState(context.Background(), &ClusterLocalState{ClusterID: "c1", NamespaceName: "acme"}); !errors.Is(err, ErrClusterMismatch) {
+		t.Fatalf("err = %v; want ErrClusterMismatch", err)
+	}
+	if _, statErr := os.Stat(savedStatePath(cm)); !os.IsNotExist(statErr) {
+		t.Fatalf("a save for the earlier cluster wrote the state file: %v", statErr)
+	}
+	if err := cm.saveAdmittedLocalState(context.Background(), &ClusterLocalState{ClusterID: "c2", NamespaceName: "acme"}); err != nil {
+		t.Fatalf("a save for the current cluster: %v", err)
+	}
+	saved, err := loadLocalState(savedStatePath(cm))
+	if err != nil || saved.ClusterID != "c2" {
+		t.Fatalf("saved state = %+v, %v", saved, err)
+	}
+}
+
+// The race itself: the save is in flight while the teardown holds the lock and
+// removes the state file; it must decide after the teardown lets go.
+func TestSaveAdmittedLocalState_waitsForTheTeardownAndThenWritesNothing(t *testing.T) {
+	cm, reg := newAdmissionCM(ClusterStatusReady)
+	cm.baseDataDir = t.TempDir()
+	teardown, err := cm.systemdSpawner.LockNamespace(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- cm.saveAdmittedLocalState(context.Background(), &ClusterLocalState{ClusterID: "c1", NamespaceName: "acme"})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the save ran while the teardown held the namespace: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	reg.status.Store(ClusterStatusDeprovisioning)
+	teardown()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNamespaceBeingDeleted) {
+			t.Fatalf("save after the teardown: %v; want ErrNamespaceBeingDeleted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the save never returned after the teardown released the namespace")
+	}
+	if _, statErr := os.Stat(savedStatePath(cm)); !os.IsNotExist(statErr) {
+		t.Fatalf("the deleted namespace's state file was written: %v", statErr)
+	}
+}
+
+// The provisioner's own save goes through the admission.
+func TestSaveClusterStateToAllNodes_doesNotWriteTheLocalStateOfADeletedNamespace(t *testing.T) {
+	cm, _ := newAdmissionCM(ClusterStatusDeprovisioning)
+	cm.baseDataDir = t.TempDir()
+	cluster := &NamespaceCluster{ID: "c1", NamespaceName: "acme"}
+	nodes := []NodeCapacity{{NodeID: "node-a", InternalIP: "10.0.0.1"}}
+	cm.saveClusterStateToAllNodes(context.Background(), cluster, nodes, []*PortBlock{{}})
+	if _, statErr := os.Stat(savedStatePath(cm)); !os.IsNotExist(statErr) {
+		t.Fatalf("the state file of a namespace being deleted was written: %v", statErr)
+	}
+}

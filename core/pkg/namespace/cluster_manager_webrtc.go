@@ -824,7 +824,7 @@ func (cm *ClusterManager) updateClusterStateWithWebRTC(
 		state.TURNSharedSecret = turnSecret
 
 		if node.NodeID == cm.localNodeID {
-			if err := cm.saveLocalState(state); err != nil {
+			if err := cm.saveAdmittedLocalState(ctx, state); err != nil {
 				cm.logger.Warn("Failed to save local cluster state",
 					zap.String("namespace", cluster.NamespaceName),
 					zap.Error(err))
