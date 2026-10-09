@@ -67,9 +67,14 @@ func (a *agent) publish(t *testing.T, files map[string][]byte) {
 	}
 }
 
+// allowLocalRepo lets the agent fetch from the repository server on the node's
+// loopback: a release repository is refused on a loopback or private address
+// unless the process asks for it, which only a test does.
+const allowLocalRepo = "ORAMA_ALLOW_LOCAL_RELEASE_REPO=1 "
+
 func (a *agent) orama(t *testing.T, args ...string) fleet.Output {
 	t.Helper()
-	return infra.OnNode(t, a.f, a.node, args...)
+	return a.f.Exec(t, a.node, allowLocalRepo+infra.OramaCommand(args...))
 }
 
 func (a *agent) manifest(t *testing.T) string {

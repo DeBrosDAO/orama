@@ -30,6 +30,7 @@ func serveRepo(t *testing.T, files map[string][]byte, archives map[string][]byte
 			t.Fatal(err)
 		}
 	}
+	AllowLocalRepositories(t)
 	srv := httptest.NewServer(http.FileServer(http.Dir(dir)))
 	t.Cleanup(srv.Close)
 	return srv.URL
@@ -110,13 +111,21 @@ func TestRepository_aTargetPathCannotLeaveTheTargetsDirectory(t *testing.T) {
 }
 
 func TestParseRepositoryURL(t *testing.T) {
-	for _, ok := range []string{"https://releases.example.org/tuf", "http://127.0.0.1:8080", "http://localhost/x", "http://[::1]:9/"} {
+	for _, ok := range []string{
+		"https://releases.example.org/tuf", "https://93.184.216.34/tuf", "https://releases.example.org:8443/a/b",
+		"https://[2606:4700:4700::1111]/tuf", "https://100.63.255.255/x", "https://172.32.0.1/x",
+	} {
 		if _, err := ParseRepositoryURL(ok); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
 	for _, bad := range []string{
 		"", "releases.example.org", "http://releases.example.org", "ftp://x/y", "https://u:p@x/y", "https://x/y?q=1", "https://x/y#f", "file:///etc",
+		// This machine and private networks: not a place a release is published.
+		"http://127.0.0.1:8080", "https://127.0.0.1/tuf", "https://localhost/x", "https://LOCALHOST./x", "https://repo.localhost/x", "https://[::1]:9/",
+		"https://10.0.0.7/tuf", "https://172.16.0.1/x", "https://192.168.1.1/x", "https://169.254.169.254/latest", "https://100.64.0.1/x",
+		"https://0.0.0.0/x", "https://[fe80::1]/x", "https://[fd00::1]/x", "https://224.0.0.1/x", "https://[::ffff:127.0.0.1]/x",
+		"https://198.18.0.1/x", "https://203.0.113.9/x",
 	} {
 		if _, err := ParseRepositoryURL(bad); err == nil {
 			t.Errorf("%q was accepted", bad)
@@ -124,12 +133,53 @@ func TestParseRepositoryURL(t *testing.T) {
 	}
 }
 
+// A test serves its repository from httptest on loopback and asks for it; the
+// permission ends with the test.
+func TestParseRepositoryURL_aTestCanAskForALocalRepository(t *testing.T) {
+	const local = "http://127.0.0.1:8080"
+	if _, err := ParseRepositoryURL(local); err == nil {
+		t.Fatal("a loopback repository was accepted without being asked for")
+	}
+	t.Run("asked", func(t *testing.T) {
+		AllowLocalRepositories(t)
+		for _, ok := range []string{local, "http://localhost/x", "http://[::1]:9/", "https://10.0.0.7/tuf"} {
+			if _, err := ParseRepositoryURL(ok); err != nil {
+				t.Errorf("%s: %v", ok, err)
+			}
+		}
+		if _, err := ParseRepositoryURL("http://releases.example.org"); err == nil {
+			t.Error("plain http to a public host was accepted")
+		}
+	})
+	if _, err := ParseRepositoryURL(local); err == nil {
+		t.Fatal("the permission outlived the test that asked")
+	}
+}
+
+// A repository cannot send the agent, which runs as root on the overlay, to a
+// service only that network can reach: not by a redirect either.
+func TestRepository_aRedirectToThisMachineOrAPrivateNetworkIsRefused(t *testing.T) {
+	redirect := Repository{}.client().CheckRedirect
+	remote := []*http.Request{{URL: mustParse(t, "https://releases.example.org/tuf/timestamp.json")}}
+	for _, target := range []string{"https://127.0.0.1/x", "https://localhost/x", "https://169.254.169.254/latest/meta-data", "https://10.0.0.1:10100/db/query"} {
+		err := redirect(&http.Request{URL: mustParse(t, target)}, remote)
+		if err == nil || !strings.Contains(err.Error(), "private network") {
+			t.Errorf("redirect to %s: err = %v", target, err)
+		}
+	}
+	// A CDN's signed URL carries a query.
+	if err := redirect(&http.Request{URL: mustParse(t, "https://cdn.example.net/a?sig=abc")}, remote); err != nil {
+		t.Errorf("a redirect with a query: %v", err)
+	}
+}
+
 func TestRepository_aRedirectToPlainHTTPElsewhereIsRefused(t *testing.T) {
 	plain := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "http://203.0.113.9/timestamp.json", http.StatusFound)
+		http.Redirect(w, r, "http://93.184.216.34/timestamp.json", http.StatusFound)
 	}))
 	plain.StartTLS()
 	t.Cleanup(plain.Close)
+	AllowLocalRepositories(t)
 	repo := Repository{BaseURL: plain.URL, Client: plain.Client()}
 	repo.Client.CheckRedirect = Repository{}.client().CheckRedirect
 	err := repo.FetchMetadata(context.Background(), t.TempDir(), nil)
@@ -150,6 +200,7 @@ func TestRepository_aRedirectToLoopbackFromAnotherHostIsRefused(t *testing.T) {
 	if err := redirect(&http.Request{URL: mustParse(t, "https://cdn.example.net/timestamp.json")}, remote); err != nil {
 		t.Fatalf("a redirect to another https host: %v", err)
 	}
+	AllowLocalRepositories(t)
 	loopback := []*http.Request{{URL: mustParse(t, "http://127.0.0.1:8080/timestamp.json")}}
 	if err := redirect(&http.Request{URL: mustParse(t, "http://127.0.0.1:8080/other.json")}, loopback); err != nil {
 		t.Fatalf("a loopback repository redirecting inside loopback: %v", err)
@@ -163,4 +214,28 @@ func mustParse(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// A name that resolves to the machine's own loopback passes the URL check (it is
+// judged as written) and is refused at the socket.
+func TestRepository_aNameThatResolvesToThisMachineIsRefusedAtConnect(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(srv.Close)
+	// The server is on 127.0.0.1; "127.0.0.1.nip.io"-style names are the shape of
+	// the attack, but the test needs no DNS: the transport is exercised through
+	// its dialer on the loopback address the name would resolve to.
+	conn, err := repositoryTransport().DialContext(context.Background(), "tcp", srv.Listener.Addr().String())
+	if err == nil {
+		conn.Close()
+		t.Fatal("the default transport connected to the loopback")
+	}
+	if !strings.Contains(err.Error(), "internal network") {
+		t.Fatalf("err = %v", err)
+	}
+	AllowLocalRepositories(t)
+	conn, err = repositoryTransport().DialContext(context.Background(), "tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("a test that asked for a local repository: %v", err)
+	}
+	conn.Close()
 }

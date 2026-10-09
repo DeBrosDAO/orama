@@ -33,8 +33,12 @@ const (
 	uploadBudget     = 2 * time.Minute
 )
 
+// allowLocalRepo is releaseverify.AllowLocalEnv: a release repository on a
+// loopback or private address is refused unless the process asks for it.
+const allowLocalRepo = "ORAMA_ALLOW_LOCAL_RELEASE_REPO=1"
+
 // repository serves a release repository from this machine's loopback, where
-// `orama node setup` runs: plain HTTP is allowed to a loopback address.
+// `orama node setup` runs.
 type repository struct {
 	dir string
 	url string
@@ -101,6 +105,9 @@ func TestSetupRelease_joinsFromAVerifiedReleaseAndRefusesTheRest(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.RequireHealthy(t)
 	cli := harness.CLI(t)
+	// The repository is served from this machine's loopback, which the CLI
+	// refuses as a release repository unless a test asks.
+	cli.Env = append(cli.Env, allowLocalRepo)
 	extra := infra.NewExtra(t, "extra-release")
 	t.Cleanup(func() { infra.RemoveMembers(t, f, cli, extra.PublicIP) })
 

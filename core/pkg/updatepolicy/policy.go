@@ -7,7 +7,6 @@ package updatepolicy
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -49,8 +48,6 @@ const (
 // hoursInDay bounds a window's hours.
 const hoursInDay = 24
 
-var channelPattern = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
-
 // Window is a maintenance window in whole hours, UTC. Start equal to End means
 // no window; a Start after the End wraps midnight.
 type Window struct {
@@ -66,10 +63,15 @@ func ValidMode(mode string) error {
 	return fmt.Errorf("auto-update is off, notify or auto, not %q", mode)
 }
 
-// ValidChannel reports whether channel can name a release channel.
+// ValidChannel reports whether channel can name a release channel. A channel is
+// a delegated role of the release repository, so it is judged by the rule that
+// role names are verified with (releaseverify.ValidRoleName): a setting the
+// verifier would refuse is refused where it is written, not by every node
+// at every tick. Root, targets, snapshot and timestamp are top-level roles, not
+// channels.
 func ValidChannel(channel string) error {
-	if !channelPattern.MatchString(channel) {
-		return fmt.Errorf("a channel is 1 to 32 characters of a-z, 0-9 and -, not %q", channel)
+	if err := releaseverify.ValidRoleName(channel); err != nil {
+		return fmt.Errorf("update channel: %w", err)
 	}
 	return nil
 }

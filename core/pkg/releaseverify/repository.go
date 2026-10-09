@@ -12,7 +12,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/netguard"
 )
 
 // A release repository is a static directory served over HTTPS:
@@ -37,18 +40,50 @@ const (
 	maxRedirects = 5
 	// metadataFilePerm: the fetched copy is private to the fetching process.
 	metadataFilePerm = 0o600
+	// dialTimeout and dialKeepAlive are the default transport's own.
+	dialTimeout   = 30 * time.Second
+	dialKeepAlive = 30 * time.Second
 )
 
 // Repository is a release repository at BaseURL.
 type Repository struct {
 	BaseURL string
 	// Client is the HTTP client to use; nil uses http.DefaultTransport with
-	// redirects limited by allowedScheme.
+	// redirects limited by checkRedirectTarget.
 	Client *http.Client
 }
 
-// ParseRepositoryURL checks a repository URL: https, or http to a loopback
-// address, with a host and no credentials, query or fragment.
+// AllowLocalEnv, set to "1" in the environment of a process, lets
+// ParseRepositoryURL accept http to, and https to, a loopback or private
+// address. Only a test sets it: it serves its repository from httptest on
+// 127.0.0.1, and the fleet e2e suite from a server on a node's loopback. The
+// installed units never carry it.
+const AllowLocalEnv = "ORAMA_ALLOW_LOCAL_RELEASE_REPO"
+
+func localAllowed() bool { return os.Getenv(AllowLocalEnv) == "1" }
+
+// testEnv is the part of testing.TB AllowLocalRepositories needs.
+type testEnv interface {
+	Helper()
+	Setenv(key, value string)
+}
+
+// AllowLocalRepositories sets AllowLocalEnv for the test (and so restores it
+// when the test ends). It takes a test so that only a test can call it.
+func AllowLocalRepositories(t testEnv) {
+	t.Helper()
+	t.Setenv(AllowLocalEnv, "1")
+}
+
+// ParseRepositoryURL checks a repository URL: https, with a public host, no
+// credentials, query or fragment. The repository is fetched by a process that
+// runs as root on a cluster's overlay, so a host that names this machine or a
+// private network (localhost, a loopback, private, link-local or carrier-grade
+// NAT address) is refused: a cluster setting must not turn the agent into a
+// way to reach the services only that network can. A name is judged as written
+// here; the default client's connections are checked again at connect time
+// against the same ranges, so a name that resolves to a private address, and a
+// redirect to one, are refused at the socket.
 func ParseRepositoryURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
@@ -57,20 +92,48 @@ func ParseRepositoryURL(raw string) (*url.URL, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("release repository %q must not carry credentials, a query or a fragment", raw)
 	}
-	if !allowedScheme(u) {
-		return nil, fmt.Errorf("release repository %q must be https (http is allowed only to a loopback address)", raw)
+	public := publicHost(u.Hostname())
+	if u.Scheme != "https" && !plainHTTPAllowed(u.Scheme, public) {
+		return nil, fmt.Errorf("release repository %q must be https", raw)
+	}
+	if !public && !localAllowed() {
+		return nil, fmt.Errorf("release repository %q is on this machine or a private network; use the address the release repository is published at", raw)
 	}
 	return u, nil
 }
 
-func allowedScheme(u *url.URL) bool {
-	return u.Scheme == "https" || u.Scheme == "http" && onLoopback(u)
+// checkRedirectTarget refuses a redirect to plain http or to a host
+// ParseRepositoryURL would refuse. A redirect may carry a query (a CDN's signed
+// URL), which a repository URL may not.
+func checkRedirectTarget(u *url.URL) error {
+	public := publicHost(u.Hostname())
+	if u.Scheme != "https" && !plainHTTPAllowed(u.Scheme, public) {
+		return fmt.Errorf("redirect to %s is not https", u.Redacted())
+	}
+	if !public && !localAllowed() {
+		return fmt.Errorf("redirect to %s is to this machine or a private network", u.Redacted())
+	}
+	return nil
 }
 
-// onLoopback reports whether u names this machine.
-func onLoopback(u *url.URL) bool {
-	ip := net.ParseIP(u.Hostname())
-	return ip != nil && ip.IsLoopback() || u.Hostname() == "localhost"
+// plainHTTPAllowed is plain http to a local host, for a test that asked for one.
+func plainHTTPAllowed(scheme string, publicHost bool) bool {
+	return scheme == "http" && !publicHost && localAllowed()
+}
+
+// publicHost reports whether host, an IP literal or a name, is not this
+// machine or a private network (pkg/netguard.Reserved is the one list of those
+// ranges).
+func publicHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSuffix(host, "."))
+	if name == "localhost" || strings.HasSuffix(name, ".localhost") {
+		return false
+	}
+	ip := net.ParseIP(strings.SplitN(host, "%", 2)[0])
+	return ip == nil || !netguard.Reserved(ip)
 }
 
 // FetchMetadata downloads timestamp.json, snapshot.json, targets.json and
@@ -78,7 +141,7 @@ func onLoopback(u *url.URL) bool {
 func (r Repository) FetchMetadata(ctx context.Context, dir string, roles []string) error {
 	names := []string{TimestampFile, SnapshotFile, TargetsFile}
 	for _, role := range roles {
-		if err := validRoleName(role); err != nil {
+		if err := ValidRoleName(role); err != nil {
 			return err
 		}
 		names = append(names, role+".json")
@@ -167,13 +230,25 @@ func (r Repository) client() *http.Client {
 	if r.Client != nil {
 		return r.Client
 	}
-	return &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	return &http.Client{Transport: repositoryTransport(), CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= maxRedirects {
 			return errors.New("too many redirects")
 		}
-		if req.URL.Scheme != "https" && !(onLoopback(via[0].URL) && allowedScheme(req.URL)) {
-			return fmt.Errorf("redirect to %s is not https", req.URL.Redacted())
-		}
-		return nil
+		return checkRedirectTarget(req.URL)
 	}}
+}
+
+// repositoryTransport is the default transport with every connection checked
+// against the reserved ranges once its address is resolved (unless a test asked
+// for a local repository).
+func repositoryTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive, Control: func(network, address string, c syscall.RawConn) error {
+		if localAllowed() {
+			return nil
+		}
+		return netguard.GuardAddress(network, address, c)
+	}}
+	t.DialContext = dialer.DialContext
+	return t
 }

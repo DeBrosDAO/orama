@@ -452,8 +452,13 @@ manifest under the root adopted now; replacing the root withdraws every earlier
 endorsement. This is how the auto-update agent installs (see "Auto-update"). It
 needs a node that is already installed, since the archive trust anchor must exist.
 
-**Release repository.** A repository is a static directory served over HTTPS
-(plain HTTP only to a loopback address): `timestamp.json`, `snapshot.json`,
+**Release repository.** A repository is a static directory served over HTTPS at
+a public address (a host that is `localhost`, or an address on this machine or a
+private network, is refused by `ParseRepositoryURL` — cluster setting and
+`--release-repo` alike — and by the client's connection to it, which is checked
+against `pkg/netguard`'s reserved ranges once the name is resolved, redirects
+included; only a test sets `ORAMA_ALLOW_LOCAL_RELEASE_REPO=1` to serve one from
+loopback): `timestamp.json`, `snapshot.json`,
 `targets.json`, one `<channel>.json` per delegated channel (`stable`, `nightly`),
 and the files under `targets/`, such as
 `targets/stable/orama-0.3.1-linux-amd64.tar.gz`. A channel is a delegated targets
@@ -619,7 +624,11 @@ anchors before adding nodes.
 A cluster can keep itself on a release channel. Every node runs
 `orama-autoupdate.timer` (installed and enabled by install and upgrade; first run
 10 minutes after boot, then 15 minutes after each run ends). The service runs
-`orama node autoupdate run` as root. The agent does nothing, and says why, until
+`orama node autoupdate run` as root, with no new privileges, a private /tmp,
+no /home, read-only control groups, no personality changes, no setuid or setgid
+files, and only the inet, unix and netlink socket families. It is not under
+`ProtectSystem` or `ProtectKernelTunables`: the upgrade it runs writes
+`/opt/orama`, `/etc`, `/usr/local/bin` and sysctls. The agent does nothing, and says why, until
 the cluster stored a release repository and this node adopted a release root
 (`orama node trust add-root`, or an archive built with `--release-root`).
 
@@ -629,9 +638,9 @@ operator with `orama cluster settings set` (audited):
 | Setting | Values | Default |
 |---|---|---|
 | `auto-update` | `off`, `notify`, `auto` | `notify` |
-| `update-channel` | a channel name | `stable` |
+| `update-channel` | a channel name (1 to 32 of `a-z`, `0-9`, `-`; not `root`, `targets`, `snapshot` or `timestamp`, which are the repository's top-level roles) | `stable` |
 | `update-window` | `start-end` hours UTC (`22-4` wraps midnight), or empty | any hour |
-| `release-repo` | an https URL, or empty | none |
+| `release-repo` | an https URL at a public address, or empty | none |
 
 A stored value the agent cannot use fails the run and is reported; it is never
 read as the default. `max_parallel` is 1 and is not a setting.

@@ -88,6 +88,7 @@ func newRelease(t *testing.T) *release {
 	if err := os.WriteFile(r.rootOut, root, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	releaseverify.AllowLocalRepositories(t)
 	srv := httptest.NewServer(http.FileServer(http.Dir(r.dir)))
 	t.Cleanup(srv.Close)
 	r.url = srv.URL

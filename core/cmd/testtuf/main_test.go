@@ -14,6 +14,7 @@ import (
 
 func serve(t *testing.T, dir string) releaseverify.Repository {
 	t.Helper()
+	releaseverify.AllowLocalRepositories(t)
 	srv := httptest.NewServer(http.FileServer(http.Dir(filepath.Join(dir, repoSubdir))))
 	t.Cleanup(srv.Close)
 	return releaseverify.Repository{BaseURL: srv.URL}
