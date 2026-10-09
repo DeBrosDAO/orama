@@ -1316,8 +1316,11 @@ that generation (and has the pushed key at it). The v3 MAC (`X-Orama-Coordinatio
 process the request is for (read from the connection on the receiving side), so
 a stamp for the index gateway is not good at a namespace gateway on the same
 node; v2 stays accepted beside it while the fleet is mixed
-(`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances are removed in
-the next release. It proves cluster membership, not which node signed.
+(`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances (and the
+unnonced ACME and node-api stamps) are accepted, and written, only while some
+registered node reports a release older than 0.3.1 (`dns_nodes.node_version`,
+read by `auth.LegacyFloor`); once every node is past it a request with its
+newer stamp stripped is refused. They are removed in the next release. It proves cluster membership, not which node signed.
 Details: SECURITY.md, "Coordination MAC v2" and "Coordination MAC v3".
 
 The source IP is not consulted, and must not be: every public request arrives

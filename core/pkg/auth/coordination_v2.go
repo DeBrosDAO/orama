@@ -35,6 +35,8 @@ const (
 	// verify, for callers that do not need the body covered. It exists for the
 	// rolling upgrade from the build that signs nothing else, and is removed in
 	// the release after that one (docs/SECURITY.md, "Coordination MAC v2").
+	// Compiled in does not mean accepted: while a LegacyFloor is installed the
+	// v1 form is refused once every node of the cluster signs the newer ones.
 	AcceptLegacyCoordinationMAC = true
 
 	// coordinationNonceBytes is the size of the random nonce a signer draws.
@@ -114,11 +116,15 @@ func SignCoordination(key []byte, r *http.Request, now time.Time, audience strin
 	ts := now.Unix()
 
 	r.Header.Set(CoordinationNonceHeader, nonce)
-	setCoordinationStamp(key, r, CoordinationMACV2Header, ts,
-		coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts))
 	setCoordinationStamp(key, r, CoordinationMACV3Header, ts,
 		coordinationPayloadV3(r.Method, audience, requestPort(r), r.URL.Path, r.URL.RawQuery, body, nonce, ts))
-	signCoordinationV1(key, r, now)
+	// The older stamps are written only while some node may need them: beside
+	// the v3 stamp they are what a replayer strips the v3 stamp back to.
+	if legacyStampsAccepted() {
+		setCoordinationStamp(key, r, CoordinationMACV2Header, ts,
+			coordinationPayloadV2(r.Method, audience, r.URL.Path, r.URL.RawQuery, body, nonce, ts))
+		signCoordinationV1(key, r, now)
+	}
 	return nil
 }
 
@@ -181,9 +187,9 @@ func CheckCoordination(key []byte, r *http.Request, now time.Time, audience stri
 		return CoordinationV3, audience != "" && verifyCoordinationV3(key, r, now, audience)
 	}
 	if r.Header.Get(CoordinationMACV2Header) != "" {
-		return CoordinationV2, AcceptLegacyCoordinationV2 && audience != "" && verifyCoordinationV2(key, r, now, audience)
+		return CoordinationV2, AcceptLegacyCoordinationV2 && legacyStampsAccepted() && audience != "" && verifyCoordinationV2(key, r, now, audience)
 	}
-	if AcceptLegacyCoordinationMAC && verifyCoordinationV1(key, r, now) {
+	if AcceptLegacyCoordinationMAC && legacyStampsAccepted() && verifyCoordinationV1(key, r, now) {
 		return CoordinationV1, true
 	}
 	return 0, false

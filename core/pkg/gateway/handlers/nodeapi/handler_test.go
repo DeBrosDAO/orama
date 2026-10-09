@@ -445,7 +445,7 @@ func TestHeartbeat_aMatchedRowIsRegistered(t *testing.T) {
 	if !resp.Registered {
 		t.Error("a heartbeat that updated a row reported the node as unregistered")
 	}
-	if got := db.calls[0].args[2]; got != testNodeID {
+	if got := db.calls[0].args[3]; got != testNodeID {
 		t.Errorf("heartbeat updated %v, want the stamped node", got)
 	}
 	if !strings.Contains(db.calls[0].query, "status = 'active'") {
@@ -1005,5 +1005,68 @@ func TestNodeAPI_aMethodFromTheInternetIsNotFoundNotNotAllowed(t *testing.T) {
 		if w.Code != http.StatusNotFound {
 			t.Errorf("%s from the internet: status %d, want 404", method, w.Code)
 		}
+	}
+}
+
+// The release a node runs is recorded with its registration and refreshed by
+// its heartbeats: the stamp verifiers read the lowest of them to decide whether
+// any node still needs the older stamps.
+func TestRegister_recordsTheReleaseTheNodeRuns(t *testing.T) {
+	db := &recordingDB{affected: 1}
+	req := validRegistration()
+	req.Version = "0.3.1"
+	w := httptest.NewRecorder()
+	newHandler(db).HandleRegister(w, post(t, "/v1/internal/node/register", testNodeID, req))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
+	}
+	call := db.calls[0]
+	if !strings.Contains(call.query, "node_version") {
+		t.Fatalf("the registration does not write node_version: %q", call.query)
+	}
+	if got := call.args[len(call.args)-1]; got != "0.3.1" {
+		t.Errorf("node_version = %v, want 0.3.1", got)
+	}
+}
+
+func TestRegister_refusesAVersionThatIsNotOne(t *testing.T) {
+	for _, bad := range []string{"1.2.3\nroot", "../../x", strings.Repeat("9", 65), " 0.3.1", "0.3.1;drop"} {
+		db := &recordingDB{affected: 1}
+		req := validRegistration()
+		req.Version = bad
+		w := httptest.NewRecorder()
+		newHandler(db).HandleRegister(w, post(t, "/v1/internal/node/register", testNodeID, req))
+		if w.Code != http.StatusBadRequest || len(db.calls) != 0 {
+			t.Errorf("version %q: status %d, %d writes", bad, w.Code, len(db.calls))
+		}
+	}
+}
+
+func TestHeartbeat_refreshesTheReleaseTheNodeRuns(t *testing.T) {
+	db := &recordingDB{affected: 1}
+	w := httptest.NewRecorder()
+	newHandler(db).HandleHeartbeat(w, post(t, "/v1/internal/node/heartbeat", testNodeID, nodeapi.HeartbeatRequest{Version: "0.4.0"}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
+	}
+	if !strings.Contains(db.calls[0].query, "node_version") {
+		t.Fatalf("the heartbeat does not write node_version: %q", db.calls[0].query)
+	}
+	if got := db.calls[0].args[2]; got != "0.4.0" {
+		t.Errorf("node_version = %v, want 0.4.0", got)
+	}
+}
+
+// A heartbeat is a liveness refresh first: a bad version is left out of it, and
+// the node still counts as alive.
+func TestHeartbeat_aVersionThatIsNotOneIsLeftOutAndTheNodeStaysAlive(t *testing.T) {
+	db := &recordingDB{affected: 1}
+	w := httptest.NewRecorder()
+	newHandler(db).HandleHeartbeat(w, post(t, "/v1/internal/node/heartbeat", testNodeID, nodeapi.HeartbeatRequest{Version: "not a version"}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %q", w.Code, w.Body.String())
+	}
+	if got := db.calls[0].args[2]; got != "" {
+		t.Errorf("node_version written as %q, want the stored one left alone", got)
 	}
 }

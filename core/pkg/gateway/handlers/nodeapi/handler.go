@@ -55,6 +55,13 @@ const maxFieldLength = 256
 // than anything inside the cluster.
 var sshUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
+// versionPattern is what a release version looks like: dotted numbers, which a
+// release may follow with a suffix (a pre-release, a build). The column is read
+// by the stamp verifiers to tell whether any node is older than the release
+// that introduced the nonced stamps, so a value that is not a version is
+// refused rather than stored.
+var versionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
+
 // Handler serves the node self-registration endpoints.
 type Handler struct {
 	logger *zap.Logger
@@ -141,8 +148,8 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	const query = `
-		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, role, last_seen, created_at, updated_at)
-		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+		INSERT INTO dns_nodes (id, ip_address, internal_ip, region, status, ssh_user, environment, operator_wallet, role, node_version, last_seen, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
 		ON CONFLICT(id) DO UPDATE SET
 			ip_address = excluded.ip_address,
 			internal_ip = excluded.internal_ip,
@@ -152,11 +159,12 @@ func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 			environment = COALESCE(NULLIF(excluded.environment, ''), dns_nodes.environment),
 			operator_wallet = COALESCE(NULLIF(excluded.operator_wallet, ''), dns_nodes.operator_wallet),
 			role = COALESCE(NULLIF(excluded.role, ''), dns_nodes.role),
+			node_version = COALESCE(NULLIF(excluded.node_version, ''), dns_nodes.node_version),
 			last_seen = datetime('now'),
 			updated_at = datetime('now')`
 
 	if _, err := h.db.Exec(r.Context(), query,
-		nodeID, req.IPAddress, req.InternalIP, req.Region, req.SSHUser, req.Environment, req.OperatorWallet, req.Role,
+		nodeID, req.IPAddress, req.InternalIP, req.Region, req.SSHUser, req.Environment, req.OperatorWallet, req.Role, req.Version,
 	); err != nil {
 		h.logger.Error("node registration failed", zap.String("node_id", nodeID), zap.Error(err))
 		http.Error(w, "failed to record this node", http.StatusInternalServerError)
@@ -273,11 +281,20 @@ func (h *Handler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &beat)
 	}
+	version := beat.Version
+	if version != "" && !versionPattern.MatchString(version) {
+		// The heartbeat is a liveness refresh first; a version it cannot store
+		// is said so and left out, not a reason to stop the node counting as alive.
+		h.logger.Warn("a node heartbeat carried a version that is not one; keeping the stored version",
+			zap.String("node_id", nodeID))
+		version = ""
+	}
 	const query = `UPDATE dns_nodes SET status = 'active', last_seen = datetime('now'), updated_at = datetime('now'),
 		role = COALESCE(NULLIF(?, ''), role),
-		environment = COALESCE(NULLIF(?, ''), environment)
+		environment = COALESCE(NULLIF(?, ''), environment),
+		node_version = COALESCE(NULLIF(?, ''), node_version)
 		WHERE id = ?`
-	res, err := h.db.Exec(r.Context(), query, beat.Role, beat.Environment, nodeID)
+	res, err := h.db.Exec(r.Context(), query, beat.Role, beat.Environment, version, nodeID)
 	if err != nil {
 		h.logger.Error("node heartbeat failed", zap.String("node_id", nodeID), zap.Error(err))
 		http.Error(w, "failed to record this heartbeat", http.StatusInternalServerError)
@@ -429,6 +446,9 @@ func validate(r nodeapi.RegisterRequest) error {
 	}
 	if r.SSHUser != "" && !sshUserPattern.MatchString(r.SSHUser) {
 		return fmt.Errorf("ssh_user must be a POSIX login name")
+	}
+	if r.Version != "" && !versionPattern.MatchString(r.Version) {
+		return fmt.Errorf("version is not a release version")
 	}
 	for name, value := range map[string]string{
 		"region":          r.Region,

@@ -35,6 +35,9 @@ type RegisterRequest struct {
 	// Role is how this node serves the cluster: "node", "nameserver", or
 	// "nameserver-nsN". Empty leaves the stored role alone.
 	Role string `json:"role,omitempty"`
+	// Version is the release this node runs (pkg/version). Empty leaves the
+	// stored version alone.
+	Version string `json:"version,omitempty"`
 }
 
 // HeartbeatRequest refreshes liveness and, when set, the role and environment
@@ -42,6 +45,9 @@ type RegisterRequest struct {
 type HeartbeatRequest struct {
 	Role        string `json:"role,omitempty"`
 	Environment string `json:"environment,omitempty"`
+	// Version is the release this node runs, refreshed with every heartbeat so
+	// that an upgrade shows in the registry without a re-registration.
+	Version string `json:"version,omitempty"`
 }
 
 // HeartbeatResponse tells a node whether the row it is keeping alive exists.
