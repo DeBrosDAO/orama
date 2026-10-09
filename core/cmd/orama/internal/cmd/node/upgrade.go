@@ -42,7 +42,7 @@ func init() {
 	f := upgradeCmd.Flags()
 	f.BoolVar(&upgradeFlags.Force, "force", false, "Reconfigure all settings")
 	f.BoolVar(&upgradeFlags.RestartServices, "restart", false, "Automatically restart services after upgrade")
-	f.BoolVar(&upgradeFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
+	f.BoolVar(&upgradeFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (disk, RAM, CPU)")
 	f.StringVar(&upgradeFlags.Env, "env", "", "Target environment for remote rolling upgrade (devnet, testnet)")
 	f.StringVar(&upgradeFlags.NodeFilter, "node", "", "Upgrade a single node IP only")
 	f.BoolVar(&upgradeFlags.Yes, "yes", false, "Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted)")

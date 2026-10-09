@@ -50,7 +50,7 @@ var repairCmd = &cobra.Command{
 var enableCmd = &cobra.Command{
 	Use:   "enable <feature>",
 	Short: "Enable a feature for a namespace",
-	Long:  "Enable a feature for a namespace. Supported features: webrtc",
+	Long:  "Enable a feature for a namespace. Supported features: webrtc, webrtc-stealth",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")
@@ -61,7 +61,7 @@ var enableCmd = &cobra.Command{
 var disableCmd = &cobra.Command{
 	Use:   "disable <feature>",
 	Short: "Disable a feature for a namespace",
-	Long:  "Disable a feature for a namespace. Supported features: webrtc",
+	Long:  "Disable a feature for a namespace. Supported features: webrtc, webrtc-stealth",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ns, _ := cmd.Flags().GetString("namespace")

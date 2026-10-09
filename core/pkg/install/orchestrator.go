@@ -171,7 +171,7 @@ func (ps *ProductionSetup) Phase1CheckPrerequisites() error {
 
 	// Check system resources
 	if ps.skipResourceChecks {
-		ps.logf("  ⚠️  Skipping system resource checks (disk, RAM, CPU) due to --ignore-resource-checks flag")
+		ps.logf("  ⚠️  Skipping system resource checks (disk, RAM, CPU) due to --skip-checks")
 	} else {
 		if err := ps.resourceChecker.CheckDiskSpace(ps.oramaHome); err != nil {
 			ps.logf("  ❌ %v", err)

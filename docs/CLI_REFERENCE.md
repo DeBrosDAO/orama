@@ -1095,7 +1095,8 @@ orama deploy
 ```
 
 Deploy static sites, Next.js apps, Go backends, and Node.js backends.
-If a deployment with the same name exists, it will be updated.
+A name that is already deployed in the namespace is refused (409) unless you
+redeploy it as an update with --update.
 
 Subcommands: `go`, `nextjs`, `nodejs`, `static`
 
@@ -2786,7 +2787,7 @@ Disable a feature for a namespace
 orama namespace disable <feature> [flags]
 ```
 
-Disable a feature for a namespace. Supported features: webrtc
+Disable a feature for a namespace. Supported features: webrtc, webrtc-stealth
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -2800,7 +2801,7 @@ Enable a feature for a namespace
 orama namespace enable <feature> [flags]
 ```
 
-Enable a feature for a namespace. Supported features: webrtc
+Enable a feature for a namespace. Supported features: webrtc, webrtc-stealth
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -3352,7 +3353,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
 | `--ssh-user` | — | SSH user for remote management |
 | `--token` | — | Invite from 'orama invite'; it carries the gateway to join and the certificate to pin |
@@ -3966,7 +3967,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--node` | — | Upgrade a single node IP only |
 | `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
 
 ### orama node wipe

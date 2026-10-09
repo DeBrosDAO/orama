@@ -40,7 +40,7 @@ func init() {
 	f.StringVar(&installFlags.BaseDomain, "base-domain", "", "Base domain for deployment routing (e.g., example.com)")
 	f.BoolVar(&installFlags.Force, "force", false, "Force reconfiguration even if already installed")
 	f.BoolVar(&installFlags.DryRun, "dry-run", false, "Show what would be done without making changes")
-	f.BoolVar(&installFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (RAM/CPU)")
+	f.BoolVar(&installFlags.SkipChecks, "skip-checks", false, "Skip minimum resource checks (disk, RAM, CPU)")
 	f.BoolVar(&installFlags.Nameserver, "nameserver", false, "Make this node a nameserver (runs CoreDNS + Caddy)")
 	f.StringVar(&installFlags.JoinAddress, "join", "",
 		"Gateway to join; the invite carries this, so it is only needed to override it")
