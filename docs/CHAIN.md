@@ -3385,8 +3385,8 @@ Binaries enter the layout through `orama global install` (the genesis binary, ve
   upgrade height); the sticky bit stops it removing or renaming root's `genesis/`, `upgrades/`
   and staging directories. Everything below `genesis/` and `upgrades/` is root-owned 0755.
 
-Nothing stages automatically: a validator's `autoupdate` role refuses `auto`, and its operator
-runs `stage-oramad` for every upgrade.
+Nothing stages automatically: a validator's `autoupdate` role never obeys `auto` (it records the release as skipped and
+tells the operator to upgrade by hand), and its operator runs `stage-oramad` for every upgrade.
 
 ## The stagenet deploy script
 

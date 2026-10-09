@@ -30,8 +30,9 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
-A validator (--role validator) is never auto: the mode is refused, and chain
-upgrades are staged explicitly with 'orama global stage-oramad'.`,
+A validator (--role validator) is never auto: on auto the decision is skip, with
+the reason, and the command exits 0; chain upgrades are staged explicitly with
+'orama global stage-oramad'.`,
 	Args: cobra.NoArgs,
 	RunE: runAutoupdate,
 }
