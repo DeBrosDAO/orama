@@ -1312,7 +1312,8 @@ A re-encrypt whose root is older than the gateway's, at its generation with a
 previous root it does not hold, or at its generation with a lower write level is
 refused; one more than one generation ahead means the gateway missed a fan-out,
 and the gateway takes the registry's root instead when the registry is at least
-that generation (and has the pushed key at it). The v3 MAC (`X-Orama-Coordination-MAC-V3`) adds the port of the
+that generation (and has the pushed key at it), unless that root would lower the write
+level the gateway is at, or the pushed root's at the same generation. The v3 MAC (`X-Orama-Coordination-MAC-V3`) adds the port of the
 process the request is for (read from the connection on the receiving side), so
 a stamp for the index gateway is not good at a namespace gateway on the same
 node; v2 stays accepted beside it while the fleet is mixed

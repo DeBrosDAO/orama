@@ -91,7 +91,12 @@ func lowersWriteLevel(current, next Root) bool {
 // later one for ever (a push only ever carries the generation just made); for
 // that case the registry, which is the source of truth and is written before
 // any push, says what the root is. The registry's root is adopted when it is
-// at least the pushed generation, and, at that generation, the pushed key.
+// at least the pushed generation, and, at that generation, the pushed key. It
+// must not lower the write level either, as CheckSuccessor does not allow a
+// pushed one to: a level only goes up, so a registry root that is below the
+// level this gateway is at (or, at the pushed generation, below the pushed
+// root's) is a stale or replayed copy, and adopting it would have this
+// gateway write what the cluster's readers have moved past.
 func ResolveSuccessor(ctx context.Context, store Store, current, next Root) (Root, error) {
 	err := CheckSuccessor(current, next)
 	if !errors.Is(err, ErrGenerationGap) {
@@ -117,6 +122,10 @@ func ResolveSuccessor(ctx context.Context, store Store, current, next Root) (Roo
 		return Root{}, fmt.Errorf("the pushed encryption root is generation %d and the registry's is %d: %w", pushed, held, err)
 	case held == pushed && registry.CurrentIKM != next.CurrentIKM:
 		return Root{}, fmt.Errorf("the pushed encryption root and the registry's differ at generation %d: %w", held, err)
+	case lowersWriteLevel(current, registry):
+		return Root{}, fmt.Errorf("refusing the registry's encryption root at generation %d: it would lower the write level this gateway is at: %w", held, err)
+	case held == pushed && lowersWriteLevel(next, registry):
+		return Root{}, fmt.Errorf("refusing the registry's encryption root at generation %d: it would lower the write level of the pushed root: %w", held, err)
 	}
 	return registry, nil
 }

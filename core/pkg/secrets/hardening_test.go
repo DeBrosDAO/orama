@@ -276,3 +276,45 @@ func TestSeal_aHolderThatCannotMakeKeysIsAnErrorNotTheStaticKey(t *testing.T) {
 		t.Fatalf("Seal under a root: %q, %v", sealed, err)
 	}
 }
+
+// A level only goes up. The registry's root, adopted after a gap, must not put
+// a gateway back on a lower write level than the one it is at, or than the
+// pushed root carries at the generation they share.
+func TestResolveSuccessor_aRegistryRootThatLowersTheWriteLevelIsRefused(t *testing.T) {
+	ctx := context.Background()
+	bound := func(id, ikm string) Root {
+		return Root{CurrentID: id, CurrentIKM: ikm, WriteVersioned: true, WriteBound: true}
+	}
+	legacy := func(id, ikm string) Root { return Root{CurrentID: id, CurrentIKM: ikm} }
+	versioned := func(id, ikm string) Root { return Root{CurrentID: id, CurrentIKM: ikm, WriteVersioned: true} }
+
+	for _, tc := range []struct {
+		name                    string
+		held, pushed, inStorage Root
+		wantErr                 bool
+	}{
+		{"below the gateway's own level", bound("3", "gen-3"), bound("5", "gen-5"), legacy("5", "gen-5"), true},
+		{"below the gateway's own level, ahead of the push", bound("3", "gen-3"), bound("5", "gen-5"), versioned("6", "gen-6"), true},
+		{"below the pushed root's at the same generation", legacy("3", "gen-3"), bound("5", "gen-5"), versioned("5", "gen-5"), true},
+		{"the same level", bound("3", "gen-3"), bound("5", "gen-5"), bound("5", "gen-5"), false},
+		{"a higher level than the push, ahead of it", legacy("3", "gen-3"), versioned("5", "gen-5"), bound("6", "gen-6"), false},
+		{"enabling at the same generation", legacy("3", "gen-3"), versioned("5", "gen-5"), bound("5", "gen-5"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := registryStore(t)
+			if err := saveToRegistry(ctx, store, tc.inStorage); err != nil {
+				t.Fatal(err)
+			}
+			got, err := ResolveSuccessor(ctx, store, tc.held, tc.pushed)
+			if tc.wantErr {
+				if !errors.Is(err, ErrGenerationGap) || !strings.Contains(err.Error(), "write level") {
+					t.Fatalf("got %+v, err = %v; want a refusal that says why", got, err)
+				}
+				return
+			}
+			if err != nil || got.CurrentID != tc.inStorage.CurrentID {
+				t.Fatalf("got %+v, err = %v", got, err)
+			}
+		})
+	}
+}
