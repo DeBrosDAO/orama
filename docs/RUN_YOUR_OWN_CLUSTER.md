@@ -14,7 +14,8 @@ must be one of debian 12, 13; ubuntu 22.04, 24.04, 26.04, with at least 2 CPU
 cores (`runtime.NumCPU`), 2GB of RAM and 10GB free disk. Those floors are
 `MinCPUCores`, `MinRAMBytes` and `MinFreeDiskBytes`. The RAM and disk checks
 count 1024³ bytes and the error text calls that GB. The archive you install
-must match the machine: amd64, arm64 or arm.
+must match the machine: `orama build --arch` builds amd64 (the default) or arm64, and
+nothing else.
 
 **A domain.** Genesis records the environment gateway as `https://<base-domain>`.
 That name has to reach the cluster, which means NS records and glue for its

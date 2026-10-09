@@ -162,26 +162,17 @@ ws.onmessage = (event) => {
 };
 ```
 
-### 4. Room Management (REST)
+### 4. Rooms (REST)
+
+Rooms are not created or closed over REST. A room exists once the first peer joins it
+over the signalling WebSocket, and an empty room is cleaned up by the SFU after 60
+seconds (`emptyRoomTTL`). The only room endpoint is a read-only health read:
 
 ```javascript
-const headers = { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
+const headers = { Authorization: `Bearer ${accessToken}` };
 
-// Create room
-await fetch('/v1/webrtc/rooms', {
-  method: 'POST',
-  headers,
-  body: JSON.stringify({ room_id: 'my-room' })
-});
-
-// List rooms
-const rooms = await fetch('/v1/webrtc/rooms', { headers });
-
-// Close room
-await fetch('/v1/webrtc/rooms?room_id=my-room', {
-  method: 'DELETE',
-  headers
-});
+// SFU health: status and room count (see "Room Placement" for which SFU answers)
+const health = await fetch('/v1/webrtc/rooms', { headers });
 ```
 
 ## API Reference
@@ -193,9 +184,7 @@ await fetch('/v1/webrtc/rooms?room_id=my-room', {
 | POST | `/v1/webrtc/turn/credentials` | JWT/API key | Get TURN relay credentials |
 | GET/WS | `/v1/webrtc/signal` | JWT/API key | WebSocket signaling |
 | GET, PUT | `/v1/webrtc/config` | Namespace settings grant (owner, admin) | The namespace's WebRTC policy: `{"require_admission": bool}` (see "Admission") |
-| GET | `/v1/webrtc/rooms` | JWT/API key | List rooms |
-| POST | `/v1/webrtc/rooms` | JWT/API key (owner) | Create room |
-| DELETE | `/v1/webrtc/rooms` | JWT/API key (owner) | Close room |
+| GET | `/v1/webrtc/rooms` | Wallet token or app workload token | The SFU's health JSON (status, room count); any other method is a 405 |
 
 ### Signaling Messages
 
@@ -822,7 +811,7 @@ systemctl status orama-turn
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
 - **A logged-in user, not a key**: every WebRTC endpoint requires a wallet token, or a deployed app's own workload token (`Authorization: Bearer`). An API key alone is refused, which is what makes a runtime key extracted from an app bundle worthless here. On the signalling WebSocket the token goes in `?jwt=`, because a browser cannot set a header on an upgrade (`?token=` is read as an API key, which these endpoints refuse).
 - **Identity and admission**: a peer is the user the gateway authenticated, carried to the SFU in a short-lived ticket signed with a key derived from the namespace's TURN secret; a namespace may admit only the users its functions admitted (see "Identity, admission and moderation").
-- **Room management**: Creating/closing rooms requires namespace ownership.
+- **Room lifecycle**: there is no create/close API. A room is created by its first join (which needs an authenticated user and, if the namespace requires admission, an admitted one) and removed by the SFU 60 seconds after it empties.
 - **SFU on WireGuard only**: SFU binds to 10.0.0.x, never 0.0.0.0. Only reachable via TURN relay.
 - **Permissions-Policy**: `camera=(self), microphone=(self)` — only same-origin can access media devices.
 

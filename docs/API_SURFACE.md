@@ -152,7 +152,7 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | Route | Owner | Notes |
 |-------|-------|-------|
 | `/v1/webrtc/config` | direct | `GET` and `PUT {"require_admission": bool}`: the namespace's WebRTC policy. With it on, a room admits only users the namespace's functions admitted (`webrtc_admit`). A credential that may change the namespace's settings; docs/WEBRTC.md#admission. |
-| `/v1/webrtc/rooms` | direct | Room listing for the SFU. |
+| `/v1/webrtc/rooms` | direct | GET only: the SFU health JSON (status, room count). |
 | `/v1/webrtc/signal` | direct | SFU signalling. |
 | `/v1/webrtc/turn/credentials` | direct | Short-lived TURN credentials. Consumed by a WebRTC stack, not by this SDK; the SDK would only pass them through. |
 

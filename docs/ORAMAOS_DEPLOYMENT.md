@@ -90,13 +90,19 @@ orama monitor report --env <env>
 
 The first OramaOS node in a cluster is the **genesis node**. It needs a special path because there are no peers yet for Shamir key distribution. **Most of this path is not yet implemented.**
 
-What works today: when Shamir reconstruction fails after a reboot (genesis node, or peers offline), the agent falls back to **genesis unlock mode** — it starts an HTTP server on the WireGuard interface (port 9998) and waits for the operator to supply the raw LUKS key:
+What works today: when Shamir reconstruction fails after a reboot (genesis node, or peers offline), the agent falls back to **genesis unlock mode** — it starts an HTTP server on port 9998, bound to **every interface** (`:9998`, not only the WireGuard address), and waits for the operator to supply the raw LUKS key:
 
 ```bash
 curl -X POST "http://<wg-ip>:9998/v1/agent/unlock" \
   -H "Content-Type: application/json" \
   -d '{"key":"<base64-encoded 32-byte LUKS key>"}'
 ```
+
+> **Known issue (bugboard #89):** the unlock server listens on all interfaces and
+> takes the LUKS key with no authentication, so while a node waits in genesis
+> unlock mode it is reachable on its public address too. Until it is bound to the
+> overlay address, block port 9998 from the internet in the provider's firewall
+> (Hetzner, AWS security groups), and send the key over WireGuard.
 
 Enrollment is authenticated by the registration code the node prints on its
 console. The code is **not** served over the network — a `GET` on port 9999
@@ -157,7 +163,7 @@ curl -X POST "https://gateway.example.com/v1/node/leave" \
   -d '{"node_id":"<id>"}'
 ```
 
-The Gateway proxies these requests to the agent over WireGuard (port 9998). The agent is never directly accessible from the public internet.
+The Gateway proxies these requests to the agent over WireGuard (port 9998). The command receiver binds only the node's overlay address and refuses any request without the node's agent token. The genesis unlock server on the same port is the exception: it binds every interface (see the known issue under [Genesis Node](#genesis-node)), so block 9998 at the provider firewall.
 
 ## OS Updates
 
@@ -222,7 +228,7 @@ The node boots but enrollment never completes.
 
 **Check:** Can you reach `http://<vps-ip>:9999/` from your machine? If not, the VPS firewall may be blocking port 9999.
 
-**Fix:** Ensure port 9999 is open in the VPS provider's firewall. OramaOS opens it automatically via its internal firewall, but external provider firewalls (Hetzner, AWS security groups) must be configured separately.
+**Fix:** Ensure port 9999 is open in the VPS provider's firewall (Hetzner, AWS security groups). The enrollment server binds `:9999` on every interface and OramaOS configures no firewall of its own, so nothing else filters it.
 
 ### LUKS unlock fails (not enough peers)
 After reboot, the node can't reconstruct its LUKS key.

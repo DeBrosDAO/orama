@@ -687,7 +687,7 @@ key the previous page's `pagination.next_key`). A transaction the chain refuses,
 **Building.** `buildSignDoc` produces the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one
 signer; `signTx` has an `OramaSigner` sign it and checks the signature before it is used;
 `verifyTx` verifies an encoded transaction the way the chain does. The message set is `MSG`:
-every Orama message (53) plus bank send, staking, unjail, reward withdrawal and the two CosmWasm
+every Orama message (59) plus bank send, staking, unjail, reward withdrawal and the two CosmWasm
 messages a wallet signs. The fee is always norama.
 
 **Signers.** `OramaSigner` is `{ address, publicKey, signDirect(signDoc) }`. The builder hands

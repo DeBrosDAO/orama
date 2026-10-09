@@ -1076,9 +1076,9 @@ Reading cluster state from 3 nodes...
 
 Rolling upgrade plan (3 nodes, 3 nameservers):
 
-  1. 10.0.0.1         nameserver-ns1         follower (nameserver — spaced so the zone keeps answering)
-  2. 10.0.0.3         nameserver-ns3         follower (nameserver — spaced so the zone keeps answering)
-  3. 10.0.0.2         nameserver-ns2         leader — last, after leadership transfer
+  1. 203.0.113.1      nameserver             follower (nameserver — spaced so the zone keeps answering)
+  2. 203.0.113.3      nameserver             follower (nameserver — spaced so the zone keeps answering)
+  3. 203.0.113.2      nameserver             leader — last, after leadership transfer
 
 Each node is upgraded only after the previous one reports Leader or Follower,
 an applied index caught up to the leader, and a gateway serving /health.
@@ -1549,7 +1549,7 @@ With no `--env`, push targets the active environment (`orama env current`).
 | `--token <token>` | Invite token for joining (from `orama node invite` on existing node) |
 | `--force` | Force reconfiguration even if already installed |
 | `--skip-firewall` | Skip UFW firewall setup |
-| `--skip-checks` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--operator-wallet <addr>` | Operator wallet; required for a genesis install, where it becomes the archive trust anchor |
 | `--remote` | Install the machine at `--vps-ip` over SSH |
 | `--archive <path>` | With `--remote`: the build to upload, verified locally against `--operator-wallet` first |
@@ -1833,7 +1833,7 @@ See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.
 
 Before running `orama node install` on a VPS, ensure:
 
-1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer checks for port conflicts and shows which process is using each port, but it's easier to stop Docker first:
+1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer does not check for port conflicts, so a service that already holds one of them fails when its unit starts. Stop Docker first:
    ```bash
    sudo systemctl stop docker docker.socket
    sudo systemctl disable docker docker.socket
@@ -1854,7 +1854,7 @@ If a node partially joins the cluster (registers in RQLite's Raft but then fails
 
 **Solution:** Do a full clean reinstall of all affected nodes. Use [CLEAN_NODE.md](CLEAN_NODE.md) to reset each node, then reinstall starting from the genesis node.
 
-**Prevention:** Always ensure a joining node can complete the full installation before it joins. The installer validates port availability upfront to catch conflicts early.
+**Prevention:** Always ensure a joining node can complete the full installation before it joins. The installer does not check port availability, so check the node's ports yourself before it joins.
 
 ## Debugging Production Issues
 

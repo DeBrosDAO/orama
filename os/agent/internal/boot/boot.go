@@ -192,8 +192,9 @@ func (a *Agent) standardBoot() error {
 	return a.startServices()
 }
 
-// waitForGenesisUnlock starts a temporary HTTP server on the WireGuard interface
-// (port 9998) that accepts a LUKS key from the operator.
+// waitForGenesisUnlock starts a temporary HTTP server on every interface
+// (":9998", not only the WireGuard address; bugboard #89) that accepts a LUKS
+// key from the operator.
 // The operator sends: POST /v1/agent/unlock with {"key":"<base64-luks-key>"}
 func (a *Agent) waitForGenesisUnlock() ([]byte, error) {
 	keyCh := make(chan []byte, 1)
