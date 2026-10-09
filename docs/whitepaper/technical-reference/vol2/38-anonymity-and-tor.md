@@ -113,7 +113,7 @@ What differs from the tunnel:
 | Pool | 24 per user, 512 per node | 128 streams per node, 4 per address, apart from the tunnels |
 | Rate limit | the gateway's general limits | 30 streams per minute per address with a burst of 10 (`core/pkg/gateway/rate_limiter.go`) |
 | Caps | 256 MiB each way, 30 min | 64 MiB each way, 5 min |
-| Logging | access log and `request_logs` | none (route policy `LogNone`): no row, no access-log line, no size or latency metric |
+| Logging | none (route policy `LogNone`): no `request_logs` row, no access-log line; the handler logs "tunnel opened", "tunnel closed" with byte counts and duration, and the class of a failed dial | none (route policy `LogNone`): no row, no access-log line, no size or latency metric |
 | Served by | the gateway asked | the index gateway even for a namespace host (`MainGateway`) |
 
 The destination check is exact. `normalizeRelayHost` accepts only ASCII letters, digits, hyphens and dots, removes one trailing dot, lowercases, rejects an IP literal, and enforces the 253 and 63 character DNS limits and no label starting or ending in a hyphen. It deliberately avoids Unicode case folding, because U+212A (the Kelvin sign) lowercases to an ASCII `k` and the check and the resolver at the exit would then disagree. The allowlist comparison is on whole labels: `evil-base.example` is not under `base.example`, and neither is `ns-x.base.example.attacker.tld`. The list is `relay_allowed_suffixes` in `node.yaml` (`http_gateway.relay_allowed_suffixes`) or the gateway YAML, defaulting to the cluster's base domain when empty; a suffix that is itself a public suffix is refused at gateway start. The dial is made on the normalised string, exactly as it was checked.

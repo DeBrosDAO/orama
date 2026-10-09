@@ -103,3 +103,27 @@ func TestRoutePolicy_relayLevels(t *testing.T) {
 		t.Errorf("get level = %v", got)
 	}
 }
+
+// The anonymity routes keep no per-request record of the caller, as the relay
+// does not: the request_logs row would pair the address and the API key id
+// with a time, a size and a duration. They still need a wallet session.
+func TestRoutePolicy_anonymityRoutesKeepNoRequestRecord(t *testing.T) {
+	for _, path := range []string{"/v1/proxy/anon", "/v1/proxy/tunnel"} {
+		p := policyOf(http.MethodPost, path)
+		if p.RequestLog != routepolicy.LogNone {
+			t.Errorf("%s request log level = %v, want LogNone", path, p.RequestLog)
+		}
+		if p.Access.Anonymous() {
+			t.Errorf("%s became anonymous", path)
+		}
+
+		g, logs := loggedGateway(t)
+		serveLogged(g, path)
+		if n := len(g.logBatcher.entries); n != 0 {
+			t.Errorf("%s left %d request_logs rows", path, n)
+		}
+		for _, e := range logs.All() {
+			t.Errorf("%s wrote an access-log line %q %v", path, e.Message, e.Context)
+		}
+	}
+}

@@ -403,8 +403,14 @@ func buildRoutePolicies() *routepolicy.Table {
 	t.Add(relayedDownload, "/v1/storage/relayed/")
 	t.Add(dataPlane(auth.DomainWebRTC, auth.ActionRead, true, routepolicy.PrincipalToken),
 		"/v1/webrtc/turn/credentials", "/v1/webrtc/signal", "/v1/webrtc/rooms")
-	t.Add(dataPlane(auth.DomainProxy, auth.ActionWrite, true, routepolicy.WalletToken),
-		"/v1/proxy/anon", "/v1/proxy/tunnel")
+	// The anonymity routes keep no record of who used them: no request_logs row
+	// (which would pair the caller's address and API key id with the time, size
+	// and duration of a request) and no access-log line. The handlers log what
+	// the operator needs without the destination or the caller, and the request
+	// metrics count the request by status.
+	anonymised := dataPlane(auth.DomainProxy, auth.ActionWrite, true, routepolicy.WalletToken)
+	anonymised.RequestLog = routepolicy.LogNone
+	t.Add(anonymised, "/v1/proxy/anon", "/v1/proxy/tunnel")
 	// The relay (bugboard #266) is the one proxy route with no credential: a
 	// destination-pinned tunnel any client may open, rate-limited by address.
 	// MainGateway: the Tor client is the node's, whatever host was asked for.

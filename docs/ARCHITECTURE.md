@@ -1399,7 +1399,8 @@ was `anyone` before Tor replaced the Anyone network.
 - `POST /v1/proxy/anon` - Route a single HTTP request through Tor.
   The gateway performs the request, so it necessarily sees the URL, headers and
   body in cleartext.
-  Its log does not keep them: one line per request with the method, status,
+  Its route policy is `LogNone` (no `request_logs` row, no access-log line), and
+  its own log does not keep them: one line per request with the method, status,
   response size and duration, or the method, duration and a class of failure
   (`timeout`, `canceled`, `transport`). See "Logging of anonymised requests" in
   `docs/SECURITY.md`.

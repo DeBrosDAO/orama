@@ -353,6 +353,17 @@ and a failed dial with the class of the failure; never the destination host or
 port, the caller, or the error text. `/v1/proxy/relay` logs nothing about a
 stream.
 
+What the gateway stores about the caller of these routes: nothing per request.
+`/v1/proxy/anon`, `/v1/proxy/tunnel` and `/v1/proxy/relay` have route policy
+`LogNone`, so they leave no `request_logs` row (which would hold the client
+address, the API key id, the status, the size and the duration) and no
+access-log line; the request metrics count them by status, with no size and no
+latency. Nothing in the gateway reads `request_logs` for billing or quotas. The
+tunnel's wallet subject is used to enforce the grant and the per-user limits and
+to derive the circuit credential, and is held in memory for the life of the
+tunnel only. This is the gateway's own record; it says nothing about the logs of
+anything in front of it.
+
 ### Response caching
 
 Every `/v1/*` response carries `Cache-Control: no-store` and `Pragma: no-cache`
