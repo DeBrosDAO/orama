@@ -2064,6 +2064,9 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 		if g.proxyCrossNodeWithReplicas(w, r, deployment) {
 			return
 		}
+		if r.Context().Err() != nil {
+			return // The client left: not a gateway error, and nobody to answer.
+		}
 		g.logger.Error("Cross-node proxy failed",
 			zap.String("deployment", deployment.Name),
 			zap.String("home_node", deployment.HomeNodeID),
@@ -2128,6 +2131,9 @@ serveLocal:
 	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: g.proxyTransport}
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // The client left: not a gateway error, and nobody to answer.
+		}
 		g.logger.ComponentError(logging.ComponentGeneral, "local proxy request failed",
 			zap.String("target", target),
 			zap.String("error", httputil.FailureReason(err)),
@@ -2291,6 +2297,9 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		recordHopError(cb, r, tracked, err)
+		if r.Context().Err() != nil {
+			return false // The client left: not a gateway error.
+		}
 		g.logger.Error("Cross-node proxy request failed",
 			zap.String("target_ip", homeIP),
 			zap.String("host", r.Host),
@@ -2423,6 +2432,9 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 	resp, err := httpClient.Do(proxyReq)
 	if err != nil {
 		recordHopError(cb, r, tracked, err)
+		if r.Context().Err() != nil {
+			return false // The client left: not a gateway error.
+		}
 		g.logger.Warn("Replica proxy request failed",
 			zap.String("target_ip", nodeIP),
 			zap.String("error", httputil.FailureReason(err)),
