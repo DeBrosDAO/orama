@@ -1962,7 +1962,7 @@ What is not indexed:
   `/index/v1/status`.
 - `orama global install --services chain,indexer` creates the `orama-indexer`
   user and writes and enables the unit; without it `/v1/chain/index/…` answers
-  `502`. The indexer opens no firewall port. On a state-synced node, set `--start-height` to a height
+  `503` ("The gateway's chain proxy"). The indexer opens no firewall port. On a state-synced node, set `--start-height` to a height
   the node keeps.
 - Shielded activity beyond its public transaction bytes and events.
 
@@ -2400,6 +2400,16 @@ gateway answers; each asks its own node) has indexed it:
 The validator list takes no query (`400`). On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
 characters) and the indexer checks its checksum. A route that takes no query refuses one.
 What the indexer holds, and what it does not, is under "Chain indexer" above.
+
+Each gateway asks the indexer of its own machine, so the indexer must run on every node whose gateway a client can
+reach (the fleet e2e deploy and the stagenet deploy install one beside every validator). On a machine whose unit directory has
+no `orama-global-indexer.service` (a cluster node with no global services, or global services installed without `indexer`)
+a valid index route answers `503` with `Retry-After: 60` and the text `this node runs no chain indexer; install it with orama
+global install --services chain,indexer`; the proxy does not call an address that nothing listens on (on a co-located
+machine the namespace firewall drops it, which would be a ten-second wait). The check is made on every request, so an
+install is used without restarting the gateway; it is skipped when `ORAMA_CHAIN_INDEX_URL` names an indexer. A path that
+is no route is still `404` and a wrong method `405`. An indexer that is installed and does not answer is `502 chain
+unreachable`, like any other upstream that is down.
 
 **Module queries.** The gateway reaches the Orama modules through `abci_query`, its one HTTP route to
 them (they are also on the node's own REST API, see "Module queries over REST" below). `GET /v1/chain/query/<package.Service>/<Method>`, for example

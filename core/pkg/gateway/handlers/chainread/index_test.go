@@ -168,3 +168,57 @@ func TestIndexProxy_refusesOtherMethodsAndEncodedPaths(t *testing.T) {
 		t.Fatalf("indexer was called with %v", got)
 	}
 }
+
+func TestIndexProxy_aMachineWithNoIndexerAnswers503WithAHint(t *testing.T) {
+	up := &indexUpstream{}
+	srv := up.serve(t)
+	installed := false
+	p, err := New(Config{RPCURL: "http://127.0.0.1:9", RESTURL: "http://127.0.0.1:9", IndexURL: srv.URL, IndexInstalled: func() bool { return installed }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	rec := get("/v1/chain/index/status")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("no indexer installed: HTTP %d, want 503", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "no chain indexer") || !strings.Contains(body, "--services chain,indexer") {
+		t.Errorf("body %q names no cause and no remedy", body)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Errorf("no Retry-After on the 503")
+	}
+	if len(up.seen()) != 0 {
+		t.Errorf("the proxy called an indexer that is not installed: %v", up.seen())
+	}
+	// A path that is no index route is still a 404, and a wrong method a 405: only a real route
+	// reports the missing indexer.
+	if rec := get("/v1/chain/index/nonsense"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown index route: HTTP %d, want 404", rec.Code)
+	}
+	// The unit installed later is used without a restart.
+	installed = true
+	if rec := get("/v1/chain/index/status"); rec.Code != http.StatusOK {
+		t.Errorf("after the install: HTTP %d, want 200", rec.Code)
+	}
+}
+
+func TestIndexProxy_aDeadIndexerOfAnInstalledMachineStaysABadGateway(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := srv.URL
+	srv.Close()
+	p, err := New(Config{RPCURL: "http://127.0.0.1:9", RESTURL: "http://127.0.0.1:9", IndexURL: url, IndexInstalled: func() bool { return true }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/chain/index/status", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("installed indexer that does not answer: HTTP %d, want 502", rec.Code)
+	}
+}

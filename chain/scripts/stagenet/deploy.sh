@@ -77,8 +77,6 @@ DENOM="norama"
 # All five stagenet nodes are validators: nothing here fixes the committee size (build_genesis sets it
 # to the number of NODES) and every loop below runs over NODES.
 NODES=("mew:mew:57.129.166.16" "mewtwo:mewtwo:57.129.166.17" "gengar:gengar:161.97.184.199" "magicarp:magicarp:161.97.184.202" "froakie:froakie:161.97.151.255")
-# The node that also runs the chain indexer (it serves the read API a gateway proxies).
-INDEXER_NODE="mew"
 P2P_PORT=31000
 PROVIDER_PORT=31013
 BIN_DIR="/usr/lib/orama-global/bin"
@@ -415,8 +413,9 @@ stage_tools() {
 # again with the chain's persistent peers, which are the node ids phase 1 made, and rewrites the
 # units. Both are the documented command; running it twice with the same flags is a supported no-op.
 global_install() {
-	local alias="$1" name="$2" phase="$3" peers="${4:-}" services="chain,ipfs,provider,archiver"
-	[ "$name" = "$INDEXER_NODE" ] && services="$services,indexer"
+	# The indexer runs on every node: a gateway proxies the indexer beside it, and a client reaches
+	# the public name on any of them.
+	local alias="$1" name="$2" phase="$3" peers="${4:-}" services="chain,ipfs,provider,archiver,indexer"
 	# The login user is resolved on its own line: inside the array a failing command substitution
 	# would not stop the script (the status of `local` and of an array assignment hides it).
 	local login
@@ -629,8 +628,7 @@ cmd_start() {
 	for n in "${NODES[@]}"; do
 		# The provider and archiver need a node id and are started by `register`; started now they
 		# would exit on the missing id and restart every few seconds until then.
-		local svcs=(chain ipfs)
-		[ "$(field "$n" 1)" = "$INDEXER_NODE" ] && svcs+=(indexer)
+		local svcs=(chain ipfs indexer)
 		log "[$(field "$n" 1)] orama global start ${svcs[*]}"
 		remote_run "$(field "$n" 2)" sudo "$BIN_DIR/orama" global start "${svcs[@]}" < /dev/null &
 		pids+=($!)

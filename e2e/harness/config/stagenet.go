@@ -53,12 +53,6 @@ const (
 	StagenetKnownHostsRel = ".ssh/known_hosts"
 )
 
-// StagenetIndexerLabel is the label of the one stagenet node that runs the chain indexer
-// (INDEXER_NODE in chain/scripts/stagenet/deploy.sh). A gateway proxies /v1/chain/index/ to the
-// indexer of its own node and answers 502 where there is none, so a read of the index must reach
-// this node's gateway.
-const StagenetIndexerLabel = "mew"
-
 // StagenetNode is one stagenet node. Nameserver says whether it runs the
 // zone's CoreDNS; the others are plain cluster nodes.
 type StagenetNode struct {
@@ -166,14 +160,4 @@ func CheckStagenetChainID(id string) error {
 		return fmt.Errorf("chain id %q does not match %s", id, stagenetChainID)
 	}
 	return nil
-}
-
-// StagenetIndexerIP is the public address of the node labelled StagenetIndexerLabel.
-func StagenetIndexerIP() string {
-	for _, n := range StagenetNodes {
-		if n.Label == StagenetIndexerLabel {
-			return n.IP
-		}
-	}
-	return ""
 }

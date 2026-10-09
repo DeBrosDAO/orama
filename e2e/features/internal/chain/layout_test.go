@@ -142,16 +142,6 @@ func TestInvariantScript_failedQueryLeavesTheErrorLine(t *testing.T) {
 	}
 }
 
-func TestIndexerPin_perTarget(t *testing.T) {
-	if got := indexerPin(&fleet.State{Target: config.TargetFleet}); got != "" {
-		t.Errorf("a fleet run pins the index reads to %q, want none: every node has an indexer", got)
-	}
-	got := indexerPin(&fleet.State{Target: config.TargetStagenet})
-	if got != "57.129.166.16" {
-		t.Errorf("stagenet pins the index reads to %q, want mew's address 57.129.166.16", got)
-	}
-}
-
 // The answer oramad printed on stagenet after the faucet had dripped 1216 ORAMA: its mints are in the
 // epoch state and in the supply identity.
 func TestEpochState_expectedSupplyCountsTheFaucet(t *testing.T) {

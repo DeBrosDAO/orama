@@ -15,6 +15,13 @@ const (
 	indexPrefix       = "index/"
 	upstreamIndexBase = "/index/v1/"
 
+	// msgNoIndexer answers an index route on a machine with no indexer installed: the route is real,
+	// this node cannot serve it, and a later install or another node can.
+	msgNoIndexer = "this node runs no chain indexer; install it with orama global install --services chain,indexer"
+	// noIndexerRetryAfter is the Retry-After, in seconds, of that answer: a client asks another node,
+	// or this one after an install.
+	noIndexerRetryAfter = "60"
+
 	indexMaxLimit = 100
 	indexMaxPage  = 1000
 )
@@ -55,6 +62,11 @@ func (p *Proxy) serveIndex(w http.ResponseWriter, r *http.Request, rest string) 
 	}
 	if !ok {
 		writeErr(w, http.StatusBadRequest, "bad query")
+		return
+	}
+	if !p.indexInstalled() {
+		w.Header().Set("Retry-After", noIndexerRetryAfter)
+		writeErr(w, http.StatusServiceUnavailable, msgNoIndexer)
 		return
 	}
 	p.forward(w, r, p.index, upstreamIndexBase+upstream, q)

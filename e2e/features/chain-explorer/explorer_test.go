@@ -33,13 +33,6 @@ func read(t *testing.T, path string, query url.Values) *gw.Response {
 	return harness.GW(t).MustSend(t, gw.Req{Path: chainPrefix + path, Query: query})
 }
 
-// readIndex is read for /v1/chain/index/...: a gateway proxies the indexer of its own node, so it
-// goes to a gateway whose node has one (chain.Chain.IndexerGateway).
-func readIndex(t *testing.T, path string, query url.Values) *gw.Response {
-	t.Helper()
-	return chain.New(t).IndexerGateway(t).MustSend(t, gw.Req{Path: chainPrefix + "/index" + path, Query: query})
-}
-
 // addressJSON is the `json=` request of a query on one address.
 func addressJSON(field, address string) string {
 	raw, _ := json.Marshal(map[string]string{field: address})
@@ -166,13 +159,21 @@ func TestExplorerReads_refusals(t *testing.T) {
 	}
 }
 
-// requireIndexer fails unless the gateway of a node with a chain indexer reaches it: the run's chain
-// deploy installs one beside every node (e2e/scripts/chain-deploy.sh), stagenet's on one node
-// (chain/scripts/stagenet/deploy.sh), so a 502 here is a fault.
+// requireIndexer fails unless the gateway of every node reaches its node's chain indexer. A
+// gateway proxies the indexer beside it, the run's chain deploy installs one on every node
+// (e2e/scripts/chain-deploy.sh, chain/scripts/stagenet/deploy.sh), and a user reaches the public
+// name on any of them, so one node without it fails a share of the explorer's reads with a 502.
 func requireIndexer(t *testing.T) {
 	t.Helper()
-	if resp := readIndex(t, "/status", nil); resp.Status != http.StatusOK {
-		t.Fatalf("/v1/chain/index/status answers HTTP %d: %.200s", resp.Status, resp.Body)
+	g := harness.GW(t)
+	for _, n := range chain.New(t).Nodes() {
+		resp := g.PinTo(n.PublicIP).MustSend(t, gw.Req{Path: chainPrefix + "/index/status"})
+		if resp.Status != http.StatusOK {
+			t.Errorf("%s (%s): /v1/chain/index/status answers HTTP %d: %.200s", n.Name, n.PublicIP, resp.Status, resp.Body)
+		}
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 }
 
@@ -192,7 +193,7 @@ func TestExplorerIndex_latestStatsAndAccount(t *testing.T) {
 		TxCount uint64 `json:"tx_count"`
 	}
 	eventually.Require(t, pollEvery, pollBudget, "the indexer to count the key's first transaction", func() (bool, error) {
-		resp := readIndex(t, "/accounts/"+k.Address, nil)
+		resp := read(t, "/index/accounts/"+k.Address, nil)
 		if resp.Status == http.StatusNotFound {
 			return false, fmt.Errorf("not indexed yet")
 		}
@@ -211,7 +212,7 @@ func TestExplorerIndex_latestStatsAndAccount(t *testing.T) {
 			Body []json.RawMessage `json:"body"`
 		} `json:"txs"`
 	}
-	decode(t, readIndex(t, "/txs", url.Values{"limit": {fmt.Sprint(indexListLimit)}}), &latest)
+	decode(t, read(t, "/index/txs", url.Values{"limit": {fmt.Sprint(indexListLimit)}}), &latest)
 	if len(latest.Txs) == 0 || len(latest.Txs) > indexListLimit {
 		t.Fatalf("%d newest transactions, want 1 to %d", len(latest.Txs), indexListLimit)
 	}
@@ -226,7 +227,7 @@ func TestExplorerIndex_latestStatsAndAccount(t *testing.T) {
 			Txs uint64 `json:"txs"`
 		} `json:"hours"`
 	}
-	decode(t, readIndex(t, "/stats", nil), &stats)
+	decode(t, read(t, "/index/stats", nil), &stats)
 	if len(stats.Hours) != hourlyBuckets {
 		t.Errorf("%d hourly buckets, want %d", len(stats.Hours), hourlyBuckets)
 	}

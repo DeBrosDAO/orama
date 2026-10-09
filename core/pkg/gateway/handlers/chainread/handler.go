@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,6 +86,10 @@ type Config struct {
 	RESTURL  string
 	IndexURL string
 	Client   *http.Client
+	// IndexInstalled says whether this machine has a chain indexer to ask. It is checked on every
+	// index request, so an indexer installed later is used without a restart. Nil means yes: the
+	// upstream URL is trusted, as it is when ORAMA_CHAIN_INDEX_URL names an indexer elsewhere.
+	IndexInstalled func() bool
 	// Logger receives the error behind a 502 the proxy answers with a generic body. Nil logs nothing.
 	Logger *logging.ColoredLogger
 }
@@ -101,6 +106,13 @@ func ConfigFromEnv() Config {
 // systemdUnitDir is where the co-located installer writes the namespace unit.
 const systemdUnitDir = constants.SystemdUnitDir
 
+// indexerInstalled reports whether this machine has the chain indexer's unit
+// (`orama global install --services chain,indexer`). It is a variable so tests can stand in for the machine.
+var indexerInstalled = func() bool {
+	_, err := os.Stat(filepath.Join(systemdUnitDir, constants.GlobalIndexerUnit))
+	return err == nil
+}
+
 // colocated reports whether this machine shares a cluster node with global
 // services. It is a variable so tests can stand in for the machine.
 var colocated = func() bool {
@@ -115,11 +127,15 @@ func configFor(colocated bool) Config {
 	if colocated {
 		rpc, rest, index = constants.ColocatedChainRPCURL(), constants.ColocatedChainAPIURL(), constants.ColocatedGlobalIndexerURL()
 	}
-	return Config{
+	cfg := Config{
 		RPCURL:   envOr("ORAMA_CHAIN_RPC_URL", rpc),
 		RESTURL:  envOr("ORAMA_CHAIN_REST_URL", rest),
 		IndexURL: envOr("ORAMA_CHAIN_INDEX_URL", index),
 	}
+	if strings.TrimSpace(os.Getenv("ORAMA_CHAIN_INDEX_URL")) == "" {
+		cfg.IndexInstalled = indexerInstalled
+	}
+	return cfg
 }
 
 func envOr(key, fallback string) string {
@@ -132,13 +148,15 @@ func envOr(key, fallback string) string {
 
 // Proxy serves the allowlist. The zero value is not usable; call New.
 type Proxy struct {
-	rpc     *url.URL
-	rest    *url.URL
-	index   *url.URL
-	client  *http.Client
-	maxBody int64
-	timeout time.Duration
-	logger  *logging.ColoredLogger
+	rpc   *url.URL
+	rest  *url.URL
+	index *url.URL
+	// indexInstalled is Config.IndexInstalled, never nil.
+	indexInstalled func() bool
+	client         *http.Client
+	maxBody        int64
+	timeout        time.Duration
+	logger         *logging.ColoredLogger
 
 	// querySlots bounds the module queries in flight (query.go).
 	querySlots chan struct{}
@@ -168,14 +186,18 @@ func New(cfg Config) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.IndexInstalled == nil {
+		cfg.IndexInstalled = func() bool { return true }
+	}
 	return &Proxy{
-		rpc:     rpc,
-		rest:    rest,
-		index:   index,
-		client:  newClient(cfg.Client),
-		maxBody: defaultMaxBody,
-		timeout: upstreamTimeout,
-		logger:  cfg.Logger,
+		rpc:            rpc,
+		rest:           rest,
+		index:          index,
+		indexInstalled: cfg.IndexInstalled,
+		client:         newClient(cfg.Client),
+		maxBody:        defaultMaxBody,
+		timeout:        upstreamTimeout,
+		logger:         cfg.Logger,
 
 		querySlots:     make(chan struct{}, queryMaxConcurrent),
 		simulateSlots:  make(chan struct{}, simulateMaxConcurrent),

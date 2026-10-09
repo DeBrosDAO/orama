@@ -65,8 +65,9 @@ sudo orama global install \
   installed. `provider` needs `ipfs` beside it, since it pins
   public deals through this host's public Kubo. `provider` and `repair` are never
   on the same host: a repair delegate holds repair seeds, and a provider must
-  not. `indexer` is optional; add it on a node that serves the chain read API
-  (loopback 31015, proxied by a gateway).
+  not. `indexer` is optional; add it on every node whose gateway
+  serves the chain read API (loopback 31015, proxied by that node's own gateway, which answers
+  `503` for `/v1/chain/index/` where no indexer is installed).
 - Each service gets its own system account (`orama-chain`, `orama-ipfs-pub`,
   `orama-provider`, `orama-archiver`, `orama-indexer`, `orama-repair`; the
   `ipfs` service also creates the `orama-ipfs-pub-rpc` group, which its unit and

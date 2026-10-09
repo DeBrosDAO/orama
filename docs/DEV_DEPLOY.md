@@ -843,12 +843,14 @@ The node report needs no restart.
 | Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Role |
 |---|---|---|---|---|---|---|
 | `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | genesis, nameserver, chain indexer |
-| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | nameserver |
-| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | nameserver |
-| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
-| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | nameserver, chain indexer |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | nameserver, chain indexer |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node, chain indexer |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node, chain indexer |
 
-All five are chain validators (the bootstrap committee is the five of them). Without BPF_FRAMEWORK systemd accepts
+All five are chain validators (the bootstrap committee is the five of them) and all five run the chain indexer: a gateway
+proxies `/v1/chain/index/` to the indexer beside it and a client reaches the public name on any node, so a node without one
+would fail its share of the explorer's reads (it answers 503, see docs/CHAIN.md, "The gateway's chain proxy"). Without BPF_FRAMEWORK systemd accepts
 `SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
 
 Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
@@ -881,11 +883,11 @@ SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke 
 (`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.43.1 and cosmovisor v1.7.3 from their
 official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
 directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
-chain,ipfs,provider,archiver` (plus `indexer` on mew) twice: first with `--init-chain` and a placeholder genesis
+chain,ipfs,provider,archiver,indexer` twice: first with `--init-chain` and a placeholder genesis
 so each node creates its own keys, then, once the script has built the real genesis from the three public keys and
 put it in place, with `--persistent-peers`. The keys are generated on the node and never copied off it. The chain
 peers over the nodes' **public** addresses, because the namespace cannot reach the WireGuard mesh. `orama global
-start chain ipfs` (plus `indexer` on mew) then starts the chain first and waits for its RPC; the provider and
+start chain ipfs indexer` then starts the chain first and waits for its RPC; the provider and
 archiver need a node id, so `register` starts them once it has written it.
 
 `register` waits until the chain is at epoch 2 (polled), then, for each node, runs the commands an operator runs
