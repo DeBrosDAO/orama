@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,42 +62,12 @@ func (c *Cloudflare) Apply(ctx context.Context, d Delegation) error {
 }
 
 func (c *Cloudflare) verify(ctx context.Context, d Delegation) error {
-	lookupNS := c.LookupNS
-	if lookupNS == nil {
-		lookupNS = func(ctx context.Context, name string) ([]string, error) {
-			hosts, err := net.DefaultResolver.LookupNS(ctx, name)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]string, len(hosts))
-			for i, h := range hosts {
-				out[i] = h.Host
-			}
-			return out, nil
-		}
-	}
-	lookupHost := c.LookupHost
-	if lookupHost == nil {
-		lookupHost = func(ctx context.Context, name string) ([]string, error) {
-			return net.DefaultResolver.LookupHost(ctx, name)
-		}
-	}
-	gotNS, err := lookupNS(ctx, d.Domain)
+	findings, err := Check(ctx, d, Lookups{NS: c.LookupNS, Host: c.LookupHost})
 	if err != nil {
-		return fmt.Errorf("look up NS for %s: %w", d.Domain, err)
+		return err
 	}
-	for _, ns := range d.Nameservers {
-		fqdn := ns.Hostname + "." + d.Domain
-		if !containsName(gotNS, fqdn) {
-			return fmt.Errorf("NS for %s does not include %s (got %s)", d.Domain, fqdn, strings.Join(gotNS, ", "))
-		}
-		hosts, err := lookupHost(ctx, fqdn)
-		if err != nil {
-			return fmt.Errorf("look up glue %s: %w", fqdn, err)
-		}
-		if !containsName(hosts, ns.IP) {
-			return fmt.Errorf("glue %s is %s, want %s", fqdn, strings.Join(hosts, ", "), ns.IP)
-		}
+	if len(findings) > 0 {
+		return errors.New(findings[0].String())
 	}
 	return nil
 }

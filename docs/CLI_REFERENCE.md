@@ -2421,14 +2421,26 @@ has pinned, and its secrets, decrypted by the cluster and sealed with the rest
 to the public key you give. The cluster never holds the private key and cannot
 open what it wrote. Keep the private key off the cluster.
 
+--out writes the sealed file. --deal-dir also seals it into one slot-N file per
+replica of a private storage deal (under your orama-storage-v1 key and repair
+seed) and prints the 'orama storage create' and 'orama storage put' commands
+that open the deal and upload the slots. Restore it from the deal with
+'orama namespace restore --from-deal'. The backup is taken when you run the
+command; the cluster does not take or store backups by itself.
+
 It goes to the namespace's own gateway (the host 'orama auth login --namespace'
 stored). With ORAMA_TOKEN, set ORAMA_API_URL to that host
 (https://ns-<name>.<domain>): the environment's gateway does not serve backup.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--deal-dir` | — | also seal the backup into one slot-N file per replica of a private storage deal, in this directory |
+| `--deal-nonce` | — | the deal's 32-byte nonce, hex; the same value goes to 'orama storage create --nonce' (needed with --deal-dir) |
+| `--deal-replicas` | `3` | number of slots to write; the same value goes to 'orama storage create --replicas' |
 | `--key` | — | your X25519 backup public key, 64 hex characters |
 | `--out` | — | file to write the sealed backup to |
+| `--repair-seed-file` | — | file holding your repair seed, hex, mode 0600 (needed with --deal-dir) |
+| `--storage-key-file` | — | file holding your orama-storage-v1 key, hex, mode 0600 (needed with --deal-dir) |
 
 ### orama namespace backup-open
 
@@ -2649,6 +2661,11 @@ in the backup. The namespace must already exist on the destination, and
 --namespace must name the namespace the backup was taken of. A wrong key, a
 corrupt file or a different namespace stops before anything is sent.
 
+The sealed backup is the file at --in, or the private storage deal that holds
+it (--from-deal, with --rpc and your storage key and repair seed files): the
+first slot a provider serves with the on-chain root is fetched and opened.
+Give one of the two.
+
 The gateway also refuses, before writing anything, a restore that would put
 the namespace over its storage quota on the destination, and it keeps the
 destination's quota rather than the one in the backup. It runs one backup or
@@ -2669,9 +2686,13 @@ With ORAMA_TOKEN, set ORAMA_API_URL to the namespace's gateway
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--dest-key` | — | destination gateway's restore public key, from 'orama namespace restore-key' |
+| `--from-deal` | `0` | read the sealed backup from this private storage deal instead of --in |
 | `--in` | — | sealed backup file |
 | `--key-file` | — | file holding your X25519 backup private key, 64 hex characters |
 | `--namespace` | — | namespace the backup was taken of; must match the backup |
+| `--repair-seed-file` | — | file holding your repair seed, hex, mode 0600 (needed with --from-deal) |
+| `--rpc` | — | oramad CometBFT RPC, for example http://127.0.0.1:31001 (needed with --from-deal) |
+| `--storage-key-file` | — | file holding your orama-storage-v1 key, hex, mode 0600 (needed with --from-deal) |
 
 ### orama namespace restore-key
 
@@ -2906,6 +2927,12 @@ Nameserver slots (ns1, ns2, …) are claimed by the --nameserver nodes as they
 come up, so which address holds which name is only known to the cluster. This
 reads it from the cluster over SSH. Only slots whose glue the cluster has
 written are listed — the same set the cluster's own zone publishes.
+
+After the records it asks DNS whether the parent zone returns them, and says
+which NS or glue record is missing or points at another address. The answer is
+stored on the environment (environments.json), replacing the last result for
+the domain. A resolver that cannot answer is reported and nothing is
+stored. --json adds "delegated" and "findings" to each domain.
 
 Run it again after adding or removing a nameserver, and update the parent
 zone to match. See docs/NAMESERVER_SETUP.md.

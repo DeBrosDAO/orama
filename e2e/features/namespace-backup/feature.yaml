@@ -40,3 +40,5 @@ covers:
     - "docs/API_SURFACE.md#namespace-management: backup and restore are owner only; one at a time per gateway (429)"
     - "docs/API_SURFACE.md#namespace-management: restore replaces the namespace RQLite with the backup"
     - "docs/CLI_REFERENCE.md#orama-namespace-restore-key: the restore key is derived per namespace"
+    - "docs/RUN_YOUR_OWN_CLUSTER.md#a-backup-in-a-storage-deal: backup --deal-dir writes one slot per replica that opens with the storage key to the sealed backup"
+    - "docs/RUN_YOUR_OWN_CLUSTER.md#a-backup-in-a-storage-deal: a restore names exactly one source (--in or --from-deal) and --from-deal needs --rpc"

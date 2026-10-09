@@ -28,6 +28,9 @@ type Environment struct {
 	// is the one that has to — use this list. The gateway inventory replaces
 	// it once the operator can log in.
 	Nodes []EnvNode `json:"nodes,omitempty"`
+	// Delegations are the results of the last `orama node dns delegation`
+	// check, one per cluster domain.
+	Delegations []DelegationStatus `json:"delegations,omitempty"`
 }
 
 // EnvNode is one machine recorded by setup: where to SSH, as whom, and

@@ -65,6 +65,45 @@ func TestDelegation_jsonMatchesTheLiveZone(t *testing.T) {
 	}
 }
 
+// TestDelegation_jsonCarriesTheDNSVerdict: after the records the command asks
+// DNS about them. The verdict is delegated, or a list of the records that are
+// missing or point elsewhere, or a check error when the resolver could not
+// answer; never an empty verdict that is not delegated (docs/NAMESERVER_SETUP.md
+// "Seeing which address holds which slot").
+func TestDelegation_jsonCarriesTheDNSVerdict(t *testing.T) {
+	t.Parallel()
+	f := harness.Fleet(t)
+	res := harness.CLI(t).MustOK(t, "node", "dns", "delegation", "--env", f.State.Env, "--json")
+	var reports []struct {
+		Domain     string `json:"domain"`
+		Delegated  bool   `json:"delegated"`
+		CheckError string `json:"check_error"`
+		Findings   []struct {
+			Kind   string `json:"kind"`
+			Record string `json:"record"`
+			Want   string `json:"want"`
+		} `json:"findings"`
+	}
+	if err := oramacli.DecodeJSON(res, &reports); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("%d reports, want one for the base domain", len(reports))
+	}
+	r := reports[0]
+	switch {
+	case r.Delegated && (len(r.Findings) != 0 || r.CheckError != ""):
+		t.Errorf("delegated with findings %v and check error %q", r.Findings, r.CheckError)
+	case !r.Delegated && r.CheckError == "" && len(r.Findings) == 0:
+		t.Errorf("%s is neither delegated nor explained", r.Domain)
+	}
+	for _, fd := range r.Findings {
+		if fd.Kind == "" || fd.Record == "" || fd.Want == "" {
+			t.Errorf("finding %+v lacks its kind, record or expected value", fd)
+		}
+	}
+}
+
 // TestDelegation_textIsZoneFileRecords: without --json the command prints a
 // comment naming the parent zone, then one NS line per slot and one glue A
 // line per slot, in zone-file form (docs/NAMESERVER_SETUP.md).

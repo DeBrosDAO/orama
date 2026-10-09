@@ -41,6 +41,7 @@ covers:
     - "docs/NAMESERVER_SETUP.md#security-considerations: recursion answers loopback only; the node is not an open resolver"
     - "docs/NAMESERVER_SETUP.md#record-lifecycle-and-self-healing: ns-<ns>, its wildcard, turn.ns-<ns> and turn-<ns> name the nodes serving each role"
     - "docs/NAMESERVER_SETUP.md#seeing-which-address-holds-which-slot: orama node dns delegation prints the records the zone publishes"
+    - "docs/NAMESERVER_SETUP.md#seeing-which-address-holds-which-slot: the delegation check says delegated or names each missing or misdirected NS and glue record"
     - "docs/SECURITY.md#acme-dns-01: present/cleanup need a MAC over method, path and body under the ACME key; source address grants nothing"
     - "docs/SECURITY.md#acme-dns-01: a signed call writes only an _acme-challenge record under the base domain with a 43-char DNS-01 value"
     - "docs/ARCHITECTURE.md#tlshttps: ACME DNS-01 certificates for the base and wildcard, TLS 1.2+, HTTP/1.1 only"

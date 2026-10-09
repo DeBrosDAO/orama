@@ -29,12 +29,26 @@ has pinned, and its secrets, decrypted by the cluster and sealed with the rest
 to the public key you give. The cluster never holds the private key and cannot
 open what it wrote. Keep the private key off the cluster.
 
+--out writes the sealed file. --deal-dir also seals it into one slot-N file per
+replica of a private storage deal (under your orama-storage-v1 key and repair
+seed) and prints the 'orama storage create' and 'orama storage put' commands
+that open the deal and upload the slots. Restore it from the deal with
+'orama namespace restore --from-deal'. The backup is taken when you run the
+command; the cluster does not take or store backups by itself.
+
 It goes to the namespace's own gateway (the host 'orama auth login --namespace'
 stored). With ORAMA_TOKEN, set ORAMA_API_URL to that host
 (https://ns-<name>.<domain>): the environment's gateway does not serve backup.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyHex, _ := cmd.Flags().GetString("key")
 		outPath, _ := cmd.Flags().GetString("out")
+		deal := dealSealFlagsFrom(cmd)
+		if outPath == "" && deal.dir == "" {
+			return fmt.Errorf("give --out, --deal-dir, or both")
+		}
+		if err := deal.validate(); err != nil {
+			return err
+		}
 		gw, err := resolveGateway()
 		if err != nil {
 			return err
@@ -43,11 +57,16 @@ stored). With ORAMA_TOKEN, set ORAMA_API_URL to that host
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(outPath, blob, 0600); err != nil {
-			return fmt.Errorf("write %s: %w", outPath, err)
+		if outPath != "" {
+			if err := os.WriteFile(outPath, blob, 0600); err != nil {
+				return fmt.Errorf("write %s: %w", outPath, err)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Backup written to %s (%d bytes)\n", outPath, len(blob))
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "Backup written to %s (%d bytes)\n", outPath, len(blob))
-		return nil
+		if deal.dir == "" {
+			return nil
+		}
+		return sealForDeal(cmd.OutOrStdout(), blob, deal)
 	},
 }
 
@@ -85,6 +104,11 @@ in the backup. The namespace must already exist on the destination, and
 --namespace must name the namespace the backup was taken of. A wrong key, a
 corrupt file or a different namespace stops before anything is sent.
 
+The sealed backup is the file at --in, or the private storage deal that holds
+it (--from-deal, with --rpc and your storage key and repair seed files): the
+first slot a provider serves with the on-chain root is fetched and opened.
+Give one of the two.
+
 The gateway also refuses, before writing anything, a restore that would put
 the namespace over its storage quota on the destination, and it keeps the
 destination's quota rather than the one in the backup. It runs one backup or
@@ -112,10 +136,12 @@ With ORAMA_TOKEN, set ORAMA_API_URL to the namespace's gateway
 
 type restoreOptions struct {
 	inPath, keyFile, namespace, destKey string
+	deal                                dealFetchFlags
 }
 
 func restoreOptionsFrom(cmd *cobra.Command) restoreOptions {
 	var o restoreOptions
+	o.deal = dealFetchFlagsFrom(cmd)
 	o.inPath, _ = cmd.Flags().GetString("in")
 	o.keyFile, _ = cmd.Flags().GetString("key-file")
 	o.namespace, _ = cmd.Flags().GetString("namespace")
@@ -162,9 +188,9 @@ func runRestore(ctx context.Context, out io.Writer, gw gatewayTarget, o restoreO
 	if err != nil {
 		return err
 	}
-	blob, err := os.ReadFile(o.inPath)
+	blob, err := restoreBlob(ctx, o.inPath, o.deal)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", o.inPath, err)
+		return err
 	}
 	body, err := buildRestore(blob, priv, dest, o.namespace)
 	if err != nil {
@@ -287,13 +313,14 @@ func init() {
 	backupCmd.Flags().String("key", "", "your X25519 backup public key, 64 hex characters")
 	backupCmd.Flags().String("out", "", "file to write the sealed backup to")
 	_ = backupCmd.MarkFlagRequired("key")
-	_ = backupCmd.MarkFlagRequired("out")
+	addDealSealFlags(backupCmd)
 
 	restoreCmd.Flags().String("in", "", "sealed backup file")
+	addDealFetchFlags(restoreCmd)
 	restoreCmd.Flags().String("key-file", "", "file holding your X25519 backup private key, 64 hex characters")
 	restoreCmd.Flags().String("namespace", "", "namespace the backup was taken of; must match the backup")
 	restoreCmd.Flags().String("dest-key", "", "destination gateway's restore public key, from 'orama namespace restore-key'")
-	for _, f := range []string{"in", "key-file", "namespace", "dest-key"} {
+	for _, f := range []string{"key-file", "namespace", "dest-key"} {
 		_ = restoreCmd.MarkFlagRequired(f)
 	}
 
