@@ -28,7 +28,8 @@ func (gs GenesisState) Validate() error {
 	if err := gs.Params.Validate(); err != nil {
 		return err
 	}
-	if _, err := NormalizeReporters(gs.Reporters, true); err != nil {
+	reporters, err := NormalizeReporters(gs.Reporters, true)
+	if err != nil {
 		return err
 	}
 
@@ -38,6 +39,13 @@ func (gs GenesisState) Validate() error {
 	relays, err := validateRelays(gs.Relays)
 	if err != nil {
 		return err
+	}
+	for _, reporter := range reporters {
+		for _, relay := range gs.Relays {
+			if relay.Operator == reporter {
+				return fmt.Errorf("reporter %s operates relay %s: %w", reporter, relay.NodeId, ErrReporterOperatesRelay)
+			}
+		}
 	}
 	results, err := validateEpochResults(gs.EpochResults, gs.Activation)
 	if err != nil {
@@ -212,8 +220,8 @@ func validateChunks(chunks []ReportChunk, relays map[string]Relay) error {
 }
 
 func validateChunkShape(chunk ReportChunk, relays map[string]Relay) error {
-	if chunk.Epoch == 0 {
-		return fmt.Errorf("chunk has epoch 0")
+	if chunk.Epoch == 0 || chunk.Epoch > MaxReportEpoch {
+		return fmt.Errorf("chunk epoch %d must be in [1, %d]", chunk.Epoch, MaxReportEpoch)
 	}
 	if _, err := CanonicalAddress(chunk.Reporter); err != nil {
 		return fmt.Errorf("chunk: %w", err)
@@ -237,8 +245,8 @@ func validateReports(reports []CompleteReport, chunks []ReportChunk, relays map[
 	}
 	seen := make(map[string]struct{}, len(reports))
 	for _, report := range reports {
-		if report.Epoch == 0 {
-			return fmt.Errorf("report has epoch 0")
+		if report.Epoch == 0 || report.Epoch > MaxReportEpoch {
+			return fmt.Errorf("report epoch %d must be in [1, %d]", report.Epoch, MaxReportEpoch)
 		}
 		canonical, err := CanonicalAddress(report.Reporter)
 		if err != nil {

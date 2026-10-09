@@ -118,7 +118,8 @@ func TestRelayRegister_refusals(t *testing.T) {
 // reporters.go: the flag is never set by a message), so MsgUpdateReporters
 // is refused for any signer; the run's reporter set is the genesis one
 // (empty), so MsgReportEpoch from a validator is refused as not a reporter,
-// and no epoch has a relay result.
+// and no epoch has a relay result (the relay end block writes none for an
+// epoch nobody reported on, however many epochs the run chain has closed).
 func TestRelayReporters_setIsClosedToMessages(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

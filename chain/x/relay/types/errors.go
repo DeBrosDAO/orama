@@ -19,4 +19,11 @@ var (
 	// ErrInputsRootMismatch is returned when inputs_root is not the SHA-256
 	// of the canonical entries.
 	ErrInputsRootMismatch = errors.New("inputs_root does not match the canonical entries")
+	// ErrReportWindow is returned when MsgReportEpoch names an epoch that has
+	// not closed yet or whose report window has passed.
+	ErrReportWindow = errors.New("epoch is not open for reports")
+	// ErrReporterOperatesRelay is returned when an address would be both a
+	// reporter and the operator of a registered relay: a relay's operator must
+	// not be able to report on its own pay.
+	ErrReporterOperatesRelay = errors.New("an address cannot be both a reporter and a relay operator")
 )

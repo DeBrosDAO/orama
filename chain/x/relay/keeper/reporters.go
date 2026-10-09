@@ -43,6 +43,9 @@ func (k Keeper) updateReporters(ctx sdk.Context, msg *types.MsgUpdateReporters) 
 	for _, addr := range next {
 		want[addr] = struct{}{}
 	}
+	if err := k.requireNoRelayOperator(ctx, want); err != nil {
+		return fmt.Errorf("update reporters: %w", err)
+	}
 
 	var existing []string
 	if err := k.Reporters.Walk(ctx, nil, func(addr string, _ bool) (bool, error) {
@@ -65,6 +68,17 @@ func (k Keeper) updateReporters(ctx sdk.Context, msg *types.MsgUpdateReporters) 
 		}
 	}
 	return nil
+}
+
+// requireNoRelayOperator refuses a reporter set that names the operator of a
+// registered relay.
+func (k Keeper) requireNoRelayOperator(ctx context.Context, reporters map[string]struct{}) error {
+	return k.Relays.Walk(ctx, nil, func(_ []byte, relay types.Relay) (bool, error) {
+		if _, ok := reporters[relay.Operator]; ok {
+			return true, fmt.Errorf("reporter %s operates relay %s: %w", relay.Operator, relay.NodeId, types.ErrReporterOperatesRelay)
+		}
+		return false, nil
+	})
 }
 
 func (k Keeper) isReporter(ctx context.Context, addr string) (bool, error) {

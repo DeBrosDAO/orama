@@ -24,6 +24,7 @@ import (
 	chainparams "github.com/DeBrosOfficial/network/chain/app/params"
 	"github.com/DeBrosOfficial/network/chain/x/relay/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/relay/types"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
 
 func init() {
@@ -71,6 +72,7 @@ type errNotFound string
 func (e errNotFound) Error() string { return "node " + string(e) + " not found" }
 
 type fakeEmission struct {
+	current uint64
 	ceiling map[uint64]math.Int
 	minted  map[uint64]math.Int
 	calls   int
@@ -89,6 +91,10 @@ func (e *fakeEmission) mintedOf(epoch uint64) math.Int {
 		return v
 	}
 	return math.ZeroInt()
+}
+
+func (e *fakeEmission) CurrentEpoch(_ context.Context) (uint64, error) {
+	return e.current, nil
 }
 
 func (e *fakeEmission) RelayCeiling(_ context.Context, epoch uint64) (math.Int, error) {
@@ -142,6 +148,37 @@ func (e *fakeEarnings) CreditEarnings(_ context.Context, senderModule string, ad
 	return nil
 }
 
+// fakeService is the C2 service split with the real split function, recording what is burned and
+// what funds the archive.
+type fakeService struct {
+	burned  math.Int
+	archive math.Int
+}
+
+func newFakeService() *fakeService {
+	return &fakeService{burned: math.ZeroInt(), archive: math.ZeroInt()}
+}
+
+func (s *fakeService) SplitServicePayment(amount math.Int) (math.Int, math.Int, math.Int) {
+	return storagetypes.SplitServicePayment(amount)
+}
+
+func (s *fakeService) BurnService(_ context.Context, senderModule string, amt math.Int) error {
+	if senderModule != types.ModuleName || !amt.IsPositive() {
+		return errNotFound("burn")
+	}
+	s.burned = s.burned.Add(amt)
+	return nil
+}
+
+func (s *fakeService) FundArchive(_ context.Context, senderModule string, amt math.Int) error {
+	if senderModule != types.ModuleName || !amt.IsPositive() {
+		return errNotFound("archive")
+	}
+	s.archive = s.archive.Add(amt)
+	return nil
+}
+
 type relayKey struct {
 	nodeID   string
 	fp       []byte
@@ -165,6 +202,7 @@ type testFixture struct {
 	Nodes    *fakeNodes
 	Emission *fakeEmission
 	Earnings *fakeEarnings
+	Service  *fakeService
 	Msg      types.MsgServer
 }
 
@@ -180,13 +218,15 @@ func newTestFixture(t *testing.T) *testFixture {
 	nodes := newFakeNodes()
 	emission := newFakeEmission()
 	earnings := newFakeEarnings()
-	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, emission, earnings)
+	service := newFakeService()
+	k := keeper.NewKeeper(cdc, runtime.NewKVStoreService(key), nodes, emission, earnings, service)
 	return &testFixture{
 		Ctx:      ctx,
 		Keeper:   k,
 		Nodes:    nodes,
 		Emission: emission,
 		Earnings: earnings,
+		Service:  service,
 		Msg:      keeper.NewMsgServerImpl(k),
 	}
 }
@@ -246,6 +286,23 @@ func obs(rk relayKey, weight int64, uptime string, exit bool) types.RelayObserva
 }
 
 func (f *testFixture) submit(t *testing.T, reporter sdk.AccAddress, epoch uint64, entries []types.RelayObservation) error {
+	t.Helper()
+	// Reports are sent for the epoch that just closed: the chain is in the next one.
+	f.closeEpoch(epoch)
+	return f.submitAt(t, reporter, epoch, entries)
+}
+
+// closeEpoch puts the chain in the epoch after epoch, with a ceiling recorded
+// for epoch unless the test already set one.
+func (f *testFixture) closeEpoch(epoch uint64) {
+	f.Emission.current = epoch + 1
+	if _, ok := f.Emission.ceiling[epoch]; !ok {
+		f.Emission.setCeiling(epoch, math.ZeroInt())
+	}
+}
+
+// submitAt sends a report without moving the chain's current epoch.
+func (f *testFixture) submitAt(t *testing.T, reporter sdk.AccAddress, epoch uint64, entries []types.RelayObservation) error {
 	t.Helper()
 	root, err := types.InputsRoot(entries)
 	require.NoError(t, err)

@@ -4,11 +4,36 @@ import (
 	"context"
 	"fmt"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	"cosmossdk.io/math"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
+
+	"github.com/DeBrosOfficial/network/chain/app/params"
 	nodeskeeper "github.com/DeBrosOfficial/network/chain/x/nodes/keeper"
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
+	storagekeeper "github.com/DeBrosOfficial/network/chain/x/storage/keeper"
+	storagetypes "github.com/DeBrosOfficial/network/chain/x/storage/types"
 )
+
+// relayService is x/relay's view of the C2 service split: x/storage's own split function and
+// archive fund, and a burn out of the relay module account.
+type relayService struct {
+	storage storagekeeper.Keeper
+	bank    bankkeeper.Keeper
+}
+
+func (r relayService) SplitServicePayment(amount math.Int) (math.Int, math.Int, math.Int) {
+	return storagetypes.SplitServicePayment(amount)
+}
+
+func (r relayService) BurnService(ctx context.Context, senderModule string, amt math.Int) error {
+	return r.bank.BurnCoins(ctx, senderModule, sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amt)))
+}
+
+func (r relayService) FundArchive(ctx context.Context, senderModule string, amt math.Int) error {
+	return r.storage.FundArchive(ctx, senderModule, amt)
+}
 
 // relayNodes is x/relay's view of a node. It returns the ed25519 binding whose
 // service is "relay", or the first ed25519 binding if that name is absent.

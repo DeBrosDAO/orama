@@ -21,8 +21,10 @@ type NodeView interface {
 // EmissionKeeper is the subset of x/emission x/relay mints against. RelayCeiling
 // is that epoch's relay ceiling in norama. MintRelayReward must refuse an amount
 // that would exceed the ceiling and must never mint more than the ceiling.
-// x/relay does not import x/emission.
+// CurrentEpoch is the epoch in progress: every epoch below it is closed and has
+// a ceiling. x/relay does not import x/emission.
 type EmissionKeeper interface {
+	CurrentEpoch(ctx context.Context) (uint64, error)
 	RelayCeiling(ctx context.Context, epoch uint64) (math.Int, error)
 	MintRelayReward(ctx context.Context, epoch uint64, amt math.Int) error
 }
@@ -32,4 +34,15 @@ type EmissionKeeper interface {
 // to addr. Every relay payout goes here; there is no public bank balance.
 type EarningsKeeper interface {
 	CreditEarnings(ctx context.Context, senderModule string, addr sdk.AccAddress, amt sdk.Coin) error
+}
+
+// ServiceSplit is the C2 service-payment split x/relay pays every operator through, the same
+// split and the same destinations x/storage uses. SplitServicePayment returns the operator's
+// part, the burned part and the archive-fund part, which sum to amount; the operator receives
+// the rounding remainder. BurnService burns amt from senderModule. FundArchive moves amt from
+// senderModule into the archive fund and records it there. x/relay does not import x/storage.
+type ServiceSplit interface {
+	SplitServicePayment(amount math.Int) (toOperator, burn, archive math.Int)
+	BurnService(ctx context.Context, senderModule string, amt math.Int) error
+	FundArchive(ctx context.Context, senderModule string, amt math.Int) error
 }

@@ -114,7 +114,7 @@ var lockedRows = []lockedRow{
 	{"storage", "protocol_duration_epochs", "1", citeC7},
 
 	// x/relay: C8, G1.
-	{"relay", "min_reporters_quorum", "2", "track-c C8: a majority of the initial 3 dirauths"},
+	{"relay", "min_reporters_quorum", "3", "owner decision on track-c C8: all 3 initial dirauths, so one lying reporter cannot move a relay's pay"},
 	{"relay", "min_uptime_fraction", "0.9", citeC8},
 	{"relay", "exit_multiplier", "2", citeC8},
 	{"relay", "per_relay_cap", "100000000000", citeC8},

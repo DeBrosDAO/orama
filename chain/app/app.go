@@ -194,7 +194,7 @@ var (
 		storagetypes.ModuleName:        {authtypes.Burner},
 		storagetypes.EscrowModuleName:  {authtypes.Burner},
 		storagetypes.ArchiveModuleName: nil,
-		relaytypes.ModuleName:          nil,
+		relaytypes.ModuleName:          {authtypes.Burner},
 		cnfttypes.ModuleName:           nil,
 		markettypes.ModuleName:         nil,
 		shieldedtypes.ModuleName:       {authtypes.Burner},
@@ -548,6 +548,7 @@ func NewOramaApp(
 		relayNodes{nodes: app.NodesKeeper},
 		app.EmissionKeeper,
 		app.FeesKeeper,
+		relayService{storage: app.StorageKeeper, bank: app.BankKeeper},
 	)
 
 	// x/houses' enacted outcomes reach the modules that act on them. Copies of a keeper taken
@@ -639,6 +640,7 @@ func NewOramaApp(
 		nodestypes.ModuleName,
 		housetypes.ModuleName,
 		storagetypes.ModuleName,
+		relaytypes.ModuleName,
 		genutiltypes.ModuleName,
 		feegrant.ModuleName,
 		powertypes.ModuleName,

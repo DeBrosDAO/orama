@@ -28,6 +28,9 @@ func (k Keeper) reportEpoch(ctx sdk.Context, msg *types.MsgReportEpoch) (bool, e
 	if msg.Epoch == 0 {
 		return false, fmt.Errorf("report epoch: epoch must be positive")
 	}
+	if err := k.requireReportWindow(ctx, msg.Epoch); err != nil {
+		return false, err
+	}
 	settled, err := k.EpochResults.Has(ctx, msg.Epoch)
 	if err != nil {
 		return false, fmt.Errorf("report epoch: failed to check epoch %d: %w", msg.Epoch, err)
@@ -143,6 +146,26 @@ func (k Keeper) reportEpoch(ctx sdk.Context, msg *types.MsgReportEpoch) (bool, e
 		return false, err
 	}
 	return true, nil
+}
+
+// requireReportWindow admits a report only for a closed epoch (it has a relay
+// ceiling) that is still inside its report window, so every report that
+// reaches settlement can be paid from a ceiling that exists.
+func (k Keeper) requireReportWindow(ctx sdk.Context, epoch uint64) error {
+	current, err := k.emission.CurrentEpoch(ctx)
+	if err != nil {
+		return fmt.Errorf("report epoch: failed to read the current epoch: %w", err)
+	}
+	if epoch >= current {
+		return fmt.Errorf("report epoch: epoch %d has not closed (current epoch %d): %w", epoch, current, types.ErrReportWindow)
+	}
+	if current-epoch > types.ReportWindowEpochs {
+		return fmt.Errorf("report epoch: the report window of epoch %d closed at epoch %d: %w", epoch, epoch+types.ReportWindowEpochs, types.ErrReportWindow)
+	}
+	if _, err := k.emission.RelayCeiling(ctx, epoch); err != nil {
+		return fmt.Errorf("report epoch: epoch %d has no relay ceiling to pay from (%v): %w", epoch, err, types.ErrReportWindow)
+	}
+	return nil
 }
 
 func (k Keeper) matchRegistered(ctx sdk.Context, entry types.RelayObservation) error {

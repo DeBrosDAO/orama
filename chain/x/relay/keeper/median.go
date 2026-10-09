@@ -9,7 +9,8 @@ import (
 )
 
 // medianInt is the lower median of an odd count and the floored average of
-// the two middle values of an even count. A single value is itself, so quorum
+// the two middle values of an even count, formed as lo+(hi-lo)/2 so it cannot
+// overflow. A single value is itself, so quorum
 // 1 pays that reporter's weight.
 func medianInt(vals []math.Int) math.Int {
 	sorted := append([]math.Int(nil), vals...)
@@ -18,7 +19,8 @@ func medianInt(vals []math.Int) math.Int {
 	if n%2 == 1 {
 		return sorted[n/2]
 	}
-	return sorted[n/2-1].Add(sorted[n/2]).QuoRaw(2)
+	lo, hi := sorted[n/2-1], sorted[n/2]
+	return lo.Add(hi.Sub(lo).QuoRaw(2))
 }
 
 func medianDec(vals []math.LegacyDec) math.LegacyDec {

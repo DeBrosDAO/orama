@@ -27,7 +27,7 @@ func TestQuorumOneReporterPaysOnTheNextEpoch(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Minted.Equal(math.NewInt(40)))
 	require.True(t, f.Emission.mintedOf(2).Equal(math.NewInt(40)))
-	require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(40)))
+	require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(36)))
 	require.Equal(t, 1, f.Emission.calls)
 }
 
@@ -132,7 +132,7 @@ func TestCaps(t *testing.T) {
 		got := f.payouts(t, 2)
 		require.True(t, payoutFor(got, r1.fp).Equal(math.NewInt(75)))
 		require.True(t, payoutFor(got, r2.fp).Equal(math.NewInt(75)))
-		require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(150)))
+		require.True(t, f.Earnings.balance(operator).Equal(math.NewInt(136)))
 	})
 
 	t.Run("per prefix 16", func(t *testing.T) {
