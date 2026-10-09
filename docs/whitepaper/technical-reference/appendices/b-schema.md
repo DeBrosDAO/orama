@@ -300,6 +300,7 @@ Placement says which database holds a table: `Cluster` tables live only in the c
 | `environment` | TEXT | no | `'production'` |  |
 | `ssh_user` | TEXT | no | `'root'` |  |
 | `role` | TEXT | no | `'node'` |  |
+| `node_version` | TEXT | yes | `''` |  |
 
 ## dns_records
 
