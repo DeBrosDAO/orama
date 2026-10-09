@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,8 +23,8 @@ const (
 )
 
 // TestWalletCap_transferIsHeldToTheCap: with the per-wallet cap at 1, a wallet
-// that already owns a namespace cannot be handed a second one (403
-// NAMESPACE_QUOTA with the wallet and the limit); the owner keeps the
+// that already owns a namespace cannot be handed a second one (a generic 403
+// TRANSFER_REFUSED that says nothing of the recipient); the owner keeps the
 // namespace and can hand it to a wallet that owns nothing
 // (docs/AUTH.md#roles: a transfer is held to the per-wallet cap).
 func TestWalletCap_transferIsHeldToTheCap(t *testing.T) {
@@ -35,10 +36,18 @@ func TestWalletCap_transferIsHeldToTheCap(t *testing.T) {
 
 	full := holder.Owner.Wallet.Address()
 	r := postJSON(t, giver.Owner.Client, pathTransfer, giver.Owner.Token(), map[string]string{"wallet": full})
-	expectCode(t, r, http.StatusForbidden, codeQuota)
+	expectCode(t, r, http.StatusForbidden, codeTransferRefused)
 	var refusal map[string]any
-	if err := json.Unmarshal(r.Body, &refusal); err != nil || refusal["limit"] != float64(1) || refusal["wallet"] == "" {
-		t.Errorf("the refusal does not name the wallet and the limit 1: %v %s", err, r.Body)
+	if err := json.Unmarshal(r.Body, &refusal); err != nil {
+		t.Fatalf("the refusal is not JSON: %v %s", err, r.Body)
+	}
+	for _, leak := range []string{"limit", "wallet"} {
+		if _, ok := refusal[leak]; ok {
+			t.Errorf("the refusal tells the caller about the recipient (%s): %s", leak, r.Body)
+		}
+	}
+	if strings.Contains(string(r.Body), full) {
+		t.Errorf("the refusal names the recipient wallet: %s", r.Body)
 	}
 
 	// Refused means nothing moved: the giver still owns the namespace, so it is

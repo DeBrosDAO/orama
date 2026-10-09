@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -200,5 +201,55 @@ func TestTransferOwnership_aRecipientWithRoomForExactlyOneIsNotRefused(t *testin
 	}
 	if len(db.rows) <= before {
 		t.Error("the transfer wrote no grant for the previous owner")
+	}
+}
+
+// The caller is told only that the transfer was refused; which wallet is at its
+// cap, and what the limit is, goes to the audit trail.
+func TestTransferOwnership_aRefusalForTheCapIsAuditedWithItsDetail(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	giveOwner(t, s, db, nsID, "0xcreator")
+	ownNamespaces(t, s, db, "0xfull", 2)
+	log, rows := newTestAudit()
+	s.audit = log
+
+	err := s.TransferOwnership(context.Background(), "anchat", "0xcreator", "0xFULL", 2)
+	var quota *ErrNamespaceQuota
+	if !errors.As(err, &quota) {
+		t.Fatalf("err = %v, want *ErrNamespaceQuota", err)
+	}
+	rows.mu.Lock()
+	defer rows.mu.Unlock()
+	if len(rows.rows) != 1 {
+		t.Fatalf("%d audit rows, want the one refusal", len(rows.rows))
+	}
+	row := rows.rows[0]
+	if row[0] != "anchat" || row[1] != "0xcreator" || row[2] != AuditOwnerTransferred || row[3] != "wallet 0xfull" || row[4] != AuditFailure {
+		t.Errorf("audit row = %v", row[:5])
+	}
+	if metadata, _ := row[7].(string); !strings.Contains(metadata, `"limit":"2"`) || !strings.Contains(metadata, "owns as many") {
+		t.Errorf("metadata = %v", row[7])
+	}
+}
+
+func TestTransferOwnership_aTransferThatWorkedIsAuditedAsASuccessOnly(t *testing.T) {
+	s, db, nsID := realRegistry(t)
+	giveOwner(t, s, db, nsID, "0xcreator")
+	log, rows := newTestAudit()
+	s.audit = log
+
+	if err := s.TransferOwnership(context.Background(), "anchat", "0xcreator", "0xroomy", 3); err != nil {
+		t.Fatal(err)
+	}
+	rows.mu.Lock()
+	defer rows.mu.Unlock()
+	var transfers [][]interface{}
+	for _, row := range rows.rows {
+		if row[2] == AuditOwnerTransferred {
+			transfers = append(transfers, row)
+		}
+	}
+	if len(transfers) != 1 || transfers[0][4] != AuditSuccess {
+		t.Fatalf("transfer audit rows = %v", transfers)
 	}
 }

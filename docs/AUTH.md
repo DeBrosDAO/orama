@@ -575,8 +575,11 @@ owner. The incoming owner's previous grant ends: ownership replaces it.
 
 A transfer is held to the per-wallet namespace cap (`max_namespaces_per_wallet`,
 default 10) as a create is: a wallet that already owns that many is refused
-`403 NAMESPACE_QUOTA` (the body carries `wallet` and `limit`), the owner keeps the
-namespace, and nothing is written. The count is decided by the statement that moves
+`403 TRANSFER_REFUSED` (a generic refusal: it does not say that the recipient is at
+its cap or what the cap is, because a transfer would otherwise tell anyone the
+namespace count of any wallet; the audit trail records the `namespace.transfer`
+failure with the recipient and the limit), the owner keeps the namespace, and
+nothing is written. The count is decided by the statement that moves
 the owner row, not by a count read first, so two transfers racing to one wallet cannot
 both find room. The cap bounds what a wallet owns, not only what it creates: without
 this a wallet could be pushed past it by namespaces it never asked for. A cap an
@@ -985,7 +988,8 @@ about it — plus the fields that make it actionable.
 | `ORIGIN_NOT_ALLOWED` | a WebSocket upgrade whose `Origin` is not this host or a name under it (403) |
 | `OWNERSHIP_REQUIRED` | the credential holds no grant in this namespace |
 | `NOT_AN_OPERATOR` | the wallet is not on the cluster's operator list |
-| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it, and so is a transfer to that wallet (`wallet` and `limit` in the body); the owner keeps the namespace |
+| `NAMESPACE_QUOTA` | the wallet already owns as many namespaces as one wallet may (403): a create is refused it; the body carries `wallet` and `limit` |
+| `TRANSFER_REFUSED` | a transfer the recipient cannot take (403), for example a wallet at its namespace cap. It names neither the wallet nor the limit; the owner keeps the namespace, and the reason is in the audit trail |
 | `DESTINATION_NOT_ALLOWED` | the proxy refused the destination |
 | `RELAY_DESTINATION_NOT_ALLOWED` | the relay (`/v1/proxy/relay`) reaches only a host under its allowed suffixes, on port 443, never an IP literal (400) |
 | `RELAY_UNAVAILABLE` | the relay could not carry the stream: Tor is down on the node, or the destination was not reached through it (503); it never connects directly |

@@ -31,7 +31,7 @@ orama cluster creators remove 0xWallet
 orama cluster settings set max-namespaces-per-wallet 25      # 1 to 10000, default 10
 ```
 
-The cap binds every way a wallet comes to own a namespace. A transfer to a wallet already at the cap is refused `403 NAMESPACE_QUOTA` (the body names the wallet and the limit) and the owner keeps the namespace; if the cap cannot be read, the transfer answers a retryable 503. A transfer does not check who may create namespaces: the cap is the only limit the recipient is held to.
+The cap binds every way a wallet comes to own a namespace. A transfer to a wallet already at the cap is refused `403 TRANSFER_REFUSED` (a generic answer that does not name the wallet or the limit; the audit trail does) and the owner keeps the namespace; if the cap cannot be read, the transfer answers a retryable 503. A transfer does not check who may create namespaces: the cap is the only limit the recipient is held to.
 
 An operator is not on the allowlist unless added. An empty list lets nobody create a namespace, and removing the last wallet does not lock operators out. Creating a namespace on this cluster also requires an EVM wallet (a `0x` address).
 
