@@ -145,6 +145,17 @@ func signableBody(r *http.Request) ([]byte, error) {
 	return body, nil
 }
 
+// HasCoordinationStamp reports whether a request carries any coordination
+// stamp, whichever generation. A route that treats a stamped request as another
+// node's (and a forged stamp as a refusal) must ask this, not for one header:
+// once every node is nonced the older stamps are no longer written, and a
+// request carrying only the v3 stamp is still a node's.
+func HasCoordinationStamp(r *http.Request) bool {
+	return r.Header.Get(CoordinationMACV3Header) != "" ||
+		r.Header.Get(CoordinationMACV2Header) != "" ||
+		r.Header.Get(CoordinationMACHeader) != ""
+}
+
 // VerifyCoordination reports whether a request was stamped by something holding
 // the cluster secret, under either stamp. Use CheckCoordination where the
 // endpoint has to know which.

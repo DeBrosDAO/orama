@@ -447,7 +447,7 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 		}))
 	} else {
 		logger.ComponentWarn(logging.ComponentGeneral,
-			"This gateway has no registry to read the nodes' versions from, so the older inter-node stamps stay accepted")
+			"This gateway has no registry to read the nodes' stamp levels from, so the older inter-node stamps stay accepted")
 	}
 	// The hop key is what lets a namespace gateway believe this one validated
 	// a request. Without a cluster secret there is no key, no internal-auth

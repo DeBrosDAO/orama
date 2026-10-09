@@ -15,7 +15,7 @@ import (
 // credential and every other request through the operator grant first, so the
 // operator list is the only thing left to check on that path.
 func (g *Gateway) authorizeNetworkDetail(w http.ResponseWriter, r *http.Request) bool {
-	if r.Header.Get(nodeauth.CoordinationMACHeader) != "" {
+	if nodeauth.HasCoordinationStamp(r) {
 		if g.verifyCoordination(r) {
 			return true
 		}

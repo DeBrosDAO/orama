@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -170,9 +171,38 @@ func TestNetworkDetailPolicy(t *testing.T) {
 	if networkDetailPolicy(plain).Access.Anonymous() {
 		t.Error("an unstamped request reaches the network status without a credential")
 	}
-	stamped := httptest.NewRequest(http.MethodGet, "/v1/network/status", nil)
-	stamped.Header.Set(nodeauth.CoordinationMACHeader, "1.00")
-	if !networkDetailPolicy(stamped).Access.Anonymous() {
-		t.Error("a stamped request is asked for a credential it cannot have")
+	for _, header := range []string{nodeauth.CoordinationMACHeader, nodeauth.CoordinationMACV2Header, nodeauth.CoordinationMACV3Header} {
+		stamped := httptest.NewRequest(http.MethodGet, "/v1/network/status", nil)
+		stamped.Header.Set(header, "1.00")
+		if !networkDetailPolicy(stamped).Access.Anonymous() {
+			t.Errorf("a request stamped with %s is asked for a credential it cannot have", header)
+		}
+	}
+}
+
+// Once every node is nonced the older stamps are no longer written: a node's
+// request is then stamped with the v3 stamp alone, and is still a node's.
+func TestNetworkDetail_admitsANodeThatSignsOnlyTheNoncedStamp(t *testing.T) {
+	g := readyGatewayWithReport(t, "0xoperator")
+	g.cfg.ClusterSecret = "network-detail-secret"
+	g.cfg.NodePeerID = coordinationTestNode
+	key, err := nodeauth.CoordinationKey(g.cfg.ClusterSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeauth.InstallLegacyFloor(&nodeauth.LegacyFloor{Read: func(context.Context) ([]int, error) {
+		return []int{nodeauth.StampLevelNonced}, nil
+	}})
+	t.Cleanup(func() { nodeauth.InstallLegacyFloor(nil) })
+
+	r := coordinationRequest(t, "/v1/network/status", "10.0.0.4:40000", key)
+	if r.Header.Get(nodeauth.CoordinationMACHeader) != "" {
+		t.Fatal("the older stamp was written with every node nonced; the test no longer models a nonced-only node")
+	}
+	if networkDetailPolicy(r).Access.Anonymous() == false {
+		t.Error("a request stamped with v3 alone is treated as an operator's")
+	}
+	if rec := httptest.NewRecorder(); !g.authorizeNetworkDetail(rec, r) {
+		t.Errorf("a node signing only v3 was refused (status %d)", rec.Code)
 	}
 }

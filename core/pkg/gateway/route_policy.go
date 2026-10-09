@@ -527,7 +527,7 @@ func withRoutePolicy(r *http.Request, p routepolicy.Policy) *http.Request {
 // stamped as coming from another node is authenticated by the handler
 // (verifyCoordination); any other request is an operator's.
 func networkDetailPolicy(r *http.Request) routepolicy.Policy {
-	if r.Header.Get(nodeauth.CoordinationMACHeader) != "" {
+	if nodeauth.HasCoordinationStamp(r) {
 		return policyHandlerAuth
 	}
 	return operatorListRoute(control(auth.DomainOperator, auth.ActionRead))

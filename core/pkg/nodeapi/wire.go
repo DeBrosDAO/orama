@@ -35,19 +35,24 @@ type RegisterRequest struct {
 	// Role is how this node serves the cluster: "node", "nameserver", or
 	// "nameserver-nsN". Empty leaves the stored role alone.
 	Role string `json:"role,omitempty"`
-	// Version is the release this node runs (pkg/version). Empty leaves the
-	// stored version alone.
-	Version string `json:"version,omitempty"`
+	// StampLevel is the stamp protocol this node signs (auth.StampLevel*). It
+	// replaces the stored level and is recorded with this registration: a sender
+	// that does not know the field (a build from before it) is level 0, which is
+	// what it signs.
+	StampLevel int `json:"stamp_level"`
 }
 
 // HeartbeatRequest refreshes liveness and, when set, the role and environment
-// this node was installed with. An empty body is a liveness refresh only.
+// this node was installed with. An empty body is a liveness refresh that reports
+// stamp level 0.
 type HeartbeatRequest struct {
 	Role        string `json:"role,omitempty"`
 	Environment string `json:"environment,omitempty"`
-	// Version is the release this node runs, refreshed with every heartbeat so
-	// that an upgrade shows in the registry without a re-registration.
-	Version string `json:"version,omitempty"`
+	// StampLevel is the stamp protocol this node signs, refreshed with every
+	// heartbeat so that an upgrade shows in the registry without a
+	// re-registration, and a rollback to a build that does not send it shows as
+	// level 0. Like the registration's, it replaces the stored level.
+	StampLevel int `json:"stamp_level"`
 }
 
 // HeartbeatResponse tells a node whether the row it is keeping alive exists.

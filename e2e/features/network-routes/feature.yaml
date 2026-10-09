@@ -4,7 +4,7 @@
 # by the route policy (the owner and its admin key by the operator list,
 # NOT_AN_OPERATOR; a runtime member, a storage key and a lobby session by the
 # scope gate, INSUFFICIENT_SCOPE), an operator's session on another
-# namespace's host (NAMESPACE_MISMATCH), a forged coordination stamp (404
+# namespace's host (NAMESPACE_MISMATCH), a forged coordination stamp, v1 and v3 (404
 # from the internet with or without a session and from a node on the
 # overlay); an operator's status (documented members only, peer id,
 # connected, storage addresses without loopback, no secret) and peers

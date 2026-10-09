@@ -1318,9 +1318,19 @@ a stamp for the index gateway is not good at a namespace gateway on the same
 node; v2 stays accepted beside it while the fleet is mixed
 (`auth.AcceptLegacyCoordinationV2`). The v1 and v2 acceptances (and the
 unnonced ACME and node-api stamps) are accepted, and written, only while some
-registered node reports a release older than 0.3.1 (`dns_nodes.node_version`,
-read by `auth.LegacyFloor`); once every node is past it a request with its
-newer stamp stripped is refused. They are removed in the next release. It proves cluster membership, not which node signed.
+registered node reports a stamp level below `auth.StampLevelNonced`
+(`dns_nodes.stamp_level`, read by `auth.LegacyFloor`; a node that never
+reported is level 0); once every node reports the nonced level a request with
+its newer stamp stripped is refused. The level is the node's own statement of
+what it signs, not a comparison of release numbers (those are not comparable
+across the network's version lines). It counts only while it was written with
+the node's latest register or heartbeat (`dns_nodes.stamp_level_at` is not
+older than `last_seen`): a node rolled back to a build from before the field
+refreshes `last_seen` without touching either column, and so counts as level 0
+again from its first heartbeat (a gateway may take up to its 30 second cache to
+notice). A route that treats a stamped request as another node's checks every
+stamp generation (`auth.HasCoordinationStamp`), since only v3 is written once
+the floor is reached. They are removed in the next release. It proves cluster membership, not which node signed.
 Details: SECURITY.md, "Coordination MAC v2" and "Coordination MAC v3".
 
 The source IP is not consulted, and must not be: every public request arrives
