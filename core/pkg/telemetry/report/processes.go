@@ -2,15 +2,12 @@ package report
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"io/fs"
 	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/DeBrosOfficial/network/pkg/config"
-	"github.com/DeBrosOfficial/network/pkg/constants"
-	"github.com/DeBrosOfficial/network/pkg/unitenv"
 )
 
 // oramaProcessNames lists command substrings that identify orama-related processes.
@@ -18,13 +15,19 @@ var oramaProcessNames = []string{
 	"orama", "rqlite", "olric", "ipfs", "caddy", "coredns",
 }
 
+const (
+	// systemSlice is the top-level cgroup systemd puts system services in.
+	systemSlice = "system.slice"
+	// serviceUnitSuffix ends the cgroup of a service unit.
+	serviceUnitSuffix = ".service"
+	// systemdCgroupController is the controller field of the systemd
+	// hierarchy on a cgroup v1 host; on cgroup v2 the one line has none.
+	systemdCgroupController = "name=systemd"
+)
+
 // collectProcesses gathers zombie/orphan process info and panic counts from logs.
 func collectProcesses() *ProcessReport {
 	r := &ProcessReport{}
-
-	// Collect known systemd-managed PIDs to avoid false positive orphan detection.
-	// Processes with PPID=1 that are systemd-managed daemons are NOT orphans.
-	managedPIDs := collectManagedPIDs()
 
 	// Run ps once and reuse the output for both zombies and orphans.
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -32,40 +35,7 @@ func collectProcesses() *ProcessReport {
 
 	out, err := runCmd(ctx, "ps", "-eo", "pid,ppid,state,comm", "--no-headers")
 	if err == nil {
-		for _, line := range strings.Split(out, "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-
-			fields := strings.Fields(line)
-			if len(fields) < 4 {
-				continue
-			}
-
-			pid, _ := strconv.Atoi(fields[0])
-			ppid, _ := strconv.Atoi(fields[1])
-			state := fields[2]
-			command := strings.Join(fields[3:], " ")
-
-			proc := ProcessInfo{
-				PID:     pid,
-				PPID:    ppid,
-				State:   state,
-				Command: command,
-			}
-
-			// Zombies: state == "Z"
-			if state == "Z" {
-				r.Zombies = append(r.Zombies, proc)
-			}
-
-			// Orphans: PPID == 1 and command is orama-related,
-			// but NOT a known systemd-managed service PID.
-			if ppid == 1 && isOramaProcess(command) && !managedPIDs[pid] {
-				r.Orphans = append(r.Orphans, proc)
-			}
-		}
+		r.Zombies, r.Orphans = classifyProcesses(out, readProcCgroup)
 	}
 
 	r.ZombieCount = len(r.Zombies)
@@ -88,85 +58,63 @@ func collectProcesses() *ProcessReport {
 	return r
 }
 
-// managedServiceUnits lists systemd units whose MainPID should be excluded from orphan detection.
-var managedServiceUnits = []string{
-	"orama-node",
-	"orama-namespace-olric@index",
-	"orama-namespace-ipfs@index",
-	"orama-namespace-ipfs-cluster@index",
-	"orama-namespace-vault@index",
-	"orama-namespace-tor@index",
-	caddyUnit,
-	"orama-namespace-wireguard@index",
-	"orama-namespace-rqlite@index",
-	"orama-namespace-gateway@index",
-	"orama-namespace-pubsub@index",
-	coreDNSUnit,
-	"rqlited",
-	constants.ChainServiceUnit,
-	constants.GlobalIPFSUnit,
-	constants.GlobalProviderUnit,
-	constants.GlobalTorRelayUnit,
-	constants.GlobalTorDirauthUnit,
+// classifyProcesses reads `ps -eo pid,ppid,state,comm` output. A zombie is
+// state Z. An orphan is an orama-related process whose parent is init and
+// that no system service unit owns: a service's own processes are reparented
+// to init too, so the parent says nothing about who supervises the process,
+// and its cgroup does. cgroupOf returns a process's /proc/<pid>/cgroup.
+func classifyProcesses(psOut string, cgroupOf func(pid int) (string, error)) (zombies, orphans []ProcessInfo) {
+	for _, line := range strings.Split(psOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+		pid, _ := strconv.Atoi(fields[0])
+		ppid, _ := strconv.Atoi(fields[1])
+		proc := ProcessInfo{PID: pid, PPID: ppid, State: fields[2], Command: strings.Join(fields[3:], " ")}
+
+		if proc.State == "Z" {
+			zombies = append(zombies, proc)
+		}
+		if ppid != 1 || !isOramaProcess(proc.Command) {
+			continue
+		}
+		cgroup, err := cgroupOf(pid)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // exited since ps ran
+		}
+		// A cgroup that cannot be read proves no owner: the process counts.
+		if err != nil || owningServiceUnit(cgroup) == "" {
+			orphans = append(orphans, proc)
+		}
+	}
+	return zombies, orphans
 }
 
-// collectManagedPIDs queries systemd for the MainPID of each known service.
-// Returns a set of PIDs that are legitimately managed by systemd (not orphans).
-func collectManagedPIDs() map[int]bool {
-	// Hard deadline: stop querying if this takes too long (e.g., node with many namespaces).
-	deadline := time.Now().Add(10 * time.Second)
-	pids := make(map[int]bool)
-
-	// Collect PIDs from global services.
-	for _, unit := range managedServiceUnits {
-		addMainPID(pids, unit)
-	}
-
-	// Collect PIDs from namespace service instances.
-	// Scan the namespaces data directory (same pattern as GetProductionServices).
-	namespacesDir := config.ProductionNamespacesDataDir
-	nsEntries, err := os.ReadDir(namespacesDir)
-	if err == nil {
-		nsServiceTypes := []string{
-			"rqlite", "olric", "gateway", "sfu", "turn", "pubsub",
-			"wireguard", "ipfs", "ipfs-cluster", "vault", "caddy",
-			"ntfy", "tor", "sni-router", "coredns",
-		}
-		for _, nsEntry := range nsEntries {
-			if !nsEntry.IsDir() {
-				continue
-			}
-			if time.Now().After(deadline) {
-				break
-			}
-			ns := nsEntry.Name()
-			for _, svcType := range nsServiceTypes {
-				envFile := unitenv.Path(unitenv.Dir, ns, svcType)
-				if _, err := os.Stat(envFile); err == nil {
-					unit := fmt.Sprintf("orama-namespace-%s@%s", svcType, ns)
-					addMainPID(pids, unit)
-				}
-			}
-		}
-	}
-
-	return pids
+// readProcCgroup is the content of /proc/<pid>/cgroup.
+func readProcCgroup(pid int) (string, error) {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
+	return string(data), err
 }
 
-// addMainPID queries systemd for a unit's MainPID and adds it to the set.
-func addMainPID(pids map[int]bool, unit string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	out, err := runCmd(ctx, "systemctl", "show", unit, "--property=MainPID")
-	cancel()
-	if err != nil {
-		return
-	}
-	props := parseProperties(out)
-	if pidStr, ok := props["MainPID"]; ok {
-		if pid, err := strconv.Atoi(pidStr); err == nil && pid > 0 {
-			pids[pid] = true
+// owningServiceUnit returns the system service unit whose cgroup holds the
+// process, from the content of its /proc/<pid>/cgroup, or "" when it is in
+// none: a session scope, a user slice, a scope started by hand. Units are
+// found by cgroup, not by a list of names, so a service installed later (the
+// global chain, indexer, reporter, a namespace's) is owned the day it exists.
+func owningServiceUnit(cgroup string) string {
+	for _, line := range strings.Split(cgroup, "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), ":", 3)
+		if len(parts) != 3 || (parts[1] != "" && parts[1] != systemdCgroupController) {
+			continue
+		}
+		dirs := strings.Split(strings.Trim(parts[2], "/"), "/")
+		unit := dirs[len(dirs)-1]
+		if dirs[0] == systemSlice && strings.HasSuffix(unit, serviceUnitSuffix) {
+			return unit
 		}
 	}
+	return ""
 }
 
 // isOramaProcess checks if a command string contains any orama-related process name.

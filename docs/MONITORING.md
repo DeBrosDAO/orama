@@ -387,7 +387,7 @@ sudo orama node report --json
 | **dns** | `orama-namespace-coredns@nameserver` / `orama-namespace-caddy@index` state, port bindings, and — in-process, with no `dig`, `openssl` or shell — SOA, NS, apex A and wildcard A answered by the local nameserver (`127.0.0.1:53`), and the expiry of the certificates Caddy serves for the apex and for a wildcard-covered name (`127.0.0.1:443`); an expired certificate is flagged separately from one that could not be read (days `-1`) |
 | **tor** | Tor client unit state, SOCKS port bound, bootstrap % of the running process (`-1` when its journal no longer has it), Anyone-network leftovers |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
-| **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
+| **processes** | Zombie count, orphan orama processes, panic/fatal count in logs. An orphan is an orama-related process (`orama`, `rqlite`, `olric`, `ipfs`, `caddy`, `coredns` in its command name) whose parent is init and whose cgroup is in no system service unit (`/proc/<pid>/cgroup` under `system.slice`, ending in `.service`): a leftover from a login session or a hand-started scope. A process of any installed unit, global or namespace, is owned |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
 | **deployments** | This node's `orama-deploy-*` units: total (loaded, stopped included), running, failed; `error` when systemd cannot list them. `static_count` is not collected (static deployments run no process on a node) |
 | **serverless** | Engine status — the WASM engine runs in the index gateway, so this is its `/v1/health` answer: `healthy`, `unhealthy (HTTP n)` or `unreachable`. `function_count` is not collected |
