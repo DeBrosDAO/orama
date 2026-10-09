@@ -34,7 +34,7 @@ func validatorStatus(t view.Theme, c *report.ChainReport) string {
 
 // globalLine summarises the global services on a node: the public Kubo's disk
 // use, the storage provider's deal slots, proof misses and hot-key balance, and
-// whether the relay is in the relay set. Empty when no global unit is installed.
+// whether the relay or directory authority is in the relay set. Empty when no global unit is installed.
 func globalLine(t view.Theme, g *report.GlobalReport) string {
 	if g == nil {
 		return ""
@@ -51,6 +51,9 @@ func globalLine(t view.Theme, g *report.GlobalReport) string {
 	}
 	if state, ok := unitState(g, constants.GlobalTorRelayUnit); ok {
 		parts = append(parts, "relay "+unitLabel(t, state)+relayFacts(t, g.Relay))
+	}
+	if state, ok := unitState(g, constants.GlobalTorDirauthUnit); ok {
+		parts = append(parts, "directory authority "+unitLabel(t, state)+relayFacts(t, g.Relay))
 	}
 	return strings.Join(parts, " | ")
 }

@@ -53,10 +53,10 @@ func listedFingerprint(t *testing.T) (string, time.Time) {
 	return c.Relays[0].Fingerprint, c.ValidAfter.Add(time.Minute)
 }
 
-func TestWriteRelayMonitor_listedRelay(t *testing.T) {
+func TestWriteMonitor_listedRelay(t *testing.T) {
 	fp, now := listedFingerprint(t)
 	home := relayHome(t, fp, true)
-	got, err := WriteRelayMonitor(home, now)
+	got, err := WriteMonitor(home, now)
 	if err != nil || got == nil || !*got {
 		t.Fatalf("listed relay: %v, %v", got, err)
 	}
@@ -68,10 +68,10 @@ func TestWriteRelayMonitor_listedRelay(t *testing.T) {
 	}
 }
 
-func TestWriteRelayMonitor_relayTheConsensusDoesNotList(t *testing.T) {
+func TestWriteMonitor_relayTheConsensusDoesNotList(t *testing.T) {
 	_, now := listedFingerprint(t)
 	home := relayHome(t, "00000000000000000000000000000000000000EE", true)
-	got, err := WriteRelayMonitor(home, now)
+	got, err := WriteMonitor(home, now)
 	if err != nil || got == nil || *got {
 		t.Fatalf("unlisted relay: %v, %v", got, err)
 	}
@@ -83,7 +83,7 @@ func TestWriteRelayMonitor_relayTheConsensusDoesNotList(t *testing.T) {
 // What the relay cannot know it does not say: no consensus yet, no identity
 // yet, or a consensus past its validity all leave the field out, and a stale
 // earlier answer is replaced.
-func TestWriteRelayMonitor_unknownLeavesTheFieldOut(t *testing.T) {
+func TestWriteMonitor_unknownLeavesTheFieldOut(t *testing.T) {
 	fp, now := listedFingerprint(t)
 	cases := map[string]struct {
 		home string
@@ -97,7 +97,7 @@ func TestWriteRelayMonitor_unknownLeavesTheFieldOut(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(c.home, MonitorFile), []byte("{\"in_consensus\":true}\n"), 0o640); err != nil {
 			t.Fatal(err)
 		}
-		got, err := WriteRelayMonitor(c.home, c.now)
+		got, err := WriteMonitor(c.home, c.now)
 		if err != nil || got != nil {
 			t.Errorf("%s: %v, %v", name, got, err)
 		}
@@ -107,12 +107,36 @@ func TestWriteRelayMonitor_unknownLeavesTheFieldOut(t *testing.T) {
 	}
 }
 
-func TestWriteRelayMonitor_refusals(t *testing.T) {
-	if _, err := WriteRelayMonitor(filepath.Join(t.TempDir(), "absent"), time.Now()); err == nil {
+// A directory authority keeps the full consensus (cached-consensus), not the
+// microdescriptor one, and is in it as a relay: the same writer answers for it.
+func TestWriteMonitor_directoryAuthorityHome(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "consensus-ns.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ParseConsensus(bytes.NewReader(raw))
+	if err != nil || len(c.Relays) == 0 {
+		t.Fatalf("fixture: %v", err)
+	}
+	now := c.ValidAfter.Add(time.Minute)
+	for fingerprint, want := range map[string]bool{c.Relays[0].Fingerprint: true, "00000000000000000000000000000000000000EE": false} {
+		home := relayHome(t, fingerprint, false)
+		if err := os.WriteFile(filepath.Join(home, DataDirConsensus), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := WriteMonitor(home, now)
+		if err != nil || got == nil || *got != want {
+			t.Fatalf("authority %s: %v, %v, want in_consensus %t", fingerprint, got, err, want)
+		}
+	}
+}
+
+func TestWriteMonitor_refusals(t *testing.T) {
+	if _, err := WriteMonitor(filepath.Join(t.TempDir(), "absent"), time.Now()); err == nil {
 		t.Error("a missing DataDirectory was written to")
 	}
 	home := relayHome(t, "not a fingerprint", false)
-	if _, err := WriteRelayMonitor(home, time.Now()); err == nil {
+	if _, err := WriteMonitor(home, time.Now()); err == nil {
 		t.Error("a malformed fingerprint file was accepted")
 	}
 	if _, err := os.Stat(filepath.Join(home, MonitorFile)); err == nil {

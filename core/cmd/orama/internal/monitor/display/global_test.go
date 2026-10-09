@@ -35,6 +35,25 @@ func TestGlobalLine_showsDealsAndRelayHealth(t *testing.T) {
 	}
 }
 
+func TestGlobalLine_directoryAuthorityInTheRelaySet(t *testing.T) {
+	g := &report.GlobalReport{
+		Units: []report.GlobalUnit{{Name: constants.GlobalTorDirauthUnit, State: "active"}},
+		Relay: &report.RelayReport{InConsensus: boolp(true)},
+	}
+	th := view.NewTheme(false)
+	if got := globalLine(th, g); got != "directory authority active (in the relay set)" {
+		t.Fatalf("got %q", got)
+	}
+	g.Relay.InConsensus = boolp(false)
+	if got := globalLine(th, g); !strings.Contains(got, "directory authority active (not in the relay set)") {
+		t.Fatalf("got %q", got)
+	}
+	g.Relay.InConsensus = nil
+	if got := globalLine(th, g); got != "directory authority active" {
+		t.Fatalf("an authority that cannot say read as %q", got)
+	}
+}
+
 func TestGlobalLine_absentOrFailedSection(t *testing.T) {
 	th := view.NewTheme(false)
 	if got := globalLine(th, nil); got != "" {

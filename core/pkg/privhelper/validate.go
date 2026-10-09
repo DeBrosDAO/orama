@@ -89,7 +89,6 @@ var globalUnits = map[string]bool{
 	"orama-global-ipfs-gc.service":     true,
 	"orama-global-ipfs-gc.timer":       true,
 	"orama-global-provider.service":    true,
-	"orama-global-relay.service":       true,
 	"orama-global-tor-relay.service":   true,
 	"orama-global-tor-dirauth.service": true,
 	"orama-global-sbws.service":        true,

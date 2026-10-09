@@ -34,6 +34,7 @@ var installFlags struct {
 	torBandwidthMbit uint
 	torFamily        []string
 	torAuthorityKeys string
+	torReporterOp    string
 }
 
 var installCmd = &cobra.Command{
@@ -41,11 +42,11 @@ var installCmd = &cobra.Command{
 	Short: "Install the global services on this node (run as root)",
 	Long: `Install global services on this machine: chain, and optionally ipfs,
 provider, archiver, indexer, repair, and the roles of the Orama Tor network
-(dirauth, relay, relay,exit, onion). The chain is required unless the machine
-only runs dirauth or relay: the other services reach it only on this host's
-loopback RPC. provider needs ipfs beside
-it (it pins public deals through the public Kubo). provider and repair are
-never installed together. indexer is optional: it serves the chain read API on
+(dirauth, relay, relay,exit, onion) and a directory authority's bandwidth
+reporter (reporter). The chain is required unless the machine only runs dirauth
+or relay: the other services reach it only on this host's loopback RPC. provider
+needs ipfs beside it (it pins public deals through the public Kubo). provider
+and repair are never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
@@ -98,10 +99,20 @@ is checked before anything on the host changes.
                   --tor-address to be one of the network's authorities and
                   --tor-authority-keys, its bundle from 'orama global tor
                   ceremony'; a bundle that is not this authority's is refused.
-                  A dirauth or relay host needs no chain.
+                  A dirauth or relay host needs no chain, unless it also runs
+                  the reporter.
   onion           the validator's onion service, forwarding to a tx gate on
                   loopback that serves only account read, broadcast and tx lookup.
                   It publishes no port and needs the chain.
+  reporter        the authority's bandwidth reporter, 'orama-global reporter': it
+                  reports each closed epoch's relay bandwidth and uptime to x/relay
+                  from the authority's votes. It goes beside dirauth and chain, with
+                  --tor-reporter-operator. The install writes the reporter's home
+                  (/var/lib/orama-global/reporter) with its operator and the
+                  authority-id, which is the v3_ident the network file lists for
+                  --tor-address; the hot key is created when the reporter first
+                  starts, and its address still has to be added to x/relay's
+                  reporter set and funded.
 
 --colocated installs the services on a machine that already runs a cluster node
 (orama node setup first). The global units run in their own network namespace,
@@ -125,7 +136,7 @@ refuses the install, and the set is kept by later installs.`,
 
 func init() {
 	f := installCmd.Flags()
-	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required]")
+	f.StringSliceVar(&installFlags.services, "services", nil, "Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required]")
 	f.StringVar(&installFlags.stagedDir, "staged-dir", "", "Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required]")
 	f.Uint64Var(&installFlags.publicStorageGB, "public-storage-gb", 0, "Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs)")
 	f.StringVar(&installFlags.peers, "persistent-peers", "", "Chain peers, id@host:port,... (written into the chain unit)")
@@ -141,6 +152,7 @@ func init() {
 	f.StringVar(&installFlags.torNodeID, "tor-node-id", "", "relay: the on-chain node id the relay's nickname is derived from")
 	f.UintVar(&installFlags.torBandwidthMbit, "tor-bandwidth-mbit", 0, "dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited)")
 	f.StringSliceVar(&installFlags.torFamily, "tor-family", nil, "dirauth, relay: the RSA fingerprints of the operator's other relays")
+	f.StringVar(&installFlags.torReporterOp, "tor-reporter-operator", "", "reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report")
 	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>)")
 	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
@@ -158,7 +170,7 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 		ChainClientUsers:   installFlags.chainClientUsers,
 		Tor: install.TorOptions{
 			Exit: exit, Address: installFlags.torAddress, Contact: installFlags.torContact, NodeID: installFlags.torNodeID,
-			BandwidthMbit: installFlags.torBandwidthMbit, Family: installFlags.torFamily, DirauthKeysDir: installFlags.torAuthorityKeys,
+			BandwidthMbit: installFlags.torBandwidthMbit, Family: installFlags.torFamily, DirauthKeysDir: installFlags.torAuthorityKeys, ReporterOperator: installFlags.torReporterOp,
 		},
 	}
 	if err := checkChainClientUsers(opts.ChainClientUsers, opts.Colocated); err != nil {

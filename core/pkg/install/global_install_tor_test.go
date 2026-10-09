@@ -320,7 +320,7 @@ func TestInstallGlobal_directoryAuthorityInstallsItsKeysAndPorts(t *testing.T) {
 	if got := tf.node.named("ufw"); !slices.Equal(got, []string{"status", "allow 31020/tcp comment orama-global", "allow 31021/tcp comment orama-global"}) {
 		t.Errorf("ufw = %v", got)
 	}
-	wantUnits := []string{"daemon-reload", "enable " + constants.GlobalTorDirauthUnit, "enable " + constants.GlobalTorArchiveTimer}
+	wantUnits := []string{"daemon-reload", "enable " + constants.GlobalTorDirauthUnit, "enable " + constants.GlobalTorArchiveTimer, "enable " + constants.GlobalTorMonitorTimer}
 	if got := tf.node.named("systemctl"); !slices.Equal(got, wantUnits) {
 		t.Errorf("systemctl = %v, want %v", got, wantUnits)
 	}
@@ -807,21 +807,30 @@ func TestRenderGlobalTorArchiveUnit_touchesNoNetwork(t *testing.T) {
 	}
 }
 
-// The relay's monitor writes the file the node report reads, in the relay's own
-// DataDirectory, as the relay's own account, and talks to nobody.
+// The monitor writes the file the node report reads, in the role's own
+// DataDirectory, as the role's own account, and talks to nobody. A directory
+// authority is in the consensus as a relay is, so it has the same oneshot for
+// its own account and home.
 func TestRenderGlobalTorMonitorUnit(t *testing.T) {
-	unit := RenderGlobalTorMonitorUnit()
-	if got := mustDirective(t, unit, "ExecStart"); !strings.HasSuffix(got, "global tor monitor --home "+constants.GlobalTorRelayHome) {
-		t.Errorf("ExecStart = %s", got)
-	}
-	if got := mustDirective(t, unit, "User"); got != globalTorRelayUser {
-		t.Errorf("the monitor runs as %s, not as the relay's account", got)
-	}
-	if got := mustDirective(t, unit, "RestrictAddressFamilies"); got != "AF_UNIX" {
-		t.Errorf("RestrictAddressFamilies = %q", got)
-	}
-	if !strings.Contains(unit, "IPAddressDeny=any\nIPAddressAllow=localhost\n") {
-		t.Errorf("the monitor may reach the network:\n%s", unit)
+	for name, c := range map[string]struct{ unit, home, user string }{
+		"relay":   {RenderGlobalTorMonitorUnit(), constants.GlobalTorRelayHome, globalTorRelayUser},
+		"dirauth": {RenderGlobalTorDirauthMonitorUnit(), constants.GlobalTorDirauthHome, globalTorDirauthUser},
+	} {
+		if got := mustDirective(t, c.unit, "ExecStart"); !strings.HasSuffix(got, "global tor monitor --home "+c.home) {
+			t.Errorf("%s: ExecStart = %s", name, got)
+		}
+		if got := mustDirective(t, c.unit, "User"); got != c.user {
+			t.Errorf("%s: the monitor runs as %s, not as the role's account %s", name, got, c.user)
+		}
+		if got := mustDirective(t, c.unit, "StateDirectory"); got != strings.TrimPrefix(c.home, "/var/lib/") {
+			t.Errorf("%s: StateDirectory = %q, want the role's own %s", name, got, c.home)
+		}
+		if got := mustDirective(t, c.unit, "RestrictAddressFamilies"); got != "AF_UNIX" {
+			t.Errorf("%s: RestrictAddressFamilies = %q", name, got)
+		}
+		if !strings.Contains(c.unit, "IPAddressDeny=any\nIPAddressAllow=localhost\n") {
+			t.Errorf("%s: the monitor may reach the network:\n%s", name, c.unit)
+		}
 	}
 	timer := RenderGlobalTorMonitorTimer()
 	if !strings.Contains(timer, "Unit="+constants.GlobalTorMonitorUnit) || !strings.Contains(timer, "OnUnitActiveSec=5min") {
@@ -829,8 +838,9 @@ func TestRenderGlobalTorMonitorUnit(t *testing.T) {
 	}
 }
 
-// The monitor files are installed for a relay, and the timer is enabled while
-// the oneshot has no [Install] section.
+// The monitor files are installed for a relay and for a directory authority
+// (each runs it for its own account), and the timer is enabled while the
+// oneshot has no [Install] section.
 func TestInstallGlobal_relayInstallsItsMonitorTimer(t *testing.T) {
 	tf := newTorFixture(t)
 	opts := tf.options(GlobalServiceRelay)
@@ -838,11 +848,33 @@ func TestInstallGlobal_relayInstallsItsMonitorTimer(t *testing.T) {
 	if err := InstallGlobal(opts, tf.host); err != nil {
 		t.Fatal(err)
 	}
+	if got := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorMonitorUnit)); got != RenderGlobalTorMonitorUnit() {
+		t.Errorf("a relay's monitor oneshot is not the relay's:\n%s", got)
+	}
 	if !strings.Contains(readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorMonitorTimer)), "[Install]") {
 		t.Error("the monitor timer is not installable")
 	}
 	if strings.Contains(readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorMonitorUnit)), "[Install]") {
 		t.Error("the monitor oneshot has an [Install] section: only its timer starts it")
+	}
+}
+
+func TestInstallGlobal_directoryAuthorityInstallsItsMonitorTimer(t *testing.T) {
+	tf := newTorFixture(t)
+	opts := tf.options(GlobalServiceDirauth)
+	opts.Tor = TorOptions{Address: torTestAddress, Contact: torTestContact, DirauthKeysDir: tf.bundle(t, tf.identityPEM, tf.network.Authorities[0].V3Ident)}
+	if err := InstallGlobal(opts, tf.host); err != nil {
+		t.Fatal(err)
+	}
+	oneshot := readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorMonitorUnit))
+	if oneshot != RenderGlobalTorDirauthMonitorUnit() || !strings.Contains(oneshot, "User="+globalTorDirauthUser+"\n") {
+		t.Errorf("an authority's monitor oneshot does not run as the authority:\n%s", oneshot)
+	}
+	if strings.Contains(oneshot, "[Install]") {
+		t.Error("the monitor oneshot has an [Install] section: only its timer starts it")
+	}
+	if !strings.Contains(readFile(t, filepath.Join(tf.host.UnitDir, constants.GlobalTorMonitorTimer)), "[Install]") {
+		t.Error("the monitor timer is not installable")
 	}
 }
 

@@ -23,6 +23,7 @@ var (
 	publicKuboTokenPath = filepath.Join(constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile)
 	providerMonitorPath = filepath.Join(constants.GlobalProviderHome, constants.GlobalMonitorFile)
 	relayMonitorPath    = filepath.Join(constants.GlobalTorRelayHome, constants.GlobalMonitorFile)
+	dirauthMonitorPath  = filepath.Join(constants.GlobalTorDirauthHome, constants.GlobalMonitorFile)
 	globalSystemctl     = chainSystemctl
 	globalIPFSPost      = postBearer
 )
@@ -37,13 +38,13 @@ var globalIPFSAPI = func() string {
 	return constants.LocalGlobalIPFSAPIURL()
 }
 
-// collectGlobal reports public Kubo, the provider, and the relay when those
-// units are installed. A cluster node has none of them, and the section is nil.
+// collectGlobal reports public Kubo, the provider, and the Tor relay or
+// directory authority when those units are installed. A cluster node has none of them, and the section is nil.
 func collectGlobal() *GlobalReport {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	units := []string{constants.GlobalIPFSUnit, constants.GlobalProviderUnit, constants.GlobalTorRelayUnit}
+	units := []string{constants.GlobalIPFSUnit, constants.GlobalProviderUnit, constants.GlobalTorRelayUnit, constants.GlobalTorDirauthUnit}
 	var g GlobalReport
 	installed := 0
 	for _, name := range units {
@@ -67,8 +68,13 @@ func collectGlobal() *GlobalReport {
 	if _, ok := globalUnitState(&g, constants.GlobalProviderUnit); ok {
 		g.Provider = readProviderMonitor()
 	}
+	// A host runs a relay or a directory authority, never both; each writes its
+	// own home's monitor.json.
 	if _, ok := globalUnitState(&g, constants.GlobalTorRelayUnit); ok {
-		g.Relay = readRelayMonitor()
+		g.Relay = readRelayMonitor(relayMonitorPath)
+	}
+	if _, ok := globalUnitState(&g, constants.GlobalTorDirauthUnit); ok {
+		g.Relay = readRelayMonitor(dirauthMonitorPath)
 	}
 	return &g
 }
@@ -156,9 +162,9 @@ func readProviderMonitor() *ProviderReport {
 	return r
 }
 
-func readRelayMonitor() *RelayReport {
+func readRelayMonitor(path string) *RelayReport {
 	r := &RelayReport{}
-	mon, present, err := readMonitor(relayMonitorPath)
+	mon, present, err := readMonitor(path)
 	if err != nil {
 		r.Error = shortChainError(err)
 		return r
@@ -170,10 +176,11 @@ func readRelayMonitor() *RelayReport {
 	return r
 }
 
-// MonitorFile is /var/lib/orama-global/{provider,tor-relay}/monitor.json.
+// MonitorFile is /var/lib/orama-global/{provider,tor-relay,tor-dirauth}/monitor.json.
 // Absent fields stay nil. The storage provider writes its file every step; the
-// Tor relay's holds only in_consensus, written by orama-global-tor-monitor.timer
-// (tornet.WriteRelayMonitor) and left out while the relay cannot know.
+// Tor relay's and the directory authority's hold only in_consensus, written by
+// orama-global-tor-monitor.timer (tornet.WriteMonitor) and left out while the
+// node cannot know.
 type MonitorFile struct {
 	HotKeyBalanceNorama *int64 `json:"hot_key_balance_norama"`
 	ProofMisses         *int   `json:"proof_misses"`

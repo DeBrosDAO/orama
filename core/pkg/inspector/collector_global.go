@@ -81,13 +81,19 @@ unit_load %s
 mark provider_state
 unit_state %s
 mark provider_monitor
-sudo -n head -c 4096 %s/%s 2>/dev/null || true
+%s
 mark relay_load
 unit_load %s
 mark relay_state
 unit_state %s
 mark relay_monitor
-sudo -n dd if=%s/%s bs=4096 count=1 iflag=nofollow,nonblock 2>/dev/null || true
+%s
+mark dirauth_load
+unit_load %s
+mark dirauth_state
+unit_state %s
+mark dirauth_monitor
+%s
 `,
 		globalnetns.UnitName, constants.GlobalNetnsAddr, constants.GlobalNetnsAddr, chainCurlFailedSudo, chainCurlFailed,
 		constants.ChainServiceUnit, constants.ChainServiceUnit,
@@ -98,11 +104,26 @@ sudo -n dd if=%s/%s bs=4096 count=1 iflag=nofollow,nonblock 2>/dev/null || true
 		constants.GlobalIPFSHome, constants.GlobalIPFSAPITokenFile,
 		constants.GlobalNetnsAddr, constants.GlobalIPFSAPIPort,
 		constants.GlobalProviderUnit, constants.GlobalProviderUnit,
-		constants.GlobalProviderHome, constants.GlobalMonitorFile,
+		monitorRead(constants.GlobalProviderHome),
 		constants.GlobalTorRelayUnit, constants.GlobalTorRelayUnit,
-		constants.GlobalTorRelayHome, constants.GlobalMonitorFile,
+		monitorRead(constants.GlobalTorRelayHome),
+		constants.GlobalTorDirauthUnit, constants.GlobalTorDirauthUnit,
+		monitorRead(constants.GlobalTorDirauthHome),
 	)
 }
+
+// monitorRead is the script line that prints a role's monitor.json as root. The
+// home belongs to the role's unprivileged account, which can replace the file
+// with a link to a file only root can read or with a FIFO: the read refuses a
+// link (nofollow), does not wait on a FIFO (nonblock, which reads nothing from
+// one) and takes one block.
+func monitorRead(home string) string {
+	return fmt.Sprintf("sudo -n dd if=%s/%s bs=%d count=1 iflag=nofollow,nonblock 2>/dev/null || true",
+		home, constants.GlobalMonitorFile, monitorReadLimit)
+}
+
+// monitorReadLimit bounds a monitor file read over SSH.
+const monitorReadLimit = 4096
 
 func splitGlobalSections(stdout string) map[string]string {
 	const mark = "===ORAMA_GLOBAL "
@@ -188,7 +209,8 @@ func globalFromSections(sections map[string]string) *report.GlobalReport {
 	ipfs := add("ipfs_load", "ipfs_state", constants.GlobalIPFSUnit)
 	provider := add("provider_load", "provider_state", constants.GlobalProviderUnit)
 	relay := add("relay_load", "relay_state", constants.GlobalTorRelayUnit)
-	if ipfs == "" && provider == "" && relay == "" {
+	dirauth := add("dirauth_load", "dirauth_state", constants.GlobalTorDirauthUnit)
+	if ipfs == "" && provider == "" && relay == "" && dirauth == "" {
 		return nil
 	}
 	if ipfs == "active" {
@@ -197,8 +219,12 @@ func globalFromSections(sections map[string]string) *report.GlobalReport {
 	if provider != "" {
 		g.Provider = monitorProvider(sections["provider_monitor"])
 	}
+	// A host runs a relay or a directory authority, never both.
 	if relay != "" {
 		g.Relay = monitorRelay(sections["relay_monitor"])
+	}
+	if dirauth != "" {
+		g.Relay = monitorRelay(sections["dirauth_monitor"])
 	}
 	return &g
 }

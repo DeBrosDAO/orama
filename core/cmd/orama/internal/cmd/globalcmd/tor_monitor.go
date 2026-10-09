@@ -13,19 +13,19 @@ var monitorFlags struct{ home string }
 
 var monitorCmd = &cobra.Command{
 	Use:   "monitor",
-	Short: "Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)",
-	Long: `Write <home>/monitor.json with whether the consensus the relay holds lists it:
-{"in_consensus": true|false}. 'orama monitor node' shows it on the Global line and the
-node report raises a warning when the relay is not listed. The field is left out
-(the file is "{}") while the relay has no consensus yet or the one it holds has
-expired, so an unknown state is never reported as a no. It reads only the relay's
-own DataDirectory and writes only monitor.json there.`,
+	Short: "Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)",
+	Long: `Write <home>/monitor.json with whether the consensus the relay or directory authority
+holds lists it: {"in_consensus": true|false}. 'orama monitor node' shows it on the Global
+line and the node report raises a warning when the node is not listed. The field is left
+out (the file is "{}") while the node has no consensus yet or the one it holds has
+expired, so an unknown state is never reported as a no. It reads only the role's own
+DataDirectory and writes only monitor.json there.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		if monitorFlags.home == "" {
-			return clierr.Usage("--home is required: the relay's tor DataDirectory")
+			return clierr.Usage("--home is required: the relay's or directory authority's tor DataDirectory")
 		}
-		listed, err := tornet.WriteRelayMonitor(monitorFlags.home, time.Now())
+		listed, err := tornet.WriteMonitor(monitorFlags.home, time.Now())
 		if err != nil {
 			return clierr.Failure("%v", err)
 		}
@@ -39,6 +39,6 @@ own DataDirectory and writes only monitor.json there.`,
 }
 
 func init() {
-	monitorCmd.Flags().StringVar(&monitorFlags.home, "home", "", "The relay's tor DataDirectory [required]")
+	monitorCmd.Flags().StringVar(&monitorFlags.home, "home", "", "The relay's or directory authority's tor DataDirectory [required]")
 	torCmd.AddCommand(monitorCmd)
 }

@@ -4,7 +4,7 @@ package relayreporter
 
 import (
 	"encoding/json"
-	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,23 +13,32 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 const (
 	// reporterBin is where `orama global install` puts orama-global.
 	reporterBin = "/usr/lib/orama-global/bin/orama-global"
-	// envHome is a reporter home on the chain node, prepared by the tester: a
-	// funded hot-key whose address is in x/relay's reporter set, operator,
-	// authority-id and votes/*.vote of a directory authority.
-	envHome = "E2E_REPORTER_HOME"
+	// reporterHome and reporterAccount are what `orama global install --services
+	// chain,dirauth,reporter` prepares: the home with the operator and the
+	// authority-id, and the account that owns it.
+	reporterHome    = constants.GlobalReporterHome
+	reporterAccount = "orama-reporter"
+	// reporterUnitFile is the unit the install writes.
+	reporterUnitFile = "/etc/systemd/system/" + constants.GlobalReporterUnit
 	// runBudget covers more than one epoch of the run chain (E2E_EPOCH_DURATION).
 	runMinutes = 8
 	runBudget  = runMinutes * time.Minute
 	// passInterval is the reporter's pass interval for the run.
 	passInterval = "5s"
+	pollEvery    = 15 * time.Second
 )
+
+// operatorAddress is the shape the install accepts for the operator file.
+var operatorAddress = regexp.MustCompile(`^orama1[02-9ac-hj-np-z]{20,100}$`)
 
 // node is the chain node the reporter runs on; the test is not applicable
 // without orama-global on it.
@@ -43,6 +52,20 @@ func node(t *testing.T) (*chain.Chain, fleet.Node) {
 	return c, n
 }
 
+// installedNode is the node `orama global install --services chain,dirauth,reporter`
+// ran on: the one that has the reporter's unit. A run chain has none.
+func installedNode(t *testing.T) (*chain.Chain, fleet.Node) {
+	t.Helper()
+	c := chain.New(t)
+	for _, n := range c.F.State.Nodes {
+		if c.F.Exec(t, n, "test -f "+reporterUnitFile).Exit == 0 {
+			return c, n
+		}
+	}
+	harness.SkipNotApplicable(t, "no node of this target has "+constants.GlobalReporterUnit+": install a directory authority's reporter with `orama global install --services chain,dirauth,reporter` (docs/TOR_NETWORK.md, The relay bandwidth reporter)")
+	return nil, fleet.Node{}
+}
+
 // A reporter with no identity does not start: no operator file, no report.
 func TestReporter_refusesToStartWithoutItsIdentity(t *testing.T) {
 	c, n := node(t)
@@ -50,29 +73,40 @@ func TestReporter_refusesToStartWithoutItsIdentity(t *testing.T) {
 	infra.ExpectNodeExit(t, "orama-global reporter without an identity", out, infra.ExitFailure, "operator", "must hold")
 }
 
-// The authority-id the reporter reads is the v3 identity the network file
-// lists for an authority: one file names the authorities for the Tor roles,
-// the clients and the reporter. The test reads the file from
-// ORAMA_ONION_NETWORK (as every client does) and the reporter home from
-// E2E_REPORTER_HOME.
-func TestReporter_authorityIDIsOneOfTheNetworkFilesAuthorities(t *testing.T) {
-	file := os.Getenv(tornet.NetworkEnv)
-	home := os.Getenv(envHome)
-	if file == "" || home == "" {
-		harness.SkipNotApplicable(t, tornet.NetworkEnv+" and "+envHome+" must name the network file and a reporter home: the run has no directory authority to report for")
-	}
-	network, err := tornet.Load(file)
+// The install prepares the reporter's home with no manual step: the account
+// owns it, the operator is an account address, and the authority-id is the v3
+// identity the network file the install kept lists for an authority (one file
+// names the authorities for the Tor roles, the clients and the reporter).
+func TestReporter_installPreparedItsHome(t *testing.T) {
+	c, n := installedNode(t)
+	network, err := tornet.ParseNetwork(c.F.ReadFile(t, n, constants.GlobalStateRoot+"/"+constants.GlobalTorAuthoritiesFile))
 	if err != nil {
-		t.Fatalf("the network file %s: %v", file, err)
+		t.Fatalf("%s: the network file the install kept: %v", n.Name, err)
 	}
-	c, n := node(t)
-	id := strings.ToUpper(strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(home+"/authority-id")).Stdout))
+	id := strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/authority-id")).Stdout)
+	var listed bool
 	for _, a := range network.Authorities {
-		if a.V3Ident == id {
-			return
+		listed = listed || a.V3Ident == id
+	}
+	if !listed {
+		t.Errorf("%s/authority-id is %s, which no authority of the installed network file lists as its v3_ident", reporterHome, id)
+	}
+	if op := strings.TrimSpace(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/operator")).Stdout); !operatorAddress.MatchString(op) {
+		t.Errorf("%s/operator is %q, not an account address", reporterHome, op)
+	}
+	for path, want := range map[string]string{
+		reporterHome:                   reporterAccount + " 700",
+		reporterHome + "/authority-id": reporterAccount + " 600",
+		reporterHome + "/operator":     reporterAccount + " 600",
+		reporterHome + "/votes":        reporterAccount + " 700",
+	} {
+		if got := strings.TrimSpace(c.F.MustExec(t, n, "stat -c '%U %a' "+fleet.ShellQuote(path)).Stdout); got != want {
+			t.Errorf("%s is %q, want %q", path, got, want)
 		}
 	}
-	t.Fatalf("%s/authority-id is %s, which no authority of %s lists as its v3_ident", home, id, file)
+	if got := strings.TrimSpace(c.F.Exec(t, n, "systemctl is-enabled "+constants.GlobalReporterUnit).Stdout); got != "enabled" {
+		t.Errorf("%s is %q after the install, want enabled", constants.GlobalReporterUnit, got)
+	}
 }
 
 type reporterState struct {
@@ -86,34 +120,51 @@ type reporterMonitor struct {
 	Relays int    `json:"relays"`
 }
 
-// The reporter runs across an epoch close and reports the epoch that closed.
+// The reporter reports the epoch that closed. It needs what the install does
+// not make: a hot key whose address is in x/relay's reporter set and funded
+// (the reporter creates the key on its first start), and archived votes in the
+// home's votes directory. Without them the run is not applicable. A reporter
+// that is running is read; one that is stopped is run across an epoch close.
 func TestReporter_reportsAClosedEpoch(t *testing.T) {
-	home := os.Getenv(envHome)
-	if home == "" {
-		harness.SkipNotApplicable(t, envHome+" names no reporter home: the run has no directory authority votes to report from (track E2 builds the dirauth)")
+	c, n := installedNode(t)
+	if c.F.Exec(t, n, "sudo test -f "+fleet.ShellQuote(reporterHome+"/hot-key")).Exit != 0 {
+		harness.SkipNotApplicable(t, n.Name+" has no reporter hot key yet: start the reporter once, add its address to x/relay's reporter set and fund it")
 	}
-	c, n := node(t)
-	cmd := "sudo timeout " + strconv.Itoa(runMinutes) + "m " + reporterBin + " reporter --home " + fleet.ShellQuote(home) + " --interval " + passInterval + " --rpc tcp://127.0.0.1:31001"
-	// timeout ends the reporter after the budget (exit 124); that is the expected end.
-	out := c.Run(t, n, runBudget+time.Minute, cmd)
-	if out.Exit != 124 {
-		t.Fatalf("the reporter stopped on its own (exit %d), it should run until timeout ends it:\n%s%s", out.Exit, out.Stdout, out.Stderr)
+	if strings.TrimSpace(c.F.Exec(t, n, "sudo ls "+fleet.ShellQuote(reporterHome+"/votes")+" | grep -c '\\.vote$'").Stdout) == "0" {
+		harness.SkipNotApplicable(t, n.Name+" has no archived votes in "+reporterHome+"/votes: the reporter has nothing to report from")
 	}
-	if strings.Contains(out.Stderr, "reporter pass failed") {
-		t.Errorf("a pass failed:\n%s", out.Stderr)
+	if c.F.Unit(t, n, constants.GlobalReporterUnit) == infra.UnitActive {
+		eventually.Require(t, pollEvery, runBudget, "the running reporter to report an epoch", func() (bool, error) {
+			st := readJSON[reporterState](t, c, n, "state.json")
+			return st.Reported > 0 && st.Reported < st.Seen, nil
+		})
+	} else {
+		cmd := "sudo -u " + reporterAccount + " timeout " + strconv.Itoa(runMinutes) + "m " + reporterBin + " reporter --home " + fleet.ShellQuote(reporterHome) + " --interval " + passInterval + " --rpc tcp://127.0.0.1:31001"
+		// timeout ends the reporter after the budget (exit 124); that is the expected end.
+		out := c.Run(t, n, runBudget+time.Minute, cmd)
+		if out.Exit != 124 {
+			t.Fatalf("the reporter stopped on its own (exit %d), it should run until timeout ends it:\n%s%s", out.Exit, out.Stdout, out.Stderr)
+		}
+		if strings.Contains(out.Stderr, "reporter pass failed") {
+			t.Errorf("a pass failed:\n%s", out.Stderr)
+		}
 	}
-	var st reporterState
-	if err := json.Unmarshal([]byte(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(home+"/state.json")).Stdout), &st); err != nil {
-		t.Fatalf("state.json: %v", err)
-	}
+	st := readJSON[reporterState](t, c, n, "state.json")
 	if st.Reported == 0 || st.Reported >= st.Seen {
 		t.Errorf("state = %+v: an epoch should be reported and the epoch in progress is after it", st)
 	}
-	var mon reporterMonitor
-	if err := json.Unmarshal([]byte(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(home+"/monitor.json")).Stdout), &mon); err != nil {
-		t.Fatalf("monitor.json: %v", err)
-	}
+	mon := readJSON[reporterMonitor](t, c, n, "monitor.json")
 	if mon.Epoch != st.Reported || mon.Chunks < 1 {
 		t.Errorf("monitor = %+v, state = %+v", mon, st)
 	}
+}
+
+// readJSON decodes a file of the reporter's home.
+func readJSON[T any](t *testing.T, c *chain.Chain, n fleet.Node, name string) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal([]byte(c.F.MustExec(t, n, "sudo cat "+fleet.ShellQuote(reporterHome+"/"+name)).Stdout), &v); err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	return v
 }

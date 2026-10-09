@@ -54,7 +54,7 @@ func TestParseGlobalServices_ipfsStartsAfterTheChainAndBeforeTheProvider(t *test
 func TestGlobalServiceCompanions(t *testing.T) {
 	want := map[GlobalService][]string{
 		GlobalServiceIPFS:    {"orama-global-ipfs-gc.timer"},
-		GlobalServiceDirauth: {constants.GlobalTorArchiveTimer},
+		GlobalServiceDirauth: {constants.GlobalTorArchiveTimer, constants.GlobalTorMonitorTimer},
 		GlobalServiceRelay:   {constants.GlobalTorMonitorTimer},
 		GlobalServiceOnion:   {constants.GlobalTxGateUnit},
 	}

@@ -50,19 +50,19 @@ func TestLifecycle_chainStopAndRestartLeaveTheRelayRunning(t *testing.T) {
 	}
 }
 
-func TestLifecycle_directoryAuthorityRunsItsArchiveTimer(t *testing.T) {
+func TestLifecycle_directoryAuthorityRunsItsArchiveAndMonitorTimers(t *testing.T) {
 	l, f := newLifecycle(t, install.GlobalServiceDirauth)
 	if err := l.Start(context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"start " + dirauthUnit, "start " + archiveTimer}; !slices.Equal(f.calls, want) {
+	if want := []string{"start " + dirauthUnit, "start " + archiveTimer, "start " + monitorTimer}; !slices.Equal(f.calls, want) {
 		t.Fatalf("start calls = %v, want %v", f.calls, want)
 	}
 	f.calls = nil
 	if err := l.Stop(nil); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"stop " + archiveTimer, "stop " + dirauthUnit}; !slices.Equal(f.calls, want) {
+	if want := []string{"stop " + archiveTimer, "stop " + monitorTimer, "stop " + dirauthUnit}; !slices.Equal(f.calls, want) {
 		t.Fatalf("stop calls = %v, want %v", f.calls, want)
 	}
 }
