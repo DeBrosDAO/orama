@@ -3,11 +3,14 @@
 package chainglobal
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/harness"
+	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
@@ -18,6 +21,14 @@ const (
 	globalIPFSGCUnit = "orama-global-ipfs-gc.service"
 	// globalIPFSGCEnv holds the daemon's RPC bearer for the unit (mode 0600).
 	globalIPFSGCEnv = constants.GlobalIPFSHome + "/gc.env"
+
+	// globalIPFSGCRunBudget is how long a collection of the repo may take. The
+	// unit sets no timeout of its own, so this is the test's bound, not a
+	// blocking command's: `systemctl start` would hold the ssh session for the
+	// whole run, longer than a command's budget.
+	globalIPFSGCRunBudget = 30 * time.Minute
+	// globalIPFSGCPollEvery is how often the run's state is read.
+	globalIPFSGCPollEvery = 5 * time.Second
 )
 
 // ipfsGCNode is a node that has the public Kubo's GC unit: the one
@@ -71,12 +82,28 @@ func TestGlobalIPFSGC_unitHoldsNoBearerOnItsCommandLine(t *testing.T) {
 }
 
 // Run on a global node, the oneshot collects through the daemon's RPC and ends
-// successful. `systemctl start` on a oneshot returns when it has ended, so the
-// unit's result is the run's.
+// successful. The unit is started without blocking and polled until it is no
+// longer running, then its Result is the run's.
 func TestGlobalIPFSGC_runsThroughTheDaemonAndEndsSuccessful(t *testing.T) {
 	c, n := ipfsGCNode(t)
 
-	c.F.MustExec(t, n, "systemctl start "+globalIPFSGCUnit)
+	// A run is a new invocation: waiting for the unit to be idle alone would read
+	// the state from before the job was picked up.
+	invocation := func() string {
+		return strings.TrimSpace(c.F.Exec(t, n, "systemctl show -p InvocationID --value "+globalIPFSGCUnit).Stdout)
+	}
+	before := invocation()
+	c.F.MustExec(t, n, "systemctl start --no-block "+globalIPFSGCUnit)
+	eventually.Require(t, globalIPFSGCPollEvery, globalIPFSGCRunBudget, n.Name+" to finish a run of "+globalIPFSGCUnit, func() (bool, error) {
+		if invocation() == before {
+			return false, fmt.Errorf("the run has not started: InvocationID is still %q", before)
+		}
+		state := strings.TrimSpace(c.F.Exec(t, n, "systemctl show -p ActiveState --value "+globalIPFSGCUnit).Stdout)
+		if state == "activating" || state == "active" || state == "deactivating" {
+			return false, fmt.Errorf("ActiveState=%s", state)
+		}
+		return true, nil
+	})
 	show := c.F.MustExec(t, n, "systemctl show -p Result -p ExecMainStatus "+globalIPFSGCUnit).Stdout
 	for _, want := range []string{"Result=success", "ExecMainStatus=0"} {
 		if !strings.Contains(show, want) {
