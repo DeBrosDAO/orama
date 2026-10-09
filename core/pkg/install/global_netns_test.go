@@ -385,7 +385,7 @@ func TestInstallGlobal_colocatedPutsTheKuboIndexerAndCosmovisorUnitsInTheNamespa
 		t.Errorf("provider does not use Kubo's namespace RPC:\n%s", provider)
 	}
 	gc, _ := os.ReadFile(filepath.Join(f.host.UnitDir, globalIPFSGCUnit))
-	if !strings.Contains(string(gc), "--api=/ip4/198.18.0.2/tcp/31011 ") || strings.Contains(string(gc), "127.0.0.1") {
+	if !strings.Contains(string(gc), "Environment=IPFS_API=/ip4/198.18.0.2/tcp/31011\n") || strings.Contains(string(gc), "127.0.0.1") {
 		t.Errorf("GC does not use Kubo's namespace RPC:\n%s", gc)
 	}
 	raw, err := os.ReadFile(filepath.Join(f.host.StateDir, "ipfs", "config"))

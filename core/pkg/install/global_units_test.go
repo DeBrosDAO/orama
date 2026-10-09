@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -281,9 +282,9 @@ func TestRenderGlobalReporterUnit_startsAfterTheChainAndUsesItsHome(t *testing.T
 }
 
 func TestGlobalUnits_kuboRPCHostIsThreadedThrough(t *testing.T) {
-	gc := mustDirective(t, RenderGlobalIPFSGCUnit("198.18.0.2"), "ExecStart")
-	if !strings.Contains(gc, "--api=/ip4/198.18.0.2/tcp/31011 ") {
-		t.Errorf("GC ExecStart = %q", gc)
+	gc := RenderGlobalIPFSGCUnit("198.18.0.2")
+	if !strings.Contains(gc, "Environment=IPFS_API=/ip4/198.18.0.2/tcp/31011\n") {
+		t.Errorf("GC unit does not name the daemon's RPC address:\n%s", gc)
 	}
 	provider := mustDirective(t, RenderGlobalProviderUnit("198.18.0.2"), "ExecStart")
 	if !strings.Contains(provider, "--ipfs-api http://198.18.0.2:31011 ") {
@@ -302,5 +303,31 @@ func TestRenderGlobalChainUnit_setsASoftMemoryLimit(t *testing.T) {
 	unit := RenderGlobalChainUnit("")
 	if !strings.Contains(unit, "\nEnvironment=GOMEMLIMIT="+constants.ChainGoMemLimit+"\n") {
 		t.Fatalf("the chain unit sets no GOMEMLIMIT:\n%s", unit)
+	}
+}
+
+// The GC unit passed the RPC bearer to ipfs as --api-auth=${IPFS_API_AUTH}, so
+// it was on the process's command line, readable by every local user, for the
+// length of a collection. The orama command reads it from the environment.
+func TestRenderGlobalIPFSGCUnit_theBearerIsNeverOnACommandLine(t *testing.T) {
+	unit := RenderGlobalIPFSGCUnit("127.0.0.1")
+	exec := mustDirective(t, unit, "ExecStart")
+	if exec != globalBinDir+"/orama node ipfs-gc" {
+		t.Errorf("ExecStart = %q, want the orama command that reads its environment", exec)
+	}
+	if strings.Contains(exec, "IPFS_API_AUTH") || strings.Contains(exec, "api-auth") {
+		t.Errorf("the bearer is on the command line: %q", exec)
+	}
+	if !strings.Contains(unit, "EnvironmentFile="+globalIPFSHome+"/"+globalIPFSGCEnvFile+"\n") ||
+		!strings.Contains(unit, "Environment=IPFS_API=/ip4/127.0.0.1/tcp/31011\n") {
+		t.Errorf("the unit does not give the command its address and its bearer:\n%s", unit)
+	}
+}
+
+// The unit runs the orama CLI from the global bin directory, so the public
+// Kubo's role installs it.
+func TestGlobalServiceSpecs_theIPFSRoleInstallsTheCLIItsGCUnitRuns(t *testing.T) {
+	if !slices.Contains(globalServiceSpecs[GlobalServiceIPFS].binaries, globalOramaCLI) {
+		t.Error("the IPFS role does not install the orama CLI its GC unit runs")
 	}
 }

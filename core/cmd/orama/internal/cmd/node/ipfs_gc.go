@@ -14,8 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Environment variables of the GC unit (orama-namespace-ipfs-gc@.service reads
-// them from its EnvironmentFile): the daemon's RPC address and credential.
+// Environment variables of the GC units (orama-namespace-ipfs-gc@.service and
+// orama-global-ipfs-gc.service): the daemon's RPC address and credential. The
+// credential is in an EnvironmentFile and never on a command line.
 const (
 	ipfsGCAPIEnv  = "IPFS_API"
 	ipfsGCAuthEnv = "IPFS_API_AUTH"
@@ -23,12 +24,13 @@ const (
 
 var ipfsGCCmd = &cobra.Command{
 	Use:    "ipfs-gc",
-	Short:  "Garbage-collect this namespace's IPFS repo (run by orama-namespace-ipfs-gc@.service)",
+	Short:  "Garbage-collect an IPFS repo through its daemon (run by the namespace and global IPFS GC units)",
 	Hidden: true,
 	Long: `Garbage-collect the repo of the running Kubo daemon through its RPC API. The
 daemon's address and credential are IPFS_API and IPFS_API_AUTH.
 
-It is the ExecStart of the GC oneshot, not an operator command. 'ipfs repo gc'
+It is the ExecStart of the GC oneshots (a namespace's, and the public Kubo's on
+a global node), not an operator command. 'ipfs repo gc'
 did this before, and a stop of the unit (orama node restart, an upgrade, a node
 stop: the unit requires the daemon and is part of the node) never ended it
 cleanly: Kubo's CLI answers the first SIGTERM by waiting for the collection, so

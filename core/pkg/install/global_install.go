@@ -53,7 +53,8 @@ const (
 	globalOramadBinary = constants.ChainDaemonName
 	globalServiceBin   = "orama-global"
 	// globalOramaCLI is the orama CLI, installed beside oramad so the chain
-	// unit can run the sign-floor check (GlobalSignFloorCheck).
+	// unit can run the sign-floor check (GlobalSignFloorCheck), and beside the
+	// public Kubo for its GC unit (`orama node ipfs-gc`).
 	globalOramaCLI = "orama"
 	// globalKuboBinary is the public Kubo daemon, the release's ipfs at constants.IPFSKuboVersion.
 	globalKuboBinary = "ipfs"
@@ -91,7 +92,7 @@ const (
 
 var globalServiceSpecs = map[GlobalService]globalServiceSpec{
 	GlobalServiceChain:    {unit: constants.ChainServiceUnit, user: globalChainUser, binaries: []string{globalOramadBinary, globalOramaCLI}},
-	GlobalServiceIPFS:     {unit: constants.GlobalIPFSUnit, user: globalIPFSUser, binaries: []string{globalKuboBinary}, groups: []string{globalIPFSRPCGroup}, companions: []string{globalIPFSGCTimer}},
+	GlobalServiceIPFS:     {unit: constants.GlobalIPFSUnit, user: globalIPFSUser, binaries: []string{globalKuboBinary, globalOramaCLI}, groups: []string{globalIPFSRPCGroup}, companions: []string{globalIPFSGCTimer}},
 	GlobalServiceProvider: {unit: constants.GlobalProviderUnit, user: globalProviderUser, binaries: []string{globalServiceBin}, groups: []string{globalIPFSRPCGroup}},
 	GlobalServiceArchiver: {unit: constants.GlobalArchiverUnit, user: globalArchiverUser, binaries: []string{globalServiceBin}},
 	GlobalServiceIndexer:  {unit: constants.GlobalIndexerUnit, user: globalIndexerUser, binaries: []string{globalServiceBin}},

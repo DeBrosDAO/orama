@@ -144,9 +144,9 @@ func chainPrometheusNote() string {
 
 // globalIPFSGCEnvFile is the GC oneshot's environment file in the public
 // Kubo home, mode 0600, the Kubo user's. It holds IPFS_API_AUTH, the bearer
-// the daemon's RPC requires. The GC unit passes it to ipfs as --api-auth, so it
-// is on that one process's command line for the length of a GC run; the token
-// allows only the calls in installers.PublicAPIAllowedPaths.
+// the daemon's RPC requires, which `orama node ipfs-gc` reads from its
+// environment: it is never on a command line, where any local user could read
+// it. The token allows only the calls in installers.PublicAPIAllowedPaths.
 const globalIPFSGCEnvFile = "gc.env"
 
 // ipfsRepoAccess gives a public-Kubo unit the RPC group and lets that group
@@ -170,13 +170,15 @@ func RenderGlobalIPFSUnit() string {
 
 // RenderGlobalIPFSGCUnit is the oneshot that garbage-collects the public Kubo
 // repo through the running daemon's RPC. Its timer is RenderGlobalIPFSGCTimer.
-// Neither is PartOf orama-node.
+// Neither is PartOf orama-node. It runs `orama node ipfs-gc`, as the namespace
+// GC unit does, so that a stop of the unit (SIGTERM) ends the collection and
+// exits 0, which Kubo's own CLI does not.
 func RenderGlobalIPFSGCUnit(apiHost string) string {
 	api := fmt.Sprintf("/ip4/%s/tcp/%d", apiHost, constants.GlobalIPFSAPIPort)
-	exec := fmt.Sprintf("%s/ipfs --api=%s --api-auth=${IPFS_API_AUTH} repo gc", globalBinDir, api)
+	exec := fmt.Sprintf("%s/%s node ipfs-gc", globalBinDir, globalOramaCLI)
 	unit := renderGlobalOneshot("Orama public IPFS garbage collection", globalIPFSUser, "orama-global/ipfs", globalIPFSHome, exec)
 	unit = strings.Replace(unit, "After=network-online.target\n", "After=network-online.target "+constants.GlobalIPFSUnit+"\n", 1)
-	unit = strings.Replace(unit, "ExecStart=", "EnvironmentFile="+globalIPFSHome+"/"+globalIPFSGCEnvFile+"\nExecStart=", 1)
+	unit = strings.Replace(unit, "ExecStart=", "EnvironmentFile="+globalIPFSHome+"/"+globalIPFSGCEnvFile+"\nEnvironment=IPFS_API="+api+"\nExecStart=", 1)
 	return ipfsRepoAccess(unit)
 }
 

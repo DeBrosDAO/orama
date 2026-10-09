@@ -321,7 +321,8 @@ func TestInstallGlobal_ipfsWritesTheGCTimerAndEnablesOnlyWhatCanBeEnabled(t *tes
 	}
 	gc := RenderGlobalIPFSGCUnit("127.0.0.1")
 	if !strings.Contains(gc, "EnvironmentFile=/var/lib/orama-global/ipfs/gc.env\n") ||
-		!strings.Contains(mustDirective(t, gc, "ExecStart"), "--api=/ip4/127.0.0.1/tcp/31011 --api-auth=${IPFS_API_AUTH} repo gc") {
+		!strings.Contains(gc, "Environment=IPFS_API=/ip4/127.0.0.1/tcp/31011\n") ||
+		mustDirective(t, gc, "ExecStart") != globalBinDir+"/orama node ipfs-gc" {
 		t.Errorf("the GC unit does not authenticate to the daemon's RPC:\n%s", gc)
 	}
 	if !strings.Contains(mustDirective(t, gc, "After"), constants.GlobalIPFSUnit) {
