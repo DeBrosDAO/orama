@@ -301,6 +301,9 @@ type Gateway struct {
 
 	// Circuit breakers for proxy targets (per-target failure tracking)
 	circuitBreakers *CircuitBreakerRegistry
+	// staleReplicaLog throttles the log line for a request forwarded to a node
+	// that is no replica of the deployment.
+	staleReplicaLog logThrottle
 
 	// Shared HTTP transport for proxy connections (connection pooling)
 	proxyTransport *http.Transport

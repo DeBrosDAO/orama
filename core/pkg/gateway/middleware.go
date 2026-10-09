@@ -2053,12 +2053,7 @@ func (g *Gateway) proxyToDynamicDeployment(w http.ResponseWriter, r *http.Reques
 		// whatever else this machine allocated that number to, so it is not
 		// dialed; the unmarked 503 tells the forwarder to try its next replica.
 		if proxyNode != "" {
-			g.logger.Error("Forwarded request for a deployment this node has no active replica of",
-				zap.String("deployment", deployment.Name),
-				zap.String("home_node", deployment.HomeNodeID),
-				zap.String("proxy_node", proxyNode),
-				zap.Error(replicaErr),
-			)
+			g.warnStaleReplicaList(deployment, proxyNode, replicaErr)
 			http.Error(w, "Service unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -2101,8 +2096,9 @@ serveLocal:
 		if g.proxyWebSocket(w, r, targetHost) {
 			return
 		}
-		// WebSocket proxy failed - try cross-node replicas as fallback
-		if g.replicaManager != nil {
+		// WebSocket proxy failed - try cross-node replicas as fallback, unless
+		// another node forwarded this request: it never goes on to a third.
+		if g.replicaManager != nil && proxyNode == "" {
 			if g.proxyCrossNodeWithReplicas(w, r, deployment) {
 				return
 			}
@@ -2114,7 +2110,7 @@ serveLocal:
 	// Create a new request to the backend
 	backendURL := proxyTargetURL(target, r.URL)
 
-	proxyReq, err := http.NewRequest(r.Method, backendURL, r.Body)
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, backendURL, r.Body)
 	if err != nil {
 		http.Error(w, "Failed to create proxy request", http.StatusInternalServerError)
 		return
@@ -2137,8 +2133,12 @@ serveLocal:
 			zap.String("error", httputil.FailureReason(err)),
 		)
 
-		// Local process is down — try other replica nodes before giving up
-		if g.replicaManager != nil {
+		// Local process is down — try other replica nodes before giving up.
+		// A request another node forwarded here is not sent on: two replicas
+		// with the app down would hand it back and forth. The unmarked 503
+		// tells the forwarder to try its next replica, as for a stale list
+		// above. A client that left has nobody to answer.
+		if g.replicaManager != nil && proxyNode == "" && r.Context().Err() == nil {
 			if g.proxyCrossNodeWithReplicas(w, r, deployment) {
 				return
 			}
@@ -2165,6 +2165,28 @@ serveLocal:
 	if _, err := w.(io.Writer).Write([]byte{}); err == nil {
 		io.Copy(w, resp.Body)
 	}
+}
+
+// staleReplicaLogInterval is how often one deployment's stale replica list is
+// logged: every request forwarded under it hits the same condition.
+const staleReplicaLogInterval = time.Minute
+
+// warnStaleReplicaList logs that proxyNode forwarded a request for deployment
+// to this node, which runs no active replica of it. The forwarder's replica
+// list is out of date and every request it sends here ends the same way, so the
+// line is a warning, once per interval per deployment, with the number held back.
+func (g *Gateway) warnStaleReplicaList(deployment *deployments.Deployment, proxyNode string, replicaErr error) {
+	ok, held := g.staleReplicaLog.allow(deployment.ID, time.Now(), staleReplicaLogInterval)
+	if !ok {
+		return
+	}
+	g.logger.Warn("Forwarded request for a deployment this node has no active replica of",
+		zap.String("deployment", deployment.Name),
+		zap.String("home_node", deployment.HomeNodeID),
+		zap.String("proxy_node", proxyNode),
+		zap.Int("held_back", held),
+		zap.Error(replicaErr),
+	)
 }
 
 // proxyCrossNode forwards a request to the home node of a deployment
@@ -2235,7 +2257,7 @@ func (g *Gateway) forwardToHomeNode(w http.ResponseWriter, r *http.Request, depl
 	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
 	body, tracked := hopBody(r)
-	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body)
 	if err != nil {
 		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", httputil.FailureReason(err)))
 		return false
@@ -2313,6 +2335,9 @@ func (g *Gateway) proxyCrossNodeWithReplicas(w http.ResponseWriter, r *http.Requ
 		if nodeID == g.nodePeerID {
 			continue // Skip self
 		}
+		if r.Context().Err() != nil {
+			return false // The client left: no replica has anybody to answer.
+		}
 
 		nodeIP, err := g.replicaManager.GetNodeOverlayIP(r.Context(), nodeID)
 		if err != nil {
@@ -2367,7 +2392,7 @@ func (g *Gateway) forwardToReplica(w http.ResponseWriter, r *http.Request, deplo
 	targetURL := proxyTargetURL("http://"+targetHost, r.URL)
 
 	body, tracked := hopBody(r)
-	proxyReq, err := http.NewRequest(r.Method, targetURL, body)
+	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, body)
 	if err != nil {
 		g.logger.Error("Failed to create cross-node proxy request", zap.String("error", httputil.FailureReason(err)))
 		return false
