@@ -575,9 +575,9 @@ owner. The incoming owner's previous grant ends: ownership replaces it.
 
 A transfer is held to the per-wallet namespace cap (`max_namespaces_per_wallet`,
 default 10) as a create is: a wallet that already owns that many is refused
-`403 TRANSFER_REFUSED` (a generic refusal: it does not say that the recipient is at
-its cap or what the cap is, because a transfer would otherwise tell anyone the
-namespace count of any wallet; the audit trail records the `namespace.transfer`
+`403 TRANSFER_REFUSED` (a generic refusal: it does not give the cap or the recipient's count, because a
+transfer would otherwise tell anyone the namespace count of any wallet; the refusal
+itself is still one bit, that this wallet is at the cap, which is all the caller learns; the audit trail records the `namespace.transfer`
 failure with the recipient and the limit), the owner keeps the namespace, and
 nothing is written. The count is decided by the statement that moves
 the owner row, not by a count read first, so two transfers racing to one wallet cannot

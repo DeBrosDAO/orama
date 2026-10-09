@@ -42,9 +42,11 @@ func verifyDelegated(trusted *trustedmetadata.TrustedMetadata, top *metadata.Met
 // maxRoleNameLen bounds a delegated role's name.
 const maxRoleNameLen = 32
 
-// ValidRoleName refuses a role name that is not a plain lowercase word. A
-// role name becomes a file name in the metadata directory and a path in the
-// repository, so it must not be able to name another file. A release channel is
+// ValidRoleName accepts 1 to 32 characters from a-z, 0-9 and "-" (digits and
+// hyphens anywhere, a hyphen first or last included), and refuses the names of
+// the top-level roles. A role name becomes a file name in the metadata directory
+// and a path in the repository, so it must not be able to name another file; the
+// character set has no separator, dot or upper case to do it with. A release channel is
 // a delegated role, so a channel name is judged by this rule where the policy
 // is written (updatepolicy.ValidChannel) and where it is verified.
 func ValidRoleName(name string) error {

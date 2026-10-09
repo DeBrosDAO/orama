@@ -29,13 +29,15 @@ func (g *Gateway) walletNamespaceCap(ctx context.Context) (int, error) {
 }
 
 // transferRefusedMessage is what a caller is told when the wallet it names
-// cannot take the namespace. It says nothing about that wallet.
+// cannot take the namespace. It names neither the wallet nor the limit; that
+// the transfer is refused is itself one bit about the wallet.
 const transferRefusedMessage = "the namespace cannot be transferred to that wallet"
 
 // refuseTransfer answers a transfer TransferOwnership did not carry out. A
 // wallet at its cap is a generic 403 TRANSFER_REFUSED: the cap and the count of
 // somebody else's wallet are not the caller's to learn, and a transfer is a way
-// to ask for them. The service has recorded which wallet and what limit in the
+// to ask for them. The refusal still tells the caller that the wallet is at its
+// cap, which is all it does tell. The service has recorded which wallet and what limit in the
 // audit trail. Every other refusal is the owner's request to correct.
 func (g *Gateway) refuseTransfer(w http.ResponseWriter, err error) {
 	var quota *auth.ErrNamespaceQuota

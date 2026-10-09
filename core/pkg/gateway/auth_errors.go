@@ -60,9 +60,9 @@ const (
 	// handler shipped.
 	CodeNamespaceQuota = "NAMESPACE_QUOTA"
 	// CodeTransferRefused — a transfer the destination wallet cannot take. It
-	// does not say why: that the wallet is at its namespace cap is a fact about
-	// somebody else's account (the caller could probe any wallet's count with
-	// it). The reason is in the audit record.
+	// does not give the wallet's count or the cap, which are facts about
+	// somebody else's account; the refusal itself still tells the caller that
+	// the wallet is at its cap (one bit). The reason is in the audit record.
 	CodeTransferRefused = "TRANSFER_REFUSED"
 )
 
