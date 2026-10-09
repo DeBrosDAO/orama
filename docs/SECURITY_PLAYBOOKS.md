@@ -153,9 +153,11 @@ suspected, not compromised, with `tor-gencert --reuse` on the offline machine
   whose window passed instead of retrying it ([TOR_NETWORK.md](TOR_NETWORK.md#the-relay-bandwidth-reporter)).
 
 **What can be done**
-- Remove or replace a reporter with a structural proposal: `oramad tx houses submit-proposal` with a
-  `relay_reporters` content (`add`, `remove`), voted with `vote-token` and `vote-operator`, executed with
-  `execute-proposal` after the timelock. The change goes through `x/relay`'s own
+- Remove or replace a reporter with a structural proposal: `oramad tx houses submit-proposal --from <key>
+  --content '{"relay_reporters":{"add":[...],"remove":[...]}}'`, voted with `vote-token` and `vote-operator`,
+  executed with `execute-proposal` after the timelock. `x/houses` has no hand-written transaction commands:
+  `oramad tx houses` is generated from the module's Msg service, so each command's flags are its message's
+  fields (`oramad tx houses <command> --help`). The change goes through `x/relay`'s own
   `MsgUpdateReporters` handler, which nothing else can call. A change that would leave no reporter
   fails, and the set stays as it was.
 - Removal takes effect on unsettled epochs too: settlement counts only reports from addresses in
