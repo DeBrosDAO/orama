@@ -549,8 +549,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			IsLeader:       false,
 		}
 
-		var spawnErr error
-		spawnErr = cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
+		spawnErr := cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn RQLite follower on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -581,8 +580,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			PeerAddresses:  olricPeers,
 		}
 
-		var spawnErr error
-		spawnErr = cm.spawnOlricOnNode(ctx, cluster, replacement, olricCfg)
+		spawnErr := cm.spawnOlricOnNode(ctx, cluster, replacement, olricCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn Olric on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -640,8 +638,7 @@ func (cm *ClusterManager) ReplaceClusterNode(ctx context.Context, cluster *Names
 			}
 		}
 
-		var spawnErr error
-		spawnErr = cm.spawnGatewayOnNode(ctx, cluster, replacement, gwCfg)
+		spawnErr := cm.spawnGatewayOnNode(ctx, cluster, replacement, gwCfg)
 		if spawnErr != nil {
 			cm.logger.Error("Failed to spawn Gateway on replacement",
 				zap.String("node", replacement.NodeID), zap.Error(spawnErr))
@@ -1546,8 +1543,7 @@ func (cm *ClusterManager) addNodeToCluster(
 		IsLeader:       false,
 	}
 
-	var spawnErr error
-	spawnErr = cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
+	spawnErr := cm.spawnRQLiteOnNode(ctx, cluster, replacement, rqliteCfg)
 	if spawnErr != nil {
 		cm.rollbackPortBlock(ctx, cluster, replacement, blockOwed)
 		return nil, nil, fmt.Errorf("failed to spawn RQLite follower: %w", spawnErr)

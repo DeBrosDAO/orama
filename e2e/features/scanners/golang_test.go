@@ -4,10 +4,13 @@ package scanners
 
 import (
 	_ "embed"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/realistic"
+	"github.com/DeBrosOfficial/network/e2e/harness/staticfind"
 	"github.com/DeBrosOfficial/network/e2e/harness/vulnaccept"
 )
 
@@ -28,8 +31,15 @@ const (
 // through `go run` so the linter is built by the Go toolchain that builds the
 // modules. A staticcheck installed on the runner is as old as its last
 // install: 2025.1.1 cannot load Go 1.27 code and reported that as findings.
-// v0.8.1 is staticcheck 2026.2.1, the first release after Go 1.27.
-const staticcheckPackage = "honnef.co/go/tools/cmd/staticcheck@v0.8.1"
+// It is built from staticcheckModfile, which pins v0.8.1 (staticcheck 2026.2.1,
+// the first release after Go 1.27) with golang.org/x/tools v0.51.0: Go 1.27.2
+// writes export data version 5, which the x/tools that v0.8.1 requires cannot
+// read ("export data version 5 is greater than maximum supported version 4").
+const (
+	staticcheckPackage = "honnef.co/go/tools/cmd/staticcheck"
+	// staticcheckModfile is repo-relative; its sum file is staticcheck.sum.
+	staticcheckModfile = "e2e/features/scanners/staticcheck.mod"
+)
 
 // govulncheckPackage is the govulncheck the modules are scanned with, run
 // through `go run` for the same reason as staticcheck: an installed binary is
@@ -82,7 +92,10 @@ func TestGovulncheck_modulesUnaffected(t *testing.T) {
 	}
 }
 
-// TestStaticcheck_modulesClean: staticcheck reports nothing in any module.
+// TestStaticcheck_modulesClean: staticcheck reports nothing in any module,
+// apart from the deprecated APIs that grpc-gateway v1's generated code uses
+// (package staticfind): every other finding fails, SA1019 in hand-written code
+// included.
 func TestStaticcheck_modulesClean(t *testing.T) {
 	t.Parallel()
 	realistic.Tool(t, "go", "the pinned staticcheck is built and run with `go run`")
@@ -90,11 +103,23 @@ func TestStaticcheck_modulesClean(t *testing.T) {
 	for _, m := range goModules {
 		t.Run(m.dir, func(t *testing.T) {
 			t.Parallel()
-			res := s.run(t, m.dir, staticBudget, "go", append(append([]string{"run", staticcheckPackage}, tagArgs(m)...), "./...")...)
+			modfile := "-modfile=" + filepath.Join(s.root, filepath.FromSlash(staticcheckModfile))
+			args := append(append([]string{"run", modfile, staticcheckPackage, "-f", "json"}, tagArgs(m)...), "./...")
+			res := s.run(t, m.dir, staticBudget, "go", args...)
 			switch res.Exit {
 			case 0:
 			case staticcheckFindings:
-				t.Errorf("staticcheck reports problems in %s:\n%s", m.dir, realistic.Tail(res.Output()))
+				found, err := staticfind.Parse([]byte(res.Stdout))
+				if err != nil {
+					t.Fatalf("staticcheck could not lint %s: %v\n%s", m.dir, err, realistic.Tail(res.Output()))
+				}
+				var lines []string
+				for _, f := range staticfind.Remaining(found, staticfind.GeneratedByGateway) {
+					lines = append(lines, strings.TrimPrefix(f.String(), filepath.Join(s.root, m.dir)+string(filepath.Separator)))
+				}
+				if len(lines) > 0 {
+					t.Errorf("staticcheck reports problems in %s:\n%s", m.dir, strings.Join(lines, "\n"))
+				}
 			default:
 				t.Fatalf("staticcheck could not lint %s (exit %d):\n%s", m.dir, res.Exit, realistic.Tail(res.Output()))
 			}

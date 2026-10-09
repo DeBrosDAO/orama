@@ -169,7 +169,7 @@ func TestMachineRestore_putsThePreviousReleaseBack(t *testing.T) {
 }
 
 func TestPrintable_dropsWhatATerminalWouldActOn(t *testing.T) {
-	if got := printable("refused\x1b[31m red ‮\nnext"); got != "refused[31m red next" {
+	if got := printable("refused\x1b[31m red \u202e\nnext"); got != "refused[31m red next" {
 		t.Fatalf("printable = %q", got)
 	}
 }

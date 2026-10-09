@@ -826,8 +826,17 @@ could not prevent, as above.
 `chain` and `e2e` modules, plus the secret, audit, fuzz and race scans. A
 scanner that is not installed is not covered, never a pass. govulncheck
 (`golang.org/x/vuln/cmd/govulncheck`) and staticcheck are not taken from the
-runner: both are pinned in `golang_test.go` and run with `go run`, so the
-Go toolchain that builds the modules builds the scanner. An installed binary
+runner: both are pinned and run with `go run`, so the Go toolchain that builds
+the modules builds the scanner. govulncheck is pinned in `golang_test.go`;
+staticcheck is built from `features/scanners/staticcheck.mod` (and its `.sum`),
+which pins staticcheck v0.8.1 with a newer `golang.org/x/tools` than v0.8.1
+requires, because Go 1.27.2 writes export data that older x/tools cannot read.
+staticcheck runs with `-f json`, and the one class of finding it may report
+without failing is the deprecation check (SA1019) in a file that
+protoc-gen-grpc-gateway v1 generated (a `query.pb.gw.go` of the chain's
+modules imports `github.com/golang/protobuf` and calls `grpc.Dial`, as every
+cosmos-sdk module's does, and v2 of the generator needs messages gogoproto's
+types are not): `harness/staticfind` drops those and nothing else. An installed binary
 is as old as its last install and refuses a module whose `go` directive is
 newer ("package requires newer Go version").
 
