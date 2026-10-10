@@ -32,41 +32,71 @@ func simulateRequest(raw []byte) []byte {
 	return protowire.AppendBytes(b, raw)
 }
 
-// parseGasInfo reads gas_wanted and gas_used from a cosmos.tx.v1beta1.SimulateResponse.
-func parseGasInfo(resp []byte) (wanted, used uint64, err error) {
+// parseGasUsed reads gas_info.gas_used from a cosmos.tx.v1beta1.SimulateResponse. It does not read
+// gas_info.gas_wanted: simulation meters with no limit, so the SDK reports the unlimited meter's limit,
+// the largest uint64, there (declaredGasLimit is the gas_wanted the route answers).
+func parseGasUsed(resp []byte) (uint64, error) {
 	info, ok, err := bytesField(resp, simulateGasInfoField)
 	if err != nil {
-		return 0, 0, fmt.Errorf("simulate response: %w", err)
+		return 0, fmt.Errorf("simulate response: %w", err)
 	}
 	if !ok {
-		return 0, 0, errors.New("simulate response has no gas_info")
+		return 0, errors.New("simulate response has no gas_info")
 	}
-	for len(info) > 0 {
-		num, typ, n := protowire.ConsumeTag(info)
+	used, _, err := varintField(info, gasUsedField)
+	if err != nil {
+		return 0, fmt.Errorf("gas_info: %w", err)
+	}
+	return used, nil
+}
+
+// declaredGasLimit reads the gas limit a signed transaction declares: TxRaw.auth_info_bytes, its
+// AuthInfo.fee and that Fee.gas_limit. A transaction that leaves any of them out declares 0, the
+// proto default.
+func declaredGasLimit(raw []byte) (uint64, error) {
+	authInfo, ok, err := bytesField(raw, txRawAuthInfoField)
+	if err != nil {
+		return 0, fmt.Errorf("transaction: %w", err)
+	}
+	if !ok {
+		return 0, nil
+	}
+	fee, ok, err := bytesField(authInfo, authInfoFeeField)
+	if err != nil {
+		return 0, fmt.Errorf("auth_info: %w", err)
+	}
+	if !ok {
+		return 0, nil
+	}
+	limit, _, err := varintField(fee, feeGasLimitField)
+	if err != nil {
+		return 0, fmt.Errorf("fee: %w", err)
+	}
+	return limit, nil
+}
+
+// varintField returns the value of the first varint field num in msg, and whether it is there.
+func varintField(msg []byte, want protowire.Number) (uint64, bool, error) {
+	for len(msg) > 0 {
+		num, typ, n := protowire.ConsumeTag(msg)
 		if n < 0 {
-			return 0, 0, fmt.Errorf("gas_info: %w", protowire.ParseError(n))
+			return 0, false, protowire.ParseError(n)
 		}
-		info = info[n:]
-		if typ == protowire.VarintType && (num == gasWantedField || num == gasUsedField) {
-			v, vn := protowire.ConsumeVarint(info)
+		msg = msg[n:]
+		if num == want && typ == protowire.VarintType {
+			v, vn := protowire.ConsumeVarint(msg)
 			if vn < 0 {
-				return 0, 0, fmt.Errorf("gas_info: %w", protowire.ParseError(vn))
+				return 0, false, protowire.ParseError(vn)
 			}
-			info = info[vn:]
-			if num == gasWantedField {
-				wanted = v
-			} else {
-				used = v
-			}
-			continue
+			return v, true, nil
 		}
-		skip := protowire.ConsumeFieldValue(num, typ, info)
+		skip := protowire.ConsumeFieldValue(num, typ, msg)
 		if skip < 0 {
-			return 0, 0, fmt.Errorf("gas_info: %w", protowire.ParseError(skip))
+			return 0, false, protowire.ParseError(skip)
 		}
-		info = info[skip:]
+		msg = msg[skip:]
 	}
-	return wanted, used, nil
+	return 0, false, nil
 }
 
 // bytesField returns the value of the first length-delimited field num in msg.

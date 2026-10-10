@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,7 +17,7 @@ func TestSimulate_postsTheBase64TxAndDecodesTheAnswer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		gotPath, gotType, gotBody = r.Method+" "+r.URL.Path, r.Header.Get("Content-Type"), string(b)
-		_, _ = w.Write([]byte(`{"gas_wanted":200000,"gas_used":120000,"fee":{"denom":"norama","amount":"240000"},"base_fee":"2"}`))
+		_, _ = w.Write([]byte(`{"gas_wanted":"200000","gas_used":"120000","fee":{"denom":"norama","amount":"240000"},"base_fee":"2"}`))
 	}))
 	t.Cleanup(srv.Close)
 	got, err := (&Reader{Gateway: srv.URL}).Simulate(context.Background(), []byte("abc"))
@@ -32,6 +33,26 @@ func TestSimulate_postsTheBase64TxAndDecodesTheAnswer(t *testing.T) {
 	var sent map[string]string
 	if err := json.Unmarshal([]byte(gotBody), &sent); err != nil || sent["tx_bytes"] != base64.StdEncoding.EncodeToString([]byte("abc")) {
 		t.Errorf("body %q", gotBody)
+	}
+}
+
+func TestSimulate_gasIsADecimalStringAndABareNumberIsRefused(t *testing.T) {
+	answer := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(answer))
+	}))
+	t.Cleanup(srv.Close)
+	r := &Reader{Gateway: srv.URL}
+
+	answer = `{"gas_wanted":"18446744073709551615","gas_used":"9007199254740993","fee":{"denom":"norama","amount":"1"},"base_fee":"1"}`
+	got, err := r.Simulate(context.Background(), []byte("abc"))
+	if err != nil || got.GasWanted != math.MaxUint64 || got.GasUsed != 9007199254740993 {
+		t.Fatalf("a gas figure above 2^53 was read as %+v (err %v)", got, err)
+	}
+
+	answer = `{"gas_wanted":200000,"gas_used":120000,"fee":{"denom":"norama","amount":"1"},"base_fee":"1"}`
+	if _, err := r.Simulate(context.Background(), []byte("abc")); err == nil {
+		t.Fatal("a bare JSON number for a 64-bit gas figure was accepted")
 	}
 }
 

@@ -2498,17 +2498,60 @@ chain does not change, and a larger one is 413). They take no query and any othe
 `Allow: POST`. Answers are `Cache-Control: no-store`.
 
 - `POST /v1/chain/simulate` runs the transaction through the ante handlers and messages without keeping
-  anything. Success is 200 `{"gas_wanted":N,"gas_used":N,"fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`:
-  `fee` is x/fees' current base fee times `gas_used`, and `base_fee` (norama per unit of gas) lets a caller that pads the
-  gas limit price the padded limit; the on-chain rule is `fee >= base_fee * gas_limit`
-  ([x/fees](#xfees-base-fee-earnings-accounts-and-state-deposits)). A transaction the chain refuses is 422 `{"code":N,"codespace":"…","log":"…"}`.
+  anything. Success is 200 `{"gas_wanted":"N","gas_used":"N","fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`.
+  `gas_used` is what the transaction consumed. `gas_wanted` is the gas limit the transaction declares (its
+  `AuthInfo.fee.gas_limit`, 0 if it declares none), so a wallet can see a limit that is under `gas_used`. It is not
+  the chain's own figure: the SDK simulates with an unlimited gas meter (`x/auth/ante.SetGasMeter`), so the
+  `gas_wanted` of its `SimulateResponse` is that meter's limit, `18446744073709551615` (2^64-1), which the
+  proxy reads past. `fee` is x/fees' current base fee times `gas_used`, and `base_fee` (norama per unit of gas)
+  lets a caller that pads the gas limit price the padded limit; the on-chain rule is `fee >= base_fee * gas_limit`
+  ([x/fees](#xfees-base-fee-earnings-accounts-and-state-deposits)).
 - `POST /v1/chain/broadcast` submits the transaction with CometBFT `broadcast_tx_sync`, which answers after
-  `CheckTx` and never waits for a block (`broadcast_tx_commit` is never called). It answers
-  `{"code":N,"codespace":"…","log":"…","tx_hash":"<64 hex, upper case>"}`: 200 when `code` is 0, and 422 when the
-  mempool refused it. Sending bytes the mempool has already seen is 422 with `code` 19, codespace `sdk`, log
-  `tx already in mempool cache` and the hash, so a client that retried after a timeout has the hash to read. A full
-  mempool is 503 with `Retry-After`. The caller then reads `GET /v1/chain/tx?hash=` until the transaction is in a
-  block (404 until it is).
+  `CheckTx` and never waits for a block (`broadcast_tx_commit` is never called). The answer is
+  `{"code":N,"codespace":"…","log":"…","tx_hash":"<64 hex, upper case>"}`. The caller then reads
+  `GET /v1/chain/tx?hash=` until the transaction is in a block (404 with `Retry-After` until it is).
+
+**64-bit integers are decimal strings.** Every 64-bit integer the chain proxy, CometBFT and the module queries answer
+is a JSON string, as proto3 JSON has it: `gas_wanted` and `gas_used` here, and in the module queries every `uint64`/`int64`, `account_number`
+and `sequence` included. The bare numbers in the proxy's own and CometBFT's answers are 32-bit (`code`, a transaction's `index`, a
+block's `parts.total`, the JSON-RPC `id`). The exception is the indexer under `/v1/chain/index/`, which answers
+heights, gas and counts as bare numbers: the chain bounds them far under 2^53 (a height is a block count, and a
+transaction's gas is capped by the block's `max_gas` of 100,000,000), so they are exact in a JavaScript number.
+A JavaScript client holds a 64-bit value as a `BigInt` built from the string.
+
+**What a call answers.** The same refusal shape serves both routes; a failure that is not a refusal is a
+plain-text body, never a JSON object with a `code`:
+
+| Case | Status | Body |
+|---|---|---|
+| Simulate ran | 200 | `{gas_wanted, gas_used, fee, base_fee}` as above |
+| Simulate: the chain refused the transaction | 422 | `{"code":N,"codespace":"…","log":"…"}` (JSON). The code is the query's, always 6 (`sdk`, unknown request) as the SDK wraps a failed simulation, and `log` carries the reason (for example `insufficient fees` or `account sequence mismatch`) |
+| Broadcast: `CheckTx` passed (`code` 0) | 200 | `{"code":0,"codespace":"","log":"","tx_hash":"…"}`. The transaction is in the node's mempool, not in a block: it can still be dropped (a later block makes it invalid, a restart empties the mempool) |
+| Broadcast: `CheckTx` refused it | 422 | `{"code":N,"codespace":"…","log":"…","tx_hash":"…"}` (JSON), with the transaction's own `CheckTx` code (for example 13 insufficient fee, 32 account sequence mismatch) |
+| Broadcast: the mempool has these bytes | 422 | the same shape with code 19, codespace `sdk`, log `tx already in mempool cache` and the hash |
+| Broadcast: the mempool is full | 503 | text `the chain's mempool is full, try again shortly`, `Retry-After: 2` |
+| The chain is unreachable, or does not answer within the gateway's 10 s timeout | 502 | text `chain unreachable` |
+| The node answers something the proxy cannot read (an unknown node error, a hash that is not 64 hex digits) | 502 | text `chain request failed` |
+| Too many in flight | 503 | text, `Retry-After: 2` |
+| Rate limited | 429 | the gateway's `RATE_LIMITED` envelope, `Retry-After: 10` |
+
+A refusal on either route is therefore a 422 with a `code`, `codespace` and `log`; broadcast adds `tx_hash`,
+simulate has none (nothing was submitted) and its `code` is the wrapper's, so a wallet reads the reason from
+`log` there and from `code` on broadcast. A 502 on broadcast after a timeout does not say the transaction was
+not taken: the node may have accepted it before the answer was lost. Send the same bytes again: if the mempool
+has them the answer is the code 19 refusal with the hash, and `GET /v1/chain/tx?hash=` is the only record of
+inclusion. The SDK raises a `ChainTxRefusedError` for the 422 and an `SDKError` or `NetworkError` for the rest.
+
+**Freshness.** The proxy keeps no copy of a read. Every `GET /v1/chain/status`, `block`, `tx`, `validators`
+and index or query call is a live call to the node's RPC, REST or indexer, and every answer carries
+`Cache-Control: no-store` (the gateway adds it to every `/v1/` response that does not choose one), so no
+browser, WebView or shared cache may keep it; Caddy on a node does not cache. The one reuse is the latest
+height the module-query `height=` window check reads, held for one second and never sent to a caller. A
+`/v1/chain/status` answers from the node of the gateway that took the request, so two gateways can differ by the
+blocks between their nodes (a block is about 5 seconds on stagenet); `sync_info.latest_block_time` and
+`catching_up` in the body say how fresh that node is, and the `Date` header says when the gateway answered. A
+height that is hours behind the chain is not this proxy's: it is a node that fell behind (its `catching_up` is
+true), or a copy kept by a client of the gateway.
 
 The `log` of a refusal is sanitised (`sanitize.go`): a stack trace, source locations, filesystem paths and
 IP addresses are replaced with `[redacted]`, control characters dropped, and it is cut to 512 characters; the

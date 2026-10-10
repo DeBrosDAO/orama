@@ -37,6 +37,7 @@ export interface BroadcastResult {
 
 /** What POST /v1/chain/simulate answers for a transaction the chain would run. */
 export interface SimulateResult {
+  /** The gas limit the transaction declares. The chain's simulation itself runs with no limit. */
   gasWanted: bigint;
   gasUsed: bigint;
   /** The fee at the chain's current base fee for the gas used. */
@@ -421,7 +422,12 @@ export class OramaChainClient {
       fee: { denom: string; amount: string };
       base_fee: string;
     };
-    return { gasWanted: BigInt(body.gas_wanted), gasUsed: BigInt(body.gas_used), fee: body.fee, baseFee: body.base_fee };
+    return {
+      gasWanted: gatewayUint64(body.gas_wanted, "gas_wanted"),
+      gasUsed: gatewayUint64(body.gas_used, "gas_used"),
+      fee: body.fee,
+      baseFee: body.base_fee,
+    };
   }
 
   /**
@@ -688,6 +694,16 @@ export class OramaChainClient {
     if (!response.ok) throw SDKError.fromResponse(response.status, body);
     return body;
   }
+}
+
+/**
+ * A 64-bit integer the gateway answers: a decimal string, or a number that is a safe integer. A bare
+ * number above 2^53 has already lost its low digits in JSON.parse, so it is refused, not rounded.
+ */
+function gatewayUint64(value: unknown, field: string): bigint {
+  if (typeof value === "string" && /^\d+$/.test(value)) return BigInt(value);
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  throw new SDKError(`the gateway answered ${field} as ${JSON.stringify(value)}, not a decimal string`, 502, "CHAIN_BAD_RESPONSE");
 }
 
 function isTxRefusal(body: unknown): body is { code: number; codespace?: string; log?: string; tx_hash?: string } {

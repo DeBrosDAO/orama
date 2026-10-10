@@ -41,6 +41,30 @@ Numbers that need 64 bits are JSON strings: an account's `account_number` and `s
 
 The list methods take `pagination.limit` up to 100. The explorer's wallet page uses `AllBalances`, `DelegatorDelegations` and `DelegatorUnbondingDelegations` here; the duplicate REST routes for them are gone, and only the staking validator list stays REST.
 
+### Simulate and broadcast
+
+Both routes take `Content-Type: application/json` and `{"tx_bytes":"<base64 TxRaw>"}`.
+
+**Simulate** runs the transaction without keeping anything and answers 200 `{"gas_wanted":"…","gas_used":"…","fee":{"denom":"norama","amount":"…"},"base_fee":"…"}`. `gas_used` is what it consumed. `gas_wanted` is the gas limit the transaction declares (0 if it declares none), so a wallet can see a limit that is below `gas_used`. The chain simulates with an unlimited gas meter, so the figure it reports itself is always 18446744073709551615 (2^64-1); the gateway does not pass that on. Both gas figures, like every 64-bit integer the proxy answers, are decimal strings: read them into a `BigInt`, never a JavaScript `number`.
+
+**Broadcast** submits the transaction with `broadcast_tx_sync` and answers once the node's mempool has checked it, not when it is in a block. The field to keep is `tx_hash` (upper-case hex). Poll `tx?hash=` until the transaction is in a block (404 with `Retry-After` until then).
+
+| Case | Status | Body |
+|---|---|---|
+| Simulate ran | 200 | `{gas_wanted, gas_used, fee, base_fee}` |
+| Simulate: the chain refused | 422 | `{"code":6,"codespace":"sdk","log":"…"}` (the query's wrapper code; the reason is in `log`) |
+| Broadcast: accepted by the mempool | 200 | `{"code":0,"codespace":"","log":"","tx_hash":"…"}` |
+| Broadcast: `CheckTx` refused | 422 | `{"code":N,"codespace":"…","log":"…","tx_hash":"…"}` with the transaction's own code (13 insufficient fee, 32 sequence mismatch) |
+| Broadcast: the mempool already has these bytes | 422 | the same shape, code 19, codespace `sdk`, log `tx already in mempool cache`, and the hash |
+| Broadcast: the mempool is full | 503 | text, `Retry-After: 2` |
+| The chain is unreachable or does not answer within 10 seconds | 502 | text `chain unreachable` |
+| Too many in flight | 503 | text, `Retry-After: 2` |
+| Rate limited | 429 | the `RATE_LIMITED` envelope, `Retry-After: 10` |
+
+A refusal is a 422 with a JSON `code`, `codespace` and `log` on both routes, and only a refusal is shaped that way; every other failure is a plain-text body. The `log` is sanitised. An accepted broadcast is in one node's mempool, not in a block, so it can still be dropped. A 502 after a timeout does not say the transaction was not taken: send the same bytes again, and if the mempool has them the answer is the code 19 refusal with the hash.
+
+Reads are live. The proxy keeps no copy of a read and every answer is `Cache-Control: no-store`; a `status` comes from the node of the gateway that took the request, and its `sync_info.latest_block_time` and `catching_up` say how fresh that node is.
+
 ## `orama chain`
 
 ```bash

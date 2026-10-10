@@ -24,11 +24,13 @@ type Coin struct {
 }
 
 // SimulateResult is what the gateway's POST /v1/chain/simulate answers for a transaction the chain
-// would run: the gas it wanted and used, and the fee at the chain's current base fee for the gas
-// used. BaseFee is norama per unit of gas, for a caller that pads the gas limit.
+// would run: the gas limit the transaction declares (GasWanted; the chain's simulation itself runs
+// with no limit), the gas it used, and the fee at the chain's current base fee for the gas used.
+// BaseFee is norama per unit of gas, for a caller that pads the gas limit. The gateway answers the
+// two gas figures as decimal strings, as proto3 JSON does for a 64-bit integer.
 type SimulateResult struct {
-	GasWanted uint64 `json:"gas_wanted"`
-	GasUsed   uint64 `json:"gas_used"`
+	GasWanted uint64 `json:"gas_wanted,string"`
+	GasUsed   uint64 `json:"gas_used,string"`
 	Fee       Coin   `json:"fee"`
 	BaseFee   string `json:"base_fee"`
 }
