@@ -27,7 +27,7 @@ func newRootChain(t *testing.T, length int, rotateAll bool) *rootChain {
 	if err != nil {
 		t.Fatal(err)
 	}
-	until := delegationNow.Add(24 * time.Hour)
+	until := testNow.Add(24 * time.Hour)
 	root, err := releaserepo.NewRoot(first, until)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func (c *rootChain) served(from, to int) map[string][]byte {
 func (c *rootChain) adopted(t *testing.T, v int) RootUpdate {
 	t.Helper()
 	dir := t.TempDir()
-	u := RootUpdate{RootPath: filepath.Join(dir, "release-root.json"), SeenPath: filepath.Join(dir, "release-seen.json"), Now: delegationNow}
+	u := RootUpdate{RootPath: filepath.Join(dir, "release-root.json"), SeenPath: filepath.Join(dir, "release-seen.json"), Now: testNow}
 	if err := os.WriteFile(u.RootPath, c.versions[v-1], 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestUpdateRoot_aRootNotSignedByThePreviousKeysIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forged, err := releaserepo.NextRoot(c.versions[0], attacker, attacker, delegationNow.Add(24*time.Hour))
+	forged, err := releaserepo.NextRoot(c.versions[0], attacker, attacker, testNow.Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestUpdateRoot_aRootNotSignedByItsOwnKeysIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	both, err := releaserepo.NextRoot(c.versions[0], c.keys[0], next, delegationNow.Add(24*time.Hour))
+	both, err := releaserepo.NextRoot(c.versions[0], c.keys[0], next, testNow.Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestUpdateRoot_exactlyTheBoundIsAccepted(t *testing.T) {
 func TestUpdateRoot_anExpiredNewestRootIsRefusedAndTheOldOneKept(t *testing.T) {
 	c := newRootChain(t, 2, true)
 	u := c.adopted(t, 1)
-	u.Now = delegationNow.Add(48 * time.Hour)
+	u.Now = testNow.Add(48 * time.Hour)
 	repo := Repository{BaseURL: serveRepo(t, c.served(2, 2), nil)}
 
 	if _, err := repo.UpdateRoot(context.Background(), u); err == nil || !strings.Contains(err.Error(), "expired") {
@@ -302,16 +302,16 @@ func TestUpdateRoot_aRotationThatKeepsTheSnapshotKeyKeepsTheRollbackRecord(t *te
 // After Sync the metadata is judged by the rotated root: metadata signed by
 // the new keys verifies, which it would not under the first root.
 func TestSync_readsTheChannelThroughTheRotatedRoot(t *testing.T) {
-	first, err := releaserepo.GenerateKeys("nightly")
+	first, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
-	until := delegationNow.Add(24 * time.Hour)
+	until := testNow.Add(24 * time.Hour)
 	root1, err := releaserepo.NewRoot(first, until)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := releaserepo.GenerateKeys("nightly")
+	second, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,24 +320,23 @@ func TestSync_readsTheChannelThroughTheRotatedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	files, err := releaserepo.Build(second, releaserepo.Spec{
-		Version: 5, RootValidUntil: until, Delegated: []string{"nightly"},
-		ChannelTargets: map[string]map[string][]byte{"nightly": {nightlyTarget: []byte("nightly archive")}},
+		Version: 5, RootValidUntil: until, Targets: map[string][]byte{nightlyTarget: []byte("nightly archive")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	files["2.root.json"] = root2
-	u := RootUpdate{RootPath: filepath.Join(t.TempDir(), "release-root.json"), SeenPath: filepath.Join(t.TempDir(), "seen.json"), Now: delegationNow}
+	u := RootUpdate{RootPath: filepath.Join(t.TempDir(), "release-root.json"), SeenPath: filepath.Join(t.TempDir(), "seen.json"), Now: testNow}
 	if err := os.WriteFile(u.RootPath, root1, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	repo := Repository{BaseURL: serveRepo(t, files, nil)}
 	dir := t.TempDir()
 
-	if err := repo.Sync(context.Background(), dir, []string{"nightly"}, u); err != nil {
+	if err := repo.Sync(context.Background(), dir, u); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Load(FileCheck{RootPath: u.RootPath, SeenPath: u.SeenPath, MetadataDir: dir, Roles: []string{"nightly"}, Now: delegationNow})
+	v, err := Load(FileCheck{RootPath: u.RootPath, SeenPath: u.SeenPath, MetadataDir: dir, Now: testNow})
 	if err != nil {
 		t.Fatalf("the metadata does not verify under the rotated root: %v", err)
 	}

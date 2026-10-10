@@ -28,7 +28,7 @@ func TestSourceNewest_followsAPublishedRootRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	next, err := releaserepo.GenerateKeys("stable", "nightly")
+	next, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestSourceNewest_followsAPublishedRootRotation(t *testing.T) {
 func TestSourceNewest_withoutTheRotationTheNewKeysAreRefused(t *testing.T) {
 	rel := newRelease(t)
 	src := newSource(t, rel)
-	next, err := releaserepo.GenerateKeys("stable", "nightly")
+	next, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}

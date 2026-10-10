@@ -8,7 +8,7 @@ import (
 // rollback record, as CheckFile does, and returns every target it names. It
 // reads no file and writes nothing.
 func Load(c FileCheck) (*Verified, error) {
-	meta, err := readMetadata(c.RootPath, c.MetadataDir, c.Roles)
+	meta, err := readMetadata(c.RootPath, c.MetadataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -35,17 +35,18 @@ func Lookup(c FileCheck) (Target, error) {
 }
 
 // Newest is the highest-versioned archive for arch among the verified targets
-// of channel, ordered by compare (positive: a is newer than b). A target whose
-// version compare cannot order is not a candidate, so one oddly named entry in
-// a signed channel does not stop the channel's updates. ok is false when the
-// channel lists no candidate.
+// under channel's prefix, ordered by compare (positive: a is newer than b). A
+// target whose version compare cannot order, or whose custom field disagrees
+// with its name, is not a candidate, so one oddly named entry in a signed
+// channel does not stop the channel's updates. ok is false when the channel
+// lists no candidate.
 func (v *Verified) Newest(channel, arch string, compare func(a, b string) (int, error)) (Target, ArchiveRef, bool, error) {
 	var best Target
 	var bestRef ArchiveRef
 	found := false
 	for _, t := range v.Targets {
 		ref, err := ParseArchiveTarget(t.Path)
-		if err != nil || ref.Channel != channel || ref.Arch != arch || t.Role != channel {
+		if err != nil || ref.Channel != channel || ref.Arch != arch || !customMatches(t.Custom, ref) {
 			continue
 		}
 		if _, err := compare(ref.Version, ref.Version); err != nil {

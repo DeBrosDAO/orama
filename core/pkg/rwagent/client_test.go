@@ -2,12 +2,16 @@ package rwagent
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -236,6 +240,58 @@ func TestGetAddress(t *testing.T) {
 	}
 	if data.Address != "0x1234abcd" {
 		t.Errorf("Address = %q, want %q", data.Address, "0x1234abcd")
+	}
+}
+
+func TestReleaseKey_decodesThePublicKey(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/orama/release/key", jsonHandler(200, apiResponse[ReleaseKeyData]{
+		OK:   true,
+		Data: ReleaseKeyData{Purpose: "orama-release", KeyType: "ed25519", PublicKey: hex.EncodeToString(pub), Path: "m/1330790733'/1'/0'"},
+	}))
+	sock, cleanup := startMockAgent(t, mux)
+	defer cleanup()
+
+	got, err := New(sock).ReleaseKey(context.Background())
+	if err != nil {
+		t.Fatalf("ReleaseKey() error: %v", err)
+	}
+	if !got.Equal(pub) {
+		t.Errorf("key = %x, want %x", got, pub)
+	}
+}
+
+func TestReleaseKey_refusals(t *testing.T) {
+	cases := map[string]ReleaseKeyData{
+		"wrong key type": {KeyType: "secp256k1", PublicKey: strings.Repeat("ab", ed25519.PublicKeySize)},
+		"short key":      {KeyType: "ed25519", PublicKey: "abcd"},
+		"not hex":        {KeyType: "ed25519", PublicKey: strings.Repeat("zz", ed25519.PublicKeySize)},
+		"empty":          {KeyType: "ed25519"},
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/v1/orama/release/key", jsonHandler(200, apiResponse[ReleaseKeyData]{OK: true, Data: data}))
+			sock, cleanup := startMockAgent(t, mux)
+			defer cleanup()
+			if _, err := New(sock).ReleaseKey(context.Background()); err == nil {
+				t.Fatal("a release key the CLI cannot use was accepted")
+			}
+		})
+	}
+}
+
+func TestReleaseKey_aHeadlessAgentHasNone(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/orama/release/key", jsonHandler(404, apiResponse[ReleaseKeyData]{OK: false, Error: "not found", Code: "NOT_FOUND"}))
+	sock, cleanup := startMockAgent(t, mux)
+	defer cleanup()
+	if _, err := New(sock).ReleaseKey(context.Background()); err == nil {
+		t.Fatal("a 404 was accepted as a key")
 	}
 }
 

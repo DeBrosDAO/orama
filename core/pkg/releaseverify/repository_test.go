@@ -38,23 +38,20 @@ func serveRepo(t *testing.T, files map[string][]byte, archives map[string][]byte
 
 func TestRepository_fetchesMetadataAndAnArchiveThatVerify(t *testing.T) {
 	r := newChannelRepo(t)
-	files := r.files(t, 4, defaultChannels())
+	files := r.files(t, 4, defaultTargets())
 	repo := Repository{BaseURL: serveRepo(t, files, map[string][]byte{stableTarget: []byte("stable archive")})}
 
 	dir := t.TempDir()
-	if err := repo.FetchMetadata(context.Background(), dir, []string{"stable"}); err != nil {
+	if err := repo.FetchMetadata(context.Background(), dir); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile, "stable.json"} {
+	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("%s was not saved: %v", name, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "nightly.json")); err == nil {
-		t.Error("a channel that was not asked for was fetched")
-	}
 
-	v, err := Verify(r.metaFor(files, "stable"), Seen{}, delegationNow)
+	v, err := Verify(r.metaFor(files), Seen{}, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +71,7 @@ func TestRepository_fetchesMetadataAndAnArchiveThatVerify(t *testing.T) {
 
 func TestRepository_missingFileIsAnError(t *testing.T) {
 	repo := Repository{BaseURL: serveRepo(t, nil, nil)}
-	err := repo.FetchMetadata(context.Background(), t.TempDir(), nil)
+	err := repo.FetchMetadata(context.Background(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("err = %v, want the repository's 404", err)
 	}
@@ -182,7 +179,7 @@ func TestRepository_aRedirectToPlainHTTPElsewhereIsRefused(t *testing.T) {
 	AllowLocalRepositories(t)
 	repo := Repository{BaseURL: plain.URL, Client: plain.Client()}
 	repo.Client.CheckRedirect = Repository{}.client().CheckRedirect
-	err := repo.FetchMetadata(context.Background(), t.TempDir(), nil)
+	err := repo.FetchMetadata(context.Background(), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "not https") {
 		t.Fatalf("err = %v, want the downgrade refused", err)
 	}

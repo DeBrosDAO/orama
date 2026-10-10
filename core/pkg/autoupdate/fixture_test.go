@@ -76,7 +76,7 @@ const (
 
 func newRelease(t *testing.T) *release {
 	t.Helper()
-	keys, err := releaserepo.GenerateKeys("stable", "nightly")
+	keys, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,8 +102,7 @@ func (r *release) publish(t *testing.T, snapshot int64, timestampExpires time.Ti
 	t.Helper()
 	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
 		Version: snapshot, RootValidUntil: time.Now().Add(24 * time.Hour), TimestampExpires: timestampExpires,
-		Delegated:      []string{"stable", "nightly"},
-		ChannelTargets: map[string]map[string][]byte{"stable": {releaseverify.ArchiveTarget("stable", version, testArch): r.archive}},
+		Targets: map[string][]byte{releaseverify.ArchiveTarget("stable", version, testArch): r.archive},
 	})
 	if err != nil {
 		t.Fatal(err)

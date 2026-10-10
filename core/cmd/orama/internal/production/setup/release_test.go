@@ -53,7 +53,7 @@ type releaseServer struct {
 
 func newReleaseServer(t *testing.T) *releaseServer {
 	t.Helper()
-	keys, err := releaserepo.GenerateKeys("stable", "nightly")
+	keys, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,8 +78,7 @@ func (s *releaseServer) publish(t *testing.T, version int64, timestampExpires ti
 	t.Helper()
 	files, err := releaserepo.Build(s.keys, releaserepo.Spec{
 		Version: version, RootValidUntil: time.Now().Add(24 * time.Hour), TimestampExpires: timestampExpires,
-		Delegated:      []string{"stable", "nightly"},
-		ChannelTargets: map[string]map[string][]byte{"stable": {releaseverify.ArchiveTarget("stable", "0.3.1", "amd64"): s.archive}},
+		Targets: map[string][]byte{releaseverify.ArchiveTarget("stable", "0.3.1", "amd64"): s.archive},
 	})
 	if err != nil {
 		t.Fatal(err)

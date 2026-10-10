@@ -142,12 +142,12 @@ func clearSeen(path string) (err error) {
 }
 
 // Sync is what a client does before it reads a channel: bring the adopted root
-// up to date (UpdateRoot), then fetch the metadata of roles into dir
+// up to date (UpdateRoot), then fetch the metadata into dir
 // (FetchMetadata). The metadata is fetched after the root so that it is judged
 // by the newest root the repository publishes.
-func (r Repository) Sync(ctx context.Context, dir string, roles []string, u RootUpdate) error {
+func (r Repository) Sync(ctx context.Context, dir string, u RootUpdate) error {
 	if _, err := r.UpdateRoot(ctx, u); err != nil {
 		return err
 	}
-	return r.FetchMetadata(ctx, dir, roles)
+	return r.FetchMetadata(ctx, dir)
 }

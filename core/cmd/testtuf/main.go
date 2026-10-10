@@ -7,7 +7,7 @@
 // not that ceremony and its roots must never be adopted by a production
 // cluster.
 //
-//	testtuf init    -dir D                       a root, keys and empty channels
+//	testtuf init    -dir D                       a root, keys and an empty release list
 //	testtuf publish -dir D -channel stable -archive orama-0.3.1-linux-amd64.tar.gz
 //	testtuf refresh -dir D                       fresh timestamp and snapshot
 //
@@ -16,12 +16,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -29,9 +29,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/releaseverify/releaserepo"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 )
-
-// channels are the delegated roles a test repository has.
-var channels = []string{"stable", "nightly"}
 
 const (
 	defaultRootValidity      = 365 * 24 * time.Hour
@@ -83,7 +80,7 @@ func initRepo(dir string, rootValid, tsValid time.Duration) error {
 	if err := os.MkdirAll(repo, repoDirPerm); err != nil {
 		return err
 	}
-	keys, err := releaserepo.GenerateKeys(channels...)
+	keys, err := releaserepo.GenerateKeys()
 	if err != nil {
 		return err
 	}
@@ -107,8 +104,8 @@ func initRepo(dir string, rootValid, tsValid time.Duration) error {
 }
 
 func publish(dir, channel, archive string, tsValid time.Duration) error {
-	if archive == "" || !slices.Contains(channels, channel) {
-		return fmt.Errorf("publish needs -archive and a -channel of %s", strings.Join(channels, ", "))
+	if archive == "" {
+		return fmt.Errorf("publish needs -archive")
 	}
 	name := filepath.Base(archive)
 	if _, err := releaseverify.ParseArchiveTarget(channel + "/" + name); err != nil {
@@ -144,24 +141,33 @@ func refresh(dir string, tsValid time.Duration) error {
 }
 
 // write builds the metadata for version from the archives under repo/targets
-// and writes it.
+// (<channel>/<file>, a channel being one or two directories) and writes it.
 func write(repo string, keys releaserepo.Keys, version int64, until time.Time, tsValid time.Duration) error {
-	targets := map[string]map[string][]byte{}
-	for _, channel := range channels {
-		targets[channel] = map[string][]byte{}
-		paths, _ := filepath.Glob(filepath.Join(repo, targetsSubdir, channel, "*.tar.gz"))
-		sort.Strings(paths)
-		for _, p := range paths {
-			data, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			targets[channel][channel+"/"+filepath.Base(p)] = data
+	targets := map[string][]byte{}
+	root := filepath.Join(repo, targetsSubdir)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".tar.gz") {
+			return err
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if _, err := releaseverify.ParseArchiveTarget(filepath.ToSlash(rel)); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		targets[filepath.ToSlash(rel)] = data
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	files, err := releaserepo.Build(keys, releaserepo.Spec{
-		Version: version, RootValidUntil: until, TimestampExpires: time.Now().Add(tsValid),
-		Delegated: channels, ChannelTargets: targets,
+		Version: version, RootValidUntil: until, TimestampExpires: time.Now().Add(tsValid), Targets: targets,
 	})
 	if err != nil {
 		return err

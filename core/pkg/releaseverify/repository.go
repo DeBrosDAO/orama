@@ -21,7 +21,7 @@ import (
 // A release repository is a static directory served over HTTPS:
 //
 //	<base>/timestamp.json  <base>/snapshot.json  <base>/targets.json
-//	<base>/<role>.json     one per delegated role (a channel)
+//	<base>/<N>.root.json   every version of the root (rotate.go)
 //	<base>/targets/<path>  the files the targets metadata names
 //
 // Nothing fetched is trusted until CheckFile has verified it against the
@@ -140,17 +140,10 @@ func publicHost(host string) bool {
 	return ip == nil || !netguard.Reserved(ip)
 }
 
-// FetchMetadata downloads timestamp.json, snapshot.json, targets.json and
-// each of roles' <role>.json into dir.
-func (r Repository) FetchMetadata(ctx context.Context, dir string, roles []string) error {
-	names := []string{TimestampFile, SnapshotFile, TargetsFile}
-	for _, role := range roles {
-		if err := ValidRoleName(role); err != nil {
-			return err
-		}
-		names = append(names, role+".json")
-	}
-	for _, name := range names {
+// FetchMetadata downloads timestamp.json, snapshot.json and targets.json into
+// dir.
+func (r Repository) FetchMetadata(ctx context.Context, dir string) error {
+	for _, name := range []string{TimestampFile, SnapshotFile, TargetsFile} {
 		data, err := r.getMetadata(ctx, name)
 		if err != nil {
 			return err

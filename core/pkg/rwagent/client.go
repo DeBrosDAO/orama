@@ -2,8 +2,10 @@ package rwagent
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -231,6 +233,32 @@ func (c *Client) GetAddress(ctx context.Context, chain string) (*WalletAddressDa
 		return nil, c.apiError(resp.Error, resp.Code, status)
 	}
 	return &resp.Data, nil
+}
+
+// releaseKeyType is the key type of the wallet's release key.
+const releaseKeyType = "ed25519"
+
+// ReleaseKey returns the wallet's Orama release public key, the ed25519 key a
+// TUF root lists for the roles this wallet signs (SignForPurpose with
+// PurposeOramaRelease). Only the public key leaves the agent. A headless agent
+// has no such key and answers 404.
+func (c *Client) ReleaseKey(ctx context.Context) (ed25519.PublicKey, error) {
+	var resp apiResponse[ReleaseKeyData]
+	status, err := c.doJSON(ctx, "GET", "/v1/orama/release/key", nil, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		return nil, c.apiError(resp.Error, resp.Code, status)
+	}
+	if resp.Data.KeyType != releaseKeyType {
+		return nil, fmt.Errorf("the agent's release key is %q, not %s", resp.Data.KeyType, releaseKeyType)
+	}
+	key, err := hex.DecodeString(strings.TrimPrefix(resp.Data.PublicKey, "0x"))
+	if err != nil || len(key) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("the agent's release key is not %d bytes of hex", ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(key), nil
 }
 
 // Sign signs a message with the wallet's private key.

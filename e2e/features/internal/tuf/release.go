@@ -113,8 +113,8 @@ func ManifestArch(t testing.TB, archive []byte) string { return manifestOf(t, ar
 // ManifestVersion is the version the archive was built as.
 func ManifestVersion(t testing.TB, archive []byte) string { return manifestOf(t, archive).Version }
 
-// ChannelRepo is a generated release root with the stable and nightly
-// channels. Every key is made for the test; none is a production key.
+// ChannelRepo is a generated release root whose targets are archives under
+// channel prefixes. Every key is made for the test; none is a production key.
 type ChannelRepo struct {
 	keys releaserepo.Keys
 	root []byte
@@ -125,7 +125,7 @@ type ChannelRepo struct {
 // NewChannelRepo generates a root valid for a day.
 func NewChannelRepo(t testing.TB) *ChannelRepo {
 	t.Helper()
-	keys, err := releaserepo.GenerateKeys("stable", "nightly")
+	keys, err := releaserepo.GenerateKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func (r *ChannelRepo) Files(t testing.TB, snapshot int64, timestampExpires time.
 	}
 	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
 		Version: snapshot, RootValidUntil: r.until, TimestampExpires: timestampExpires,
-		Delegated: []string{"stable", "nightly"}, ChannelTargets: map[string]map[string][]byte{Channel: targets},
+		Targets: targets,
 	})
 	if err != nil {
 		t.Fatal(err)

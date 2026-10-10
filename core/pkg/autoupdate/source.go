@@ -40,8 +40,6 @@ type Release struct {
 	Target  releaseverify.Target
 	// Dir holds the metadata and, after Download, the archive.
 	Dir string
-	// Roles are the delegated roles the metadata was verified with.
-	Roles []string
 }
 
 // MetadataDir is where the verified metadata is.
@@ -84,14 +82,14 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 			err = errors.Join(err, os.RemoveAll(dir))
 		}
 	}()
-	rel = Release{Dir: dir, Roles: []string{channel}}
+	rel = Release{Dir: dir}
 	if err := os.Mkdir(rel.MetadataDir(), workDirPerm); err != nil {
 		return Release{}, false, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
 	defer cancel()
 	update := releaseverify.RootUpdate{RootPath: s.RootPath, SeenPath: s.SeenPath, Now: s.Now()}
-	if err := (releaseverify.Repository{BaseURL: repoURL}).Sync(ctx, rel.MetadataDir(), rel.Roles, update); err != nil {
+	if err := (releaseverify.Repository{BaseURL: repoURL}).Sync(ctx, rel.MetadataDir(), update); err != nil {
 		return Release{}, false, fmt.Errorf("fetch the %s channel: %w", channel, err)
 	}
 	verified, err := releaseverify.Load(s.check(rel, ""))
@@ -134,6 +132,6 @@ func (r Release) Remove() error { return os.RemoveAll(r.Dir) }
 func (s Source) check(rel Release, target string) releaseverify.FileCheck {
 	return releaseverify.FileCheck{
 		RootPath: s.RootPath, SeenPath: s.SeenPath, MetadataDir: rel.MetadataDir(),
-		Roles: rel.Roles, Target: target, Now: s.Now(),
+		Target: target, Now: s.Now(),
 	}
 }

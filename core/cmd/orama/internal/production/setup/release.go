@@ -122,11 +122,11 @@ func fetchVerifiedRelease(ctx context.Context, work string, opts Options, channe
 		return "", err
 	}
 	update := releaseverify.RootUpdate{RootPath: opts.ReleaseRoot, SeenPath: seen, Now: time.Now()}
-	if err := repo.Sync(ctx, metaDir, []string{channel}, update); err != nil {
+	if err := repo.Sync(ctx, metaDir, update); err != nil {
 		return "", fmt.Errorf("fetch the release metadata: %w", err)
 	}
 	check := releaseverify.FileCheck{
-		RootPath: opts.ReleaseRoot, SeenPath: seen, MetadataDir: metaDir, Roles: []string{channel},
+		RootPath: opts.ReleaseRoot, SeenPath: seen, MetadataDir: metaDir,
 		Target: releaseverify.ArchiveTarget(channel, opts.Release, arch), Now: time.Now(),
 	}
 	target, err := releaseverify.Lookup(check)

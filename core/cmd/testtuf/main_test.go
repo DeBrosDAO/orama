@@ -23,12 +23,12 @@ func serve(t *testing.T, dir string) releaseverify.Repository {
 func verifyTarget(t *testing.T, repo releaseverify.Repository, dir, name string) (releaseverify.Target, error) {
 	t.Helper()
 	meta := t.TempDir()
-	if err := repo.FetchMetadata(context.Background(), meta, []string{"stable"}); err != nil {
+	if err := repo.FetchMetadata(context.Background(), meta); err != nil {
 		t.Fatal(err)
 	}
 	return releaseverify.Lookup(releaseverify.FileCheck{
 		RootPath: filepath.Join(dir, repoSubdir, "root.json"), SeenPath: filepath.Join(t.TempDir(), "seen.json"),
-		MetadataDir: meta, Roles: []string{"stable"}, Target: name, Now: time.Now(),
+		MetadataDir: meta, Target: name, Now: time.Now(),
 	})
 }
 
