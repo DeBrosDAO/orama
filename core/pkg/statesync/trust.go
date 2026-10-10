@@ -58,7 +58,7 @@ func Resolve(ctx context.Context, seeds []string, chainID string, hc Doer) (*Tru
 	}
 	clients := make([]Client, len(seeds))
 	statuses := make([]Status, len(seeds))
-	lowest := int64(0)
+	var lowest int64
 	for i, seed := range seeds {
 		clients[i] = Client{BaseURL: "https://" + seed, HTTP: hc}
 		st, err := clients[i].Status(ctx)
@@ -72,7 +72,7 @@ func Resolve(ctx context.Context, seeds []string, chainID string, hc Doer) (*Tru
 			return nil, fmt.Errorf("seed %s is still catching up (height %d): try again when it has", seed, st.LatestHeight)
 		}
 		statuses[i] = st
-		if lowest == 0 || st.LatestHeight < lowest {
+		if i == 0 || st.LatestHeight < lowest {
 			lowest = st.LatestHeight
 		}
 	}

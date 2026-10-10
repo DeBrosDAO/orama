@@ -229,3 +229,20 @@ func TestNewHTTPClient_followsOnlyARedirectOnTheSameHost(t *testing.T) {
 		t.Errorf("a redirect to another host is a different witness: %v", err)
 	}
 }
+
+func TestResolve_aSeedAtHeightZeroSetsTheLowestHeight(t *testing.T) {
+	a, b := goodSeed(testIDA), goodSeed(testIDB)
+	a.height = 0
+	seeds, hc := twoSeeds(t, a, b)
+	_, err := Resolve(context.Background(), seeds, testChain, hc)
+	if err == nil || !strings.Contains(err.Error(), `latest_block_height "0"`) {
+		t.Fatalf("got %v: a seed with no block is refused whichever place it has in the list", err)
+	}
+	// And in the other order.
+	a, b = goodSeed(testIDA), goodSeed(testIDB)
+	b.height = 0
+	seeds, hc = twoSeeds(t, a, b)
+	if _, err = Resolve(context.Background(), seeds, testChain, hc); err == nil || !strings.Contains(err.Error(), `latest_block_height "0"`) {
+		t.Fatalf("got %v", err)
+	}
+}
