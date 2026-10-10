@@ -1,10 +1,12 @@
-# Orama Network Architecture
+# Architecture Reference
+
+The detailed architecture of the Orama Network node and gateway: the process model, the core components, data flow, security architecture, and how the pieces are deployed. [Architecture](/docs/architecture/overview) is the short overview; this page is the reference.
 
 ## Overview
 
 Orama Network is a high-performance API Gateway and Reverse Proxy designed for a decentralized ecosystem. It serves as a unified entry point that orchestrates traffic between clients and various backend services.
 
-How you talk to it: humans use the `orama` CLI; programs use the SDK and the gateway HTTP API. There is no Orama dashboard and no Orama MCP. See [CLIENT_SURFACE.md](CLIENT_SURFACE.md).
+How you talk to it: humans use the `orama` CLI; programs use the SDK and the gateway HTTP API. There is no Orama dashboard and no Orama MCP. See [How you talk to the network](/docs/developer/client-surface).
 
 ## Architecture Pattern
 
@@ -73,7 +75,7 @@ Install enables **only** `orama-node.service`. That process is a supervisor: it 
 | **nameserver** | this node, if `--nameserver` | `orama-namespace-coredns@nameserver` | `:53` |
 | **tenant** | N members chosen at provision | `orama-namespace-{rqlite,olric,gateway}@<name>` (+ `sfu`/`turn` if WebRTC) | `10000–10099` |
 
-Default tenant provision is N=3. A one-node fleet provisions N=1 (eval, not HA; see [EVAL.md](EVAL.md)). A two-node fleet is refused. The size is the fleet's members (registered and not retired, heartbeating or not), not those with a free slot: a full fleet refuses the create with 503 `NAMESPACE_CAPACITY` rather than falling back to eval. A larger fleet still provisions tenants at N=3, not at fleet size. WebRTC still requires 3 members.
+Default tenant provision is N=3. A one-node fleet provisions N=1 (eval, not HA; see [Getting Started](/docs/operator/getting-started)). A two-node fleet is refused. The size is the fleet's members (registered and not retired, heartbeating or not), not those with a free slot: a full fleet refuses the create with 503 `NAMESPACE_CAPACITY` rather than falling back to eval. A larger fleet still provisions tenants at N=3, not at fleet size. WebRTC still requires 3 members.
 
 Reserved namespace names: **`index`** and **`nameserver`**. They are not tenant-provisionable.
 
@@ -205,7 +207,7 @@ behaviour for anything that takes a moment to fail (`RestartSec=5` never trips
 the default five-starts-in-ten-seconds window); it is now deliberate rather than
 accidental, and it also covers the unit that fails *instantly* — a missing
 binary, an unparseable config — which used to reach `failed` within ten seconds.
-Since nothing parks those any more, `orama monitor report` reads the restart
+Since nothing parks those any more, `orama status report` reads the restart
 counter instead: `restartLoopRisk` treats a unit that has restarted repeatedly
 and never reached active as a crash loop, and raises the same critical alert
 `failed` state used to.
@@ -217,7 +219,7 @@ piece of start-up is a **component** with declared dependencies
 (`pkg/node/boot`), and a supervisor runs each one whose dependencies are ready,
 retrying failures with exponential backoff (1s → 60s) instead of exiting.
 
-A node's role chooses the graph. An empty role and `role: cluster` — `node.role` in the node config, or `role` in `preferences.yaml` — use the cluster graph. `role: global` registers only `data-dir`. That graph does not start WireGuard, RQLite, Olric, or the gateway. Olric is not its own component; `rqlite-local` starts it, so leaving that component out leaves Olric down. `role: both` (a cluster node and global services on one machine) runs the cluster graph, and is accepted only when `preferences.yaml` records `global_netns: orama-global` and the layout's files exist, as `orama global install --colocated` leaves them; the global services then run in their own network namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). Chain, public IPFS and the relay are not boot components. A plain `orama global install` on a machine with no `preferences.yaml` writes `role: global` there, so an `orama-node` started on that machine boots the global graph and never the cluster one; a machine that already has preferences (a cluster node) keeps them. The global graph is converged when `data-dir` is ready, and the node then reports `active`; the chain's sync state is the chain section of the node report, not a lifecycle state.
+A node's role chooses the graph. An empty role and `role: cluster` — `node.role` in the node config, or `role` in `preferences.yaml` — use the cluster graph. `role: global` registers only `data-dir`. That graph does not start WireGuard, RQLite, Olric, or the gateway. Olric is not its own component; `rqlite-local` starts it, so leaving that component out leaves Olric down. `role: both` (a cluster node and global services on one machine) runs the cluster graph, and is accepted only when `preferences.yaml` records `global_netns: orama-global` and the layout's files exist, as `orama global install --colocated` leaves them; the global services then run in their own network namespace ([Run a global node](/docs/blockchain/run-a-global-node), "Sharing a machine with a cluster node"). Chain, public IPFS and the relay are not boot components. A plain `orama global install` on a machine with no `preferences.yaml` writes `role: global` there, so an `orama-node` started on that machine boots the global graph and never the cluster one; a machine that already has preferences (a cluster node) keeps them. The global graph is converged when `data-dir` is ready, and the node then reports `active`; the chain's sync state is the chain section of the node report, not a lifecycle state.
 
 On a cluster node, components come in two tiers:
 
@@ -321,7 +323,7 @@ once its **serving core** — `rqlite-local` and `gateway` — is up, so one loc
 component that can never converge cannot pin it out of `IsAvailable` and stop it
 announcing maintenance on shutdown.
 
-The state is published in discovery metadata. `orama monitor report` does not
+The state is published in discovery metadata. `orama status report` does not
 render it today; read it from the node's own log
 (`sudo orama node logs node --since -1h | grep "Node lifecycle state changed"`),
 which also lists the components that have not converged.
@@ -460,7 +462,7 @@ remove a live member); and it is refused when the survivors would be fewer than
 a quorum of the configuration, since without a leader the removal cannot commit.
 That quorum-loss refusal, and "no surviving member" (reported the same way by the
 prune and by `ReplaceClusterNode`), name the recovery procedure: "Emergency:
-namespace RQLite lost quorum" in `docs/NODE_REPLACEMENT.md` (`orama node
+namespace RQLite lost quorum" in the [Node replacement](/docs/operator/node-replacement) page (`orama node
 recover-raft` recovers the platform cluster, not a namespace). Removing an id
 that is not in the configuration succeeds in rqlite, so concurrent prunes of one
 member on several nodes do not fail each other.
@@ -514,7 +516,7 @@ all (a request to it would block for the spawn timeout, node after node): its te
 is recorded without being sent. Otherwise the teardown is recorded in
 `namespace_pending_cleanup` with the cluster id and the reservations stay until the
 replay frees them, because freeing them under running units hands the ports to the
-next namespace (bugboard #275). The evicted member is no longer a member: the reads
+next namespace. The evicted member is no longer a member: the reads
 that build the cluster state, the join lists and the surviving ports skip a block
 whose node owes a teardown for that cluster (`notOwedTeardownSQL`): the node's own
 assignment reads (`clusterAssignedQuery`, `restoreClusterOnNode`, `desiredLocalConfig`)
@@ -815,7 +817,7 @@ the previous release ignores the flag and keeps the data.
 A namespace that stays but turns WebRTC off has the same exposure for its SFU,
 so `DisableWebRTC` tears the SFU down (`teardown-sfu`: stop, disable, env file
 and config removed) rather than stopping it; TURN is the shared host server and
-is reconciled, not stopped (see `docs/WEBRTC.md`).
+is reconciled, not stopped (see the [WebRTC](/docs/developer/webrtc) page).
 
 The backstop is the tenant reconciler's orphan sweep (`reapOrphanedTenants`,
 every 60s on every node). It lists the tenant namespaces with state on the node
@@ -867,7 +869,7 @@ all while the node has tenants,** the sweep and the boot
 restore tear nothing down (above), and a node left in that state would do so
 silently for ever. A failed registry read neither raises nor clears the alert.
 After two consecutive sweeps the node's telemetry report
-carries `registry_disowned_tenants` and `orama monitor report` raises a critical
+carries `registry_disowned_tenants` and `orama status report` raises a critical
 `namespace` alert naming them. Recovery depends on which side is wrong:
 
 1. The registry is wrong (restored from an older snapshot by `recover-raft`, or
@@ -1379,8 +1381,8 @@ not a skip.
 **Key Files:**
 - `pkg/anonproxy/socks.go` - SOCKS5 dialer and HTTP client; every connection goes through Tor
 - `pkg/gateway/anon_proxy_handler.go` - Anonymous request proxy endpoint
-- `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy (bugboard #168)
-- `pkg/gateway/relay_tunnel_handler.go` - Anonymous destination-pinned relay (bugboard #266)
+- `pkg/gateway/anon_tunnel_handler.go` - Authenticated tunnelling proxy
+- `pkg/gateway/relay_tunnel_handler.go` - Anonymous destination-pinned relay
 - `pkg/install/installers/tor.go`, `tor_installer.go`, `tor_keyring.go` - Tor repository, key pin, package, torrc
 - `pkg/install/installers/anyone_legacy.go` - Removal of the Anyone network
 - `systemd/orama-namespace-tor@.service` - The Tor client unit
@@ -1392,7 +1394,7 @@ refuses internal addresses (including a redirect to one).
 **Health:** `/v1/health` reports the SOCKS port as `checks.anon_proxy`
 (`ok`, or `unavailable` when it does not accept connections — deliberately not
 `error`, so a stopped Tor client never degrades the node or removes it from
-DNS; `orama monitor` and `orama maint inspect --subsystem tor` alert on it). The key
+DNS; `orama status` and `orama maint inspect --subsystem tor` alert on it). The key
 was `anyone` before Tor replaced the Anyone network.
 
 **API Endpoints:**
@@ -1402,16 +1404,15 @@ was `anyone` before Tor replaced the Anyone network.
   Its route policy is `LogNone` (no `request_logs` row, no access-log line), and
   its own log does not keep them: one line per request with the method, status,
   response size and duration, or the method, duration and a class of failure
-  (`timeout`, `canceled`, `transport`). See "Logging of anonymised requests" in
-  `docs/SECURITY.md`.
+  (`timeout`, `canceled`, `transport`). See [Tor](/docs/privacy/tor).
 - `GET /v1/proxy/tunnel` (WebSocket) - Carry an opaque TCP stream to
   `?host=&port=` through Tor. Each end user gets their own circuit (the
   isolation key is passed as SOCKS credentials). TLS is negotiated end-to-end
   between the client and the destination *through* the tunnel, so the gateway
   relays ciphertext and sees only the destination host and port. See
-  "Anonymity Tunnel" in `docs/GO_CLIENT_SDK.md`.
+  "Anonymity Tunnel" in the [Go Client SDK](/docs/developer/go-sdk) page.
 
-- `GET /v1/proxy/relay` (WebSocket, bugboard #266) - The relay of a relayed
+- `GET /v1/proxy/relay` (WebSocket) - The relay of a relayed
   fetch: the tunnel with the identity taken out and the destination pinned.
   **Framing:** binary WebSocket messages carry raw TCP bytes in both directions,
   with no framing of ours; a text frame ends the stream; when the destination
@@ -1439,8 +1440,8 @@ was `anyone` before Tor replaced the Anyone network.
   the request metrics count it by status with no size and no latency. It is served by the gateway of the node
   asked, whatever host the request names. The client runs TLS to the serving
   node's `ns-<name>.<base>` through it and sends `GET /v1/storage/relayed/{cid}`
-  with a fetch capability inside ([AUTH.md](AUTH.md#fetch-capabilities),
-  [SECURITY.md](SECURITY.md#relayed-fetch)).
+  with a fetch capability inside (the technical reference's authorization and storage chapters (`docs/whitepaper/technical-reference/vol1/14-authorization.md`,
+  `docs/whitepaper/technical-reference/vol1/19-storage.md`)).
 
 `/v1/proxy/anon` and `/v1/proxy/tunnel` require the `proxy` grant **and** a
 genuine end-user (SIWE wallet) JWT — an app-runtime API key alone is refused.
@@ -1661,7 +1662,7 @@ app's requests there.
   with how many cycles it left out. The breakers that are not closed are in the
   node report (`breakers`), as a warning alert per kind and target node naming
   the namespaces, or the `namespace/deployment` apps, how many breakers are open and how many half-open, and the reason of the one whose last failure is the oldest, and
-  as a line in `orama monitor node`; see [MONITORING.md](MONITORING.md).
+  as a line in `orama status node`; see [Monitoring](/docs/operator/monitoring).
 
 ## Security Architecture
 
@@ -1710,7 +1711,7 @@ app's requests there.
      exactly the scope that selector narrows, and the data path narrows that
      scope to what it matches. A selector in a domain the data path cannot yet
      name is refused when the grant is written, rather than stored and silently
-     ignored. See `docs/SECURITY.md`
+     ignored. See the technical reference's authorization chapter (`docs/whitepaper/technical-reference/vol1/14-authorization.md`, "Selectors")
    - `/v1/namespace/members` and `orama members` manage them; transferring the
      namespace requires the owner
 
@@ -1754,7 +1755,7 @@ app's requests there.
    - Actors are never credentials. The JWT the API-key exchange mints carries
      the key as its subject, so a non-wallet actor is recorded as a fingerprint
    - `GET /v1/audit` and `orama audit [--follow]` read it, scoped to the
-     caller's own namespace. See `docs/SECURITY.md`
+     caller's own namespace. See the technical reference's authorization chapter (`docs/whitepaper/technical-reference/vol1/14-authorization.md`, "The audit trail")
 
 ### Network Security (WireGuard Mesh)
 
@@ -1764,7 +1765,7 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **UFW Firewall:** Only public ports are exposed: 22 (SSH; Ubuntu/sandbox only — OramaOS has no SSH), 53 (DNS, nameservers only), 80/443 (HTTP/HTTPS), 51820 (WireGuard UDP)
 - **IPv6 disabled:** System-wide via sysctl to prevent bypass of IPv4 firewall rules
 - **A tenant's namespace gateway binds the overlay address**, not every interface, so it cannot be reached from a public one however the firewall is written. The index gateway keeps binding everything: Caddy reverse-proxies to localhost and the ACME internal endpoint is reached there. A node whose WireGuard is not up refuses to configure a tenant gateway rather than putting it on the public interface
-- **Namespace and index RQLite bind the WireGuard advertise address**, not `0.0.0.0`. The namespace gateway DSN uses that same host. `-auth` is always passed; missing auth file refuses to start. See `docs/SECURITY.md`
+- **Namespace and index RQLite bind the WireGuard advertise address**, not `0.0.0.0`. The namespace gateway DSN uses that same host. `-auth` is always passed; missing auth file refuses to start. See the technical reference's database chapter (`docs/whitepaper/technical-reference/vol1/17-database.md`)
 - **UFW is still the outer boundary** for everything on the node, but it is no longer the only one for the gateway
 - **Orama owns only the UFW rules it tagged.** Install and upgrade add every rule with the comment `orama` and remove only tagged rules the node no longer needs. Rules without the tag — an operator's `allow in on tailscale0`, a monitoring port, and the TURN rules `orama-node` opens at runtime through the privileged helper — are left alone. A node upgraded from a release before the tag keeps any rule that release opened and this one no longer wants; remove it by hand. A firewall that cannot be reconciled fails the install, as it fails an upgrade
 - **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama maint node install`
@@ -1828,19 +1829,19 @@ internal-auth check both accept.
 
 ### Service Authentication
 
-- **RQLite:** credentials are generated at genesis. `orama-namespace-rqlite@*` copies `rqlite-auth.json` into the instance data dir and starts rqlited with `-auth`. HTTP/Raft bind the WireGuard advertise address, not `0.0.0.0`. Gateway YAML carries `rqlite_username` / `rqlite_password`. Missing auth file refuses to start. See `docs/SECURITY.md`
+- **RQLite:** credentials are generated at genesis. `orama-namespace-rqlite@*` copies `rqlite-auth.json` into the instance data dir and starts rqlited with `-auth`. HTTP/Raft bind the WireGuard advertise address, not `0.0.0.0`. Gateway YAML carries `rqlite_username` / `rqlite_password`. Missing auth file refuses to start. See the technical reference's database chapter (`docs/whitepaper/technical-reference/vol1/17-database.md`)
 - **Olric:** memberlist binds the WireGuard address. An upgrade rewrites that config and seeds it from the WireGuard allowed IPs and the bootstrap multiaddrs, so genesis and the joiners name every other node and the index cache stays one cluster. Olric v0.7.4 YAML has no `encryptionKey`; overlay is the control
 - **IPFS Cluster:** `TrustedPeers` is `["*"]`; membership is CLUSTER_SECRET + overlay + invite. Install refuses to initialize IPFS Cluster with an empty `CLUSTER_SECRET`. Private blobs are encrypted before Add (`HKDF(cluster-secret, "ipfs-wrap-v1")`)
 - **TLS:** Caddy terminates public TLS (DNS-01). The gateway process does not bind `:80`/`:443` and refuses `enable_https: true`
-- **Internal endpoints:** the former `/v1/internal/wg/*` peer-exchange endpoints no longer exist; peers enter the table only through the invite-gated join and the OramaOS enrolment. The other `/v1/internal/*` routes authenticate with a coordination stamp (see SECURITY.md)
+- **Internal endpoints:** the former `/v1/internal/wg/*` peer-exchange endpoints no longer exist; peers enter the table only through the invite-gated join and the OramaOS enrolment. The other `/v1/internal/*` routes authenticate with a coordination stamp (see [Security](/docs/operator/security))
 - **Vault:** V1 push/pull endpoints require session token authentication when guardian is configured
 - **WebSockets:** Origin header validated against the node's configured domain
 - **Tenant SQLite:** opened with `SQLITE_LIMIT_ATTACHED=0`; `ATTACH`/`DETACH`, `VACUUM INTO`, any pragma outside a small allowlist of per-file ones (`table_info`, `index_list`, `foreign_keys`, `user_version`, `integrity_check`, …, also as `pragma_*` table functions), control bytes and multi-statement queries are rejected (a token-level check, so the words inside string literals or comments are data). Database files are `0600` in `0700` directories, read only by the gateway
-- **Tenant deployments:** `orama-deploy-{node,npm,go}@` see an empty read-only tmpfs over `/opt/orama` with only their own `data/deployments/<instance>` bound back read-only (`data/deployments` itself is `0700`). A Node.js app's `npm install` runs in the oneshot `orama-deploy-build@<instance>` (`--ignore-scripts`, registry dependencies only, same sandbox, loopback denied), never in the gateway; its `node_modules` is bound into the runtime unit from the build unit's own cache directory, `/var/cache/orama-build/<instance>`, which `orama-deploy-clean@<instance>` empties when the deployment is removed or created without an install. See SECURITY.md, "Tenant deployments"
+- **Tenant deployments:** `orama-deploy-{node,npm,go}@` see an empty read-only tmpfs over `/opt/orama` with only their own `data/deployments/<instance>` bound back read-only (`data/deployments` itself is `0700`). A Node.js app's `npm install` runs in the oneshot `orama-deploy-build@<instance>` (`--ignore-scripts`, registry dependencies only, same sandbox, loopback denied), never in the gateway; its `node_modules` is bound into the runtime unit from the build unit's own cache directory, `/var/cache/orama-build/<instance>`, which `orama-deploy-clean@<instance>` empties when the deployment is removed or created without an install. See the technical reference's app deployments chapter (`docs/whitepaper/technical-reference/vol1/11-app-deployments.md`)
 - **WASM egress:** `http_fetch` / `anon_fetch` (and its deprecated alias `anyone_fetch`) deny loopback, private, link-local, unspecified, and multicast URLs; `anon_fetch` sends every connection to Tor, which refuses internal addresses itself
 - **WASM memory:** wazero `WithMemoryLimitPages` from `MaxMemoryLimitMB` (default 256 MB). Modules without a memory max still cannot grow past that
 - **WASM concurrency:** process-wide semaphore plus a per-namespace cap (`maxConcurrent/2`, min 1)
-- **Process uid:** namespace gateway/rqlite/olric/pubsub/ipfs/ipfs-cluster/vault/caddy/sni-router and the host TURN server run as `User=orama` (not root). CoreDNS runs as `orama-coredns` and the SFU as `orama-sfu`, so neither shares a uid with the orama daemons and `ProtectProc=invisible` hides their processes from each other (`pkg/systemd` `isolatedServices`; install renders their templates with those accounts and creates the accounts). `/opt/orama/bin` is `root:orama` 0750; the SFU runs `/usr/local/bin/sfu`. `/opt/orama` is an empty read-only tmpfs to CoreDNS and, except its own namespace's `configs/`, to the SFU. Caddy's `ReadWritePaths` do not include `secrets/`. What keeps each other service on orama is in SECURITY.md, "Per-service accounts"
+- **Process uid:** namespace gateway/rqlite/olric/pubsub/ipfs/ipfs-cluster/vault/caddy/sni-router and the host TURN server run as `User=orama` (not root). CoreDNS runs as `orama-coredns` and the SFU as `orama-sfu`, so neither shares a uid with the orama daemons and `ProtectProc=invisible` hides their processes from each other (`pkg/systemd` `isolatedServices`; install renders their templates with those accounts and creates the accounts). `/opt/orama/bin` is `root:orama` 0750; the SFU runs `/usr/local/bin/sfu`. `/opt/orama` is an empty read-only tmpfs to CoreDNS and, except its own namespace's `configs/`, to the SFU. Caddy's `ReadWritePaths` do not include `secrets/`. What keeps each other service on orama is in the technical reference's privilege and filesystem trust chapter (`docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`, "Per-service accounts")
 - **What a gateway writes:** every gateway, `@index` included, writes only under `data/` — `secrets/` and `configs/` are read-only to `orama-namespace-gateway@`. A tenant gateway's signing keys (`jwt-signing-key.pem`, `jwt-eddsa-key.pem`) and every gateway's encryption-root cache sit in that gateway's state directory, `data/namespaces/<ns>/gateway/` (`0700`, the YAML's required `state_dir`). The index gateway's signing keys do not: they are root:root 0400 in `/var/lib/orama-gateway-keys/index` and loaded only into `orama-namespace-gateway@index`. The shared trees are `data/sqlite/<ns>/<db>.db` (tenant SQLite; the path is derived from this layout, not read from the registry), `data/deployments/<ns>-<name>/` (the `orama-deploy-*@` working directories) and `data/turn/turn.yaml` (the host TURN config `orama-turn.service` reads). `<oramaDir>` itself is only read: cluster secrets, `identity.key`, `node.yaml`
 - **Which node a gateway is on:** every gateway YAML must carry `cluster_secret_path` (`<oramaDir>/secrets/cluster-secret`, written by the spawner). The gateway reads the cluster secret from it and, from the orama directory it is in, the node's `data/identity.key` — its node peer id. A gateway without either refuses to start (`gateway.node_peer_id` in config validation): without the peer id, SQLite home-node assignment, deployment placement, host TURN and leader locality matched no node, silently
 - **TLS:** internet-facing TLS is 1.2+ (`TCPSNIGateway`, CLI, tlsutil)
@@ -1850,7 +1851,7 @@ internal-auth check both accept.
 
 - **Refresh tokens:** Stored as SHA-256 hashes (never plaintext)
 - **API keys:** Stored as HMAC-SHA256 hashes with a server-side secret
-- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM (a deployment's environment, once an operator has run `orama maint operator rotate-secrets`, is also sealed to its namespace and deployment id as `enc:v2:`; docs/SECURITY.md "Deployment environment variables"). The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama maint operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
+- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM (a deployment's environment, once an operator has run `orama maint operator rotate-secrets`, is also sealed to its namespace and deployment id as `enc:v2:`; see [Deployments](/docs/developer/deployments#how-the-values-are-handled)). The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama maint operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
 - **Namespace backups:** `/v1/namespace/backup` decrypts those secrets and seals them, with the RQLite snapshot and pin list, to the owner's X25519 public key (nacl sealed box, `ORBK`); the cluster never has the private key. The pin list is the namespace's stored objects (from its own database) and the content and builds of its deployments (from the cluster registry, where deployments live); the deployments themselves are cluster state and are not in the snapshot. A restore is opened on the owner's machine and its secrets re-sealed to the destination gateway's restore key for that namespace, `HKDF(encryption root, "orama-restore-v1:<namespace>")`, which the gateway derives and never stores; each sealed secret also names its namespace and row, checked on open
 - **Binary signing:** Build archives signed with rootwallet EVM signature, verified on install
 
@@ -1860,14 +1861,14 @@ internal-auth check both accept.
 - **systemd hardening:** `ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateDevices=yes`, etc. `orama-node` omits `NoNewPrivileges` so it can `sudo systemctl` the `@` units.
 - **Capabilities:** Caddy, CoreDNS, and the SNI router get `CAP_NET_BIND_SERVICE` for privileged ports.
 
-See [SECURITY.md](SECURITY.md) for the full security hardening reference.
+See the technical reference's privilege and filesystem trust chapter (`docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`) for the full security hardening reference.
 
 ### Global role
 
 A global node runs the public chain and the services beside it, not a cluster.
 `orama global install` (`core/pkg/install/global_install*.go`) puts them on the
 machine; `orama global start|stop|restart|status` (`core/pkg/globalnode`) runs
-their units; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) is the operator guide.
+their units; [Run a global node](/docs/blockchain/run-a-global-node) is the operator guide.
 
 | Service | Unit | Account | Public port |
 |---|---|---|---|
@@ -1888,7 +1889,7 @@ hides `/opt/orama`, denies private address ranges, and is not part of
 services reach it only through its RPC on `127.0.0.1:31001`. The Tor roles are
 the exception: a relay or an authority never reaches the chain, so a chain
 restart leaves it serving. They run the Orama Tor network, a separate network
-from the node's own Tor client above: [TOR_NETWORK.md](TOR_NETWORK.md).
+from the node's own Tor client above: [Running the Tor network](/docs/operator/tor-network).
 
 Trust points:
 
@@ -1942,7 +1943,7 @@ Order matches `Gateway.withMiddleware` (outermost first). Rate limiting runs **b
 Every gate reads the policy the route declared, never the request path. A route
 with no declared policy cannot be registered at all. The declaration is
 `pkg/gateway/route_policy.go`; `pkg/gateway/routepolicy` is what enforces it.
-See `docs/SECURITY.md` for what the three path-prefix lists this replaced cost.
+See the technical reference's gateway architecture chapter (`docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md`, "A declared policy per route, enforced at registration") for what the three path-prefix lists this replaced cost.
 
 The client a rate limit is charged to is the peer address, not
 `X-Forwarded-For`. The header is honoured only when the peer is the local
@@ -2001,21 +2002,21 @@ so a distributed grind against one victim is not capped by a per-address limit.
   90-day uptime, node counts, chain progress, network traffic; no node named.
   `/status` in a browser is the status page built on it
 - `/v1/operator/telemetry` (and `/stream`) - Every node's full health report and
-  the derived alerts, for operators; what `orama monitor` reads
+  the derived alerts, for operators; what `orama status` reads
 
 Each cluster gateway collects its own node's report every 10s through the
 privileged helper and assembles the cluster view from its peers' reports over
-the mesh; see "Cluster telemetry on the gateway" in [MONITORING.md](MONITORING.md).
+the mesh; see "Cluster telemetry on the gateway" in [Monitoring](/docs/operator/monitoring).
 
 ### Metrics
 
 There is no Prometheus-compatible metrics endpoint yet. Observability today comes
-from the health/status endpoints above, structured logs, and the `orama monitor`
+from the health/status endpoints above, structured logs, and the `orama status`
 and `orama maint inspect` CLI commands. Each gateway also keeps live request metrics
 in memory — requests, rps, 4xx/5xx and error rate, p50/p95/p99 latency, and the
 busiest namespaces over a rolling 60-second window (`pkg/telemetry/traffic`,
 read with `Gateway.TrafficSnapshot()`); see "Request metrics" in
-[MONITORING.md](MONITORING.md).
+[Monitoring](/docs/operator/monitoring).
 
 ### Logging
 
@@ -2085,15 +2086,15 @@ Namespaces can opt in to WebRTC support for real-time voice, video, and data cha
 ### Components
 
 - **SFU (Selective Forwarding Unit)** — Pion WebRTC server that handles signaling (WebSocket), SDP negotiation, and RTP forwarding. Runs on all 3 cluster nodes, binds only to WireGuard IPs.
-- **TURN Server** — Pion TURN relay that provides NAT traversal. One shared server per host (`orama-turn.service`) serves every namespace allocated TURN there, each authenticated against its own secret; typically 2 of 3 nodes for redundancy. Public-facing (3478/udp and 3478/tcp, TURNS on 5349/tcp and, with stealth TURN, on 443/tcp through the SNI router ([STEALTH_TURN.md](STEALTH_TURN.md)), relay range 49152-65535/udp).
+- **TURN Server** — Pion TURN relay that provides NAT traversal. One shared server per host (`orama-turn.service`) serves every namespace allocated TURN there, each authenticated against its own secret; typically 2 of 3 nodes for redundancy. Public-facing (3478/udp and 3478/tcp, TURNS on 5349/tcp and, with stealth TURN, on 443/tcp through the SNI router ([Stealth TURN](/docs/operator/stealth-turn)), relay range 49152-65535/udp).
 
 ### Security Model
 
 - **TURN-shielded**: SFU binds only to WireGuard (10.0.0.x), never 0.0.0.0. All client media flows through TURN relay.
 - **Forced relay**: `iceTransportPolicy: relay` enforced server-side — no direct peer connections.
-- **HMAC credentials**: Per-namespace TURN shared secret. Credentials from the REST endpoint and the host function last 24h; those the SFU signals to a client use the per-namespace TTL, 600s by default ([WEBRTC.md](WEBRTC.md)).
+- **HMAC credentials**: Per-namespace TURN shared secret. Credentials from the REST endpoint and the host function last 24h; those the SFU signals to a client use the per-namespace TTL, 600s by default ([WebRTC](/docs/developer/webrtc)).
 - **Namespace isolation**: Each namespace has its own TURN secret, port ranges, and rooms.
-- **Authenticated identity and admission**: the SFU takes a peer's user and device from a short-lived join ticket the namespace gateway signs (a key derived from the namespace's TURN secret), never from the client's join frame; a namespace can admit only users its functions admitted, and its functions can kick and mute ([WEBRTC.md](WEBRTC.md#identity-admission-and-moderation)).
+- **Authenticated identity and admission**: the SFU takes a peer's user and device from a short-lived join ticket the namespace gateway signs (a key derived from the namespace's TURN secret), never from the client's join frame; a namespace can admit only users its functions admitted, and its functions can kick and mute ([WebRTC](/docs/developer/webrtc#identity-admission-and-moderation)).
 
 ### Port Allocation
 
@@ -2107,7 +2108,7 @@ WebRTC uses a separate port allocation system from core namespace services:
 | TURN TLS | 5349/tcp (443/tcp with stealth TURN) |
 | TURN relay | 49152-65535/udp |
 
-See [docs/WEBRTC.md](WEBRTC.md) for full details including client integration, API reference, and debugging.
+See [WebRTC](/docs/developer/webrtc) for full details including client integration, API reference, and debugging.
 
 ## OramaOS
 
@@ -2132,22 +2133,13 @@ These OramaOS properties do **not** apply to the production Ubuntu fleet (sandbo
 
 **Node enrollment:** OramaOS nodes join via `orama maint node enroll` instead of `orama maint node install`. The operator reads an 80-bit registration code off the node's console and gives it to the CLI with an invite token; the gateway pushes cluster config sealed under that code. There is no WebSocket enrollment path.
 
-See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full deployment guide.
+See [OramaOS](/docs/operator/orama-os) for the full deployment guide.
 
 Sandbox clusters remain on Ubuntu for development convenience.
 
-## Future Enhancements
-
-1. **GraphQL Support** - GraphQL gateway alongside REST
-2. **gRPC Support** - gRPC protocol support
-3. **Event Sourcing** - Event-driven architecture
-4. **Kubernetes Operator** - Native K8s deployment
-5. **Observability** - OpenTelemetry integration
-6. **Multi-tenancy** - Enhanced namespace isolation
-
 ## Resources
 
-- [How you talk to the network](CLIENT_SURFACE.md)
+- How you talk to the network
 - [RQLite Documentation](https://rqlite.io/docs/)
 - [IPFS Documentation](https://docs.ipfs.tech/)
 - [LibP2P Documentation](https://docs.libp2p.io/)

@@ -17,7 +17,7 @@ import (
 )
 
 // reservedNames are the platform's (create_handler.go reservedNamespaces;
-// docs/SECURITY.md "platform names are reserved").
+// docs/whitepaper/technical-reference/vol1/09-namespaces.md "platform names are reserved").
 var reservedNames = []string{"default", "index", "nameserver", "system", "orama", "admin", "internal",
 	"api", "www", "mail", "cdn", "docs", "status", "push", "turn", "ns1", "ns2", "ns3", "ns4"}
 

@@ -25,7 +25,7 @@ const (
 	pathPubsubWS = "/v1/pubsub/ws"
 	pathKeys     = "/v1/namespace/keys"
 	// closeRevoked: "the token, its session or its subject was revoked"
-	// (docs/AUTH.md#open-websockets).
+	// (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets).
 	closeRevoked = 4403
 	// sweepBudget: sockets are re-checked every 10 seconds; a close frame
 	// and the round trip come on top.
@@ -102,7 +102,7 @@ func (w *watched) closeCode(t testing.TB, within time.Duration) int {
 // TestSocketRevocation_closesWith4403: a subscription opened with a token is
 // closed with 4403 within ten seconds when that token is revoked (logout),
 // its session is ended, or its device is revoked — on the public and on the
-// namespace gateway (docs/AUTH.md#open-websockets).
+// namespace gateway (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets).
 func TestSocketRevocation_closesWith4403(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -160,7 +160,7 @@ func sessionIDOf(t testing.TB, c *gw.Client, bearer, deviceID string) int64 {
 
 // TestSocketRevocation_keySocketsStayOpen: a socket opened with an API key
 // has no token to re-check; revoking the key refuses its next upgrade and
-// leaves the open socket alone (docs/AUTH.md#open-websockets). ?jwt= opens a
+// leaves the open socket alone (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets). ?jwt= opens a
 // socket with a token where a header cannot be set.
 func TestSocketRevocation_keySocketsStayOpen(t *testing.T) {
 	t.Parallel()

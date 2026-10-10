@@ -6,7 +6,7 @@ import "time"
 
 const (
 	// keyCacheBudget covers a gateway's credential cache and the revocation
-	// reload (docs/AUTH.md#revoking) after a restore replaces the key rows.
+	// reload (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation) after a restore replaces the key rows.
 	keyCacheBudget = 30 * time.Second
 	pollEvery      = 2 * time.Second
 )

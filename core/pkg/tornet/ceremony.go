@@ -85,7 +85,7 @@ type CeremonyResult struct {
 
 // RunCeremony generates the keys of a directory-authority set with the
 // upstream tor and tor-gencert, on the machine it runs on. That machine should
-// be air-gapped and have tor installed; docs/TOR_NETWORK.md has the procedure.
+// be air-gapped and have tor installed; website/src/docs/operator/tor-network.mdx has the procedure.
 //
 // For each authority it writes below OutDir:
 //   - offline/<nickname>/authority_identity_key: the identity key, encrypted

@@ -62,12 +62,12 @@ func TestHint_pointsAtRealCommands(t *testing.T) {
 		alert cluster.Alert
 		want  []string
 	}{
-		{cluster.Alert{Subsystem: "rqlite"}, []string{"orama maint inspect --env devnet --subsystem rqlite", "docs/COMMON_PROBLEMS.md §6"}},
-		{cluster.Alert{Subsystem: "wireguard", Node: "1.1.1.1"}, []string{"--subsystem wg", "§1"}},
+		{cluster.Alert{Subsystem: "rqlite"}, []string{"orama maint inspect --env devnet --subsystem rqlite", "orama.network/docs/operator/troubleshooting#raft-quorum-issues", "troubleshooting#rqlite-replication-lag"}},
+		{cluster.Alert{Subsystem: "wireguard", Node: "1.1.1.1"}, []string{"--subsystem wg", "troubleshooting#wireguard-connectivity"}},
 		{cluster.Alert{Subsystem: cluster.SubsystemCollection, Node: "3.3.3.3"}, []string{"orama status node --env devnet --node 3.3.3.3 --ssh"}},
 		{cluster.Alert{Subsystem: "service", Node: "2.2.2.2"}, []string{"orama ssh 2.2.2.2 --env devnet 'sudo orama node status'"}},
 		{cluster.Alert{Subsystem: "vault", Node: "2.2.2.2"}, []string{"orama status node --env devnet --node 2.2.2.2"}},
-		{cluster.Alert{Subsystem: "namespace"}, []string{"docs/COMMON_PROBLEMS.md §1–§4"}},
+		{cluster.Alert{Subsystem: "namespace"}, []string{"orama.network/docs/operator/troubleshooting#namespace-gateway-olric-unavailable", "troubleshooting#namespace-services-not-restarting-after-an-upgrade"}},
 	}
 	for _, tc := range cases {
 		got := Hint(tc.alert, "devnet")

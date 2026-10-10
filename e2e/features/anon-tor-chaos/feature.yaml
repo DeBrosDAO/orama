@@ -14,6 +14,6 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/ARCHITECTURE.md: checks.anon_proxy is unavailable (never error) with Tor down; the node stays in DNS"
-    - "docs/SERVERLESS.md#http: anon_fetch has no direct fallback; Tor down is status 0 with an error"
-    - "docs/SECURITY.md#tenant-isolation: every anon_fetch connection goes to the Tor SOCKS port"
+    - "website/src/docs/contributor/architecture-reference.mdx: checks.anon_proxy is unavailable (never error) with Tor down; the node stays in DNS"
+    - "website/src/docs/developer/functions.mdx#http: anon_fetch has no direct fallback; Tor down is status 0 with an error"
+    - "docs/whitepaper/technical-reference/vol1/21-serverless.md#outbound-http-and-the-egress-guard: every anon_fetch connection goes to the Tor SOCKS port"

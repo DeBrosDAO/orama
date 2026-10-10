@@ -24,6 +24,8 @@ Orama modules: `emission`, `power`, `fees`, `token`, `archive`, `nodes`, `cnft`,
 
 [The modules](/docs/blockchain/modules) says what each one does and links to its page.
 
+`x/staking` still holds bonds, delegations, unbonding, and jailing. It does not publish the validator set; `x/power` does. The module by module description is in the technical reference (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "The module set").
+
 ## What is not wired
 
 - No stock `x/gov`. Governance is `x/houses`. Every authority-gated message of a stock module (software upgrade, parameter updates) names an authority address nobody can sign for, so those messages are unreachable until a release deliberately hands the authority to the houses.

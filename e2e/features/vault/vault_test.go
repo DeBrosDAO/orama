@@ -61,7 +61,7 @@ func TestPush_pullRoundTrip(t *testing.T) {
 
 // TestPush_versionsAreMonotonic: a higher version replaces the envelope; the
 // same or a lower version is 409 version_conflict and changes nothing
-// (vault/docs/API.md: anti-rollback).
+// (docs/whitepaper/technical-reference/vol1/28-vault.md, Storage layout and the write order: anti-rollback).
 func TestPush_versionsAreMonotonic(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

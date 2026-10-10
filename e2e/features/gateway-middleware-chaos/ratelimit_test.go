@@ -77,7 +77,7 @@ func flood(t *testing.T, c *gw.Client, req gw.Req) (*gw.Response, int) {
 
 // TestRateLimit_credentialBucketPerAddress: from one address the credential
 // routes admit the burst and then answer 429 with Retry-After: 60, the coded
-// retryable envelope and the security headers (docs/ARCHITECTURE.md
+// retryable envelope and the security headers (website/src/docs/contributor/architecture-reference.mdx
 // "Middleware Stack": 30 a minute per address bursting to 10).
 func TestRateLimit_credentialBucketPerAddress(t *testing.T) {
 	quiet(t)
@@ -114,7 +114,7 @@ func requireCredential429(t *testing.T, resp *gw.Response) {
 
 // TestRateLimit_spoofedForwardedForDoesNotMoveTheBucket: a client that
 // writes its own X-Forwarded-For is still charged to its address — Caddy
-// appends the real peer, and only the last entry is read (docs/SECURITY.md
+// appends the real peer, and only the last entry is read (docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md
 // "Rate limiting").
 func TestRateLimit_spoofedForwardedForDoesNotMoveTheBucket(t *testing.T) {
 	quiet(t)
@@ -133,7 +133,7 @@ func TestRateLimit_spoofedForwardedForDoesNotMoveTheBucket(t *testing.T) {
 
 // TestRateLimit_challengePerWallet: challenges for one wallet stop at the
 // wallet's burst of 5 even while the address still has credential budget,
-// with the per-wallet refusal (docs/SECURITY.md "Rate limiting": a
+// with the per-wallet refusal (docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md "Rate limiting": a
 // challenge writes a row for a wallet the caller need not own).
 func TestRateLimit_challengePerWallet(t *testing.T) {
 	quiet(t)
@@ -204,7 +204,7 @@ const localFlood = 2 * floodCeiling
 // reaches the gateway from 127.0.0.1 through Caddy, so loopback with a
 // forwarding header is charged to the forwarded address and limited; plain
 // loopback (a process on the node) and another node over the overlay are
-// exempt (docs/ARCHITECTURE.md "Middleware Stack"; docs/SECURITY.md "Rate
+// exempt (website/src/docs/contributor/architecture-reference.mdx "Middleware Stack"; docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md "Rate
 // limiting").
 func TestRateLimit_loopbackWithForwardedForIsNotExempt(t *testing.T) {
 	quiet(t)

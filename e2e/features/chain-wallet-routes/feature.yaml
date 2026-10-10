@@ -29,9 +29,9 @@ covers:
   queries:
     - orama.fees.v1.BaseFee
   claims:
-    - "docs/CHAIN.md#the-gateways-chain-proxy: POST /v1/chain/simulate answers gas_wanted (the limit the transaction declares) and gas_used as decimal strings, and a fee of the base fee times gas_used, and keeps nothing"
-    - "docs/CHAIN.md#the-gateways-chain-proxy: POST /v1/chain/broadcast submits with broadcast_tx_sync and answers code, codespace, log and tx_hash; a refusal is a 422 with a sanitised log"
-    - "docs/CHAIN.md#the-gateways-chain-proxy: a transaction not yet in a block is a 404 with Retry-After on /v1/chain/tx, never a 502"
-    - "docs/CHAIN.md#the-gateways-chain-proxy: wallet queries (bank, auth, staking, distribution, wasm ContractInfo) are served on /v1/chain/query/; a non-contract address is a 404"
-    - "docs/CHAIN.md#the-gateways-chain-proxy: a page limit over 100 is refused, and simulate and broadcast have their own rate-limit buckets"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: POST /v1/chain/simulate answers gas_wanted (the limit the transaction declares) and gas_used as decimal strings, and a fee of the base fee times gas_used, and keeps nothing"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: POST /v1/chain/broadcast submits with broadcast_tx_sync and answers code, codespace, log and tx_hash; a refusal is a 422 with a sanitised log"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: a transaction not yet in a block is a 404 with Retry-After on /v1/chain/tx, never a 502"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: wallet queries (bank, auth, staking, distribution, wasm ContractInfo) are served on /v1/chain/query/; a non-contract address is a 404"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md#how-core-reads-and-writes-the-chain: a page limit over 100 is refused, and simulate and broadcast have their own rate-limit buckets"
     - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: POST /v1/chain/light answers the state-sync light client's status, commit, validators and consensus_params with the caller's JSON-RPC id, and refuses every other method (broadcast_evidence included)"

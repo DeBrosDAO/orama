@@ -16,13 +16,13 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Session policies (docs/AUTH.md#adding-a-device-approval-and-linking).
+// Session policies (docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device).
 const (
 	policyOptional = "optional"
 	policyRequired = "required"
 	policyApproval = "approval"
 	// policyCacheBudget: a refresh may be judged by a policy read up to 10
-	// seconds earlier (docs/AUTH.md#how-long-a-change-takes-to-land).
+	// seconds earlier (docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching).
 	policyCacheBudget = revocationStaleness + stalenessSlack
 	restoreBudget     = time.Minute
 )

@@ -19,5 +19,5 @@ covers:
     - /v1/namespace/status
     - /v1/namespace/delete
   claims:
-    - "docs/API_SURFACE.md#namespace-management: a wallet at its per-wallet cap (default 10) is refused NAMESPACE_QUOTA"
-    - "docs/ARCHITECTURE.md: a node hosts at most twenty tenant port blocks in 10000-10099; the next namespace is refused, not squeezed in"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a wallet at its per-wallet cap (default 10) is refused NAMESPACE_QUOTA"
+    - "website/src/docs/contributor/architecture-reference.mdx: a node hosts at most twenty tenant port blocks in 10000-10099; the next namespace is refused, not squeezed in"

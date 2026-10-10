@@ -95,7 +95,7 @@ type JoinResponse struct {
 	// whose signature on a build archive nodes of this cluster accept. The
 	// joiner writes it to its own anchor before it installs anything from its
 	// archive; it arrives over the invite-authenticated, pinned-TLS join, which
-	// is what makes it trustworthy (docs/SECURITY.md).
+	// is what makes it trustworthy (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md).
 	ArchiveSigners []string `json:"archive_signers"`
 	// ArchiveSignersRotatedAt is the build date (RFC 3339) of the last signer
 	// rotation the minting node took, empty when it took none. The joiner

@@ -222,7 +222,7 @@ func TestAuthorizationMiddleware_namespaceListNeedsAWalletNotAGrant(t *testing.T
 }
 
 // The wallet's role decides the data plane: an owner reaches the cache and a
-// reader, who holds none of it, does not (docs/AUTH.md, "Roles"). Either way
+// reader, who holds none of it, does not (docs/whitepaper/technical-reference/vol1/14-authorization.md, "Roles"). Either way
 // the grant is read once and remembered (narrowed_grant.go), not once per
 // request.
 func TestAuthorizationMiddleware_dataPlaneFollowsTheWalletsRole(t *testing.T) {

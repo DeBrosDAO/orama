@@ -15,7 +15,7 @@ import (
 )
 
 // TestPin_statusReachesReplicationFactor: an upload is pinned on the cluster's
-// replication factor (3) and status reports it (docs/ARCHITECTURE.md; RF=3).
+// replication factor (3) and status reports it (website/src/docs/contributor/architecture-reference.mdx; RF=3).
 func TestPin_statusReachesReplicationFactor(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -52,7 +52,7 @@ func TestPin_explicitPinOwnedOnly(t *testing.T) {
 }
 
 // TestGet_otherNamespaceRefused: a namespace reads only CIDs it owns
-// (docs/SECURITY.md#tenant-isolation; download_handler.go): 403, and never
+// (docs/whitepaper/technical-reference/vol1/23-webrtc.md#authentication; download_handler.go): 403, and never
 // the content.
 func TestGet_otherNamespaceRefused(t *testing.T) {
 	t.Parallel()

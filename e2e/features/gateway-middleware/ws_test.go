@@ -19,7 +19,7 @@ const pubsubWS = "/v1/pubsub/ws"
 // and the namespace's own origin or a name under it upgrade; a foreign site,
 // a lookalike, the parent base domain and "null" are refused with 403 before
 // the upgrade, and a forged X-Forwarded-Host does not change the host
-// compared against (docs/SECURITY.md "WebSocket Origin Validation"; the
+// compared against (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "WebSocket Origin Validation"; the
 // cluster gateway sets X-Forwarded-Host itself on the proxy hop).
 func TestWebSocket_originChecked(t *testing.T) {
 	t.Parallel()

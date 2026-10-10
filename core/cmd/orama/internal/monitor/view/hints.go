@@ -3,12 +3,13 @@ package view
 import (
 	"fmt"
 	"net"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/telemetry/cluster"
 )
 
 // commonProblemsDoc is where the runbooks for recurring failures live.
-const commonProblemsDoc = "docs/COMMON_PROBLEMS.md"
+const commonProblemsDoc = "orama.network/docs/operator/troubleshooting"
 
 // inspectSubsystems maps an alert subsystem to the `orama maint inspect
 // --subsystem` value that checks it in depth.
@@ -23,14 +24,14 @@ var inspectSubsystems = map[string]string{
 	"tor":       "tor",
 }
 
-// problemSections points a subsystem at the COMMON_PROBLEMS.md sections that
-// cover it.
-var problemSections = map[string]string{
-	"rqlite":    "§6, §14, §15",
-	"olric":     "§1, §7",
-	"wireguard": "§1 (WireGuard packet loss)",
-	"ipfs":      "§12",
-	"namespace": "§1–§4",
+// problemSections points a subsystem at the anchors of the troubleshooting page
+// sections that cover it.
+var problemSections = map[string][]string{
+	"rqlite":    {"raft-quorum-issues", "rqlite-replication-lag"},
+	"olric":     {"olric-cluster-problems", "olric-cluster-split-after-enabling-encryption"},
+	"wireguard": {"wireguard-connectivity"},
+	"ipfs":      {"ipfs-cluster-pins-never-replicate"},
+	"namespace": {"namespace-gateway-olric-unavailable", "namespace-gateway-missing-config-fields", "namespace-not-restoring-after-a-restart-missing-cluster-statejson", "namespace-services-not-restarting-after-an-upgrade"},
 }
 
 // Hint is what to do next about an alert: a real command that looks closer,
@@ -38,8 +39,12 @@ var problemSections = map[string]string{
 // specific to say than the alert itself.
 func Hint(a cluster.Alert, env string) string {
 	hint := hintCommand(a, env)
-	if sec, ok := problemSections[a.Subsystem]; ok {
-		doc := fmt.Sprintf("see %s %s", commonProblemsDoc, sec)
+	if anchors, ok := problemSections[a.Subsystem]; ok {
+		links := make([]string, len(anchors))
+		for i, anchor := range anchors {
+			links[i] = commonProblemsDoc + "#" + anchor
+		}
+		doc := "see " + strings.Join(links, ", ")
 		if hint == "" {
 			return doc
 		}

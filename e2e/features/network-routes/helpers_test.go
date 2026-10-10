@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// The four network routes (docs/API_SURFACE.md "Network"; handlers in
+// The four network routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Network"; handlers in
 // core/pkg/gateway/network_handlers.go, policy in route_policy.go).
 const (
 	pathStatus     = "/v1/network/status"

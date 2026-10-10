@@ -42,7 +42,7 @@ first.
 
 A directory authority is not stopped while another has started less than 30
 minutes ago: a fresh authority casts no Running vote for that long and a
-consensus needs two of the three (docs/TOR_NETWORK.md, "Directory authorities").
+consensus needs two of the three (website/src/docs/operator/tor-network.mdx, "Directory authorities").
 --force overrides it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLifecycle(cmd, args, "stopping the global services", func(l globalnode.Lifecycle, s []install.GlobalService) error {

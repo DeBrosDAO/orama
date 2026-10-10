@@ -23,7 +23,7 @@ covers:
     - orama maint node stage-archive
     - orama maint global stage-oramad
   claims:
-    - "docs/CLI_REFERENCE.md#orama-maint-node-stage-archive: before anything is extracted the archive must be the target in TUF metadata signed under the adopted root; any failure refuses it and the wallet check is not tried instead"
-    - "docs/CLI_REFERENCE.md#orama-maint-node-stage-archive: a snapshot older than the one recorded in /etc/orama/release-seen.json is refused"
-    - "docs/CLI_REFERENCE.md#orama-maint-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
-    - "docs/SECURITY.md#supply-chain: a TUF refusal leaves /opt/orama unchanged and does not raise the rollback record"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-stage-archive: before anything is extracted the archive must be the target in TUF metadata signed under the adopted root; any failure refuses it and the wallet check is not tried instead"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-stage-archive: a snapshot older than the one recorded in /etc/orama/release-seen.json is refused"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: a TUF refusal leaves /opt/orama unchanged and does not raise the rollback record"

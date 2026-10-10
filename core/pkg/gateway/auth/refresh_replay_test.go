@@ -9,7 +9,7 @@ import (
 // The replay tripwire fired only when two requests raced the rotation. A token
 // presented after it had been rotated away — the ordinary shape of a stolen one
 // — was refused as "invalid or expired" and recorded as an ordinary failed
-// refresh, so the audit trail never said anyone had tried (docs/AUTH.md: "the
+// refresh, so the audit trail never said anyone had tried (docs/whitepaper/technical-reference/vol1/14-authorization.md: "the
 // second attempt fails and is recorded").
 func TestRefreshToken_aSpentTokenIsAReplay(t *testing.T) {
 	s, _, _ := realRegistry(t)

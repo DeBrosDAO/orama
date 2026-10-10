@@ -46,9 +46,9 @@ covers:
     - orama cluster register-onchain
     - orama cluster retire-onchain
   claims:
-    - "docs/CLI_REFERENCE.md#orama-cluster-register-onchain: without --node the command prints the sign document and does not submit anything"
-    - "docs/CLI_REFERENCE.md#orama-storage-open: a wrong seed, repair seed, or slot fails and writes nothing"
-    - "docs/CLI_REFERENCE.md#orama-global-register: each binding's signature must verify for this chain id and operator"
-    - "docs/CLI_REFERENCE.md#orama-maint-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
-    - "docs/CLI_REFERENCE.md#orama-storage-put: a wrong file or a wrong deal uploads nothing"
-    - "docs/CLI_REFERENCE.md#orama-storage-repair: a deal that does not exist fails and restores no slot"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster-register-onchain: without --node the command prints the sign document and does not submit anything"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-open: a wrong seed, repair seed, or slot fails and writes nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-global-register: each binding's signature must verify for this chain id and operator"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-global-stage-oramad: a binary is placed only after it verifies against the release root through TUF metadata"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-put: a wrong file or a wrong deal uploads nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-repair: a deal that does not exist fails and restores no slot"

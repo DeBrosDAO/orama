@@ -31,11 +31,11 @@ covers:
     - /v1/storage/relayed/
     - /v1/proxy/relay
   claims:
-    - "docs/AUTH.md#fetch-capabilities: a fetch capability reads one CID of one namespace with no credential; forged, expired, wrong-CID and wrong-namespace tokens are one 403 FETCH_CAP_INVALID, a revoked one FETCH_CAP_REVOKED, none is 401 FETCH_CAP_MISSING"
-    - "docs/AUTH.md#fetch-capabilities: revoking by id takes the revoke_key the mint returned in X-Orama-Revoke-Key; without it, or with another capability's, it is 403 FETCH_CAP_REVOKE_KEY_INVALID and nothing is written"
-    - "docs/AUTH.md#fetch-capabilities: minting needs a device-bound session, count 1 to 64, ttl 3600 to 604800 seconds"
-    - "docs/AUTH.md#fetch-capabilities: a credential beside the capability is 400 FETCH_CAP_NOT_ALONE"
-    - "docs/API_SURFACE.md#storage: the relayed download answers the body and headers of /v1/storage/get with a Content-Length"
-    - "docs/ARCHITECTURE.md#6-anonymity-proxy-tor-pkganonproxy: /v1/proxy/relay takes no credential and reaches only hosts under relay_allowed_suffixes on port 443, never an IP literal"
-    - "docs/SECURITY.md#relayed-fetch: the relay writes no request log row or line, and the relayed download keeps no address in request_logs"
-    - "docs/SERVERLESS.md#storage-fetch-capabilities: storage_fetch_cap_mint mints capabilities from a device-bound caller"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: a fetch capability reads one CID of one namespace with no credential; forged, expired, wrong-CID and wrong-namespace tokens are one 403 FETCH_CAP_INVALID, a revoked one FETCH_CAP_REVOKED, none is 401 FETCH_CAP_MISSING"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: revoking by id takes the revoke_key the mint returned in X-Orama-Revoke-Key; without it, or with another capability's, it is 403 FETCH_CAP_REVOKE_KEY_INVALID and nothing is written"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: minting needs a device-bound session, count 1 to 64, ttl 3600 to 604800 seconds"
+    - "docs/whitepaper/technical-reference/vol1/19-storage.md#fetch-capabilities: a credential beside the capability is 400 FETCH_CAP_NOT_ALONE"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage: the relayed download answers the body and headers of /v1/storage/get with a Content-Length"
+    - "website/src/docs/contributor/architecture-reference.mdx#6-anonymity-proxy--tor-pkganonproxy: /v1/proxy/relay takes no credential and reaches only hosts under relay_allowed_suffixes on port 443, never an IP literal"
+    - "docs/whitepaper/technical-reference/vol1/36-sdks.md#relayed-fetch: the relay writes no request log row or line, and the relayed download keeps no address in request_logs"
+    - "website/src/docs/developer/functions.mdx#storage-fetch-capabilities: storage_fetch_cap_mint mints capabilities from a device-bound caller"

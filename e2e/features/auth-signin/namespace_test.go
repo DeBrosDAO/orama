@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// pathNamespaces creates a namespace (docs/API_SURFACE.md "Namespace management").
+// pathNamespaces creates a namespace (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Namespace management").
 const pathNamespaces = "/v1/namespaces"
 
 // reservedNames are the platform's own labels (core/pkg/gateway/handlers/

@@ -118,6 +118,31 @@ curl "https://gateway.example.com/v1/db/sqlite/backups?database_name=my-database
   -H "Authorization: Bearer <token>"
 ```
 
+### Deleting a Database
+
+```bash
+orama db delete my-database
+
+# This permanently deletes "my-database" and its file. There is no undo.
+# Type the database name to confirm: my-database
+# ✓ my-database deleted (3 file(s) removed).
+```
+
+Typing the name back is the confirmation, not a y/n prompt: a y/n is answered
+reflexively, and the mistake this guards against is the right command aimed at
+the wrong database. `--yes` skips the prompt for scripts.
+
+The database file and its write-ahead log are removed from the node that holds
+them. Back up first with `orama db backup` if you may want the data again.
+
+### Database Features
+
+- ✅ **WAL Mode**: Write-Ahead Logging for better concurrency
+- ✅ **Namespace Isolation**: Complete separation between namespaces. Tenant SQL cannot `ATTACH`/`DETACH` another database file or `VACUUM INTO` a path, can run only per-file pragmas (`table_info`, `table_list`, `index_list`, `index_info`, `foreign_key_list`, `foreign_key_check`, `foreign_keys`, `defer_foreign_keys`, `user_version`, `application_id`, `integrity_check`, `quick_check`, `page_count`, `freelist_count`, `optimize`), and extra statements in one query are rejected.
+- ✅ **On-Demand Backups**: Back up to IPFS anytime with `orama db backup`
+- ✅ **ACID Transactions**: Full SQLite transactional support
+- ✅ **Concurrent Reads**: Multiple readers can query simultaneously
+
 ### SQLite CLI Reference
 
 | Command | Description |

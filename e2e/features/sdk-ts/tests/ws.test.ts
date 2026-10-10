@@ -1,5 +1,5 @@
 // The pubsub WebSocket and session revocation: ending a session closes the
-// sockets its tokens hold open within ten seconds (docs/AUTH.md "Which
+// sockets its tokens hold open within ten seconds (docs/whitepaper/technical-reference/vol1/13-identity.md "Which
 // machines are signed in"), and the SDK reports it.
 import { createClient, MemoryStorage } from "../../../../sdk/src/index";
 import { need, nsClient, onFleet, unique, until } from "./fleet";

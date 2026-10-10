@@ -83,6 +83,8 @@ Do not rely on any of this:
 - **Syscall filtering.** Seccomp runs in audit mode: disallowed syscalls are logged, not blocked.
 - **Share redistribution on departure.**
 
+Until the genesis path is built, an operator must record the genesis node's raw LUKS key out of band during initial enrollment and supply it manually to unlock the node after a reboot.
+
 ## Managing a node
 
 Since OramaOS has no SSH, all management is through the gateway API, which proxies to the agent over WireGuard (port 9998). The command receiver binds only the node's overlay address and requires the node's agent token, so on an unlocked node it is not reachable from the public internet (the genesis unlock server above is the exception while a node waits for its key). These calls need an **admin** API key (or the owner's JWT):

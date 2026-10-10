@@ -13,7 +13,7 @@ import (
 )
 
 // pathOperatorRegister records a node in the operator's inventory
-// (docs/API_SURFACE.md "Node and operator").
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Node and operator").
 const pathOperatorRegister = "/v1/operator/node/register"
 
 // refusal is a credential and the answer it is owed.

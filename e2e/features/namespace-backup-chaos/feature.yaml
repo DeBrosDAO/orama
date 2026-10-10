@@ -21,5 +21,5 @@ covers:
     - /v1/namespace/restore
     - /v1/namespace/restore-key
   claims:
-    - "docs/CLI_REFERENCE.md#orama-namespace-restore-key: the restore key changes when the encryption root is rotated"
-    - "docs/API_SURFACE.md#namespace-management: a restore whose secrets are sealed to another key is refused before any write"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-restore-key: the restore key changes when the encryption root is rotated"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a restore whose secrets are sealed to another key is refused before any write"

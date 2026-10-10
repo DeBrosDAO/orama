@@ -40,7 +40,7 @@ type verdictView struct {
 // TestBootstrap_clusterConverged: the fresh cluster, read the way the
 // operator reads it (`orama monitor report`), has every core node, quorum,
 // one leader every node agrees on, a full mesh and no critical alert
-// (docs/MONITORING.md).
+// (website/src/docs/operator/monitoring.mdx).
 func TestBootstrap_clusterConverged(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -65,7 +65,7 @@ func TestBootstrap_clusterConverged(t *testing.T) {
 		}
 		wg := n.Report.WGIP
 		if ip := net.ParseIP(wg); ip == nil || !subnet.Contains(ip) {
-			t.Errorf("%s: WireGuard address %q is not in %s (docs/SECURITY.md CIDR validation)", node.Name, wg, infra.WireGuardSubnet)
+			t.Errorf("%s: WireGuard address %q is not in %s (docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md CIDR validation)", node.Name, wg, infra.WireGuardSubnet)
 		}
 		if other, dup := seenWG[wg]; dup {
 			t.Errorf("%s and %s share the WireGuard address %s", node.Name, other, wg)
@@ -78,7 +78,7 @@ func TestBootstrap_clusterConverged(t *testing.T) {
 }
 
 // TestBootstrap_verdictOperational: the verdict on top of the report is
-// "operational" with no component degraded (docs/MONITORING.md: every view
+// "operational" with no component degraded (website/src/docs/operator/monitoring.mdx: every view
 // starts with the verdict).
 func TestBootstrap_verdictOperational(t *testing.T) {
 	t.Parallel()

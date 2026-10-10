@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Named failures, what causes them, and how to fix them. Start with the tools, then find your symptom.
+Named failures, what causes them, and how to fix them. Start with the tools, then find your symptom. Always use the `orama` CLI for diagnostics and service management, never raw `systemctl`: the CLI handles dependency ordering and safety checks.
 
 ## Start here
 
@@ -53,7 +53,14 @@ sudo orama node logs <service> -n 100
 sudo orama node restart              # dependency order and quorum safety
 ```
 
-Dependency order matters: RQLite, then Olric, then the gateway. Starting a gateway before Olric is ready causes a permanent initialization failure because the Olric client does not retry; the CLI orders them for you.
+Dependency order matters: WireGuard, RQLite, then Olric, then the gateway. Starting a gateway before Olric is ready causes a permanent initialization failure because the Olric client does not retry; the CLI orders them for you. `sudo orama node restart --force` bypasses the quorum safety check.
+
+| Cause | Symptom | Resolution |
+|---|---|---|
+| Dependency not ready | The service starts then exits | Make sure the upstream services run: WireGuard, RQLite, Olric, gateway |
+| Port conflict | "address already in use" in the logs | Find the holder: `ss -tlnp \| grep <port>` |
+| Service masked | `systemctl start` silently fails | Use `orama node start`, which unmasks |
+| Corrupted state | The service crashes on boot | Read the logs for the specifics; the state directory may need cleaning |
 
 ## Namespace gateway: "Olric unavailable"
 
@@ -73,7 +80,7 @@ Dependency order matters: RQLite, then Olric, then the gateway. Starting a gatew
 
 ## Namespace not restoring after a restart (missing `cluster-state.json`)
 
-The disk pass runs once at boot. The tenant reconciler then converges from the database every 60 seconds, so a node with no state file recovers as soon as its RQLite has a leader. The state file is **not** trusted for Raft membership (it is refreshed by a best-effort push, so the node most likely to hold a stale copy is the one that was down). A namespace RQLite holding Raft state restarts on its own configuration, writing `peers.json` only when live membership differs from what the node recorded. One without Raft state, but with a membership record, joins the others and never bootstraps. After three consecutive sweeps with its RQLite not active, a cluster is marked `degraded` (`rqlite is not running on node <id>`), still served.
+After `orama node restart` the namespace services do not come back and `ls /opt/orama/.orama/data/namespaces/<name>/cluster-state.json` shows no file. The disk pass runs once at boot. The tenant reconciler then converges from the database every 60 seconds, so a node with no state file recovers as soon as its RQLite has a leader. The state file is **not** trusted for Raft membership (it is refreshed by a best-effort push, so the node most likely to hold a stale copy is the one that was down). A namespace RQLite holding Raft state restarts on its own configuration, writing `peers.json` only when live membership differs from what the node recorded. One without Raft state, but with a membership record, joins the others and never bootstraps. After three consecutive sweeps with its RQLite not active, a cluster is marked `degraded` (`rqlite is not running on node <id>`), still served.
 
 ## Namespace services not restarting after an upgrade
 
@@ -105,7 +112,27 @@ orama maint inspect --subsystem rqlite
 sudo orama node logs rqlite -n 100
 ```
 
-A node stuck in `Candidate`, or "leader not found" everywhere, with the **whole cluster** leaderless: [`orama maint node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster). It keeps one node's data and deletes everything on the others. Take a backup first if the survivor might be wrong. A single node reporting `degraded` is not a reason to recover.
+RQLite needs a majority of its voters. If quorum is lost the database stops accepting writes. To recover:
+
+1. **Identify which nodes are down:** `orama status report --env <env>` shows every node's status.
+2. **Bring them back:** start the offline nodes with `orama node start`.
+3. **Wait for a leader.** Once a majority is available Raft elects one by itself.
+4. **Verify:** `orama status cluster --env <env>` shows the leader and the log indices in sync.
+
+A node stuck in `Candidate`, or "leader not found" everywhere, with the **whole cluster** leaderless and quorum permanently lost (for example a majority of the nodes destroyed): [`orama maint node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster). It is destructive. It keeps one node's data and rebuilds every other node's raft log and database from it, with no backup. Take a backup first if the survivor might be wrong, and find the node with the highest applied index first (`orama maint inspect --env <env> --subsystem rqlite`). A single node reporting `degraded` is not a reason to recover.
+
+```bash
+orama maint node recover-raft --env <env>                      # keep the node with the highest applied index (it prints what each node reported)
+orama maint node recover-raft --env <env> --leader <node-ip>   # keep a node of your choice
+orama maint node recover-raft --env <env> --leader-raft-addr 10.0.0.1:10101 --force   # quorum lost and rqlite answers nowhere
+```
+
+| Flag | Meaning |
+|---|---|
+| `--env` | Target environment (required) |
+| `--leader` | The node IP whose data to keep. Default: the node with the highest applied index |
+| `--leader-raft-addr` | The leader's raft address `host:port`, for when quorum is already lost and the leader cannot be read from the cluster |
+| `--force` | Skip the confirmation prompt |
 
 ### Index RQLite refuses to start: "holds raft state but no raft-node-id"
 
@@ -117,7 +144,7 @@ After an upgrade that moved the index Raft port, the node's address changed and 
 
 ### Namespace RQLite has no leader
 
-A namespace's RQLite lost quorum (its other voters are gone). If the namespace has a single live host, as the `orama` user on that host: stop the namespace's gateway and RQLite units with the CLI, back up `raft/peers.info`, write `raft/peers.json` as `[{"id":"<this node's raft advertise address>","address":"<same>","non_voter":false}]`, start the RQLite unit and wait until `/status` shows `Leader`. Then fix the namespace's Olric config (`memberlist.peers: []`) and the gateway's `olric_servers` to name only the live node, restart those, and check `/v1/health`. Re-provision the namespace to three nodes afterwards so it is not single-node for ever. `orama node remove --dry-run` shows this risk before you cause it.
+A namespace's RQLite lost quorum (its other voters are gone). If the namespace has a single live host, as the `orama` user on that host: stop the namespace's gateway and RQLite units (the CLI has no per-tenant stop, so the exact commands are in [Replace a node](/docs/operator/node-replacement#emergency-namespace-rqlite-lost-quorum-single-survivor)), back up `raft/peers.info`, write `raft/peers.json` as `[{"id":"<this node's raft advertise address>","address":"<same>","non_voter":false}]`, start the RQLite unit and wait until `/status` shows `Leader`. Then fix the namespace's Olric config (`memberlist.peers: []`) and the gateway's `olric_servers` to name only the live node, restart those, and check `/v1/health`. Re-provision the namespace to three nodes afterwards so it is not single-node for ever. `orama node remove --dry-run` shows this risk before you cause it.
 
 ### Namespace RQLite refuses to bootstrap: "this node has been a member … but holds no raft state"
 
@@ -133,7 +160,30 @@ The monitor raises a critical "Raft snapshot term N is above the current term M"
 
 ## WireGuard connectivity
 
-Symptoms: `orama status mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama status mesh --env <env>`, `orama maint inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
+Symptoms: `orama status mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama status mesh --env <env>`, `orama maint inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. A handshake within the last two minutes is healthy; stale or missing handshakes mean a connectivity problem. To resolve it:
+
+1. **Check the firewall:** UDP 51820 must be open in both directions.
+2. **Check the provider's firewall.** Some VPS providers have an external firewall panel separate from `ufw`.
+3. **Restart through the CLI:** `orama node restart` handles the full dependency chain.
+4. **Verify:** `orama status mesh --env <env>` shows every peer reconnected.
+
+See [WireGuard](/docs/operator/wireguard).
+
+## RQLite replication lag
+
+**Symptoms.** A follower's Raft log index is lower than the leader's, queries return stale data, replication lag warnings in the logs. Compare the nodes with `orama maint inspect --env <env> --subsystem rqlite` and `orama status cluster --env <env>`.
+
+- **Small lag** is normal under a high write load; the follower catches up.
+- **Large lag:** check the network between the follower and the leader with `orama status mesh --env <env>`.
+- **A node that fell too far behind** may need to rejoin the cluster with a fresh snapshot.
+
+## Olric cluster problems
+
+**Symptoms.** Cache misses on data that should be cached, "member not found" errors in the gateway logs, Olric restarting often. Inspect with `orama maint inspect --env <env> --subsystem olric` and `sudo orama node logs olric`.
+
+- **Olric cannot find its peers:** check WireGuard; Olric discovers peers over the mesh.
+- **A crash loop:** check that RQLite is healthy first, because Olric depends on it.
+- **Stale cluster membership:** `orama node restart` restarts in dependency order.
 
 ## Olric cluster split after enabling encryption
 
@@ -145,7 +195,16 @@ Olric memberlist encryption is all-or-nothing: nodes with encryption cannot talk
 
 ## IPFS repo garbage collection times out on every run
 
-`orama-namespace-ipfs-gc@index` fails with a timeout after 30 minutes, the monitor raises "IPFS pin/add active for …", and the repo never shrinks. Kubo runs `pin/add` and `repo gc` under one lock; a recursive pin of content no peer holds never finishes and GC waits behind it. The pin ends at ipfs-cluster's `pin_timeout` (2 minutes without progress). `service.json` must say `"node_multiaddress": "/ip4/127.0.0.1/tcp/10110"`; a `/unix/…` value means the node was not upgraded with this release's CLI. Upgrade the node. A CID whose blocks exist on no node cannot be pinned by anything; unpinning it is the content owner's decision.
+`orama-namespace-ipfs-gc@index` fails with a timeout after 30 minutes, the monitor raises "IPFS pin/add active for …", and the repo never shrinks. Kubo runs `pin/add` and `repo gc` under one lock; a recursive pin of content no peer holds never finishes and GC waits behind it. The pin ends at ipfs-cluster's `pin_timeout` (2 minutes without progress). `service.json` must say `"node_multiaddress": "/ip4/127.0.0.1/tcp/10110"`; a `/unix/…` value means the node was not upgraded with this release's CLI. Upgrade the node (`orama node upgrade`). To see which request holds the lock, and whether its content exists anywhere (never print the command line of `diag cmds -v` unfiltered: the GC oneshot's options carry the Kubo bearer):
+
+```bash
+sudo bash -c 'set -a; . /var/lib/orama-unit-env/index/ipfs-gc.env; set +a; HOME=/opt/orama \
+  ipfs --api=$IPFS_API --api-auth=$IPFS_API_AUTH diag cmds' | grep -E 'pin/|repo/gc'
+# for the CID of a stuck pin/add, on every node, with the same --api/--api-auth:
+ipfs block stat --offline <cid>; ipfs refs -r --offline <cid>
+```
+
+A CID whose blocks exist on no node cannot be pinned by anything; unpinning it is the content owner's decision.
 
 ## IPFS daemon crash-loops: "error loading plugins: invalid character '\x00'"
 
@@ -157,7 +216,7 @@ The Kubo repo `config` is zero-filled (a crash or reboot before an unsynced rewr
 
 **Cause.** Function metadata is in the namespace RQLite; function bytes are IPFS blobs. A new or wiped node starts with an empty Kubo repo, and until every active `wasm_cid` is pinned locally, cold `cat` and `add` can hang. Health only proves the daemon is up. Content now re-replicates on its own (a gateway elected through the `ipfs-pin-sweep` lock re-issues short pins every 15 minutes), but a fresh node needs a few sweeps.
 
-**Fix.** Wait for the sweep, or pin the active function CIDs on every nameserver (`pin/add` with `recursive=true` against the node's Kubo API). Verify a hot function's `cat` is fast on the new node and a roughly 1.2 MB `add` succeeds on all peers. Do not call a cutover complete because the registry Raft group is 3/3.
+**Fix.** Wait for the sweep, or pin the active function CIDs on every nameserver (`pin/add` with `recursive=true` against the node's Kubo API). Verify a hot function's `cat` is fast on the new node and a roughly 1.2 MB `add` succeeds on all peers. Do not call a cutover complete because the registry Raft group is 3/3. The full procedure (export the active CIDs, pin on every nameserver, verify) is in [Replace a node](/docs/operator/node-replacement#ipfs-re-replication-and-wasm-backfill).
 
 ## A 504 on a slow client's large upload
 
@@ -184,3 +243,16 @@ See [OramaOS](/docs/operator/orama-os).
 If a node partially joins (it registers in the registry's Raft group, then fails or is wiped), the remaining cluster can lose quorum permanently: RQLite thinks there are N voters but only N-1 are reachable. The symptom is RQLite stuck in `Candidate`, no leader, every write failing. If the cluster is still healthy, remove the half-joined node with `orama node remove --env <env> --node <ip>` and join again with a **new** invite (invites are single use, and a retry is told the invite was already used). If quorum is already lost, use [`orama maint node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster); on a young cluster with no data worth keeping, a clean reinstall of the affected nodes from the genesis node is the alternative ([Wipe a node](/docs/operator/clean-node)).
 
 **Prevention.** Make sure a joining node can complete the whole installation before it joins. The installer does not check for port conflicts up front, so stop anything holding the ports the node needs (for example 8080 and 4001) before you join. See the pre-install checklist in [What you need](/docs/operator/getting-started#pre-install-checklist).
+
+## General debugging workflow
+
+1. Run `sudo orama node doctor` for a quick local diagnostic.
+2. Run `orama status report --env <env>` for the full cluster picture.
+3. Read the logs of the affected service with `sudo orama node logs <service>`.
+4. Verify the dependencies are healthy: WireGuard, RQLite, Olric, gateway.
+5. If it looks like the network, check `orama status mesh --env <env>` and the firewall rules.
+6. For deep diagnostics, run `orama maint inspect --env <env>`, or one subsystem with `--subsystem`.
+7. Restart the affected service with `orama node restart`.
+8. If the problem persists, save a full report with `orama maint inspect --env <env> --output ./results` and escalate.
+
+To erase a node that is in a bad state and start fresh, use `orama node wipe`, or take it out of the cluster and erase it with `orama remove` ([Wipe a node](/docs/operator/clean-node)).

@@ -98,7 +98,7 @@ An update or rollback has a longer chain because a replica fetches the artifact 
 
 `http.go:StatusCode` maps a code to a status: invalid argument, validation, failed precondition and out of range to 400; unauthenticated, unauthorized and auth error to 401; permission denied and forbidden to 403; not found to 404; timeout and deadline to 408; already-exists, conflict and aborted to 409; resource-exhausted and rate limit to 429; unimplemented to 501; unavailable to 503; cancelled to 499; every other code to 500. `ToHTTPError` builds the JSON body (`code`, `message`, `details`, `trace_id`) and `WriteHTTPError` writes it, adding `Retry-After` for a rate-limit error.
 
-Only one production package uses the package: `core/pkg/client/status_error.go` maps a gateway response status onto the sentinels so that a Go client's `errors.Is(err, errors.ErrNotFound)` works (the contract `docs/GO_CLIENT_SDK.md` promises). The gateway does not use `WriteHTTPError`; see Known gaps.
+Only one production package uses the package: `core/pkg/client/status_error.go` maps a gateway response status onto the sentinels so that a Go client's `errors.Is(err, errors.ErrNotFound)` works (the contract `website/src/docs/developer/go-sdk.mdx` promises). The gateway does not use `WriteHTTPError`; see Known gaps.
 
 ### The httputil package
 

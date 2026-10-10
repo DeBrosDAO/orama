@@ -1,4 +1,4 @@
-// The read-only chain proxy (/v1/chain/*, docs/API_SURFACE.md: "Read-only
+// The read-only chain proxy (/v1/chain/*, docs/whitepaper/technical-reference/appendices/i-api-surface.md: "Read-only
 // proxy of CometBFT status, blocks, transactions, validators, norama supply,
 // and the staking pool. Open. The handler refuses every other path."). The
 // SDK has no method for it, so it is read through the SDK's HttpClient.

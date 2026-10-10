@@ -51,7 +51,7 @@ func (k Key) keyringFlags() []string {
 }
 
 // Validator is the operator key of the validator co-hosted on n. It earns
-// the epoch rewards (docs/CHAIN.md "Rewards, paid on capped power"), so it is
+// the epoch rewards (docs/whitepaper/technical-reference/vol2/40-economics.md "Rewards, paid on capped power"), so it is
 // the only kind of account a run chain can fund (see funds.go).
 func (c *Chain) Validator(t testing.TB, n fleet.Node) Key {
 	t.Helper()

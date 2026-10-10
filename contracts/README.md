@@ -71,4 +71,4 @@ that carry no body (`GET /v1/rqlite/schema`), take multipart form data
 (`/v1/invoke/{namespace}/{name}`) have no fixed shape to pin.
 
 Which client owns which route is recorded in
-[docs/API_SURFACE.md](../docs/API_SURFACE.md).
+[docs/whitepaper/technical-reference/appendices/i-api-surface.md](../docs/whitepaper/technical-reference/appendices/i-api-surface.md).

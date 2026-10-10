@@ -24,7 +24,7 @@ func unauthStatus(t testing.TB, f *fleet.Fleet, from fleet.Node, toWG, method, p
 // TestRQLite_authRequiredOnTheMesh: the index rqlite always runs with -auth.
 // An unauthenticated or wrongly authenticated call from any node of the
 // mesh, to its own rqlite or a peer's, is 401 on every data and cluster
-// endpoint; the node's own credentials work (docs/SECURITY.md "RQLite
+// endpoint; the node's own credentials work (docs/whitepaper/technical-reference/vol1/17-database.md "RQLite
 // Authentication": unauthenticated POST /db/execute from the mesh is 401).
 func TestRQLite_authRequiredOnTheMesh(t *testing.T) {
 	t.Parallel()
@@ -79,7 +79,7 @@ func TestRQLite_startedWithAuth(t *testing.T) {
 
 // TestRQLite_bindsTheWireGuardAddress: the index rqlite's HTTP and raft
 // ports listen on the node's WireGuard address only, never on every
-// interface (docs/SECURITY.md "Network isolation").
+// interface (docs/whitepaper/technical-reference/vol1/17-database.md "Network isolation").
 func TestRQLite_bindsTheWireGuardAddress(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

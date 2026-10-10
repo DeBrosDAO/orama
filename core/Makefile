@@ -64,7 +64,7 @@ test-e2e-production:
 #   ORAMA_LIFECYCLE_ENV=lifecycle make test-lifecycle
 #
 # Scenarios whose infrastructure hook is not configured SKIP rather than pass;
-# see docs/DEV_DEPLOY.md, "Lifecycle harness", for the hook variables.
+# see website/src/docs/contributor/testing.mdx, "Lifecycle harness", for the hook variables.
 .PHONY: test-lifecycle
 test-lifecycle:
 	@if [ -z "$$ORAMA_LIFECYCLE_ENV" ]; then \
@@ -157,7 +157,7 @@ rollout-testnet:
 	./bin/orama maint rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
-# Regenerate ../docs/CLI_REFERENCE.md from the cobra command tree.
+# Regenerate the whitepaper CLI reference (appendix D) from the cobra command tree.
 #
 # The reference is not written by hand, so command documentation cannot drift
 # from the code. `go test ./cmd/orama` fails when the file and the tree disagree.
@@ -179,16 +179,16 @@ sync-networks:
 		[ ! -f "$$dir/tor-network.json" ] || cp "$$dir/tor-network.json" "pkg/netregistry/embedded/$$name/"; \
 	done
 
-# The run-your-own-cluster guide (docs/RUN_YOUR_OWN_CLUSTER.md) executed step by
+# The run-your-own-cluster guide (website/src/docs/operator/run-your-own-cluster.mdx) executed step by
 # step against machines you provide. It installs Orama on real servers, so it
-# never runs from `make test`: see docs/DEV_DEPLOY.md, "Cluster guide e2e".
+# never runs from `make test`: see website/src/docs/contributor/testing.mdx, "Cluster guide e2e".
 .PHONY: e2e-cluster
 e2e-cluster:
 	@if [ -z "$$E2E_CLUSTER_BASE_DOMAIN" ]; then \
 		echo "E2E_CLUSTER_BASE_DOMAIN is not set."; \
 		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_RELEASE=<version> E2E_CLUSTER_RELEASE_REPO=<url> E2E_CLUSTER_RELEASE_ROOT=<root.json> make e2e-cluster   (or E2E_CLUSTER_ARCHIVE=<orama maint build archive> instead of the three RELEASE ones)"; \
 		echo "  use-only:  E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster"; \
-		echo "  see docs/DEV_DEPLOY.md, Cluster guide e2e"; \
+		echo "  see website/src/docs/contributor/testing.mdx, Cluster guide e2e"; \
 		exit 2; \
 	fi
 	@mkdir -p bin
@@ -198,7 +198,7 @@ e2e-cluster:
 
 # The co-located network namespace layout (core/pkg/globalnetns) built for real
 # on this Linux machine. Needs root, iproute2 and nftables; it never runs on
-# darwin. See docs/RUN_A_GLOBAL_NODE.md, "Sharing a machine with a cluster node".
+# darwin. See website/src/docs/blockchain/run-a-global-node.mdx, "Sharing a machine with a cluster node".
 .PHONY: test-netns
 test-netns:
 	go test -count=1 -v -tags netns_integration ./pkg/globalnetns/...

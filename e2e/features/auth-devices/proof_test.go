@@ -17,7 +17,7 @@ import (
 const (
 	// proofWindow: "iat must be within 60 seconds of the gateway's clock".
 	proofWindow = 60 * time.Second
-	// deviceRefreshPrefix marks a device-bound refresh token (docs/AUTH.md#signing-in-with-a-device).
+	// deviceRefreshPrefix marks a device-bound refresh token (docs/whitepaper/technical-reference/vol1/13-identity.md#signing-in-with-a-device).
 	deviceRefreshPrefix = "dv1_"
 )
 
@@ -34,7 +34,7 @@ func refreshWith(t testing.TB, c *gw.Client, token, namespace string, p *wallet.
 // is marked dv1_ and renews only with the device's proof: fresh, single use,
 // for this action on this token, from this device. A refused refresh spends
 // nothing — the token and its rotation are still there for the real device
-// (docs/AUTH.md#proving-the-device-on-later-requests).
+// (docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device).
 func TestDeviceRefresh_needsAFreshSingleUseProof(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -103,7 +103,7 @@ func expectCodeNamed(t testing.TB, name string, resp *gw.Response, status int, c
 
 // TestDeviceSession_actsNeedTheDevicesProof: from a device-bound session,
 // ending a session and revoking a device take the device's proof over the
-// target; a session bound to no device needs none (docs/AUTH.md#revoking-a-device).
+// target; a session bound to no device needs none (docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device).
 func TestDeviceSession_actsNeedTheDevicesProof(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

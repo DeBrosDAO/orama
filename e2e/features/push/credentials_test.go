@@ -19,7 +19,7 @@ const namespacesDir = tenancy.NamespacesDir
 
 // TestCredentials_apnsLifecycle: PUT stores, GET and the summary report only
 // has_* booleans, DELETE is idempotent, and the p8 key never appears on a
-// node's disk in plaintext (docs/PUSH_NOTIFICATIONS.md#step-3--store-credentials-via-the-api).
+// node's disk in plaintext (website/src/docs/developer/push-notifications.mdx#step-3--store-credentials-via-the-api).
 func TestCredentials_apnsLifecycle(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -73,7 +73,7 @@ func configuredProviders(t testing.TB, n *ns.Namespace, who tenancy.Cred) []stri
 
 // TestCredentials_validation: APNs and ntfy records are validated at PUT;
 // an unknown provider, an internal ntfy base_url, a body over 32 KiB and an
-// empty body are refused (docs/PUSH_NOTIFICATIONS.md; core push/url_guard.go).
+// empty body are refused (website/src/docs/developer/push-notifications.mdx; core push/url_guard.go).
 func TestCredentials_validation(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

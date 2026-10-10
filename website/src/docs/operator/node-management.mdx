@@ -83,7 +83,7 @@ orama edit --node 203.0.113.13 --exit=true                     # the node's Tor 
 
 The change is made on the node by its own CLI (`orama maint global edit`), so a node on an older release needs `orama upgrade` first.
 
-## Remove a node
+## Removing a node
 
 ```bash
 orama remove --node 203.0.113.13 --dry-run
@@ -92,6 +92,33 @@ orama remove --node 203.0.113.13 --chain-node-id node-13   # also retire it on t
 ```
 
 It refuses if any Raft group the node votes in would lose quorum, if the node signs for the validator set (`--drop-validator` removes it anyway), and, for a node with the global layer, until you say what happens to its chain registration (`--chain-node-id` retires it, `--no-chain` leaves it). See [Joining nodes](/docs/operator/joining-nodes#removing-a-node). To swap a nameserver for a new machine, follow [Replace a node](/docs/operator/node-replacement).
+
+**`remove` and `wipe` are different operations, and picking the wrong one is how a deleted VPS ends up still counted toward Raft quorum.** `remove` retires a node from the cluster and then erases it: run it for a node that is or was a member. It works from a survivor, prints what the removal costs every Raft cluster the node votes in (the registry and each namespace it serves), and refuses if any would lose quorum. Every step is keyed on the node and safe to repeat, so a removal that failed part way through is finished by running it again. `wipe` erases a node and says nothing to the cluster (below). `orama node remove` is `orama remove` under its old name and prints a notice that it is replaced.
+
+## Wiping a node
+
+`wipe` erases the target only. Use it for a node that is already retired, that never joined, or to finish a removal whose wipe failed.
+
+```bash
+orama node wipe --env mycluster --force                       # every node of the environment
+orama node wipe --env mycluster --node 203.0.113.13 --force   # one node
+orama node wipe --env mycluster --nuclear --force             # also shared binaries, the Tor package and the system accounts
+```
+
+On a cluster member `wipe` leaves the node a configured Raft voter, keeps its `wireguard_peers` row applied to every survivor's interface, and keeps its `dns_nodes` row; `remove` retires the node from the cluster first. `wipe` stops the tenant `orama-namespace-*@*` units before it deletes their data directory. It does not work on OramaOS nodes (no SSH): see [OramaOS](/docs/operator/orama-os). The full guide, with what a wipe removes, the manual steps for a machine the CLI cannot reach, and bringing a removed machine back, is [Wipe a node](/docs/operator/clean-node).
+
+## Push options
+
+`orama nodes` and `orama node list` are the same command. `push` and `rollout` are maintainer commands, under `orama maint`.
+
+```bash
+orama maint push --env mycluster --archive $ARCHIVE                       # upload from this machine to each node
+orama maint push --env mycluster --archive $ARCHIVE --node 203.0.113.11   # a single node from the inventory
+orama maint push --host 203.0.113.14 --archive $ARCHIVE                   # an installed node not in the inventory yet
+orama maint push --env mycluster --archive $ARCHIVE --trust-signers 0xYourWallet  # nodes installed before archive signing
+```
+
+`--direct` is accepted and ignored: every push uploads from this machine. Every node verifies the archive before anything under `/opt/orama` changes (see [Signed archives](/docs/operator/signed-archives)). With no `--env`, push targets the active environment (`orama network current`).
 
 ## On the node itself
 

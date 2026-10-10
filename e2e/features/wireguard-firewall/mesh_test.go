@@ -56,7 +56,7 @@ func wgAddress(t testing.TB, f *fleet.Fleet, n fleet.Node) string {
 // TestMesh_fullAndFresh: every node has exactly one peer per other node,
 // reached at that node's public address on 51820, routing only that node's
 // /32, with a recent handshake: the overlay is a full mesh and live
-// (docs/ARCHITECTURE.md "Inter-node traffic uses the WireGuard overlay").
+// (website/src/docs/contributor/architecture-reference.mdx "Inter-node traffic uses the WireGuard overlay").
 func TestMesh_fullAndFresh(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -122,7 +122,7 @@ func TestMesh_overlayCarriesTraffic(t *testing.T) {
 
 // TestMesh_unitOrdering: the overlay unit is not part of the supervisor (a
 // node restart must not take wg0 down), and every unit that binds across
-// the overlay is ordered after it (docs/ARCHITECTURE.md "The overlay is not a
+// the overlay is ordered after it (website/src/docs/contributor/architecture-reference.mdx "The overlay is not a
 // child of the supervisor").
 func TestMesh_unitOrdering(t *testing.T) {
 	t.Parallel()

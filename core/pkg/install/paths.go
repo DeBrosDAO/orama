@@ -32,7 +32,7 @@ const WireGuardInterface = "wg0"
 // OramaRoot anchors rootfs at the directory holding oramaDir — OramaBase on a
 // node — which only root may write. Install and upgrade run as root and reach
 // the orama user's .orama tree through it, so a symlink the orama user plants
-// there is refused rather than followed (docs/SECURITY.md).
+// there is refused rather than followed (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md).
 func OramaRoot(oramaDir string) rootfs.Root {
 	return rootfs.At(filepath.Dir(oramaDir))
 }

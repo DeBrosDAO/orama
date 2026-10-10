@@ -1,6 +1,6 @@
 // Sessions through the SDK against the live fleet: verify, whoami, refresh
 // (rotating), refresh-on-401 replaying the request, logout, and renew being
-// for workloads only (docs/TS_SDK.md, docs/AUTH.md).
+// for workloads only (website/src/docs/developer/sdk-reference.mdx, docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md).
 import { createClient, MemoryStorage, SDKError } from "../../../../sdk/src/index";
 import { mainURL, need, nsClient, onFleet } from "./fleet";
 

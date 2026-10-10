@@ -19,7 +19,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Topology and limits (docs/WEBRTC.md).
+// Topology and limits (website/src/docs/operator/webrtc-operations.mdx).
 const (
 	pathCreds       = "/v1/webrtc/turn/credentials"
 	pathRooms       = "/v1/webrtc/rooms"

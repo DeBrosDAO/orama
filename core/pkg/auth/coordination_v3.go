@@ -25,7 +25,7 @@ const (
 	// a node, not a process, so while this is set a stamp for a route several
 	// processes on one node serve can be replayed once to a sibling process
 	// inside the window. It is removed in the release after the one that
-	// introduced v3 (docs/SECURITY.md, "Coordination MAC v3").
+	// introduced v3 (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md, "Coordination MAC v3").
 	AcceptLegacyCoordinationV2 = true
 )
 

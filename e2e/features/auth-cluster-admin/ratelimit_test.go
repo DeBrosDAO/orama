@@ -68,7 +68,7 @@ func TestSignInLimits_inOrder(t *testing.T) {
 // outstandingCapped: a wallet holding ten unanswered challenges in one
 // namespace is refused an eleventh with TOO_MANY_CHALLENGES (429,
 // Retry-After 300) — whichever gateway it asks — and answering one frees a
-// slot (docs/AUTH.md sign-in codes).
+// slot (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md sign-in codes).
 func outstandingCapped(t *testing.T, nodes []nodeClient) {
 	w := newWallet(t)
 	var first *gw.ChallengeResponse
@@ -146,7 +146,7 @@ func perAddressBucket(t *testing.T, c *gw.Client) {
 
 // oneWinner: one signed message presented to every gateway at once signs in
 // exactly once; every other attempt is AUTH_CHALLENGE_INVALID (the nonce is
-// single-use cluster-wide, docs/AUTH.md#signing-in).
+// single-use cluster-wide, docs/whitepaper/technical-reference/vol1/13-identity.md#identity).
 func oneWinner(t *testing.T, nodes []nodeClient) {
 	w := newWallet(t)
 	ch, _, err := nodes[0].Client.For(t).Challenge(t.Context(), gw.ChallengeRequest{Wallet: w.Address()})

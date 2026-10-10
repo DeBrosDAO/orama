@@ -27,7 +27,7 @@ func subcommand(parent *cobra.Command, name string) *cobra.Command {
 	return nil
 }
 
-// docs/SECURITY_PLAYBOOKS.md names `oramad tx houses submit-proposal`, and
+// docs/whitepaper/technical-reference/vol2/39-chain-architecture.md names `oramad tx houses submit-proposal`, and
 // x/houses has no tx command of its own (client/cli/query.go only). The
 // command exists all the same: AutoCLI generates `oramad tx houses` from the
 // module's Msg service. Every `oramad tx` command a document names is checked

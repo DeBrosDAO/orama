@@ -22,7 +22,7 @@ const (
 	pushBurst  = 5 // 30 pushes an hour per identity, burst 30/6
 	pullBurst  = 20
 	pullSkew   = 120 * time.Second
-	shareMax   = 512 << 10 // a guardian's decoded share limit (vault/docs/API.md)
+	shareMax   = 512 << 10 // a guardian's decoded share limit (docs/whitepaper/technical-reference/vol1/28-vault.md, Limits and scale)
 	shareXByte = 1         // the x-coordinate byte the gateway prepends to each share
 	noReadSet  = "not enough consistent shares"
 	pushRetry  = "120"

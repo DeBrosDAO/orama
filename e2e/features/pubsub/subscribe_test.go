@@ -51,7 +51,7 @@ func presenceMembers(t testing.TB, n *ns.Namespace, c *clientPin, topic string) 
 
 // TestPubsub_presenceJoinListLeave: a presence subscriber is listed with its
 // member id, the others see presence.join and presence.leave, and the list
-// empties when it goes (docs/TS_SDK.md "Pub/sub").
+// empties when it goes (website/src/docs/developer/sdk-reference.mdx "Pub/sub").
 func TestPubsub_presenceJoinListLeave(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -111,7 +111,7 @@ func TestPubsub_presenceNeedsMemberID(t *testing.T) {
 }
 
 // TestPubsub_topicsListsSubscribedTopics: /v1/pubsub/topics is the SDK's
-// pubsub.topics() (docs/API_SURFACE.md "Pub/sub") and lists the namespace's
+// pubsub.topics() (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Pub/sub") and lists the namespace's
 // subscribed topics, never another namespace's.
 func TestPubsub_topicsListsSubscribedTopics(t *testing.T) {
 	t.Parallel()

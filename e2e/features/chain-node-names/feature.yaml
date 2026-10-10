@@ -33,5 +33,5 @@ covers:
     - orama.nodes.v1.NameOfNode
     - orama.nodes.v1.NodeNames
   claims:
-    - "docs/CHAIN.md#x-nodes: a node holds at most one identification name, a name belongs to one node (first come first served), a reserved or malformed name is refused, and the deposit is returned on release or retire"
+    - "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md: a node holds at most one identification name, a name belongs to one node (first come first served), a reserved or malformed name is refused, and the deposit is returned on release or retire"
     - "docs/whitepaper/technical-reference/vol1/24-dns-and-nameservers.md#node-identification-names: with dns.node_names_zone set to a sub-zone below the base domain, a claimed node name is served as an A record of <name>.<zone> on the cluster's nameserver within a sync interval, and removed within one after the release (fleet-tested here); adds before removes, nothing is written from a partial read or removed while the chain node is catching up, private addresses and names another owner holds are refused (unit-tested in core/pkg/nodenames)"

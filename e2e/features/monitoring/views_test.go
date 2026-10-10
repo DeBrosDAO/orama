@@ -17,13 +17,13 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// oneShots are the monitor's one-shot views (docs/MONITORING.md
+// oneShots are the monitor's one-shot views (website/src/docs/operator/monitoring.mdx
 // "Subcommands"; `report` is always JSON and checked on its own).
 var oneShots = []string{"alerts", "chain", "cluster", "dns", "mesh", "namespaces", "node", "service", "traffic"}
 
 // TestMonitor_everyViewAsTableAndJSON: every one-shot view exits 0, starts
 // its table with the verdict line, and with --json prints one JSON document
-// (docs/MONITORING.md "Every table starts with the verdict line; every
+// (website/src/docs/operator/monitoring.mdx "Every table starts with the verdict line; every
 // subcommand takes --json").
 func TestMonitor_everyViewAsTableAndJSON(t *testing.T) {
 	t.Parallel()
@@ -80,7 +80,7 @@ func hasOK(rows []struct{ Host, Status string }, host string) bool {
 // TestMonitor_dnsViewEveryNameserverHealthy: the dns view lists exactly the
 // nameservers, each with CoreDNS and Caddy active, SOA, NS and wildcard
 // resolving locally and both certificates well within validity
-// (docs/MONITORING.md "dns"; alert threshold 14 days).
+// (website/src/docs/operator/monitoring.mdx "dns"; alert threshold 14 days).
 func TestMonitor_dnsViewEveryNameserverHealthy(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -110,7 +110,7 @@ const tlsWarnDays = 14
 
 // TestMonitor_meshViewFullAndOverlayOnly: every node's wg0 is up on 51820
 // with N-1 peers, each peer a single /32 inside 10.0.0.0/24 — only overlay
-// peers (docs/MONITORING.md "mesh"; docs/SECURITY.md "CIDR Validation").
+// peers (website/src/docs/operator/monitoring.mdx "mesh"; docs/whitepaper/technical-reference/vol1/04-the-node-as-a-supervisor.md "CIDR Validation").
 func TestMonitor_meshViewFullAndOverlayOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -182,7 +182,7 @@ func TestMonitor_alertsViewShape(t *testing.T) {
 
 // TestMonitor_namespacesViewShowsANewNamespace: the namespaces view lists a
 // namespace on every node running it, with its rqlite, Olric and gateway up
-// (docs/MONITORING.md "namespaces"; the probes run every 30s).
+// (website/src/docs/operator/monitoring.mdx "namespaces"; the probes run every 30s).
 func TestMonitor_namespacesViewShowsANewNamespace(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

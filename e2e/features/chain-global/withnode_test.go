@@ -25,8 +25,8 @@ const (
 
 // requireREST fails unless the node serves the chain REST API on its
 // loopback 31003, which every --node command reads the account from
-// (docs/CLI_REFERENCE.md "--node ... Chain REST API") and the gateway's
-// chain proxy forwards to (docs/CHAIN.md "The gateway's chain proxy").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "--node ... Chain REST API") and the gateway's
+// chain proxy forwards to (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The gateway's chain proxy").
 func requireREST(t *testing.T, c *chain.Chain) {
 	t.Helper()
 	if c.F.State.IsStagenet() {

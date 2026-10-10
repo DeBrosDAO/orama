@@ -52,7 +52,7 @@ func starts(t testing.TB, f *fleet.Fleet) map[string]string {
 
 // TestRollout_planPutsTheLeaderLastAndNeedsYes: without --yes the rolling
 // upgrade prints its plan, one numbered step per node with the raft leader
-// last, restarts nothing and refuses to go on (docs/CLI_REFERENCE.md "orama
+// last, restarts nothing and refuses to go on (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama
 // node upgrade" --yes; core/e2e/lifecycle TestRollingUpgrade_upgradesTheLeaderLast).
 func TestRollout_planPutsTheLeaderLastAndNeedsYes(t *testing.T) {
 	f := harness.Fleet(t)
@@ -90,7 +90,7 @@ func equal(a, b map[string]string) bool {
 // the rollout: the output names it and says it stopped, the nodes after it
 // are untouched, the leader keeps the leadership and the cluster stays
 // converged. Once the node is fixed, the same command completes the rollout
-// (core/e2e/lifecycle TestRollingUpgrade_haltsOnAFailingNode; docs/DEV_DEPLOY.md
+// (core/e2e/lifecycle TestRollingUpgrade_haltsOnAFailingNode; website/src/docs/contributor/testing.mdx
 // rolling upgrades).
 func TestRollout_haltsOnABrokenNodeThenResumes(t *testing.T) {
 	f := harness.Fleet(t)
@@ -145,7 +145,7 @@ const (
 )
 
 // gatewaysServeNow requires each node to answer its health check through its
-// public edge within edgeBudget of the rollout completing (docs/ARCHITECTURE.md
+// public edge within edgeBudget of the rollout completing (website/src/docs/contributor/architecture-reference.mdx
 // "A removed namespace is removed, not stopped").
 func gatewaysServeNow(t testing.TB, f *fleet.Fleet) {
 	t.Helper()

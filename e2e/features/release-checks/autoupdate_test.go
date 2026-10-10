@@ -19,7 +19,7 @@ func autoupdate(t testing.TB, current, candidate string, flags ...string) (int, 
 }
 
 // TestAutoupdate_decisions: what the cluster should do with a candidate
-// release, one line "<action>: <reason>" (docs/CLI_REFERENCE.md "orama node
+// release, one line "<action>: <reason>" (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node
 // autoupdate"): notify by default, auto installs only when healthy, newer
 // and inside the window, and every TUF failure, a downgrade and a release
 // marked bad are refused.
@@ -47,7 +47,7 @@ func TestAutoupdate_decisions(t *testing.T) {
 		{"v prefix and length", "v1.2", "1.2.0.1", []string{"--mode", "auto"}, "upgrade: newer release 1.2.0.1"},
 		{"validator notify", "1.2.3", "1.2.4", []string{"--role", "validator"}, "notify: newer release 1.2.4 (notify)"},
 		// A validator never installs a release by itself: on auto it skips, with the
-		// way to upgrade it, and the rollout counts it as done (docs/DEV_DEPLOY.md, "Auto-update").
+		// way to upgrade it, and the rollout counts it as done (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Auto-update").
 		{"validator auto", "1.2.3", "1.2.4", []string{"--mode", "auto", "--role", "validator"}, "skip: release 1.2.4 is not installed here: this machine is a validator, upgrade it by hand ('orama maint global stage-oramad')"},
 	}
 	for _, c := range cases {

@@ -28,7 +28,7 @@ covers:
   queries:
     - orama.emission.v1.Params
   claims:
-    - "docs/CLI_REFERENCE.md#orama-chain-faucet: sends test ORAMA to an account on a test network; --amount is norama; prints the transaction hash and the recipient's bank balance"
-    - "docs/CLI_REFERENCE.md#orama-chain-faucet: the chain refuses a drip over its maximum and a second drip to the same recipient inside its cooldown"
-    - "docs/CLI_REFERENCE.md#orama-chain-faucet: refuses an address that is not orama1... and an amount that is not a positive whole number of norama before it signs"
-    - "docs/DEV_DEPLOY.md#stagenet: FAUCET_ENABLED=1 (default) sets emission faucet_enabled in the stagenet genesis"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: sends test ORAMA to an account on a test network; --amount is norama; prints the transaction hash and the recipient's bank balance"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: the chain refuses a drip over its maximum and a second drip to the same recipient inside its cooldown"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet: refuses an address that is not orama1... and an amount that is not a positive whole number of norama before it signs"
+    - "website/src/docs/contributor/deployment.mdx#stagenet-the-chain-and-the-global-services: FAUCET_ENABLED=1 (default) sets emission faucet_enabled in the stagenet genesis"

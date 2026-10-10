@@ -158,7 +158,7 @@ func TestRollingUpgrade_haltsOnAFailingNode(t *testing.T) {
 
 // A successful rolling upgrade must upgrade the leader last.
 //
-// docs/DEV_DEPLOY.md claimed this for a long time while nothing implemented it.
+// website/src/docs/contributor/testing.mdx claimed this for a long time while nothing implemented it.
 func TestRollingUpgrade_upgradesTheLeaderLast(t *testing.T) {
 	c := lifecycle.New(t)
 	c.RequireHealthy()

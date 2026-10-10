@@ -16,7 +16,9 @@ import (
 // (bugboard 2866, E2E-46).
 var exampleDocs = []string{
 	"README.md", "sdk/README.md", "sdk/QUICKSTART.md",
-	"docs/DEPLOYMENT_GUIDE.md", "docs/GO_CLIENT_SDK.md", "docs/TS_SDK.md", "docs/SERVERLESS.md",
+	"website/src/docs/developer/getting-started.mdx", "website/src/docs/developer/deployments.mdx",
+	"website/src/docs/developer/go-sdk.mdx", "website/src/docs/developer/sdk-reference.mdx",
+	"website/src/docs/developer/functions.mdx",
 }
 
 // snippet is one fenced code block.
@@ -91,7 +93,7 @@ func TestDocsExamples_jsonBlocksParse(t *testing.T) {
 	t.Parallel()
 	blocks := allSnippets(t, "json")
 	if len(blocks) == 0 {
-		// docs/SERVERLESS.md has json blocks: none found means the fence
+		// website/src/docs/developer/functions.mdx has json blocks: none found means the fence
 		// parsing broke, and passing would check nothing.
 		t.Fatalf("no json block found in %v: the fence parsing or the documents changed", exampleDocs)
 	}

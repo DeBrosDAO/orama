@@ -29,7 +29,7 @@ const (
 	// can reach, outside the fleet (http_fetch refuses internal addresses).
 	publicURL   = "https://example.com/"
 	ordersTopic = "ref-orders"
-	// pathPushDevices registers a device (docs/API_SURFACE.md "Push").
+	// pathPushDevices registers a device (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Push").
 	pathPushDevices = "/v1/push/devices"
 	pathPublish     = "/v1/pubsub/publish"
 )
@@ -39,8 +39,8 @@ const (
 // which pushes to the user named in the message through the namespace's
 // push and the push lands on every node's ntfy; the cron trigger fires every
 // minute, once per minute across the namespace's gateways; http_fetch
-// reaches a public page (docs/SERVERLESS.md "PubSub Triggers", "HTTP",
-// docs/PUSH_NOTIFICATIONS.md).
+// reaches a public page (website/src/docs/developer/functions.mdx "PubSub Triggers", "HTTP",
+// website/src/docs/developer/push-notifications.mdx).
 func TestReferenceFunctions_cronPubsubPushAndFetch(t *testing.T) {
 	t.Parallel()
 	realistic.RequireTinyGo(t)
@@ -83,7 +83,7 @@ func randomTopic(t testing.TB) string {
 }
 
 // registerNtfy registers the user's device for push through the platform's
-// ntfy under topic (docs/PUSH_NOTIFICATIONS.md "Step 2").
+// ntfy under topic (website/src/docs/developer/push-notifications.mdx "Step 2").
 func registerNtfy(t testing.TB, c *gw.Client, usr *realistic.User, topic string) {
 	t.Helper()
 	body := map[string]string{"device_id": "phone-" + topic[:12], "provider": "ntfy", "token": topic, "platform": "android"}

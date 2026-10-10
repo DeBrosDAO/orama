@@ -243,7 +243,7 @@ func TestNamespaceDelete_cliNeedsConfirmation(t *testing.T) {
 // the delete runs (a killed CLI, a proxy timeout) does not stop it: the
 // teardown runs on a context of the removal's own, so the namespace is gone
 // afterwards on every node, and a second delete sent while the first still runs
-// is refused 409 NAMESPACE_DELETE_IN_PROGRESS, retryable (docs/ARCHITECTURE.md,
+// is refused 409 NAMESPACE_DELETE_IN_PROGRESS, retryable (website/src/docs/contributor/architecture-reference.mdx,
 // namespace delete). The cluster is 'deprovisioning' from the moment the
 // teardown starts, which is what the test waits on before it cuts the client.
 func TestNamespaceDelete_survivesTheClientLeaving(t *testing.T) {

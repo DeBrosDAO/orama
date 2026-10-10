@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	cliDoc = "# CLI reference\n\n### orama app\n\n```\norama app\n```\n\n### orama app env set\n\n### orama version\n\n### not a command\n"
+	cliDoc = "# CLI reference\n\n## orama app\n\n```\norama app\n```\n\n## orama app env set\n\n## orama version\n\n## not a command\n"
 	apiDoc = "| Route | Owner | Notes |\n|---|---|---|\n| `/health` | SDK | x |\n| `/v1/rqlite/query` | SDK | y |\n| `/v1/internal/ping` | internal | z |\n"
 	txDoc  = "syntax = \"proto3\";\npackage orama.token.v1;\nservice Msg {\n  option (cosmos.msg.v1.service) = true;\n  rpc CreateToken(MsgCreateToken) returns (MsgCreateTokenResponse);\n  rpc Mint(orama.token.v1.MsgMint) returns (MsgMintResponse);\n}\nmessage MsgCreateToken {\n}\n"
 	qDoc   = "package orama.token.v1;\nservice Query {\n  rpc Params(QueryParamsRequest) returns (QueryParamsResponse);\n  rpc Watch(stream QueryWatchRequest) returns (stream QueryWatchResponse);\n}\n"
@@ -109,7 +109,7 @@ func m(id string, c manifest.Covers) manifest.Manifest {
 func TestEvaluate_passesWhenCoveredOrWaived(t *testing.T) {
 	u := []Item{{ID: "cli:orama version", Kind: KindCLI}, {ID: "route:/health", Kind: KindRoute}}
 	res := Evaluate(u,
-		[]manifest.Manifest{m("smoke", manifest.Covers{Routes: []string{"/health"}, Claims: []string{"docs/AUTH.md: x"}})},
+		[]manifest.Manifest{m("smoke", manifest.Covers{Routes: []string{"/health"}, Claims: []string{"docs/whitepaper/technical-reference/vol1/14-authorization.md: x"}})},
 		[]Waiver{{ID: "cli:orama version", Reason: "r", Trigger: "t"}})
 	if !res.OK() || res.Format() != "" {
 		t.Fatalf("gate failed:\n%s", res.Format())
@@ -117,7 +117,7 @@ func TestEvaluate_passesWhenCoveredOrWaived(t *testing.T) {
 	if res.Rows[0].Status != StatusWaived || res.Rows[1].Status != StatusCovered || res.Rows[1].Features[0] != "smoke" {
 		t.Fatalf("rows %+v", res.Rows)
 	}
-	if len(res.Claims["docs/AUTH.md: x"]) != 1 {
+	if len(res.Claims["docs/whitepaper/technical-reference/vol1/14-authorization.md: x"]) != 1 {
 		t.Fatalf("claims %+v", res.Claims)
 	}
 	if !strings.Contains(res.Summary(), "cli 0 covered, 1 waived of 1") {

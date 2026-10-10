@@ -16,7 +16,7 @@ import (
 // quorums. Removing a node used to be checked against the platform cluster
 // alone, so an operator could retire a node that held two of three voters for a
 // namespace and only find out when that namespace stopped accepting writes.
-// NODE_REPLACEMENT.md records exactly that outcome.
+// website/src/docs/operator/node-replacement.mdx records exactly that outcome.
 type Impact struct {
 	// Cluster is PlatformCluster or a namespace name.
 	Cluster string

@@ -37,11 +37,11 @@ covers:
     - /v1/internal/telemetry
     - /v1/operator/node/register
   claims:
-    - "docs/API_SURFACE.md#internal-node-to-node: node-to-node routes are never reachable by a client, whatever credential or header it presents"
-    - "docs/API_SURFACE.md#internal-node-to-node: /v1/internal/telemetry is 404 to anything but a coordination MAC from the overlay"
-    - "docs/SECURITY.md#authentication: being on the host or on the mesh is not a credential; a forged coordination MAC, node stamp or cluster secret is refused"
-    - "docs/SECURITY.md#authentication: the node's own routes refuse (404) any caller that is not a process on the host or a node on the overlay"
-    - "docs/SECURITY.md#authentication: the three /v1/internal/namespace/webrtc/* endpoints were removed"
-    - "docs/SECURITY.md#authentication: the /v1/internal/wg/peer, /peers and /peer/remove endpoints were removed and answer like a path that does not exist"
-    - "docs/SECURITY.md#authentication: a node no join admitted cannot register itself, whatever key it enrolled and signs with"
-    - "docs/AUTH.md#operating-the-cluster: /v1/operator/node/register refuses a namespace admin who is not on the operator list"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#internal-node-to-node: node-to-node routes are never reachable by a client, whatever credential or header it presents"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#internal-node-to-node: /v1/internal/telemetry is 404 to anything but a coordination MAC from the overlay"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: being on the host or on the mesh is not a credential; a forged coordination MAC, node stamp or cluster secret is refused"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the node's own routes refuse (404) any caller that is not a process on the host or a node on the overlay"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the three /v1/internal/namespace/webrtc/* endpoints were removed"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: the /v1/internal/wg/peer, /peers and /peer/remove endpoints were removed and answer like a path that does not exist"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#the-node-stamp: a node no join admitted cannot register itself, whatever key it enrolled and signs with"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#operators: /v1/operator/node/register refuses a namespace admin who is not on the operator list"

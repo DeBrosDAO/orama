@@ -11,9 +11,9 @@ import (
 )
 
 // TestCLIReference_liveTreeMatchesReference walks the binary under test from
-// `orama --help` down and compares its command tree with docs/CLI_REFERENCE.md:
+// `orama --help` down and compares its command tree with docs/whitepaper/technical-reference/appendices/d-cli-reference.md:
 // the reference claims to be generated from the tree and unable to drift
-// (docs/CLI_REFERENCE.md, header), so the binary the fleet runs must show
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md, header), so the binary the fleet runs must show
 // exactly the documented commands with the documented one-line descriptions.
 func TestCLIReference_liveTreeMatchesReference(t *testing.T) {
 	t.Parallel()

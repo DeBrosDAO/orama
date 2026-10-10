@@ -20,7 +20,7 @@ import (
 )
 
 // The SFU's signalling protocol (core/pkg/sfu/signaling.go), reached through
-// the namespace gateway's /v1/webrtc/signal (docs/WEBRTC.md#signaling-messages).
+// the namespace gateway's /v1/webrtc/signal (website/src/docs/developer/webrtc.mdx#signaling-messages).
 const (
 	SignalPath        = "/v1/webrtc/signal"
 	MsgJoin           = "join"
@@ -32,7 +32,7 @@ const (
 	MsgRefreshCreds   = "refresh-credentials"
 	MsgServerDraining = "server-draining"
 	MsgError          = "error"
-	// Participant state and moderation (docs/WEBRTC.md#audio-and-video-state,
+	// Participant state and moderation (website/src/docs/developer/webrtc.mdx#audio-and-video-state,
 	// #kick-and-mute).
 	MsgAudioState       = "audio-state"
 	MsgVideoState       = "video-state"

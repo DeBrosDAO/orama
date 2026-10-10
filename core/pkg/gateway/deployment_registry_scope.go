@@ -52,7 +52,7 @@ func deploymentRegistryGuard() rqlite.SQLGuard {
 // cluster's one RQLite user, and RQLite cannot restrict a user to tables, so the
 // guard is a check in this process on the statements the family issues, not a
 // database permission: it keeps a bug in the family from reaching identity,
-// secrets or topology tables through this handle. docs/SECURITY.md says what it
+// secrets or topology tables through this handle. docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md says what it
 // does and does not cover.
 //
 // On the gateway that fronts the cluster the family keeps the registry itself:

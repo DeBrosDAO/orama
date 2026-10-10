@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Capability rules (docs/AUTH.md#capability-websockets, docs/SERVERLESS.md#capabilities).
+// Capability rules (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets, website/src/docs/developer/functions.mdx#capabilities).
 const (
 	minTTL           = time.Minute
 	maxTTL           = 7 * 24 * time.Hour

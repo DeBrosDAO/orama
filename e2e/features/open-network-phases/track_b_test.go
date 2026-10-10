@@ -28,9 +28,9 @@ const (
 // TestPhaseB1_coreDNSRunsAsItsOwnAccount: on every nameserver CoreDNS runs
 // as orama-coredns, its Corefile (which holds the index rqlite password) is
 // root:orama-coredns 0640, and the orama account every other daemon runs as
-// cannot read it (B1; docs/SECURITY.md "Per-service accounts").
+// cannot read it (B1; docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Per-service accounts").
 func TestPhaseB1_coreDNSRunsAsItsOwnAccount(t *testing.T) {
-	phase(t, "B1", "docs/SECURITY.md", "runs as `orama-coredns`", trackB+" B1")
+	phase(t, "B1", "docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md", "runs as `orama-coredns`", trackB+" B1")
 	f := harness.Fleet(t)
 	for _, n := range tenancy.Nameservers(f) {
 		user := strings.TrimSpace(f.MustExec(t, n, "ps -o user= -p \"$(systemctl show -p MainPID --value "+infra.CoreDNSUnit+")\"").Stdout)
@@ -65,10 +65,10 @@ func chainNodes(t *testing.T, f *fleet.Fleet) []fleet.Node {
 // TestPhaseB2_globalServicesOutsideTheClusterGraph: the chain is not a boot
 // component of the node supervisor: its unit is not PartOf, BoundTo or
 // Required by orama-node.service, so restarting the supervisor never
-// restarts the chain (B2; docs/ARCHITECTURE.md "Chain, public IPFS and the
+// restarts the chain (B2; website/src/docs/contributor/architecture-reference.mdx "Chain, public IPFS and the
 // relay are not boot components").
 func TestPhaseB2_globalServicesOutsideTheClusterGraph(t *testing.T) {
-	phase(t, "B2", "docs/ARCHITECTURE.md", "are not boot components", trackB+" B2")
+	phase(t, "B2", "website/src/docs/contributor/architecture-reference.mdx", "are not boot components", trackB+" B2")
 	f := harness.Fleet(t)
 	for _, n := range chainNodes(t, f) {
 		deps := f.MustExec(t, n, "systemctl show -p PartOf -p BindsTo -p Requires -p Requisite "+infra.ChainUnit).Stdout
@@ -80,9 +80,9 @@ func TestPhaseB2_globalServicesOutsideTheClusterGraph(t *testing.T) {
 
 // TestPhaseB3_chainUnitAccountAndPorts: the chain runs as orama-chain, its
 // RPC listens on loopback only and its p2p port on the WireGuard address
-// only (B3; core/pkg/constants/chain.go, docs/MONITORING.md "chain").
+// only (B3; core/pkg/constants/chain.go, website/src/docs/operator/monitoring.mdx "chain").
 func TestPhaseB3_chainUnitAccountAndPorts(t *testing.T) {
-	phase(t, "B3", "docs/MONITORING.md", "orama-global-chain.service", trackB+" B3")
+	phase(t, "B3", "website/src/docs/operator/monitoring.mdx", "orama-global-chain.service", trackB+" B3")
 	f := harness.Fleet(t)
 	for _, n := range chainNodes(t, f) {
 		if user := strings.TrimSpace(f.MustExec(t, n, "systemctl show -p User --value "+infra.ChainUnit).Stdout); user != chainUser {
@@ -106,7 +106,7 @@ func TestPhaseB3_chainUnitAccountAndPorts(t *testing.T) {
 // binding with a node's real validator key without printing it; the public
 // key it binds is the one the running chain reports for that node (B4).
 func TestPhaseB4_identityKeyBindingFromTheLiveKey(t *testing.T) {
-	phase(t, "B4", "docs/CLI_REFERENCE.md", "### orama global bind", trackB+" B4")
+	phase(t, "B4", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama global bind", trackB+" B4")
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
 	res := onNode(t, f, n, "global", "bind", "--chain-id", f.State.ChainID, "--operator", vectorOperator, "--service", "validator", "--key-file", validatorKey)

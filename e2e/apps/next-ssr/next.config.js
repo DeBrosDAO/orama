@@ -1,3 +1,3 @@
 // Standalone output is what `orama deploy nextjs --ssr` uploads
-// (docs/DEPLOYMENT_GUIDE.md "Next.js with SSR").
+// (website/src/docs/developer/deployments.mdx "Next.js with SSR").
 module.exports = { output: 'standalone' };

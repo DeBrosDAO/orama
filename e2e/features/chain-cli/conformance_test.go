@@ -10,7 +10,7 @@ import (
 )
 
 // TestConformance_chainCommands runs the generic checks (help matches
-// docs/CLI_REFERENCE.md, --json accepted, unknown flags and subcommands are
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md, --json accepted, unknown flags and subcommands are
 // usage errors, required positional arguments enforced) on `orama chain` and
 // every subcommand. `orama chain` with no subcommand prints its help and
 // lists them all.

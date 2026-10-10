@@ -40,7 +40,7 @@ const hugeHeaderBytes = 2 << 20
 // 5xx and never served: a garbage request line, an unknown HTTP version, a
 // second Host header, a header over the size limit, a header with a NUL or a
 // space before its colon (Caddy terminates HTTP/1.1 in front of every
-// gateway; docs/ARCHITECTURE.md "TLS/HTTPS").
+// gateway; website/src/docs/contributor/architecture-reference.mdx "TLS/HTTPS").
 func TestRaw_malformedRequestsRefusedNotServed(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

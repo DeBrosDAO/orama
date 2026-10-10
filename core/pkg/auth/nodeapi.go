@@ -61,7 +61,7 @@ const (
 	// captured register, heartbeat or enrol-key can be replayed inside the
 	// stamp's window (a stale heartbeat or register re-records an address the
 	// node has since left). It is removed in the release after the one that
-	// introduced the nonce (docs/SECURITY.md, "A node recording itself").
+	// introduced the nonce (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md, "A node recording itself").
 	AcceptLegacyNodeStamp = true
 
 	// nodeAPIMaxSkew bounds replay. These calls are one request to the gateway

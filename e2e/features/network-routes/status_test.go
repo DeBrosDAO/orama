@@ -16,7 +16,7 @@ import (
 
 // statusFields is every member GET /v1/network/status may carry
 // (core/pkg/client/interface.go NetworkStatus): the peer ids and the storage
-// peers' addresses docs/API_SURFACE.md says are the operator's.
+// peers' addresses docs/whitepaper/technical-reference/appendices/i-api-surface.md says are the operator's.
 var statusFields = []string{"node_id", "peer_id", "connected", "peer_count", "database_size", "uptime", "ipfs", "ipfs_cluster"}
 
 // loopbackMarks are the addresses the status filters out of the storage

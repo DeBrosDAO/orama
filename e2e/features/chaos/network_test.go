@@ -22,7 +22,7 @@ const (
 // nodes in both directions. The two others keep quorum, keep serving and
 // keep accepting writes; when the partition lifts the node catches up on
 // every row written without it and the cluster converges with one leader
-// (docs/ARCHITECTURE.md; rqlite needs a majority of voters).
+// (website/src/docs/contributor/architecture-reference.mdx; rqlite needs a majority of voters).
 func TestChaos_symmetricPartitionHeals(t *testing.T) {
 	f := harness.Fleet(t)
 	realistic.RequireFaultBudget(t, "the symmetric partition", faultWorst)

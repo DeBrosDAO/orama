@@ -40,7 +40,7 @@ func devices(t testing.TB, c *gw.Client, who tenancy.Cred) deviceList {
 // TestDevices_registerListDelete: a user registers, lists (the token is not
 // returned) and deletes their own device; deleting it twice or someone
 // else's is 404; malformed registrations are 400
-// (docs/PUSH_NOTIFICATIONS.md#step-5--register-devices-from-your-client).
+// (website/src/docs/developer/push-notifications.mdx#step-5--register-devices-from-your-client).
 func TestDevices_registerListDelete(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -77,7 +77,7 @@ func TestDevices_registerListDelete(t *testing.T) {
 
 // TestDevices_revokedDeviceRegistrationDropped: a registration made from a
 // device-bound session disappears once that device is revoked
-// (docs/PUSH_NOTIFICATIONS.md#registrations-from-a-device-bound-session).
+// (website/src/docs/developer/push-notifications.mdx#registrations-from-a-device-bound-session).
 func TestDevices_revokedDeviceRegistrationDropped(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

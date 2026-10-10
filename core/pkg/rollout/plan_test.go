@@ -29,7 +29,7 @@ func hosts(p *Plan) []string {
 	return out
 }
 
-// The property the whole package exists for. docs/DEV_DEPLOY.md claimed it;
+// The property the whole package exists for. website/src/docs/contributor/testing.mdx claimed it;
 // nothing implemented it.
 func TestBuild_leader_goes_last(t *testing.T) {
 	nodes := []inspector.Node{node("10.0.0.1", "node"), node("10.0.0.2", "node"), node("10.0.0.3", "node")}

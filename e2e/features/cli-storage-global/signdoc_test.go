@@ -13,7 +13,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
-// Sizes of a storage proof (docs/CLI_REFERENCE.md#orama-storage-prove).
+// Sizes of a storage proof (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-prove).
 const (
 	proofLeafBytes    = 1024
 	proofSiblingBytes = 32
@@ -51,7 +51,7 @@ func txCommands(t testing.TB, baseDomain string) []txCommand {
 	}
 }
 
-// proofFile writes one well-formed proof (docs/CLI_REFERENCE.md#orama-storage-prove).
+// proofFile writes one well-formed proof (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-storage-prove).
 func proofFile(t testing.TB) string {
 	t.Helper()
 	raw, err := json.Marshal([]map[string]any{{
@@ -71,7 +71,7 @@ func proofFile(t testing.TB) string {
 
 // TestSignDoc_printedNotSubmitted: without --node every chain transaction
 // command prints the SIGN_MODE_DIRECT sign document and submits nothing
-// (docs/CLI_REFERENCE.md#orama-cluster-register-onchain, #orama-global-bond,
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster-register-onchain, #orama-global-bond,
 // #orama-storage-create, ...). The document names the command's Msg type,
 // the chain id, the signer and its public key. It runs on a machine with no
 // wallet: printing a sign document must not need one.

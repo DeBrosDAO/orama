@@ -9,7 +9,7 @@ describe.skipIf(!hasGateway())("Network", () => {
   });
 
   // The peer map is an operator's: the operator grant and a wallet on the
-  // cluster's operator list (docs/API_SURFACE.md). A namespace's owner or key
+  // cluster's operator list (docs/whitepaper/technical-reference/appendices/i-api-surface.md). A namespace's owner or key
   // is neither on the list nor meant to be, so the suite's credential is
   // refused — a 403, not an answer and not a 503 from a gateway that cannot
   // read the list. An operator's reads are the fleet's network-routes feature.

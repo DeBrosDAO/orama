@@ -17,7 +17,7 @@ import (
 
 // TestNamespacePorts_blockInRangeAndDisjoint: every member gives a namespace
 // one block of five ports inside 10000-10099 (core/pkg/namespace/types.go;
-// docs/ARCHITECTURE.md), and two namespaces never share a port on a node.
+// website/src/docs/contributor/architecture-reference.mdx), and two namespaces never share a port on a node.
 func TestNamespacePorts_blockInRangeAndDisjoint(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -50,7 +50,7 @@ func TestNamespacePorts_blockInRangeAndDisjoint(t *testing.T) {
 // TestNamespaceIsolation_nothingListensPublicly: a tenant's rqlite, Olric and
 // gateway listen on the node's WireGuard address, never on every interface and
 // never on loopback, where Caddy delivers public traffic and a deployment can
-// connect (docs/SECURITY.md "Tenant deployments"; docs/ARCHITECTURE.md), and
+// connect (docs/whitepaper/technical-reference/vol1/11-app-deployments.md "Tenant deployments"; website/src/docs/contributor/architecture-reference.mdx), and
 // the firewall does not open them.
 func TestNamespaceIsolation_nothingListensPublicly(t *testing.T) {
 	t.Parallel()
@@ -84,7 +84,7 @@ func TestNamespaceIsolation_nothingListensPublicly(t *testing.T) {
 // TestNamespaceIsolation_unitsAreConfined: a tenant gateway writes only its
 // own namespace's directory (plus the shared deployment and SQLite trees),
 // sees of secrets/ only what is bound into it, and runs as orama with hidden
-// processes; Olric cannot see secrets/ at all (core/systemd; docs/SECURITY.md
+// processes; Olric cannot see secrets/ at all (core/systemd; docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md
 // "Per-service accounts").
 func TestNamespaceIsolation_unitsAreConfined(t *testing.T) {
 	t.Parallel()
@@ -111,7 +111,7 @@ func TestNamespaceIsolation_unitsAreConfined(t *testing.T) {
 
 // TestNamespaceIsolation_configFilesArePrivate: the gateway YAML holds the
 // namespace's credentials and is 0600 orama; the unit env tree is root's
-// (docs/SECURITY.md "Per-service accounts": "A gateway reads its 0600 YAML").
+// (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Per-service accounts": "A gateway reads its 0600 YAML").
 func TestNamespaceIsolation_configFilesArePrivate(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -138,7 +138,7 @@ func TestNamespaceIsolation_configFilesArePrivate(t *testing.T) {
 
 // TestNamespaceIsolation_crossNamespaceCredentialRefused: at A's gateway, B's
 // API key is NAMESPACE_MISMATCH naming both namespaces, B's session is not
-// served, and neither can read A's members or keys (docs/SECURITY.md).
+// served, and neither can read A's members or keys (docs/whitepaper/technical-reference/vol1/09-namespaces.md).
 func TestNamespaceIsolation_crossNamespaceCredentialRefused(t *testing.T) {
 	t.Parallel()
 	pair := tenancy.Namespaces(t, harness.Fleet(t), 2, ns.Options{})

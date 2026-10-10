@@ -19,7 +19,7 @@ var ErrOutsideScope = errors.New("not available on a scoped database handle")
 // never issue, which is what a bug in the component's own SQL handling would
 // produce. It does not stop code that already runs in this process and holds the
 // connection's credentials, and it is not a database permission; see
-// docs/SECURITY.md for what a scoped handle is and is not.
+// docs/whitepaper/technical-reference/vol1/17-database.md for what a scoped handle is and is not.
 //
 // Only the calls a guard can read are available: Query, Exec, Tx, Batch and
 // BatchQuery. The entity layer (FindBy, Save, Remove, Repository,

@@ -15,16 +15,22 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Documents the checks read (repo-relative).
+// Documents the checks read (repo-relative): website docs pages, whitepaper
+// chapters and appendices, and the one plan.
 const (
-	webrtcDoc   = "docs/WEBRTC.md"
-	securityDoc = "docs/SECURITY.md"
-	surfaceDoc  = "docs/API_SURFACE.md"
-	chainDoc    = "docs/CHAIN.md"
-	cliRefDoc   = "docs/CLI_REFERENCE.md"
+	webrtcDoc   = "website/src/docs/developer/webrtc.mdx"
+	capDoc      = "docs/whitepaper/technical-reference/vol1/09-namespaces.md"
+	surfaceDoc  = "docs/whitepaper/technical-reference/appendices/i-api-surface.md"
+	chainDoc    = "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md"
+	economyDoc  = "docs/whitepaper/technical-reference/vol2/40-economics.md"
+	cliRefDoc   = cliconf.ReferencePath
 	whitepaper  = "docs/whitepaper/WHITEPAPER.md"
 	openNetPlan = "plans/open-network.md"
 )
+
+// websiteDocsDir holds the website's docs pages (MDX), the other place the
+// documentation lives besides the whitepaper under docs/.
+const websiteDocsDir = "website/src/docs"
 
 // line is one line of a document, for "file:line" in failure messages.
 type line struct {
@@ -59,26 +65,29 @@ func grep(t testing.TB, rel string, re *regexp.Regexp) []line {
 	return out
 }
 
-// docs returns every Markdown file under docs/, repo-relative, sorted.
+// docs returns every documentation page, repo-relative, sorted: the Markdown
+// under docs/ (the whitepaper) and the MDX under website/src/docs.
 func docs(t testing.TB) []string {
 	t.Helper()
 	root := cliconf.RepoRoot(t)
 	var out []string
-	err := filepath.WalkDir(filepath.Join(root, "docs"), func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(p, ".md") {
-			rel, relErr := filepath.Rel(root, p)
-			if relErr != nil {
-				return relErr
+	for dir, suffix := range map[string]string{"docs": ".md", websiteDocsDir: ".mdx"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
 			}
-			out = append(out, filepath.ToSlash(rel))
+			if !d.IsDir() && strings.HasSuffix(p, suffix) {
+				rel, relErr := filepath.Rel(root, p)
+				if relErr != nil {
+					return relErr
+				}
+				out = append(out, filepath.ToSlash(rel))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("failed to list %s: %v", dir, err)
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("failed to list docs/: %v", err)
 	}
 	sort.Strings(out)
 	return out

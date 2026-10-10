@@ -51,7 +51,7 @@ func tenantRQLiteEndpoints(unitEnvDir, namespacesDir string, index rqlite.Endpoi
 	if len(missing) > 0 {
 		return nil, nil, fmt.Errorf("namespace(s) %s are served by this node (%s/<ns>/%s) with rqlite data here, but %s has no rqlite.env "+
 			"for them, so their leadership cannot be handed over. If orama-node has not finished moving its env files, its log names "+
-			"the path it stopped on; if the namespace no longer runs here, its directory is a leftover — see docs/COMMON_PROBLEMS.md",
+			"the path it stopped on; if the namespace no longer runs here, its directory is a leftover — see orama.network/docs/operator/troubleshooting",
 			strings.Join(missing, ", "), namespacesDir, namespaceClusterStateFile, envDir)
 	}
 	return endpoints, failures, nil

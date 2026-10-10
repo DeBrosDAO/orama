@@ -16,7 +16,7 @@ const (
 	// archiveRangeBlocks is the width every archiver uses: orama-global archiver's default
 	// (--range-blocks), which its unit does not change. The first range is 1..archiveRangeBlocks.
 	archiveRangeBlocks = 1000
-	// archiveAttesters is how many distinct operators must attest a range (docs/CHAIN.md, "History
+	// archiveAttesters is how many distinct operators must attest a range (docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md, "History
 	// archiver").
 	archiveAttesters = 3
 )
@@ -61,7 +61,7 @@ func distinctStrings(in []string) int {
 }
 
 // archiveVerdict judges the first archive range. A protocol deal (and so an ARCHIVE deal) gives a
-// slot only to a node with a declared ASN distinct from the other slots' (docs/CHAIN.md, "Node
+// slot only to a node with a declared ASN distinct from the other slots' (docs/whitepaper/technical-reference/vol2/37-global-nodes.md, "Node
 // network identity"), so on an environment where every provider shares one ASN the deals stay
 // unassigned. That is detected from the chain's own state, not assumed, and reported as a SKIP
 // naming the cause; an archived range is a PASS whatever the ASNs are.

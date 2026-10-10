@@ -50,7 +50,7 @@ func claim(t testing.TB, c *gw.Client, dev *wallet.Device, namespace, deviceCode
 // TestSessionPolicy_approvalPendsANewDevice: under `approval` an account's
 // first device is active; its next device's sign-in answers 202 with codes,
 // holds no session until an active device approves it, and a wallet
-// signature alone cannot approve it (docs/AUTH.md#adding-a-device-approval-and-linking).
+// signature alone cannot approve it (docs/whitepaper/technical-reference/vol1/13-identity.md#linking-a-device-from-a-device).
 func TestSessionPolicy_approvalPendsANewDevice(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -130,7 +130,7 @@ func TestDeviceLink_seedlessTakesTheApproversAccount(t *testing.T) {
 
 // TestNamespaceDevices_operatorRecovery: a namespace operator (members write)
 // lists and revokes an account's devices; with none left the account's next
-// device enrols as its first again, even under approval (docs/AUTH.md,
+// device enrols as its first again, even under approval (docs/whitepaper/technical-reference/vol1/13-identity.md,
 // "When the user cannot help themselves").
 func TestNamespaceDevices_operatorRecovery(t *testing.T) {
 	t.Parallel()

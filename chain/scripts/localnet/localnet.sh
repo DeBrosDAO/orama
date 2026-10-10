@@ -27,7 +27,7 @@
 # member gets an equal share of genesis voting power straight from its own priv_validator_key.json
 # (see `oramad genesis add-bootstrap-validator --help`). This replaced the old devnet-only
 # self-bonded-validator exception (x/emission's now-vestigial allow_bootstrap_stake premine gate,
-# kept only for the epoch-duration/min-blocks-per-epoch floor relaxation below - see docs/CHAIN.md).
+# kept only for the epoch-duration/min-blocks-per-epoch floor relaxation below - see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 set -euo pipefail
 
 CHAIN_ID="${CHAIN_ID:-orama-localnet-1}"
@@ -117,7 +117,7 @@ build_genesis() {
 	log "setting emission params: epoch-duration=$EPOCH_DURATION min-blocks-per-epoch=$EPOCH_MIN_BLOCKS allow-bootstrap-stake=true"
 	# allow-bootstrap-stake only relaxes the epoch-duration/min-blocks-per-epoch floors here -
 	# genesis supply is exactly zero either way (no genesis account is ever funded), so its premine
-	# gate is satisfied trivially (see docs/CHAIN.md).
+	# gate is satisfied trivially (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 	run_logged "$bin" genesis set-emission-params \
 		--epoch-duration "$EPOCH_DURATION" \
 		--min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" \

@@ -30,6 +30,6 @@ covers:
     - /v1/namespace/keys
     - /v1/namespace/keys/
   claims:
-    - "docs/TS_SDK.md: the SDK's methods work against a live gateway with a namespace session"
-    - "docs/AUTH.md: ending a session closes the sockets its tokens hold open within ten seconds"
-    - "docs/API_SURFACE.md: the chain proxy is read-only and refuses every other path"
+    - "website/src/docs/developer/sdk-reference.mdx: the SDK's methods work against a live gateway with a namespace session"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md: ending a session closes the sockets its tokens hold open within ten seconds"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: the chain proxy is read-only and refuses every other path"

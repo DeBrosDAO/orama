@@ -26,7 +26,7 @@ const (
 	observeEvery  = 30 * time.Second
 	restartBudget = 2 * time.Minute
 	// maxAppliedLag is the size monitoring's commit-applied gap warning uses
-	// (docs/MONITORING.md).
+	// (website/src/docs/operator/monitoring.mdx).
 	maxAppliedLag = 100
 )
 

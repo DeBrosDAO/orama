@@ -67,7 +67,7 @@ func TestAuthorities_signAConsensusThatListsEveryRelay(t *testing.T) {
 // run. A service rotates its descriptors at the end of each run, and clients
 // look it up by the time period: with Tor's default of 1440 minutes and a
 // voting interval shorter than an hour, the service is unreachable from each
-// rotation until the period ends (docs/TOR_NETWORK.md#onion-service-time-periods).
+// rotation until the period ends (website/src/docs/operator/tor-network.mdx#onion-service-time-periods).
 func TestNetwork_consensusVotesTheOnionTimePeriodOfOneSharedRandomRun(t *testing.T) {
 	t.Parallel()
 	f, r := requireRoles(t)
@@ -242,7 +242,7 @@ func TestRelays_onlyAnInstalledExitHasTheExitFlag(t *testing.T) {
 			t.Errorf("the consensus has %d exits, but %d nodes were installed as exits", c.Exits, exits)
 		}
 		if c.ExitsWithoutPorts > 0 {
-			t.Errorf("%d of the consensus's %d exits are summarised as accepting no port (`p reject 1-65535`), so no client uses them: check the exit policy's refusals cover no more than two /8 blocks (docs/TOR_NETWORK.md#exits)", c.ExitsWithoutPorts, c.Exits)
+			t.Errorf("%d of the consensus's %d exits are summarised as accepting no port (`p reject 1-65535`), so no client uses them: check the exit policy's refusals cover no more than two /8 blocks (orama.network/docs/operator/tor-network)", c.ExitsWithoutPorts, c.Exits)
 		}
 	}
 }
@@ -311,7 +311,7 @@ func TestExit_leavesFromTheNodeAndRefusesWhatItShould(t *testing.T) {
 		harness.SkipNotApplicable(t, "no relay of this target is installed as an exit (--services relay,exit)")
 	}
 	info := homeInfo(t, infoOf(t, f, *exit), *exit, constants.GlobalTorRelayHome)
-	// After the authorities made no consensus for an hour (docs/TOR_NETWORK.md#directory-authorities)
+	// After the authorities made no consensus for an hour (website/src/docs/operator/tor-network.mdx#directory-authorities)
 	// the exit holds an expired one until it fetches the next: test it once it is valid again.
 	eventually.Require(t, pollEvery, consensusBudget, "the exit "+exit.Name+" to hold a valid consensus", func() (bool, error) {
 		cons := homeInfo(t, infoOf(t, f, *exit), *exit, constants.GlobalTorRelayHome).Consensus

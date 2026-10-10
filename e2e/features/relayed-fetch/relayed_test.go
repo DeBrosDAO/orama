@@ -18,7 +18,7 @@ import (
 // TestRelayedFetch_throughTheRelayMatchesGet: three capabilities, three
 // fetches through a relay that is given no credential; the bytes and the
 // headers are those of /v1/storage/get, with a Content-Length
-// (docs/API_SURFACE.md#storage).
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage).
 func TestRelayedFetch_throughTheRelayMatchesGet(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -170,7 +170,7 @@ func TestRelay_refusesDestinationsAndNeedsNoCredential(t *testing.T) {
 
 // TestRelayedFetch_namespaceRequestLogsKeepNoAddress: after relayed downloads
 // the namespace's request_logs hold rows for the route and none carries an
-// address (docs/SECURITY.md#relayed-fetch). The relay's own row is in the
+// address (docs/whitepaper/technical-reference/vol1/36-sdks.md#relayed-fetch). The relay's own row is in the
 // cluster gateway's database, which a tenant cannot read; the unit tests pin
 // its empty ip.
 func TestRelayedFetch_namespaceRequestLogsKeepNoAddress(t *testing.T) {

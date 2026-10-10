@@ -16,7 +16,7 @@ import (
 
 // crossNodeBudget is how long a write through one node's gateway may take to
 // be visible through another's. Olric is one cluster per namespace
-// (docs/ARCHITECTURE.md "Olric"), so this is the time of one routed read.
+// (website/src/docs/contributor/architecture-reference.mdx "Olric"), so this is the time of one routed read.
 const crossNodeBudget = 10 * time.Second
 
 // TestCacheConsistency_writeOnOneNodeReadOnEvery writes through each node's

@@ -86,7 +86,7 @@ func target(t *testing.T) fleet.Node {
 // TestAlerts_clockSkewWarningThenCritical: a node 20s off raises the
 // cluster-wide clock-skew warning; 90s off, the monitor raises a critical
 // alert about it (the skew itself, or the node's collection failing because
-// its stamps leave the ±60s window) (docs/MONITORING.md "Clock Skew": warning
+// its stamps leave the ±60s window) (website/src/docs/operator/monitoring.mdx "Clock Skew": warning
 // beyond 5s, critical beyond 60s). ClockSkew restores NTP at cleanup.
 func TestAlerts_clockSkewWarningThenCritical(t *testing.T) {
 	f := harness.Fleet(t)
@@ -110,7 +110,7 @@ func TestAlerts_clockSkewWarningThenCritical(t *testing.T) {
 }
 
 // TestAlerts_failedUnitWarned: a failed systemd unit on a node is reported
-// by name (docs/MONITORING.md "Services: Systemd state"; `systemctl
+// by name (website/src/docs/operator/monitoring.mdx "Services: Systemd state"; `systemctl
 // --failed`). The unit is a transient that exits 1, reset at cleanup.
 func TestAlerts_failedUnitWarned(t *testing.T) {
 	f := harness.Fleet(t)
@@ -125,7 +125,7 @@ func TestAlerts_failedUnitWarned(t *testing.T) {
 }
 
 // TestAlerts_coreServiceStoppedWarned: a core service stopped on a node is
-// a warning naming it (docs/MONITORING.md "Services").
+// a warning naming it (website/src/docs/operator/monitoring.mdx "Services").
 func TestAlerts_coreServiceStoppedWarned(t *testing.T) {
 	f := harness.Fleet(t)
 	n := target(t)
@@ -135,7 +135,7 @@ func TestAlerts_coreServiceStoppedWarned(t *testing.T) {
 }
 
 // TestAlerts_firewallInactiveCritical: a node whose UFW is disabled raises a
-// critical alert (docs/MONITORING.md "Alert Severities": UFW inactive). The
+// critical alert (website/src/docs/operator/monitoring.mdx "Alert Severities": UFW inactive). The
 // firewall is enabled again at cleanup, before anything else, and checked.
 func TestAlerts_firewallInactiveCritical(t *testing.T) {
 	f := harness.Fleet(t)

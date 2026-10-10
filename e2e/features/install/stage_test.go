@@ -17,7 +17,7 @@ const releaseRootPath = "/etc/orama/release-root.json"
 // TestStageArchive_usageRefusals: the node-side step refuses a command line
 // that cannot work before it verifies anything: no --archive, and half of
 // the release-root flags, which must never fall back to the wallet path
-// (docs/CLI_REFERENCE.md "orama maint node stage-archive").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint node stage-archive").
 func TestStageArchive_usageRefusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -39,7 +39,7 @@ func TestStageArchive_usageRefusals(t *testing.T) {
 
 // TestStageArchive_releaseRootRequiredWhenAsked: asking for the TUF release
 // check on a node that adopted no release root refuses the archive before
-// extracting it, and is never retried on the wallet path (docs/SECURITY.md
+// extracting it, and is never retried on the wallet path (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md
 // "Verification").
 func TestStageArchive_releaseRootRequiredWhenAsked(t *testing.T) {
 	t.Parallel()

@@ -14,5 +14,5 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/ARCHITECTURE.md#node-process-model: ipfs-cluster@ and ipfs-gc@ Require ipfs@; stopping the daemon stops them and they return with it"
-    - "docs/API_SURFACE.md#storage: content pinned at RF 3 survives one node's IPFS being down and returns to RF 3 after"
+    - "website/src/docs/contributor/architecture-reference.mdx#node-process-model: ipfs-cluster@ and ipfs-gc@ Require ipfs@; stopping the daemon stops them and they return with it"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage: content pinned at RF 3 survives one node's IPFS being down and returns to RF 3 after"

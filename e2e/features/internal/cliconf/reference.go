@@ -10,10 +10,11 @@ import (
 	"testing"
 )
 
-// ReferencePath is the generated command reference (core/cmd/orama/reference_test.go).
-const ReferencePath = "docs/CLI_REFERENCE.md"
+// ReferencePath is the generated command reference, whitepaper appendix D
+// (core/cmd/orama/book_reference_test.go renders it).
+const ReferencePath = "docs/whitepaper/technical-reference/appendices/d-cli-reference.md"
 
-// Command is one `### orama ...` section of the reference.
+// Command is one `## orama ...` section of the reference.
 type Command struct {
 	// Path is "orama app env set".
 	Path string
@@ -82,7 +83,7 @@ func (r *Reference) Paths() []string {
 	return out
 }
 
-// LoadReference parses docs/CLI_REFERENCE.md from the checkout.
+// LoadReference parses the CLI reference (ReferencePath) from the checkout.
 func LoadReference(t testing.TB) *Reference {
 	t.Helper()
 	ref, err := ParseReference(ReadRepoFile(t, ReferencePath))
@@ -93,8 +94,11 @@ func LoadReference(t testing.TB) *Reference {
 }
 
 var (
-	headingRe = regexp.MustCompile("^### (orama(?: [a-z0-9-]+)*)$")
+	headingRe = regexp.MustCompile("^## (orama(?: [a-z0-9-]+)*)$")
 	tickRe    = regexp.MustCompile("`([^`]+)`")
+	// unescapeProse undoes the entities the book renderer writes outside code
+	// (bookCell in core/cmd/orama/book_reference_test.go).
+	unescapeProse = strings.NewReplacer("&#123;", "{", "&#125;", "}", "&lt;", "<")
 )
 
 const (
@@ -102,6 +106,7 @@ const (
 	aliasesPrefix   = "Aliases: "
 	subsPrefix      = "Subcommands: "
 	fence           = "```"
+	sectionPrefix   = "## "
 )
 
 // ParseReference reads every command section of the reference.
@@ -113,10 +118,7 @@ func ParseReference(text string) (*Reference, error) {
 		if m == nil {
 			continue
 		}
-		end := i + 1
-		for end < len(lines) && !strings.HasPrefix(lines[end], "### ") {
-			end++
-		}
+		end := sectionEnd(lines, i+1)
 		c, err := parseSection(m[1], i+1, lines[i+1:end])
 		if err != nil {
 			return nil, err
@@ -129,9 +131,24 @@ func ParseReference(text string) (*Reference, error) {
 		i = end - 1
 	}
 	if len(ref.Commands) == 0 {
-		return nil, fmt.Errorf("no `### orama ...` command sections")
+		return nil, fmt.Errorf("no `## orama ...` command sections")
 	}
 	return ref, nil
+}
+
+// sectionEnd is the line of the next "## " heading after from. A line inside a
+// fenced block is never a heading: a command's long help is fenced.
+func sectionEnd(lines []string, from int) int {
+	inFence := false
+	for end := from; end < len(lines); end++ {
+		switch {
+		case strings.HasPrefix(lines[end], fence):
+			inFence = !inFence
+		case !inFence && strings.HasPrefix(lines[end], sectionPrefix):
+			return end
+		}
+	}
+	return len(lines)
 }
 
 func parseSection(path string, line int, body []string) (Command, error) {
@@ -139,16 +156,21 @@ func parseSection(path string, line int, body []string) (Command, error) {
 	// prose is set by the first line after the usage block that is not the
 	// aliases line: the generator writes "Aliases: `a`" right after the usage
 	// block, before the Long text, so an "Aliases: ..." in the Long text is
-	// prose, not the command's aliases.
+	// prose, not the command's aliases. The Long text is a fenced block and is
+	// skipped whole.
 	inTable, sawUsage, prose := false, false, false
 	for i := 0; i < len(body); i++ {
 		l := body[i]
 		switch {
-		case !sawUsage && l == fence && i+1 < len(body):
+		case !sawUsage && strings.HasPrefix(l, fence) && i+1 < len(body):
 			c.Usage, sawUsage = strings.TrimSpace(body[i+1]), true
 			i += 2
+		case sawUsage && strings.HasPrefix(l, fence):
+			prose = true
+			for i++; i < len(body) && !strings.HasPrefix(body[i], fence); i++ {
+			}
 		case c.Short == "" && !sawUsage && strings.TrimSpace(l) != "":
-			c.Short = strings.TrimSpace(l)
+			c.Short = unescapeProse.Replace(strings.TrimSpace(l))
 		case sawUsage && !prose && strings.HasPrefix(l, aliasesPrefix):
 			c.Aliases = ticked(l)
 		case strings.HasPrefix(l, subsPrefix):

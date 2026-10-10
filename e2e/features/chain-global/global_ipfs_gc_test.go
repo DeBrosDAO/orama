@@ -41,7 +41,7 @@ func ipfsGCNode(t *testing.T) (*chain.Chain, fleet.Node) {
 			return c, n
 		}
 	}
-	harness.SkipNotApplicable(t, "no node of this target has "+globalIPFSGCUnit+": install the public Kubo with `orama global install --services ipfs` (docs/RUN_A_GLOBAL_NODE.md)")
+	harness.SkipNotApplicable(t, "no node of this target has "+globalIPFSGCUnit+": install the public Kubo with `orama global install --services ipfs` (orama.network/docs/blockchain/run-a-global-node)")
 	return nil, fleet.Node{}
 }
 

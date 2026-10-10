@@ -9,7 +9,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
-// tokenEnvVar is the CI credential (docs/AUTH.md, docs/DEPLOYMENT_GUIDE.md "In CI").
+// tokenEnvVar is the CI credential (docs/whitepaper/technical-reference/vol1/13-identity.md, website/src/docs/developer/deployments.mdx "In CI").
 const tokenEnvVar = "ORAMA_TOKEN"
 
 // garbageToken is a credential no gateway issued, recognisable if echoed.
@@ -57,7 +57,7 @@ func TestCredentials_missingIsAuthError(t *testing.T) {
 }
 
 // tokenCommands are commands that take their credential from ORAMA_TOKEN when
-// it is set (docs/AUTH.md "ORAMA_TOKEN is the CI credential"), whatever else
+// it is set (docs/whitepaper/technical-reference/vol1/13-identity.md "ORAMA_TOKEN is the CI credential"), whatever else
 // the HOME holds. A command that ignores it answers with the login hint, which
 // is the same exit code as a refused token: the message tells them apart.
 func tokenCommands(env string) [][]string {

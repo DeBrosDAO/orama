@@ -11,7 +11,7 @@ import (
 )
 
 // blockMaxGas is the run chain's consensus block max_gas
-// (e2e/scripts/chain-deploy.sh build_genesis, docs/CHAIN.md).
+// (e2e/scripts/chain-deploy.sh build_genesis, docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 const blockMaxGas = 100_000_000
 
 // maxMemoChars is x/auth's default MaxMemoCharacters (the app keeps it).

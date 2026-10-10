@@ -31,8 +31,8 @@ covers:
     - orama.fees.v1.FeeBalance
     - orama.storage.v1.NodeFailures
   claims:
-    - "docs/CHAIN.md#x-nodes: MsgFundHotKey pays the fee-only balance of the hot key registered on the operator's own node from the operator's earnings; the balance pays base fees and cannot be bonded, sent, shielded or deposited"
-    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md: MsgFundHotKey with source FUND_SOURCE_BANK moves the amount from the operator's bank balance into the fees module account and credits the hot key's fee-only balance, leaving the operator's earnings untouched and the fees invariants holding"
-    - "docs/CHAIN.md#x-nodes: a node's hot key must prove it holds itself with a hot-key binding it signed"
-    - "docs/CHAIN.md#history-archiver: MsgCreateArchiveDeal is signed by the hot key of an active ARCHIVER node and opens deals only for a finalised range"
-    - "docs/CHAIN.md#history-archiver: REFUSAL PATHS ONLY: orama.archive.v1.MsgCreateArchiveDeal; the success path needs an active ARCHIVER role bond (a bank balance) and a range attested by three operators (trigger: a funding path exists)"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#hot-key-funding: MsgFundHotKey pays the fee-only balance of the hot key registered on the operator's own node from the operator's earnings; the balance pays base fees and cannot be bonded, sent, shielded or deposited"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#hot-key-funding: MsgFundHotKey with source FUND_SOURCE_BANK moves the amount from the operator's bank balance into the fees module account and credits the hot key's fee-only balance, leaving the operator's earnings untouched and the fees invariants holding"
+    - "docs/whitepaper/technical-reference/vol2/37-global-nodes.md#registering-an-operator-and-a-node: a node's hot key must prove it holds itself with a hot-key binding it signed"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#messages-and-queries: MsgCreateArchiveDeal is signed by the hot key of an active ARCHIVER node and opens deals only for a finalised range"
+    - "docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md#archive-and-indexer: REFUSAL PATHS ONLY: orama.archive.v1.MsgCreateArchiveDeal; the success path needs an active ARCHIVER role bond (a bank balance) and a range attested by three operators (trigger: a funding path exists)"

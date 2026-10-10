@@ -83,7 +83,7 @@ func loggedIn(t testing.TB) *oramacli.Runner {
 }
 
 // TestAuthLogin_storesASessionNotAKey: `orama auth login` keeps the access and
-// refresh tokens, no API key in the lobby, in a 0600 file (docs/AUTH.md#signing-in).
+// refresh tokens, no API key in the lobby, in a 0600 file (docs/whitepaper/technical-reference/vol1/13-identity.md#the-command-line-client).
 func TestAuthLogin_storesASessionNotAKey(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -149,7 +149,7 @@ func TestAuthWhoami_withoutLoginIsAnAuthError(t *testing.T) {
 
 // TestAuthLogout_cliEndsTheSessionItHeld: `orama auth logout` ends the session
 // on the gateway — the refresh token and the access token the machine held —
-// and clears the file (docs/AUTH.md#revoking: "Logging out revokes the
+// and clears the file (docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device: "Logging out revokes the
 // refresh token and the access token").
 func TestAuthLogout_cliEndsTheSessionItHeld(t *testing.T) {
 	t.Parallel()

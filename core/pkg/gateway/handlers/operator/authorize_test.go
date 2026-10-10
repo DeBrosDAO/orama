@@ -99,7 +99,7 @@ func TestRequireOperator_refusesAWalletThatIsNotAnOperator(t *testing.T) {
 	if body["code"] != ErrCodeNotAnOperator {
 		t.Errorf("code %v, want %s", body["code"], ErrCodeNotAnOperator)
 	}
-	// docs/AUTH.md: every refusal carries {error, code, hint}.
+	// docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md: every refusal carries {error, code, hint}.
 	if hint, _ := body["hint"].(string); hint == "" {
 		t.Error("the refusal carries no hint")
 	}

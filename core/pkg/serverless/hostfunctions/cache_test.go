@@ -295,7 +295,7 @@ func TestCacheIncrBy_noCacheClient(t *testing.T) {
 }
 
 // Olric counts a value that is not a number as 0 and replaces it; the host
-// function does not turn that into an error (docs/SERVERLESS.md#cache-olric-distributed-cache).
+// function does not turn that into an error (website/src/docs/developer/functions.mdx#cache-olric-distributed-cache).
 func TestCacheIncrBy_nonNumericValueCountsAsZero(t *testing.T) {
 	h := newEmbeddedCache(t)
 	ctx := nsCtx()

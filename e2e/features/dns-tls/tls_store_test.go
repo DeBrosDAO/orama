@@ -31,7 +31,7 @@ func servedLeaf(t *testing.T, ip, sni string) string {
 // under it are served with the same certificate by every node — one obtained
 // for the cluster and shared through its store, not one per node, which would
 // spend Let's Encrypt's five-a-week limit on one name set with every install
-// (docs/ARCHITECTURE.md "TLS/HTTPS": one certificate per cluster).
+// (website/src/docs/contributor/architecture-reference.mdx "TLS/HTTPS": one certificate per cluster).
 func TestTLS_everyNodeServesTheClustersOneCertificate(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -50,7 +50,7 @@ func TestTLS_everyNodeServesTheClustersOneCertificate(t *testing.T) {
 
 // TestTLSStore_refusesCallsNotFromCaddy: a process on the node with no stamp,
 // a stamp under a key no node holds, or a replay of a valid call gets 404 —
-// the route does not confirm it exists (docs/SECURITY.md "Certificates").
+// the route does not confirm it exists (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md "Certificates").
 func TestTLSStore_refusesCallsNotFromCaddy(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -73,7 +73,7 @@ func TestTLSStore_refusesCallsNotFromCaddy(t *testing.T) {
 // call is sent to is accepted (the v2 stamp beside it is not needed), and one
 // made for another process's port on the same node is 404, so a stamp captured
 // on its way to one gateway process cannot be replayed to a sibling on the
-// node (docs/SECURITY.md "Coordination MAC v3").
+// node (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md "Coordination MAC v3").
 func TestTLSStore_aStampIsGoodForOneProcessOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -91,7 +91,7 @@ func TestTLSStore_aStampIsGoodForOneProcessOnly(t *testing.T) {
 
 // TestTLSStore_holdsTheWildcardSealed: the store every node's Caddy uses holds
 // the cluster's *.<base> certificate and key, sealed — what the gateway keeps
-// in the registry is never a key in the clear (docs/SECURITY.md
+// in the registry is never a key in the clear (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md
 // "Certificates").
 func TestTLSStore_holdsTheWildcardSealed(t *testing.T) {
 	t.Parallel()
@@ -130,7 +130,7 @@ func TestTLSStore_holdsTheWildcardSealed(t *testing.T) {
 
 // TestTLSStore_exportedWildcardIsTheServedOne: the *.<base> pair the cluster
 // gateway exports for TURN on every node is the certificate the nodes serve
-// for a name under the base (docs/WEBRTC.md: TURNS serves the cluster's
+// for a name under the base (website/src/docs/developer/webrtc.mdx: TURNS serves the cluster's
 // wildcard).
 func TestTLSStore_exportedWildcardIsTheServedOne(t *testing.T) {
 	t.Parallel()

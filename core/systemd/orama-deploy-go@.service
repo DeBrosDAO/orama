@@ -60,7 +60,7 @@ BindReadOnlyPaths=/opt/orama/.orama/data/deployments/%i
 # the app from 127.0.0.1, so denying loopback would drop every request the app
 # is sent. IPAddressAllow/Deny have no notion of a port, so what a deployment
 # can reach on 127.0.0.1 is decided by the services listening there, not here
-# (docs/SECURITY.md, "Tenant deployments").
+# (docs/whitepaper/technical-reference/vol1/11-app-deployments.md, "Tenant deployments").
 IPAddressAllow=localhost
 IPAddressDeny=10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 fc00::/7 fe80::/10
 # bind() is separate from IPAddressDeny, and denied here outright: with TCP

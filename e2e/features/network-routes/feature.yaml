@@ -33,5 +33,5 @@ covers:
     - /v1/network/connect
     - /v1/network/disconnect
   claims:
-    - "docs/API_SURFACE.md#network-and-proxy: /v1/network/peers and /v1/network/status are an operator's (operator grant and the operator list), or another node's with a coordination MAC over the mesh; no longer open to anyone"
-    - "docs/API_SURFACE.md#network-and-proxy: /v1/network/connect and /v1/network/disconnect are topology mutation, never reachable by a namespace owner who is not an operator"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#network-and-proxy: /v1/network/peers and /v1/network/status are an operator's (operator grant and the operator list), or another node's with a coordination MAC over the mesh; no longer open to anyone"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#network-and-proxy: /v1/network/connect and /v1/network/disconnect are topology mutation, never reachable by a namespace owner who is not an operator"

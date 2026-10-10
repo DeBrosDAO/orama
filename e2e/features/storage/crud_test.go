@@ -22,7 +22,7 @@ const (
 )
 
 // TestUpload_multipartRoundTrip: the SDK's storage.upload()/get()
-// (docs/API_SURFACE.md#storage) stores bytes and returns them unchanged,
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage) stores bytes and returns them unchanged,
 // named as uploaded, with the logical size. A multipart file name is reduced to
 // its last element by the standard library, so a path-like name travels in the
 // JSON form.
@@ -43,7 +43,7 @@ func TestUpload_multipartRoundTrip(t *testing.T) {
 		t.Errorf("download disposition %q does not name the CID", cd)
 	}
 	// A download is a user's data: it must not land in a client's disk cache
-	// (docs/SECURITY.md#response-caching, bugboard #735).
+	// (docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching, bugboard #735).
 	if cc := r.Header.Values("Cache-Control"); len(cc) != 1 || cc[0] != "no-store" {
 		t.Errorf("download Cache-Control %v, want exactly no-store", cc)
 	}
@@ -112,7 +112,7 @@ func multipartNoFile(t testing.TB, c *gw.Client, who tenancy.Cred) *gw.Response 
 }
 
 // TestUpload_nameNormalized: `/a//b/./c` and `a/b/c` are the same name
-// (docs/AUTH.md#narrowing-a-grant; core NormalizeStoragePath).
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#where-a-requests-permissions-come-from; core NormalizeStoragePath).
 func TestUpload_nameNormalized(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

@@ -30,7 +30,7 @@ const (
 )
 
 // stageOnServer puts the build where a manual join expects it, the operator
-// step docs/CLI_REFERENCE.md "orama maint node install" names: "The build archive
+// step docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint node install" names: "The build archive
 // must be extracted at /opt/orama".
 func stageOnServer(t testing.TB, f *fleet.Fleet, n fleet.Node, archive string) {
 	t.Helper()
@@ -83,7 +83,7 @@ func mintInvite(t testing.TB, f *fleet.Fleet) string {
 // expecting other archive signers is refused before the token is spent; the
 // genuine invite, on stdin, joins the node as a full member; the row records
 // who used it; and the same invite is refused as used afterwards
-// (docs/SECURITY.md "TLS & Transport", "Supply Chain", "Secrets never on a
+// (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "TLS & Transport", "Supply Chain", "Secrets never on a
 // command line"; handlers/join tokenRefusal).
 func TestJoin_manualJoinSpendsTheInviteOnce(t *testing.T) {
 	f := harness.Fleet(t)

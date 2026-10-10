@@ -107,7 +107,7 @@ func hotKeyBinding(t *testing.T, c *chain.Chain, operator string) (string, strin
 // SIGN_MODE_DIRECT sign document for the given chain id, account number,
 // sequence, fee and gas, carrying exactly one message of the documented type
 // whose signer field is the given account, and submits nothing
-// (docs/CLI_REFERENCE.md: "Without --node it prints the sign document").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md: "Without --node it prints the sign document").
 func TestOnchainDocs_withoutNodeOnlyPrintTheSignDocument(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

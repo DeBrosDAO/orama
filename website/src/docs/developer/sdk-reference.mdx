@@ -148,6 +148,14 @@ const result = await client.auth.verify({
 
 `deviceIdOf(publicJwk)` is the RFC 7638 thumbprint. A device-bound `verify` returns no API key; later refreshes sign a proof with the device key automatically, and without a signer `refresh()` throws `DEVICE_PROOF_REQUIRED`. When the namespace requires an existing device's approval, `verify` returns `{status: "pending_approval", user_code, device_code}` and stores nothing: show the user code, call `client.auth.approveDeviceLink(code)` on a device already signed in, then `client.auth.claimDeviceLink(device_code, namespace)` on the new one. `startDeviceLink({namespace})` starts a link with no wallet. `listDevices()` and `revokeDevice(id)` manage devices. `deviceProofMessage` is exported for a client that signs proofs itself.
 
+### Persisting tokens in a browser
+
+```ts
+import { createClient, LocalStorageAdapter } from "@debros/orama";
+
+const client = createClient({ baseURL, apiKey, storage: new LocalStorageAdapter() });
+```
+
 ### `client.auth` methods
 
 `setApiKey`, `setJwt`, `getToken`, `renew`, `refresh`, `whoami`, `logout`, `logoutUser`, `clear`, `challenge`, `verify`, `getApiKey`, `setDeviceSigner`, `listDevices`, `revokeDevice`, `approveDeviceLink`, `startDeviceLink`, `claimDeviceLink`.
@@ -220,7 +228,7 @@ const response = await client.storage.getBinary(cid);      // Response, with hea
 await client.storage.unpin(cid);
 ```
 
-A read that closely follows a write can legitimately 404 while the pin propagates, so reads retry a 404 for about eighteen seconds, but only while the gateway marks it retryable (a CID uploaded or pinned in the last two minutes). Methods: `upload`, `pin`, `status`, `get`, `getBinary`, `unpin`, `mintFetchCaps`, `revokeFetchCap`, `directTransport`, `fetchWith`. Error codes and relayed fetch: [Storage](/docs/developer/storage) and [Relayed fetch](/docs/privacy/relayed-fetch).
+A read that closely follows a write can legitimately 404 while the pin propagates, so reads retry a 404 for about eighteen seconds, but only while the gateway marks it retryable (a CID uploaded or pinned in the last two minutes). Methods: `upload`, `pin`, `status`, `get`, `getBinary`, `unpin`, `mintFetchCaps`, `revokeFetchCap`, `directTransport`, `fetchWith`. Error codes: [Storage](/docs/developer/storage). Downloading without the storage node learning your address: [Relayed fetch](#relayed-fetch) below and [the privacy page](/docs/privacy/relayed-fetch).
 
 ## Functions
 
@@ -230,6 +238,83 @@ const result = await client.functions.invoke("resize", { cid, width: 400 });
 ```
 
 `functionsConfig.gatewayURL` sends invocations to a different origin with the same credentials. Writing and deploying functions: [Functions](/docs/developer/functions).
+
+## Relayed fetch
+
+A relayed fetch downloads a CID without the storage node learning the caller's
+address. The owner mints capabilities; the downloader presents one through a
+relay. The model and its limits are on [Relayed fetch](/docs/privacy/relayed-fetch);
+this section is the SDK's side of it.
+
+```typescript
+// Owner (device-bound session): mint one token per fetch, 3600..604800 s lifetime.
+const { caps } = await client.storage.mintFetchCaps(cid, { count: 3, ttlSeconds: 86400 });
+// Each capability carries `revokeKey`, the proof that you issued its id; keep it with the owner.
+await client.storage.revokeFetchCap(caps[0].id, caps[0].revokeKey);
+
+// Downloader, Node.js only:
+import { RelayedFetch } from "@debros/orama/relay";
+
+const transport = new RelayedFetch({
+  relays: ["https://node-1.relays.example", "https://node-2.relays.example"],
+  namespaceHost: "ns-myapp.cluster.example.com", // a plain hostname (letters, digits, hyphens); anything else throws
+  jitterMs: 2000,        // optional: random 0..2 s before the request is sent
+  circuit: "fresh",      // "session" reuses one Tor circuit across a batch
+});
+const bytes = await client.storage.fetchWith(transport, cid, caps[1], { signal });
+
+// The non-private baseline: the client's own credential, no relay.
+const direct = await client.storage.fetchWith(client.storage.directTransport(), cid, caps[2]);
+```
+
+For each fetch the SDK picks one relay uniformly at random (never the namespace
+host), opens `GET /v1/proxy/relay` on it with no credential, runs TLS to the
+namespace host inside that WebSocket's byte stream, and sends
+`GET /v1/storage/relayed/<cid>` with `X-Orama-Fetch-Cap`. The relay carries
+ciphertext.
+
+What it hides, and what it does not:
+
+| Party | Sees | Does not see |
+|---|---|---|
+| Relay | your IP address; the namespace host; the size and timing of the stream | the CID, the capability, the content |
+| Storage node | the CID and the capability; a Tor exit address | your IP address |
+| Anyone watching both ends | timing and size can correlate a fetch (`jitterMs` blunts this, it does not remove it) | |
+
+A relay run by the same operator as the storage node, or in the same cluster, is
+not a privacy boundary: together they hold both halves. Choose relays from a
+different operator than the namespace.
+
+- **Node.js only.** `RelayedFetch` needs `node:tls` and `ws`, so it lives in the
+  `@debros/orama/relay` entry and the core import stays bundleable for React
+  Native and browsers. Those apps need a native helper that runs TLS to the
+  namespace host over the relay stream.
+- **No direct fallback.** A relay or tunnel failure throws and is never retried
+  as a direct request, which would send your address to the storage node.
+  Falling back is the application's decision, made by calling `fetchWith` with
+  another transport.
+- **A response must say how long it is.** A `200` with neither `Content-Length`
+  nor chunked encoding is refused (`RELAY_PROTOCOL_ERROR`): a body that ends when
+  the connection does cannot be told from one a reset cut short.
+- **Pin propagation.** `fetchWith` re-asks on a retryable 404 exactly as `get`
+  does, through the same transport, choosing a relay afresh each time.
+- A fetch buffers the body (default limit 64 MiB, the relay's per-stream cap;
+  deadline 5 minutes: `maxBodyBytes`, `timeoutMs`). Pass `ca` to trust a private
+  CA for the namespace host.
+
+Errors:
+
+| Error | `code` | Meaning |
+|---|---|---|
+| `FetchCapError` | `FETCH_CAP_INVALID` (403) | Forged, expired, for another CID or namespace |
+| `FetchCapError` | `FETCH_CAP_REVOKED` (403) | The owner revoked it |
+| `FetchCapError` | `FETCH_CAP_MISSING` (401) | No capability header reached the storage node |
+| `ScopeError` | `FETCH_CAP_REVOKE_KEY_INVALID` (403) | `revokeFetchCap` was given a `revokeKey` that was not issued for that id (no key at all throws `VALIDATION_FAILED` before the call) |
+| `RelayError` | `RELAY_DESTINATION_NOT_ALLOWED` (400) | The relay does not serve this namespace host |
+| `RelayError` | `RATE_LIMITED` (429) | Relay limit; `retryAfterSeconds` says when |
+| `RelayError` | `RELAY_UNAVAILABLE` (503) | The relay cannot carry a stream now |
+| `RelayError` | `RELAY_CONNECT_FAILED` | Relay unreachable, TLS to the namespace host failed, or the stream closed early |
+| `RelayError` | `RELAY_PROTOCOL_ERROR`, `RELAY_RESPONSE_TOO_LARGE`, `RELAY_NONE_CONFIGURED`, `RELAY_UNSUPPORTED_RUNTIME` | Malformed answer; body over `maxBodyBytes`; no usable relay; not Node |
 
 ## Network
 
@@ -273,7 +358,7 @@ PROFILE_SCOPES["app-runtime"];          // ["invoke", "storage", "push", "webrtc
 satisfiesScope(["admin"], "storage");   // true: admin is a wildcard
 ```
 
-The grants are `admin`, `cache`, `invoke`, `proxy`, `pubsub`, `push`, `storage` and `webrtc`.
+The grants are `admin`, `cache`, `invoke`, `proxy`, `pubsub`, `push`, `storage` and `webrtc`. They mirror the gateway's own list, and a test in the SDK fails if the two ever disagree.
 
 ## Retries and failover
 
@@ -289,7 +374,7 @@ const client = createClient({
 
 ## Secrets
 
-The vault client is `@debros/orama-vault`. It talks to guardian daemons on the WireGuard overlay, which an application outside the cluster cannot reach. An application reaches the vault through the gateway's `/v1/vault/push` and `/v1/vault/pull`, which do the Shamir split server side. See [Vault](/docs/developer/vault).
+The vault client is `@debros/orama-vault`. It talks to guardian daemons on the WireGuard overlay, which an application outside the cluster cannot reach. An application reaches the vault through the gateway's `/v1/vault/push` and `/v1/vault/pull`, which do the Shamir split server side and authenticate each request with a per-request Ed25519 ownership signature. See [Vault](/docs/developer/vault).
 
 ## A gateway with an untrusted certificate
 
@@ -331,13 +416,15 @@ const paid = await chain.transfer({ to: recipient, amount: 5_000_000_000n, publi
 console.log(paid.warning);   // the sender, the recipient and the amount are visible on the chain
 ```
 
-- **Reads.** The gateway proxy serves `status`, `block`, `blocks`, `tx`, `validators`, `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`, `indexAccountTxs`, `cnftAsset`, `cnftOwnerAssets`. A node's REST API adds `account`, `balances` and `broadcast`. Module state speaks gRPC only, so `moduleQuery(service, method, request, { height })` reads any query through the gateway, with typed reads for `x/nodes` (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`, `nodeByName`, `nameOfNode`, `nodeNames`), `x/storage` (`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`, `storageQueue`), `x/fees` (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), `x/archive` (`archiveParams`, `archiveRange`, `lastArchivedHeight`, `retainHeight`) and `x/relay` (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`). uint64 fields come back as decimal strings; a key not on chain is an `SDKError` with `httpStatus` 404.
-- **A wallet with only a gateway.** A wallet shows an address and sends from it through `gatewayURL` alone, with no node and no `restURL`. Balances, delegations and unbonding are wallet queries on `/v1/chain/query/`: `bankBalance`, `bankAllBalances`, `bankSpendableBalances`, `authAccount`, `authAccountInfo`, `stakingDelegation`, `stakingDelegatorDelegations`, `stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`, `distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`. Then `simulateTx(txBytes)` returns the gas and fee (`gasWanted` is the limit the transaction declares; both gas figures are `bigint`s), `broadcastTx(txBytes)` submits and answers once the node's mempool has checked the transaction, and `tx(hash)` polls until the transaction is in a block (a `NotFoundError` until then). The listings take `{ limit, key }`. A transaction the chain refuses is a `ChainTxRefusedError`. `signAndBroadcast` still uses `restURL`.
+- **Reads.** The gateway proxy serves `status`, `block`, `blocks`, `tx`, `validators`, `supply`, `stakingPool` and the indexer's `indexStatus`, `indexBlock`, `indexTx`, `indexAccountTxs`, `cnftAsset`, `cnftOwnerAssets`. A node's REST API adds `account`, `balances` and `broadcast`. Module state speaks gRPC only, so `moduleQuery(service, method, request, { height })` reads any query through the gateway, with typed reads for `x/nodes` (`nodesParams`, `operator`, `node`, `nodeCluster`, `nodeUnbondings`, `nodeByName`, `nameOfNode`, `nodeNames`), `x/storage` (`storageParams`, `deal`, `slot`, `storageAuthorization`, `storageChallenges`, `storageEpochMint`, `storageQueue`), `x/fees` (`feesParams`, `baseFee`, `earnings`, `feesDeposit`), `x/archive` (`archiveParams`, `archiveRange`, `lastArchivedHeight`, `retainHeight`) and `x/relay` (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`). uint64 fields come back as decimal strings; a key not on chain is an `SDKError` with `httpStatus` 404. `x/houses` and the other modules are reachable through `moduleQuery`, and a read that needs a base URL the config does not have fails and names it.
+- **A wallet with only a gateway.** A wallet shows an address and sends from it through `gatewayURL` alone, with no node and no `restURL`. Balances, delegations and unbonding are wallet queries on `/v1/chain/query/`: `bankBalance`, `bankAllBalances`, `bankSpendableBalances`, `authAccount`, `authAccountInfo`, `stakingDelegation`, `stakingDelegatorDelegations`, `stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`, `distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`. Then `simulateTx(txBytes)` returns the gas and fee (`gasWanted` is the limit the transaction declares; both gas figures are `bigint`s), `broadcastTx(txBytes)` submits and answers once the node's mempool has checked the transaction, and `tx(hash)` polls until the transaction is in a block (a `NotFoundError` until then). The listings take `{ limit, key }` (limit 1 to 100, key the previous page's `pagination.next_key`). `isContract` is `false` on the gateway's typed 404 for an address that is not a contract. A transaction the chain refuses, on either call, is a `ChainTxRefusedError` (an `SDKError` with `code` `CHAIN_TX_REJECTED`, `httpStatus` 422, and `chainCode`, `codespace`, `log` and, for a broadcast, `txHash`); the `log` is the gateway's sanitised copy of the reason. `signAndBroadcast` still uses `restURL`.
 - **Building.** `buildSignDoc` makes the `SIGN_MODE_DIRECT` body, auth info and `SignDoc` for one signer; `signTx` has an `OramaSigner` sign it and checks the signature; `verifyTx` verifies an encoded transaction the way the chain does. `MSG` is the message set: 69 messages, 59 of them Orama's own, plus bank send, staking, unjail, reward withdrawal and the two CosmWasm messages a wallet signs. The fee is always norama.
 - **Sending ORAMA: private by default, public by choice.** `chain.transfer({ to, amount }, options)` sends privately unless the request says `public: true`. Only the boolean `true` pays in the open: an absent or `false` flag is private, and any other value (`"false"`, `1`, `null`) is a `TypeError`, so a transfer cannot turn public by omission or by a mistyped string. `amount` is a positive whole number of norama (a `bigint`, a safe-integer `number` or a decimal string); a fraction or a zero is a `RangeError`. A private transfer needs a shielded wallet, which proves with the owner's shielded spending key and so never lives in this SDK: pass it as `options.shielded` (`{ build({ to, amount }) }` returns the signer-less transactions in broadcast order, and the SDK broadcasts them through `gatewayURL`). Without one the call throws `PrivateTransferUnavailableError` (`code` `PRIVATE_TRANSFER_UNAVAILABLE`) and sends nothing; it never falls back to a public payment. A public transfer needs `options.signer` and `options.tx` (`chainId`, `gasLimit`, `feeNorama`), signs a bank send, and returns `{ privacy: "public", txHash, warning }`, where `warning` is `PUBLIC_TRANSFER_WARNING`: the sender, the recipient and the amount are visible on the chain to everyone, permanently. Show it to the person who chose to pay publicly. If a later transaction of a private transfer fails after earlier ones were broadcast, the error is `PRIVATE_TRANSFER_INCOMPLETE` and names the hashes already sent. Every broadcast (`broadcast`, `broadcastTx`, `signAndBroadcast`, `transfer`) computes the transaction's hash itself (`txHashOf`) and throws `CHAIN_TX_HASH_MISMATCH` when the node or gateway answers another, and the chain's reason text is stripped of control characters before it reaches an error. RootWallet does not yet build shielded bundles, so today a wallet-driven transfer is a public one.
 - **Using earnings.** `chain.withdrawEarnings(amount, signer, tx)` builds `MsgWithdrawEarnings` for the signer: the chain moves that much of the signer's earnings to the signer's own bank balance, and there is no destination parameter. Withdrawing is visible on the chain. From the balance, send it publicly with `transfer({ ..., public: true })`, or shield it.
 - **Signers.** `OramaSigner` is `{ address, publicKey, signDirect(signDoc) }`. The builder hands the signer the serialized `SignDoc`, never a key, so a wallet can decode it and show the user what they approve. `LocalSigner` holds a key in memory, for tests and servers that own their key.
 - **Approval text.** `describeTx` and `describeMessage` summarize each message, with notes for what a signer must see (a token's powers, a deal allowance's limits and expiry, a collection's royalty, a contract call's decoded body) and a `sensitive` flag. A message type the SDK does not hold is described as unknown and sensitive.
+
+**Generated code and the Go side.** `src/chain/gen` is generated from `chain/proto` by `pnpm gen:chain` (protoc and `ts-proto`, pinned). A test regenerates it and fails on a difference. `chain/client/tx/testdata/tx_vectors.json` is written by the Go builder: every case is rebuilt in TypeScript and must match the body, auth info, `SignDoc`, signature and transaction bytes. `wallet_msgs.json` lists every message the chain registers; the SDK must decode all of them.
 
 ## Testing against a gateway
 

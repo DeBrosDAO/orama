@@ -60,7 +60,7 @@ func expiresIn(t testing.TB, expires string) time.Duration {
 // TestInvite_namesNodeAndPinsItsCertificate: an invite minted through a node
 // names that node by address, the name it serves, and the SHA-256 of the
 // certificate it serves for that name, so the joiner pins the node that
-// minted the token (docs/CLI_REFERENCE.md "orama maint invite", docs/SECURITY.md
+// minted the token (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint invite", docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md
 // "TLS & Transport").
 func TestInvite_namesNodeAndPinsItsCertificate(t *testing.T) {
 	t.Parallel()
@@ -85,7 +85,7 @@ func TestInvite_namesNodeAndPinsItsCertificate(t *testing.T) {
 
 // TestInvite_storedOnlyAsHash: the registry holds sha256 of the token, never
 // the token: the raw value matches no row, the hash matches exactly one, not
-// yet used (docs/SECURITY.md: invite tokens are stored hashed).
+// yet used (docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md: invite tokens are stored hashed).
 func TestInvite_storedOnlyAsHash(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -128,7 +128,7 @@ func TestInvite_shortExpiryIsHonoured(t *testing.T) {
 
 // TestInvite_refusals: a non-positive expiry is a usage error; a node that
 // is not in the cluster is unavailable; a caller with no credentials is not
-// let mint (docs/CLI_REFERENCE.md "orama maint invite").
+// let mint (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama maint invite").
 func TestInvite_refusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -143,7 +143,7 @@ func TestInvite_refusals(t *testing.T) {
 // TestInviteRoute_operatorsOnly: the invite route refuses no credential
 // (401), a signed-in wallet with no grant (403: the route needs the admin
 // grant), and the admin of a namespace who is not on the operator list (403
-// NOT_AN_OPERATOR), and mints nothing for them (docs/AUTH.md "Operating the
+// NOT_AN_OPERATOR), and mints nothing for them (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Operating the
 // cluster": the admin grant and the operator list).
 func TestInviteRoute_operatorsOnly(t *testing.T) {
 	t.Parallel()

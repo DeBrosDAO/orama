@@ -26,7 +26,7 @@ covers:
   units:
     - orama-namespace-rqlite@.service
   claims:
-    - "docs/SECURITY.md#network-isolation: rqlited always runs with -auth; an unauthenticated POST /db/execute from the mesh is 401"
-    - "docs/SECURITY.md#network-isolation: rqlite HTTP and raft bind the WireGuard address"
-    - "docs/CLI_REFERENCE.md#orama-maint-node-migrate-raft-id: a node records the raft id it runs as, and its raft address, beside raft.db"
-    - "docs/API_SURFACE.md: /v1/schema-status reports the applied schema is the required one"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#who-holds-the-cluster-secret: rqlited always runs with -auth; an unauthenticated POST /db/execute from the mesh is 401"
+    - "docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#who-holds-the-cluster-secret: rqlite HTTP and raft bind the WireGuard address"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-maint-node-migrate-raft-id: a node records the raft id it runs as, and its raft address, beside raft.db"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: /v1/schema-status reports the applied schema is the required one"

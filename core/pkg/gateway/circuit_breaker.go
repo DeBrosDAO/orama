@@ -27,7 +27,7 @@ const (
 	// everyone else until that caller reports an outcome, so a caller that
 	// never reports removes the target from rotation for the life of the
 	// process. That is what made "restart orama-node to clear the breakers" the
-	// documented cure in docs/NODE_REPLACEMENT.md.
+	// documented cure in website/src/docs/operator/node-replacement.mdx.
 	defaultHalfOpenTimeout = 30 * time.Second
 
 	// breakerCycleLogInterval is how often a breaker that keeps failing its

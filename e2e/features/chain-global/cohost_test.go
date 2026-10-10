@@ -83,7 +83,7 @@ func requireHiddenInUnit(t *testing.T, c *chain.Chain, n fleet.Node, pid, path s
 
 // TestCoHost_stateOwnedByTheChainUser: the chain home is orama-chain's, mode
 // 0700; the consensus key inside is 0600; the binary is root's, not
-// writable by the chain user (docs/CHAIN.md "The stagenet deploy script").
+// writable by the chain user (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The stagenet deploy script").
 func TestCoHost_stateOwnedByTheChainUser(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -105,7 +105,7 @@ func TestCoHost_stateOwnedByTheChainUser(t *testing.T) {
 // TestCoHost_p2pOnWireGuardRPCOnLoopback: p2p (31000) listens only on the
 // node's WireGuard address; RPC, gRPC, REST and Prometheus (31001-31004)
 // only on loopback; nothing of the chain listens on every interface; the
-// firewall opens none of those ports to the internet (docs/CHAIN.md: "p2p
+// firewall opens none of those ports to the internet (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: "p2p
 // public, RPC, gRPC, REST and Prometheus on loopback"; the run keeps p2p on
 // the overlay).
 func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
@@ -147,7 +147,7 @@ func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
 const clusterPreferences = "/opt/orama/.orama/preferences.yaml"
 
 // colocatedRole and colocatedNetns are the two lines a co-located install adds to the cluster node's
-// preferences.yaml (core/pkg/install/global_netns.go; docs/RUN_A_GLOBAL_NODE.md).
+// preferences.yaml (core/pkg/install/global_netns.go; website/src/docs/blockchain/run-a-global-node.mdx).
 const (
 	colocatedRole  = "both"
 	colocatedNetns = "orama-global"
@@ -183,7 +183,7 @@ func roleProblems(prefs string, colocated bool) []string {
 
 // TestCoHost_clusterNodeKeepsItsClusterRole: installing the chain beside a
 // cluster node leaves the node on the cluster graph, so orama-node keeps
-// booting it (docs/ARCHITECTURE.md, node roles): the role is the cluster
+// booting it (website/src/docs/contributor/architecture-reference.mdx, node roles): the role is the cluster
 // role, or `both` with global_netns on a co-located install (stagenet),
 // never global, and orama-node is active.
 func TestCoHost_clusterNodeKeepsItsClusterRole(t *testing.T) {

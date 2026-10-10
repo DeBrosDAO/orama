@@ -1,4 +1,4 @@
-// Package clusterguide executes docs/RUN_YOUR_OWN_CLUSTER.md against real
+// Package clusterguide executes website/src/docs/operator/run-your-own-cluster.mdx against real
 // machines. It parses the guide's command blocks, matches them one by one
 // against the steps in plan.go, substitutes the guide's example values with the
 // fixture's, and runs them. A guide that gains, loses, reorders or renames a

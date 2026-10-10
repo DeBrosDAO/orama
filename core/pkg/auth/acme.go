@@ -52,7 +52,7 @@ const (
 	// while). While it is set, a captured unnonced present or cleanup can be
 	// replayed inside the stamp's window, which is how a cleanup deletes a
 	// TXT record mid-challenge. It is removed in the release after the one that
-	// introduced the nonce (docs/SECURITY.md, "ACME DNS-01").
+	// introduced the nonce (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md, "ACME DNS-01").
 	AcceptLegacyACMEMAC = true
 )
 

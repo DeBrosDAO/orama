@@ -15,8 +15,9 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 )
 
-// docs/CLI_REFERENCE.md is rendered from the cobra tree, and this test fails
-// when the file and the tree disagree.
+// The CLI reference is whitepaper appendix D, rendered from the cobra tree by
+// book_reference_test.go; the test there fails when the file and the tree
+// disagree. This file holds what the renderer shares with the other tests.
 //
 // Hand-written command documentation drifts the moment a flag is added: the
 // deployment guide's flag tables were missing --environment, --ssh-user,
@@ -27,33 +28,7 @@ import (
 // Regenerate with:
 //
 //	make -C core docs
-var updateReference = flag.Bool("update-cli-reference", false, "rewrite docs/CLI_REFERENCE.md from the command tree")
-
-func TestCLIReferenceMatchesTheCommandTree(t *testing.T) {
-	rendered := renderReference(newRootCmd())
-	path := filepath.Join(repoRoot(t), "docs/CLI_REFERENCE.md")
-
-	if *updateReference {
-		if err := os.WriteFile(path, []byte(rendered), 0644); err != nil {
-			t.Fatalf("write reference: %v", err)
-		}
-		t.Logf("wrote %s", path)
-		if err := os.WriteFile(bookReferencePath(t), []byte(renderBookReference(newRootCmd())), 0644); err != nil {
-			t.Fatalf("write book reference: %v", err)
-		}
-		return
-	}
-
-	existing, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read reference: %v (run `make -C core docs`)", err)
-	}
-
-	if string(existing) != rendered {
-		t.Errorf("docs/CLI_REFERENCE.md does not match the command tree.\n"+
-			"Run `make -C core docs` and commit the result.\n%s", firstDifference(string(existing), rendered))
-	}
-}
+var updateReference = flag.Bool("update-cli-reference", false, "rewrite the whitepaper CLI reference (appendix D) from the command tree")
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -76,47 +51,6 @@ func firstDifference(have, want string) string {
 		}
 	}
 	return fmt.Sprintf("\nthe files differ in length: committed %d lines, generated %d", len(haveLines), len(wantLines))
-}
-
-func renderReference(root *cobra.Command) string {
-	var b strings.Builder
-
-	b.WriteString(`<!--
-Generated from the cobra command tree by core/cmd/orama/reference_test.go.
-Do not edit by hand: run ` + "`make -C core docs`" + `.
--->
-
-# CLI reference
-
-Every command the ` + "`orama`" + ` binary defines, with its flags. Generated from the
-command tree, so it cannot drift from the code: a test fails when this file and
-the tree disagree.
-
-Who uses this binary, and what does not exist (no dashboard, no Orama MCP), is
-[CLIENT_SURFACE.md](CLIENT_SURFACE.md). Task-shaped documentation lives
-elsewhere — [deploying apps](DEPLOYMENT_GUIDE.md), [building and rolling
-out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
-
-`)
-
-	commands := collectCommands(root)
-
-	b.WriteString("## Commands\n\n")
-	for _, cmd := range commands {
-		path := cmd.CommandPath()
-		anchor := strings.ReplaceAll(path, " ", "-")
-		// "orama app" is depth 0 in this list; "orama app env" is depth 1.
-		depth := strings.Count(path, " ") - 1
-		b.WriteString(fmt.Sprintf("%s- [`%s`](#%s) — %s\n",
-			strings.Repeat("  ", depth), path, anchor, cmd.Short))
-	}
-	b.WriteString("\n---\n\n")
-
-	for _, cmd := range commands {
-		b.WriteString(renderCommand(cmd))
-	}
-
-	return b.String()
 }
 
 // collectCommands returns every runnable or group command, depth-first and
@@ -142,51 +76,6 @@ func collectCommands(root *cobra.Command) []*cobra.Command {
 	}
 	walk(root)
 	return out
-}
-
-func renderCommand(cmd *cobra.Command) string {
-	var b strings.Builder
-
-	b.WriteString(fmt.Sprintf("### %s\n\n", cmd.CommandPath()))
-	if cmd.Short != "" {
-		b.WriteString(cmd.Short + "\n\n")
-	}
-
-	// Not cobra's UseLine: it reports whether a command "has available flags",
-	// which cobra computes lazily and caches, so the answer depends on whether
-	// something earlier in the process happened to touch that command. A
-	// reference whose content depends on test ordering is not a reference.
-	b.WriteString("```\n" + usageLine(cmd) + "\n```\n\n")
-
-	if len(cmd.Aliases) > 0 {
-		b.WriteString(fmt.Sprintf("Aliases: %s\n\n", "`"+strings.Join(cmd.Aliases, "`, `")+"`"))
-	}
-
-	if long := strings.TrimSpace(cmd.Long); long != "" && long != strings.TrimSpace(cmd.Short) {
-		b.WriteString(long + "\n\n")
-	}
-
-	if flags := renderFlags(ownFlags(cmd)); flags != "" {
-		b.WriteString("| Flag | Default | Description |\n|------|---------|-------------|\n")
-		b.WriteString(flags)
-		b.WriteString("\n")
-	}
-
-	if cmd.HasAvailableSubCommands() {
-		var names []string
-		for _, child := range cmd.Commands() {
-			if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
-				continue
-			}
-			names = append(names, "`"+child.Name()+"`")
-		}
-		sort.Strings(names)
-		if len(names) > 0 {
-			b.WriteString("Subcommands: " + strings.Join(names, ", ") + "\n\n")
-		}
-	}
-
-	return b.String()
 }
 
 // usageLine is the command path plus whatever argument shape its Use string

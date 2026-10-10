@@ -43,7 +43,7 @@ var maintTorCmd = &cobra.Command{
 	Use:   "tor",
 	Short: "The Orama Tor network: authority key ceremony, vote archive, relay monitor, onion list",
 	Long: `The Orama Tor network is a separate anonymity network built from unmodified
-upstream Tor code, run by Orama's own directory authorities (docs/TOR_NETWORK.md).
+upstream Tor code, run by Orama's own directory authorities (orama.network/docs/operator/tor-network).
 The roles are installed by 'orama global install --services dirauth|relay|relay,exit|onion'.`,
 }
 

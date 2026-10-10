@@ -41,7 +41,7 @@ type feesParams struct {
 }
 
 // TestFees_paramsAreTheGenesisDefaults: the fee market runs with the
-// documented genesis defaults (docs/CHAIN.md "x/fees": 50% target, 12.5% max
+// documented genesis defaults (docs/whitepaper/technical-reference/vol2/40-economics.md "x/fees": 50% target, 12.5% max
 // move, floor 1 norama/gas; deposits 99% refund / 1% burn,
 // x/fees/types/params.go DefaultParams), and the base fee on a chain whose
 // blocks are nowhere near half of max_gas sits at the floor, as an integer.
@@ -87,7 +87,7 @@ func TestFees_belowBaseFeeRefused(t *testing.T) {
 }
 
 // TestFees_zeroFeeRefused: no fee at all fails the validator's local
-// minimum-gas-prices policy first (docs/CHAIN.md "Other genesis defaults":
+// minimum-gas-prices policy first (docs/whitepaper/technical-reference/vol2/40-economics.md "Other genesis defaults":
 // 0.000001norama; fee_decorator.go checkValidatorMinGasPrice).
 func TestFees_zeroFeeRefused(t *testing.T) {
 	t.Parallel()
@@ -119,7 +119,7 @@ func TestFees_tipMustComeFromBank(t *testing.T) {
 // exactly base_fee(previous block) * gas_limit, all of it base fee (tip 0),
 // paid from the signer's earnings when the bank balance is empty, and burned:
 // the fee counters move by it with collected == burned + distributed
-// (docs/CHAIN.md "The fee ante decorator").
+// (docs/whitepaper/technical-reference/vol2/40-economics.md "The fee ante decorator").
 func TestFees_baseFeeBurnedFromEarnings(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

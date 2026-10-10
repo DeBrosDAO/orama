@@ -22,4 +22,4 @@ covers:
     - /v1/status
     - /v1/version
   claims:
-    - "docs/API_SURFACE.md#health-and-version: /v1/status shows no node address, peer id, hostname or error text"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#health-and-version: /v1/status shows no node address, peer id, hostname or error text"

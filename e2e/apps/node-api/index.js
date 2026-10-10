@@ -5,7 +5,7 @@
 // token itself. Todos are stored by the "store" WASM function on the
 // namespace's RQLite, and each user's list is cached in the namespace's cache;
 // the app reaches both as itself, with the workload token the platform hands
-// it and that it renews (docs/DEPLOYMENT_GUIDE.md "Your app's own credential").
+// it and that it renews (website/src/docs/developer/deployments.mdx "Your app's own credential").
 // No dependencies: it runs with plain `node index.js`.
 'use strict';
 

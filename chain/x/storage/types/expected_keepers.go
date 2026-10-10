@@ -66,7 +66,7 @@ type EmissionKeeper interface {
 //
 // IsActive means the node's STORAGE role is bonded at its minimum and the node is not jailed,
 // retired or tombstoned. Network16 is "" when the node has no literal-IP endpoint and ASN is 0
-// when the operator declared none; neither is verified on chain (docs/CHAIN.md, "Node network
+// when the operator declared none; neither is verified on chain (docs/whitepaper/technical-reference/vol2/37-global-nodes.md, "Node network
 // identity").
 //
 // IsProbation means the node is a fee-free probation registration: it has the STORAGE role, no

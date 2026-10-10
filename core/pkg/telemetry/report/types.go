@@ -35,7 +35,7 @@ type NodeReport struct {
 	Chain       *ChainReport       `json:"chain,omitempty"`
 	Global      *GlobalReport      `json:"global,omitempty"`
 	// Update is what this node's auto-update agent last found; nil when it has
-	// found nothing worth reporting (docs/MONITORING.md).
+	// found nothing worth reporting (website/src/docs/operator/monitoring.mdx).
 	Update *updatenotice.Notice `json:"update,omitempty"`
 
 	// Traffic is filled in by the cluster gateway, which serves this node's

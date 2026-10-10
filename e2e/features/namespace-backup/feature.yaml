@@ -35,10 +35,10 @@ covers:
     - /v1/rqlite/export
     - /v1/rqlite/import
   claims:
-    - "docs/CLI_REFERENCE.md#orama-namespace-backup: the backup is sealed to the owner's key; the cluster cannot open it"
-    - "docs/CLI_REFERENCE.md#orama-namespace-restore: a wrong key, a corrupt file or a different namespace stops before anything is sent"
-    - "docs/API_SURFACE.md#namespace-management: backup and restore are owner only; one at a time per gateway (429)"
-    - "docs/API_SURFACE.md#namespace-management: restore replaces the namespace RQLite with the backup"
-    - "docs/CLI_REFERENCE.md#orama-namespace-restore-key: the restore key is derived per namespace"
-    - "docs/RUN_YOUR_OWN_CLUSTER.md#a-backup-in-a-storage-deal: backup --deal-dir writes one slot per replica that opens with the storage key to the sealed backup"
-    - "docs/RUN_YOUR_OWN_CLUSTER.md#a-backup-in-a-storage-deal: a restore names exactly one source (--in or --from-deal) and --from-deal needs --rpc"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-backup: the backup is sealed to the owner's key; the cluster cannot open it"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-restore: a wrong key, a corrupt file or a different namespace stops before anything is sent"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: backup and restore are owner only; one at a time per gateway (429)"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: restore replaces the namespace RQLite with the backup"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-namespace-restore-key: the restore key is derived per namespace"
+    - "website/src/docs/operator/run-your-own-cluster.mdx#a-backup-in-a-storage-deal: backup --deal-dir writes one slot per replica that opens with the storage key to the sealed backup"
+    - "website/src/docs/operator/run-your-own-cluster.mdx#a-backup-in-a-storage-deal: a restore names exactly one source (--in or --from-deal) and --from-deal needs --rpc"

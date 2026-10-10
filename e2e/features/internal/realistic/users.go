@@ -74,7 +74,7 @@ func (u *User) Token() string {
 func (u *User) Subject() string { return u.sub }
 
 // Refresh rotates the session with a device proof over the refresh token
-// (docs/AUTH.md "Proving the device on later requests").
+// (docs/whitepaper/technical-reference/vol1/13-identity.md "Proving the device on later requests").
 func (u *User) Refresh(ctx context.Context) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()

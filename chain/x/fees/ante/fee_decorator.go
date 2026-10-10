@@ -79,7 +79,7 @@ func (d FeeDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next
 
 	// Security review, non-blocking "min gas price": this is the per-validator LOCAL mempool
 	// admission policy (app.toml's minimum-gas-prices), independent of and in addition to x/fees'
-	// own chain-wide base fee below - see docs/CHAIN.md. It only ever runs on CheckTx (a node's own
+	// own chain-wide base fee below - see docs/whitepaper/technical-reference/vol2/40-economics.md. It only ever runs on CheckTx (a node's own
 	// mempool policy has no business affecting DeliverTx/FinalizeBlock's deterministic state
 	// transition), and it also sets the tx's mempool priority.
 	priority, err := checkValidatorMinGasPrice(ctx, feeTx)

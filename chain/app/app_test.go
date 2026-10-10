@@ -60,7 +60,7 @@ func buildTestApp(t *testing.T) *app.OramaApp {
 // single-member x/power bootstrap committee giving that one seat all of the genesis CometBFT
 // voting power (plans/open-network.md D16; plans/open-network/track-c-chain.md C4) - replacing the
 // old devnet-only self-bonded-validator exception this test used before x/power existed (see
-// docs/CHAIN.md).
+// docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 func buildGenesisState(t *testing.T, oramaApp *app.OramaApp) (app.GenesisState, sdk.AccAddress) {
 	t.Helper()
 

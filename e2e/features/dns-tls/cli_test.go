@@ -36,7 +36,7 @@ type delegation struct {
 // TestDelegation_jsonMatchesTheLiveZone: the delegation the CLI reads over
 // SSH lists one slot per nameserver, and each slot's address is exactly what
 // the zone's own glue answers — the records the parent zone must carry
-// (docs/NAMESERVER_SETUP.md "Seeing which address holds which slot").
+// (website/src/docs/operator/nameserver.mdx "Seeing which address holds which slot").
 func TestDelegation_jsonMatchesTheLiveZone(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -68,7 +68,7 @@ func TestDelegation_jsonMatchesTheLiveZone(t *testing.T) {
 // TestDelegation_jsonCarriesTheDNSVerdict: after the records the command asks
 // DNS about them. The verdict is delegated, or a list of the records that are
 // missing or point elsewhere, or a check error when the resolver could not
-// answer; never an empty verdict that is not delegated (docs/NAMESERVER_SETUP.md
+// answer; never an empty verdict that is not delegated (website/src/docs/operator/nameserver.mdx
 // "Seeing which address holds which slot").
 func TestDelegation_jsonCarriesTheDNSVerdict(t *testing.T) {
 	t.Parallel()
@@ -106,7 +106,7 @@ func TestDelegation_jsonCarriesTheDNSVerdict(t *testing.T) {
 
 // TestDelegation_textIsZoneFileRecords: without --json the command prints a
 // comment naming the parent zone, then one NS line per slot and one glue A
-// line per slot, in zone-file form (docs/NAMESERVER_SETUP.md).
+// line per slot, in zone-file form (website/src/docs/operator/nameserver.mdx).
 func TestDelegation_textIsZoneFileRecords(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -145,7 +145,7 @@ func TestDelegation_refusals(t *testing.T) {
 
 // TestTLSCheck_onlyBaseAndItsSubdomains: the check Caddy asks before it
 // would issue on demand allows the base domain and names under it and
-// nothing else — no custom domain gets a certificate (docs/ARCHITECTURE.md
+// nothing else — no custom domain gets a certificate (website/src/docs/contributor/architecture-reference.mdx
 // "TLS/HTTPS"; core/pkg/gateway/status_handlers.go tlsCheckHandler). Asked
 // from a node shell, where Caddy asks it.
 func TestTLSCheck_onlyBaseAndItsSubdomains(t *testing.T) {
@@ -168,7 +168,7 @@ func TestTLSCheck_onlyBaseAndItsSubdomains(t *testing.T) {
 
 // TestTLSCheck_reachableFromTheInternet records a documentation gap: the
 // route is policyOpen and has no source check, so it answers through Caddy
-// although docs/API_SURFACE.md calls it "Never reachable by a client". What
+// although docs/whitepaper/technical-reference/appendices/i-api-surface.md calls it "Never reachable by a client". What
 // it leaks is only whether a name is under the base domain; the answer is
 // the same as on the node.
 func TestTLSCheck_reachableFromTheInternet(t *testing.T) {
@@ -184,7 +184,7 @@ func TestTLSCheck_reachableFromTheInternet(t *testing.T) {
 
 // TestCustomDomain_baseDomainRefused: a tenant cannot claim the base domain
 // or a name under it as a custom domain, in any spelling, before any
-// deployment lookup (docs/MONITORING.md "Public status page": a custom domain
+// deployment lookup (website/src/docs/operator/monitoring.mdx "Public status page": a custom domain
 // equal to the base domain is refused; core/pkg/gateway/handlers/deployments
 // domain_handler.go).
 func TestCustomDomain_baseDomainRefused(t *testing.T) {

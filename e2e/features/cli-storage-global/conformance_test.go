@@ -10,7 +10,7 @@ import (
 )
 
 // TestConformance_storageGlobalClusterChainCommands runs the generic checks
-// (help matches docs/CLI_REFERENCE.md, --json accepted, unknown flags and
+// (help matches docs/whitepaper/technical-reference/appendices/d-cli-reference.md, --json accepted, unknown flags and
 // subcommands are usage errors) on every `orama storage` and `orama global`
 // command and the two on-chain cluster commands.
 func TestConformance_storageGlobalClusterChainCommands(t *testing.T) {

@@ -14,7 +14,7 @@ import (
 // The run-your-own-cluster page is the installer's checks and the commands
 // that exist. A renamed flag or a changed floor fails here.
 func TestRunYourOwnClusterGuideMatchesTheInstaller(t *testing.T) {
-	path := filepath.Join(repoRoot(t), "docs", "RUN_YOUR_OWN_CLUSTER.md")
+	path := filepath.Join(repoRoot(t), "website", "src", "docs", "operator", "run-your-own-cluster.mdx")
 	body, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

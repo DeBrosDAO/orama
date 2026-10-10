@@ -20,8 +20,8 @@ import (
 
 // Sources of the universe, relative to the repository root.
 const (
-	CLIReferencePath = "docs/CLI_REFERENCE.md"
-	APISurfacePath   = "docs/API_SURFACE.md"
+	CLIReferencePath = "docs/whitepaper/technical-reference/appendices/d-cli-reference.md"
+	APISurfacePath   = "docs/whitepaper/technical-reference/appendices/i-api-surface.md"
 	ProtoDir         = "chain/proto"
 	SystemdDir       = "core/systemd"
 )
@@ -45,7 +45,7 @@ type Item struct {
 }
 
 var (
-	cliHeading = regexp.MustCompile(`^### (orama(?: [a-z0-9][a-z0-9-]*)*)\s*$`)
+	cliHeading = regexp.MustCompile(`^## (orama(?: [a-z0-9][a-z0-9-]*)*)\s*$`)
 	routeRow   = regexp.MustCompile("^\\| `(/[^`]*)` \\| ([A-Za-z]+) \\|")
 	protoPkg   = regexp.MustCompile(`^package\s+([a-z0-9_.]+)\s*;`)
 	protoSvc   = regexp.MustCompile(`^service\s+(Msg|Query)\s*\{`)
@@ -67,7 +67,7 @@ func Universe(repoRoot string) ([]Item, error) {
 	return all, nil
 }
 
-// CLICommands reads every "### orama ..." heading of the generated CLI reference.
+// CLICommands reads every "## orama ..." heading of the generated CLI reference (whitepaper appendix D).
 // Group commands are included: `orama app` prints its subcommands, and that
 // output is part of what ships.
 func CLICommands(repoRoot string) ([]Item, error) {

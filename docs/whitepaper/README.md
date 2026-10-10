@@ -1,8 +1,16 @@
 # Orama Network — Whitepaper
 
-`WHITEPAPER.md` is the canonical source of the Orama Network whitepaper. The
-website renders it at `/whitepaper`. There is no separate HTML or PDF copy to
-keep in sync. Edit the Markdown and nothing else.
+`WHITEPAPER.md` is the canonical source of the short overview. The website
+renders it at `/whitepaper`; there is no separate HTML copy to keep in sync.
+Edit the Markdown and nothing else.
+
+The same page offers the PDF editions for download: the technical edition
+(`orama-whitepaper/`) and the Technical Reference volumes
+(`technical-reference/`). `website/scripts/build-whitepaper.mjs` copies them
+from their gitignored `dist/` into the site at build time, and fails the build
+when one is missing: run `make whitepaper whitepaper-short` from the repo root
+first. The page shows each file's version (the repo's `VERSION`), size and page
+count, measured from the built files.
 
 ## Format
 

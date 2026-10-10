@@ -1,4 +1,4 @@
-# The Orama Tor network
+# Running the Orama Tor network
 
 The Orama Tor network is a separate anonymity network built from **unmodified
 upstream Tor** (the `tor` package of the Tor Project's apt repository) and run by
@@ -12,9 +12,8 @@ The node's own Tor client (`orama-namespace-tor@index`, SOCKS 9050) is a
 different thing and stays on the public Tor network, because the anonymity proxy
 (`/v1/proxy/anon`, `anon_fetch`) needs public exits. Nothing here changes it.
 
-The network's product name is not decided (plan decision P8; it cannot be
-"Tor"). The working name in network files is the network's id, for example
-`orama-stagenet`.
+The network's product name is not decided (it cannot be "Tor"). The working name in network files is the network's id, for example
+`orama-stagenet`. The mechanism of the network (consensus, weights, rewards) is described in the whitepaper; this page is the operator's runbook.
 
 Code: `core/pkg/tornet` (the network file and its one parser, torrc rendering,
 key ceremony, consensus reader, vote archive, relay monitor file),
@@ -22,8 +21,7 @@ key ceremony, consensus reader, vote archive, relay monitor file),
 (the gate behind the onion service), `core/pkg/install/global_install_tor.go`
 (the install), `core/cmd/orama/internal/cmd/globalcmd/tor*.go` and `txgate.go`
 (the CLI), `core/cmd/orama/internal/cmd/vpncmd` (`orama maint vpn`) and
-`chain/reporter` (the bandwidth reporter). Spike results and open questions:
-`plans/open-network/decisions/E0.md`.
+`chain/reporter` (the bandwidth reporter).
 
 ## Roles
 
@@ -247,7 +245,7 @@ signing key and the relay identity only. Remove the authority from
 `tor-network.json`, ship the new file in an emergency release (nodes and wallets
 re-read it on install and update), and run a ceremony for its replacement. The
 remaining authorities keep voting meanwhile: three authorities tolerate one
-loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-compromise).
+loss. See the directory-authority compromise playbook in the technical reference's chain architecture chapter (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "Directory authority or reporter compromise").
 
 ## Directory authorities
 
@@ -341,8 +339,7 @@ account and the reader is root.
   a relay from installing.
 - The relay's RSA fingerprint appears after its first start:
   `orama global tor info`. That fingerprint, with the node's bond, is what
-  `MsgRegisterRelay` takes (plan C8); registering relays on chain is not part of
-  this change.
+  `MsgRegisterRelay` takes; registering relays on chain is a separate transaction.
 
 A relay that was not installed as an exit has `ExitRelay 0` and
 `ExitPolicy reject *:*` in its torrc, always.
@@ -368,7 +365,7 @@ A directory authority is in the consensus as a relay is, so it runs the same tim
 under its own account in its own DataDirectory: `orama maint global tor monitor --home
 /var/lib/orama-global/tor-dirauth` as `orama-tor-dirauth`, writing
 `/var/lib/orama-global/tor-dirauth/monitor.json` (a host runs a relay or an authority, never
-both, so the unit name is the same). The node report, the inspector and `orama monitor node`
+both, so the unit name is the same). The node report, the inspector and `orama status node`
 read the file from the home of whichever of the two units is installed: the Global line shows
 `directory authority active (in the relay set)` or `(not in the relay set)`, and the health
 check `global.dirauth.consensus` warns when the authority says it is not listed
@@ -444,12 +441,12 @@ namespace address, which is denied to it, and loopback is denied as well.
 > the users of the network, not from us, and we keep no record of who sent it
 > or where it went, so we cannot identify a user. We have added the destination
 > you named to the relay's refusal list [if it is a service they run]. More
-> about what an exit is: <notice page>. Contact: <ContactInfo>.
+> about what an exit is: [notice page]. Contact: [ContactInfo].
 
 > *Notice to the hosting provider.* This server runs a Tor exit relay of the Orama
 > Tor network, opt-in and by the account holder. Its exit policy refuses mail
 > and file-sharing ports and all private ranges. Complaints reach us at
-> <ContactInfo>; we answer within <time>. Please forward a complaint to us rather
+> [ContactInfo]; we answer within [time]. Please forward a complaint to us rather
 > than acting on the server first.
 
 ## The validator onion service
@@ -487,7 +484,7 @@ not cross back.
 
 The onion address is in `/var/lib/orama-global/tor-onion/onion/hostname` and in
 `orama global tor info`; it is what a validator publishes as an endpoint and
-what a wallet passes as `--onion` (docs/CHAIN.md, "Onion submission"). The
+what a wallet passes as `--onion` (see "Onion transaction submission" below). The
 wallet's SOCKS proxy for it must be a client of **this** network: a client of the
 public Tor network resolves no address of it. No unit on a node runs such a
 client; a wallet runs one with `tornet.ClientTorrc`.
@@ -558,8 +555,8 @@ was the one onion service clients could not find.
 ## Rolling it out on stagenet
 
 Stagenet is five machines that each run a cluster node and, co-located, the
-global services (`chain/scripts/stagenet/deploy.sh`). Two deviations from the
-plan are deliberate and need the owner's agreement: the authorities share
+global services (`chain/scripts/stagenet/deploy.sh`). Two deviations from a production
+layout are deliberate and need the owner's agreement: the authorities share
 machines with cluster nodes (mainnet authorities are separate machines), and
 only two providers exist (OVH, Contabo), not three. The roles:
 
@@ -694,7 +691,7 @@ directory (`--data-dir` overrides), so the next start does not fetch the consens
 - Kill switch: when tor stops, the proxy port closes and `up` exits with an error. Applications
   using the port fail; nothing is routed around the network.
 - The proxy and DNS addresses must be loopback IP literals.
-- The 3-hop Tauri/arti application with a system-wide tunnel (plan E6) is a separate piece of
+- The 3-hop Tauri/arti application with a system-wide tunnel is a separate piece of
   work; `orama maint vpn` is the command-line client for the same network file.
 
 `orama maint vpn check --network tor-network.json` joins the network (tor is stopped when the check ends)
@@ -831,8 +828,8 @@ What a report contains, for each relay in the epoch's votes:
 - `flags`: bit 0 is Exit (set when at least half of the votes listing the relay carry `Exit`
   and not `BadExit`; the only bit that changes pay), bits 1 to 3 are Guard, Stable, Fast.
 - `uptime_fraction`: the share of this authority's votes in the epoch that list the relay
-  `Running`. The plan says "the share of consensuses"; the reporter has only its own authority's
-  votes, not the consensus, and reports that.
+  `Running`. The reporter has only its own authority's
+  votes, not the consensus, so it reports the share of those votes.
 - `ed25519_id`: the one in the latest vote that lists the relay.
 
 Rules that keep a node from paying itself:
@@ -842,7 +839,7 @@ Rules that keep a node from paying itself:
 - The chain refuses a reporter address that operates a relay: `MsgRegisterRelay` refuses an
   operator that is in the reporter set, `MsgUpdateReporters` (and so a reporter proposal) refuses a
   set that names a relay operator, and genesis validation rejects both together
-  (`ErrReporterOperatesRelay`; docs/CHAIN.md, "x/relay"). So the hot key cannot be paid as a
+  (`ErrReporterOperatesRelay`; see the `x/relay` description in the technical reference's relay rewards chapter, `docs/whitepaper/technical-reference/vol2/46-relay-rewards.md`). So the hot key cannot be paid as a
   relay operator. The chain does not know which operator *account* the hot key reports for, so
   the reporter itself leaves out the relays registered to the `operator` file's account (the
   authority's operator, a different address from the hot key). That second rule is the honest
@@ -862,12 +859,11 @@ Rules that keep a node from paying itself:
   interval of the Tor network` (`reporter.ErrEpochTooShort`), not retried. The chain's epoch
   duration has to be at least the Tor network's voting interval for any epoch to be reported.
 - A relay's pay is the median across reporters (`x/relay`; the default quorum is 3, one per
-  initial authority), so one lying reporter cannot move it; see "Directory authority
-  compromise" in [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md).
+  initial authority), so one lying reporter cannot move it; see the technical reference's chain architecture chapter (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "Directory authority or reporter compromise").
 
 **The report window.** `x/relay` takes a report for epoch `e` only while the chain is in epoch
 `e+1` (`ReportWindowEpochs = 1`), and its end block settles the epoch in the first block of
-`e+2`, paying through the 90/5/5 service split (docs/CHAIN.md, "x/relay"). An epoch nobody reported
+`e+2`, paying through the 90/5/5 service split (see the `x/relay` description in the technical reference's relay rewards chapter (`docs/whitepaper/technical-reference/vol2/46-relay-rewards.md`)). An epoch nobody reported
 is never settled and takes no later report. So the reporter reports epoch `e` at the first pass
 after the boundary and keeps trying during `e+1`; a pass that finds the window over drops the
 epoch with `the report window of the epoch has closed` (`reporter.ErrWindowClosed`), and one that
@@ -917,20 +913,17 @@ is changed. Turning it on is a release decision made with the 30-day measurement
 
 ## Not built, and not verified
 
-Stated so nothing here reads as more than it is (the spike's list is in
-`plans/open-network/decisions/E0.md`):
+Stated so nothing here reads as more than it is:
 
-- **Never run against a real network.** The code was written against Tor's
-  manual and dir-spec; no tor process was started while writing it. The first
-  stagenet bring-up is the first run, and E0 lists what it must confirm.
+- **Bring-up is the proof.** The network has been brought up on stagenet and the fleet e2e feature `tor-network` runs against it; stagenet is the only network it has run on.
 - Bandwidth measurement (sbws) is not built (see "Directory authorities").
 - No independent authority: Orama runs all of them. While Orama runs a majority,
   Orama could sign a consensus that lists only its own relays and deanonymise
   users. The launch thresholds (a majority of independent authorities, 100
-  relays from 40 operators, 15 exits in 5 countries) are plan item E7.
+  relays from 40 operators, 15 exits in 5 countries) gate the public launch.
 - The archive is not published, and neither it nor the exported votes have a retention policy.
 - The install does not register a relay on chain: `MsgRegisterRelay` is a separate transaction
-  (docs/CHAIN.md, "x/relay"), and a relay is paid only once it is registered and reported.
+  (see the `x/relay` description in the technical reference's relay rewards chapter (`docs/whitepaper/technical-reference/vol2/46-relay-rewards.md`)), and a relay is paid only once it is registered and reported.
 - The signed fallback list is not built: clients bootstrap from the
   authorities in the network file, which the release carries. The file is
   public and unsigned by itself; its integrity is the release's.

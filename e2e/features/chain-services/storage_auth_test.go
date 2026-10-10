@@ -32,7 +32,7 @@ func revokeGrantMsg(granter, grantee string) chain.Msg {
 }
 
 // TestStorageGrant_capsSpendPieceDurationAndReplicas: a deal allowance (not
-// SDK authz: docs/CHAIN.md "orama storage grant") caps spend, piece size,
+// SDK authz: docs/whitepaper/technical-reference/vol2/41-storage-deals.md "orama storage grant") caps spend, piece size,
 // duration and replica count; a deal beyond any cap is refused before any
 // coin moves, and one inside every cap is charged to the GRANTER's bank
 // balance (refused here: the granter holds only earnings). The Authorization
@@ -124,7 +124,7 @@ func revokeAtCleanup(t *testing.T, c *chain.Chain, granter chain.Key, grantee st
 
 // TestStorageHotKey_onlyTheHotKeyAnswersASlot: MsgAcceptDeal, MsgDeclineDeal,
 // MsgSubmitProofs and MsgReleaseReplica are signed by the node's HOT key
-// (docs/CHAIN.md: "The signer of those two is the node's hot key"): the
+// (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: "The signer of those two is the node's hot key"): the
 // operator is refused. A hot key that proved it holds itself (the node
 // registers with a hot-key binding made in the test) has no account on the run
 // chain, and a transaction from an account that does not exist is refused

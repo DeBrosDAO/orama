@@ -19,8 +19,8 @@ const (
 // TestNamespaceRemove_operatorRemovesAnOrphan: a namespace whose owner's
 // wallet is gone could never be deleted; an operator removes it with a reason
 // and it is torn down on every node. Its owner cannot use the operator route
-// (docs/API_SURFACE.md "/v1/operator/namespaces/remove",
-// docs/CLI_REFERENCE.md "orama cluster namespace remove").
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/operator/namespaces/remove",
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama cluster namespace remove").
 func TestNamespaceRemove_operatorRemovesAnOrphan(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{})

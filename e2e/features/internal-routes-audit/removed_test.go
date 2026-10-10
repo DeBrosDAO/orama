@@ -13,7 +13,7 @@ import (
 )
 
 // removedWebRTC are the three internal WebRTC endpoints that were removed
-// rather than authenticated (docs/SECURITY.md "Inter-gateway trust"), and
+// rather than authenticated (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Inter-gateway trust"), and
 // neverRoute a path under the same prefix that never existed: a removed
 // route must be indistinguishable from it.
 var (
@@ -65,7 +65,7 @@ func TestRemovedWebRTCRoutes_answerLikeNoRoute(t *testing.T) {
 }
 
 // removedWireGuard are the peer-exchange endpoints that took the cluster
-// secret as a bearer credential and were removed (docs/SECURITY.md,
+// secret as a bearer credential and were removed (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md,
 // "Authentication"; #727).
 var removedWireGuard = []string{
 	"/v1/internal/wg/peer",

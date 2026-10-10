@@ -11,7 +11,7 @@
 
 ## Why it exists
 
-An Orama cluster has no control panel. The website is a landing page, documentation, a blog and the chain explorer; tenant web and mobile apps are applications a tenant deploys and are not an Orama control plane. No MCP server exists for tenants or operators; agents read the published documentation. Every administrative act, from signing in to replacing a dead raft voter, therefore has one front door: the `orama` binary (`docs/CLIENT_SURFACE.md`).
+An Orama cluster has no control panel. The website is a landing page, documentation, a blog and the chain explorer; tenant web and mobile apps are applications a tenant deploys and are not an Orama control plane. No MCP server exists for tenants or operators; agents read the published documentation. Every administrative act, from signing in to replacing a dead raft voter, therefore has one front door: the `orama` binary (`website/src/docs/developer/getting-started.mdx`).
 
 Four constraints shaped it.
 
@@ -55,7 +55,7 @@ The groups sort by what a command needs to do its work. This is the real boundar
 | Network client | `maint vpn` | None; runs an unmodified `tor` against a network file | `tor` installed |
 | Other | `version`, `help`, `completion`, hidden `serve-ipfs-cluster` | None | The last one is a unit's `ExecStart`, not an operator command |
 
-`docs/CLIENT_SURFACE.md` named two audiences and ten plus ten commands; the tree now has more groups than that page listed. The rule it states still holds: the binary is one, and operator paths are never removed. The `node` group is the bridge: its long help divides it into a local half (run on the node, needs root) and a remote half (run from your machine, reaches nodes over SSH), and its `list` is the same implementation as the top-level `nodes` (`core/cmd/orama/internal/cmd/node/node.go`).
+`website/src/docs/developer/client-surface.mdx` names two audiences, operators and tenants; the tree now has more groups than that page lists. The rule it states still holds: the binary is one, and operator paths are never removed. The `node` group is the bridge: its long help divides it into a local half (run on the node, needs root) and a remote half (run from your machine, reaches nodes over SSH), and its `list` is the same implementation as the top-level `nodes` (`core/cmd/orama/internal/cmd/node/node.go`).
 
 **What `orama --help` shows.** Only the commands a newcomer needs: `setup`, `status`, `upgrade`, `edit`, `remove`, `ssh`, `network`, `auth` and the developer commands (`deploy`, `app`, `db`, `function`, `domain`, `namespace`, `members`, `storage`, `audit`) and `version`. `TestVisibleTopLevelCommands_areWithinTheTargetSet` fails when another command becomes visible, and `TestMovedCommands_existOnlyUnderMaint` when a moved command reappears at its old path (`core/cmd/orama/maint_test.go`). Everything else works and is documented; it is hidden. `orama maint` holds the commands of the people who build, release and repair a network: `build`, `push`, `rollout`, `inspect`, `sandbox`, `invite`, `operator`, `vpn`, `cluster settings` and `creators`, `node` (`install`, `stage-archive`, `autoupdate`, `recover-raft`, `migrate-conf`, `migrate-raft-id`, `schema`, `enroll`, `unlock`), `global` (`validator`, `stage-oramad`, `tor ceremony`, `archive`, `monitor`, `onions`, `txgate`), `network publish` and `faucet init`, which makes the key a gateway signs the public faucet's drips with (`core/pkg/chainfaucet`: a file owned by the gateway's account, mode 0600, never replaced). A command moved there is not copied: it has one definition in its own package, and `maintcmd.New` mounts it. The operator groups that `setup`, `status`, `upgrade` and `remove` replace (`node`, `global`, `cluster`, `chain`, `monitor`, `nodes`) are hidden by `hideReplacedGroups` and stay in the reference: `cmdmeta.MarkListed` marks a hidden command the reference still documents, and the reference's walk skips every other hidden command, so a deprecated alias is documented where its replacement is (`core/cmd/orama/internal/cmdmeta/alias.go`, `reference_test.go:collectCommands`).
 
@@ -263,7 +263,7 @@ The `version` command prints `orama VERSION (commit C, modified) built DATE`. Th
 
 ### The generated reference
 
-`docs/CLI_REFERENCE.md` is rendered from the cobra tree by `renderReference` in `core/cmd/orama/reference_test.go`. `TestCLIReferenceMatchesTheCommandTree` fails when the committed file and the tree disagree and prints the first differing line; `make -C core docs` rewrites it. Hidden commands, `help` and `completion` are excluded. For each command it writes the usage line, aliases, long help, a flag table (excluding inherited flags and cobra's injected `--help`, computed by subtracting ancestors' persistent flags by name because cobra's own accessors answer differently depending on whether the command already ran in the process) and its subcommands. Hand-written flag tables had been missing `--environment`, `--ssh-user`, `--ca-fingerprint` and `--leader-raft-addr`, and `orama maint push` and `orama maint rollout` existed without being mentioned. Appendix D of this book is the same data: [the CLI reference](../appendices/d-cli-reference.md).
+Appendix D is rendered from the cobra tree by `core/cmd/orama/book_reference_test.go`. `TestCLIReferenceMatchesTheCommandTree` fails when the committed file and the tree disagree; `make -C core docs` rewrites it. Hidden commands, `help` and `completion` are excluded. For each command it writes the usage line, aliases, long help, a flag table (excluding inherited flags and cobra's injected `--help`, computed by subtracting ancestors' persistent flags by name because cobra's own accessors answer differently depending on whether the command already ran in the process) and its subcommands. Hand-written flag tables had been missing `--environment`, `--ssh-user`, `--ca-fingerprint` and `--leader-raft-addr`, and `orama maint push` and `orama maint rollout` existed without being mentioned. The result is [the CLI reference](../appendices/d-cli-reference.md).
 
 The fleet e2e features that check the binary against this file are listed in [Verify it yourself](#verify-it-yourself).
 
@@ -282,7 +282,7 @@ The fleet e2e features that check the binary against this file are listed in [Ve
 | Scoped CA roots, `http.DefaultTransport` | process memory | `TrustEnvironmentCAs` | every HTTPS call of the process |
 | Agent socket | `~/.rootwallet/agent.sock` or `RW_AGENT_SOCK` | the RootWallet agent, not this repo | `rwagent.Client` |
 | Environment variables | `ORAMA_API_URL`, `ORAMA_GATEWAY_URL`, `ORAMA_GATEWAY`, `ORAMA_TOKEN`, `RW_AGENT_SOCK`, `ORAMA_E2E`, `NO_COLOR`, `OPENROUTER_API_KEY` (inspect) | the caller | as named in this chapter |
-| `docs/CLI_REFERENCE.md` | repository | `make -C core docs` | people; `e2e/features/cli-*` |
+| `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` | repository | `make -C core docs` | people; `e2e/features/cli-*` |
 
 The CLI keeps no cache of the node list: every fleet command asks again.
 
@@ -355,7 +355,7 @@ The CLI keeps no cache of the node list: every fleet command asks again.
 
 ### One binary for both audiences
 
-*Chosen:* a single `orama` with groups for tenants, operators, chain and the local node. *Rejected:* an operator CLI and a tenant CLI, and removing operator paths. *Why:* an operator is also a tenant, the node-local commands must run from the same installed binary the build ships, and splitting would duplicate the credential, environment and output layers. The audiences are told apart by what a command authenticates with (`docs/CLIENT_SURFACE.md`).
+*Chosen:* a single `orama` with groups for tenants, operators, chain and the local node. *Rejected:* an operator CLI and a tenant CLI, and removing operator paths. *Why:* an operator is also a tenant, the node-local commands must run from the same installed binary the build ships, and splitting would duplicate the credential, environment and output layers. The audiences are told apart by what a command authenticates with (`website/src/docs/developer/getting-started.mdx`).
 
 ### Handlers return errors; only `runCLI` exits
 
@@ -395,7 +395,7 @@ The CLI keeps no cache of the node list: every fleet command asks again.
 
 ### A generated reference with a failing test
 
-*Chosen:* render `docs/CLI_REFERENCE.md` from the tree and fail the build on drift. *Rejected:* hand-maintained command pages. *Why:* hand-written flag tables went stale within a release.
+*Chosen:* render `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` from the tree and fail the build on drift. *Rejected:* hand-maintained command pages. *Why:* hand-written flag tables went stale within a release.
 
 ## Known gaps
 
@@ -418,7 +418,7 @@ go test ./cmd/orama/... ./pkg/rwagent/... ./pkg/remotessh/...
 ```
 
 - `core/cmd/orama/exit_code_test.go`, `command_tree_test.go`, `command_duplicates_test.go`, `command_strings_test.go`, `args_declared_test.go`, `environment_ca_gate_test.go`: exit-code classification, the shape of the tree, aliased commands, printed commands, argument declarations, which commands need CAs.
-- `core/cmd/orama/reference_test.go:TestCLIReferenceMatchesTheCommandTree`: the generated reference against the tree. Regenerate with `make -C core docs`.
+- `core/cmd/orama/book_reference_test.go:TestCLIReferenceMatchesTheCommandTree`: the generated reference against the tree. Regenerate with `make -C core docs`.
 - `core/cmd/orama/internal/clierr/clierr_test.go`, `confirm_test.go`; `internal/printer/printer_test.go`: codes, wrapping, confirmation, status lines and tables in both modes.
 - `core/cmd/orama/internal/noderesolver/`: resolution order, redirects, the `NewNode` defaults.
 - `core/pkg/rwagent/`: `client_test.go` (socket ownership and mode, purposes), `skew_test.go` (timeout arithmetic, every code classified), `keepalive_test.go` and `touch_test.go`, `e2eguard_test.go`, `orama_tx_test.go`.
@@ -426,7 +426,7 @@ go test ./cmd/orama/... ./pkg/rwagent/... ./pkg/remotessh/...
 
 Fleet e2e features (the owner runs them):
 
-- `e2e/features/cli-env-auth-misc/`: the whole tree against `docs/CLI_REFERENCE.md`, `orama network` in isolated homes, every credential-needing command without a credential, `inspect` and `ssh` including forged host keys.
+- `e2e/features/cli-env-auth-misc/`: the whole tree against `docs/whitepaper/technical-reference/appendices/d-cli-reference.md`, `orama network` in isolated homes, every credential-needing command without a credential, `inspect` and `ssh` including forged host keys.
 - `e2e/features/cli-node-ops-readonly/`: `node`, `monitor`, `nodes` and `status`, tables and JSON.
 - `e2e/features/cli-function/`, `cli-sandbox-build/`, `cli-storage-global/`, `chain-cli/`: the remaining groups, help and usage errors, sign documents on a machine with no wallet.
 

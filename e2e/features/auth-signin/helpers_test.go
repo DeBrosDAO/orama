@@ -19,13 +19,13 @@ import (
 
 // Documented lifetimes and intervals this package asserts on.
 const (
-	// accessTokenLifetime: "The access token lasts 15 minutes" (docs/AUTH.md#signing-in).
+	// accessTokenLifetime: "The access token lasts 15 minutes" (docs/whitepaper/technical-reference/vol1/13-identity.md#machines-with-no-wallet).
 	accessTokenLifetime = 15 * time.Minute
-	// refreshTokenLifetime: "The refresh token lasts 30 days" (docs/AUTH.md#signing-in).
+	// refreshTokenLifetime: "The refresh token lasts 30 days" (docs/whitepaper/technical-reference/vol1/13-identity.md#storage-and-minting).
 	refreshTokenLifetime = 30 * 24 * time.Hour
 	// challengeTTL is the nonce's life (core/pkg/gateway/auth/challenge.go ChallengeTTL).
 	challengeTTL = 5 * time.Minute
-	// revocationStaleness: "reloaded every 10 seconds" (docs/AUTH.md#revoking).
+	// revocationStaleness: "reloaded every 10 seconds" (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation).
 	revocationStaleness = 10 * time.Second
 	// stalenessSlack covers the request round trip on top of the staleness.
 	stalenessSlack = 5 * time.Second
@@ -41,7 +41,7 @@ const (
 )
 
 // expectRefusal fails unless resp has status and code. Every 401 and 403
-// must carry a non-empty error, code and hint (docs/AUTH.md#when-a-request-is-refused).
+// must carry a non-empty error, code and hint (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func expectRefusal(t testing.TB, resp *gw.Response, status int, code string) map[string]any {
 	t.Helper()
 	var body map[string]any

@@ -19,11 +19,11 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/AUTH.md#capability-websockets: a capability opens only the minting function's socket, alone; with a credential too it is refused (400)"
-    - "docs/AUTH.md#capability-websockets: forged, misdirected, versioned and unknown-function capabilities get the same 403; a revoked one is told it was revoked"
-    - "docs/AUTH.md#capability-websockets: minting needs a device-bound session; ttl 60s to 7 days; resource up to 256 bytes"
-    - "docs/AUTH.md#capability-websockets: one capability holds at most 16 sockets on a gateway (429 beyond)"
-    - "docs/AUTH.md#capability-websockets: revoking a capability or its issuing device closes its sockets within 10 seconds (4403)"
-    - "docs/AUTH.md#capability-websockets: a socket whose capability expired closes two minutes later (4401)"
-    - "docs/SERVERLESS.md#capabilities: get_caller_capability reports what the socket was opened with"
-    - "docs/AUTH.md#narrowing-a-grant: fn:name selectors narrow function invocation"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: a capability opens only the minting function's socket, alone; with a credential too it is refused (400)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: forged, misdirected, versioned and unknown-function capabilities get the same 403; a revoked one is told it was revoked"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: minting needs a device-bound session; ttl 60s to 7 days; resource up to 256 bytes"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: one capability holds at most 16 sockets on a gateway (429 beyond)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: revoking a capability or its issuing device closes its sockets within 10 seconds (4403)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets: a socket whose capability expired closes two minutes later (4401)"
+    - "website/src/docs/developer/functions.mdx#capabilities: get_caller_capability reports what the socket was opened with"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#selectors: fn:name selectors narrow function invocation"

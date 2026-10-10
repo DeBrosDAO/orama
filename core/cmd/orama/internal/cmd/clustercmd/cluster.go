@@ -99,7 +99,7 @@ func init() {
 
 max-namespaces-per-wallet is an integer from 1 to %d. The default is %d.
 
-The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
+The cluster's automatic updates (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Auto-update"):
 
   auto-update      off, notify (the default) or auto. notify reports a newer
                    release in 'orama status'; auto installs it, one node at a

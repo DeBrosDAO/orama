@@ -31,8 +31,8 @@ covers:
     - orama-autoupdate.service
     - orama-autoupdate.timer
   claims:
-    - "docs/DEV_DEPLOY.md#auto-update: the agent does nothing until the cluster stores a release repository and the node adopts a release root"
-    - "docs/DEV_DEPLOY.md#auto-update: notify reports a newer release and installs nothing"
-    - "docs/DEV_DEPLOY.md#auto-update: a release that does not verify is refused and reported, never installed"
-    - "docs/SECURITY.md#release-trust: a root rotation is followed link by link: every N.root.json must be signed by the previous root's keys at their threshold and by its own, and the node adopts the newest"
-    - "docs/DEV_DEPLOY.md#auto-update: an upgrade that fails at a check before it stopped anything puts the previous release back and does not mark the release bad"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: the agent does nothing until the cluster stores a release repository and the node adopts a release root"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: notify reports a newer release and installs nothing"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a release that does not verify is refused and reported, never installed"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: a root rotation is followed link by link: every N.root.json must be signed by the previous root's keys at their threshold and by its own, and the node adopts the newest"
+    - "docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md: an upgrade that fails at a check before it stopped anything puts the previous release back and does not mark the release bad"

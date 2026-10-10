@@ -61,7 +61,7 @@ The node's namespace-health probe asks each local gateway's `/v1/health` on the 
 
 ## Reconcilers
 
-A tenant reconciler on every node converges that node's namespace services every 60 seconds: it restarts missing services, rewrites configurations that no longer match cluster membership (Olric peers, gateway `olric_servers`), and one elected member per namespace prunes departed members. See [Replace a node](/docs/operator/node-replacement) and [Monitoring](/docs/operator/monitoring#in-cluster-failure-detection).
+A tenant reconciler on every node converges that node's namespace services every 60 seconds: it restarts missing services, rewrites configurations that no longer match cluster membership (Olric peers, gateway `olric_servers`), and one elected member per namespace prunes departed members. See [Replace a node](/docs/operator/node-replacement) and [Monitoring](/docs/operator/monitoring#in-cluster-failure-detection-the-ring-monitor).
 
 ### One lock per namespace
 

@@ -28,7 +28,7 @@ const (
 	// inside the orama-global netns, reachable from the host's root namespace.
 	StagenetChainHost = "198.18.0.2"
 	// StagenetOperatorNamespace is the namespace the operator's wallet owns
-	// and signs in to for a run. docs/AUTH.md: /v1/operator/* needs an admin
+	// and signs in to for a run. docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md: /v1/operator/* needs an admin
 	// grant as well as the operator list, and a lobby session holds no grant,
 	// so the operator's session has to stand in a namespace it owns; a wallet
 	// session anywhere also creates namespaces and lists the wallet's own.

@@ -1140,7 +1140,7 @@ func (cm *ClusterManager) removeDeadNodeFromRaft(ctx context.Context, deadRaftAd
 
 // quorumRecoveryHint names how a namespace raft that lost quorum is recovered.
 // `orama maint node recover-raft` recovers the platform cluster, not a namespace's.
-const quorumRecoveryHint = "recover it with the procedure \"Emergency: namespace RQLite lost quorum\" in docs/NODE_REPLACEMENT.md"
+const quorumRecoveryHint = "recover it with the procedure \"Emergency: namespace RQLite lost quorum\" in orama.network/docs/operator/node-replacement"
 
 // guardRaftRemoval refuses a removal that would remove the wrong member or
 // leave the namespace's raft without a quorum.

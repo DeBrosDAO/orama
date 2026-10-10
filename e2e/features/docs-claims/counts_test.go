@@ -10,15 +10,15 @@ import (
 )
 
 var (
-	// surfaceHeader is "it reaches <sdk> of <total> routes, and the other <rest>".
-	surfaceHeader = regexp.MustCompile(`reaches\s+(\d+)\s+of\s+(\d+)\s+routes,\s+and\s+the\s+other\s+(\d+)`)
+	// surfaceHeader is "it reaches <sdk> of <total> routes".
+	surfaceHeader = regexp.MustCompile(`reaches\s+(\d+)\s+of\s+(\d+)\s+routes`)
 	// ownerRow is a row of the owner table: | `SDK` | meaning | 38 |.
 	ownerRow = regexp.MustCompile("^\\| `(SDK|CLI|direct|internal)` \\|.*\\| (\\d+) \\|$")
 	// routeRow is a route row: | `/v1/...` | OWNER | why |.
 	routeRow = regexp.MustCompile("^\\| `(/[^`]*)` \\| (\\w+) \\|")
 )
 
-// TestAPISurface_headerCountsMatchRows: the counts API_SURFACE.md states (the
+// TestAPISurface_headerCountsMatchRows: the counts the API surface appendix states (the
 // "reaches N of M routes" sentence and the owner table) must be the number of
 // route rows the document actually has, per owner (bugboard 2855: the header
 // said 152 while 167 routes were listed).
@@ -45,12 +45,12 @@ func TestAPISurface_headerCountsMatchRows(t *testing.T) {
 	if m := surfaceHeader.FindStringSubmatch(strings.Join(texts(lines(t, surfaceDoc)), "\n")); m != nil {
 		header = m[1:]
 	}
-	if total == 0 || len(header) != 3 {
+	if total == 0 || len(header) != 2 {
 		t.Fatalf("%s: found %d route rows and header %v; the document's shape changed", surfaceDoc, total, header)
 	}
-	sdk, all, rest := atoi(header[0]), atoi(header[1]), atoi(header[2])
-	if all != total || sdk != rows["SDK"] || rest != total-rows["SDK"] {
-		t.Errorf("%s says the SDK reaches %d of %d routes and %d are elsewhere; the rows are %d, %d SDK", surfaceDoc, sdk, all, rest, total, rows["SDK"])
+	sdk, all := atoi(header[0]), atoi(header[1])
+	if all != total || sdk != rows["SDK"] {
+		t.Errorf("%s says the SDK reaches %d of %d routes; the rows are %d, %d SDK", surfaceDoc, sdk, all, total, rows["SDK"])
 	}
 	for owner, n := range stated {
 		if rows[owner] != n {

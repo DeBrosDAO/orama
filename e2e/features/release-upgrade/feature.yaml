@@ -20,7 +20,7 @@ covers:
   cli:
     - orama upgrade
   claims:
-    - "docs/CLI_REFERENCE.md#orama-upgrade: --dry-run prints each node's running release, the release and the action, and stages and restarts nothing"
-    - "docs/CLI_REFERENCE.md#orama-upgrade: an environment on no registry network has no release channel and is refused"
-    - "docs/CLI_REFERENCE.md#orama-upgrade: nodes are restarted one at a time, followers first and the raft leader last"
-    - "docs/CLI_REFERENCE.md#orama-upgrade: a node that already runs the release is left alone unless --reinstall"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-upgrade: --dry-run prints each node's running release, the release and the action, and stages and restarts nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-upgrade: an environment on no registry network has no release channel and is refused"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-upgrade: nodes are restarted one at a time, followers first and the raft leader last"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-upgrade: a node that already runs the release is left alone unless --reinstall"

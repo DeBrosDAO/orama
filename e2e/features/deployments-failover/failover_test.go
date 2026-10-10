@@ -47,7 +47,7 @@ func TestDeployFailover_replicaServesWhenANodeStops(t *testing.T) {
 }
 
 // TestDeployFailover_oomKilledAppRestarts: an app that outgrows its memory
-// limit is killed by the kernel and restarted by its unit (docs/SECURITY.md:
+// limit is killed by the kernel and restarted by its unit (docs/whitepaper/technical-reference/vol1/11-app-deployments.md:
 // MemoryMax comes from the deployment's recorded limits). The app's name has
 // no "oom" in it, so only systemd's own verdict matches the journal search.
 func TestDeployFailover_oomKilledAppRestarts(t *testing.T) {

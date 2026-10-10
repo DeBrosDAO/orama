@@ -35,7 +35,7 @@ const (
 // being upgraded is SIGKILLed as its step starts. The upgrade command ends
 // (whatever it reports), running the same upgrade again completes, the
 // cluster converges, and the node answers with the release every other node
-// runs (docs/CLI_REFERENCE.md "orama node upgrade").
+// runs (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node upgrade").
 func TestChaosLifecycle_nodeKilledMidUpgrade(t *testing.T) {
 	realistic.RequireFaultBudget(t, "the interrupted upgrade", upgradeWorst)
 	f := harness.Fleet(t)
@@ -70,8 +70,8 @@ func TestChaosLifecycle_nodeKilledMidUpgrade(t *testing.T) {
 // at the same moment, each with its own invite, while a customer deploys an
 // app. Both joins complete, the cluster converges with every member, and
 // the app is served by name from the new nodes too; the cleanups remove both
-// and the core cluster converges again (docs/DEV_DEPLOY.md;
-// docs/DEPLOYMENT_GUIDE.md "Cross-Node Routing").
+// and the core cluster converges again (website/src/docs/contributor/testing.mdx;
+// website/src/docs/developer/domains.mdx "Cross-Node Routing").
 func TestChaosLifecycle_concurrentJoinsWhileDeploying(t *testing.T) {
 	realistic.RequireFaultBudget(t, "the concurrent joins", joinsWorst)
 	f := harness.Fleet(t)

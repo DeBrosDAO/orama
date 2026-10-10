@@ -20,8 +20,8 @@ func wgIfindex(t testing.TB, f *fleet.Fleet, n fleet.Node) string {
 
 // TestReboot_overlayAndHardeningPersist: after a reboot the overlay comes up
 // on its own, the firewall, IPv6 off and swap off are all still in force, and
-// the node rejoins the cluster (docs/ARCHITECTURE.md "The mesh comes up at
-// boot on its own"; docs/SECURITY.md persisted sysctls).
+// the node rejoins the cluster (website/src/docs/contributor/architecture-reference.mdx "The mesh comes up at
+// boot on its own"; docs/whitepaper/technical-reference/vol1/18-cache.md persisted sysctls).
 func TestReboot_overlayAndHardeningPersist(t *testing.T) {
 	f := harness.Fleet(t)
 	// HealthyAround: a reboot or restart that fails still ends with the
@@ -58,7 +58,7 @@ func TestReboot_overlayAndHardeningPersist(t *testing.T) {
 
 // TestNodeRestart_keepsTheOverlayUp: `orama node restart` restarts the
 // supervisor and every daemon but not wg0: restarting used to tear the mesh
-// down and sever every raft and memberlist on the node (docs/ARCHITECTURE.md
+// down and sever every raft and memberlist on the node (website/src/docs/contributor/architecture-reference.mdx
 // "PartOf propagates restart").
 func TestNodeRestart_keepsTheOverlayUp(t *testing.T) {
 	f := harness.Fleet(t)

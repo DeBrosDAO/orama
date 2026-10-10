@@ -41,7 +41,7 @@ func expectHostKeyRefusal(t testing.TB, res oramacli.Result, n fleet.Node) {
 }
 
 // knownHostsPaths are where the CLI and OpenSSH look for pinned host keys in
-// a HOME (docs/DEVNET_INSTALL.md "~/.orama/known_hosts"; ssh's default).
+// a HOME (website/src/docs/operator/node-setup.mdx "~/.orama/known_hosts"; ssh's default).
 var knownHostsPaths = []string{".orama/known_hosts", ".ssh/known_hosts"}
 
 // signedInHome is an isolated HOME signed in as the operator: `orama ssh`
@@ -113,7 +113,7 @@ func sshRun(t testing.TB, cli *oramacli.Runner, env string, n fleet.Node) oramac
 }
 
 // TestSSH_runsCommandOnPinnedNode: `orama ssh <ip> '<command>'` runs the
-// command on that node non-interactively (docs/CLI_REFERENCE.md#orama-ssh),
+// command on that node non-interactively (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-ssh),
 // with the key from RootWallet and the node's pinned host key.
 func TestSSH_runsCommandOnPinnedNode(t *testing.T) {
 	t.Parallel()
@@ -126,7 +126,7 @@ func TestSSH_runsCommandOnPinnedNode(t *testing.T) {
 // TestSSH_refusesUnpinnedHostKey: the CLI's own SSH must verify the node
 // against pinned host keys and never trust on first use (e2e/README.md
 // "oramacli": "must verify hosts against the run's pinned known_hosts, never
-// trust on first use"; docs/DEVNET_INSTALL.md pins host keys at setup). A
+// trust on first use"; website/src/docs/operator/node-setup.mdx pins host keys at setup). A
 // HOME that pinned nothing must not run the command.
 func TestSSH_refusesUnpinnedHostKey(t *testing.T) {
 	t.Parallel()

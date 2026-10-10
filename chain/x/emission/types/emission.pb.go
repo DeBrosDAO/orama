@@ -56,7 +56,7 @@ type Params struct {
 	// alone (CometBFT requires >1/3 of voting power to sign each block, and a
 	// block's timestamp cannot precede its predecessor's), so shortening the
 	// epoch requires either genuinely fast, honest block production or a
-	// supermajority equivocation - see docs/CHAIN.md.
+	// supermajority equivocation - see docs/whitepaper/technical-reference/vol2/40-economics.md.
 	AllowBootstrapStake bool `protobuf:"varint,3,opt,name=allow_bootstrap_stake,json=allowBootstrapStake,proto3" json:"allow_bootstrap_stake,omitempty"`
 	// faucet_enabled turns on the test-network faucet (Msg.Faucet). It defaults to
 	// false and is rejected at genesis unless the chain-id is a non-production

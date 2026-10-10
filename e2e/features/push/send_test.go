@@ -27,7 +27,7 @@ func pushHost(f *fleet.Fleet) string { return "https://push." + f.State.BaseDoma
 
 // waitDelivered polls every node's ntfy cache for marker on topic: ntfy
 // instances share nothing, and the gateway fans a publish out to all of them
-// (docs/PUSH_NOTIFICATIONS.md#self-hosted-ntfy-installed-on-every-node).
+// (website/src/docs/developer/push-notifications.mdx#self-hosted-ntfy-installed-on-every-node).
 func waitDelivered(t *testing.T, f *fleet.Fleet, topic, marker string) {
 	t.Helper()
 	c := harness.GW(t).WithBase(pushHost(f))
@@ -46,7 +46,7 @@ func waitDelivered(t *testing.T, f *fleet.Fleet, topic, marker string) {
 // TestNtfy_selfHostedDeliveryEveryNode: with no credentials stored the
 // namespace uses the platform ntfy; a push to a user's ntfy device lands on
 // every node's ntfy; a UnifiedPush endpoint on the push host works; one on
-// another host is refused at send (docs/PUSH_NOTIFICATIONS.md#unifiedpush-android--grapheneos-no-google-play-services).
+// another host is refused at send (website/src/docs/developer/push-notifications.mdx#unifiedpush-android--grapheneos-no-google-play-services).
 func TestNtfy_selfHostedDeliveryEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -73,7 +73,7 @@ func TestNtfy_selfHostedDeliveryEveryNode(t *testing.T) {
 // sequence ID (an update of an earlier message), so a token "T/user" is not a
 // nested topic and does not fail: the push lands on T. It is delivered to the
 // first segment, which is why a token must not contain "/"
-// (docs/PUSH_NOTIFICATIONS.md#step-2--choose-an-ntfy-topic-mode-android--web-only).
+// (website/src/docs/developer/push-notifications.mdx#step-2--choose-an-ntfy-topic-mode-android--web-only).
 func TestNtfy_topicWithSlashIsASequenceID(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

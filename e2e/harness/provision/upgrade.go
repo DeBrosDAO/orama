@@ -14,7 +14,7 @@ import (
 const upgradeLogPrefix = "upgrade"
 
 // UpgradeToHead rolls the run's cluster forward to the HEAD archive through
-// the CLI under test, the way docs/DEV_DEPLOY.md upgrades a cluster: push the
+// the CLI under test, the way website/src/docs/contributor/testing.mdx upgrades a cluster: push the
 // archive to every node, then `orama node upgrade --node <ip> --yes` one node
 // at a time, followers first and the RQLite leader last. The cluster must be
 // healthy before the first node, and after each node both that node's report

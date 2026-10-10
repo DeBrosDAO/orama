@@ -11,7 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Auth routes (docs/API_SURFACE.md, "Authentication").
+// Auth routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md, "Authentication").
 const (
 	PathChallenge = "/v1/auth/challenge"
 	PathVerify    = "/v1/auth/verify"

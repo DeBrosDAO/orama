@@ -18,7 +18,7 @@ import (
 // TestSupervisor_crashedDaemonsComeBack: a daemon killed with SIGKILL, the
 // way a crash ends it, is running again without an operator, the node
 // reconverges, and nothing is reported crash-looping afterwards (the node
-// report's restart_loop_risk; docs/ARCHITECTURE.md "the supervisor").
+// report's restart_loop_risk; website/src/docs/contributor/architecture-reference.mdx "the supervisor").
 func TestSupervisor_crashedDaemonsComeBack(t *testing.T) {
 	f := harness.Fleet(t)
 	r := infra.RequireHealthy(t)

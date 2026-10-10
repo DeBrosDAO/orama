@@ -22,7 +22,7 @@ type appGrant struct {
 
 // TestAppGrants_refusals: a deployment may never be granted the control plane
 // (admin, owner or developer), a selector the role cannot carry, an unknown
-// role or no name (docs/AUTH.md#a-workloads-identity: "A deployment cannot be
+// role or no name (docs/whitepaper/technical-reference/vol1/14-authorization.md#workloads-get-identity-and-no-grants-by-default: "A deployment cannot be
 // granted the control plane"), and the name has to be a deployment of the
 // caller's namespace: a name with '/' or ':' is 400, one that is no deployment
 // is 404. Every refusal is a client error. The grants that succeed need a
@@ -91,7 +91,7 @@ func TestAppGrants_cli(t *testing.T) {
 
 // TestRenew_onlyAWorkloadRenewsItself: a user session is renewed by its
 // refresh token, never at /v1/auth/renew; neither can a key or nothing
-// (docs/AUTH.md#a-workloads-identity). These are the refusals only: the
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#workloads-get-identity-and-no-grants-by-default). These are the refusals only: the
 // positive path, a deployed workload renewing its own token, needs a running
 // app and is asserted by features/reference-apps.
 func TestRenew_onlyAWorkloadRenewsItself(t *testing.T) {

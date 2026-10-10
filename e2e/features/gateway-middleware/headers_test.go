@@ -16,7 +16,7 @@ import (
 // TestSecurityHeaders_everyResponseClass: the headers are set by the fourth
 // middleware, before rate limiting, CORS, routing and auth, so every answer
 // carries them — success, a refusal, a missing route, a wrong method, a bad
-// body (docs/ARCHITECTURE.md "Middleware Stack", step 4). The 5xx and 429
+// body (website/src/docs/contributor/architecture-reference.mdx "Middleware Stack", step 4). The 5xx and 429
 // classes are in gateway-middleware-chaos, which can cause them.
 func TestSecurityHeaders_everyResponseClass(t *testing.T) {
 	t.Parallel()

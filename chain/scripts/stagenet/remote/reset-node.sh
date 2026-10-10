@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs on a stagenet node, as root (deploy.sh reset stages and runs it with sudo). Removes the
 # global services and the co-located layout `orama global install --colocated` wrote, and any
-# legacy direct-unit chain install, following the removal steps in docs/RUN_A_GLOBAL_NODE.md
+# legacy direct-unit chain install, following the removal steps in website/src/docs/blockchain/run-a-global-node.mdx
 # ("Sharing a machine with a cluster node"). Every step tolerates the thing it removes already
 # being absent, so a half-finished install or a second run is fine.
 #

@@ -17,7 +17,7 @@ import (
 // `orama node restart`, a reboot — and a harness that reaches around the CLI to
 // set up its own state tests something no operator ever runs.
 //
-// Observation is the same: `orama monitor report --json`, `dig`, and the
+// Observation is the same: `orama status report --json`, `dig`, and the
 // gateway's own /health. The report comes from the gateway's operator
 // telemetry API, as it does for an operator, so the machine running the
 // harness needs an operator session for the environment (`orama network use`,
@@ -76,7 +76,7 @@ func New(t *testing.T) *Cluster {
 	env := os.Getenv(EnvVar)
 	if env == "" {
 		t.Skipf("%s is not set; skipping the lifecycle harness "+
-			"(see docs/DEV_DEPLOY.md, 'Lifecycle harness')", EnvVar)
+			"(see orama.network/docs/contributor/testing, 'Lifecycle harness')", EnvVar)
 	}
 	if strings.EqualFold(env, "testnet") || strings.EqualFold(env, "mainnet") {
 		t.Fatalf("%s=%s: these scenarios reboot nodes and destroy VMs; "+
@@ -125,9 +125,9 @@ func (c *Cluster) MustCLI(args ...string) string {
 	return out
 }
 
-// Report reads the current cluster state through `orama monitor report --json`.
+// Report reads the current cluster state through `orama status report --json`.
 func (c *Cluster) Report() (*Report, error) {
-	out, err := c.CLI("monitor", "report", "--env", c.Env, "--json")
+	out, err := c.CLI("status", "report", "--env", c.Env, "--json")
 	if err != nil {
 		return nil, err
 	}

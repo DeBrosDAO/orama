@@ -13,7 +13,7 @@ import (
 // LiveNamespaces is how many namespaces one feature package holds at once.
 //
 // Every namespace takes a five-port block on every node, and a node has room
-// for twenty (docs/ARCHITECTURE.md; core/pkg/namespace MaxNamespacesPerNode).
+// for twenty (website/src/docs/contributor/architecture-reference.mdx; core/pkg/namespace MaxNamespacesPerNode).
 // A stage runs its packages in parallel and go test runs a package's tests in
 // parallel, so without a bound three data-plane packages alone would ask for
 // more namespaces than the fleet can host, and provisioning would fail for

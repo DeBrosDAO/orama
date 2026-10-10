@@ -43,7 +43,7 @@ func staticSite(t testing.TB, marker string) string {
 }
 
 // nextStaticExport is what `next build` with output: 'export' leaves in out/
-// (docs/DEPLOYMENT_GUIDE.md "Static Next.js Export"): HTML pages plus _next/.
+// (website/src/docs/developer/deployments.mdx "Static Next.js Export"): HTML pages plus _next/.
 func nextStaticExport(t testing.TB, marker string) string {
 	t.Helper()
 	return writeTree(t, map[string]string{

@@ -1,7 +1,7 @@
 //go:build e2e_fleet
 
 // Package cliconf holds what the CLI conformance features share: the command
-// tree docs/CLI_REFERENCE.md documents, the tree the live `orama --help`
+// tree docs/whitepaper/technical-reference/appendices/d-cli-reference.md documents, the tree the live `orama --help`
 // output shows, and the checks every command must pass (help consistent with
 // the reference, usage mistakes exit with the usage code, --json accepted).
 package cliconf
@@ -20,7 +20,7 @@ import (
 const EnvRepoRoot = "E2E_REPO_ROOT"
 
 // repoMarkers are the files that identify the root of the orama checkout.
-var repoMarkers = []string{"core/go.mod", "e2e/go.mod", "docs/CLI_REFERENCE.md"}
+var repoMarkers = []string{"core/go.mod", "e2e/go.mod", ReferencePath}
 
 // RepoRoot returns the checkout the docs are read from.
 func RepoRoot(t testing.TB) string {

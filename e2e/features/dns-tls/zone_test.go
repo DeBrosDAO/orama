@@ -19,7 +19,7 @@ import (
 // TestZone_soaAndNSFromEveryNameserver: every nameserver answers the base
 // zone's SOA and NS itself (authoritative), the NS set is exactly one nsN
 // name per nameserver, and the SOA names the lowest glued slot as primary
-// (docs/NAMESERVER_SETUP.md "Nameserver slots"; TTL 300 from
+// (website/src/docs/operator/nameserver.mdx "Nameserver slots"; TTL 300 from
 // core/pkg/node/dns_nameservers.go).
 func TestZone_soaAndNSFromEveryNameserver(t *testing.T) {
 	t.Parallel()
@@ -48,7 +48,7 @@ func TestZone_soaAndNSFromEveryNameserver(t *testing.T) {
 
 // TestZone_glueNamesEveryNameserverOnce: each nsN.<base> resolves to exactly
 // one nameserver's public address and every nameserver holds one slot
-// (docs/NAMESERVER_SETUP.md "NS records and glue").
+// (website/src/docs/operator/nameserver.mdx "NS records and glue").
 func TestZone_glueNamesEveryNameserverOnce(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -134,7 +134,7 @@ func TestZone_wildcardWalksOutward(t *testing.T) {
 // there said the name did not exist, so the resolvers that apply RFC 8020 (or
 // minimise the name, RFC 9156) cached the whole name as nonexistent after one
 // AAAA or NS query and the next A lookup of a served host failed with "no such
-// host" (docs/NAMESERVER_SETUP.md "A negative answer"; core/pkg/coredns/rqlite
+// host" (website/src/docs/operator/nameserver.mdx "A negative answer"; core/pkg/coredns/rqlite
 // plugin.go lookup and handleNegative).
 func TestZone_missingTypeIsNoDataNotNXDOMAIN(t *testing.T) {
 	t.Parallel()
@@ -176,7 +176,7 @@ func TestZone_caseInsensitive(t *testing.T) {
 }
 
 // TestZone_notAnOpenResolver: a name outside the zone is refused to a remote
-// client — recursion answers loopback only (docs/NAMESERVER_SETUP.md
+// client — recursion answers loopback only (website/src/docs/operator/nameserver.mdx
 // "Security Considerations": acl allowing 127.0.0.0/8 and ::1).
 func TestZone_notAnOpenResolver(t *testing.T) {
 	t.Parallel()
@@ -194,7 +194,7 @@ func TestZone_notAnOpenResolver(t *testing.T) {
 // TestZone_localRecursionStillWorks: the same listener answers the node's
 // own processes (apt, ACME) for outside names, and its own zone from the
 // authoritative block rather than a public resolver's cache — the reason the
-// two blocks share one listener (docs/NAMESERVER_SETUP.md).
+// two blocks share one listener (website/src/docs/operator/nameserver.mdx).
 func TestZone_localRecursionStillWorks(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

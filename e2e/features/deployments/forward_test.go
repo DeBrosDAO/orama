@@ -12,7 +12,7 @@ import (
 
 // TestDeployForward_updateThroughANodeWithoutTheApp: an update sent to a
 // gateway on a node that does not run the app is carried out on the app's
-// nodes, and the new version serves everywhere (docs/DEPLOYMENT_GUIDE.md
+// nodes, and the new version serves everywhere (website/src/docs/developer/domains.mdx
 // "Cross-Node Routing"; mutating operations go to the home node).
 func TestDeployForward_updateThroughANodeWithoutTheApp(t *testing.T) {
 	t.Parallel()

@@ -19,7 +19,7 @@ const staticUpload = "/v1/deployments/static/upload"
 
 // TestDeployInput_namesValidated: 1-56 of letters, digits, - and _, starting
 // with a letter or digit; anything else is 400 before the upload is stored
-// (docs/DEPLOYMENT_GUIDE.md "Deployment names").
+// (website/src/docs/developer/deployments.mdx "Deployment names").
 func TestDeployInput_namesValidated(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)

@@ -13,7 +13,7 @@ import (
 const wantNullifierLen = 32
 
 // TestShieldedQueries_paramsAreGenesisSetAndPositive: x/shielded's
-// parameters are set at genesis (no message changes them, docs/CHAIN.md
+// parameters are set at genesis (no message changes them, docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md
 // "x/shielded"): every one is present and positive, and the biggest bundle
 // (max_actions x action_gas) fits the gas arithmetic. The same answer comes
 // from every validator.

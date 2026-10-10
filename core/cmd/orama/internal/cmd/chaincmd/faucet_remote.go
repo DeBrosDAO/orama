@@ -113,7 +113,7 @@ func splitMarked(out string, marks ...string) map[string]string {
 
 // faucetTxScript signs unsigned (base64 proto-JSON) with the operator key and broadcasts it,
 // printing the broadcast response, and keeps the key's lock until the transaction's block. The fee is gas x the base fee read under the key's lock, which
-// is what the next block charges (docs/CHAIN.md, "The base fee"). The transaction files live in a
+// is what the next block charges (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, "The base fee"). The transaction files live in a
 // 0700 directory of the chain user, removed on exit; the key never leaves the keyring.
 func faucetTxScript(chainID string, unsigned []byte) string {
 	return fmt.Sprintf(`set -eu

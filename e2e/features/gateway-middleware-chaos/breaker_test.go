@@ -78,7 +78,7 @@ const breakerAlertBudget = 2 * time.Minute
 // node), not one per node. With one namespace's gateway cut off on a node that
 // hosts another namespace too, the first opens its own breaker, the second is
 // served through that node throughout, and the operator's report names only
-// the first (docs/ARCHITECTURE.md#circuit-breakers).
+// the first (website/src/docs/contributor/architecture-reference.mdx#circuit-breakers).
 func TestBreaker_oneNamespacesFailingGatewayLeavesAnothersCircuitClosed(t *testing.T) {
 	f := harness.Fleet(t)
 	infra.RequireHealthy(t)

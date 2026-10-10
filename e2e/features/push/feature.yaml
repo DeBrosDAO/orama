@@ -33,11 +33,11 @@ covers:
   units:
     - orama-namespace-ntfy@.service
   claims:
-    - "docs/PUSH_NOTIFICATIONS.md#step-3--store-credentials-via-the-api: stored credentials are never returned, only has_* booleans; encrypted at rest"
-    - "docs/PUSH_NOTIFICATIONS.md#removing-credentials: DELETE is idempotent"
-    - "docs/PUSH_NOTIFICATIONS.md#registrations-from-a-device-bound-session: a revoked device's registrations are skipped and deleted"
-    - "docs/PUSH_NOTIFICATIONS.md#register-or-refresh: topic id = sha256(secret); 7-8 days rounded up to a UTC day; re-register extends; one topic per token"
-    - "docs/PUSH_NOTIFICATIONS.md#errors: secret 16-64 bytes hex, token at most 512 bytes; wrong secret 404; no grant 403"
-    - "docs/PUSH_NOTIFICATIONS.md#self-hosted-ntfy-installed-on-every-node: ntfy on 127.0.0.1:10109 on every node; a publish reaches every node's ntfy"
-    - "docs/PUSH_NOTIFICATIONS.md#unifiedpush-android--grapheneos-no-google-play-services: an endpoint must be on the configured push host"
-    - "docs/PUSH_NOTIFICATIONS.md#step-2--choose-an-ntfy-topic-mode-android--web-only: an ntfy topic is one path segment"
+    - "website/src/docs/developer/push-notifications.mdx#step-3--store-credentials-via-the-api: stored credentials are never returned, only has_* booleans; encrypted at rest"
+    - "website/src/docs/developer/push-notifications.mdx#removing-credentials: DELETE is idempotent"
+    - "website/src/docs/developer/push-notifications.mdx#registrations-from-a-device-bound-session: a revoked device's registrations are skipped and deleted"
+    - "website/src/docs/developer/push-notifications.mdx#register-or-refresh: topic id = sha256(secret); 7-8 days rounded up to a UTC day; re-register extends; one topic per token"
+    - "website/src/docs/developer/push-notifications.mdx#errors: secret 16-64 bytes hex, token at most 512 bytes; wrong secret 404; no grant 403"
+    - "website/src/docs/developer/push-notifications.mdx#self-hosted-ntfy-installed-on-every-node: ntfy on 127.0.0.1:10109 on every node; a publish reaches every node's ntfy"
+    - "website/src/docs/developer/push-notifications.mdx#unifiedpush-android--grapheneos-no-google-play-services: an endpoint must be on the configured push host"
+    - "website/src/docs/developer/push-notifications.mdx#step-2--choose-an-ntfy-topic-mode-android--web-only: an ntfy topic is one path segment"

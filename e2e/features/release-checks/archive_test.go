@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 )
 
-// shippedBinaries are what every build must carry (docs/CLI_REFERENCE.md
+// shippedBinaries are what every build must carry (docs/whitepaper/technical-reference/appendices/d-cli-reference.md
 // "orama maint build": the Orama binaries, Olric, IPFS Kubo, IPFS Cluster, RQLite,
 // CoreDNS, Caddy).
 var shippedBinaries = []string{"orama", "orama-node", "gateway", "olric-server", "ipfs", "ipfs-cluster-service", "rqlited", "coredns", "caddy"}
@@ -23,7 +23,7 @@ var shippedBinaries = []string{"orama", "orama-node", "gateway", "olric-server",
 // build` verifies on its own: its signature recovers to the operator's
 // wallet, every file matches the signed manifest with none unlisted, it is
 // built for linux/amd64, it carries every shipped binary, and its version is
-// the CLI's (docs/SECURITY.md "Supply Chain").
+// the CLI's (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "Supply Chain").
 func TestRelease_headArchiveVerifies(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

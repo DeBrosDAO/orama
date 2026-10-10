@@ -38,7 +38,7 @@ func TestAuth_noCredential(t *testing.T) {
 }
 
 // TestAuth_apiKeyAloneRefused: a storage-scoped key reaches no storage route
-// without a logged-in user: 401 USER_JWT_REQUIRED (docs/AUTH.md; the layer
+// without a logged-in user: 401 USER_JWT_REQUIRED (docs/whitepaper/technical-reference/vol1/14-authorization.md; the layer
 // that makes an extracted runtime key inert).
 func TestAuth_apiKeyAloneRefused(t *testing.T) {
 	t.Parallel()

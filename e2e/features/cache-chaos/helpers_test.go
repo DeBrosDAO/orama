@@ -20,11 +20,11 @@ const (
 	// pollEvery paces every wait in this package.
 	pollEvery = 2 * time.Second
 	// reconcileBudget: the tenant reconciler starts a missing service every
-	// 60s (docs/ARCHITECTURE.md "The tenant plane converges"); two sweeps and
+	// 60s (website/src/docs/contributor/architecture-reference.mdx "The tenant plane converges"); two sweeps and
 	// a start.
 	reconcileBudget = 3 * time.Minute
 	// dropBudget: the gateway probes Olric every 10s, each probe bounded by
-	// 10s, and drops the client after three failures (docs/ARCHITECTURE.md
+	// 10s, and drops the client after three failures (website/src/docs/contributor/architecture-reference.mdx
 	// "Olric is supervised, not connected once"); plus a request.
 	dropBudget = 90 * time.Second
 	// reconnectBudget: reconnect backoff is capped at 30s, plus a probe.

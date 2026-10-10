@@ -574,7 +574,7 @@ func (h *Handlers) HoldUntilCIDRefBackfill() {
 // A failed attempt is retried with exponential backoff. A namespace over the
 // bound is not retried: it is logged once as an error, and it is the reason
 // unpins answer 503 on this gateway; every other gateway's unpins are refused
-// too, because this namespace never gets its marker (see docs/SECURITY.md for
+// too, because this namespace never gets its marker (see docs/whitepaper/technical-reference/vol1/19-storage.md for
 // how an operator resolves it). After the backfill the loop applies the unpins
 // deferred while the index was not ready.
 func (h *Handlers) StartCIDRefBackfill(ctx context.Context, namespace string) {

@@ -91,7 +91,7 @@ func stepMessage(step scenarioStep, signer string, actionGas uint64) (msg sdk.Ms
 	}
 	switch step.Kind {
 	case "shield":
-		// A stagenet account holds earnings, never a bank balance (docs/CHAIN.md: no premine, and
+		// A stagenet account holds earnings, never a bank balance (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md: no premine, and
 		// users cannot send norama to each other), so a shield comes out of earnings.
 		return &shieldedtypes.MsgShieldEarnings{Signer: signer, Bundle: bundle}, 0, false, nil
 	case "transfer":

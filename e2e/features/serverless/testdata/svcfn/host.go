@@ -2,7 +2,7 @@ package main
 
 import "unsafe"
 
-// Host functions (docs/SERVERLESS.md#host-functions-api), canonical module env.
+// Host functions (website/src/docs/developer/functions.mdx#host-functions-api), canonical module env.
 
 //go:wasmimport env get_caller_wallet
 func getCallerWallet() uint64

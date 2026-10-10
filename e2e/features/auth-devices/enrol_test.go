@@ -72,7 +72,7 @@ func randomB64(t testing.TB, n int) string {
 
 // TestDeviceSignIn_bindsTheSession: Ed25519, ES256 (r||s) and ES256 (DER) keys
 // all enrol; the session and its tokens carry the device, the id is the RFC
-// 7638 thumbprint, and no API key is handed out beside it (docs/AUTH.md#devices).
+// 7638 thumbprint, and no API key is handed out beside it (docs/whitepaper/technical-reference/vol1/13-identity.md#devices).
 func TestDeviceSignIn_bindsTheSession(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -151,7 +151,7 @@ func TestDeviceSignIn_keyAndSignatureRules(t *testing.T) {
 }
 
 // TestDeviceSignIn_lobbyBindsNoDevice: the lobby is nobody's, so a device
-// cannot be enrolled there (docs/AUTH.md "the lobby binds none").
+// cannot be enrolled there (docs/whitepaper/technical-reference/vol1/13-identity.md "the lobby binds none").
 func TestDeviceSignIn_lobbyBindsNoDevice(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

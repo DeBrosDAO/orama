@@ -30,7 +30,7 @@ covers:
     - orama chain status
     - orama chain validator
   claims:
-    - "docs/CLI_REFERENCE.md#orama-chain: every command only reads, except faucet (chain-faucet); --rpc reads a node's CometBFT RPC, --node its REST API, the gateway its /v1/chain/ proxy"
-    - "docs/CLI_REFERENCE.md#orama-chain-balance: the spendable bank balance; earnings are a separate account"
-    - "docs/CLI_REFERENCE.md#orama-chain-query: orama chain query --list prints every query the CLI knows"
-    - "docs/CLI_REFERENCE.md#orama-chain-deal: REFUSAL PATHS ONLY: a deal that does not exist is a failed read; the run chain funds no deal (trigger: a funding path exists; the faucet is one now, features/internal/chain/funds.go)"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain: every command only reads, except faucet (chain-faucet); --rpc reads a node's CometBFT RPC, --node its REST API, the gateway its /v1/chain/ proxy"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-balance: the spendable bank balance; earnings are a separate account"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-query: orama chain query --list prints every query the CLI knows"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-deal: REFUSAL PATHS ONLY: a deal that does not exist is a failed read; the run chain funds no deal (trigger: a funding path exists; the faucet is one now, features/internal/chain/funds.go)"

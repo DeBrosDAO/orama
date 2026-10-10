@@ -58,7 +58,7 @@ func runDeployScript(t *testing.T, c *chain.Chain, verb string) (string, int) {
 }
 
 // TestDeployScript_statusAndInvariantsReadOnly: the run's chain deploy
-// script (docs/CHAIN.md "The stagenet deploy script", e2e/scripts)
+// script (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The stagenet deploy script", e2e/scripts)
 // `status` reports a height and a REST API that answers for every node, and `invariants` reports every
 // module ok on every node; both exit 0.
 func TestDeployScript_statusAndInvariantsReadOnly(t *testing.T) {

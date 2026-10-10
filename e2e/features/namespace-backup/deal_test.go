@@ -41,7 +41,7 @@ func dealSecretFile(t testing.TB, name string) string {
 // into one slot per replica of a private storage deal, prints the
 // 'orama storage create' pieces, and each slot opens with the owner's storage
 // key to the same sealed backup, which opens with the backup key to this
-// namespace (docs/RUN_YOUR_OWN_CLUSTER.md "A backup in a storage deal"). The
+// namespace (website/src/docs/operator/run-your-own-cluster.mdx "A backup in a storage deal"). The
 // upload to providers and the restore from the deal need a chain and
 // providers and are covered where those exist (cli-storage-global).
 func TestBackupCLI_dealSlotsOpenToTheBackup(t *testing.T) {

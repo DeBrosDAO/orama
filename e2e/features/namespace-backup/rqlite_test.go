@@ -37,7 +37,7 @@ func importDB(t testing.TB, n *ns.Namespace, who tenancy.Cred, ctype string, db 
 
 // TestRQLiteExport_importRoundTrip: the export is a consistent SQLite file of
 // the namespace database; importing it replaces the database with it
-// (docs/CLI_REFERENCE.md "orama namespace rqlite export|import").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace rqlite export|import").
 func TestRQLiteExport_importRoundTrip(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

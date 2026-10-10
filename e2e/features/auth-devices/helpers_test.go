@@ -19,12 +19,12 @@ import (
 
 const (
 	// revocationStaleness: devices, sessions and tokens stop "within ten
-	// seconds on every gateway" (docs/AUTH.md#revoking-a-device).
+	// seconds on every gateway" (docs/whitepaper/technical-reference/vol1/13-identity.md#revoking-a-device).
 	revocationStaleness = 10 * time.Second
 	// stalenessSlack covers the round trip and a close frame on top.
 	stalenessSlack = 5 * time.Second
 	pollEvery      = time.Second
-	// Paths not in the harness's constant set (docs/API_SURFACE.md).
+	// Paths not in the harness's constant set (docs/whitepaper/technical-reference/appendices/i-api-surface.md).
 	pathDeviceStart   = "/v1/auth/device"
 	pathDeviceApprove = "/v1/auth/device/approve"
 	pathDeviceToken   = "/v1/auth/device/token"
@@ -32,14 +32,14 @@ const (
 	pathMembers       = "/v1/namespace/members"
 	pathPolicy        = "/v1/namespace/session-policy"
 	pathNSDevices     = "/v1/namespace/devices"
-	// Roles (docs/AUTH.md#roles).
+	// Roles (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 	roleRuntime   = "runtime"
 	roleDeveloper = "developer"
 	roleAdmin     = "admin"
 )
 
 // expectCode fails unless resp has status and code, and a 401/403 carries
-// {error, code, hint} (docs/AUTH.md#when-a-request-is-refused).
+// {error, code, hint} (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func expectCode(t testing.TB, resp *gw.Response, status int, code string) map[string]any {
 	t.Helper()
 	var body map[string]any
@@ -119,7 +119,7 @@ func signInSession(t testing.TB, c *gw.Client, w *wallet.EVM, namespace string, 
 	return s
 }
 
-// addMember grants w role in n as n's owner (docs/AUTH.md#roles).
+// addMember grants w role in n as n's owner (docs/whitepaper/technical-reference/vol1/14-authorization.md#roles-and-grants).
 func addMember(t testing.TB, n *ns.Namespace, w *wallet.EVM, role string) {
 	t.Helper()
 	resp := postJSON(t, n.Owner.Client, pathMembers, n.Owner.Token(), map[string]string{"wallet": w.Address(), "role": role})

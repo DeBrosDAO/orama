@@ -18,6 +18,6 @@ covers:
   units:
     - orama-deploy-go@.service
   claims:
-    - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: an app is served by name from every node while one of its nodes is down"
-    - "docs/ARCHITECTURE.md#circuit-breakers: a deployment has one breaker per node, an app's own 5xx never counts against the node, and an open breaker is raised as a deployment alert"
-    - "docs/SECURITY.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"
+    - "website/src/docs/developer/domains.mdx#cross-node-routing: an app is served by name from every node while one of its nodes is down"
+    - "website/src/docs/contributor/architecture-reference.mdx#circuit-breakers: a deployment has one breaker per node, an app's own 5xx never counts against the node, and an open breaker is raised as a deployment alert"
+    - "docs/whitepaper/technical-reference/vol1/11-app-deployments.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"

@@ -15,7 +15,7 @@ import (
 )
 
 // A cluster may adopt the TUF release root of the Orama releases
-// (docs/SECURITY.md, "Release trust"). Two things follow from it here:
+// (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Release trust"). Two things follow from it here:
 //
 //   - A manifest signed by a trusted wallet may carry a release root, which
 //     the node adopts the way it takes a signer rotation.

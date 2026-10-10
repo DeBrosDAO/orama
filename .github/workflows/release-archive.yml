@@ -4,7 +4,7 @@ name: Release archive
 # its SHA-256 as release assets. The two builds must hash the same: that is
 # what lets each release signer rebuild the tag on their own machine, compare
 # the hash with this one and only then sign the TUF targets metadata that
-# names it (docs/DEV_DEPLOY.md, "Reproducible builds"). CI holds no signing
+# names it (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Reproducible builds"). CI holds no signing
 # key; a published archive is not trusted by any node until signers have
 # signed it.
 

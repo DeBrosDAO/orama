@@ -1,5 +1,5 @@
 // Command function imports a host module the gateway does not register, so
-// every invocation fails to instantiate (docs/SERVERLESS.md#host-functions-api).
+// every invocation fails to instantiate (website/src/docs/developer/functions.mdx#host-functions-api).
 package main
 
 import "os"

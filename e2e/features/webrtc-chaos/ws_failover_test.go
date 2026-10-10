@@ -24,7 +24,7 @@ const (
 // entering at a node whose own namespace gateway is down is taken by another
 // member's gateway, which routes the room to its SFU; with every member's
 // gateway down the upgrade is answered with a typed, retryable 503, not plain
-// text (docs/WEBRTC.md#signaling-socket-failover).
+// text (website/src/docs/developer/webrtc.mdx#signaling-socket-failover).
 func TestSignalingSocket_failsOverWhenMemberGatewaysAreDown(t *testing.T) {
 	fx := setup(t)
 	unit := gatewayUnitPrefix + fx.n.Name + ".service"

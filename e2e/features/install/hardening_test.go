@@ -14,7 +14,7 @@ import (
 )
 
 // TestInstall_nodeReportShowsHardeningHeld: the node report reads the
-// hardened kernel settings back at runtime (docs/SECURITY.md "RAM-to-disk"),
+// hardened kernel settings back at runtime (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "RAM-to-disk"),
 // so a drift after install (apport, a package postinst, sysctl -w, swap on)
 // raises the "RAM hardening drifted" warning in `orama monitor`. On a healthy
 // node the report carries the values install set and no drift.
@@ -67,7 +67,7 @@ func requireContains(t testing.TB, f *fleet.Fleet, n fleet.Node, path string, li
 }
 
 // TestInstall_ipv6DisabledPersistently: IPv6 is off in the running kernel
-// and on every boot (docs/SECURITY.md "IPv6 Disabled", core/pkg/install
+// and on every boot (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "IPv6 Disabled", core/pkg/install
 // firewall.go persistIPv6Disable).
 func TestInstall_ipv6DisabledPersistently(t *testing.T) {
 	t.Parallel()
@@ -87,7 +87,7 @@ func TestInstall_ipv6DisabledPersistently(t *testing.T) {
 }
 
 // TestInstall_ramHygiene: no swap, swap.target masked, suid core dumps off,
-// systemd-coredump keeps nothing (docs/SECURITY.md "RAM-to-disk").
+// systemd-coredump keeps nothing (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "RAM-to-disk").
 func TestInstall_ramHygiene(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -115,7 +115,7 @@ func TestInstall_ramHygiene(t *testing.T) {
 }
 
 // TestInstall_secretBearingUnitsNeverSwap: the units that hold secrets run
-// with MemorySwapMax=0 (docs/SECURITY.md "RAM-to-disk": the control that
+// with MemorySwapMax=0 (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "RAM-to-disk": the control that
 // keeps secrets off the block device).
 func TestInstall_secretBearingUnitsNeverSwap(t *testing.T) {
 	t.Parallel()
@@ -131,7 +131,7 @@ func TestInstall_secretBearingUnitsNeverSwap(t *testing.T) {
 }
 
 // TestInstall_servicesRunAsOrama: the node supervisor and the index daemons
-// run as the unprivileged orama user, never root (docs/SECURITY.md
+// run as the unprivileged orama user, never root (docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md
 // "Dedicated User").
 func TestInstall_servicesRunAsOrama(t *testing.T) {
 	t.Parallel()

@@ -35,7 +35,7 @@ func listedDBs(t testing.TB, cli *oramacli.Runner) []string {
 }
 
 // TestDBCLI_lifecycle drives `orama db` as an operator would: create, query
-// (DDL, write, read), list, backup, backups, delete (docs/CLI_REFERENCE.md
+// (DDL, write, read), list, backup, backups, delete (docs/whitepaper/technical-reference/appendices/d-cli-reference.md
 // "orama db").
 func TestDBCLI_lifecycle(t *testing.T) {
 	t.Parallel()

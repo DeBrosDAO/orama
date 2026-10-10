@@ -32,10 +32,10 @@ func (tn *tenant) storedEnvironment(t testing.TB, name string) string {
 }
 
 // TestDeployEnv_boundToItsRowAfterRotateSecrets: once the operator has run
-// `orama maint operator rotate-secrets` (docs/CLI_REFERENCE.md), a deployment's
+// `orama maint operator rotate-secrets` (docs/whitepaper/technical-reference/appendices/d-cli-reference.md), a deployment's
 // environment is stored sealed to its namespace and deployment id, still
 // reaches the running app, and a later change to it is stored bound too
-// (docs/SECURITY.md "Deployment environment").
+// (docs/whitepaper/technical-reference/vol1/11-app-deployments.md "Deployment environment").
 func TestDeployEnv_boundToItsRowAfterRotateSecrets(t *testing.T) {
 	tn := newTenant(t)
 	secret := marker(t)
@@ -63,7 +63,7 @@ func TestDeployEnv_boundToItsRowAfterRotateSecrets(t *testing.T) {
 // served at its {name}-{random} address. The bare {name}.<base> host belongs
 // only to a deployment from before subdomains existed, so deploying a name in
 // two namespaces leaves the bare host answering neither
-// (docs/DEPLOYMENT_GUIDE.md "Deployment addresses").
+// (website/src/docs/developer/deployments.mdx "Deployment addresses").
 func TestDeployHost_bareNameOfASubdomainedDeploymentIsNotServed(t *testing.T) {
 	const name = "twin"
 	tenants := newTenants(t, 2)

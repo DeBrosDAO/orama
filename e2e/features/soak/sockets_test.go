@@ -22,7 +22,7 @@ import (
 const (
 	soakTopic = "soak.feed"
 	// closeExpired is the close code of a socket whose token expired more
-	// than two minutes ago (docs/AUTH.md "Open WebSockets"): a client
+	// than two minutes ago (docs/whitepaper/technical-reference/vol1/13-identity.md "Open WebSockets"): a client
 	// reconnects with its fresh token, and so does this one.
 	closeExpired = 4401
 	// joinGrace is how long a new subscription may take to be reachable

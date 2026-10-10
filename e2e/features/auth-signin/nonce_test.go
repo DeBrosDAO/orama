@@ -21,7 +21,7 @@ const nonceBytes = 32
 
 // TestVerify_challengeInvalidIsIdenticalForUnknownUsedExpired: an unknown
 // nonce, a used one and an expired one get the same AUTH_CHALLENGE_INVALID
-// body, so a caller learns nothing about which it was (docs/AUTH.md,
+// body, so a caller learns nothing about which it was (docs/whitepaper/technical-reference/vol1/13-identity.md,
 // "Signing in has its own"). The expired case waits out the five-minute nonce.
 func TestVerify_challengeInvalidIsIdenticalForUnknownUsedExpired(t *testing.T) {
 	t.Parallel()

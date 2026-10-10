@@ -12,7 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// EvalCluster is a single-node eval cluster beside the run (docs/EVAL.md).
+// EvalCluster is a single-node eval cluster beside the run (website/src/docs/operator/getting-started.mdx).
 type EvalCluster = fleet.Cluster
 
 // Names of an eval cluster's parts.

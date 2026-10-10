@@ -25,10 +25,10 @@ covers:
     - /status/assets/
     - /v1/internal/ping
   claims:
-    - "docs/SECURITY.md#authentication: X-Internal-Auth-* headers without a valid MAC are deleted by the first middleware; the source address is not consulted"
-    - "docs/SECURITY.md#authentication: /health, /v1/health, /status, /v1/status and /v1/internal/ping show no address, peer id, hostname or error text"
-    - "docs/SECURITY.md#tls--transport: WebSocket upgraders validate Origin; clients without Origin are allowed"
-    - "docs/ARCHITECTURE.md#middleware-stack: security headers and CORS run before routing and authentication"
-    - "docs/MONITORING.md#public-status-page: /status is the page to a browser and JSON otherwise, under a CSP that allows nothing else; a subdomain's /status is its deployment's"
-    - "docs/ARCHITECTURE.md#data-flow: the namespace host is proxied to the namespace's gateways from every node"
-    - "docs/SECURITY.md#response-caching: every /v1/* response is Cache-Control: no-store unless the route chooses its own (/v1/status is public, max-age=5)"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#internal-routes: X-Internal-Auth-* headers without a valid MAC are deleted by the first middleware; the source address is not consulted"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#health-status-and-the-public-status-page: /health, /v1/health, /status, /v1/status and /v1/internal/ping show no address, peer id, hostname or error text"
+    - "docs/whitepaper/technical-reference/vol1/27-rate-limits-and-egress-controls.md#the-gateway-wide-buckets: WebSocket upgraders validate Origin; clients without Origin are allowed"
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: security headers and CORS run before routing and authentication"
+    - "website/src/docs/operator/monitoring.mdx#public-status-page: /status is the page to a browser and JSON otherwise, under a CSP that allows nothing else; a subdomain's /status is its deployment's"
+    - "website/src/docs/contributor/architecture-reference.mdx#data-flow: the namespace host is proxied to the namespace's gateways from every node"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching: every /v1/* response is Cache-Control: no-store unless the route chooses its own (/v1/status is public, max-age=5)"

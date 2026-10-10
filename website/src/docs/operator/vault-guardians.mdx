@@ -1,0 +1,202 @@
+# Vault guardians
+
+Every Orama node runs a `vault-guardian`, the daemon that stores one Shamir share of each secret in the network's vault. This page is the operator's runbook: how a guardian is built and started, how to read its health, what its logs and files mean, and what happens to the shares when nodes come and go. Clients and the API are in [Vault](/docs/developer/vault).
+
+The guardian is part of the network, not an add-on. Status: partial. Guardians do not yet know about each other, so nothing repairs, rotates or re-distributes shares (see "Joining, losing and replacing nodes" below).
+
+## What runs on a node
+
+| What | Value |
+|------|-------|
+| Binary | `/opt/orama/bin/vault-guardian` (static musl executable, no runtime dependencies) |
+| Unit | `orama-namespace-vault@index`, started by `orama-node` after the gateway and before Caddy; journal identifier `orama-vault-index` |
+| Config | `/opt/orama/.orama/data/vault/vault.yaml`, written at install |
+| Data | `/opt/orama/.orama/data/vault` (the only writable path of the unit) |
+| Client port | `10106` on the node's WireGuard address, plain HTTP |
+| Peer port | `7501` is configured and **nothing listens on it** |
+| Limits | `MemoryMax=512M`, no swap, `Restart=always` every 5 s with no start limit |
+
+A guardian never splits, combines or encrypts anything. It receives a share, checks who sent it, and writes bytes. Splitting and combining happen in the gateway (for applications) or in the client (`@debros/orama-vault`, for tooling on the mesh).
+
+Every active node in the registry is assumed to run a guardian; nothing checks. The gateway reads the guardian list from the active nodes of the index database and pairs each with port 10106.
+
+## Build and deploy
+
+`orama build` cross-compiles the guardian with `zig build-exe src/main.zig -O ReleaseSafe` for the target and puts it in the archive as `bin/vault-guardian`. It refuses any Zig that is not the same minor release as the `minimum_zig_version` in `vault/build.zig.zon` (currently 0.15.2), because Zig changes its language and standard library between minors. Set `ORAMA_ZIG` to point at the right binary.
+
+The guardian then ships like everything else: with the archive, by the normal rollout ([Upgrades](/docs/operator/upgrades)). Two things matter for a rolling upgrade of the vault:
+
+- **Restart one node at a time and check between nodes.** With three guardians the write quorum is all three, so while one restarts every write is refused with 503 (reads keep working). Wait for the node to be back before the next.
+- **A restart invalidates the guardian's sessions.** It draws a new server secret on every start. The gateway re-authenticates on every request and does not notice; a direct client with a cached session gets 401 until it calls `clearSessions()`.
+
+Use the `orama` CLI to start, stop and restart (`sudo orama node restart`), not raw `systemctl`: the CLI handles dependency order and health checks. The unit is ordered after the node's WireGuard unit; if the overlay address is not assigned yet, the bind fails, the process exits 1 and systemd retries every 5 seconds until it is.
+
+## Configuration
+
+`vault.yaml` is `key = value` lines despite its name. `#` starts a comment, unknown keys are ignored, and a missing file means the defaults. A port that does not parse is a fatal error at start.
+
+```
+# Vault Guardian Configuration
+listen_address = 10.0.0.1
+client_port = 10106
+peer_port = 7501
+data_dir = /opt/orama/.orama/data/vault
+rqlite_url = http://10.0.0.1:10100
+```
+
+| Key | Install writes | Binary default | Meaning |
+|-----|----------------|----------------|---------|
+| `listen_address` | the node's WireGuard address (`127.0.0.1` if none is known) | `0.0.0.0` | Where the client listener binds. On a node this keeps the guardian on the overlay |
+| `client_port` | `10106` | `7500` | Client HTTP port |
+| `peer_port` | `7501` | `7501` | Reserved for the guardian-to-guardian protocol; nothing binds it |
+| `data_dir` | `/opt/orama/.orama/data/vault` | same | Share storage |
+| `rqlite_url` | the node's RQLite address | `http://127.0.0.1:4001` | Read and **not used**: peer discovery is a stub |
+
+The binary's own defaults (`0.0.0.0:7500`) apply only when it is run without the installed `vault.yaml`; do not run it that way on a node. The flags `--config`, `--data-dir`, `--port`, `--bind`, `--help` and `--version` override the file (`--port` and `--bind` override `client_port` and `listen_address`). `--version` and the health body report `0.1.0`, which is the guardian's own constant and does not follow the network version.
+
+## Firewall
+
+Do not expose either guardian port on a public interface. The node firewall already accepts traffic arriving through the WireGuard interface from the overlay range and opens no vault port publicly, and the guardian binds the overlay address, so a node installed by `orama node setup` needs no vault rule. The guardian has no TLS and no authentication on its health and status endpoints; its confidentiality is the WireGuard tunnel under it. Applications reach the vault over HTTPS through the gateway.
+
+## Reading health
+
+Three views, from broad to narrow.
+
+**Through the node's gateway** (what the monitoring uses):
+
+```bash
+curl -s http://localhost:10104/v1/vault/status   # {"guardians":N,"healthy":H,"threshold":K,"write_quorum":W}
+curl -s http://localhost:10104/v1/vault/health   # {"status":"healthy"|"degraded"|"unavailable"}
+```
+
+`healthy` means at least W guardians answered, `degraded` at least K (reads work, writes may not), `unavailable` fewer than K. A guardian counts as healthy when its health endpoint answers 2xx, so this means "the HTTP server is up", nothing more.
+
+**The node report.** `sudo orama node report --pretty` has a vault section: service state, guardians healthy of total, read threshold, write quorum, restart count, memory and log errors. The cluster alerts raise a critical alert when the unit is down or fewer than K guardians are healthy, and a warning when fewer than W are; see [Monitoring](/docs/operator/monitoring).
+
+**The guardian itself**, on the node, using its WireGuard address (it does not listen on `127.0.0.1`):
+
+```bash
+curl -s http://<wireguard-address>:10106/v1/vault/health
+curl -s http://<wireguard-address>:10106/v1/vault/status
+curl -s http://<wireguard-address>:10106/v1/vault/guardians
+```
+
+Today a healthy guardian answers like this:
+
+```json
+{"status":"degraded","version":"0.1.0","shares":0,"peers":0,"data_dir_ok":true}
+```
+
+`degraded` with `peers: 0` is **the expected state**, not a failed deploy: peer discovery returns an empty list, so a guardian never knows another one, and `/v1/vault/guardians` answers `{"guardians":[],"threshold":2,"total":0}`. The status words are `unhealthy` (the data directory is not accessible), `degraded` (no alive peer) and `ok` (at least one). `shares` is the number of identity directories under `shares/` plus those under `vaults/`. The response is always HTTP 200 while the process runs; a missing answer means the process is down or the overlay is.
+
+## Logs
+
+```bash
+sudo orama node logs orama-namespace-vault@index
+```
+
+The guardian logs to stderr, which the journal captures. Lines you will see:
+
+| Line | Meaning |
+|------|---------|
+| `vault-guardian v0.1.0 starting`, `config: <path>` | Start |
+| `listening on <addr>:<port> (client)` | The client listener's address |
+| `listening on <addr>:<port> (peer)` | Logged from the config only; nothing binds the peer port |
+| `data directory: <path>`, `guardian initialized: <n> nodes, <n> shares` | State at start |
+| `initialized persistent vault integrity key` | First start on this data directory |
+| `guardian ready — starting HTTP server`, `HTTP server listening on …` | Serving |
+| `stored share for identity …`, `served share for identity …` | A V1 push or pull |
+| `stored secret '<name>' for identity …`, `deleted secret …` | A V2 put or delete |
+| `rejected rollback for …: version <v> <= current <v>` | A write with a stale version (answered 409 on V1) |
+| `failed to write share for …` | Disk write failure (answered 500) |
+| `integrity check failed for …` | A share failed its checksum (answered 500) |
+| `integrity.key has unexpected size …; regenerating`, `… using ephemeral key` | The integrity key could not be read or persisted; see below |
+| `accept error: …`, `connection error: …` | A connection failed; not fatal |
+| `failed to bind <addr>:<port>: …` | The listener could not start (exit 1) |
+
+## Troubleshooting
+
+**The unit restarts every 5 seconds.** Read the log for `failed to bind`. The overlay address may not be assigned yet (it settles by itself once WireGuard is up), another process may hold the port, or `listen_address` in `vault.yaml` is not an address of this node. Also check `journalctl -k | grep -i oom`: the unit is limited to 512 MiB.
+
+**`failed to create data directory … AccessDenied`.** The unit runs as the `orama` user with only the vault data directory writable. Check ownership of `/opt/orama/.orama/data/vault`.
+
+**A write is refused (503 `insufficient_quorum`) and one guardian is down.** Expected on three guardians: W equals N. Bring the guardian back; reads were not affected. See "Failure modes" in the table below.
+
+**Pushes get 409.** The client sent a version not greater than the one stored. Check `meta.json` of the identity (below). The client must send a higher version. This is not a guardian fault.
+
+**A guardian answers 401 to the gateway for pulls only.** The guardian verifies the pull timestamp against its own clock, within 120 seconds. A node whose clock has drifted looks like a guardian that is down. Fix the clock.
+
+**A guardian answers 429.** It allows 120 requests per 60 seconds per source IP, on every endpoint. A gateway spends three requests per guardian for each push or pull (challenge, session, call), plus the monitoring probes, so one gateway can sustain about 40 operations a minute against one guardian. A refused guardian contributes no share and looks like an outage.
+
+**Every pull from one guardian returns 500 after a restart or restore.** The guardian could not read its `integrity.key` (or it was replaced), so every existing share fails its checksum. Restore the original `integrity.key` from a copy; a new key never destroys data but it cannot verify the old shares.
+
+**`push` returns 503 with a guardian that looks healthy.** The registry counts every active node in N whether or not its guardian answers, so a node with a dead guardian lowers the acknowledgements without lowering W. Look at `/v1/vault/status`: `healthy` below `guardians`.
+
+## Files on disk
+
+```text
+integrity.key                              32 bytes, mode 0600
+shares/IDENTITY/share.bin                  V1 share ([x][y...], one byte longer than the envelope)
+shares/IDENTITY/checksum.bin               HMAC-SHA256(integrity key, share.bin)
+shares/IDENTITY/meta.json                  {"version":N,"threshold":K}
+vaults/IDENTITY/NAME/share.bin             V2 share
+vaults/IDENTITY/NAME/checksum.bin          HMAC-SHA256(integrity key, share.bin)
+vaults/IDENTITY/NAME/meta.json             {"version":..,"created_ns":..,"updated_ns":..,"size":..}
+```
+
+`IDENTITY` is the 64-hex identity (SHA-256 of the owner's Ed25519 public key). A write replaces three files in turn (`share.bin`, `checksum.bin`, then `meta.json`) with a temporary file and a rename each, without `fsync`. A crash in the middle can leave a share that answers 500 until the next push repairs it, or one served under the older version; clients tolerate the second because they group shares by version.
+
+The checksum detects corruption; it is not encryption and not authentication, because its key sits in the same directory. Shares are not encrypted at rest by the guardian: they are Shamir shares, and in the usual case ciphertext on top of that.
+
+Read-only checks (as root, on the node):
+
+```bash
+ls /opt/orama/.orama/data/vault/shares | wc -l                           # V1 identities on this guardian
+ls /opt/orama/.orama/data/vault/vaults | wc -l                           # V2 identities
+cat /opt/orama/.orama/data/vault/shares/<identity>/meta.json              # version and threshold
+ls -la /opt/orama/.orama/data/vault/shares/<identity>/                    # sizes
+```
+
+Counts should match across guardians for secrets that were written to all of them. Do not delete share directories by hand to "clean up": removing `shares/<identity>` removes this guardian's share of that backup and nothing replaces it. There is no delete route for V1.
+
+## Joining, losing and replacing nodes
+
+Every guardian holds one share of every secret, so the fleet is the replication set. Reads need K shares of one version and writes need W acknowledgements; the number of guardians that may be down is N−K for reads and N−W for writes:
+
+| Guardians (N) | K | W | Down for reads | Down for writes |
+|---------------|---|---|----------------|-----------------|
+| 3 | 2 | 3 | 1 | 0 |
+| 5 | 2 | 4 | 3 | 1 |
+| 9 | 3 | 6 | 6 | 3 |
+| 14 | 4 | 10 | 10 | 4 |
+| 100 | 33 | 67 | 67 | 33 |
+
+N is the number of active nodes in the registry. A node that is silent for 120 seconds drops out of it, and K and W recompute lower for new writes. Existing secrets keep the K they were written with (V1 stores it in `meta.json`).
+
+- **A node leaves or dies.** Its shares are gone with it, and nothing replaces them: a secret stays readable while at least K guardians that hold its latest version are alive. Durability decays with churn until the owner rewrites the secret.
+- **A node joins.** Its guardian holds nothing for existing secrets. It receives a share only when an owner next writes a new version. Until then it counts in N, which can raise W for new writes without it having data for old ones.
+- **Replacing a node** follows [Node replacement](/docs/operator/node-replacement); the vault part of it is only the two points above. Nothing re-shares automatically (the re-sharing code exists and is not run), so after a replacement tell owners of important secrets to write a new version.
+- **Backups.** Copy the whole data directory, including `integrity.key`; without the key a restored share fails its checksum. Because nothing recreates a lost guardian's shares, the copy is the only way to bring them back. A restored directory may hold older versions than its peers; readers handle that by grouping shares by version.
+- **Losing every guardian, or more than N−K of them,** loses the secrets that only lived in the vault. Clients that keep another recovery path (for example a mnemonic) are unaffected.
+
+Two-node fleets are refused when a tenant namespace is provisioned, because with N = 2 the write quorum equals the read threshold and the vault would have no spare share. On a one-node eval cluster the gateway stores each envelope whole as a local key (K = 1, W = 1), which is not secret sharing: lose the disk, lose the secret.
+
+## Capacity
+
+- **Disk.** Per secret per guardian: the share (the secret size plus one byte), a 32-byte checksum, a small `meta.json` and a directory. Every guardian stores every secret, so the fleet stores N times the secrets. At a million identities of a kilobyte each, a guardian holds about a gigabyte of share data and several million inodes; watch `df -i` on small partitions.
+- **Memory.** The server handles one connection at a time and allocates two buffers of just over 1 MiB for each, freed when the connection closes. It keeps no shares in memory. `MemoryMax=512M` is far above what it needs.
+- **First bottleneck.** The single-threaded accept loop. Every gateway request queues on it, and the per-IP budget caps one gateway at about 40 operations a minute per guardian. A connection that sends nothing can stall it: the code sets a 1 second receive timeout on the listening socket only, and whether accepted sockets inherit it depends on the operating system. Ten times the traffic means 429s and failed quorum across the fleet while the disks and CPUs sit idle.
+- **Housekeeping.** Every 5 seconds a thread recounts the identity directories under `shares/` and `vaults/`, which grows with the number of identities.
+
+## Known limitations
+
+The guardian is an early version. What is written but not running (peer discovery, the peer listener, verification, re-sharing, the post-quantum modules), the open bugs and the security model are listed in the technical reference, Vault chapter (`docs/whitepaper/technical-reference/vol1/28-vault.md`, "Known gaps" and "Trust and security"). Do not assume a feature exists because a file for it is in `vault/src`.
+
+## Checklist
+
+After a deploy or upgrade of a node, before the next one:
+
+- `sudo orama node report --pretty`: the vault section shows the unit active and no new restarts.
+- `curl -s http://localhost:10104/v1/vault/status`: `healthy` equals `guardians`.
+- The guardian's own `/v1/vault/health` answers with `data_dir_ok` true (`degraded` with `peers: 0` is normal).
+- `sudo orama node logs orama-namespace-vault@index`: no error-level lines.

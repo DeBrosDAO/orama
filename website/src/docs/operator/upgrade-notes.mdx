@@ -1,0 +1,312 @@
+# Upgrade notes
+
+What a rolling upgrade does differently when it crosses a release that changes how a node is laid out, which service versions it runs, or the registry schema. Read the section that matches the release you are leaving before the first node is restarted. Everything here is in addition to the procedure on [Upgrades](/docs/operator/upgrades); the rule that never changes is one node at a time, followers first, the leader last.
+
+## First upgrade from 0.122.x
+
+The whole hop runs this release's code, from this checkout:
+
+```bash
+orama maint build                                                   # signed with your RootWallet
+orama maint push --env devnet --archive <path> --trust-signers 0xYourWallet
+orama node upgrade --env devnet                              # read the plan
+orama node upgrade --env devnet --yes
+```
+
+1. `orama maint push --trust-signers` puts the verified archive in `/opt/orama` on
+   every node, and creates each node's anchor, as above. The nodes keep running
+   0.122.x; nothing is stopped.
+2. `orama node upgrade --env … --yes` reads every node's raft state — a 0.122.x
+   `node.yaml` has no rqlite credentials and its index rqlite runs without
+   `-auth`, which the probe reads from `node.yaml` (no auth file and no
+   credentials at all) — and runs `/opt/orama/bin/orama node upgrade --restart`
+   on each node in turn: the CLI of the staged build, not the node's
+   `/usr/local/bin/orama`. Before running it the node refuses — naming `orama
+   maint push … --trust-signers` — unless it has a trust anchor (a node that was
+   never pushed a signed build has none, and its `/opt/orama/bin/orama` is its
+   old release's) and `/opt/orama`, `/opt/orama/bin` and the CLI are root's,
+   writable by nobody else and not symlinks; the check fails closed when `find`
+   cannot inspect a path. So every step on the node is this release's code —
+   the checks, the raft identity capture, the leadership hand-over and the stop
+   included — and the post-swap re-exec has nothing to hand over to (the
+   running binary already is the installed one).
+3. The same happens on every later upgrade: `orama maint push` stages the build,
+   the rolling upgrade runs its CLI.
+
+What the 0.122.x CLI cannot do is why it is not used for this hop: its build
+path (`./cmd/cli`) no longer exists, its `orama node upgrade --env` has no plan,
+no `--yes`, no leadership hand-over and a fixed sleep between nodes, its archive
+check refuses a manifest signed under this scheme, and its stop step wrote a
+recovery `peers.json` that this release's index rqlite would act on.
+
+On that first hop, before anything is stopped, each node also records its raft
+identity (see [What the rolling upgrade does](/docs/operator/upgrades#what-the-rolling-upgrade-does)),
+and the tenant namespaces' leadership is not handed over: their 0.122.x
+rqlites run with the credentials in `secrets/rqlite-auth.json`, which a 0.122.x
+`node.yaml` does not name, so each is reported as not addressable and keeps its
+leader until the node restarts (an election per namespace, not a lost quorum).
+
+New joins need the minting node to have an anchor, so give the cluster its
+anchors before adding nodes.
+
+## The raft port moves (7001 to 10101)
+
+**The index raft port moves (7001 → 10101) on the upgrade from 0.122.x.** Raft
+identity does not follow it: each node restarts under the id recorded in step 6
+(`<wg-ip>:7001` on a 0.122.x node) at its new address, and because the
+configuration still holds it at `:7001`, its rqlited is started with `-join` to
+the other recorded members. The leader removes the member and adds it back at
+`:10101` (rqlite: "Modifying a node's Raft network addresses"); once the
+configuration holds the node at its new address, `raft-adv-addr` is updated and
+later restarts pass no `-join`. For that moment the configuration is one voter
+short, so **only one node's address may change at a time, with every other voter
+up** — a majority changing address at once leaves no leader to re-register any of
+them, which is a `recover-raft`. The rolling upgrade's one-node-at-a-time gate
+is what guarantees it; do not upgrade 0.122.x voters in parallel by hand. A
+cluster of one cannot re-register itself: reform it at the new address with
+`orama maint node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`.
+
+## Bundled service versions and the rqlite v10 upgrade
+
+The archive bundles the versions in `core/pkg/constants/versions.go`: rqlite 10.4.0, Kubo v0.43.1, IPFS Cluster v1.1.6, Olric v0.7.4 and Caddy 2.11.4 (ntfy 2.28.0 is pinned in the ntfy installer; Node.js 24.21.0 LTS, the runtime of Node.js, Next.js SSR and npm deployments, is downloaded from nodejs.org at install and upgrade, verified against the digest pinned in `core/pkg/install/installers/nodejs.go`, unpacked to `/usr/local/lib/nodejs` and linked as `/usr/bin/node`, `npm` and `npx`). The build refuses a Kubo or rqlite tarball whose SHA-256 differs from the digest pinned in `core/pkg/constants/release_digests.go`; bump the digest with the version.
+
+**The rqlite v10 upgrade is one way.** On its first start a v10 `rqlited` converts the node's v8/v9 snapshots (`rsnapshots/`) into its own format (`wsnapshots/`) and deletes `rsnapshots/`. A v10 node cannot join a v9-or-older cluster, and a node that has started under v10 cannot go back: a downgrade is a restore from a backup into a new pre-v10 cluster. Take a backup first (see below). Roll it node by node, as any upgrade, and finish **every** cluster before adding a node: the index cluster, then each namespace cluster (`orama-namespace-rqlite@<ns>`). During the roll the cluster is mixed v9/v10 and that works, but a new v10 node cannot join it: add no node until every member is on v10. rqlite v10 renamed `-raft-timeout` to `-raft-heartbeat-timeout` and rejects the old name, so the generated env files carry the new one; an `rqlite.env` written by an older release is rewritten when `orama-node` starts. Code that reads a node's raft state (`rqlite.HasRaftState`, the persisted-index read, the raft-state wipe in recovery) looks in `wsnapshots/` and, for a node that has not started under v10 yet, `rsnapshots/`.
+
+## What changes on the node
+
+### Tor replaces Anyone (first upgrade to this release)
+
+The first upgrade of a node that ran the Anyone network removes it for good: `orama-namespace-anyone-client@index`, `orama-anyone-client`, `orama-anyone-relay` and `anon.service` are stopped and disabled (unmasked first if `orama node stop` masked them), the `anon` package and `nyx` (installed only for the anon control port) are purged, and its apt source and key, `/etc/anon`, `/var/lib/anon` (relay keys included), `/var/log/anon` and the Orama-written unit/env/log files are deleted. The rolling upgrade runs the staged build's CLI (see [First upgrade from 0.122.x](/docs/operator/upgrade-notes#first-upgrade-from-0122x)), so this is the pre-stop Phase 2d: a failure to reach `deb.torproject.org` aborts the upgrade with the node still serving. Only an upgrade started by hand with a 0.122.x CLI runs Phase 2b under the old binary, which knows nothing of Tor and installs Anyone again; the post-swap Phase 2d under the new binary then removes it with the node's services stopped. Such an old binary may re-exec the new one with `--anyone-client` on its command line; the new `orama node upgrade` accepts that flag only together with the hidden re-exec marker and refuses it from an operator. Every step checks before it acts, so re-running the upgrade, or upgrading a node that never had Anyone, does nothing extra. Nothing opens a firewall port for Tor: a client needs no inbound port. Afterwards `orama status report` and `orama maint inspect --subsystem tor` flag any node where Anyone leftovers remain.
+
+### Privileged helper replaces the sudoers rules (first upgrade to this release)
+
+`orama-node` runs as the `orama` user; its root actions (Orama's own systemd units, the TURN firewall rules, WireGuard peer persistence) go through the privileged helper — see the technical reference's privilege and filesystem trust chapter (`docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`). There is no sudo or sudoers involved: `orama-privhelper.socket` listens on `/run/orama-privhelper.sock` (root:orama, 0660, `Accept=yes`), each connection runs one `orama-privhelper@.service` instance as root, and callers use `orama-privhelper call …`. sudo could not work anyway: systemd implies `no_new_privs` for `orama-node`'s sandboxing.
+
+Phase 2b installs the helper under the archive lock, and the post-swap step (`EnsurePrivHelper`, before Phase 4b and before `orama-node` restarts) ensures it again — which is what installs it when Phase 2b was a 0.122.x binary's, on an upgrade started by hand with the old CLI. It copies `bin/orama-privhelper` to `/usr/local/bin/orama-privhelper` (root, 0755, verified byte-identical), writes both units to `/etc/systemd/system`, enables and restarts the socket, and deletes the old wildcard rules in `/etc/sudoers.d/orama-namespaces`. Every step is fatal: a release archive without `bin/orama-privhelper` fails the upgrade at that step with nothing restarted.
+
+### `orama-node` moves the old layout (first start on this release)
+
+Every gateway runs as `orama-namespace-gateway@<ns>` (`User=orama`, `ProtectSystem=strict`), to which `secrets/` and `configs/` are read-only, so it writes only under `data/`: its own keys and encryption-root cache in `data/namespaces/<ns>/gateway/`, tenant SQLite in `data/sqlite/`, deployments in `data/deployments/`, and the host TURN config in `data/turn/turn.yaml`. Namespace units read their env files from the root-owned `/var/lib/orama-unit-env/<ns>/<svc>.env`, and deployments read their environment and workload token from the root-only `/var/lib/orama-deploy/` — both written only through `orama-privhelper` (see the technical reference's privilege and filesystem trust chapter (`docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`)). A 0.122.x node holds all of this where the old code wrote it.
+
+Two namespace services run as their own account rather than as orama: `orama-namespace-coredns@` as `orama-coredns` and `orama-namespace-sfu@` as `orama-sfu`. Every other daemon still runs as orama; the technical reference's privilege and filesystem trust chapter (`docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md`, "Per-service accounts"), says what keeps each one there. Install and upgrade handle the accounts themselves, so there is nothing to run by hand:
+- Phase 4 writes the Corefile's content and mode (0640) and leaves its owner as it is.
+- Phase 4b runs three steps in order:
+  1. It creates any account that is missing (`useradd --system --user-group --no-create-home --shell /usr/sbin/nologin`, or `-g <name>` if the group already exists without its user) and adds the orama user to `orama-sfu`.
+  2. It renders those two templates with `User=`/`Group=` set to the account and copies every other template unchanged.
+  3. It hands the Corefile to `root:orama-coredns 0640`.
+
+  A failure before the last step leaves the Corefile in the group of the CoreDNS unit still on disk.
+- Phase 5 runs `chown -R orama:orama` on the tree, then sets every existing `data/namespaces/*/configs/sfu-*.yaml` to `orama:orama-sfu 0640`, before `orama-node` restarts.
+
+The steps run on every upgrade, and a node where they have already run is left as it is. The SFU runs `/usr/local/bin/sfu`, the copy Phase 2b installs, because `orama-sfu` cannot execute from `/opt/orama/bin` (`root:orama 0750`). The spawner, running as orama, writes new SFU configs into the `orama-sfu` group itself. If that group is missing, the node was not upgraded through `orama node upgrade`, and the SFU spawn fails and names the group.
+
+On a cluster-role node, `orama-node` moves it itself, as the `orama` user, when it first starts on this release: the `legacy-layout` boot component (`pkg/legacylayout`) runs right after `data-dir`, and every other component — WireGuard, libp2p, storage, rqlite, the gateway, every namespace service — waits for it. A global-role node does not run that migration or those components. Root takes no part: every path is in the tree the `orama` user owns, and a root process walking it would follow whatever symlinks that user planted.
+
+| Old path (under `/opt/orama/.orama`) | Now | How |
+|---|---|---|
+| `secrets/jwt-signing-key.pem`, `secrets/jwt-eddsa-key.pem` | `data/namespaces/index/gateway/` (same names) | renamed; copied if `secrets/` is not writable by `orama-node` (below) |
+| `sqlite/` | `data/sqlite/` | renamed |
+| `deployments/<ns>/<name>/` | `data/deployments/<ns>-<name>/` (dots in either become `-`, as `process.InstanceName`) | the owner marker `.orama-owner` (`{"namespace":…,"name":…}`, the host-level claim every gateway checks) is written into it, replacing one an archive carried, then renamed; the empty old tree is removed |
+| inline `Environment="…"` lines of `/etc/systemd/system/orama-deploy-<ns>-<name>.service` | `/var/lib/orama-deploy/orama-deploy-<ns>-<name>.env` | read (the unit is world-readable, opened with `O_NOFOLLOW`), stripped of the platform's variables (`PORT`, `ORAMA_*`, the entry point) and of `ENTRY_POINT` — 0.122.x wrote them from a tenant-writable row, and the gateway sets them when it starts the deployment — rendered as an env file and handed to `orama-privhelper deploy set-env`, before that deployment's directory moves |
+| `configs/turn.yaml` | `data/turn/turn.yaml` | renamed |
+| `data/namespaces/<ns>/<svc>.env` | `/var/lib/orama-unit-env/<ns>/<svc>.env` | read with `O_NOFOLLOW`, handed to `orama-privhelper unitenv set`, then deleted |
+| `deployment-env/orama-deploy-<instance>.env`, `.token` | `/var/lib/orama-deploy/orama-deploy-<instance>.env`, `.token` | read with `O_NOFOLLOW`, handed to `orama-privhelper deploy set-env` / `set-token`, then deleted; the empty directory is removed |
+
+For each path: only the old one exists → moved or staged; neither, or only the new one → nothing to do; **both** → the component fails naming both paths and the node starts nothing else, so it stays down and the rollout's readiness gate stops at it. Keep the one the node should use and move the other out of both places; the boot supervisor retries the component, so nothing needs restarting. Every path is checked before anything changes, so a refusal leaves the node as it was, and a node already moved does nothing. An env file already in `/var/lib/orama-unit-env` with **identical** contents is what an interrupted run leaves, so the old copy is just deleted; different contents are a refusal. Names are checked as `orama-privhelper` checks them (namespace and service for env files, `orama-deploy-<instance>.env|.token` for deployment files), and a symlink, or a file the helper would refuse, fails the component. Only the env files of units that read one today (their template names `/var/lib/orama-unit-env/%i/<svc>.env`) are staged; those of units that must not get one — `wireguard`, `tor` and `ntfy`, which run as root or as their own users and for which the helper refuses an env file; `anyone-client`, replaced by Tor; and `turn`, the per-namespace TURN server the shared `orama-turn.service` replaced, whose env file in the new tree would make the node start and enable `orama-namespace-turn@<ns>` against the shared server's 3478 — are deleted, and one for any other service fails the component. `deployment-env/` exists only on nodes that ran a pre-release build of this line — 0.122.x wrote each deployment's environment inline into its unit in `/etc/systemd/system` and has no such directory. A 0.122.x deployment's directory must be `deployments/<ns>/<name>/`, two directories whose names map to a valid unit instance; a file or symlink in that tree, or two deployments mapping to the same instance, fails the component before anything moves. Its environment is staged in the same pass that moves its directory, and never again — staged later it would overwrite the one the gateway writes when it starts the deployment. 0.122.x had no workload tokens, so none is staged.
+
+The legacy per-deployment units themselves are root's: the upgrade stops them with everything else before the swap, and once `orama-node` is back and healthy its last step stops, disables and deletes every `/etc/systemd/system/orama-deploy-<instance>.service` (the legacy name: no `@`, an instance of the characters `orama-privhelper` accepts) and reloads systemd. A regular file or a mask (a symlink to `/dev/null`) is removed; any other symlink under such a name fails the step. Left in place, such a unit keeps the tenant's secrets in a world-readable file, holds the deployment's port, and fails on its next start because its working directory moved. A 0.122.x deployment is therefore **stopped by the upgrade** and stays stopped until it is deployed again: the template unit that replaces it needs a workload token, which only the gateway mints when it starts a deployment (see [Troubleshooting](/docs/operator/troubleshooting) §17). `/var/lib/orama-deploy` is root-only, so the node cannot compare what is already there: every file in `deployment-env/` is staged. Nothing writes there before the move — gateways start after it — so what is staged is what the deployment last ran with. A helper that refuses leaves the old file in place for the next attempt.
+
+The signing keys are the one thing the node may be unable to rename: install writes `secrets/` as root. If `orama-node` cannot write that directory (it is root's, or mounted read-only), it copies each key, recording its SHA-256 in `data/namespaces/index/gateway/legacy-signing-keys.copied` before making the copy. The upgrade step `RemoveCopiedSigningKeys` — root, after the privileged helper and before the restart — then deletes an original in `secrets/` only when its contents match that record **and** the copy exists; it opens `secrets/` and each key without following symlinks and touches those two names only. On the upgrade that crosses the layouts the node has not run yet, so the originals are removed by the next upgrade; the node clears the record once they are gone. **Rolling back** to 0.122.x after a node has moved is not a supported path: the old binary looks for everything at the old paths, so its gateway starts with no signing keys (it generates new ones, which invalidates every token issued before) and no tenant databases, and upgrading again then stops on every path both layouts hold until an operator decides which copy to keep. The copied EdDSA key is the cluster-derived key 0.122.x signed with; the index gateway replaces it with a key of its own on first boot. Tenant gateways generate their own keys in their own state directories; a tenant gateway still on a YAML without `state_dir` refuses to start until the index gateway's restore rewrites its config.
+
+Until the node has restarted on this release, the upgrade reads the old layout where it needs node state:
+
+- **Phase 6b (firewall)** keeps the TURN relay range open when the node relays TURN, judged from files because the TURN units are stopped by then: `data/turn/turn.yaml`, and on a node not yet moved `configs/turn.yaml` or `data/namespaces/<ns>/turn.env`. A location it cannot read fails the upgrade rather than closing the range.
+- **pre-/post-upgrade** read the namespace rqlite env files from `/var/lib/orama-unit-env` once it exists, and from `data/namespaces/<ns>/rqlite.env` before it does. A tenant namespace the node serves (`data/namespaces/<ns>/cluster-state.json`) with rqlite data on it (`data/namespaces/<ns>/rqlite/`) but no `rqlite.env` in the tree read fails the step: its leadership cannot be handed over. A directory without `cluster-state.json` is a leftover that runs nothing and is ignored.
+- **The restart starts every namespace it finds on disk.** `orama node upgrade` and `orama node start` enable and restart `orama-namespace-<svc>@<ns>` for each namespace directory that has a unit env file in `/var/lib/orama-unit-env/<ns>/`. A namespace that was rolled back or deleted is therefore removed by `TeardownNamespace` — units stopped **and disabled**, data directory and env files deleted — not merely stopped (the [Architecture](/docs/contributor/architecture-reference) page, "A removed namespace is removed, not stopped"). A node still holding a namespace an older release deleted starts it on the upgrade and loses it again within two tenant-reconciler sweeps (about two minutes), when the registry shows the node has no part of it.
+
+### `node.public_ip` is recorded on upgrade
+
+`orama node invite` builds the join URL from `node.public_ip` in `node.yaml`, which only `orama maint node install` (`--vps-ip`) used to write. Phase 4 of every upgrade records it: `--public-ip` if given, else the address `node.yaml` already records, else the source address of the default route — the address `orama-node` registers for itself in `dns_nodes`. Whichever it is must be a public IPv4 address — not private, carrier-grade NAT (`100.64.0.0/10`), loopback or link-local; the value read back from `node.yaml` is checked again, and so is the one `orama node invite` reads. It is resolved **before anything is stopped**, so a node that has none fails the upgrade still serving; a node behind NAT has a private route source address and must be told, with `/opt/orama/bin/orama node upgrade --restart --public-ip <ip>` on it. The value resolved there is the one Phase 4 records (after a re-exec it is handed to the new process as `--public-ip`). The rolling upgrade does not pass `--public-ip`: it is per node.
+
+### Local control planes move off loopback TCP (first upgrade to this release)
+
+Each node's upgrade changes these together, so nothing on the node talks across a version boundary:
+
+- **Caddy** gets `admin unix//run/orama-caddy/admin.sock|0600` and its DNS provider a `key_file` (`/etc/caddy/orama-acme.key`, written by Phase 4). The Caddy binary and the Caddyfile come from the same archive; an old Caddy cannot parse `key_file`, and a new gateway refuses an unsigned DNS-01 call.
+- **IPFS Cluster** requires basic auth on its REST API from the `service.json` Phase 2c rewrites; the gateway, `orama-node` and `orama node report` derive the same password from the cluster secret.
+- **pubsub** serves on `/run/orama-pubsub/pubsub.sock`; the gateways reach it there. `PUBSUB_LISTEN` in its env file is no longer read.
+- **The index gateway** binds the node's WireGuard address and `127.0.0.1`, not every interface. A gateway YAML from before (`listen_addr: ":10104"`) is refused, so the gateway restarts until `orama-node` rewrites the YAML on its first reconcile — a few seconds of 502 from Caddy on that node.
+- **orama-privhelper** serves only `orama-node` and the cluster gateway, by unit. A tenant gateway's request is refused.
+- **Mixed window:** a node on this release refuses an older node's unsigned `/v1/network/status` (IPFS Cluster peer discovery on the old node then finds nothing until it is upgraded; nothing is removed), and answers an upgraded node's signed one. `/v1/health` and `/v1/status` no longer carry namespaces or peers; an operator reads `/v1/operator/health`.
+
+## Mixed-version windows and cutovers
+
+**Crossing migration 069 (pending-cleanup claim).** Migration 069 gives
+`namespace_pending_cleanup` a claim lease, and 070 records who holds it. A
+gateway of an earlier release replays those rows without claiming them, and
+clears a row before it releases the ports the row kept. Next to a claiming
+gateway that can double-send a teardown and free a block twice, so before the
+first node of a rolling upgrade that crosses 069 the table must be empty. Check
+it, read-only, against the registry (index RQLite):
+
+```sql
+SELECT namespace, node_id, action, cluster_id, attempts, claimed_until
+  FROM namespace_pending_cleanup;
+```
+
+Zero rows: upgrade. Any row is a teardown still owed to a node; let the running
+release finish it (it leaves the table when the node confirms) or find out why
+it cannot, and upgrade after.
+
+### Mixed-version window: WireGuard peer rows (migration 038)
+
+Migration 038 adds `confirmed_at` to `wireguard_peers` and is safe to apply while
+old-binary nodes are still writing: the column is nullable, the backfills are
+one-shot, and old binaries name their columns explicitly so they never trip on
+it. Two things about the window itself are worth knowing:
+
+- **Upgrade the node serving `/v1/internal/join` first.** An old binary handling
+  a join still allocates `max+1` and writes `INSERT OR REPLACE`, so it can
+  overwrite a row a new binary just inserted and take its overlay address. It
+  also ignores the `peer_id` a new installer sends and writes the old synthetic
+  id instead.
+- **Don't issue invite tokens during the roll.** Same reason: which behaviour a
+  join gets depends on which node answers it.
+
+An old-binary node also keeps self-registering without `confirmed_at`, so its row
+reads as unconfirmed on a new-binary leader. It is not at risk — the same
+statement refreshes `created_at`, keeping the row inside the 30-minute join
+grace, and a row is only ever dropped when it is *also* unmatched in `dns_nodes`.
+Once every node is on the new binary this resolves on the next 60s sync tick.
+
+### Mixed-version window: shared TURN confirmation (`served-tenants.json`)
+
+`reconcile-host-turn` now answers only once the RUNNING `orama-turn` process has
+loaded the namespace, which it proves by writing `/run/orama-turn/served-tenants.json`
+(the unit's `RuntimeDirectory`, removed whenever the unit stops). Only the new
+`turn` binary and unit write it, and a host-side confirmation also requires
+`orama-turn` to be active. The rolling upgrade installs the new unit and restarts
+`orama-turn` on each node in turn, so between the new `orama-node` coming up and
+that restart a node is in one of these states:
+
+- **New node code, old `turn` still running.** No status file exists, so a
+  `reconcile-host-turn` confirmation waits its 6s and is refused. The only
+  consequence is that enabling WebRTC in that window does not advertise that
+  host from the enable call; its own 60s WebRTC sweep advertises it once it
+  serves, and nothing already enabled is affected. Avoid enabling WebRTC during
+  the roll.
+- **`orama-turn` restarting.** The restart drops active relays on that host
+  (the unit is `PartOf=orama-node.service`, so this happens on every node
+  restart anyway). The status file is removed with the unit and a new process
+  deletes any leftover before its first load; the host stays unconfirmed until
+  the new process has published.
+- **Old node code receiving `release`.** A coordinator rolling back a failed
+  enablement sends `reconcile-host-turn` with `release: true`. An old host does
+  not know the field, treats it as a confirmation and answers 500 "does not
+  serve" once the namespace is gone. That 500 is the expected outcome of a
+  successful drop there: the coordinator logs it as a failed release, and the
+  host has already dropped the namespace's secret by reconciling.
+
+### Mixed-version window: unscoped API keys (migration 043)
+
+Migration 043 writes `scopes = 'admin'` onto every live key whose scopes column
+was empty, because an empty column used to be *read* as admin and the new
+binary reads it as no access at all. Access does not change: the grant that was
+being inferred is written down.
+
+The window is one-directional. An old binary still mints a key with no scopes on
+every wallet login, and a new binary denies that key everywhere. So during the
+roll a wallet that logs in against a not-yet-upgraded node can come away with a
+key that an upgraded node refuses. Logging in again once the node is upgraded
+mints a correct one, and `orama namespace keys revoke-legacy` sweeps any that
+were left behind.
+
+The same migration makes one wallet owner per namespace a database invariant. If
+a namespace has several wallet owners today — which the takeover bug allowed —
+only the earliest survives the migration, and the others lose access to it. That
+is the fix, not a side effect: they should never have had it.
+
+### Cutover: invite tokens and the operator list (migration 044)
+
+Migration 044 deletes every invite token in the registry. They were stored in
+plaintext, and SQLite has no hash function, so there is no way to convert them
+from inside a migration. **Any invite minted before the upgrade stops working**;
+re-mint with `orama node invite`. The maximum lifetime is also now one hour,
+down from seven days.
+
+It also creates the `operators` table and seeds it from
+`dns_nodes.operator_wallet` — what `orama maint node install --operator-wallet` wrote
+at the moment the migration runs. On a cluster installed after that migration,
+the table is empty when the migration runs. The first node to register is the
+genesis node, and that registration inserts its wallet, and only its wallet.
+A node that joins later does not become an operator. Add and remove wallets
+with the CLI, which refuses to remove the last one:
+
+```bash
+orama maint operator list
+orama maint operator add 0x…
+orama maint operator remove 0x…
+```
+
+`/v1/operator/*` refuses a wallet that is not on that list. A genesis install
+without `--operator-wallet` records nobody, and no operator command can run
+until that install is repeated with the wallet.
+
+Check what was seeded before upgrading the first node:
+
+```bash
+sudo orama node logs node --since -5min | grep -i migration
+```
+
+```sql
+SELECT wallet, added_by FROM operators;
+```
+
+### Mixed-version window: ownership and API key expiry (migrations 050, 051)
+
+Both are **expand-only** in this release; the next one contracts them.
+
+- **050** creates `principals` and `grants` and backfills them from
+  `namespace_ownership`, and leaves `namespace_ownership` in place. 0.122.x
+  gateways read and write it on every ownership check, namespace claim and key
+  mint; dropping it failed all of them for the whole rolling window. This
+  release does not read it. The two are not kept in step during the window: an
+  owner a 0.122.x gateway records exists only in `namespace_ownership`, and one
+  this release records only in `grants`. The contract migration re-runs 050's
+  backfill (idempotent — it adds only owners with no live owner grant) and then
+  drops the table.
+- **051** adds `expires_at`, `rotated_from` and `principal_id` to `api_keys` in
+  place, gives every existing key 90 days from the migration, and constrains
+  nothing. The table rebuild that made `expires_at` and `scopes` NOT NULL failed
+  every key 0.122.x gateways minted during the window (they name neither). A key
+  a 0.122.x gateway mints in the window has no expiry, which this release's
+  lookup (`expires_at > now`) does not match: it works on 0.122.x gateways only
+  and stops at the end of the rollout — mint keys after the rollout. Only keys
+  that existed when 051 first ran are given the 90-day window: it records the
+  highest key id in `api_keys_expiry_cutoff` before anything else and bounds
+  every backfill by it, so a replay of 051 after the window opened does not turn
+  window keys into live ones. The contract migration **revokes** every key above
+  the cutoff that still has no expiry — it never backfills one — and then
+  rebuilds the table with `expires_at` and `scopes` NOT NULL.
+
+### Rotate the index gateway's signing key after upgrading (this release)
+
+The index gateway's signing keys are systemd credentials now (`/var/lib/orama-gateway-keys/index`, root `0400`). The key the upgrade carries over from `data/namespaces/index/gateway` was readable by every tenant gateway until then, and the index key signs for any namespace, so run `orama maint operator rotate-signing-key` once on each node's index gateway after the whole fleet is upgraded, one node at a time. Rotation writes the new key to the credential tree (never the state directory) and survives a restart; nobody is signed out. The same release stamps each gateway's key every 10 minutes (migration 071) and retires, at index gateway start, unbound keys nobody has stamped for 24 hours, which clears the keys earlier releases published on every restart. Complete the rolling upgrade within 24 hours of the migration: a peer still on the old build does not stamp its key, and its key is retired (published live again when it restarts).
+
+### Access tokens across the upgrade
+
+0.122.x gateways signed access tokens with the EdDSA key every node derived from
+the cluster secret and with the node's RS256 key in `secrets/`. This release's
+gateways each sign with a key of their own and publish its public half in
+`signing_keys` (migration 052); tenant gateways generate theirs in their own
+state directories. An access token issued before a node's upgrade stops
+verifying on that node's gateways, and during the window a token issued by an
+upgraded gateway does not verify on a 0.122.x one (it does not know the `kid`).
+Clients get a 401 and **refresh**: refresh tokens are registry rows (a hash of
+the token), not signatures, so they survive the upgrade and mint a token the
+gateway verifies. A client that cannot refresh logs in again. The
+cluster-derived EdDSA key verifies — never signs — for one access-token
+lifetime after a gateway's **first** boot on this release, and not after: the
+deadline is written to the gateway's state directory
+(`legacy-signing-key-retired-at`) on that boot, so a restart does not re-arm a
+key every node and every namespace gateway holds.

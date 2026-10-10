@@ -12,7 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/telemetry/report"
 )
 
-// Values `orama monitor report` writes, pinned against the monitor's own
+// Values `orama status report` writes, pinned against the monitor's own
 // constants by cmd/orama/internal/monitor/display/report_contract_test.go.
 const (
 	// NoLeader is summary.rqlite_leader when no node is the leader.
@@ -35,7 +35,7 @@ const (
 // node whose collection took 25s.
 const MaxReportAgeSec = 90
 
-// Report is `orama monitor report --json` as this harness reads it.
+// Report is `orama status report --json` as this harness reads it.
 //
 // Each node's report and the alerts decode into the real types from
 // pkg/telemetry, the ones the report is written from. This used to be a hand
@@ -79,7 +79,7 @@ type Node struct {
 	Report       *report.NodeReport `json:"report,omitempty"`
 }
 
-// ParseReport decodes `orama monitor report --json` output.
+// ParseReport decodes `orama status report --json` output.
 func ParseReport(raw []byte) (*Report, error) {
 	var r Report
 	if err := json.Unmarshal(raw, &r); err != nil {

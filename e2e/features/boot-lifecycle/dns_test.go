@@ -47,7 +47,7 @@ func nameservers(f *fleet.Fleet) []fleet.Node {
 // TestIndexRQLiteDown_dnsServesStale: with the index rqlite stopped on every
 // node, every nameserver still answers for the zone at once, from its stale
 // cache, instead of SERVFAIL for every name (lifecycle
-// TestIndexRQLiteDown_dnsServesStale; docs/ARCHITECTURE.md CoreDNS reads
+// TestIndexRQLiteDown_dnsServesStale; website/src/docs/contributor/architecture-reference.mdx CoreDNS reads
 // dns_records from the index rqlite at its own node's WireGuard address, so
 // the nameservers' rqlite is the one that matters). The units are held down:
 // orama-node's supervisor restarts a component whose health check fails

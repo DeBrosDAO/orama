@@ -64,11 +64,11 @@ covers:
     - orama-deploy-node@.service
     - orama-deploy-clean@.service
   claims:
-    - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app renews its workload token from inside its sandbox and the renewed token is accepted"
-    - "docs/DEPLOYMENT_GUIDE.md#your-apps-own-credential: an app reaches nothing it was not granted; a grant change reaches a running app on redeploy"
-    - "docs/AUTH.md#a-workloads-identity: an app's grant applies to a running app on every node without a redeploy, and an app the grant does not cover is refused 403 when it invokes a private function"
-    - "docs/DEPLOYMENT_GUIDE.md#updating-a-deployment: an update replaces the app on its home node and its replica"
-    - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: every node serves every app by name"
-    - "docs/SERVERLESS.md#pubsub-triggers: a publish invokes the triggered function, which can push to a user's devices"
-    - "docs/PUSH_NOTIFICATIONS.md#self-hosted-ntfy-installed-on-every-node: a push lands on every node's ntfy"
-    - "docs/AUTH.md#devices: a device-bound session refreshes only with a device proof"
+    - "website/src/docs/developer/deployments.mdx#your-apps-own-credential: an app renews its workload token from inside its sandbox and the renewed token is accepted"
+    - "website/src/docs/developer/deployments.mdx#your-apps-own-credential: an app reaches nothing it was not granted; a grant change reaches a running app on redeploy"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#workloads-get-identity-and-no-grants-by-default: an app's grant applies to a running app on every node without a redeploy, and an app the grant does not cover is refused 403 when it invokes a private function"
+    - "website/src/docs/developer/deployments.mdx#updating-a-deployment: an update replaces the app on its home node and its replica"
+    - "website/src/docs/developer/domains.mdx#cross-node-routing: every node serves every app by name"
+    - "website/src/docs/developer/functions.mdx#pubsub-triggers: a publish invokes the triggered function, which can push to a user's devices"
+    - "website/src/docs/developer/push-notifications.mdx#self-hosted-ntfy-installed-on-every-node: a push lands on every node's ntfy"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#devices: a device-bound session refreshes only with a device proof"

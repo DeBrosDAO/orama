@@ -22,7 +22,7 @@ const (
 	GlobalServiceArchiver GlobalService = "archiver"
 	GlobalServiceIndexer  GlobalService = "indexer"
 	GlobalServiceRepair   GlobalService = "repair"
-	// The Orama Tor network's roles (docs/TOR_NETWORK.md). A directory
+	// The Orama Tor network's roles (website/src/docs/operator/tor-network.mdx). A directory
 	// authority is also a relay, so dirauth and relay are never installed
 	// together; the exit role is relay with a policy, parsed by
 	// ParseGlobalRoles.

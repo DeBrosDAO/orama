@@ -39,4 +39,4 @@ covers:
     - /v1/storage/unpin/
     - /v1/proxy/anon
   claims:
-    - "docs/API_SURFACE.md: the contracts/ fixtures are what the SDK sends and what the gateway answers, on the live fleet too"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md: the contracts/ fixtures are what the SDK sends and what the gateway answers, on the live fleet too"

@@ -13,7 +13,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/client"
 )
 
-// TestGoClientDatabase_documentedQueriesWork runs docs/GO_CLIENT_SDK.md
+// TestGoClientDatabase_documentedQueriesWork runs website/src/docs/developer/go-sdk.mdx
 // "Database Client" with the configuration its Quick Start gives (a gateway
 // URL and a credential): create a table, write with parameters, read back,
 // a transaction, the schema, drop. The SDK sends these straight to RQLite
@@ -72,7 +72,7 @@ func TestGoClientDatabase_needsConnect(t *testing.T) {
 
 // TestGoClientPubSub_outsideANodeFailsFast: the SDK publishes through the
 // node's pubsub socket, which "admits only the gateways' user"
-// (docs/GO_CLIENT_SDK.md ClientConfig.PubSubSocket), so a program outside a
+// (website/src/docs/developer/go-sdk.mdx ClientConfig.PubSubSocket), so a program outside a
 // node has no pubsub transport: Publish, ListTopics and Subscribe must fail
 // with an error, promptly, never report a delivery that did not happen.
 func TestGoClientPubSub_outsideANodeFailsFast(t *testing.T) {

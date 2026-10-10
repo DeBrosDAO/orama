@@ -12,7 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// The repair delegate's passes (docs/CHAIN.md "Repair delegate").
+// The repair delegate's passes (docs/whitepaper/technical-reference/vol2/41-storage-deals.md "Repair delegate").
 const (
 	repairRPC      = "http://127.0.0.1:31001"
 	repairInterval = "2s"
@@ -27,7 +27,7 @@ const (
 // TestRepairDelegate_oneBadSeedFileDoesNotStopTheOtherDeals: a deal file the
 // delegate refuses (readable by others) is logged as an error every pass and
 // its deal is not repaired, while the other deals in the directory are still
-// visited in the same pass (docs/CHAIN.md "Repair delegate"). Runs the
+// visited in the same pass (docs/whitepaper/technical-reference/vol2/41-storage-deals.md "Repair delegate"). Runs the
 // binary against a scratch home and the node's own chain RPC, with no deal
 // naming the delegate, so nothing is repaired or uploaded.
 func TestRepairDelegate_oneBadSeedFileDoesNotStopTheOtherDeals(t *testing.T) {
