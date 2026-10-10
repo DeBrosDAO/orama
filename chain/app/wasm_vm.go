@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 
 	wasmvmtypes "github.com/CosmWasm/wasmvm/v3/types"
@@ -118,6 +119,19 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		wasm.NewAppModule(app.appCodec, keeper, app.StakingKeeper, app.AccountKeeper, app.BankKeeper, app.MsgServiceRouter(), nil),
 	}
 	app.wasmGenesisOrder = []string{policytypes.ModuleName, wasmtypes.ModuleName}
+}
+
+// registerWasmSnapshot adds contract bytecode to state-sync snapshots. The IAVL snapshot carries
+// only each code's CodeInfo; the bytecode lives in <home>/wasm, so without this a state-synced
+// node would hold contracts it cannot execute and diverge at the first transaction that calls one.
+func (app *OramaApp) registerWasmSnapshot() {
+	manager := app.SnapshotManager()
+	if manager == nil {
+		return
+	}
+	if err := manager.RegisterExtensions(wasmkeeper.NewWasmSnapshotter(app.CommitMultiStore(), app.WasmKeeper())); err != nil {
+		panic(fmt.Errorf("register the wasm snapshot extension: %w", err))
+	}
 }
 
 // WasmKeeper is the wasmd keeper, for queries and tests.

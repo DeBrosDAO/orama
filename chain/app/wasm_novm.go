@@ -28,6 +28,9 @@ func wasmModuleAccountPerms() map[string][]string { return nil }
 // WasmVMLinked reports whether this binary links libwasmvm.
 func WasmVMLinked() bool { return false }
 
+// registerWasmSnapshot has nothing to add: without libwasmvm no contract code is stored.
+func (app *OramaApp) registerWasmSnapshot() {}
+
 func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts servertypes.AppOptions) {
 	if err := guardWasmClaim(appOpts); err != nil {
 		panic(err)

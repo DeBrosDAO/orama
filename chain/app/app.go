@@ -739,6 +739,7 @@ func NewOramaApp(
 	app.setInclusionHandlers()
 	app.setPostHandler()
 	app.registerShieldedSnapshot()
+	app.registerWasmSnapshot()
 
 	if loadLatest {
 		if err := app.LoadLatestVersion(); err != nil {
