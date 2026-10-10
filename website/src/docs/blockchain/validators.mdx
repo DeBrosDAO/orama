@@ -32,7 +32,7 @@ The limits on `C`:
 
 **A cap per operator.** No operator's capped share can exceed 5% of the set, however many validators it runs. Once more than 60 operators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs. Power removed from a capped operator is redistributed by water-filling.
 
-An operator is the account that registered the `x/nodes` node whose `consensus` binding holds the validator's ed25519 consensus key (see [Nodes](/docs/blockchain/nodes#bindings)). The chain adds up the stake of all of an operator's validators, applies the cap to the sum, and splits the operator's capped share back over its validators in proportion to their stake. One operator with 20 validators therefore holds 5% in total, not 20 shares of 5%, and a validator never holds more than its operator does. The ramp applies to each validator's stake as before, so adding a validator to a capped operator moves no power until its stake is admitted, and then only inside the operator's cap.
+An operator is the account that registered the `x/nodes` node whose `consensus` binding holds the validator's ed25519 consensus key (see [Nodes](/docs/blockchain/nodes#the-records)). The chain adds up the stake of all of an operator's validators, applies the cap to the sum, and splits the operator's capped share back over its validators in proportion to their stake. One operator with 20 validators therefore holds 5% in total, not 20 shares of 5%, and a validator never holds more than its operator does. The ramp applies to each validator's stake as before, so adding a validator to a capped operator moves no power until its stake is admitted, and then only inside the operator's cap.
 
 A validator whose consensus key no live node binds belongs to no operator. All such validators share one bucket and one cap, so leaving a validator unregistered gains nothing over registering it. `oramad query power validator-power <valoper>` shows the operator a validator counts toward, or `unlinked`. Retiring the node unlinks its validators.
 
@@ -73,7 +73,7 @@ At lambda = 1 a seat that exists only on the committee drops to zero power.
 
 At the end of an epoch `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT used. Rewards are paid on *capped* power, not on the stock distribution module.
 
-Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account. There is no withdraw transaction. A delegation smaller than 1 ORAMA is skipped.
+Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account, and each owner moves their own earnings to their bank balance with `MsgWithdrawEarnings` (`orama chain withdraw-earnings`) when they choose; see [Fees](/docs/blockchain/fees#using-your-rewards). A delegation smaller than 1 ORAMA is skipped.
 
 ## Slashing and jailing
 

@@ -69,7 +69,7 @@ The tip must come from the bank balance alone. A tip is a payment to the propose
 
 ## Earnings
 
-Every module that pays a protocol reward credits earnings from its own module account: `x/power`, `x/storage`, `x/relay`, `x/houses`, `x/market`. Earnings are a ledger backed by coins in the `fees` account. They can pay the base fee, bond a validator or node role, create a token, open a storage deal, fund a deposit, enter the shielded pool, or fund a node's hot key. They cannot be sent to another user.
+Every module that pays a protocol reward credits earnings from its own module account: `x/power`, `x/storage`, `x/relay`, `x/houses`, `x/market`. Earnings are a ledger backed by coins in the `fees` account. They can pay the base fee, bond a validator or node role, create a token, open a storage deal, fund a deposit, enter the shielded pool, or fund a node's hot key. They cannot be sent to another user directly: the owner withdraws them to the owner's own bank balance with `MsgWithdrawEarnings` and sends from there, in the open or through the shielded pool.
 
 Where earnings convert to spendable balance matters. The top-up, by exactly the shortfall, happens inside message handlers, never in the ante chain. Ante writes survive a message that then fails, so a top-up there would turn earnings into spendable balance for free; a handler's cache branch is discarded on failure, taking the top-up with it.
 

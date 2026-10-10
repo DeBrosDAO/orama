@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -409,5 +410,56 @@ func TestLoadNetworks_anAddedNameThatBecameBuiltInIsExplained(t *testing.T) {
 	_, err := LoadNetworks()
 	if err == nil || !strings.Contains(err.Error(), "orama network remove") {
 		t.Fatalf("error = %v, want the remedy", err)
+	}
+}
+
+func TestExpectedChainID(t *testing.T) {
+	cfg := func(active, network string) *EnvironmentConfig {
+		return &EnvironmentConfig{
+			ActiveEnvironment: active,
+			Environments:      []Environment{{Name: "main", GatewayURL: "https://gw.example.org", Network: network}},
+		}
+	}
+	for name, tc := range map[string]struct {
+		cfg         *EnvironmentConfig
+		wantID      string
+		wantNetwork string
+	}{
+		"a registry network names its chain": {cfg("main", "stagenet"), "orama-stagenet-1", "stagenet"},
+		"no network configured":              {&EnvironmentConfig{}, "", ""},
+		"the active one is not configured":   {cfg("gone", "stagenet"), "", ""},
+		"the gateway belongs to no network":  {cfg("main", ""), "", ""},
+		"the network is not in the registry": {cfg("main", "ghost"), "", ""},
+	} {
+		useNetworkFixtures(t, tc.cfg, "stagenet")
+		id, network, err := ExpectedChainID()
+		if err != nil || id != tc.wantID || network != tc.wantNetwork {
+			t.Errorf("%s: %q, %q, %v; want %q, %q", name, id, network, err, tc.wantID, tc.wantNetwork)
+		}
+	}
+}
+
+// Only "nothing is selected" and "the network is not in the registry" mean there is no pin. A
+// configuration or a registry that cannot be read is an error carrying the real cause: swallowing
+// it would turn a fault into "name your chain with --chain-id", or worse, into no check.
+func TestExpectedChainID_aFaultIsAnErrorWithItsCause(t *testing.T) {
+	useNetworkFixtures(t, &EnvironmentConfig{ActiveEnvironment: "main", Environments: []Environment{{Name: "main", Network: "stagenet"}}}, "stagenet")
+	path, err := getEnvironmentConfigPathFn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = ExpectedChainID()
+	if err == nil || errors.Is(err, ErrNoActiveNetwork) || !strings.Contains(err.Error(), "active network") {
+		t.Fatalf("an unreadable configuration: err = %v", err)
+	}
+
+	useNetworkFixtures(t, &EnvironmentConfig{ActiveEnvironment: "main", Environments: []Environment{{Name: "main", Network: "stagenet"}}}, "stagenet")
+	boom := errors.New("store unreadable")
+	embeddedNetworksFn = func() (*netregistry.Registry, error) { return nil, boom }
+	if _, _, err = ExpectedChainID(); !errors.Is(err, boom) {
+		t.Fatalf("an unreadable registry: err = %v, want it to wrap the cause", err)
 	}
 }

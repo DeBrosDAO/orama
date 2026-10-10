@@ -56,7 +56,7 @@ Two nftables tables, each replaced atomically, define the boundary. Published po
 
 **Endpoints.** Hosts must be public, and no two live nodes may claim one literal IP.
 
-**Names.** An operator can claim one identification name per node, a DNS label under the network's domain that points at the node's literal IPs and delegates nothing. The chain enforces the label rules, a reserved list, first come first served and a refundable deposit that comes back when the name is released or the node retires.
+**Names.** An operator can claim one identification name per node, a DNS label in a dedicated sub-zone of the network's domain that points at the node's literal IPs and delegates nothing. The chain enforces the label rules, a reserved list, first come first served and a refundable deposit that comes back when the name is released or the node retires. The cluster that answers the network's zone reads the claimed names from the chain once a minute and serves them, so what the zone answers cannot drift from the chain.
 
 **Bonds.** A bond is norama escrowed in the `nodes` module account, per role. A role is active only while the node is active and that role's bond meets the minimum. Unbonding queues the amount for 21 days, still slashable.
 

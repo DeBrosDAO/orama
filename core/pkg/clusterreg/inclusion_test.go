@@ -36,7 +36,7 @@ func txServer(t *testing.T, misses int32, status int, answer string) (*httptest.
 }
 
 func TestWaitIncluded_waitsForTheBlock(t *testing.T) {
-	srv, calls := txServer(t, 3, http.StatusOK, `{"tx_response":{"height":"120","code":0}}`)
+	srv, calls := txServer(t, 3, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"120","code":0}}`)
 	height, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
 	if err != nil || height != 120 {
 		t.Fatalf("height %d err %v", height, err)
@@ -49,7 +49,7 @@ func TestWaitIncluded_waitsForTheBlock(t *testing.T) {
 // Admission to the mempool is not success: a transaction that fails in its block is an error that
 // carries the chain's log.
 func TestWaitIncluded_aTransactionThatFailsInItsBlockIsAnError(t *testing.T) {
-	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"7","code":11,"raw_log":"out of gas"}}`)
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"7","code":11,"raw_log":"out of gas"}}`)
 	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
 	if err == nil || !strings.Contains(err.Error(), "block 7 (code 11): out of gas") {
 		t.Fatalf("err = %v", err)
@@ -74,7 +74,7 @@ func TestWaitIncluded_anotherErrorEndsTheWait(t *testing.T) {
 }
 
 func TestWaitIncluded_aResultWithNoHeightIsAnError(t *testing.T) {
-	for _, body := range []string{`{"tx_response":{"code":0}}`, `not json`, `{"tx_response":{"height":"0"}}`} {
+	for _, body := range []string{`{"tx_response":{"code":0}}`, `not json`, `{"tx_response":{"txhash":"` + testHash + `","height":"0"}}`} {
 		srv, _ := txServer(t, 0, http.StatusOK, body)
 		if _, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll); err == nil {
 			t.Errorf("%s: no error", body)
@@ -94,7 +94,7 @@ func TestWaitIncluded_theCallersCancellationIsReturned(t *testing.T) {
 
 // The hash goes into the lookup's URL path and comes from the node: anything but a hex hash is refused.
 func TestWaitIncluded_refusesAHashThatIsNotHex(t *testing.T) {
-	srv, calls := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"1","code":0}}`)
+	srv, calls := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"1","code":0}}`)
 	for _, hash := range []string{"", "ABC", testHash + "/../x", strings.Repeat("zz", 32), "?q=" + testHash} {
 		if _, err := WaitIncluded(context.Background(), srv.URL, hash, time.Minute, testPoll); err == nil {
 			t.Errorf("%q: no error", hash)
@@ -107,7 +107,7 @@ func TestWaitIncluded_refusesAHashThatIsNotHex(t *testing.T) {
 
 // A hostile node's log cannot put terminal escapes on the operator's screen.
 func TestWaitIncluded_theChainsLogLosesControlCharacters(t *testing.T) {
-	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"7","code":3,"raw_log":"bad\u001b[2Jthing\n"}}`)
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"7","code":3,"raw_log":"bad\u001b[2Jthing\n"}}`)
 	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
 	if err == nil || strings.ContainsAny(err.Error(), "\x1b\n") || !strings.Contains(err.Error(), "bad[2Jthing") {
 		t.Fatalf("err = %q", err)
@@ -117,9 +117,32 @@ func TestWaitIncluded_theChainsLogLosesControlCharacters(t *testing.T) {
 // The quoted log is cut on a character, never inside one.
 func TestWaitIncluded_aLongLogIsCutOnACharacter(t *testing.T) {
 	long := strings.Repeat("é", maxResultLog+10)
-	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"height":"7","code":3,"raw_log":"`+long+`"}}`)
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"7","code":3,"raw_log":"`+long+`"}}`)
 	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
 	if err == nil || !utf8.ValidString(err.Error()) || !strings.Contains(err.Error(), strings.Repeat("é", maxResultLog)) {
 		t.Fatalf("err = %q", err)
+	}
+}
+
+// A node that answers the result of another transaction must not have it reported as this one's.
+func TestWaitIncluded_aResultForAnotherHashIsRefused(t *testing.T) {
+	other := strings.Repeat("CD", 32)
+	for name, body := range map[string]string{
+		"another hash":               `{"tx_response":{"txhash":"` + other + `","height":"9","code":0}}`,
+		"no hash":                    `{"tx_response":{"height":"9","code":0}}`,
+		"another hash, failed there": `{"tx_response":{"txhash":"` + other + `","height":"9","code":5,"raw_log":"boom"}}`,
+	} {
+		srv, _ := txServer(t, 0, http.StatusOK, body)
+		height, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
+		if err == nil || !strings.Contains(err.Error(), "refusing to report it") || height != 0 {
+			t.Errorf("%s: height %d err %v", name, height, err)
+		}
+	}
+}
+
+func TestWaitIncluded_theRightHashInAnyCaseIsAccepted(t *testing.T) {
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+strings.ToLower(testHash)+`","height":"9","code":0}}`)
+	if height, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll); err != nil || height != 9 {
+		t.Fatalf("height %d err %v", height, err)
 	}
 }

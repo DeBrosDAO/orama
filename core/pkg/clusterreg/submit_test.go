@@ -97,3 +97,18 @@ func TestWithHTTPClient_failureIsReturnedNotRetried(t *testing.T) {
 		t.Fatalf("client was called %d times, want 1", calls)
 	}
 }
+
+func TestParseUint_refusesWhatWrapsAround(t *testing.T) {
+	for in, want := range map[string]uint64{"": 0, "0": 0, "42": 42, "18446744073709551615": 18446744073709551615} {
+		if got, err := parseUint(in); err != nil || got != want {
+			t.Errorf("parseUint(%q) = %d, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"18446744073709551616", "99999999999999999999999", "-1", "1.5", "0x10", "abc", "\x1b[2J"} {
+		if _, err := parseUint(in); err == nil {
+			t.Errorf("parseUint(%q) succeeded", in)
+		} else if strings.ContainsRune(err.Error(), 0x1b) {
+			t.Errorf("the error carries an escape: %q", err.Error())
+		}
+	}
+}

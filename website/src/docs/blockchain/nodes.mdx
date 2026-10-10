@@ -56,7 +56,7 @@ A node with no literal-IP endpoint or no declared ASN cannot take a protocol-dea
 
 ## Identification names
 
-An operator can claim a name for one of its nodes with `MsgClaimNodeName`. The name is the DNS label of `<name>.<network>.orama.network`: an address record (A or AAAA) for each literal IP among the node's endpoints. It identifies the node and nothing more. There is no NS record and no glue, so a name delegates nothing; a private cluster keeps using its developer's own domain.
+An operator can claim a name for one of its nodes with `MsgClaimNodeName`. The name is the DNS label of `<name>.<zone>`, where the zone is a dedicated sub-zone the network publishes below its domain (for example `nodes.stagenet.orama.network`): an address record (A or AAAA) for each literal IP among the node's endpoints. It identifies the node and nothing more. There is no NS record and no glue, so a name delegates nothing; a private cluster keeps using its developer's own domain.
 
 The chain enforces:
 
@@ -68,7 +68,7 @@ The chain enforces:
 
 Only the node's own operator can claim or release its name. A name with no literal-IP endpoint on its node resolves to no address until the node registers one. `oramad tx nodes claim-name <node-id> <name>` and `release-name <node-id>` send the messages; the events are `claim_node_name` and `release_node_name` (with the reason `release`, `retire` or `tombstone`).
 
-Three queries read the names, and the gateway serves all three. `NodeByName` returns the node a name identifies with the literal IPs of its endpoints. `NameOfNode` returns the name a node holds and its deposit. `NodeNames` pages through every claim in name order, at most 1,000 names a page; it pages by the key the previous page returned, and refuses an offset and computes no total. The service that serves the records pages through it.
+Three queries read the names, and the gateway serves all three. `NodeByName` returns the node a name identifies with the literal IPs of its endpoints. `NameOfNode` returns the name a node holds and its deposit. `NodeNames` pages through every claim in name order, at most 1,000 names a page; it pages by the key the previous page returned, and refuses an offset and computes no total. The cluster that answers the network's zone pages through it once a minute and serves each name from the chain's state: see [Serving node names](/docs/operator/nameserver#serving-node-names).
 
 ## What happens every block
 

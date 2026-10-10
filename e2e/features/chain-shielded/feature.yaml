@@ -13,9 +13,11 @@
 # step the pool, the note tree and the nullifier set are unchanged and every
 # module's Invariants query holds on every validator. The queries Params,
 # Pools, TreeState, NullifierSpent and Invariants are read through abci_query.
-# The success paths (a wallet-built scenario: shield, shield from earnings,
-# transfer, unshield, as chain/scripts/stagenet gen-shielded builds it) need a
-# run chain built with the Orchard library and the pinned verifier binary;
+# Shielding is optional: a public bank send and MsgWithdrawEarnings need no pool
+# (features/chain-core, chain-transfers), and the CLI and SDK are private unless
+# told --public / public: true. The success paths (a wallet-built scenario:
+# shield, shield from earnings, transfer, unshield, as chain/scripts/stagenet
+# gen-shielded builds it) need a run chain built with the Orchard library and the pinned verifier binary;
 # they are reported as refusal-only claims until chain-deploy.sh builds and
 # installs them.
 id: chain-shielded

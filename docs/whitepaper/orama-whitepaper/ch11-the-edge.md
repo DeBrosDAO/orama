@@ -28,6 +28,10 @@ Any node can notice a peer is dead, so DNS edits cannot wait for a coordinator. 
 
 Three mechanisms turn failure into DNS change, and they overlap on purpose. A node whose own gateway fails three probes in a row (about 90 s) withdraws its rows. The ring monitor disables a suspect node's rows. A reaper marks nodes silent for 120 s inactive and, after 15 min, purges their namespace records. Gateway-host rows keep the last record even when it points at a departed node, because an emptied name falls through to the base wildcard and sends clients to a node that does not host the namespace, which is harder to diagnose than an outage.
 
+### Node names
+
+With `dns.node_names_zone` set to a sub-zone, each node copies the chain's claimed names into tagged `A` and `AAAA` rows every minute.
+
 ### Slots and delegation
 
 A nameserver node claims the lowest free slot `ns1` to `ns13` by inserting a row whose primary key is the hostname, so Raft decides the winner. Thirteen is the number of NS records with glue that fit a classic 512-byte referral. A slot is published as an NS record only once its glue A record exists and matches. A missed heartbeat does not free a slot, since that would drop the glue and the delegation with it; `orama node remove` does. Because slots are claimed at run time, the operator cannot know which address holds `ns1` in advance. `orama node dns delegation` reads the glued slots from the registry, prints the records for the registrar and checks that the parent zone returns them. Delegation must precede the first certificate, since the certificate authority finds CoreDNS through it.

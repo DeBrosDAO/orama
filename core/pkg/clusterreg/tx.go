@@ -21,6 +21,10 @@ type SignInput struct {
 	Gas           uint64
 	ChainID       string
 	AccountNumber uint64
+	// TimeoutHeight is the last block the transaction may be included in; the chain refuses it
+	// after that. Zero sets none. It is part of the signed body, so a node cannot hold the
+	// transaction and release it later.
+	TimeoutHeight uint64
 }
 
 // SignDoc is the protobuf cosmos.tx.v1beta1.SignDoc for this registration.
@@ -31,7 +35,7 @@ func (in SignInput) SignDoc() ([]byte, error) {
 	return Direct{
 		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
 		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
-		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber, TimeoutHeight: in.TimeoutHeight,
 	}.SignDoc()
 }
 
@@ -44,7 +48,7 @@ func (in SignInput) TxRaw(signature []byte) ([]byte, error) {
 	return Direct{
 		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
 		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
-		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber, TimeoutHeight: in.TimeoutHeight,
 	}.TxRaw(signature)
 }
 
@@ -58,6 +62,10 @@ type Direct struct {
 	Gas           uint64
 	ChainID       string
 	AccountNumber uint64
+	// TimeoutHeight is the last block the transaction may be included in; the chain refuses it
+	// after that. Zero sets none. It is part of the signed body, so a node cannot hold the
+	// transaction and release it later.
+	TimeoutHeight uint64
 }
 
 // SignDoc is the cosmos.tx.v1beta1.SignDoc for this message.
@@ -65,7 +73,7 @@ func (d Direct) SignDoc() ([]byte, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	body := txBody(d.TypeURL, d.Msg, "")
+	body := txBody(d.TypeURL, d.Msg, "", d.TimeoutHeight)
 	auth := authInfo(d.PubKey, d.Sequence, d.FeeAmount, d.Gas)
 	doc := appendBytesField(nil, 1, body)
 	doc = appendBytesField(doc, 2, auth)
@@ -81,7 +89,7 @@ func (d Direct) TxRaw(signature []byte) ([]byte, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	body := txBody(d.TypeURL, d.Msg, "")
+	body := txBody(d.TypeURL, d.Msg, "", d.TimeoutHeight)
 	auth := authInfo(d.PubKey, d.Sequence, d.FeeAmount, d.Gas)
 	tx := appendBytesField(nil, 1, body)
 	tx = appendBytesField(tx, 2, auth)
@@ -143,7 +151,7 @@ func EncodeMsgSendSignDoc(from, to, amount, memo string, pubKey []byte, sequence
 	msg := appendStringField(nil, 1, from)
 	msg = appendStringField(msg, 2, to)
 	msg = appendBytesField(msg, 3, coin)
-	body := txBody("/cosmos.bank.v1beta1.MsgSend", msg, memo)
+	body := txBody("/cosmos.bank.v1beta1.MsgSend", msg, memo, 0)
 	auth := authInfo(pubKey, sequence, fee, gas)
 	doc := appendBytesField(nil, 1, body)
 	doc = appendBytesField(doc, 2, auth)
@@ -151,12 +159,15 @@ func EncodeMsgSendSignDoc(from, to, amount, memo string, pubKey []byte, sequence
 	return appendUvarintField(doc, 4, account)
 }
 
-func txBody(typeURL string, msg []byte, memo string) []byte {
+func txBody(typeURL string, msg []byte, memo string, timeoutHeight uint64) []byte {
 	any := appendStringField(nil, 1, typeURL)
 	any = appendBytesField(any, 2, msg)
 	body := appendBytesField(nil, 1, any)
 	if memo != "" {
 		body = appendStringField(body, 2, memo)
+	}
+	if timeoutHeight > 0 {
+		body = appendUvarintField(body, 3, timeoutHeight)
 	}
 	return body
 }

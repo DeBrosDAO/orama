@@ -14,7 +14,7 @@ import { CloudCompare } from "../components/visuals/cloud-compare";
 import { ClusterDiagram, MeshDiagram, WalletLoginDiagram } from "../components/visuals/how-diagrams";
 import { RoadmapTrack } from "../components/visuals/roadmap-track";
 import { APPS } from "../content/apps";
-import { DOCS_PATH } from "../content/pages";
+import { DOCS_PATH, GET_STARTED_PATH } from "../content/pages";
 import { ROUTES } from "../content/routes";
 import { GITHUB_URL } from "../content/site";
 import { PILLARS } from "../content/why";
@@ -39,10 +39,13 @@ function Hero() {
         </p>
         <div className="flex flex-col sm:flex-row w-full sm:w-auto gap-3 justify-center pt-2">
           <Button asChild size="lg">
-            <Link to={DOCS_PATH}>
-              Docs
+            <Link to={GET_STARTED_PATH}>
+              Get started
               <ArrowRight className="w-3.5 h-3.5 ml-2" />
             </Link>
+          </Button>
+          <Button asChild variant="ghost" size="lg">
+            <Link to={DOCS_PATH}>Docs</Link>
           </Button>
           <Button asChild variant="ghost" size="lg">
             <Link to={ROUTES.donate.path}>Support</Link>

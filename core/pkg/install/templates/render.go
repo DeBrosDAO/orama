@@ -102,6 +102,11 @@ type NodeConfigData struct {
 	// --acme-ca` and carried forward across regenerations.
 	ACMECA string
 
+	// NodeNamesZone is the zone this cluster publishes node identification names under (node.yaml
+	// dns.node_names_zone); empty publishes none. An operator writes it into node.yaml and it is
+	// carried forward across regenerations, so an upgrade never switches the names off.
+	NodeNamesZone string
+
 	// PublicIP is the node's public address (orama node install --vps-ip),
 	// which an invite minted on this node names as the gateway to join.
 	PublicIP string

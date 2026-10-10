@@ -117,12 +117,24 @@ func (r *Reader) do(req *http.Request) (json.RawMessage, error) {
 		return nil, fmt.Errorf("response from %s is over %d bytes", req.URL.Host, responseLimit)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s answered HTTP %d: %s", req.URL.Host, resp.StatusCode, truncate(string(body)))
+		return nil, &StatusError{Host: req.URL.Host, Code: resp.StatusCode, Body: truncate(httputil.Printable(string(body)))}
 	}
 	if !json.Valid(body) {
 		return nil, fmt.Errorf("%s did not answer JSON", req.URL.Host)
 	}
 	return body, nil
+}
+
+// StatusError is an HTTP error status a read was answered with. Reads that must tell "not there"
+// from "could not ask" match it with errors.As.
+type StatusError struct {
+	Host string
+	Code int
+	Body string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("%s answered HTTP %d: %s", e.Host, e.Code, e.Body)
 }
 
 func truncate(s string) string {

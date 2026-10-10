@@ -31,6 +31,13 @@ sni_router:
 tls:
   acme_ca: "{{.ACMECA}}"
 {{- end}}
+{{- if .NodeNamesZone}}
+
+# The sub-zone below http_gateway.base_domain this cluster publishes node identification
+# names under, from the chain (dns.node_names_zone). Carried forward across regenerations.
+dns:
+  node_names_zone: "{{.NodeNamesZone}}"
+{{- end}}
 
 database:
   data_dir: "{{.DataDir}}/rqlite"

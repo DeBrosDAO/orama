@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
+	"github.com/DeBrosOfficial/network/pkg/nodenames"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )
@@ -389,6 +390,21 @@ func TestCreate_refusesNamesThatCannotBeUsed(t *testing.T) {
 		if len(db.writes) != 0 {
 			t.Errorf("%q was created", name)
 		}
+	}
+}
+
+// The sync that serves node names owns the dns_records rows tagged with this name and removes the
+// ones it does not expect, so a tenant namespace may not be called it.
+func TestCreate_refusesTheNodeNamesOwnerTag(t *testing.T) {
+	if !reservedNamespaces[nodenames.RecordNamespace] {
+		t.Fatalf("%q is not reserved", nodenames.RecordNamespace)
+	}
+	db := newRegistry()
+	h := NewCreateHandler(db, &recordingProvisioner{}, nil, zap.NewNop())
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, createRequest("0xowner", nodenames.RecordNamespace))
+	if w.Code != http.StatusBadRequest || len(db.writes) != 0 {
+		t.Fatalf("answered %d, wrote %d", w.Code, len(db.writes))
 	}
 }
 

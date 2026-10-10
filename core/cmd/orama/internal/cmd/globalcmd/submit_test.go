@@ -12,7 +12,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 )
 
-var testTxHash = strings.Repeat("AB", 32)
+// testTxHash is the hash of the one-byte transaction the tests broadcast.
+var testTxHash = clusterreg.TxHash([]byte{1})
 
 // chainAPI admits every broadcast to the mempool and answers the lookup with result.
 func chainAPI(t *testing.T, result string) *httptest.Server {
@@ -34,7 +35,7 @@ func chainAPI(t *testing.T, result string) *httptest.Server {
 // The storage smoke on stagenet printed "opened deal" for a transaction that was only in the
 // mempool. Admission is not success: the block's verdict is.
 func TestBroadcastAndWait_aTransactionItsBlockRefusesIsAFailure(t *testing.T) {
-	srv := chainAPI(t, `{"tx_response":{"height":"9","code":5,"raw_log":"insufficient funds"}}`)
+	srv := chainAPI(t, `{"tx_response":{"txhash":"`+testTxHash+`","height":"9","code":5,"raw_log":"insufficient funds"}}`)
 	err := broadcastAndWait(context.Background(), srv.URL, []byte{1}, "opened deal")
 	if err == nil || !strings.Contains(err.Error(), testTxHash) || !strings.Contains(err.Error(), "insufficient funds") {
 		t.Fatalf("err = %v, want the block's refusal naming the hash", err)
@@ -42,7 +43,7 @@ func TestBroadcastAndWait_aTransactionItsBlockRefusesIsAFailure(t *testing.T) {
 }
 
 func TestBroadcastAndWait_succeedsOnceInABlock(t *testing.T) {
-	srv := chainAPI(t, `{"tx_response":{"height":"9","code":0}}`)
+	srv := chainAPI(t, `{"tx_response":{"txhash":"`+testTxHash+`","height":"9","code":0}}`)
 	if err := broadcastAndWait(context.Background(), srv.URL, []byte{1}, "opened deal"); err != nil {
 		t.Fatal(err)
 	}
@@ -82,5 +83,46 @@ func TestBroadcastAndWait_unreachableChainIsUnavailable(t *testing.T) {
 	err := broadcastAndWait(context.Background(), "http://127.0.0.1:1", []byte{1}, "opened deal")
 	if got := clierr.CodeOf(err); got != clierr.CodeUnavailable {
 		t.Fatalf("exit code %d (%v), want %d", got, err, clierr.CodeUnavailable)
+	}
+}
+
+// A node that answers another transaction's hash must not have its result reported as ours.
+func TestBroadcastAndWait_aHashThatIsNotTheTransactionsIsRefused(t *testing.T) {
+	other := strings.Repeat("CD", 32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("the client followed the wrong hash: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tx_response":{"code":0,"txhash":"` + other + `"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	err := broadcastAndWait(context.Background(), srv.URL, []byte{1}, "opened deal")
+	if err == nil || !strings.Contains(err.Error(), "refusing to follow or report it") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestWithTimeoutHeight_setsTheNewestBlockPlusTheMargin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/cosmos/base/tendermint/v1beta1/blocks/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"block":{"header":{"height":"5000"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	in, err := withTimeoutHeight(context.Background(), srv.URL, clusterreg.Direct{TypeURL: "/x"})
+	if err != nil || in.TimeoutHeight != 5000+clusterreg.TimeoutHeightMargin {
+		t.Fatalf("timeout height %d, err %v", in.TimeoutHeight, err)
+	}
+}
+
+// A chain that cannot say its height is an error: a transaction is not signed without the bound.
+func TestWithTimeoutHeight_aChainWithNoHeightIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", http.StatusBadGateway) }))
+	t.Cleanup(srv.Close)
+	if _, err := withTimeoutHeight(context.Background(), srv.URL, clusterreg.Direct{}); err == nil {
+		t.Fatal("a missing height was ignored")
 	}
 }

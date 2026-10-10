@@ -7,13 +7,19 @@
 # order (the DNS sync loop's read). MsgReleaseNodeName and retiring the node
 # return the deposit and free the name. The refusals are the claim of a
 # reserved, malformed or taken name, a second name for a node, and a release
-# of a name the node does not hold.
+# of a name the node does not hold. The records are served by the cluster that
+# sets dns.node_names_zone (core/pkg/nodenames); the run's nodes do not set it and
+# its test nodes have hostname endpoints, so TestNodeNames_theZoneServesAClaimAndDropsARelease
+# sets the zone (a sub-zone of the base domain) in one node's node.yaml, restarts that node,
+# registers a node with a literal public IP, claims a name and waits for the A record on the node's
+# nameserver, then releases it and waits for the record to go; it restores node.yaml and restarts the
+# node afterwards, and so runs alone.
 id: chain-node-names
 title: Node identification names
 area: chain
 subtasks: [3333]
 stage: 8
-destructive: false
+destructive: true
 requires:
   extra_nodes: 0
   probe: false
@@ -28,3 +34,4 @@ covers:
     - orama.nodes.v1.NodeNames
   claims:
     - "docs/CHAIN.md#x-nodes: a node holds at most one identification name, a name belongs to one node (first come first served), a reserved or malformed name is refused, and the deposit is returned on release or retire"
+    - "docs/whitepaper/technical-reference/vol1/24-dns-and-nameservers.md#node-identification-names: with dns.node_names_zone set to a sub-zone below the base domain, a claimed node name is served as an A record of <name>.<zone> on the cluster's nameserver within a sync interval, and removed within one after the release (fleet-tested here); adds before removes, nothing is written from a partial read or removed while the chain node is catching up, private addresses and names another owner holds are refused (unit-tested in core/pkg/nodenames)"

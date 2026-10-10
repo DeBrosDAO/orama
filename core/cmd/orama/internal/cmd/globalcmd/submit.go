@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 	"github.com/spf13/cobra"
 )
@@ -52,6 +54,9 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 		if len(in.PubKey) == 0 {
 			in.PubKey = acct.PubKey
 		}
+		if in, err = withTimeoutHeight(ctx, node, in); err != nil {
+			return err
+		}
 	}
 	doc, err := in.SignDoc()
 	if err != nil {
@@ -76,6 +81,19 @@ func SubmitDirect(cmd *cobra.Command, operator, node, pubHex string, account, se
 	return broadcastAndWait(ctx, node, tx, verb)
 }
 
+// withTimeoutHeight sets the transaction's timeout height from the newest block of the chain at
+// node, so the signed body carries the last block it may be included in and a node that holds it
+// cannot release it later. A chain that cannot say its height is an error: signing without the
+// bound is not a fallback.
+func withTimeoutHeight(ctx context.Context, node string, in clusterreg.Direct) (clusterreg.Direct, error) {
+	timeout, err := clusterreg.FetchTimeoutHeight(ctx, node)
+	if err != nil {
+		return in, chainErr(err, "read the newest block's height for the timeout height")
+	}
+	in.TimeoutHeight = timeout
+	return in, nil
+}
+
 // chainErr classifies a failure of a chain REST call. A request that got no
 // answer (a refused connection, a timeout, a 5xx) is Unavailable, so a script
 // may retry it; an answer that says no is a Failure, which retrying will not
@@ -92,10 +110,18 @@ func chainErr(err error, what string, args ...any) error {
 
 // broadcastAndWait sends tx and reports it only once it is in a block: admission to the mempool
 // is not success, since the block that runs it can still refuse it.
+//
+// The hash the node answers must be the hash of the bytes that were sent. One that is not would
+// have the wait, and the report, follow some other transaction.
 func broadcastAndWait(ctx context.Context, node string, tx []byte, verb string) error {
-	hash, err := clusterreg.Broadcast(ctx, node, tx)
+	answered, err := clusterreg.Broadcast(ctx, node, tx)
 	if err != nil {
 		return chainErr(err, "broadcast the transaction")
+	}
+	hash := clusterreg.TxHash(tx)
+	if !strings.EqualFold(answered, hash) {
+		return clierr.Failure("the node answered the transaction hash %q for a transaction whose hash is %s; refusing to follow or report it",
+			httputil.Printable(answered), hash)
 	}
 	height, err := clusterreg.WaitIncluded(ctx, node, hash, clusterreg.InclusionTimeout, clusterreg.InclusionPoll)
 	if err != nil {

@@ -32,6 +32,12 @@ type fakeChain struct {
 	broadcast  error
 	waitErr    error
 	height     int64
+	// answerHash replaces the hash the chain answers to a broadcast (default: the real hash).
+	answerHash string
+	waited     []string
+	// latest is the newest block's height (default 1000); latestErr fails reading it.
+	latest    uint64
+	latestErr error
 
 	simulated [][]byte
 	sent      [][]byte
@@ -40,6 +46,12 @@ type fakeChain struct {
 func (f *fakeChain) Account(context.Context, string) (clusterreg.Account, error) {
 	return f.account, f.accountErr
 }
+func (f *fakeChain) LatestHeight(context.Context) (uint64, error) {
+	if f.latest == 0 {
+		return 1000, f.latestErr
+	}
+	return f.latest, f.latestErr
+}
 func (f *fakeChain) BaseFee(context.Context) (string, error) { return f.baseFee, nil }
 func (f *fakeChain) SimulateGas(_ context.Context, tx []byte) (uint64, error) {
 	f.simulated = append(f.simulated, tx)
@@ -47,9 +59,15 @@ func (f *fakeChain) SimulateGas(_ context.Context, tx []byte) (uint64, error) {
 }
 func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	f.sent = append(f.sent, tx)
-	return "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789", f.broadcast
+	if f.answerHash != "" {
+		return f.answerHash, f.broadcast
+	}
+	return clusterreg.TxHash(tx), f.broadcast
 }
-func (f *fakeChain) WaitIncluded(context.Context, string) (int64, error) { return f.height, f.waitErr }
+func (f *fakeChain) WaitIncluded(_ context.Context, hash string) (int64, error) {
+	f.waited = append(f.waited, hash)
+	return f.height, f.waitErr
+}
 
 // fakeSigner is a RootWallet that signs with a fixed signature.
 type fakeSigner struct {

@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // RootWallet's cross-language ORAMA vector: MsgSend on orama-stagenet-2.
@@ -106,4 +108,102 @@ func TestRulesMatchTheChainModule(t *testing.T) {
 	if !bytes.Contains(msgs, []byte(`proto.RegisterType((*MsgRegisterCluster)(nil), "orama.nodes.v1.MsgRegisterCluster")`)) {
 		t.Fatal("MsgRegisterCluster type URL changed")
 	}
+}
+
+// The timeout height is in the signed body (TxBody field 3), so a node cannot hold the
+// transaction and release it later.
+func TestDirect_timeoutHeightIsInTheSignedBodyAndAbsentWhenZero(t *testing.T) {
+	pub, _ := hex.DecodeString(vectorPubKey)
+	d := Direct{TypeURL: "/x.Msg", Msg: []byte{1}, PubKey: pub, FeeAmount: "5", Gas: 9, ChainID: "orama-1"}
+	body := func(d Direct) map[protowire.Number]uint64 {
+		doc, err := d.SignDoc()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw := fieldBytes(t, doc, 1)
+		got := map[protowire.Number]uint64{}
+		for len(raw) > 0 {
+			num, typ, n := protowire.ConsumeTag(raw)
+			raw = raw[n:]
+			if typ == protowire.VarintType {
+				v, n := protowire.ConsumeVarint(raw)
+				got[num] = v
+				raw = raw[n:]
+				continue
+			}
+			raw = raw[protowire.ConsumeFieldValue(num, typ, raw):]
+		}
+		return got
+	}
+	if _, set := body(d)[3]; set {
+		t.Error("a zero timeout height was encoded")
+	}
+	d.TimeoutHeight = 12345
+	if got := body(d)[3]; got != 12345 {
+		t.Errorf("timeout height in the body = %d, want 12345", got)
+	}
+	signed, _ := d.SignDoc()
+	d.TimeoutHeight = 12346
+	other, _ := d.SignDoc()
+	if bytes.Equal(signed, other) {
+		t.Error("the timeout height is not covered by the sign document")
+	}
+}
+
+func fieldBytes(t *testing.T, msg []byte, want protowire.Number) []byte {
+	t.Helper()
+	for len(msg) > 0 {
+		num, typ, n := protowire.ConsumeTag(msg)
+		msg = msg[n:]
+		if num == want && typ == protowire.BytesType {
+			v, _ := protowire.ConsumeBytes(msg)
+			return v
+		}
+		msg = msg[protowire.ConsumeFieldValue(num, typ, msg):]
+	}
+	t.Fatalf("field %d not found", want)
+	return nil
+}
+
+// The cluster registration's own sign input carries the timeout height into the body too.
+func TestSignInput_passesTheTimeoutHeightThrough(t *testing.T) {
+	pub, _ := hex.DecodeString(vectorPubKey)
+	in := SignInput{
+		Registration: Registration{Operator: vectorAddress, ClusterID: "mycluster", BaseDomain: "cluster.example.com", Endpoints: []string{"https://cluster.example.com"}},
+		PubKey:       pub, FeeAmount: "5", Gas: 9, ChainID: "orama-1", TimeoutHeight: 777,
+	}
+	doc, err := in.SignDoc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := timeoutOf(t, fieldBytes(t, doc, 1)); got != 777 {
+		t.Errorf("sign document timeout height = %d, want 777", got)
+	}
+	raw, err := in.TxRaw(make([]byte, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := timeoutOf(t, fieldBytes(t, raw, 1)); got != 777 {
+		t.Errorf("tx body timeout height = %d, want 777", got)
+	}
+	in.TimeoutHeight = 0
+	doc, _ = in.SignDoc()
+	if got := timeoutOf(t, fieldBytes(t, doc, 1)); got != 0 {
+		t.Errorf("no timeout height was encoded as %d", got)
+	}
+}
+
+// timeoutOf is TxBody.timeout_height of an encoded body.
+func timeoutOf(t *testing.T, body []byte) uint64 {
+	t.Helper()
+	for len(body) > 0 {
+		num, typ, n := protowire.ConsumeTag(body)
+		body = body[n:]
+		if num == 3 && typ == protowire.VarintType {
+			v, _ := protowire.ConsumeVarint(body)
+			return v
+		}
+		body = body[protowire.ConsumeFieldValue(num, typ, body):]
+	}
+	return 0
 }

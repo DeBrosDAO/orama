@@ -1,12 +1,17 @@
-// Package chaincmd is `orama chain`: read the Orama chain over HTTP JSON.
+// Package chaincmd is `orama chain`: read the Orama chain over HTTP JSON, and
+// move ORAMA.
 //
 // It links no chain or Cosmos code. Each command names the read path it uses:
 // the gateway's /v1/chain/ proxy, a node's Cosmos REST API (--node), or a
 // node's CometBFT RPC (--rpc). The Orama modules' own state is read through
 // the gateway's /v1/chain/query/ route, or through --rpc's abci_query. It reads,
-// with one exception: `orama chain faucet` funds an account on a test network
-// by signing on a node over SSH. Other transactions are the `orama global`,
-// `orama storage` and `orama cluster` commands.
+// with three exceptions. `orama chain faucet` funds an account on a test network
+// by signing on a node over SSH. `orama chain send` pays another account and
+// `orama chain withdraw-earnings` moves earnings to the signer's own balance;
+// both are signed by the RootWallet agent (core/pkg/onchain) and sent through
+// the gateway or --node. A send is private unless --public is given. Other
+// transactions are the `orama global`, `orama storage` and `orama cluster`
+// commands.
 package chaincmd
 
 import (
@@ -27,9 +32,10 @@ var readFlags struct{ gateway, node, rpc string }
 // Cmd is `orama chain`.
 var Cmd = &cobra.Command{
 	Use:   "chain",
-	Short: "Read the Orama chain: status, balances, earnings, nodes, deals, validators; fund test accounts",
+	Short: "Read the Orama chain, send ORAMA, withdraw earnings; fund test accounts",
 	Long: `Read the Orama chain. Every command here only reads, except 'faucet', which
-funds an account on a test network.
+funds an account on a test network, 'send', which pays another account, and
+'withdraw-earnings', which moves your earnings to your own balance.
 
 Three read paths exist, and each command uses one:
 
@@ -44,9 +50,11 @@ Three read paths exist, and each command uses one:
              through abci_query; with --rpc set, earnings, node, deal and query read
              it directly instead of through the gateway.
 
-Transactions are built and signed by 'orama global', 'orama storage' and
-'orama cluster'; --onion on those submits through Tor. 'faucet' is the one
-transaction here, and it signs on a node over SSH (see 'orama chain faucet').`,
+Node, deal and cluster transactions are built and signed by 'orama global',
+'orama storage' and 'orama cluster'; --onion on those submits through Tor.
+'send' and 'withdraw-earnings' are signed by your RootWallet and sent through the
+gateway, or --node; 'send' is private unless --public is given (see 'orama chain
+send'). 'faucet' signs on a node over SSH (see 'orama chain faucet').`,
 }
 
 func init() {
