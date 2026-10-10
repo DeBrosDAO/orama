@@ -43,7 +43,7 @@ func Create(name, archive string) error {
 		return err
 	}
 	if active != nil {
-		return fmt.Errorf("sandbox %q is already active (status: %s)\nDestroy it first: orama sandbox destroy --name %s",
+		return fmt.Errorf("sandbox %q is already active (status: %s)\nDestroy it first: orama maint sandbox destroy --name %s",
 			active.Name, active.Status, active.Name)
 	}
 	fmt.Println("  [ok] No active sandbox")
@@ -545,8 +545,8 @@ func printCreateSummary(cfg *Config, state *SandboxState) {
 	fmt.Printf("Domain:  %s\n", cfg.Domain)
 	fmt.Printf("Gateway: https://%s\n", cfg.Domain)
 	fmt.Println()
-	fmt.Println("SSH:     orama sandbox ssh 1")
-	fmt.Println("Destroy: orama sandbox destroy")
+	fmt.Println("SSH:     orama maint sandbox ssh 1")
+	fmt.Println("Destroy: orama maint sandbox destroy")
 }
 
 // cleanupFailedCreate deletes any servers that were created during a failed provision.

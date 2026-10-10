@@ -22,7 +22,7 @@ import (
 type tarEntry struct {
 	name     string
 	body     string
-	typeflag byte // 0: what `orama build` writes (no type set)
+	typeflag byte // 0: what `orama maint build` writes (no type set)
 	link     string
 }
 

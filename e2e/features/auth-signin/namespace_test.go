@@ -120,15 +120,15 @@ func TestNamespaceCreate_takenNameConflicts(t *testing.T) {
 func ensureCreator(t testing.TB, walletAddr string) {
 	t.Helper()
 	cli := harness.CLI(t)
-	out := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	out := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	switch {
 	case strings.Contains(out, "namespace-creation: open"):
 	case strings.Contains(out, "namespace-creation: allowlist"):
-		cli.MustOK(t, "cluster", "creators", "add", walletAddr)
+		cli.MustOK(t, "maint", "cluster", "creators", "add", walletAddr)
 		t.Cleanup(func() {
 			ctx, cancel := fleet.CleanupContext(t)
 			defer cancel()
-			if res, err := cli.Run(ctx, "cluster", "creators", "remove", walletAddr); err != nil || res.Exit != 0 {
+			if res, err := cli.Run(ctx, "maint", "cluster", "creators", "remove", walletAddr); err != nil || res.Exit != 0 {
 				t.Errorf("cleanup: failed to remove creator %s: %v %s", walletAddr, err, res.Stderr)
 			}
 		})

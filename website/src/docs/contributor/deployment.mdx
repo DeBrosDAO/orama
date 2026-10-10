@@ -10,42 +10,42 @@ Nodes never compile. You build one **signed archive** on your computer and every
 
 ```bash
 cd core
-orama build                                     # signed archive; prints its path
-orama push --env <env> --archive <path>         # upload and verify on every node, restart nothing
-orama node upgrade --env <env>                  # read every node's state, print the plan
-orama node upgrade --env <env> --yes            # execute it
-orama rollout --env <env> --yes                 # build + push + upgrade in one
-orama rollout --env <env> --no-build --archive <path> --yes
+orama maint build                                     # signed archive; prints its path
+orama maint push --env <env> --archive <path>         # upload and verify on every node, restart nothing
+orama node upgrade --env <env>                        # read every node's state, print the plan
+orama node upgrade --env <env> --yes                  # execute it
+orama maint rollout --env <env> --yes                 # build + push + upgrade in one
+orama maint rollout --env <env> --no-build --archive <path> --yes
 ```
 
-RootWallet must be open and unlocked for the whole run. The first run after a rebuild asks you to approve the new `orama` binary once (approval is keyed on the binary's hash).
+`build`, `push` and `rollout` are maintainer commands, under `orama maint`, which `orama --help` does not list; they work like any other. RootWallet must be open and unlocked for the whole run. The first run after a rebuild asks you to approve the new `orama` binary once (approval is keyed on the binary's hash).
 
 ## Reproducible builds
 
-Two `orama build` runs of one commit produce the same archive byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. A release build sets the date from the commit: `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. Go binaries are built with `-trimpath`, `-buildvcs=false`, a stripped linker and `-mod=readonly`. The third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a `go.sum`, and CoreDNS, Kubo and RQLite are refused unless they match a pinned commit or SHA-256. The archive lists its entries in a fixed order with fixed owners, modes and times. A change to a pinned program means changing its version constant and its module together; a test holds the two. CI builds each published release's archive twice per architecture, fails if the two differ, and attaches the archive and its SHA-256 to the release. CI holds no signing key.
+Two `orama maint build` runs of one commit produce the same archive byte for byte, so the people who sign a release can each rebuild it and compare hashes before they sign. A release build sets the date from the commit: `export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`. Go binaries are built with `-trimpath`, `-buildvcs=false`, a stripped linker and `-mod=readonly`. The third-party programs (Olric, IPFS Cluster, Caddy) are built from modules checked in to the repository, each with a `go.sum`, and CoreDNS, Kubo and RQLite are refused unless they match a pinned commit or SHA-256. The archive lists its entries in a fixed order with fixed owners, modes and times. A change to a pinned program means changing its version constant and its module together; a test holds the two. CI builds each published release's archive twice per architecture, fails if the two differ, and attaches the archive and its SHA-256 to the release. CI holds no signing key.
 
 ## Releases, TUF and auto-update
 
 A cluster can also trust a **TUF release root** in addition to its wallet signer. A release is then trusted only when the release signers have signed the metadata that names its hash.
 
-- The root is adopted on a node with `orama node trust add-root`, by an archive built with `orama build --release-root <root.json>`, or by `orama node setup --release <version> --release-repo <https url> --release-root <root.json>`, which fetches a published release, verifies it and has your wallet sign the manifest. Nothing fetches a root by itself; the operator names it out of band.
+- The root is adopted on a node with `orama node trust add-root`, by an archive built with `orama maint build --release-root <root.json>`, or by `orama node setup --release <version> --release-repo <https url> --release-root <root.json>`, which fetches a published release, verifies it and has your wallet sign the manifest. Nothing fetches a root by itself; the operator names it out of band.
 - Releases live in a static HTTPS repository with `stable` and `nightly` as delegated channels, each with its own keys and threshold, trusted only for its own path. A client refuses metadata signed under another root or below a threshold, an expired timestamp, a snapshot older than the newest one it has accepted (rollback protection), and a target whose bytes differ.
 - Every node runs `orama-autoupdate.timer`, which does nothing until the cluster stored a release repository and the node adopted a root. The cluster settings `auto-update` (`off`, `notify` by default, `auto`), `update-channel`, `update-window` and `release-repo` set the policy. With `auto` inside the window, nodes install the newest verified release one at a time under a cluster lock, behind the same health gate as a manual rolling upgrade; if the upgrade or the gate fails, the node puts the previous release back and the release is marked bad for the whole cluster, which stops the rollout.
-- A machine that runs the chain is never `auto`. Its binary goes in through `orama global stage-oramad --upgrade <plan>`.
+- A machine that runs the chain is never `auto`. Its binary goes in through `orama maint global stage-oramad --upgrade <plan>`.
 - Auto-update installs only what the release root's signers signed; it never signs anything. Publishing a release is the signers' ceremony.
 
 See [Upgrades](/docs/operator/upgrades#automatic-updates) and [Build and sign](/docs/operator/build-and-sign).
 
 ## Versions and releases
 
-`VERSION` at the repository root is the single version. `make -C core bump VER=<x.y.z>` updates it everywhere; a release tag `v<version>` must match it or the release workflow fails. GoReleaser builds the CLI and node binaries for GitHub releases, Homebrew (stable only) and apt packages. The signed **install archive** that nodes use is built from a checkout with `orama build`, signed by your own wallet. CI also attaches an unsigned, reproducible archive to each release; it becomes installable through the TUF path above, not by being attached.
+`VERSION` at the repository root is the single version. `make -C core bump VER=<x.y.z>` updates it everywhere; a release tag `v<version>` must match it or the release workflow fails. GoReleaser builds the CLI and node binaries for GitHub releases, Homebrew (stable only) and apt packages. The signed **install archive** that nodes use is built from a checkout with `orama maint build`, signed by your own wallet. CI also attaches an unsigned, reproducible archive to each release; it becomes installable through the TUF path above, not by being attached.
 
 ## Before rolling out
 
 - Unit tests and `make test` (including the coverage gate) pass.
 - Docs updated for any behaviour change, in the same change.
 - If the change touches inter-node coordination, secrets, namespaces or deployments, read the upgrade page's **mixed-version windows**: pause namespace and deployment create and delete during the roll, and do not add a node until every cluster you are upgrading is on the same version.
-- If the change adds a migration, it must be applied before the gateway that requires it starts; migrations take a cluster-wide lock, and the gateway refuses to start if its required schema is not applied (`orama node schema status`).
+- If the change adds a migration, it must be applied before the gateway that requires it starts; migrations take a cluster-wide lock, and the gateway refuses to start if its required schema is not applied (`orama maint node schema status`).
 - RQLite v10 is one way. Take a registry backup first.
 
 ## Verification between nodes
@@ -55,7 +55,7 @@ orama monitor report --env <env> --node <ip>     # that node: services, RQLite s
 orama monitor report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
 ```
 
-Proceed only when both pass. `orama rollout` gates on the same signals itself and stops the moment a node fails to rejoin.
+Proceed only when both pass. `orama maint rollout` gates on the same signals itself and stops the moment a node fails to rejoin.
 
 ## What not to do
 
@@ -65,9 +65,18 @@ Proceed only when both pass. `orama rollout` gates on the same signals itself an
 - Do not stop `orama-node` on several nodes at once; it takes the index services with it.
 - Do not fix a node by hand. Fix in source, test, then roll out.
 
+## Published networks
+
+`networks/<name>/` in the repository is what a joining operator trusts: `manifest.json` (chain id, the digest of the genesis, seed DNS names, release channel, minimum version, release repository, the digest of the release root and whether the network has a faucet), `genesis.json` and `release-root.json`. A deploy writes it with `orama maint network publish --name <name> --chain-id <id> --genesis <file>` (the first publish of a network also takes `--release-root`, `--seeds`, `--channel`, `--min-version` and `--release-repo`; later ones keep the published values); nobody edits it by hand. Afterwards `make -C core sync-networks` refreshes the copy the binary embeds, and both directories are committed together.
+
+- **Every reset of a network gets a new chain id** (`orama-stagenet-5` becomes `orama-stagenet-6`). Publishing refuses to give an already published chain id a different genesis.
+- **The binary carries a copy.** Go cannot embed a file outside the `core` module, so `make -C core sync-networks` copies each network's manifest and release root into `core/pkg/netregistry/embedded/`. `go test ./pkg/netregistry` fails when that copy and `networks/` differ. Genesis files are not embedded: they are fetched and checked against the manifest's digest.
+- **The website serves it.** `pnpm build` copies `networks/` to `https://orama.network/networks/<name>/` and fails if a copy differs from the source, or if a manifest's digests do not match its files.
+- **A manifest can be out before its genesis.** The CLI says so ("the network has no genesis published yet") instead of guessing.
+
 ## Environments
 
-An environment is just a name for a cluster in your CLI. Promotion is rolling the same archive to the next one (`orama push --env <next> --archive <same path>`), which the nodes verify against their own trust anchor. Pushing the same archive to several clusters works only if each trusts the signer.
+An environment is just a name for a cluster in your CLI. Promotion is rolling the same archive to the next one (`orama maint push --env <next> --archive <same path>`), which the nodes verify against their own trust anchor. Pushing the same archive to several clusters works only if each trusts the signer.
 
 ## Test clusters
 

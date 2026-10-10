@@ -45,7 +45,7 @@ Both take `Authorization: Bearer <token>`. How the monitor answers failures:
 | Response | Exit code | What the monitor says |
 |----------|-----------|-----------------------|
 | `400` | 2 (usage) | the gateway refused the request as written (for example an `--interval` outside 2–60s) |
-| `401` | 3 (auth) | the credential was not accepted: `orama env use <env>` then `orama auth login` |
+| `401` | 3 (auth) | the credential was not accepted: `orama network use <env>` then `orama auth login` |
 | `403` | 3 (auth) | this wallet is not an operator of the cluster |
 | `404` | 4 (not found) | the gateway predates the telemetry API; upgrade it, or use `--ssh` |
 | `503` | 5 (unavailable) | the gateway is not ready yet; retry, or use `--ssh` |
@@ -63,7 +63,7 @@ snapshot), and follows no redirect; neither does node resolution nor the
 session renewal behind `orama auth login` credentials.
 
 TLS trusts the same CAs as every other API command: `ORAMA_CA_CERT_PATH`, and
-the environment's `ca_file` (`orama env add <name> <url> --ca-file <pem>`).
+the environment's `ca_file` (`orama network add <name> <url> --ca-file <pem>`).
 
 ### Live stream behaviour
 
@@ -254,11 +254,11 @@ host is only put into a command when it is an IP address:
 
 | Subsystem | Hint |
 |-----------|------|
-| `rqlite` | `orama inspect --env <env> --subsystem rqlite`; [COMMON_PROBLEMS.md](COMMON_PROBLEMS.md) §6, §14, §15 |
-| `wireguard` | `orama inspect --env <env> --subsystem wg`; COMMON_PROBLEMS.md §1 (WireGuard packet loss) |
-| `olric` | `orama inspect --env <env> --subsystem olric`; COMMON_PROBLEMS.md §1, §7 |
-| `ipfs` | `orama inspect --env <env> --subsystem ipfs`; COMMON_PROBLEMS.md §12 |
-| `dns`, `system`, `network`, `tor`, `global` | `orama inspect --env <env> --subsystem <same>` |
+| `rqlite` | `orama maint inspect --env <env> --subsystem rqlite`; [COMMON_PROBLEMS.md](COMMON_PROBLEMS.md) §6, §14, §15 |
+| `wireguard` | `orama maint inspect --env <env> --subsystem wg`; COMMON_PROBLEMS.md §1 (WireGuard packet loss) |
+| `olric` | `orama maint inspect --env <env> --subsystem olric`; COMMON_PROBLEMS.md §1, §7 |
+| `ipfs` | `orama maint inspect --env <env> --subsystem ipfs`; COMMON_PROBLEMS.md §12 |
+| `dns`, `system`, `network`, `tor`, `global` | `orama maint inspect --env <env> --subsystem <same>` |
 | `collection` (node unreachable) | `orama monitor node --env <env> --node <host> --ssh` |
 | `service`, `gateway`, `namespace` | `orama ssh <host> --env <env> 'sudo orama node status'` (namespace: also COMMON_PROBLEMS.md §1–§4) |
 | `vault` | `orama monitor node --env <env> --node <host>` |
@@ -394,7 +394,7 @@ sudo orama node report --json
 | **serverless** | Engine status — the WASM engine runs in the index gateway, so this is its `/v1/health` answer: `healthy`, `unhealthy (HTTP n)` or `unreachable`. `function_count` is not collected |
 | **chain** | Only on a node with `orama-global-chain.service` (absent otherwise). Unit state, then the CometBFT RPC on `127.0.0.1:31001`: chain ID, node version, latest height and block time, block age, average block time over the last 20 blocks, catching up, peers, mempool size, whether this node is a validator and its voting power, the validator set and its total power. `/status` must answer with this node's CometBFT id (`node_info.id`, derived from `/var/lib/orama-global/chain/config/node_key.json` as CometBFT does: lower-case hex of the first 20 bytes of SHA-256 over the ed25519 public key); an unreadable or malformed node key is the section's `error`. The chain ID must match `^[A-Za-z0-9._-]{1,64}$`, the node version `^[A-Za-z0-9.+_-]{1,64}$`, every validator address `^[0-9A-F]{40}$`, and at most 1000 validators are kept. Any failed RPC query or malformed field sets `responsive: false` and an `error` that names the query or field without echoing the value (unprintable characters in an RPC error message are replaced with `?`). When `/status` includes this node's consensus address, the section also asks the REST API on `127.0.0.1:31003` for the slashing params, the signing info, and the staking validator: missed-block ratio (`missed_blocks_counter / signed_blocks_window`), `min_signed_per_window`, `jailed`, and `tombstoned`. A failed query sets `signing_error` and leaves `responsive` as the CometBFT RPC reported it. Prometheus on `127.0.0.1:31004` is the chain process's own listener; this report does not scrape it. |
 | **update** | What this node's auto-update agent last found (`/etc/orama/update-notice.json`; absent when there is nothing to report): `available` (a newer verified release was not installed: notify, outside the window, or another node's turn), `refused` (a release did not verify, was older, was marked bad, or the cluster was degraded; `reason` says which) or `failed` (this node installed it, rolled back and marked it bad), with the mode, channel, installed version and candidate. A notice that cannot be read is reported as refused. |
-| **global** | Only when `orama-global-ipfs.service`, `orama-global-provider.service`, `orama-global-tor-relay.service`, or `orama-global-tor-dirauth.service` is installed (absent on a cluster node). Unit state. While the public Kubo unit is active, `RepoSize` and `StorageMax` from its RPC on `127.0.0.1:31011` (`198.18.0.2:31011` on a co-located machine, chosen on every report by whether the `orama-global-netns` unit is installed, like the chain endpoints; the inspector asks through `sudo -n curl` there), using the bearer in `/var/lib/orama-global/ipfs/api-token` (the token is not written into the report or into errors). Provider, relay and directory authority add the fields present in `/var/lib/orama-global/provider/monitor.json`, `/var/lib/orama-global/tor-relay/monitor.json` and `/var/lib/orama-global/tor-dirauth/monitor.json` (a host runs a relay or an authority; the section's `relay` field carries whichever file its unit has): `hot_key_balance_norama`, `proof_misses`, `disk_bytes`, `storage_max_bytes`, `held_slots`, `pending_slots`, `in_consensus`. The storage provider writes its file every step: `hot_key_balance_norama` is what the hot key can pay a base fee from, its bank balance plus its x/fees fee-only balance (a hot key's bank balance is always zero; `MsgFundHotKey` fills the fee-only one); `held_slots` and `pending_slots` are the storage deals the provider serves (slots bound to a stored piece) and the slots assigned to it that still wait for their piece. A negative count makes the file invalid and the section's `error` says so. The Tor relay's and the directory authority's file hold only `in_consensus`, written every five minutes by `orama-global-tor-monitor.timer` (`orama global tor monitor`, run for the role's own account and home): whether the consensus the node holds lists it, left out while the node has no valid consensus ([TOR_NETWORK.md](TOR_NETWORK.md#relays)). |
+| **global** | Only when `orama-global-ipfs.service`, `orama-global-provider.service`, `orama-global-tor-relay.service`, or `orama-global-tor-dirauth.service` is installed (absent on a cluster node). Unit state. While the public Kubo unit is active, `RepoSize` and `StorageMax` from its RPC on `127.0.0.1:31011` (`198.18.0.2:31011` on a co-located machine, chosen on every report by whether the `orama-global-netns` unit is installed, like the chain endpoints; the inspector asks through `sudo -n curl` there), using the bearer in `/var/lib/orama-global/ipfs/api-token` (the token is not written into the report or into errors). Provider, relay and directory authority add the fields present in `/var/lib/orama-global/provider/monitor.json`, `/var/lib/orama-global/tor-relay/monitor.json` and `/var/lib/orama-global/tor-dirauth/monitor.json` (a host runs a relay or an authority; the section's `relay` field carries whichever file its unit has): `hot_key_balance_norama`, `proof_misses`, `disk_bytes`, `storage_max_bytes`, `held_slots`, `pending_slots`, `in_consensus`. The storage provider writes its file every step: `hot_key_balance_norama` is what the hot key can pay a base fee from, its bank balance plus its x/fees fee-only balance (a hot key's bank balance is always zero; `MsgFundHotKey` fills the fee-only one); `held_slots` and `pending_slots` are the storage deals the provider serves (slots bound to a stored piece) and the slots assigned to it that still wait for their piece. A negative count makes the file invalid and the section's `error` says so. The Tor relay's and the directory authority's file hold only `in_consensus`, written every five minutes by `orama-global-tor-monitor.timer` (`orama maint global tor monitor`, run for the role's own account and home): whether the consensus the node holds lists it, left out while the node has no valid consensus ([TOR_NETWORK.md](TOR_NETWORK.md#relays)). |
 
 ### Bounds
 
@@ -457,7 +457,7 @@ These checks compare data across all nodes:
 - **RQLite Leader**: Exactly one leader exists (no split brain)
 - **Leader Agreement**: All nodes agree on the same leader address
 - **Raft Term Consistency**: Term values within 1 of each other
-- **Follower Contact**: Every follower has heard from the leader within 2 seconds (`rqlite.StalenessMaxLastContact`, the bound after which a namespace gateway stops serving none-reads from it); a follower that has never heard from one is flagged too. Each node is judged from its own `/status` read (`store.raft.last_contact`). The applied indexes of the nodes are deliberately not compared: each report is collected at a slightly different moment, so under steady writes their spread counts the writes made between the reads, not lag (a healthy 5-node stagenet read 101 apart). A node's own apply backlog is the per-node "RQLite commit-applied gap" warning (`commit_index` minus `applied_index` over 100, both from one read). `orama inspect` follows the same rule: `rqlite.last_contact` warns on a stale follower and there is no cross-node applied-index check
+- **Follower Contact**: Every follower has heard from the leader within 2 seconds (`rqlite.StalenessMaxLastContact`, the bound after which a namespace gateway stops serving none-reads from it); a follower that has never heard from one is flagged too. Each node is judged from its own `/status` read (`store.raft.last_contact`). The applied indexes of the nodes are deliberately not compared: each report is collected at a slightly different moment, so under steady writes their spread counts the writes made between the reads, not lag (a healthy 5-node stagenet read 101 apart). A node's own apply backlog is the per-node "RQLite commit-applied gap" warning (`commit_index` minus `applied_index` over 100, both from one read). `orama maint inspect` follows the same rule: `rqlite.last_contact` warns on a stale follower and there is no cross-node applied-index check
 - **WireGuard Peer Symmetry**: Each node has N-1 peers
 - **Clock Skew**: Node clocks within 5 seconds of each other (critical beyond 60s). The offset is measured when each report is served — the peer sends its clock (`X-Orama-Clock-Ms`) and the collector compares it with the request's midpoint — not read from report timestamps, which differ by up to the collection interval on synchronised clocks. A peer that sends no clock (0.122.109) is left unmeasured and its report still counts
 - **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
@@ -505,7 +505,7 @@ its gate between nodes. A node passes when **all** of these hold:
 | Gateway `/health` returns 200 | The node serves no traffic until it does |
 
 Anything short of all four stops the rollout, leaving the remaining voters
-untouched. The same package backs `orama node install`'s post-install
+untouched. The same package backs `orama maint node install`'s post-install
 verification, `orama node start`, and the post-upgrade step of `orama node upgrade`, so "ready"
 means one thing across the CLI.
 
@@ -573,7 +573,7 @@ and read with `Gateway.TrafficSnapshot()` as a `report.TrafficReport`.
 
 Both tools check cluster health, but they serve different purposes:
 
-| | `orama monitor` | `orama inspect` |
+| | `orama monitor` | `orama maint inspect` |
 |---|---|---|
 | **Data source** | The gateway's operator telemetry API (every node's `orama node report`, gathered in the cluster); `--ssh`: one SSH call per node | About 12 SSH sessions per node, sharing one connection |
 | **Speed** | One API call; `--ssh` ~3-5s for full cluster | ~10s for a full cluster on healthy nodes; a CPU-starved node takes longer, and `--timeout` (30s per node) is what it has |
@@ -672,7 +672,7 @@ sudo orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
 
 ## Configuration
 
-The API source uses the environment's gateway URL (`orama env list`) and the
+The API source uses the environment's gateway URL (`orama network list`) and the
 credentials `orama auth login` stored for it — the same ones `orama nodes` uses to
 list your nodes. With `--ssh`, nodes are resolved the same way the inspector does
 — network API first, `nodes.conf` as the fallback — unless `--config` names a
@@ -681,9 +681,9 @@ file. See [INSPECTOR.md](INSPECTOR.md#configuration) for the file format.
 ## Prerequisites
 
 - **API (default):** a signed-in operator session for the environment's gateway
-  (`orama env use <env>`, then `orama auth login`), and gateways that serve
+  (`orama network use <env>`, then `orama auth login`), and gateways that serve
   `/v1/operator/telemetry`.
-- **`--ssh`:** nodes must have the `orama` CLI installed (via `orama node install`,
-  or updated via `orama node push` / `orama node rollout`), since the monitor runs
+- **`--ssh`:** nodes must have the `orama` CLI installed (via `orama maint node install`,
+  or updated via `orama maint push` / `orama maint rollout`), since the monitor runs
   `sudo orama node report --json` over SSH; the binary must be at
   `/usr/local/bin/orama` on each node. SSH keys come from RootWallet.

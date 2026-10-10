@@ -25,7 +25,7 @@ const (
 	pathInvite = "/v1/operator/invite"
 )
 
-// minted is `orama invite --json`.
+// minted is `orama maint invite --json`.
 type minted struct {
 	Invite        string `json:"invite"`
 	JoinURL       string `json:"join_url"`
@@ -60,7 +60,7 @@ func expiresIn(t testing.TB, expires string) time.Duration {
 // TestInvite_namesNodeAndPinsItsCertificate: an invite minted through a node
 // names that node by address, the name it serves, and the SHA-256 of the
 // certificate it serves for that name, so the joiner pins the node that
-// minted the token (docs/CLI_REFERENCE.md "orama invite", docs/SECURITY.md
+// minted the token (docs/CLI_REFERENCE.md "orama maint invite", docs/SECURITY.md
 // "TLS & Transport").
 func TestInvite_namesNodeAndPinsItsCertificate(t *testing.T) {
 	t.Parallel()
@@ -103,7 +103,7 @@ func TestInvite_storedOnlyAsHash(t *testing.T) {
 }
 
 // TestInvite_expiryCappedAtAnHour: however long an invite is asked for, the
-// gateway caps it at an hour (`orama invite --expiry`: "the gateway caps it
+// gateway caps it at an hour (`orama maint invite --expiry`: "the gateway caps it
 // at 1h").
 func TestInvite_expiryCappedAtAnHour(t *testing.T) {
 	t.Parallel()
@@ -128,16 +128,16 @@ func TestInvite_shortExpiryIsHonoured(t *testing.T) {
 
 // TestInvite_refusals: a non-positive expiry is a usage error; a node that
 // is not in the cluster is unavailable; a caller with no credentials is not
-// let mint (docs/CLI_REFERENCE.md "orama invite").
+// let mint (docs/CLI_REFERENCE.md "orama maint invite").
 func TestInvite_refusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
 	for _, bad := range []string{"0s", "-5m"} {
-		infra.ExpectExit(t, infra.Run(t, cli, "invite", "--env", f.State.Env, "--expiry", bad), infra.ExitUsage, "--expiry must be positive")
+		infra.ExpectExit(t, infra.Run(t, cli, "maint", "invite", "--env", f.State.Env, "--expiry", bad), infra.ExitUsage, "--expiry must be positive")
 	}
-	infra.ExpectRefused(t, infra.Run(t, cli, "invite", "--env", f.State.Env, "--node", "192.0.2.1"), "192.0.2.1")
-	infra.ExpectExit(t, infra.Run(t, cli.Isolated(t), "invite", "--env", f.State.Env, "--node", f.State.Nodes[0].PublicIP), infra.ExitAuth)
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "invite", "--env", f.State.Env, "--node", "192.0.2.1"), "192.0.2.1")
+	infra.ExpectExit(t, infra.Run(t, cli.Isolated(t), "maint", "invite", "--env", f.State.Env, "--node", f.State.Nodes[0].PublicIP), infra.ExitAuth)
 }
 
 // TestInviteRoute_operatorsOnly: the invite route refuses no credential

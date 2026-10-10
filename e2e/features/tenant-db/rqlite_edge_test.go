@@ -20,7 +20,7 @@ import (
 const (
 	pollEvery = 2 * time.Second
 	// operatorBudget covers the gateways' operator cache after
-	// `orama operator add`.
+	// `orama maint operator add`.
 	operatorBudget = time.Minute
 )
 
@@ -182,11 +182,11 @@ func TestRQLiteIsolation_clusterRegistryNeedsOperator(t *testing.T) {
 	op := tenancy.Member(t, tenancy.Namespace(t, f, ns.Options{}), tenancy.RoleAdmin)
 	tenancy.ExpectRefused(t, tenancy.Post(t, c, pathQuery, tenancy.Cred{Bearer: op.Token()}, body), http.StatusForbidden, tenancy.CodeNotOperator)
 	cli := harness.CLI(t)
-	cli.MustOK(t, "operator", "add", op.Wallet.Address())
+	cli.MustOK(t, "maint", "operator", "add", op.Wallet.Address())
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
 		defer cancel()
-		if res, err := cli.Run(ctx, "operator", "remove", op.Wallet.Address()); err != nil || res.Exit != 0 {
+		if res, err := cli.Run(ctx, "maint", "operator", "remove", op.Wallet.Address()); err != nil || res.Exit != 0 {
 			t.Errorf("cleanup: the throwaway operator %s was not removed: %v %s", op.Wallet.Address(), err, res.Stderr)
 		}
 	})

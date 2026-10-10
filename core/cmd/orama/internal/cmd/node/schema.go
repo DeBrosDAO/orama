@@ -2,13 +2,13 @@
 // inspecting and applying the embedded gateway schema migrations against
 // the local RQLite instance.
 //
-// `orama node schema status` — non-destructive: shows binary's required
+// `orama maint node schema status` — non-destructive: shows binary's required
 //
 //	schema version, applied version, and pending
 //	migrations. Useful in rolling-upgrade
 //	monitoring.
 //
-// `orama node schema apply`  — applies any pending migrations. Idempotent
+// `orama maint node schema apply`  — applies any pending migrations. Idempotent
 //
 //	and safe to re-run; each migration is one
 //	transaction with its tracker row. Confirms
@@ -47,7 +47,7 @@ var schemaCmd = &cobra.Command{
 
 The gateway binary embeds a set of SQL migrations. Each migration is numbered;
 the highest number is the schema version the binary requires. After deploying
-a new gateway binary, run 'orama node schema apply' on every namespace's RQLite
+a new gateway binary, run 'orama maint node schema apply' on every namespace's RQLite
 to bring the schema up to date — otherwise function deploys fail at runtime
 with cryptic missing-column errors.`,
 }
@@ -93,7 +93,7 @@ var schemaStatusCmd = &cobra.Command{
 			for _, m := range pending {
 				fmt.Printf("  %03d  %s\n", m.Version, m.Name)
 			}
-			fmt.Println("\nRun 'sudo orama node schema apply' to apply them.")
+			fmt.Println("\nRun 'sudo orama maint node schema apply' to apply them.")
 		}
 		return nil
 	},

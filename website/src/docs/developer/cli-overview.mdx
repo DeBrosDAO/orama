@@ -1,6 +1,6 @@
 # CLI overview
 
-`orama` is the human interface to an Orama network. One binary, two audiences: **operators** (`orama node`, `inspect`, `rollout`, `invite`, `monitor`) and **tenants** (`orama deploy`, `app`, `function`, `db`, `namespace`). Programs use the [SDK](/docs/developer/sdk-reference) and the [gateway HTTP API](/docs/developer/api-surface) instead. There is no dashboard and no Orama MCP server.
+`orama` is the human interface to an Orama network. One binary, three audiences: **operators** (`orama status`, `ssh`, `network`), **tenants** (`orama deploy`, `app`, `function`, `db`, `namespace`) and **maintainers**, whose commands (`build`, `push`, `rollout`, `inspect`, `invite`, the node installer and the rest) live under `orama maint`, out of `orama --help`, and all work. The operator groups `orama node`, `global`, `cluster`, `chain`, `monitor` and `nodes` work too and are hidden from `--help` until `orama setup`, `upgrade` and `remove` replace them. Programs use the [SDK](/docs/developer/sdk-reference) and the [gateway HTTP API](/docs/developer/api-surface) instead. There is no dashboard and no Orama MCP server.
 
 The pages under "CLI commands" in the sidebar are generated from the command tree, so every command and flag in them exists in the binary. This page covers what applies to all of them.
 
@@ -26,19 +26,17 @@ make build
 
 Homebrew tracks the latest stable release, which can lag nightly pre-releases by several versions. `orama node upgrade` expects the CLI and the nodes to be on the same version.
 
-## First run: there are no environments
+## First run: no cluster is configured
 
 A fresh CLI knows no cluster. Add the one you use:
 
 ```bash
-orama env add mycluster https://cluster.example.com
-orama env use mycluster
+orama network add mycluster https://cluster.example.com
+orama network use mycluster
 orama auth login
 ```
 
-The gateway URL must be `https://` with a host (`http://` only for a gateway on this machine). Every command sends its credential there. `orama env add` also takes `--ca-file` to trust a private or staging CA for that environment only. `orama env list` and `orama env current` show what is configured. The list is stored in `~/.orama/environments.json`, and `orama node setup --genesis` adds the cluster it creates.
-
-(The `orama env` help text still says "Available default environments: production, devnet, testnet". A fresh install has none; that sentence is out of date.)
+The gateway URL must be `https://` with a host (`http://` only for a gateway on this machine). Every command sends its credential there. `orama network add` also takes `--ca-file` to trust a private or staging CA for that cluster only, and `--network` to record which network of the registry it runs on. `orama network list` and `orama network current` show what is configured, next to the networks built into the CLI. A network that publishes a manifest is added by its URL: `orama network add https://example.org/networks/mine/manifest.json` shows the chain id and the digest of the release root it would trust and asks you to type `yes` (`--yes` in a script). `orama env` is the old name of `orama network`: hidden, prints a deprecation line, and goes in the next release. The list is stored in `~/.orama/environments.json`, and `orama node setup --genesis` adds the cluster it creates.
 
 ## Which cluster, which namespace, which credential
 
@@ -75,14 +73,14 @@ Colour and emoji appear only on a terminal. Piping gives plain ASCII markers (`O
 
 ## RootWallet
 
-Commands that reach a node or sign something (`node setup`, `push`, `rollout`, `build`, `ssh`, `monitor`, `auth login`, anything that signs a chain transaction) ask the RootWallet desktop app's agent. See [The agent](/docs/rootwallet/agent). A command that seems to hang is usually an approval prompt in the app.
+Commands that reach a node or sign something (`node setup`, `maint push`, `maint rollout`, `maint build`, `ssh`, `monitor`, `auth login`, anything that signs a chain transaction) ask the RootWallet desktop app's agent. See [The agent](/docs/rootwallet/agent). A command that seems to hang is usually an approval prompt in the app.
 
 ## Command families
 
 | Page | Commands |
 |---|---|
 | [orama auth](/docs/developer/cli/auth) | `login`, `logout`, `status`, `whoami`, `list`, `switch`, `sessions`, `approve` |
-| [orama env](/docs/developer/cli/env) | `add`, `current`, `list`, `remove`, `use` |
+| [orama network](/docs/developer/cli/network) | `add`, `current`, `list`, `remove`, `use` |
 | [orama namespace](/docs/developer/cli/namespace) | `create`, `list`, `delete`, `keys`, `backup`, `restore`, `rqlite`, `session-policy`, `enable`, `disable`, `repair` |
 | [orama members, audit](/docs/developer/cli/members) | `members add`, `list`, `remove`, `transfer`; `audit` |
 | [orama deploy, domain](/docs/developer/cli/deploy) | `deploy static`, `nextjs`, `go`, `nodejs`; `domain add`, `verify`, `list`, `remove` |
@@ -91,5 +89,5 @@ Commands that reach a node or sign something (`node setup`, `push`, `rollout`, `
 | [orama function](/docs/developer/cli/function) | `init`, `build`, `deploy`, `invoke`, `logs`, `secrets`, `triggers`, `versions`, `enable`, `disable`, `delete` |
 | [orama chain](/docs/developer/cli/chain), [storage](/docs/developer/cli/storage), [global](/docs/developer/cli/global) | The chain, storage deals, global nodes |
 | [orama node](/docs/developer/cli/node), [cluster and operator](/docs/developer/cli/cluster), [monitor](/docs/developer/cli/monitor) | Running a cluster |
-| [Other commands](/docs/developer/cli/other) | `build`, `push`, `rollout`, `status`, `nodes`, `ssh`, `inspect`, `invite`, `version` |
-| [orama sandbox](/docs/developer/cli/sandbox) | Throwaway test clusters |
+| [Other commands](/docs/developer/cli/other) | `status`, `nodes`, `ssh`, `version`, and the maintainer commands `maint build`, `push`, `rollout`, `inspect`, `invite`, `vpn` |
+| [orama maint sandbox](/docs/developer/cli/sandbox) | Throwaway test clusters |

@@ -12,7 +12,7 @@ var autoupdateRunCmd = &cobra.Command{
 	Long: `Run this node's auto-update agent once. orama-autoupdate.timer runs it every
 15 minutes on every node; running it by hand does the same thing.
 
-The agent reads the cluster's policy (orama cluster settings show): auto-update
+The agent reads the cluster's policy (orama maint cluster settings show): auto-update
 off, notify or auto; the channel; the maintenance window; the release repository.
 It does nothing unless the cluster stored a release repository and this node
 adopted a release root (orama node trust add-root).
@@ -34,7 +34,7 @@ nothing is installed. With auto the node installs it only when
     last, nameservers spaced, one node at a time;
   - it holds the cluster-wide rollout lock.
 
-The install is 'orama node stage-archive --release-only', keeping the release it
+The install is 'orama maint node stage-archive --release-only', keeping the release it
 replaces, then 'orama node upgrade --restart', then the health gate. If the
 upgrade or the gate fails, the previous release is put back and the node is
 upgraded onto it again; the release is then marked bad for the cluster. A
@@ -51,4 +51,15 @@ policy now says. One agent runs at a time on a machine.`,
 
 func init() {
 	autoupdateCmd.AddCommand(cmdmeta.MarkNodeLocal(autoupdateRunCmd))
+
+	// orama-autoupdate.service on every installed node runs `orama node
+	// autoupdate run`. The command moved to `orama maint node autoupdate run`;
+	// this keeps the path the installed unit uses until an upgrade rewrites it.
+	unitPath := &cobra.Command{
+		Use:    autoupdateCmd.Use,
+		Short:  "Kept for installed units: orama maint node autoupdate",
+		Hidden: true,
+	}
+	unitPath.AddCommand(cmdmeta.HiddenAlias(autoupdateRunCmd))
+	Cmd.AddCommand(unitPath)
 }

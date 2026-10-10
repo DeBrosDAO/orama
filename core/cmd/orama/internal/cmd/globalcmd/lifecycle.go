@@ -1,9 +1,6 @@
 package globalcmd
 
 import (
-	"fmt"
-	"text/tabwriter"
-
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/globalnode"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -71,17 +68,10 @@ see "orama global stop". --force overrides the check.`,
 	},
 }
 
-var statusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show the state of each installed global service (run as root)",
-	Args:  cobra.NoArgs,
-	RunE:  runStatus,
-}
-
 func init() {
 	stopCmd.Flags().BoolVar(&forceAuthorityRoll, "force", false, forceAuthorityRollUsage)
 	restartCmd.Flags().BoolVar(&forceAuthorityRoll, "force", false, forceAuthorityRollUsage)
-	Cmd.AddCommand(startCmd, stopCmd, restartCmd, statusCmd)
+	Cmd.AddCommand(startCmd, stopCmd, restartCmd)
 }
 
 func runLifecycle(cmd *cobra.Command, args []string, what string, act func(globalnode.Lifecycle, []install.GlobalService) error) error {
@@ -96,22 +86,6 @@ func runLifecycle(cmd *cobra.Command, args []string, what string, act func(globa
 		return clierr.Failure("%v", err)
 	}
 	return nil
-}
-
-func runStatus(cmd *cobra.Command, _ []string) error {
-	if err := clierr.RequireRoot("reading the global services' state"); err != nil {
-		return err
-	}
-	states, err := globalnode.DefaultLifecycle(cmd.OutOrStdout()).Status()
-	if err != nil {
-		return clierr.Failure("%v", err)
-	}
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "SERVICE\tUNIT\tSTATE")
-	for _, s := range states {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Service, s.Unit, s.Active)
-	}
-	return w.Flush()
 }
 
 // parseServiceArgs names services by their install names.

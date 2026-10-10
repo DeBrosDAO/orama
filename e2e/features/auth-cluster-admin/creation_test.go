@@ -62,7 +62,7 @@ func operatorCreate(t testing.TB, cli *oramacli.Runner, taken string) oramacli.R
 
 // TestCreationMode_operatorsAdmitsOnlyOperators: in `operators` mode a user
 // is refused and the operator is admitted (docs/AUTH.md#the-lobby,
-// docs/CLI_REFERENCE.md "orama cluster settings set").
+// docs/CLI_REFERENCE.md "orama maint cluster settings set").
 func TestCreationMode_operatorsAdmitsOnlyOperators(t *testing.T) {
 	f := harness.Fleet(t)
 	taken := ns.New(t, f, ns.Options{}).Name
@@ -94,13 +94,13 @@ func TestCreationMode_allowlistAdmitsOnlyListed(t *testing.T) {
 	if res := operatorCreate(t, cli, taken); res.Exit == 0 || strings.Contains(res.Stdout+res.Stderr, takenMsg) {
 		t.Errorf("an unlisted operator passed the allowlist: exit %d\n%s%s", res.Exit, res.Stdout, res.Stderr)
 	}
-	cli.MustOK(t, "cluster", "creators", "add", w.Address())
+	cli.MustOK(t, "maint", "cluster", "creators", "add", w.Address())
 	t.Cleanup(func() { removeCreator(t, cli, w.Address()) })
-	if out := cli.MustOK(t, "cluster", "creators", "list").Stdout; !containsFold(out, w.Address()) {
+	if out := cli.MustOK(t, "maint", "cluster", "creators", "list").Stdout; !containsFold(out, w.Address()) {
 		t.Errorf("creators list does not show %s:\n%s", w.Address(), out)
 	}
 	expectAllowed(t, c, user, taken, "a listed user")
-	cli.MustOK(t, "cluster", "creators", "remove", w.Address())
+	cli.MustOK(t, "maint", "cluster", "creators", "remove", w.Address())
 	expectDenied(t, c, user, taken, "a user taken off the list", allowlistMsg)
 }
 
@@ -123,7 +123,7 @@ func TestClusterSettings_invalidValuesRefused(t *testing.T) {
 		{settingMode, "everyone"}, {settingMode, ""}, {settingCap, "0"}, {settingCap, "10001"},
 		{settingCap, "-1"}, {settingCap, "ten"}, {"no-such-setting", "1"},
 	} {
-		res, err := cli.For(t).Run(t.Context(), append([]string{"cluster", "settings", "set"}, args...)...)
+		res, err := cli.For(t).Run(t.Context(), append([]string{"maint", "cluster", "settings", "set"}, args...)...)
 		if err != nil || res.Exit == 0 {
 			t.Errorf("settings set %q accepted (exit %d): %v", args, res.Exit, err)
 		}
@@ -165,11 +165,11 @@ func removeCreator(t testing.TB, cli *oramacli.Runner, w string) {
 	t.Helper()
 	ctx, cancel := fleet.CleanupContext(t)
 	defer cancel()
-	res, err := cli.Run(ctx, "cluster", "creators", "list")
+	res, err := cli.Run(ctx, "maint", "cluster", "creators", "list")
 	if err != nil || !containsFold(res.Stdout, w) {
 		return
 	}
-	if res, err := cli.Run(ctx, "cluster", "creators", "remove", w); err != nil || res.Exit != 0 {
+	if res, err := cli.Run(ctx, "maint", "cluster", "creators", "remove", w); err != nil || res.Exit != 0 {
 		t.Errorf("cleanup: failed to remove creator %s: %v %s", w, err, res.Stderr)
 	}
 }
@@ -182,17 +182,17 @@ func containsFold(s, sub string) bool {
 // on the list and a missing argument all fail and change nothing.
 func TestClusterCreators_invalidInputsRefused(t *testing.T) {
 	cli := harness.CLI(t)
-	before := cli.MustOK(t, "cluster", "creators", "list").Stdout
+	before := cli.MustOK(t, "maint", "cluster", "creators", "list").Stdout
 	for _, args := range [][]string{
 		{"add", "not-a-wallet"}, {"add", "0x" + strings.Repeat("z", 40)}, {"add"},
 		{"remove", newWallet(t).Address()}, {"remove"},
 	} {
-		res, err := cli.For(t).Run(t.Context(), append([]string{"cluster", "creators"}, args...)...)
+		res, err := cli.For(t).Run(t.Context(), append([]string{"maint", "cluster", "creators"}, args...)...)
 		if err != nil || res.Exit == 0 {
 			t.Errorf("cluster creators %q succeeded (exit %d): %v", args, res.Exit, err)
 		}
 	}
-	if after := cli.MustOK(t, "cluster", "creators", "list").Stdout; after != before {
+	if after := cli.MustOK(t, "maint", "cluster", "creators", "list").Stdout; after != before {
 		t.Fatalf("refused inputs changed the creator list:\n%s\n->\n%s", before, after)
 	}
 }

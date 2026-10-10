@@ -28,7 +28,7 @@ const (
 
 // TestNamespaceCap_whitepaperMatchesSecurity: the per-wallet namespace cap
 // is a default of 10 that an operator may set from 1 to 10000
-// (docs/SECURITY.md, docs/CLI_REFERENCE.md#orama-cluster-settings-set,
+// (docs/SECURITY.md, docs/CLI_REFERENCE.md#orama-maint-cluster-settings-set,
 // core/pkg/gateway/handlers/operator/policy.go MaxNamespacesPerWalletCeiling).
 // The whitepaper must not present 10 as a fixed limit (bugboard 2855).
 func TestNamespaceCap_whitepaperMatchesSecurity(t *testing.T) {

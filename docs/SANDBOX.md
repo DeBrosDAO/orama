@@ -6,22 +6,22 @@ Spin up temporary 5-node Orama clusters on Hetzner Cloud for development and tes
 
 ```bash
 # One-time setup (API key, domain, floating IPs, SSH key)
-orama sandbox setup
+orama maint sandbox setup
 
 # Create a cluster (~5 minutes)
-orama sandbox create --name my-feature
+orama maint sandbox create --name my-feature
 
 # Check health
-orama sandbox status
+orama maint sandbox status
 
 # SSH into a node
-orama sandbox ssh 1
+orama maint sandbox ssh 1
 
 # Deploy code changes
-orama sandbox rollout
+orama maint sandbox rollout
 
 # Tear it down
-orama sandbox destroy
+orama maint sandbox destroy
 ```
 
 ## Prerequisites
@@ -32,7 +32,7 @@ Create a project at [console.hetzner.cloud](https://console.hetzner.cloud) and g
 
 ### 2. Domain with Glue Records
 
-You need a domain (or subdomain) that points to Hetzner Floating IPs. The `orama sandbox setup` wizard will guide you through this.
+You need a domain (or subdomain) that points to Hetzner Floating IPs. The `orama maint sandbox setup` wizard will guide you through this.
 
 **Example:** Using `sbx.dbrs.space`
 
@@ -48,14 +48,14 @@ DNS propagation can take up to 48 hours.
 
 ### 3. Binary Archive and RootWallet
 
-`create` and `rollout` take `--archive <path>` (the path `orama build` printed), or build this checkout themselves. Either way the archive must be signed by the RootWallet account that is unlocked when you run them: `orama build` signs through the RootWallet agent, and that account is the only signer a sandbox trusts. An archive signed by anyone else, or unsigned (`--unsigned`), is refused before any server is created.
+`create` and `rollout` take `--archive <path>` (the path `orama maint build` printed), or build this checkout themselves. Either way the archive must be signed by the RootWallet account that is unlocked when you run them: `orama maint build` signs through the RootWallet agent, and that account is the only signer a sandbox trusts. An archive signed by anyone else, or unsigned (`--unsigned`), is refused before any server is created.
 
 ## Setup
 
 Run the interactive setup wizard:
 
 ```bash
-orama sandbox setup
+orama maint sandbox setup
 ```
 
 This will:
@@ -72,7 +72,7 @@ Config is saved to `~/.orama/sandbox.yaml`.
 
 ## Commands
 
-### `orama sandbox create [--name <name>] [--archive <path>]`
+### `orama maint sandbox create [--name <name>] [--archive <path>]`
 
 Creates a new 5-node cluster. If `--name` is omitted, a random name is generated (e.g., "swift-falcon"). A name is lowercase letters, digits and `-`, at most 40 characters.
 
@@ -80,19 +80,19 @@ Creates a new 5-node cluster. If `--name` is omitted, a random name is generated
 - Nodes 1-2: Nameservers (CoreDNS + Caddy + all services)
 - Nodes 3-5: Regular nodes (all services except CoreDNS)
 
-`--archive <path>` names the build to deploy; without it, this checkout is built (and signed) first. Before any server is created, the archive must verify against your RootWallet account: it is signed by `orama build` through the RootWallet agent, and that account becomes the cluster's only archive signer.
+`--archive <path>` names the build to deploy; without it, this checkout is built (and signed) first. Before any server is created, the archive must verify against your RootWallet account: it is signed by `orama maint build` through the RootWallet agent, and that account becomes the cluster's only archive signer.
 
 **Phases:**
 1. Provision 5 servers on Hetzner using the configured server type (parallel, ~90s), then pin each server's SSH host key as soon as its sshd answers, before anything is sent to it
 2. Assign floating IPs to nameserver nodes (~10s)
-3. Put the verified archive on every server the way `orama node setup` does: verified on your machine, uploaded as a canonical re-pack, and staged by `orama node stage-archive`, which creates the server's trust anchor (`/etc/orama/archive-signers`) from your wallet. The archive is uploaded from your machine to each server in turn
+3. Put the verified archive on every server the way `orama node setup` does: verified on your machine, uploaded as a canonical re-pack, and staged by `orama maint node stage-archive`, which creates the server's trust anchor (`/etc/orama/archive-signers`) from your wallet. The archive is uploaded from your machine to each server in turn
 4. Install the genesis node with `--operator-wallet <your wallet>` and `--acme-ca letsencrypt-staging`, and wait until it serves a TLS certificate for the sandbox domain, which each invite pins (~120s)
 5. Join remaining 4 nodes (serial with health checks, ~180s), each with an invite minted on genesis just before use and `--expect-archive-signers <your wallet>`
 6. Verify cluster health (~15s)
 
 **One sandbox at a time.** Since the floating IPs are shared, only one sandbox can own the nameservers. Destroy the active sandbox before creating a new one.
 
-### `orama sandbox destroy [--name <name>] [--force]`
+### `orama maint sandbox destroy [--name <name>] [--force]`
 
 Tears down a cluster:
 1. Unassigns floating IPs
@@ -101,33 +101,33 @@ Tears down a cluster:
 
 Use `--force` to skip confirmation.
 
-### `orama sandbox list`
+### `orama maint sandbox list`
 
 Lists all sandboxes with their status. Also checks Hetzner for orphaned servers that don't have a corresponding state file.
 
-### `orama sandbox status [--name <name>]`
+### `orama maint sandbox status [--name <name>]`
 
 Shows per-node health including:
 - Service status (active/inactive)
 - RQLite role (Leader/Follower)
 - Cluster summary (commit index, voter count)
 
-### `orama sandbox rollout [--name <name>] [--archive <path>]`
+### `orama maint sandbox rollout [--name <name>] [--archive <path>]`
 
 Deploys code changes:
 1. Uses `--archive <path>`, or builds (and signs) this checkout
-2. Pushes to all nodes the way `orama push` does: to the first node, which fans it out; each node verifies it with its installed `orama node stage-archive` against its trust anchor before anything under `/opt/orama` changes
+2. Pushes to all nodes the way `orama maint push` does: to the first node, which fans it out; each node verifies it with its installed `orama maint node stage-archive` against its trust anchor before anything under `/opt/orama` changes
 3. Rolling upgrade with `orama node upgrade --restart`: followers first, leader last, 15s between nodes
 
 A sandbox created before host keys were pinned has no `~/.orama/sandboxes/<name>.known_hosts` and is refused; destroy it and create a new one.
 
-### `orama sandbox ssh <node-number>`
+### `orama maint sandbox ssh <node-number>`
 
 Opens an interactive SSH session to a sandbox node (1-5).
 
 ```bash
-orama sandbox ssh 1    # SSH into node 1 (genesis/ns1)
-orama sandbox ssh 3    # SSH into node 3 (regular node)
+orama maint sandbox ssh 1    # SSH into node 1 (genesis/ns1)
+orama maint sandbox ssh 3    # SSH into node 3 (regular node)
 ```
 
 ## Architecture
@@ -152,7 +152,7 @@ Servers: `sbx-<name>-<N>` (e.g., `sbx-swift-falcon-1` through `sbx-swift-falcon-
 
 Sandbox state is stored at `~/.orama/sandboxes/<name>.yaml`. This tracks server IDs, IPs, roles, and cluster status.
 
-Nodes register under the `sandbox` environment (`orama node install --environment sandbox`) with your wallet as their operator.
+Nodes register under the `sandbox` environment (`orama maint node install --environment sandbox`) with your wallet as their operator.
 
 ### TLS: Let's Encrypt staging
 
@@ -160,11 +160,11 @@ Sandbox nodes get their certificates from Let's Encrypt's staging CA (`--acme-ca
 
 ### Host keys
 
-The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. `orama push` uploads from this machine to each node and does not copy SSH keys onto a hub; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [SECURITY.md](SECURITY.md), "Build-archive signing and the trust anchor".
+The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. `orama maint push` uploads from this machine to each node and does not copy SSH keys onto a hub; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [SECURITY.md](SECURITY.md), "Build-archive signing and the trust anchor".
 
 ## Running the cluster guide against a sandbox
 
-`orama sandbox create` installs the cluster itself, so it cannot run the install steps of [RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md) (those need bare machines). Its cluster does serve as the fixture for the guide's "Use it" and "Check it" sections: `E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster`. See [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide e2e".
+`orama maint sandbox create` installs the cluster itself, so it cannot run the install steps of [RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md) (those need bare machines). Its cluster does serve as the fixture for the guide's "Use it" and "Check it" sections: `E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster`. See [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide e2e".
 
 ## Cost
 
@@ -173,17 +173,17 @@ The SSH host keys each server presents on first contact (trust on first use) are
 | Servers (type chosen during setup) | depends on type | 5 |
 | Floating IPv4 | €0.005/hr | 2 |
 
-Servers are billed per hour at the rate for the chosen type (shown during `orama sandbox setup`). Floating IPs are billed as long as they exist (even unassigned). Destroy the sandbox when not in use to save on server costs.
+Servers are billed per hour at the rate for the chosen type (shown during `orama maint sandbox setup`). Floating IPs are billed as long as they exist (even unassigned). Destroy the sandbox when not in use to save on server costs.
 
 ## Troubleshooting
 
 ### "sandbox not configured"
 
-Run `orama sandbox setup` first.
+Run `orama maint sandbox setup` first.
 
 ### "the archive does not verify against your wallet"
 
-The archive is unsigned or signed by another RootWallet account than the one unlocked now. Rebuild it with `orama build` while the account you create sandboxes with is unlocked, or leave out `--archive` to build this checkout.
+The archive is unsigned or signed by another RootWallet account than the one unlocked now. Rebuild it with `orama maint build` while the account you create sandboxes with is unlocked, or leave out `--archive` to build this checkout.
 
 ### "has no pinned SSH host keys"
 
@@ -193,7 +193,7 @@ The sandbox was created before sandboxes pinned host keys and verified archives.
 
 Only one sandbox can be active at a time. Destroy it first:
 ```bash
-orama sandbox destroy --name <name>
+orama maint sandbox destroy --name <name>
 ```
 
 ### Server creation fails
@@ -207,7 +207,7 @@ Check:
 
 SSH into the node to debug:
 ```bash
-orama sandbox ssh 1
+orama maint sandbox ssh 1
 sudo orama node logs node -f
 ```
 
@@ -221,4 +221,4 @@ The sandbox will be left in "error" state. You can destroy and recreate it.
 
 ### Orphaned servers
 
-If `orama sandbox list` shows orphaned servers, delete them manually at [console.hetzner.cloud](https://console.hetzner.cloud). Sandbox servers are labeled `orama-sandbox=<name>` for easy identification.
+If `orama maint sandbox list` shows orphaned servers, delete them manually at [console.hetzner.cloud](https://console.hetzner.cloud). Sandbox servers are labeled `orama-sandbox=<name>` for easy identification.

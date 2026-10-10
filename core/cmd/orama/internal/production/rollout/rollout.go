@@ -29,7 +29,7 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return clierr.Usage("--env is required\nUsage: orama node rollout --env <devnet|testnet>")
+		return clierr.Usage("--env is required\nUsage: orama maint rollout --env <devnet|testnet>")
 	}
 	if f.NoBuild && f.Archive == "" {
 		return clierr.Usage("--no-build needs --archive <path>: the build to roll out")

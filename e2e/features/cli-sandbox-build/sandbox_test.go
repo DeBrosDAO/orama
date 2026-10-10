@@ -34,25 +34,25 @@ func bareHome(t testing.TB) *oramacli.Runner {
 // TestConformance_sandboxAndBuildHelp runs the generic checks (help matches
 // docs/CLI_REFERENCE.md, --json accepted, unknown flags and subcommands are
 // usage errors, `sandbox ssh` takes exactly one node number) on every
-// `orama sandbox` command and `orama build`. None of them runs.
+// `orama maint sandbox` command and `orama maint build`. None of them runs.
 func TestConformance_sandboxAndBuildHelp(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)
-	cliconf.Conformance(t, cli, bareHome(t), cliconf.LoadReference(t), "orama sandbox", "orama build")
+	cliconf.Conformance(t, cli, bareHome(t), cliconf.LoadReference(t), "orama maint sandbox", "orama maint build")
 }
 
 // TestSandbox_unconfiguredMachineRefuses: with no sandbox configured, list
-// says there is none and status and ssh point at `orama sandbox setup`
+// says there is none and status and ssh point at `orama maint sandbox setup`
 // instead of reaching for a cloud (docs/SANDBOX.md).
 func TestSandbox_unconfiguredMachineRefuses(t *testing.T) {
 	t.Parallel()
 	cli := bareHome(t)
-	list := cli.MustOK(t, "sandbox", "list")
+	list := cli.MustOK(t, "maint", "sandbox", "list")
 	if !strings.Contains(list.Stdout, "No sandboxes found") {
 		t.Errorf("sandbox list on a bare machine:\n%s", list.Stdout)
 	}
 	for _, args := range [][]string{{"sandbox", "status"}, {"sandbox", "ssh", "1"}} {
-		infra.ExpectRefused(t, infra.Run(t, cli, args...), "orama sandbox setup")
+		infra.ExpectRefused(t, infra.Run(t, cli, args...), "orama maint sandbox setup")
 	}
 	entries, err := os.ReadDir(filepath.Join(cli.Home, ".orama", "sandboxes"))
 	if err == nil && len(entries) > 0 {

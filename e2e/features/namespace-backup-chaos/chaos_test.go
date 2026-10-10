@@ -99,7 +99,7 @@ func TestBackupChaos_duringLeaderChange(t *testing.T) {
 // root changes every namespace's restore key; a restore whose secrets were
 // sealed to the old key is refused with nothing written, and one sealed to
 // the new key succeeds (docs/CLI_REFERENCE.md "orama namespace restore-key",
-// "orama operator rotate-secrets"). It runs on an eval cluster of its own:
+// "orama maint operator rotate-secrets"). It runs on an eval cluster of its own:
 // the rotation cannot be undone.
 func TestBackupChaos_restoreKeyFollowsRotation(t *testing.T) {
 	ev, cli := rotationCluster(t)
@@ -115,7 +115,7 @@ func TestBackupChaos_restoreKeyFollowsRotation(t *testing.T) {
 		t.Fatal("a namespace with WebRTC enabled backed up no secret")
 	}
 	oldKey := tenancy.RestoreKey(t, n)
-	cli.MustOK(t, "operator", "rotate-secrets", "--rotate")
+	cli.MustOK(t, "maint", "operator", "rotate-secrets", "--rotate")
 	var rotated [32]byte
 	eventually.Require(t, pollEvery, electionBudget, "the restore key to follow the new root", func() (bool, error) {
 		rotated = tenancy.RestoreKey(t, n)

@@ -57,7 +57,7 @@ type Store interface {
 // next boot with nothing to decrypt with.
 //
 // seedDir is <oramaDir>/secrets, which a gateway may read and never write.
-// `orama node install` puts the cluster's current root there when a node joins
+// `orama maint node install` puts the cluster's current root there when a node joins
 // (so a rotated cluster is not mistaken for a fresh one), and 0.122.x gateways
 // kept their copy there. It is only consulted when the cache has nothing.
 //

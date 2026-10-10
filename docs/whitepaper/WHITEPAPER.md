@@ -36,7 +36,7 @@ Three design commitments explain most of the architecture:
 
 **What Orama is not:**
 
-- **Not a chain in the request path.** Wallet signatures are still only a login method for apps. Hosting, databases, functions, and storage do not settle on the ledger. A separate ledger does exist. Section 3.6 describes it. Its token is not required to deploy or to call the gateway, and `orama node install` does not start it.
+- **Not a chain in the request path.** Wallet signatures are still only a login method for apps. Hosting, databases, functions, and storage do not settle on the ledger. A separate ledger does exist. Section 3.6 describes it. Its token is not required to deploy or to call the gateway, and `orama maint node install` does not start it.
 - **Not censorship-proof.** Nodes are ordinary servers at ordinary hosting providers. Orama is designed so that losing any single node does not take an application down. That is resilience, not immunity.
 - **Not a defense against a hostile hypervisor.** Anyone who can read the memory of a running server can read what that server is processing. Section 5 states this precisely.
 - **Not finished.** Orama is alpha software running on two small networks. It is not open for public sign-up.
@@ -95,7 +95,7 @@ A normal genesis mints nothing. New coins are created once per epoch, and an epo
 
 Voting power is capped, ramped over 30 epochs, and bounded so redistribution cannot more than double a validator's raw stake share. Fees use a base fee that is entirely burned. Tips go to the block proposer. There is no on-chain governance, no IBC, and no shielded transfer.
 
-The chain is not installed by `orama node install`. A separate script can place it on a devnet or stagenet chain id. App requests do not pass through it. The pages under the docs site's Blockchain tab are the full description.
+The chain is not installed by `orama maint node install`. A separate script can place it on a devnet or stagenet chain id. App requests do not pass through it. The pages under the docs site's Blockchain tab are the full description.
 
 ## 4. Services
 
@@ -176,7 +176,7 @@ Sign-ins, key and grant changes, namespace, deployment and function changes, sec
 
 - **Network:** WireGuard between all nodes. RQLite listens only on the overlay and always requires authentication. Tenant gateways listen only on the overlay. Internal endpoints require both a mesh source address and a cluster credential.
 - **Processes:** services run as an unprivileged `orama` user under systemd sandboxing, and tenant apps run as dynamically allocated users. Secret-bearing units cannot swap to disk, and core dumps are disabled.
-- **Secrets at rest:** TURN secrets, function secrets, push credentials, deployment environment variables and agent tokens are encrypted with AES-256-GCM under a versioned key hierarchy. `orama operator rotate-secrets` re-encrypts them under a new root. Private files are encrypted before they are added to IPFS.
+- **Secrets at rest:** TURN secrets, function secrets, push credentials, deployment environment variables and agent tokens are encrypted with AES-256-GCM under a versioned key hierarchy. `orama maint operator rotate-secrets` re-encrypts them under a new root. Private files are encrypted before they are added to IPFS.
 - **Supply chain:** release archives are signed, and the installer rejects unsigned or tampered archives.
 
 ### Current limits, stated plainly
@@ -243,7 +243,7 @@ Node operation is invite-only, and operators are vetted, because an operator of 
 | Free disk | 10 GB |
 | Network | A public IPv4 address |
 
-An existing operator mints an invite with `orama node invite`, and the new operator runs `orama node install` with it. Upgrades are rolling: new binaries can be unpacked on every node in parallel, but restarts happen one node at a time, and cluster health is verified between them. The registry database needs a majority of voters, so restarting several at once would lose quorum. The CLI transfers leadership before restarting a leader. In the current release branch (not yet on the test network), dead voters are removed only when three independent signals agree, and never if doing so would lose quorum.
+An existing operator mints an invite with `orama node invite`, and the new operator runs `orama maint node install` with it. Upgrades are rolling: new binaries can be unpacked on every node in parallel, but restarts happen one node at a time, and cluster health is verified between them. The registry database needs a majority of voters, so restarting several at once would lose quorum. The CLI transfers leadership before restarting a leader. In the current release branch (not yet on the test network), dead voters are removed only when three independent signals agree, and never if doing so would lose quorum.
 
 Each node contributes storage in proportion to its disk: IPFS's storage budget is set to half the node's disk, and garbage collection reclaims unpinned data every six hours.
 
@@ -267,7 +267,7 @@ OramaOS is **built but has never been booted** on a live network. Known gaps inc
 - **Tenant monitoring and alerting.** Tenants have health endpoints, namespace status, deployment logs and the audit trail. There is no metrics endpoint and no alerting.
 - **Enforced storage quotas.** Quotas exist but are opt-in, and no namespace has one by default.
 - **Scale evidence.** The design allows 20 namespaces per node and grows by adding nodes, but it has been exercised only at the scale of a few nodes and a few tenants.
-- **A public chain.** The ledger in Section 3.6 is implemented and tested in the repository. It is not what `orama node install` starts, storage and relay rewards are not paid, there is no governance, and app traffic does not use it. A devnet or stagenet chain id can be brought up with `chain/scripts/stagenet/deploy.sh`. That is not a network you can treat as carrying value.
+- **A public chain.** The ledger in Section 3.6 is implemented and tested in the repository. It is not what `orama maint node install` starts, storage and relay rewards are not paid, there is no governance, and app traffic does not use it. A devnet or stagenet chain id can be brought up with `chain/scripts/stagenet/deploy.sh`. That is not a network you can treat as carrying value.
 
 **Self-audit.** We audit our own system and publish what we find. An earlier review that treated the hosting provider as the adversary produced ninety findings. Two further audits in September 2026 covered stability (35 items) and authentication and authorization (29 items). All stability items and all but three authentication items are now implemented in code and awaiting review. Several of the changes described in this paper, including authenticated RQLite, the WebAssembly egress filter, per-gateway signing keys, secret rotation and encrypt-before-add storage, landed in the current release line in September 2026 and are being rolled out to the live networks. The remaining open findings are concentrated in OramaOS and the vault and are tracked openly.
 

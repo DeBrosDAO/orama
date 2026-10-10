@@ -17,19 +17,19 @@ const releaseRootPath = "/etc/orama/release-root.json"
 // TestStageArchive_usageRefusals: the node-side step refuses a command line
 // that cannot work before it verifies anything: no --archive, and half of
 // the release-root flags, which must never fall back to the wallet path
-// (docs/CLI_REFERENCE.md "orama node stage-archive").
+// (docs/CLI_REFERENCE.md "orama maint node stage-archive").
 func TestStageArchive_usageRefusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
-	res := infra.OnNode(t, f, n, "node", "stage-archive")
+	res := infra.OnNode(t, f, n, "maint", "node", "stage-archive")
 	if res.Exit != infra.ExitUsage {
 		t.Errorf("stage-archive without --archive: exit %d, want %d: %s", res.Exit, infra.ExitUsage, res.Stderr)
 	}
 	dummy := "/tmp/e2e-stage-" + f.State.RunID + ".tar.gz"
 	f.WriteFile(t, n, dummy, []byte("not an archive"), 0o600)
 	for _, half := range [][]string{{"--release-target", "orama.tar.gz"}, {"--release-metadata", "/tmp"}} {
-		args := append([]string{"node", "stage-archive", "--archive", dummy}, half...)
+		args := append([]string{"maint", "node", "stage-archive", "--archive", dummy}, half...)
 		res := infra.OnNode(t, f, n, args...)
 		if res.Exit != infra.ExitUsage || !strings.Contains(res.Stdout+res.Stderr, "go together") {
 			t.Errorf("stage-archive %v: exit %d, want %d naming both flags: %s%s", half, res.Exit, infra.ExitUsage, res.Stdout, res.Stderr)
@@ -51,7 +51,7 @@ func TestStageArchive_releaseRootRequiredWhenAsked(t *testing.T) {
 	dummy := "/tmp/e2e-tuf-" + f.State.RunID + ".tar.gz"
 	f.WriteFile(t, n, dummy, []byte("not an archive"), 0o600)
 	before := infra.ReadStaged(t, f, n)
-	res := infra.OnNode(t, f, n, "node", "stage-archive", "--archive", dummy,
+	res := infra.OnNode(t, f, n, "maint", "node", "stage-archive", "--archive", dummy,
 		"--release-metadata", "/tmp", "--release-target", "orama.tar.gz")
 	if res.Exit == infra.ExitOK || !strings.Contains(res.Stdout+res.Stderr, releaseRootPath) {
 		t.Fatalf("stage-archive with no adopted root: exit %d, want a refusal naming %s:\n%s%s",
@@ -68,7 +68,7 @@ func TestStageArchive_notRootRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
-	res := f.Exec(t, n, "runuser -u orama -- "+infra.OramaCommand("node", "stage-archive", "--archive", "/tmp/x.tar.gz"))
+	res := f.Exec(t, n, "runuser -u orama -- "+infra.OramaCommand("maint", "node", "stage-archive", "--archive", "/tmp/x.tar.gz"))
 	if res.Exit == infra.ExitOK {
 		t.Fatalf("the orama user staged an archive:\n%s", res.Stdout)
 	}

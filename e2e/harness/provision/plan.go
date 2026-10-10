@@ -89,7 +89,7 @@ func planAgent(cfg Config) []string {
 }
 
 func planArchives(cfg Config) []string {
-	out := []string{"orama build --output " + archiveDir + "/" + headArchive + " (signed through the test agent)"}
+	out := []string{"orama maint build --output " + archiveDir + "/" + headArchive + " (signed through the test agent)"}
 	switch ref, isRef := strings.CutPrefix(cfg.PreviousArchive, previousRefPrefix); {
 	case isRef:
 		out = append(out, "orama-prev build of "+ref+" --output "+archiveDir+"/"+prevArchive)
@@ -124,8 +124,8 @@ func planHostKeys(Config) []string {
 }
 
 func planEnvironment(cfg Config) []string {
-	return []string{"orama env add " + envName(cfg.RunID) + " https://" + envName(cfg.RunID) + "." + cfg.CFZone + " --ca-file " + caFileName,
-		"orama env use " + envName(cfg.RunID)}
+	return []string{"orama network add " + envName(cfg.RunID) + " https://" + envName(cfg.RunID) + "." + cfg.CFZone + " --ca-file " + caFileName,
+		"orama network use " + envName(cfg.RunID)}
 }
 
 func planGenesis(cfg Config) []string {

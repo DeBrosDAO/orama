@@ -177,7 +177,7 @@ func TestNodeInvite_localMint(t *testing.T) {
 	n := f.State.Nodes[1]
 	out := infra.OnNode(t, f, n, "node", "invite")
 	if out.Exit != 0 || !strings.Contains(out.Stdout, "Invite created (expires in 1h0m0s)") ||
-		!strings.Contains(out.Stdout, "orama node install --token") {
+		!strings.Contains(out.Stdout, "orama maint node install --token") {
 		t.Fatalf("orama node invite: exit %d:\n%s", out.Exit, f.Redact(out.Stdout))
 	}
 	raw := infra.OnNode(t, f, n, "node", "invite", "--raw")

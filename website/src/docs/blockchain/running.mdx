@@ -1,6 +1,6 @@
 # Running a chain node
 
-`orama node install` does not start the chain. A machine runs it as a global node, installed with `sudo orama global install --services chain,...`: see [Run a global node](/docs/blockchain/run-a-global-node) for the install, the start and stop commands, validators, the double-sign guard and removal. The development networks are also stood up by `chain/scripts/stagenet/deploy.sh`, which refuses to run unless the chain id contains `-stagenet-` or `-devnet-` (the default chain id is `orama-stagenet-1`) and uses an unencrypted test keyring. That is a devnet convenience. It is not acceptable once the token has value outside a test.
+`orama maint node install` does not start the chain. A machine runs it as a global node, installed with `sudo orama global install --services chain,...`: see [Run a global node](/docs/blockchain/run-a-global-node) for the install, the start and stop commands, validators, the double-sign guard and removal. The development networks are also stood up by `chain/scripts/stagenet/deploy.sh`, which refuses to run unless the chain id contains `-stagenet-` or `-devnet-` (the default chain id is `orama-stagenet-1`) and uses an unencrypted test keyring. That is a devnet convenience. It is not acceptable once the token has value outside a test.
 
 The chain's own epoch on that script is 300 seconds and 10 blocks. Production parameters require 24 hours and 14,400 blocks unless `--allow-bootstrap-stake` is set, which that devnet path does set.
 

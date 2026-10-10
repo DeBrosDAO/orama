@@ -82,7 +82,7 @@ func ReadClusterMembership(path string) (*ClusterMembership, error) {
 		// An unreadable record is still evidence of membership, but not
 		// evidence of whom to join; saying so beats guessing either way.
 		return nil, fmt.Errorf("%w: %s (%v); it records that this node was a cluster member — "+
-			"restore it, or see `orama node recover-raft`", ErrCorruptMembershipRecord, path, err)
+			"restore it, or see `orama maint node recover-raft`", ErrCorruptMembershipRecord, path, err)
 	}
 	return &m, nil
 }
@@ -249,7 +249,7 @@ func recordConfirmedAddr(rqliteDir string, live LiveIdentity, logger *zap.Logger
 }
 
 // HasRecoveryPeers reports whether rqliteDataDir holds a recovery peers.json:
-// the operator's instruction (orama node recover-raft) to reform the cluster
+// the operator's instruction (orama maint node recover-raft) to reform the cluster
 // from this node's data. rqlited consumes it at start, so such a node neither
 // bootstraps nor joins.
 func HasRecoveryPeers(rqliteDataDir string) (bool, error) {

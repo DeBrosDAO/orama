@@ -22,13 +22,12 @@ covers:
     - orama node setup
     - orama node remove
     - orama node wipe
-    - orama node clean
     - orama nodes
-    - orama node install
-    - orama node push
+    - orama maint node install
+    - orama maint push
   claims:
-    - "docs/CLI_REFERENCE.md#orama-node-install: --dry-run shows what would be done without making changes"
-    - "docs/CLI_REFERENCE.md#orama-node-install: a genesis install needs --operator-wallet; flag mistakes are refused before anything changes"
+    - "docs/CLI_REFERENCE.md#orama-maint-node-install: --dry-run shows what would be done without making changes"
+    - "docs/CLI_REFERENCE.md#orama-maint-node-install: a genesis install needs --operator-wallet; flag mistakes are refused before anything changes"
     - "docs/SECURITY.md#supply-chain: an unsigned, untrusted-signer, tampered or extra-file archive is refused and nothing under /opt/orama changes"
     - "docs/SECURITY.md#supply-chain: --trust-signers never changes an existing anchor"
     - "docs/CLI_REFERENCE.md#orama-node-setup: a --host-key that does not match is refused before the credential is used"
@@ -36,5 +35,4 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-node-remove: --dry-run prints the quorum impact and the statements and changes nothing"
     - "docs/CLI_REFERENCE.md#orama-node-remove: the node leaves raft and the mesh, is tombstoned and wiped"
     - "docs/CLI_REFERENCE.md#orama-node-wipe: only rules tagged orama are removed; the operator's own rules and SSH stay"
-    - "docs/CLI_REFERENCE.md#orama-node-clean: clean is deprecated and runs wipe"
     - "docs/SECURITY.md#supply-chain: a joining node takes the archive signer list from the cluster"

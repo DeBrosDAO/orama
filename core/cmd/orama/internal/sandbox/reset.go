@@ -25,7 +25,7 @@ func Reset() error {
 	// Check for active sandboxes — refuse to reset if clusters are still running
 	active, _ := FindActiveSandbox()
 	if active != nil {
-		return fmt.Errorf("active sandbox %q exists — run 'orama sandbox destroy' first", active.Name)
+		return fmt.Errorf("active sandbox %q exists — run 'orama maint sandbox destroy' first", active.Name)
 	}
 
 	// Show what will be deleted
@@ -91,7 +91,7 @@ func Reset() error {
 	fmt.Println()
 	fmt.Println("Reset complete. All sandbox resources deleted.")
 	fmt.Println()
-	fmt.Println("Next: orama sandbox setup")
+	fmt.Println("Next: orama maint sandbox setup")
 	return nil
 }
 

@@ -22,7 +22,7 @@ view), authenticated with the credentials 'orama auth login' stored for the
 environment's gateway. Only the cluster's operators may read it.
 
 --ssh is the break-glass path for when no gateway answers: it SSHes into every
-node and runs 'sudo orama node report --json' there instead. It is never chosen
+node and runs 'sudo orama node report' there instead. It is never chosen
 automatically; when the API fails the error says so and suggests it. Traffic is
 counted by the gateways, so it is empty over --ssh.
 
@@ -36,7 +36,7 @@ q quits.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` | — | With --ssh: read nodes from this file instead of resolving them |
-| `--env` | — | Environment: devnet, testnet, mainnet (required) |
+| `--env` | — | Environment (default: active) |
 | `--interval` | `5s` | How often the live view refreshes, 2s to 60s (with --ssh: at least 15s, which is also its default) |
 | `--node` | — | Show only this node (public IP or WireGuard IP) |
 | `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |

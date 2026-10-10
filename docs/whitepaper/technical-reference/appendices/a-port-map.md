@@ -43,7 +43,7 @@ Every integer constant whose name marks it as a port, a port range bound or a po
 | 31015 | `core/pkg/constants/global.go:GlobalIndexerPort` | GlobalIndexerPort is the chain indexer's read API (orama-global indexer), on 127.0.0.1 only. The gateway proxies /v1/chain/index/ to it. |
 | 31020 | `core/pkg/constants/global.go:GlobalTorORPort` | GlobalTorORPort is the relay's ORPort. |
 | 31021 | `core/pkg/constants/global.go:GlobalTorDirPort` | GlobalTorDirPort is a dirauth's DirPort. |
-| 31022 | `core/pkg/constants/global.go:GlobalTxGatePort` | GlobalTxGatePort is the validator tx gate (orama global txgate), on 127.0.0.1 (the namespace's own loopback when co-located). The validator onion service forwards to it, and only it: nothing else of the chain is reachable through the onion. |
+| 31022 | `core/pkg/constants/global.go:GlobalTxGatePort` | GlobalTxGatePort is the validator tx gate (orama maint global txgate), on 127.0.0.1 (the namespace's own loopback when co-located). The validator onion service forwards to it, and only it: nothing else of the chain is reachable through the onion. |
 | 31099 | `core/pkg/constants/global.go:GlobalPortEnd` |  |
 | 51820 | `core/pkg/constants/ports.go:WireGuardPort` | Edge — not in 10100. |
 

@@ -1,6 +1,6 @@
-// Package vpncmd is the VPN client for an Orama Tor network: `orama vpn up`
+// Package vpncmd is the VPN client for an Orama Tor network: `orama maint vpn up`
 // runs a tor client on the network and offers its SOCKS5 proxy on loopback, and
-// `orama vpn check` joins the network and proves a circuit reaches a validator
+// `orama maint vpn check` joins the network and proves a circuit reaches a validator
 // onion service. Plans: track E, E6.
 package vpncmd
 
@@ -22,7 +22,7 @@ const (
 	// NetworkEnv is the configuration form of --network, shared with
 	// onion transaction submission (--onion-network).
 	NetworkEnv = tornet.NetworkEnv
-	// DefaultSOCKS is where `orama vpn up` offers the proxy: Tor Browser's port,
+	// DefaultSOCKS is where `orama maint vpn up` offers the proxy: Tor Browser's port,
 	// not 9050, which a node's own Tor client uses.
 	DefaultSOCKS = "127.0.0.1:9150"
 )

@@ -81,12 +81,12 @@ func TestNodeDNSDelegation_refusals(t *testing.T) {
 
 // TestNodeMigrateRaftID_freshClusterAlreadyStable: "a fresh node is on a
 // stable id from its first boot" (docs/ARCHITECTURE.md), and the documented
-// way to check is `orama node migrate-raft-id --env <env> --dry-run`
+// way to check is `orama maint node migrate-raft-id --env <env> --dry-run`
 // (docs/NODE_REPLACEMENT.md), which changes nothing.
 func TestNodeMigrateRaftID_freshClusterAlreadyStable(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	res := run(t, harness.CLI(t), "node", "migrate-raft-id", "--env", f.State.Env, "--dry-run")
+	res := run(t, harness.CLI(t), "maint", "node", "migrate-raft-id", "--env", f.State.Env, "--dry-run")
 	infra.ExpectExit(t, res, exitOK, "Raft identity in "+f.State.Env, "Every node already has a stable raft id")
 	for _, n := range f.State.Nodes {
 		if !strings.Contains(res.Stdout, n.PublicIP) {
@@ -101,8 +101,8 @@ func TestNodeMigrateRaftID_refusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	infra.ExpectExit(t, run(t, cli, "node", "migrate-raft-id", "--dry-run"), exitUsage, "--env is required")
-	res := run(t, cli, "node", "migrate-raft-id", "--env", f.State.Env, "--node", documentAddr, "--dry-run")
+	infra.ExpectExit(t, run(t, cli, "maint", "node", "migrate-raft-id", "--dry-run"), exitUsage, "--env is required")
+	res := run(t, cli, "maint", "node", "migrate-raft-id", "--env", f.State.Env, "--node", documentAddr, "--dry-run")
 	infra.ExpectRefused(t, res, "not found")
 }
 

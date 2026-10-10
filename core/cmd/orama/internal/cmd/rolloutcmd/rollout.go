@@ -1,10 +1,9 @@
-// Package rolloutcmd defines the rollout command.
+// Package rolloutcmd defines `orama maint rollout`.
 //
-// The same command is mounted as `orama rollout` and as `orama node rollout`.
-// They used to be separate: one pushed and restarted without building, the
-// other built first, and only one of them attempted to leave the raft leader
-// until last. Which behaviour an operator got depended on which of two
-// identically named commands they happened to type.
+// It used to be mounted twice, as `orama rollout` and as `orama node rollout`,
+// as two separate implementations that differed in whether they built first and
+// whether they left the raft leader until last. It is one definition, in
+// `orama maint`.
 package rolloutcmd
 
 import (
@@ -31,12 +30,10 @@ then upgrade them one at a time.
 The rolling upgrade prints its plan — which node holds the raft leadership and
 the order the restarts happen in — and stops unless --yes is given.
 
-'orama rollout' and 'orama node rollout' are the same command.
-
 Examples:
-  orama rollout --env testnet             # Build, push, then print the plan
-  orama rollout --env testnet --yes       # Execute the plan
-  orama rollout --env testnet --no-build  # Reuse the existing archive`,
+  orama maint rollout --env testnet             # Build, push, then print the plan
+  orama maint rollout --env testnet --yes       # Execute the plan
+  orama maint rollout --env testnet --no-build  # Reuse the existing archive`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return rollout.Run(&flags)
 		},

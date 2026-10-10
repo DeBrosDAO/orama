@@ -48,7 +48,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// 1. Check if services exist
 	services := utils.GetProductionServices()
 	if len(services) == 0 {
-		checks = append(checks, check{"Services installed", "FAIL", "No Orama services found. Run 'orama node install' first."})
+		checks = append(checks, check{"Services installed", "FAIL", "No Orama services found. Run 'orama maint node install' first."})
 	} else {
 		checks = append(checks, check{"Services installed", "PASS", fmt.Sprintf("%d services found", len(services))})
 	}

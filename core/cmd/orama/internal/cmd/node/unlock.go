@@ -23,7 +23,7 @@ try fetching it from the node first, on a path the agent has never served, and
 spent ten seconds timing out before telling you to pass the flag.
 
 Usage:
-  orama node unlock --genesis --node-ip <wg-ip> --key-file <path>
+  orama maint node unlock --genesis --node-ip <wg-ip> --key-file <path>
 
 The node must be reachable over WireGuard on port 9998.`,
 	RunE: func(cmd *cobra.Command, args []string) error {

@@ -146,7 +146,7 @@ func CLI(t testing.TB) *oramacli.Runner {
 
 // WorkTemp is a fresh directory under the run's work dir, removed when the
 // test ends: a working directory the CLI may run in (oramacli.RunOpts.Dir),
-// e.g. a copy of the source tree for `orama build`.
+// e.g. a copy of the source tree for `orama maint build`.
 func WorkTemp(t testing.TB) string {
 	t.Helper()
 	Fleet(t)

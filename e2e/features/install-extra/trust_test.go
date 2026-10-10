@@ -44,7 +44,7 @@ func restoreBuild(t testing.TB, f *fleet.Fleet, n fleet.Node, before infra.Stage
 		if archive == "" || string(infra.ReadArchiveFile(t, archive, infra.ManifestName)) != original {
 			continue
 		}
-		res, err := harness.CLI(t).Run(ctx, "push", "--env", f.State.Env, "--node", n.PublicIP, "--archive", archive)
+		res, err := harness.CLI(t).Run(ctx, "maint", "push", "--env", f.State.Env, "--node", n.PublicIP, "--archive", archive)
 		if err != nil || res.Exit != 0 {
 			t.Errorf("cleanup: re-push to %s failed (exit %d): %v %s", n.Name, res.Exit, err, res.Stderr)
 		}
@@ -128,7 +128,7 @@ func extraFileRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 
 // trustSignersNeverChangesAnchor: --trust-signers only
 // creates a missing anchor; on a node that has one, a different list is
-// refused and the anchor is unchanged (docs/CLI_REFERENCE.md "orama node push").
+// refused and the anchor is unchanged (docs/CLI_REFERENCE.md "orama maint push").
 func trustSignersNeverChangesAnchor(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	n := extra.Node
 	before := target(t, n)

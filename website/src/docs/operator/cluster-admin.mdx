@@ -9,9 +9,9 @@ Operator commands need two things: the admin grant and a wallet on the operator 
 The wallet that installed the cluster is its first operator. Add others:
 
 ```bash
-orama operator list
-orama operator add 0xAnotherWallet
-orama operator remove 0xAnotherWallet
+orama maint operator list
+orama maint operator add 0xAnotherWallet
+orama maint operator remove 0xAnotherWallet
 ```
 
 `orama status`, `orama monitor` and the other cluster-level views read the gateway's operator telemetry API, so they need a sign-in as an operator wallet. When no gateway answers, `orama status --ssh` and `orama monitor --ssh --env <env>` read the nodes directly over SSH. `orama monitor` always needs `--env`.
@@ -21,14 +21,14 @@ orama operator remove 0xAnotherWallet
 A new cluster allows only its operators to create a namespace. A cluster that already had a namespace besides the seeded default, a node, or an operator when it was upgraded to this behaviour stays open (any signed-in wallet) until an operator changes it.
 
 ```bash
-orama cluster settings show
-orama cluster settings set namespace-creation operators      # only wallets on the operator list
-orama cluster settings set namespace-creation allowlist      # only wallets added below
-orama cluster settings set namespace-creation open           # any signed-in wallet
-orama cluster creators add 0xWallet
-orama cluster creators list
-orama cluster creators remove 0xWallet
-orama cluster settings set max-namespaces-per-wallet 25      # 1 to 10000, default 10
+orama maint cluster settings show
+orama maint cluster settings set namespace-creation operators      # only wallets on the operator list
+orama maint cluster settings set namespace-creation allowlist      # only wallets added below
+orama maint cluster settings set namespace-creation open           # any signed-in wallet
+orama maint cluster creators add 0xWallet
+orama maint cluster creators list
+orama maint cluster creators remove 0xWallet
+orama maint cluster settings set max-namespaces-per-wallet 25      # 1 to 10000, default 10
 ```
 
 The cap binds every way a wallet comes to own a namespace. A transfer to a wallet already at the cap is refused `403 TRANSFER_REFUSED` (a generic answer that does not name the wallet or the limit; the audit trail does) and the owner keeps the namespace; if the cap cannot be read, the transfer answers a retryable 503. A transfer does not check who may create namespaces: the cap is the only limit the recipient is held to.
@@ -37,7 +37,7 @@ An operator is not on the allowlist unless added. An empty list lets nobody crea
 
 ## Update policy
 
-The same `orama cluster settings` command holds the cluster's automatic-update policy: `release-repo`, `update-channel`, `update-window` and `auto-update` (`off`, `notify` or `auto`). The default is `notify`, and nothing updates until `release-repo` is set. [Upgrades](/docs/operator/upgrades#automatic-updates) explains what each node does with them.
+The same `orama maint cluster settings` command holds the cluster's automatic-update policy: `release-repo`, `update-channel`, `update-window` and `auto-update` (`off`, `notify` or `auto`). The default is `notify`, and nothing updates until `release-repo` is set. [Upgrades](/docs/operator/upgrades#automatic-updates) explains what each node does with them.
 
 ## Removing a namespace its owner cannot delete
 
@@ -52,9 +52,9 @@ orama cluster namespace remove myapp --reason "owner wallet lost"
 ## Key rotation
 
 ```bash
-orama operator rotate-signing-key
-orama operator rotate-secrets            # re-encrypt stored secrets onto the current envelope
-orama operator rotate-secrets --rotate   # also generate a new encryption root
+orama maint operator rotate-signing-key
+orama maint operator rotate-secrets            # re-encrypt stored secrets onto the current envelope
+orama maint operator rotate-secrets --rotate   # also generate a new encryption root
 ```
 
 **Signing key.** Every gateway signs tokens with its own Ed25519 key and publishes the public half. Rotation generates a new key and starts signing with it. Nobody is signed out: the outgoing key keeps verifying tokens it already signed until they expire, so both are accepted for one access-token lifetime (15 minutes).

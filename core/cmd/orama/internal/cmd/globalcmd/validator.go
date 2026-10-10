@@ -28,9 +28,9 @@ characters), with the same ORBK seal as a namespace backup, and write it to --to
 The node never holds the private half, so it cannot open the file. --to must
 not exist.
 
-To restore the key on a new host, run 'orama global validator migrate prepare'
-there, then 'orama global validator reseal' on the machine holding the private
-key, then 'orama global validator migrate import' on the new host. Restore only
+To restore the key on a new host, run 'orama maint global validator migrate prepare'
+there, then 'orama maint global validator reseal' on the machine holding the private
+key, then 'orama maint global validator migrate import' on the new host. Restore only
 when the old host is gone: two hosts signing with one key is a double sign.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
@@ -54,9 +54,9 @@ var resealFlags struct{ from, identity, recipient, to string }
 var resealCmd = &cobra.Command{
 	Use:   "reseal",
 	Short: "Turn a key backup into a migration bundle for a new host",
-	Long: `Open a key backup from 'orama global validator export-key' with the operator's
+	Long: `Open a key backup from 'orama maint global validator export-key' with the operator's
 X25519 private key (--identity-file, hex, mode 0600) and seal the key to the new
-host's migration key (--recipient, printed by 'orama global validator migrate
+host's migration key (--recipient, printed by 'orama maint global validator migrate
 prepare'). Run it on the machine that holds the private key, not on a node. The
 bundle carries no sign state: nobody knows what a lost host last signed. Its
 import therefore needs --old-host-destroyed and --floor-height <the network's
@@ -75,7 +75,7 @@ func init() {
 	r.StringVar(&resealFlags.recipient, "recipient", "", "The new host's migration key, hex [required]")
 	r.StringVar(&resealFlags.to, "to", "", "Bundle file to write; must not exist [required]")
 	validatorCmd.AddCommand(exportKeyCmd, resealCmd)
-	Cmd.AddCommand(validatorCmd)
+	MaintCmd.AddCommand(validatorCmd)
 }
 
 func runReseal(cmd *cobra.Command, _ []string) error {

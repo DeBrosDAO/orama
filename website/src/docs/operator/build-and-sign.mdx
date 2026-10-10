@@ -10,7 +10,7 @@ Run it from the `core/` directory of a checkout of the Orama repository. The com
 
 ```bash
 cd orama/core
-orama build
+orama maint build
 ```
 
 The first thing it does is ask RootWallet for the active account (a locked or missing wallet fails in seconds, before anything compiles; the approval prompt at signing waits up to two and a half minutes). Then it cross-compiles:
@@ -85,7 +85,7 @@ Every node keeps the list of trusted addresses in `/etc/orama/archive-signers`: 
 - On the **genesis** node the file is created from `--operator-wallet` (which `orama node setup` fills in with your active RootWallet account) before the archive is verified. So the first archive must be signed by that same account.
 - On a **joining** node the list comes from the cluster in the join response. If the cluster trusts more, or other, signers than you expect, the join is refused with a 409 and the invite is not used. Joining with `orama node setup --join-via` reads the expectation from that node.
 - `orama node setup` verifies the archive on your machine against the operator account **before** uploading anything, because a new machine has no verified binary of its own to check with.
-- A node can also trust a **release root**: the TUF key set of a release's signers, adopted into `/etc/orama/release-root.json`. It arrives in an archive built with `--release-root` (a node that installs it adopts the root the way it takes a signer rotation), or with `sudo orama node trust add-root root.json` on one node. With a root, a node accepts an unsigned release whose TUF metadata verifies against it (`orama node stage-archive --release-only`), and records in `/etc/orama/release-staged.json` that it did. A release that names signers or a root of its own is never accepted this way.
+- A node can also trust a **release root**: the TUF key set of a release's signers, adopted into `/etc/orama/release-root.json`. It arrives in an archive built with `--release-root` (a node that installs it adopts the root the way it takes a signer rotation), or with `sudo orama node trust add-root root.json` on one node. With a root, a node accepts an unsigned release whose TUF metadata verifies against it (`orama maint node stage-archive --release-only`), and records in `/etc/orama/release-staged.json` that it did. A release that names signers or a root of its own is never accepted this way.
 
 Each node verifies an archive with its installed `orama` before anything under `/opt/orama` changes: the signature must recover to a trusted address and every file must match the manifest.
 
@@ -94,7 +94,7 @@ Each node verifies an archive with its installed `orama` before anything under `
 To add or replace a signer, make a new build with `--signers`. Nodes that install it replace their list with the addresses you give.
 
 ```bash
-orama build --signers 0xYourWallet,0xNewOperator
+orama maint build --signers 0xYourWallet,0xNewOperator
 ```
 
 Rules:
@@ -104,7 +104,7 @@ Rules:
 - A node refuses a rotation older than one it already took ("an old build is being replayed").
 - A node whose clock is behind the build refuses it; fix the clock and rebuild.
 
-Nodes installed before archives were signed have no anchor. Push once with `orama push --trust-signers <your address>`, which creates the anchor and never changes an existing one.
+Nodes installed before archives were signed have no anchor. Push once with `orama maint push --trust-signers <your address>`, which creates the anchor and never changes an existing one.
 
 ## Install a published release
 
@@ -114,7 +114,7 @@ Nodes installed before archives were signed have no anchor. Push once with `oram
 
 | Message | Meaning and fix |
 |---|---|
-| `is unsigned` | Built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama build`, unless the node accepts it as a release through its release root |
+| `is unsigned` | Built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama maint build`, unless the node accepts it as a release through its release root |
 | `signed by 0x…, which this node does not trust` | The signing account is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate |
 | `does not match the signed manifest` / `not in its signed manifest` | The archive was changed after signing. Rebuild. If it happens only on fanned-out nodes, suspect the hub |
 | `no archive trust anchor` | The node predates signed archives. Push once with `--trust-signers` |

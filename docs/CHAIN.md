@@ -2656,7 +2656,7 @@ go through Tor yet. A wallet that cannot use Tor or reach a validator submits th
 
 A validator's onion service is installed by `orama global install --services onion`
 ([TOR_NETWORK.md](TOR_NETWORK.md#the-validator-onion-service)). It serves port 80 and forwards to
-`orama global txgate`, which passes only the three calls this client makes (`GET
+`orama maint global txgate`, which passes only the three calls this client makes (`GET
 /cosmos/auth/v1beta1/accounts/{address}`, `POST /cosmos/tx/v1beta1/txs`, `GET /cosmos/tx/v1beta1/txs/{hash}`)
 to the node's REST API and answers 404 to the rest. The service lives on the **Orama Tor network**, so
 `--onion-socks` must point at a client of that network (`tornet.ClientTorrc`, SOCKS port
@@ -3194,7 +3194,7 @@ pin), so a release's oramad runs exactly the verifier built with it and no other
 carries the orchard library (with the note-commitment tree function) as an rlib of the one static
 library; the verifier binary is a separate crate and is not part of it.
 `scripts/stagenet/deploy.sh` installs both: the verifier goes in the chain home's `bin/`, root-owned, which is where
-oramad looks by default (`--shielded-verifier` names another path); `orama global install` does not stage it. `orama build`
+oramad looks by default (`--shielded-verifier` names another path); `orama global install` does not stage it. `orama maint build`
 does not build `oramad`; these targets are the release path, and `make build` is unchanged and
 produces nodes that accept no shielded bundle. All were built and linked for linux/amd64 on
 macOS/arm64; they were not run on linux.
@@ -3388,7 +3388,7 @@ read-only (`ReadOnlyPaths=`). Cosmovisor runs `DAEMON_HOME/cosmovisor/current/bi
 and, when the chain halts at an upgrade plan's height, points `current` at
 `cosmovisor/upgrades/<name>` and restarts. It never downloads a binary; a plan with no staged
 binary halts the chain until one is staged. Before every start it also runs the
-double-sign guard (`orama global validator check-sign-floor`) as root.
+double-sign guard (`orama maint global validator check-sign-floor`) as root.
 
 `orama global install` installs the pinned cosmovisor: **cosmovisor/v1.7.3** of
 `cosmos/cosmos-sdk` (tag object `6dee2e6f`). The operator stages the official
@@ -3405,7 +3405,7 @@ bytes are refused: a consensus-breaking binary goes in with `stage-oramad
 consensus behaviour (the B6 updater is not built): stage it as an upgrade plan.
 The stagenet deploy script below installs through this command.
 
-Binaries enter the layout through `orama global install` (the genesis binary, verified only by the bytes the operator staged) and `orama global stage-oramad` (run as root, TUF-verified):
+Binaries enter the layout through `orama global install` (the genesis binary, verified only by the bytes the operator staged) and `orama maint global stage-oramad` (run as root, TUF-verified):
 
 - `--upgrade <name>` places `cosmovisor/upgrades/<name>/bin/oramad`. `<name>` must be lowercase
   letters, digits, `.`, `-` or `_` (cosmovisor lowercases and URI-escapes plan names, so these are
@@ -3425,7 +3425,7 @@ Binaries enter the layout through `orama global install` (the genesis binary, ve
 - The binary is copied into a fresh 0700 root-only staging directory under `cosmovisor/`,
   synced, set to 0755 through its descriptor, and verified **through that descriptor** with
   `--release-metadata <dir> --release-target <name>` against the TUF release root adopted at
-  `/etc/orama/release-root.json` (the same check `orama node stage-archive` makes). Only then is
+  `/etc/orama/release-root.json` (the same check `orama maint node stage-archive` makes). Only then is
   it hard-linked into `bin/`; the link fails if a binary is already there, so nothing is
   replaced. A failure leaves nothing behind.
 - Ownership: `cosmovisor/` is root-owned, group `orama-chain`, mode 1775. The group may create

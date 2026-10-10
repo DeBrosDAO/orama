@@ -12,7 +12,7 @@ This page explains the records, how to choose the base domain, how to create the
 
 ## Nameserver slots
 
-Each node installed with `--role nameserver` (`--nameserver` on `orama node install`) claims a slot, `ns1`, `ns2`, and so on, the first time its DNS sweep runs (every 30 seconds, once it has registered). Slots are claimed dynamically, lowest free number first, so **you cannot know in advance which address holds which name**. A node keeps its slot across restarts and missed heartbeats. Two minutes of silence takes it out of the round-robin, not out of its slot, because freeing the slot would drop the zone's glue. `orama node remove` releases the slot. There are at most 13 slots.
+Each node installed with `--role nameserver` (`--nameserver` on `orama maint node install`) claims a slot, `ns1`, `ns2`, and so on, the first time its DNS sweep runs (every 30 seconds, once it has registered). Slots are claimed dynamically, lowest free number first, so **you cannot know in advance which address holds which name**. A node keeps its slot across restarts and missed heartbeats. Two minutes of silence takes it out of the round-robin, not out of its slot, because freeing the slot would drop the zone's glue. `orama node remove` releases the slot. There are at most 13 slots.
 
 Each slot holder writes its glue record `nsN.<base>` pointing at its public IP. The zone's own NS set and SOA derive from the slots: one NS record for every slot that has glue. A one-nameserver cluster publishes only `ns1`; a five-nameserver cluster publishes `ns1` to `ns5`.
 

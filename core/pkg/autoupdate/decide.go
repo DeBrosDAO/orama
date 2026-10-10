@@ -11,7 +11,7 @@
 // cluster-wide lock and it is its turn in the rollout plan (followers first,
 // the leader last, nameservers spaced: pkg/rollout), and never while the
 // cluster is degraded or below a quorum of healthy voters. The install is
-// `orama node stage-archive --release-only` keeping the release it replaces,
+// `orama maint node stage-archive --release-only` keeping the release it replaces,
 // then `orama node upgrade` of the new release, then the health gate
 // (pkg/nodehealth). A failure puts the previous release back, upgrades onto it
 // again, and records the release as failed for the cluster: no other node then
@@ -129,7 +129,7 @@ func Decide(settings Settings, health Health, now time.Time, current string, can
 	}
 	if settings.Role == RoleValidator && settings.Mode == ModeAuto {
 		return Decision{Action: ActionSkip, Reason: "release " + candidate.Version + " is not installed here: this machine is a validator, " +
-			"upgrade it by hand ('orama global stage-oramad')"}, nil
+			"upgrade it by hand ('orama maint global stage-oramad')"}, nil
 	}
 	if health.Degraded || !quorum(health) {
 		return Decision{Action: ActionRefuse, Reason: "cluster is degraded or below quorum"}, nil

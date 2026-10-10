@@ -18,7 +18,7 @@ const ErrCodeNotAnOperator = "NOT_AN_OPERATOR"
 // notAnOperatorHint is what to do about NOT_AN_OPERATOR. docs/AUTH.md promises
 // every refusal {error, code, hint}; the gateway's own refusal of the same
 // code says the same.
-const notAnOperatorHint = "sign in with a wallet on this cluster's operator list; an operator adds one with `orama operator add`"
+const notAnOperatorHint = "sign in with a wallet on this cluster's operator list; an operator adds one with `orama maint operator add`"
 
 // requireOperator resolves the caller's wallet and refuses unless that wallet
 // is on the cluster's operator list.

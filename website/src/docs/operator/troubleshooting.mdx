@@ -8,7 +8,7 @@ Named failures, what causes them, and how to fix them. Start with the tools, the
 orama status                                   # which node is unhealthy?
 orama monitor alerts --env <env>               # what the cluster thinks is wrong, with a next step for each
 orama monitor node --env <env> --node <ip>   # everything one node reported
-orama inspect --subsystem rqlite               # deep checks for one subsystem (see Inspector)
+orama maint inspect --subsystem rqlite               # deep checks for one subsystem (see Inspector)
 sudo orama node doctor                         # on the node: services, ports, connectivity, Raft state
 sudo orama node logs <service> -n 100 -f       # logs; service aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqlite, turn
 sudo orama node logs orama-namespace-olric@<ns> -n 30    # a tenant service by full unit name
@@ -38,11 +38,11 @@ General rules:
 | `PEER_VANISHED` | The `orama` binary changed while the request was open | Run it again |
 | `NOT_FOUND` | No such vault entry | Nothing to do; the CLI creates SSH entries on demand |
 
-**A first vault run (SSH keys in `orama node setup`, for example) against a locked wallet can take four minutes** (two for approval, two for unlock); a wallet operation such as signing in `orama build` refuses at once instead. If a command seems to hang, look at the desktop app: there is probably a prompt on it. `rootwallet agent not reachable: … (is the desktop app running?)` means the socket is absent: the desktop app is closed. `rootwallet agent is locked — unlock it in the desktop app first` means unlock it and run the command again. `orama auth login` does not need the agent: on a machine without a wallet it prints a code, and `orama auth approve <code>` on one that has approves it.
+**A first vault run (SSH keys in `orama node setup`, for example) against a locked wallet can take four minutes** (two for approval, two for unlock); a wallet operation such as signing in `orama maint build` refuses at once instead. If a command seems to hang, look at the desktop app: there is probably a prompt on it. `rootwallet agent not reachable: … (is the desktop app running?)` means the socket is absent: the desktop app is closed. `rootwallet agent is locked — unlock it in the desktop app first` means unlock it and run the command again. `orama auth login` does not need the agent: on a machine without a wallet it prints a code, and `orama auth approve <code>` on one that has approves it.
 
 ## Binary signature verification fails
 
-`orama push`, `orama node install` or `orama node upgrade` refuses the archive and names the cause. The full table is in [Build and sign](/docs/operator/build-and-sign#errors-a-node-can-give). The ones people hit: built with `--unsigned`; signed by an account not in `/etc/orama/archive-signers`; a genesis install without `--operator-wallet`; a `--signers` rotation that leaves out its own signer; an archive for the wrong architecture; a join refused with 409 because the cluster trusts other signers than you expected (use `--join-via`).
+`orama maint push`, `orama maint node install` or `orama node upgrade` refuses the archive and names the cause. The full table is in [Build and sign](/docs/operator/build-and-sign#errors-a-node-can-give). The ones people hit: built with `--unsigned`; signed by an account not in `/etc/orama/archive-signers`; a genesis install without `--operator-wallet`; a `--signers` rotation that leaves out its own signer; an archive for the wrong architecture; a join refused with 409 because the cluster trusts other signers than you expected (use `--join-via`).
 
 ## Service will not start
 
@@ -101,11 +101,11 @@ The credentials go to `curl` on stdin so they never appear in `ps`.
 
 ```bash
 orama monitor report --env <env>              # quorum, leader, indices
-orama inspect --subsystem rqlite
+orama maint inspect --subsystem rqlite
 sudo orama node logs rqlite -n 100
 ```
 
-A node stuck in `Candidate`, or "leader not found" everywhere, with the **whole cluster** leaderless: [`orama node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster). It keeps one node's data and deletes everything on the others. Take a backup first if the survivor might be wrong. A single node reporting `degraded` is not a reason to recover.
+A node stuck in `Candidate`, or "leader not found" everywhere, with the **whole cluster** leaderless: [`orama maint node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster). It keeps one node's data and deletes everything on the others. Take a backup first if the survivor might be wrong. A single node reporting `degraded` is not a reason to recover.
 
 ### Index RQLite refuses to start: "holds raft state but no raft-node-id"
 
@@ -113,7 +113,7 @@ The node predates recorded Raft ids and was upgraded without this release's CLI.
 
 ### Index RQLite: "no other member to join so that the leader re-registers it"
 
-After an upgrade that moved the index Raft port, the node's address changed and RQLite only moves a member to a new address when it joins the leader again; this node has nobody recorded to join. On a cluster of one, reform it: `orama node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`. On a larger cluster set `database.rqlite_join_address` in `node.yaml` to a live member's Raft address and let `orama-node` retry.
+After an upgrade that moved the index Raft port, the node's address changed and RQLite only moves a member to a new address when it joins the leader again; this node has nobody recorded to join. On a cluster of one, reform it: `orama maint node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`. On a larger cluster set `database.rqlite_join_address` in `node.yaml` to a live member's Raft address and let `orama-node` retry.
 
 ### Namespace RQLite has no leader
 
@@ -133,7 +133,7 @@ The monitor raises a critical "Raft snapshot term N is above the current term M"
 
 ## WireGuard connectivity
 
-Symptoms: `orama monitor mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama monitor mesh --env <env>`, `orama inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
+Symptoms: `orama monitor mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama monitor mesh --env <env>`, `orama maint inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
 
 ## Olric cluster split after enabling encryption
 
@@ -173,14 +173,14 @@ See [TLS and certificates](/docs/operator/tls-certificates#if-a-node-has-no-cert
 
 ## OramaOS
 
-**LUKS unlock fails after a reboot.** Not enough peer vault guardians are online to meet the Shamir threshold `K = max(2, floor(N/3))`. Make sure enough nodes are online and reachable over WireGuard; the agent retries with backoff. For a genesis node before 5 peers exist, `orama node unlock --genesis --node-ip <wg-ip> --key-file <path>` takes a RootWallet-encrypted key file, but nothing produces one yet because key escrow is not built (see "Not yet implemented" in [OramaOS](/docs/operator/orama-os#not-yet-implemented)). The only unlock that works today is the raw-key `curl` to port 9998 described there, and that port is a known issue.
+**LUKS unlock fails after a reboot.** Not enough peer vault guardians are online to meet the Shamir threshold `K = max(2, floor(N/3))`. Make sure enough nodes are online and reachable over WireGuard; the agent retries with backoff. For a genesis node before 5 peers exist, `orama maint node unlock --genesis --node-ip <wg-ip> --key-file <path>` takes a RootWallet-encrypted key file, but nothing produces one yet because key escrow is not built (see "Not yet implemented" in [OramaOS](/docs/operator/orama-os#not-yet-implemented)). The only unlock that works today is the raw-key `curl` to port 9998 described there, and that port is a known issue.
 
-**`orama node enroll` times out.** Port 9999 on the node is not reachable from the gateway, `--code` is missing or wrong, or `--node-ip` is not the node's public IPv4. Read the registration code from the node's console (it is not served on port 9999) and open 9999 in your provider's external firewall.
+**`orama maint node enroll` times out.** Port 9999 on the node is not reachable from the gateway, `--code` is missing or wrong, or `--node-ip` is not the node's public IPv4. Read the registration code from the node's console (it is not served on port 9999) and open 9999 in your provider's external firewall.
 
 See [OramaOS](/docs/operator/orama-os).
 
 ## Recovering from a failed join
 
-If a node partially joins (it registers in the registry's Raft group, then fails or is wiped), the remaining cluster can lose quorum permanently: RQLite thinks there are N voters but only N-1 are reachable. The symptom is RQLite stuck in `Candidate`, no leader, every write failing. If the cluster is still healthy, remove the half-joined node with `orama node remove --env <env> --node <ip>` and join again with a **new** invite (invites are single use, and a retry is told the invite was already used). If quorum is already lost, use [`orama node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster); on a young cluster with no data worth keeping, a clean reinstall of the affected nodes from the genesis node is the alternative ([Wipe a node](/docs/operator/clean-node)).
+If a node partially joins (it registers in the registry's Raft group, then fails or is wiped), the remaining cluster can lose quorum permanently: RQLite thinks there are N voters but only N-1 are reachable. The symptom is RQLite stuck in `Candidate`, no leader, every write failing. If the cluster is still healthy, remove the half-joined node with `orama node remove --env <env> --node <ip>` and join again with a **new** invite (invites are single use, and a retry is told the invite was already used). If quorum is already lost, use [`orama maint node recover-raft`](/docs/operator/upgrades#recovering-a-split-cluster); on a young cluster with no data worth keeping, a clean reinstall of the affected nodes from the genesis node is the alternative ([Wipe a node](/docs/operator/clean-node)).
 
 **Prevention.** Make sure a joining node can complete the whole installation before it joins. The installer does not check for port conflicts up front, so stop anything holding the ports the node needs (for example 8080 and 4001) before you join. See the pre-install checklist in [What you need](/docs/operator/getting-started#pre-install-checklist).

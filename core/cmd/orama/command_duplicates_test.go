@@ -10,12 +10,11 @@ import (
 
 // `orama push` and `orama node push` were two separate implementations with
 // opposite defaults for whether the archive fans out, and two fanouts with
-// different key handling. `orama rollout` and `orama node rollout` likewise:
-// one built first, the other did not, and only one of them tried to restart the
-// raft leader last. Which behaviour you got depended on which of two identically
-// named commands you happened to type.
+// different key handling. Which behaviour you got depended on which of two
+// identically named commands you happened to type. Both moved to `orama maint`
+// and exist once; `orama nodes` and `orama node list` are the pair left.
 //
-// They are now one definition mounted twice. These pin that down: a command
+// They are one definition mounted twice. These pin that down: a command
 // reachable under two names must accept the same flags with the same defaults
 // and describe itself the same way.
 
@@ -61,8 +60,6 @@ func TestAliasedCommandsShareOneDefinition(t *testing.T) {
 		top    []string
 		nested []string
 	}{
-		{[]string{"push"}, []string{"node", "push"}},
-		{[]string{"rollout"}, []string{"node", "rollout"}},
 		{[]string{"nodes"}, []string{"node", "list"}},
 	} {
 		name := strings.Join(pair.top, " ") + " vs " + strings.Join(pair.nested, " ")
@@ -93,26 +90,40 @@ func TestAliasedCommandsShareOneDefinition(t *testing.T) {
 // parent per command, so mounting one object twice silently breaks help paths.
 func TestAliasedCommandsAreDistinctObjects(t *testing.T) {
 	root := newRootCmd()
-	top := findCommand(t, root, []string{"push"})
-	nested := findCommand(t, root, []string{"node", "push"})
+	top := findCommand(t, root, []string{"nodes"})
+	nested := findCommand(t, root, []string{"node", "list"})
 	if top == nested {
 		t.Fatal("the same *cobra.Command is mounted under two parents")
 	}
 	if nested.Parent().Name() != "node" {
-		t.Errorf("orama node push has parent %q, want node", nested.Parent().Name())
+		t.Errorf("orama node list has parent %q, want node", nested.Parent().Name())
 	}
 }
 
-// `orama env enable` was printed in help and handled by the dispatcher but
-// never registered, so it could not be run.
-func TestEnvEnableIsReachable(t *testing.T) {
+// `orama env use` had two more names, `switch` and `enable`. `enable` was printed
+// in help and handled by the dispatcher but never registered, so it could not be
+// run; both are gone with `orama env`, which is now `orama network` (and `env`
+// itself a hidden alias).
+func TestNetworkUseHasNoAliases(t *testing.T) {
 	root := newRootCmd()
-	env := findCommand(t, root, []string{"env"})
-	target, _, err := env.Find([]string{"enable"})
-	if err != nil {
-		t.Fatalf("orama env enable must resolve: %v", err)
+	for _, group := range []string{"network", "env"} {
+		use := findCommand(t, root, []string{group, "use"})
+		if len(use.Aliases) != 0 {
+			t.Errorf("orama %s use has aliases %v", group, use.Aliases)
+		}
+		for _, alias := range []string{"switch", "enable"} {
+			if target, _, err := findGroup(root, group).Find([]string{alias}); err == nil && target.Name() == alias {
+				t.Errorf("orama %s %s resolves to a command", group, alias)
+			}
+		}
 	}
-	if target.Name() != "use" {
-		t.Errorf("orama env enable resolved to %q, want use", target.Name())
+}
+
+func findGroup(root *cobra.Command, name string) *cobra.Command {
+	for _, sub := range root.Commands() {
+		if sub.Name() == name {
+			return sub
+		}
 	}
+	return nil
 }

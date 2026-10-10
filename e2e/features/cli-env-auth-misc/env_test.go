@@ -3,6 +3,7 @@
 package clienvauthmisc
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -10,28 +11,29 @@ import (
 
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
+	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// concurrentAdds is how many `orama env add` run at once in one HOME.
+// concurrentAdds is how many `orama network add` run at once in one HOME.
 const concurrentAdds = 8
 
 // TestEnvAdd_customEnvironmentSignsInThroughIt: an environment added with the
 // run's CA and made active is what the next command talks to, end to end: a
 // real wallet login through it and whoami answered by its gateway
-// (docs/CLI_REFERENCE.md#orama-env-add, #orama-env-use).
+// (docs/CLI_REFERENCE.md#orama-network-add, #orama-network-use).
 func TestEnvAdd_customEnvironmentSignsInThroughIt(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := isolated(t)
 	name := e2eEnvPrefix + "alt"
-	added := cli.MustOK(t, "env", "add", name, f.State.GatewayURL, "e2e alternate", "--ca-file", f.State.CAFile)
-	for _, want := range []string{"Added environment: " + name, f.State.GatewayURL, "Trusted CA:"} {
+	added := cli.MustOK(t, "network", "add", name, f.State.GatewayURL, "e2e alternate", "--ca-file", f.State.CAFile)
+	for _, want := range []string{"Added network: " + name, f.State.GatewayURL, "Trusted CA:"} {
 		if !strings.Contains(added.Stdout, want) {
 			t.Errorf("env add output lacks %q:\n%s", want, added.Stdout)
 		}
 	}
-	cli.MustOK(t, "env", "use", name)
-	if cur := cli.MustOK(t, "env", "current").Stdout; !strings.Contains(cur, "Current environment: "+name) {
+	cli.MustOK(t, "network", "use", name)
+	if cur := cli.MustOK(t, "network", "current").Stdout; !strings.Contains(cur, "Current network: "+name) {
 		t.Fatalf("env current after env use %s:\n%s", name, cur)
 	}
 	cli.MustOK(t, "auth", "login")
@@ -57,13 +59,13 @@ func TestEnvAdd_missingOrSurplusArgumentsAreUsage(t *testing.T) {
 	cli := isolated(t)
 	before := readEnvFile(t, cli)
 	for _, args := range [][]string{
-		{"env", "add"},
-		{"env", "add", e2eEnvPrefix + "one"},
-		{"env", "add", e2eEnvPrefix + "four", "https://a.invalid", "desc", "surplus"},
-		{"env", "use"},
-		{"env", "use", "a", "b"},
-		{"env", "remove"},
-		{"env", "remove", "a", "b"},
+		{"network", "add"},
+		{"network", "add", e2eEnvPrefix + "one"},
+		{"network", "add", e2eEnvPrefix + "four", "https://a.invalid", "desc", "surplus"},
+		{"network", "use"},
+		{"network", "use", "a", "b"},
+		{"network", "remove"},
+		{"network", "remove", "a", "b"},
 	} {
 		if res := run(t, cli, args...); res.Exit != exitUsage {
 			t.Errorf("orama %q: exit %d, want %d\n%s", args, res.Exit, exitUsage, output(res))
@@ -92,7 +94,7 @@ func TestEnvAdd_emptyNameOrUnusableURLRefused(t *testing.T) {
 			t.Parallel()
 			cli := isolated(t)
 			before := len(readEnvFile(t, cli).Environments)
-			res := run(t, cli, append([]string{"env", "add"}, args...)...)
+			res := run(t, cli, append([]string{"network", "add"}, args...)...)
 			if res.Exit != exitUsage {
 				t.Errorf("env add with %s: exit %d, want %d\n%s", label, res.Exit, exitUsage, output(res))
 			}
@@ -104,7 +106,7 @@ func TestEnvAdd_emptyNameOrUnusableURLRefused(t *testing.T) {
 }
 
 // TestEnvAdd_updatesInPlace: adding a name that exists updates its gateway
-// and description (docs/CLI_REFERENCE.md#orama-env-add "or update one already
+// and description (docs/CLI_REFERENCE.md#orama-network-add "or update one already
 // configured"); the CA stays for the same host and is dropped when the
 // environment is pointed at another host (environment.go AddEnvironment).
 func TestEnvAdd_updatesInPlace(t *testing.T) {
@@ -112,15 +114,15 @@ func TestEnvAdd_updatesInPlace(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := isolated(t)
 	name := e2eEnvPrefix + "upd"
-	cli.MustOK(t, "env", "add", name, f.State.GatewayURL, "one", "--ca-file", f.State.CAFile)
-	cli.MustOK(t, "env", "add", name, f.State.GatewayURL, "two")
+	cli.MustOK(t, "network", "add", name, f.State.GatewayURL, "one", "--ca-file", f.State.CAFile)
+	cli.MustOK(t, "network", "add", name, f.State.GatewayURL, "two")
 	if ca, _ := caFileOf(t, cli, name); ca == "" {
 		t.Error("re-adding the same host dropped its CA")
 	}
-	if list := cli.MustOK(t, "env", "list").Stdout; !strings.Contains(list, "Description: two") || strings.Contains(list, "Description: one") {
-		t.Errorf("env list after the update:\n%s", list)
+	if got := networkRow(t, cli, name)["description"]; got != "two" {
+		t.Errorf("the description of %s after the update is %q, want two", name, got)
 	}
-	cli.MustOK(t, "env", "add", name, "https://other."+f.State.BaseDomain, "three")
+	cli.MustOK(t, "network", "add", name, "https://other."+f.State.BaseDomain, "three")
 	if ca, ok := caFileOf(t, cli, name); !ok || ca != "" {
 		t.Errorf("pointing %s at another host kept its CA %q (present %v)", name, ca, ok)
 	}
@@ -142,7 +144,7 @@ func TestEnvUse_unknownIsNotFound(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := isolated(t)
 	for _, name := range []string{e2eEnvPrefix + "absent", "production", "E2E-" + f.State.Env, "\u202e" + f.State.Env} {
-		res := run(t, cli, "env", "use", name)
+		res := run(t, cli, "network", "use", name)
 		if res.Exit != exitNotFound || !strings.Contains(output(res), "not found") {
 			t.Errorf("env use %q: exit %d, want %d and \"not found\"\n%s", name, res.Exit, exitNotFound, output(res))
 		}
@@ -152,16 +154,20 @@ func TestEnvUse_unknownIsNotFound(t *testing.T) {
 	}
 }
 
-// TestEnvUse_aliasesSwitch: `env switch` and `env enable` are aliases of
-// `env use` (docs/CLI_REFERENCE.md#orama-env-use).
-func TestEnvUse_aliasesSwitch(t *testing.T) {
+// TestNetworkUse_hasNoAliases: `network use` answers to its own name only;
+// `switch` and `enable`, which `orama env use` had, are unknown subcommands
+// (docs/CLI_REFERENCE.md#orama-network-use).
+func TestNetworkUse_hasNoAliases(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := isolated(t)
-	for _, alias := range []string{"use", "switch", "enable"} {
-		res := cli.MustOK(t, "env", alias, f.State.Env)
-		if !strings.Contains(res.Stdout, f.State.Env) || !strings.Contains(res.Stdout, f.State.GatewayURL) {
-			t.Errorf("env %s %s printed:\n%s", alias, f.State.Env, res.Stdout)
+	res := cli.MustOK(t, "network", "use", f.State.Env)
+	if !strings.Contains(res.Stdout, f.State.Env) || !strings.Contains(res.Stdout, f.State.GatewayURL) {
+		t.Errorf("network use %s printed:\n%s", f.State.Env, res.Stdout)
+	}
+	for _, alias := range []string{"switch", "enable"} {
+		if res := run(t, cli, "network", alias, f.State.Env); res.Exit != exitUsage {
+			t.Errorf("network %s: exit %d, want %d\n%s", alias, res.Exit, exitUsage, output(res))
 		}
 	}
 }
@@ -171,22 +177,22 @@ func TestEnvUse_aliasesSwitch(t *testing.T) {
 func TestEnvRemove_absentSucceeds(t *testing.T) {
 	t.Parallel()
 	cli := isolated(t)
-	res := cli.MustOK(t, "env", "remove", e2eEnvPrefix+"never-added")
-	if !strings.Contains(res.Stdout, "Removed environment") {
+	res := cli.MustOK(t, "network", "remove", e2eEnvPrefix+"never-added")
+	if !strings.Contains(res.Stdout, "Removed network") {
 		t.Errorf("env remove of an absent environment printed:\n%s", res.Stdout)
 	}
 }
 
 // TestEnvRemove_activeLeavesNoneSelected: removing the active environment
-// selects nothing else; the next gateway command asks for `orama env add` /
-// `orama env use` instead of silently using another cluster (environment.go
+// selects nothing else; the next gateway command asks for `orama network add` /
+// `orama network use` instead of silently using another cluster (environment.go
 // GetActiveEnvironment "No fallback").
 func TestEnvRemove_activeLeavesNoneSelected(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := isolated(t)
-	cli.MustOK(t, "env", "remove", f.State.Env)
-	cur := run(t, cli, "env", "current")
+	cli.MustOK(t, "network", "remove", f.State.Env)
+	cur := run(t, cli, "network", "current")
 	if cur.Exit != exitNotFound || !strings.Contains(output(cur), noEnvHelp) {
 		t.Errorf("env current with nothing active: exit %d\n%s", cur.Exit, output(cur))
 	}
@@ -196,21 +202,27 @@ func TestEnvRemove_activeLeavesNoneSelected(t *testing.T) {
 	}
 }
 
-// TestEnvList_emptyHomeConfiguresNothing: a fresh machine points at no
+// TestNetworkList_emptyHomeConfiguresNothing: a fresh machine points at no
 // cluster (environment.go LoadEnvironmentConfig "not filled in with somebody
-// else's networks"), and --json does not break the text-only listing.
-func TestEnvList_emptyHomeConfiguresNothing(t *testing.T) {
+// else's networks"): the list holds the networks built into the binary and not
+// one configured gateway, and --json is the same rows as an array.
+func TestNetworkList_emptyHomeConfiguresNothing(t *testing.T) {
 	t.Parallel()
 	cli := emptyHome(t)
-	for _, args := range [][]string{{"env", "list"}, {"env", "list", "--json"}} {
-		out := cli.MustOK(t, args...).Stdout
-		for _, name := range []string{"production", "devnet", "testnet", "mainnet", "(active)"} {
-			if strings.Contains(out, name) {
-				t.Errorf("orama %v on a fresh machine lists %q:\n%s", args, name, out)
-			}
+	text := cli.MustOK(t, "network", "list").Stdout
+	if strings.Contains(text, "configured") || strings.Contains(text, "*") {
+		t.Errorf("orama network list on a fresh machine shows a configured or active network:\n%s", text)
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(cli.MustOK(t, "network", "list", "--json").Stdout), &rows); err != nil {
+		t.Fatalf("orama network list --json is not a JSON array of rows: %v", err)
+	}
+	for _, row := range rows {
+		if row["gateway"] != "-" || row["active"] != "" {
+			t.Errorf("a fresh machine lists %v with a gateway or active", row)
 		}
 	}
-	cur := run(t, cli, "env", "current")
+	cur := run(t, cli, "network", "current")
 	if cur.Exit != exitNotFound || !strings.Contains(output(cur), noEnvHelp) {
 		t.Errorf("env current on a fresh machine: exit %d\n%s", cur.Exit, output(cur))
 	}
@@ -228,7 +240,7 @@ func TestEnvAdd_concurrentAddsAllKept(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := cli.For(t).Run(t.Context(), "env", "add", fmt.Sprintf("%sc%d", e2eEnvPrefix, i), f.State.GatewayURL)
+			res, err := cli.For(t).Run(t.Context(), "network", "add", fmt.Sprintf("%sc%d", e2eEnvPrefix, i), f.State.GatewayURL)
 			if err != nil || res.Exit != exitOK {
 				t.Errorf("concurrent env add %d: exit %d, %v\n%s", i, res.Exit, err, output(res))
 			}
@@ -247,4 +259,20 @@ func TestEnvAdd_concurrentAddsAllKept(t *testing.T) {
 	if !names[f.State.Env] {
 		t.Errorf("the run's environment %s was lost by concurrent adds", f.State.Env)
 	}
+}
+
+// networkRow is the row of `orama network list --json` for name.
+func networkRow(t *testing.T, cli *oramacli.Runner, name string) map[string]string {
+	t.Helper()
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(cli.MustOK(t, "network", "list", "--json").Stdout), &rows); err != nil {
+		t.Fatalf("orama network list --json: %v", err)
+	}
+	for _, row := range rows {
+		if row["name"] == name {
+			return row
+		}
+	}
+	t.Fatalf("orama network list has no row %s", name)
+	return nil
 }

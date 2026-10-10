@@ -503,7 +503,7 @@ func (o *Orchestrator) callJoinEndpoint(wgPubKey, peerID string) (*joinhandlers.
 	//
 	// Every invite carries the fingerprint: `orama node invite` reads this
 	// node's certificate and refuses to mint an invite without it, and
-	// `orama node install` decodes it from the token. An invocation with no
+	// `orama maint node install` decodes it from the token. An invocation with no
 	// fingerprint is a bare token from somewhere else, and there is nothing to
 	// verify the far end with.
 	tlsConfig, err := pinnedTLSConfig(o.flags.CAFingerprint, o.flags.JoinSNI)

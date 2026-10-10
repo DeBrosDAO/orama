@@ -31,7 +31,7 @@ var evalNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,11}$`)
 // AddEvalCluster installs a single-node eval cluster on a new server of the
 // run: the subdomain e2e-<run>-<name>.<zone> delegated to it, genesis with
 // the real CLI (`orama node setup --genesis --role nameserver`, Let's Encrypt
-// staging), an `orama env` entry <that subdomain's first label> with its own
+// staging), an `orama network` entry <that subdomain's first label> with its own
 // CA file in the run's CLI HOME, and the certificate waited for. On failure
 // everything it made is removed. In a feature process (E2E_BROKER_SOCK set)
 // the runner's broker installs it.
@@ -140,7 +140,7 @@ func installEval(ctx context.Context, r *run) error {
 		return fmt.Errorf("failed to write the eval cluster's CA file %s: %w", r.st.CAFile, err)
 	}
 	desc := "e2e eval cluster of run " + r.cfg.RunID
-	if _, err := r.oramaCmd(ctx, "env", "add", r.st.Env, r.st.GatewayURL, desc, "--ca-file", r.st.CAFile); err != nil {
+	if _, err := r.oramaCmd(ctx, "network", "add", r.st.Env, r.st.GatewayURL, desc, "--ca-file", r.st.CAFile); err != nil {
 		return err
 	}
 	if err := r.installGenesis(ctx); err != nil {
@@ -165,8 +165,8 @@ func removeEvalCluster(ctx context.Context, st *fleet.State, name string, log Lo
 	}
 	errs = append(errs, removeExtra(ctx, st, evalServerPrefix+name, d))
 	r := evalRun(st, cl, log, d)
-	// `orama env remove` of an absent environment succeeds.
-	if _, err := r.oramaCmd(ctx, "env", "remove", cl.Env); err != nil {
+	// `orama network remove` of an absent environment succeeds.
+	if _, err := r.oramaCmd(ctx, "network", "remove", cl.Env); err != nil {
 		errs = append(errs, fmt.Errorf("failed to remove environment %s: %w", cl.Env, err))
 	}
 	if err := os.Remove(cl.CAFile); err != nil && !errors.Is(err, os.ErrNotExist) {

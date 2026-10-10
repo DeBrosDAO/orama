@@ -27,13 +27,13 @@ func nodeFingerprint(t testing.TB, f *fleet.Fleet, n fleet.Node) string {
 	return f.MustExec(t, n, cmd).Stdout
 }
 
-// installDryRunChangesNothing: `orama node install --dry-run` on a member
+// installDryRunChangesNothing: `orama maint node install --dry-run` on a member
 // prints the plan under "DRY RUN - No changes will be made" and
-// leaves the node exactly as it was (docs/CLI_REFERENCE.md "orama node install").
+// leaves the node exactly as it was (docs/CLI_REFERENCE.md "orama maint node install").
 func installDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	n := extra.Node
 	before := nodeFingerprint(t, f, n)
-	out := infra.OnNode(t, f, n, "node", "install", "--dry-run", "--vps-ip", n.PublicIP, "--base-domain", f.State.BaseDomain)
+	out := infra.OnNode(t, f, n, "maint", "node", "install", "--dry-run", "--vps-ip", n.PublicIP, "--base-domain", f.State.BaseDomain)
 	if out.Exit != infra.ExitOK || !strings.Contains(out.Stdout, "DRY RUN - No changes will be made") ||
 		!strings.Contains(out.Stdout, n.PublicIP) {
 		t.Fatalf("dry run: exit %d\n%s%s", out.Exit, out.Stdout, f.Redact(out.Stderr))
@@ -67,7 +67,7 @@ func installFlagsRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 		{[]string{"--dry-run", "--vps-ip", "\u202e1.2.3.4", "--base-domain", bd}, infra.ExitFailure, "--vps-ip"},
 	}
 	for _, c := range cases {
-		out := infra.OnNode(t, f, n, append([]string{"node", "install"}, c.args...)...)
+		out := infra.OnNode(t, f, n, append([]string{"maint", "node", "install"}, c.args...)...)
 		if out.Exit != c.exit || !strings.Contains(out.Stdout+out.Stderr, c.why) {
 			t.Errorf("install %v: exit %d, want %d naming %q:\n%s%s", c.args, out.Exit, c.exit, c.why, out.Stdout, f.Redact(out.Stderr))
 		}

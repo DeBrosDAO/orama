@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// A missing CA file used to fail every command, including `orama env add
+// A missing CA file used to fail every command, including `orama network add
 // --ca-file`, the one its error message tells you to run.
 func TestNeedsEnvironmentCAs(t *testing.T) {
 	root := newRootCmd()

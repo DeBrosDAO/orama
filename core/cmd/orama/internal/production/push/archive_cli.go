@@ -20,7 +20,7 @@ import (
 // That needs a node whose CLI has stage-archive and an anchor. A push with
 // --trust-signers is the one for nodes that have neither — 0.122.x nodes, whose
 // CLI predates archive signing — so it cannot rely on the node's CLI. It stages
-// the way `orama node install --remote` does: the archive is verified here,
+// the way `orama maint node install --remote` does: the archive is verified here,
 // against --trust-signers, and what is uploaded is a canonical archive written
 // from the verified tree; on the node, the CLI alone is extracted into a
 // root-only directory under /opt/orama, checked against the checksum the

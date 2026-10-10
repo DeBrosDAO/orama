@@ -44,7 +44,7 @@ Staging certificates are trusted by nobody, including your `orama` CLI. Give the
 ```bash
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem  > le-staging.pem
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le-staging.pem
-orama env add mycluster https://cluster.example.com --ca-file le-staging.pem
+orama network add mycluster https://cluster.example.com --ca-file le-staging.pem
 ```
 
 Every command then verifies `<base-domain>` and names under it against those roots as well as the system's, and every other host against the system's alone. A missing CA file is an error naming the environment. Browsers will still show a warning.

@@ -60,7 +60,7 @@ type Options struct {
 	// Archive is the build archive to install. Empty means the newest one in
 	// build.ArchiveDir.
 	Archive string
-	// ACMECA is passed to `orama node install --acme-ca`.
+	// ACMECA is passed to `orama maint node install --acme-ca`.
 	ACMECA string
 	// Release installs a published release instead of an archive built here:
 	// the version to fetch from ReleaseRepo on Channel, verified against the
@@ -223,7 +223,7 @@ func Run(opts Options) error {
 }
 
 // OperatorWallet is the operator's RootWallet address, normalized: the account
-// `orama build` signs archives with, which a genesis node makes its archive
+// `orama maint build` signs archives with, which a genesis node makes its archive
 // trust anchor and every node registers under.
 func OperatorWallet(ctx context.Context, agent *rwagent.Client) (string, error) {
 	addrData, err := agent.GetAddress(ctx, archiveSigningChain)
@@ -746,7 +746,7 @@ const inviteExpiry = 15 * time.Minute
 // It used to hand install `--join <gateway> --token <token>`: the cluster's
 // domain, which reaches whichever nameserver DNS picks, and no fingerprint, so
 // the joining node trusted the first certificate it was shown. The invite is
-// now minted the way `orama invite` mints it (pkg invitemint).
+// now minted the way `orama maint invite` mints it (pkg invitemint).
 func mintInviteThroughGateway(gatewayURL string) (string, error) {
 	host, err := invitemint.GatewayHost(gatewayURL)
 	if err != nil {
@@ -790,7 +790,7 @@ func EnsureArchive(node inspector.Node, archivePath string, trusted []string) er
 func EnsureArchives(nodes []inspector.Node, archivePath string, trusted []string) (err error) {
 	if archivePath == "" {
 		// /tmp is shared: its newest archive can be another checkout's build.
-		return clierr.Usage("--archive is required: the path `orama build` printed")
+		return clierr.Usage("--archive is required: the path `orama maint build` printed")
 	}
 	upload, err := archivetrust.PrepareUpload(archivePath, trusted)
 	if err != nil {

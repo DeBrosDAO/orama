@@ -10,7 +10,7 @@ import (
 // term above the node's current term. Raft never produces that: a snapshot is
 // taken at an applied entry, whose term is at most the current one. It is
 // left by a recovery that restarted the cluster's term below its recovery
-// snapshot (orama node recover-raft before 2026-10-03 deleted the leader's
+// snapshot (orama maint node recover-raft before 2026-10-03 deleted the leader's
 // raft.db). rqlite orders snapshots by term first, so that snapshot stays
 // "newest": every later snapshot is reaped as older, a node that needs a
 // snapshot is sent the stale one and never catches up, and a restarted node

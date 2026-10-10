@@ -10,7 +10,7 @@ import (
 )
 
 // NewX25519 makes a fresh X25519 key pair and returns both halves as the 64
-// hex characters `orama global validator` takes (--recipient is the public
+// hex characters `orama maint global validator` takes (--recipient is the public
 // half, --identity-file holds the private one).
 func NewX25519(t testing.TB) (pubHex, privHex string) {
 	t.Helper()

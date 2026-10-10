@@ -30,7 +30,7 @@ const (
 )
 
 // stageOnServer puts the build where a manual join expects it, the operator
-// step docs/CLI_REFERENCE.md "orama node install" names: "The build archive
+// step docs/CLI_REFERENCE.md "orama maint node install" names: "The build archive
 // must be extracted at /opt/orama".
 func stageOnServer(t testing.TB, f *fleet.Fleet, n fleet.Node, archive string) {
 	t.Helper()
@@ -44,7 +44,7 @@ func stageOnServer(t testing.TB, f *fleet.Fleet, n fleet.Node, archive string) {
 		" -C /opt/orama && rm -f "+uploadedArchive)
 }
 
-// installWith runs `orama node install` on n with the invite on stdin
+// installWith runs `orama maint node install` on n with the invite on stdin
 // (--secrets-stdin: the invite never appears on a command line).
 func installWith(t testing.TB, f *fleet.Fleet, n fleet.Node, encoded string, extra ...string) fleet.Output {
 	t.Helper()
@@ -53,7 +53,7 @@ func installWith(t testing.TB, f *fleet.Fleet, n fleet.Node, encoded string, ext
 		t.Fatal(err)
 	}
 	f.WriteFile(t, n, secretsFile, raw, 0o600)
-	args := append([]string{"node", "install", "--secrets-stdin", "--vps-ip", n.PublicIP,
+	args := append([]string{"maint", "node", "install", "--secrets-stdin", "--vps-ip", n.PublicIP,
 		"--base-domain", f.State.BaseDomain, "--environment", f.State.Env}, extra...)
 	cmd := nodeCLI + " " + strings.TrimPrefix(infra.OramaCommand(args...), infra.OramaBinOnNode+" ") + " < " + secretsFile
 	ctx, cancel := context.WithTimeout(t.Context(), infra.InstallBudget)
@@ -70,7 +70,7 @@ func mintInvite(t testing.TB, f *fleet.Fleet) string {
 	var m struct {
 		Invite string `json:"invite"`
 	}
-	res := harness.CLI(t).MustOK(t, "invite", "--env", f.State.Env, "--node", f.State.Nodes[0].PublicIP, "--json")
+	res := harness.CLI(t).MustOK(t, "maint", "invite", "--env", f.State.Env, "--node", f.State.Nodes[0].PublicIP, "--json")
 	if err := oramacli.DecodeJSON(res, &m); err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 )
 
 // docs/CLI_REFERENCE.md is rendered from the cobra tree, and this test fails
@@ -18,7 +20,7 @@ import (
 //
 // Hand-written command documentation drifts the moment a flag is added: the
 // deployment guide's flag tables were missing --environment, --ssh-user,
-// --ca-fingerprint and --leader-raft-addr, and `orama push` and `orama rollout`
+// --ca-fingerprint and --leader-raft-addr, and `orama maint push` and `orama maint rollout`
 // existed without being mentioned anywhere. A reference nobody writes cannot go
 // stale that way.
 //
@@ -118,7 +120,11 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
 }
 
 // collectCommands returns every runnable or group command, depth-first and
-// alphabetical, excluding the root and cobra's generated help commands.
+// alphabetical, excluding the root and cobra's generated help commands. A
+// command hidden from `orama --help` is left out too, unless it was declared
+// listed (cmdmeta.MarkListed): the maintainer group and the operator groups that
+// are being replaced work and are documented, while a deprecated alias such as
+// `orama network` is documented where its replacement is.
 func collectCommands(root *cobra.Command) []*cobra.Command {
 	var out []*cobra.Command
 
@@ -127,7 +133,7 @@ func collectCommands(root *cobra.Command) []*cobra.Command {
 		children := append([]*cobra.Command(nil), cmd.Commands()...)
 		sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
 		for _, child := range children {
-			if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
+			if (child.Hidden && !cmdmeta.IsListed(child)) || child.Name() == "help" || child.Name() == "completion" {
 				continue
 			}
 			out = append(out, child)

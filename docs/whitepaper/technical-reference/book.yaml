@@ -387,6 +387,9 @@ volumes:
               - core/cmd/orama/
               - core/pkg/rwagent/
               - core/pkg/remotessh/
+              - core/pkg/netregistry/
+              - core/pkg/onchain/
+              - networks/
           - file: vol1/36-sdks.md
             title: SDKs
             template: subsystem

@@ -14,7 +14,7 @@ import (
 type tarEntry struct {
 	name     string
 	body     string
-	typeflag byte // 0: what `orama build` writes (no type set)
+	typeflag byte // 0: what `orama maint build` writes (no type set)
 	link     string
 	size     int64 // header size when body is empty; 0 means len(body)
 }
@@ -155,7 +155,7 @@ func TestLockArchiveDir_isExclusive(t *testing.T) {
 	}
 }
 
-// signedTarball is a tarball of a signed test archive, as `orama build`
+// signedTarball is a tarball of a signed test archive, as `orama maint build`
 // writes one.
 func signedTarball(t *testing.T, s testSigner) string {
 	t.Helper()

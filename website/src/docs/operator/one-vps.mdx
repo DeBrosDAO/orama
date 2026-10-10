@@ -27,7 +27,7 @@ There is no "dev mode" that skips systemd, and no `--replicas` flag. The create 
 From your computer with RootWallet unlocked and the archive built ([Build and sign](/docs/operator/build-and-sign)):
 
 ```bash
-orama build
+orama maint build
 orama node setup --ip 203.0.113.10 --password --env eval --archive $ARCHIVE \
   --base-domain eval.example.com --role nameserver --genesis \
   --acme-ca letsencrypt-staging
@@ -36,14 +36,14 @@ orama node setup --ip 203.0.113.10 --password --env eval --archive $ARCHIVE \
 Then delegate the domain ([DNS and nameservers](/docs/operator/nameserver)): one nameserver publishes only `ns1`. Or by hand on the machine:
 
 ```bash
-sudo orama node install --vps-ip 203.0.113.10 --domain eval.example.com \
+sudo orama maint node install --vps-ip 203.0.113.10 --domain eval.example.com \
   --base-domain eval.example.com --operator-wallet 0xYourWallet --nameserver
 ```
 
 ## Use it
 
 ```bash
-orama env use eval
+orama network use eval
 orama auth login
 orama namespace create myapp
 orama auth login --namespace myapp

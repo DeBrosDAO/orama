@@ -30,7 +30,7 @@ func TestParseGuide_commandsSectionsAndContinuations(t *testing.T) {
 }
 
 func TestParseGuide_ignoresNonShellFencesAndProse(t *testing.T) {
-	md := "## Install\n\n```yaml\norama: not a command\n```\n\nRun `orama build` first.\n\n```\norama also not\n```\n"
+	md := "## Install\n\n```yaml\norama: not a command\n```\n\nRun `orama maint build` first.\n\n```\norama also not\n```\n"
 	cmds, err := ParseGuide(md)
 	if err != nil || len(cmds) != 0 {
 		t.Fatalf("cmds = %+v, err = %v", cmds, err)

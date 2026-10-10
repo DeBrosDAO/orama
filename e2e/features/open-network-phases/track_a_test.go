@@ -19,7 +19,7 @@ import (
 const (
 	trackA = "plans/open-network/track-a-private-clusters.md"
 	// creationSetting prefixes the namespace-creation line of
-	// `orama cluster settings show`.
+	// `orama maint cluster settings show`.
 	creationSetting = "namespace-creation: "
 )
 
@@ -27,9 +27,9 @@ const (
 // cluster is on its operator list with no SQL by hand, and an operator route
 // refuses a wallet that is not (A1).
 func TestPhaseA1_genesisWalletOperatesTheCluster(t *testing.T) {
-	phase(t, "A1", "docs/CLI_REFERENCE.md", "### orama operator add", trackA+" A1")
+	phase(t, "A1", "docs/CLI_REFERENCE.md", "### orama maint operator add", trackA+" A1")
 	f := harness.Fleet(t)
-	list := run(t, harness.CLI(t), "operator", "list")
+	list := run(t, harness.CLI(t), "maint", "operator", "list")
 	if list.Exit != exitOK || !strings.Contains(strings.ToLower(out(list)), strings.ToLower(f.State.OperatorAddress)) {
 		t.Fatalf("the genesis operator %s is not on the operator list (exit %d):\n%s", f.State.OperatorAddress, list.Exit, out(list))
 	}
@@ -42,17 +42,17 @@ func TestPhaseA1_genesisWalletOperatesTheCluster(t *testing.T) {
 // knows no environment (nobody's devnet or testnet) and says how to add
 // one (A2; core/cmd/orama/internal/environment.go noEnvironmentHelp).
 func TestPhaseA2_freshCLIPointsAtNoCluster(t *testing.T) {
-	phase(t, "A2", "docs/CLI_REFERENCE.md", "### orama env add", trackA+" A2")
+	phase(t, "A2", "docs/CLI_REFERENCE.md", "### orama network add", trackA+" A2")
 	cli := freshCLI(t)
-	listed := strings.ToLower(out(run(t, cli, "env", "list")))
+	listed := strings.ToLower(out(run(t, cli, "network", "list")))
 	for _, fleetName := range []string{"devnet", "testnet", "mainnet", "stagenet"} {
 		if strings.Contains(listed, fleetName) {
 			t.Errorf("a fresh CLI lists the owner's %s environment:\n%s", fleetName, listed)
 		}
 	}
-	cur := run(t, cli, "env", "current")
-	if cur.Exit == exitOK || !strings.Contains(out(cur), "orama env add") {
-		t.Errorf("`orama env current` on a fresh CLI: exit %d, want a refusal naming `orama env add`:\n%s", cur.Exit, out(cur))
+	cur := run(t, cli, "network", "current")
+	if cur.Exit == exitOK || !strings.Contains(out(cur), "orama network add") {
+		t.Errorf("`orama network current` on a fresh CLI: exit %d, want a refusal naming `orama network add`:\n%s", cur.Exit, out(cur))
 	}
 }
 
@@ -63,13 +63,13 @@ func TestPhaseA2_freshCLIPointsAtNoCluster(t *testing.T) {
 // namespace a broken policy would let through, and an accepted one is
 // adopted so it is deleted.
 func TestPhaseA3_creationPolicyEnforced(t *testing.T) {
-	phase(t, "A3", "docs/CLI_REFERENCE.md", "### orama cluster settings set", trackA+" A3")
+	phase(t, "A3", "docs/CLI_REFERENCE.md", "### orama maint cluster settings set", trackA+" A3")
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
 	tenancy.Reserve(t, f, 1)
 	t.Cleanup(func() { restoreOpen(t, f, cli) })
-	cli.MustOK(t, "cluster", "settings", "set", "namespace-creation", "operators")
-	if shown := cli.MustOK(t, "cluster", "settings", "show").Stdout; !strings.Contains(shown, creationSetting+"operators") {
+	cli.MustOK(t, "maint", "cluster", "settings", "set", "namespace-creation", "operators")
+	if shown := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout; !strings.Contains(shown, creationSetting+"operators") {
 		t.Fatalf("settings show after set:\n%s", shown)
 	}
 	stranger := gw.NewUser(t, f, gw.LobbyNamespace)
@@ -92,12 +92,12 @@ func TestPhaseA3_creationPolicyEnforced(t *testing.T) {
 func restoreOpen(t *testing.T, f *fleet.Fleet, cli *oramacli.Runner) {
 	ctx, cancel := fleet.CleanupContext(t)
 	defer cancel()
-	res, err := cli.Run(ctx, "cluster", "settings", "set", "namespace-creation", "open")
+	res, err := cli.Run(ctx, "maint", "cluster", "settings", "set", "namespace-creation", "open")
 	if err != nil || res.Exit != exitOK {
 		t.Errorf("cleanup: restoring namespace-creation open on %s: %v %s — later stages cannot create namespaces", f.State.Env, err, res.Stderr)
 		return
 	}
-	shown, err := cli.Run(ctx, "cluster", "settings", "show")
+	shown, err := cli.Run(ctx, "maint", "cluster", "settings", "show")
 	if err != nil || shown.Exit != exitOK || !strings.Contains(shown.Stdout, creationSetting+"open") {
 		t.Errorf("cleanup: namespace-creation on %s does not read back open (exit %d): %v\n%s — later stages cannot create namespaces",
 			f.State.Env, shown.Exit, err, shown.Stdout)
@@ -108,7 +108,7 @@ func restoreOpen(t *testing.T, f *fleet.Fleet, cli *oramacli.Runner) {
 // against the TUF release root, stage-archive refuses an archive whose
 // metadata does not verify, even though the archive itself is the one the
 // node's wallet anchor trusts, and /opt/orama is untouched (A4;
-// docs/CLI_REFERENCE.md "orama node stage-archive").
+// docs/CLI_REFERENCE.md "orama maint node stage-archive").
 func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 	phase(t, "A4", "docs/CLI_REFERENCE.md", "--release-metadata", trackA+" A4")
 	f := harness.Fleet(t)
@@ -120,7 +120,7 @@ func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 	t.Cleanup(func() { cleanupPath(t, f, n, metaDir) })
 	f.MustExec(t, n, "mkdir -m 0700 "+metaDir)
 	before := f.MustExec(t, n, "stat -c '%i %Y' "+infra.StagedManifest).Stdout
-	res := onNode(t, f, n, "node", "stage-archive", "--archive", remote, "--release-metadata", metaDir, "--release-target", "orama-linux-amd64.tar.gz")
+	res := onNode(t, f, n, "maint", "node", "stage-archive", "--archive", remote, "--release-metadata", metaDir, "--release-target", "orama-linux-amd64.tar.gz")
 	expectVerifyRefusal(t, f, n, res)
 	if !strings.Contains(res.Stdout+res.Stderr, "release root: ") {
 		t.Errorf("stage-archive's refusal does not come from the release root check:\n%s", f.Redact(res.Stdout+res.Stderr))
@@ -133,22 +133,22 @@ func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 // TestPhaseA5_notifyByDefaultValidatorNeverAuto: the update decision
 // reports a newer release without installing it unless the cluster chose
 // auto, and a validator on auto is told to upgrade by hand: the decision is a
-// skip that exits 0 and names 'orama global stage-oramad', not a refusal, so a
+// skip that exits 0 and names 'orama maint global stage-oramad', not a refusal, so a
 // rollout counts the validator as done (A5; docs/DEV_DEPLOY.md "A machine that
 // runs the chain (a validator) is never auto").
 func TestPhaseA5_notifyByDefaultValidatorNeverAuto(t *testing.T) {
-	phase(t, "A5", "docs/CLI_REFERENCE.md", "### orama node autoupdate", trackA+" A5")
+	phase(t, "A5", "docs/CLI_REFERENCE.md", "### orama maint node autoupdate", trackA+" A5")
 	cli := harness.CLI(t)
-	def := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1")
+	def := run(t, cli, "maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1")
 	if def.Exit != exitOK || strings.TrimSpace(out(def)) != "notify: newer release 1.0.1 (notify)" {
 		t.Errorf("the default decision: exit %d %q", def.Exit, out(def))
 	}
-	v := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "auto", "--role", "validator")
+	v := run(t, cli, "maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "auto", "--role", "validator")
 	if got := strings.TrimSpace(out(v)); v.Exit != exitOK || !strings.HasPrefix(got, "skip: ") ||
-		!strings.Contains(got, "validator") || !strings.Contains(got, "orama global stage-oramad") {
-		t.Errorf("auto for a validator: exit %d %q, want exit 0 and a skip that points at 'orama global stage-oramad'", v.Exit, out(v))
+		!strings.Contains(got, "validator") || !strings.Contains(got, "orama maint global stage-oramad") {
+		t.Errorf("auto for a validator: exit %d %q, want exit 0 and a skip that points at 'orama maint global stage-oramad'", v.Exit, out(v))
 	}
-	n := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "notify", "--role", "validator")
+	n := run(t, cli, "maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "notify", "--role", "validator")
 	if n.Exit != exitOK || strings.TrimSpace(out(n)) != "notify: newer release 1.0.1 (notify)" {
 		t.Errorf("notify for a validator: exit %d %q, want it reported like any node", n.Exit, out(n))
 	}

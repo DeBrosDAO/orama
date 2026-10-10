@@ -30,13 +30,13 @@ const (
 
 var capLine = regexp.MustCompile(`(?m)^\s*max-namespaces-per-wallet:\s*(\d+)\s*$`)
 
-// walletCap reads the per-wallet cap from `orama cluster settings show`.
+// walletCap reads the per-wallet cap from `orama maint cluster settings show`.
 func walletCap(t testing.TB, f *fleet.Fleet) int {
 	t.Helper()
-	out := oramacli.ForState(f.State, f.Recorder()).For(t).MustOK(t, "cluster", "settings", "show").Stdout
+	out := oramacli.ForState(f.State, f.Recorder()).For(t).MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	m := capLine.FindStringSubmatch(out)
 	if m == nil {
-		t.Fatalf("`orama cluster settings show` printed no max-namespaces-per-wallet:\n%s", out)
+		t.Fatalf("`orama maint cluster settings show` printed no max-namespaces-per-wallet:\n%s", out)
 	}
 	n, err := strconv.Atoi(m[1])
 	if err != nil {
@@ -109,7 +109,7 @@ func TestNamespaceCapacity_walletQuota(t *testing.T) {
 	limit, free := walletCap(t, f), freeSlots(t, f)
 	if limit > free {
 		harness.SkipNotApplicable(t, fmt.Sprintf("the per-wallet cap (%d) is above the free capacity (%d); "+
-			"lower it with `orama cluster settings set max-namespaces-per-wallet` or run on an emptier fleet", limit, free))
+			"lower it with `orama maint cluster settings set max-namespaces-per-wallet` or run on an emptier fleet", limit, free))
 	}
 	owner := tenancy.Creator(t, f)
 	createAll(t, f, owner, limit)

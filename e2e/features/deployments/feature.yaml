@@ -11,7 +11,7 @@
 # verification; name and archive validation; a same-name race; control-plane
 # only; crash restarts; updates forwarded from a node without the app.
 # An environment stored sealed to its own namespace and deployment id after
-# `orama operator rotate-secrets`; a bare {name} host not served for a
+# `orama maint operator rotate-secrets`; a bare {name} host not served for a
 # subdomained deployment.
 # Home-node failover and OOM are in deployments-failover, which runs alone.
 id: deployments

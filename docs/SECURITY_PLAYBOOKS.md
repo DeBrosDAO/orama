@@ -58,7 +58,7 @@ height, or the chain splits. There is no on-chain switch that can do it for them
 5. **Each validator sets that height.** Either set `halt-height = <H>` in
    `config/app.toml`, or start `oramad` with `--halt-height <H>`. At `H` the node commits
    the block and stops.
-6. **Each validator stages the new binary** with `orama global stage-oramad --upgrade
+6. **Each validator stages the new binary** with `orama maint global stage-oramad --upgrade
    <name> ...` (cosmovisor layout, `docs/CHAIN.md`); the installed chain unit runs
    under cosmovisor. Validators stay in notify mode; nothing installs by itself.
 7. **Restart after `H`.** Blocks resume once validators holding more than two thirds of
@@ -133,7 +133,7 @@ compromised reporter key, and a compromise of an authority host means its signin
 **A compromised authority host.** Its identity key is offline, so the host's compromise cannot mint
 new certificates. Remove the authority from `tor-network.json`, ship the file in an emergency release
 (install re-reads it; wallets receive it with their update), and run a ceremony for the replacement
-(`orama global tor ceremony`). The other authorities keep voting meanwhile; three tolerate one loss
+(`orama maint global tor ceremony`). The other authorities keep voting meanwhile; three tolerate one loss
 and two compromised or down lose the consensus. Rotate the signing certificate of a host that is
 suspected, not compromised, with `tor-gencert --reuse` on the offline machine
 ([TOR_NETWORK.md](TOR_NETWORK.md#rotating-a-signing-certificate-before-month-12)).
@@ -180,9 +180,9 @@ suspected, not compromised, with `tor-gencert --reuse` on the offline machine
 ### Release-key compromise (TUF root rotation)
 
 A node verifies a staged `oramad` or archive against the TUF root at `/etc/orama/release-root.json`
-(`orama global stage-oramad`, `orama node stage-archive`, each with `--release-metadata <dir>
+(`orama maint global stage-oramad`, `orama maint node stage-archive`, each with `--release-metadata <dir>
 --release-target <name>`). Validators are on notify and nothing installs a validator by itself. On a
-cluster node the auto-update agent (`orama node autoupdate run`) installs releases under that root when
+cluster node the auto-update agent (`orama maint node autoupdate run`) installs releases under that root when
 the cluster's `auto-update` is `auto`; on `notify`, the default, nothing installs without an operator.
 
 **What is not implemented**
@@ -196,7 +196,7 @@ the cluster's `auto-update` is `auto`; on `notify`, the default, nothing install
 - The compromised keys' metadata stays valid for any node that still trusts the old root.
 
 **What an operator can do**
-1. Stop staging. Set the cluster's `auto-update` to `off` (`orama cluster settings set auto-update off`) so
+1. Stop staging. Set the cluster's `auto-update` to `off` (`orama maint cluster settings set auto-update off`) so
    no node installs from the old root, do not run `stage-oramad` or `stage-archive` for a release you
    cannot verify out of band, and tell the other validators. Validators stay on notify, so a bad release
    reaches only a node whose operator stages it.
@@ -216,7 +216,7 @@ the cluster's `auto-update` is `auto`; on `notify`, the default, nothing install
 
 **A separate rotation that works**
 - The wallet-signer anchor for archives (`/etc/orama/archive-signers`) rotates with
-  `orama build --signers 0xA,0xB`: a build signed by a currently trusted signer replaces the list.
+  `orama maint build --signers 0xA,0xB`: a build signed by a currently trusted signer replaces the list.
   Retiring a key takes two builds, and a recorded build date stops an older signed build from
   replaying a retired key. The same replay rule covers a release root carried by a signed build
   (`--release-root`). It does not cover the chain binary.

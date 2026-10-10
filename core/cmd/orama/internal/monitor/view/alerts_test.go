@@ -62,7 +62,7 @@ func TestHint_pointsAtRealCommands(t *testing.T) {
 		alert cluster.Alert
 		want  []string
 	}{
-		{cluster.Alert{Subsystem: "rqlite"}, []string{"orama inspect --env devnet --subsystem rqlite", "docs/COMMON_PROBLEMS.md §6"}},
+		{cluster.Alert{Subsystem: "rqlite"}, []string{"orama maint inspect --env devnet --subsystem rqlite", "docs/COMMON_PROBLEMS.md §6"}},
 		{cluster.Alert{Subsystem: "wireguard", Node: "1.1.1.1"}, []string{"--subsystem wg", "§1"}},
 		{cluster.Alert{Subsystem: cluster.SubsystemCollection, Node: "3.3.3.3"}, []string{"orama monitor node --env devnet --node 3.3.3.3 --ssh"}},
 		{cluster.Alert{Subsystem: "service", Node: "2.2.2.2"}, []string{"orama ssh 2.2.2.2 --env devnet 'sudo orama node status'"}},

@@ -15,7 +15,7 @@ import (
 
 const pathEnroll = "/v1/node/enroll"
 
-// enrollBody is `orama node enroll`'s request (core/pkg/gateway/handlers/enroll
+// enrollBody is `orama maint node enroll`'s request (core/pkg/gateway/handlers/enroll
 // EnrollRequest), with a token no invite ever had.
 func enrollBody(t *testing.T, nodeIP string) []byte {
 	t.Helper()

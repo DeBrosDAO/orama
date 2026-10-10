@@ -3,7 +3,7 @@ package fleet
 // Cluster is a second, single-node Orama cluster a test installed beside the
 // run's own (docs/EVAL.md): its own server, its own subdomain
 // e2e-<run>-<name>.<zone> delegated to it, a Let's Encrypt staging
-// certificate, and its own `orama env` entry and CA file in the run's CLI
+// certificate, and its own `orama network` entry and CA file in the run's CLI
 // HOME. The run's fleet does not include it; reach its node with the
 // fleet's SSH helpers through Node.
 type Cluster struct {
@@ -15,7 +15,7 @@ type Cluster struct {
 	BaseDomain string `json:"base_domain"`
 	// GatewayURL is https://<BaseDomain>.
 	GatewayURL string `json:"gateway_url"`
-	// CAFile trusts the staging roots for BaseDomain (orama env add --ca-file).
+	// CAFile trusts the staging roots for BaseDomain (orama network add --ca-file).
 	CAFile string `json:"ca_file"`
 	// Node is its one server, genesis and nameserver.
 	Node Node `json:"node"`

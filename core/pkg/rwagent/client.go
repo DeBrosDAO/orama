@@ -357,6 +357,27 @@ func (c *Client) SignOramaTx(ctx context.Context, signDoc []byte) (*OramaTxSigna
 	return sig, nil
 }
 
+// OramaAccount returns the ORAMA account the agent signs transactions for: its
+// address and public key. A transaction carries the key, and an account that has
+// never signed has none on chain, so the key is read here before the first
+// SignDoc is built.
+func (c *Client) OramaAccount(ctx context.Context) (*OramaAccount, error) {
+	var resp apiResponse[oramaAccountData]
+	status, err := c.doJSON(ctx, "GET", "/v1/orama/account", nil, &resp)
+	if err != nil {
+		return nil, fmt.Errorf("read the orama account: %w", err)
+	}
+	if !resp.OK {
+		return nil, fmt.Errorf("read the orama account: %w", c.apiError(resp.Error, resp.Code, status))
+	}
+	pubKey, err := base64.StdEncoding.DecodeString(resp.Data.PublicKey)
+	if err != nil || len(pubKey) != oramaPubKeyBytes || !strings.HasPrefix(resp.Data.Address, oramaAddressPrefix) {
+		return nil, fmt.Errorf("read the orama account: the agent answered with a malformed account (address %q, key of %d bytes)",
+			resp.Data.Address, len(pubKey))
+	}
+	return &OramaAccount{Address: resp.Data.Address, PubKey: pubKey}, nil
+}
+
 // errMalformedOramaTxSignature is an agent answer that is not a signature of
 // the SignDoc it was sent.
 var errMalformedOramaTxSignature = errors.New("the RootWallet agent answered with a malformed ORAMA signature")

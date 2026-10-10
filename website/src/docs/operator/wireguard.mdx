@@ -71,16 +71,16 @@ orama monitor mesh --env devnet --node 203.0.113.10
 
 The data comes from the cluster gateway's telemetry, not SSH: each node's report carries its WireGuard peers, and the view shows the peers against the N-1 a full mesh needs and each link's handshake age and traffic, so you can see which tunnels are healthy (recent handshakes) and which are stale. Add `--ssh` to collect from the nodes directly when no gateway answers.
 
-### Using orama inspect
+### Using orama maint inspect
 
-The `orama inspect` command with the `wg` subsystem performs deeper SSH-based WireGuard health checks:
+The `orama maint inspect` command with the `wg` subsystem performs deeper SSH-based WireGuard health checks:
 
 ```bash
 # Inspect WireGuard on all nodes
-orama inspect --env devnet --subsystem wg
+orama maint inspect --env devnet --subsystem wg
 
 # With AI analysis of failures
-orama inspect --env devnet --subsystem wg --ai
+orama maint inspect --env devnet --subsystem wg --ai
 ```
 
 ### Using orama node doctor

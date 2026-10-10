@@ -125,7 +125,7 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 	f := harness.Fleet(t)
 	cl := harness.ExtraCluster(t, "autoupd")
 	cli := harness.CLI(t).Isolated(t)
-	cli.MustOK(t, "env", "use", cl.Env)
+	cli.MustOK(t, "network", "use", cl.Env)
 
 	runArchive, err := os.ReadFile(infra.RunningArchive(t, f))
 	if err != nil {
@@ -142,15 +142,15 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 	a.publish(t, a.repo.Files(t, firstSnapshot, time.Time{}, a.arch, archives))
 
 	t.Run("doesNothingUntilTheClusterNamesARepository", func(t *testing.T) {
-		out := a.orama(t, "node", "autoupdate", "run")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "no release repository")
 		if n := a.notice(t); n != "" {
 			t.Fatalf("a notice with nothing to report: %s", n)
 		}
 	})
 	t.Run("doesNothingUntilTheNodeAdoptsARoot", func(t *testing.T) {
-		cli.MustOK(t, "cluster", "settings", "set", "release-repo", repoURL)
-		out := a.orama(t, "node", "autoupdate", "run")
+		cli.MustOK(t, "maint", "cluster", "settings", "set", "release-repo", repoURL)
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "no release root")
 	})
 	t.Run("notifyReportsANewerReleaseAndInstallsNothing", func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 		out := infra.OnNode(t, a.f, a.node, "node", "trust", "add-root", rootFile)
 		infra.ExpectNodeExit(t, "add-root", out, infra.ExitOK, a.repo.Digest())
 		before := a.manifest(t)
-		out = a.orama(t, "node", "autoupdate", "run")
+		out = a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "notify:", a.newVer)
 		if n := a.notice(t); !strings.Contains(n, `"state":"available"`) || !strings.Contains(n, a.newVer) {
 			t.Fatalf("notice %q", n)
@@ -168,10 +168,10 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 		}
 	})
 	t.Run("aTamperedArchiveIsRefusedAndReported", func(t *testing.T) {
-		cli.MustOK(t, "cluster", "settings", "set", "auto-update", "auto")
+		cli.MustOK(t, "maint", "cluster", "settings", "set", "auto-update", "auto")
 		a.put(t, path.Join(repoDir, targetFile), tuf.Flipped(release))
 		before := a.manifest(t)
-		out := a.orama(t, "node", "autoupdate", "run")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "refuse:", "did not verify")
 		if n := a.notice(t); !strings.Contains(n, `"state":"refused"`) {
 			t.Fatalf("notice %q", n)
@@ -183,13 +183,13 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 	})
 	t.Run("aFrozenTimestampIsRefused", func(t *testing.T) {
 		a.publish(t, a.repo.Files(t, firstSnapshot+1, time.Now().Add(-time.Hour), a.arch, archives))
-		out := a.orama(t, "node", "autoupdate", "run")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "refuse:", "frozen")
 		a.publish(t, a.repo.Files(t, firstSnapshot, time.Time{}, a.arch, archives))
 	})
 	t.Run("aSoleVoterIsPutBackAndTheReleaseIsNotMarkedBad", func(t *testing.T) {
 		before := a.manifest(t)
-		out := a.orama(t, "node", "autoupdate", "run")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitFailure, "back on its previous release")
 		if after := a.manifest(t); after != before {
 			t.Fatalf("a refused upgrade left a different release in place:\n%s\n%s", before, after)
@@ -197,7 +197,7 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 		if n := a.notice(t); strings.Contains(n, `"state":"failed"`) {
 			t.Fatalf("a failure before anything stopped was reported as the release's: %s", n)
 		}
-		again := a.orama(t, "node", "autoupdate", "run")
+		again := a.orama(t, "maint", "node", "autoupdate", "run")
 		if strings.Contains(again.Stdout+again.Stderr, "marked bad") {
 			t.Fatal("the release was marked bad by a failure that stopped nothing")
 		}
@@ -205,12 +205,12 @@ func TestAutoupdateRun_followsItsPolicyAndRefusesWhatDoesNotVerify(t *testing.T)
 	})
 	t.Run("anOlderSnapshotIsRefused", func(t *testing.T) {
 		a.publish(t, a.repo.Files(t, olderSnapshot, time.Time{}, a.arch, archives))
-		out := a.orama(t, "node", "autoupdate", "run")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "refuse:", "rolled-back")
 	})
 	t.Run("offStopsLookingAndClearsTheNotice", func(t *testing.T) {
-		cli.MustOK(t, "cluster", "settings", "set", "auto-update", "off")
-		out := a.orama(t, "node", "autoupdate", "run")
+		cli.MustOK(t, "maint", "cluster", "settings", "set", "auto-update", "off")
+		out := a.orama(t, "maint", "node", "autoupdate", "run")
 		infra.ExpectNodeExit(t, "autoupdate run", out, infra.ExitOK, "auto-update is off")
 		if n := a.notice(t); n != "" {
 			t.Fatalf("a notice after updates were turned off: %s", n)

@@ -6,40 +6,28 @@ Install, run, upgrade and remove nodes. Every command and flag below comes from 
 
 Global conventions are on the [CLI overview](/docs/developer/cli-overview).
 
-## orama node
+## orama maint node
 
-Node operator commands
+Install, stage, recover and migrate nodes
 
 ```
-orama node
+orama maint node
 ```
 
-Operate Orama nodes, both the one on this machine and the fleet you own.
+Node commands for maintainers and for the installer.
 
-Local, run on the node itself and needing root (sudo):
-```
-install, uninstall, upgrade, start, stop, restart, status, logs, doctor,
-report, invite, unlock, schema, migrate, migrate-raft-id, migrate-conf,
-stage-archive (run by push)
-```
+Install and stage a release on this machine, simulate the auto-update decision,
+recover a cluster that lost its raft quorum, migrate older state, apply gateway
+schema migrations, and enroll or unlock an OramaOS node.
 
-Remote, run from your machine and reaching nodes over SSH:
-```
-list, setup, enroll, push, rollout, clean, remove, wipe, recover-raft,
-dns delegation
-```
+Subcommands: `autoupdate`, `enroll`, `install`, `migrate-conf`, `migrate-raft-id`, `recover-raft`, `schema`, `stage-archive`, `unlock`
 
-The remote commands are the same implementations as the top-level 'orama push',
-'orama rollout' and 'orama nodes'.
-
-Subcommands: `autoupdate`, `clean`, `dns`, `doctor`, `enroll`, `install`, `invite`, `list`, `logs`, `migrate-conf`, `migrate-raft-id`, `push`, `recover-raft`, `remove`, `report`, `restart`, `rollout`, `schema`, `setup`, `stage-archive`, `start`, `status`, `stop`, `trust`, `uninstall`, `unlock`, `upgrade`, `wipe`
-
-## orama node autoupdate
+## orama maint node autoupdate
 
 Decide whether a newer release should be installed
 
 ```
-orama node autoupdate [flags]
+orama maint node autoupdate [flags]
 ```
 
 Report what this cluster should do with a candidate release.
@@ -56,8 +44,9 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
-A validator (--role validator) is never auto: the mode is refused, and chain
-upgrades are staged explicitly with 'orama global stage-oramad'.
+A validator (--role validator) is never auto: on auto the decision is skip, with
+the reason, and the command exits 0; chain upgrades are staged explicitly with
+'orama maint global stage-oramad'.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -75,18 +64,18 @@ upgrades are staged explicitly with 'orama global stage-oramad'.
 
 Subcommands: `run`
 
-## orama node autoupdate run
+## orama maint node autoupdate run
 
 Look for a newer release on the cluster's channel and act on it (requires sudo)
 
 ```
-orama node autoupdate run
+orama maint node autoupdate run
 ```
 
 Run this node's auto-update agent once. orama-autoupdate.timer runs it every
 15 minutes on every node; running it by hand does the same thing.
 
-The agent reads the cluster's policy (orama cluster settings show): auto-update
+The agent reads the cluster's policy (orama maint cluster settings show): auto-update
 off, notify or auto; the channel; the maintenance window; the release repository.
 It does nothing unless the cluster stored a release repository and this node
 adopted a release root (orama node trust add-root).
@@ -110,7 +99,7 @@ nothing is installed. With auto the node installs it only when
 - it holds the cluster-wide rollout lock.
 ```
 
-The install is 'orama node stage-archive --release-only', keeping the release it
+The install is 'orama maint node stage-archive --release-only', keeping the release it
 replaces, then 'orama node upgrade --restart', then the health gate. If the
 upgrade or the gate fails, the previous release is put back and the node is
 upgraded onto it again; the release is then marked bad for the cluster. A
@@ -120,41 +109,358 @@ If a run is killed in the middle of an install, the next run finishes it first
 (the intent is in /var/lib/orama-autoupdate/install-intent.json), whatever the
 policy now says. One agent runs at a time on a machine.
 
-## orama node clean
+## orama maint node enroll
 
-Deprecated: use 'orama node wipe' or 'orama node remove'
+Enroll an OramaOS node into the cluster
 
 ```
-orama node clean [flags]
+orama maint node enroll [flags]
 ```
 
-DEPRECATED. Use 'orama node wipe' or 'orama node remove'.
+Enroll a freshly booted OramaOS node into the cluster.
 
-'clean' only ever erased the target. It said nothing to the rest of the cluster,
-so a cleaned node stayed a configured raft voter counted toward quorum, kept its
-wireguard_peers row re-applied to every survivor's interface, and kept its
-dns_nodes row. It also stopped only the legacy host unit names, leaving tenant
-'orama-namespace-*@*' units running under a deleted data directory.
+The OramaOS node prints a registration code on its console. Provide that code
+along with an invite token. The Gateway pushes cluster configuration
+(WireGuard, secrets, peer list) to the node, sealed under the code.
 
+The code is not served over the network. A GET on port 9999 used to return it.
+
+Usage:
 ```bash
-orama node wipe           erases a node (what clean did, fixed)
-orama node remove   removes one node from the cluster, then erases it
+orama maint node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
 ```
 
-This command now runs 'wipe'.
+--gateway must be an https:// URL: the invite token is a credential and is never
+sent in the clear.
+
+The node must be reachable over the public internet on port 9999 (enrollment only).
+After enrollment, port 9999 is permanently closed and all communication goes over WireGuard.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--code` | — | Registration code from the node's console (required) |
+| `--env` | `production` | Environment name |
+| `--gateway` | — | Gateway URL (required, e.g. https://gateway.example.com) |
+| `--node-ip` | — | Public IP of the OramaOS node (required) |
+| `--token` | — | Invite token for cluster joining (required) |
+
+## orama maint node install
+
+Install production node (requires sudo)
+
+```
+orama maint node install [flags]
+```
+
+Install and configure an Orama production node on this machine.
+For the first node, this creates a new cluster. For subsequent nodes,
+use --join and --token to join an existing cluster.
+
+Run it on the node itself with sudo, or from your own machine with --remote to
+drive the install over SSH against --vps-ip. Which of the two happened used to
+be decided by whether you had used sudo.
+
+The build archive must be extracted at /opt/orama and signed by a wallet in the
+node's trust anchor, /etc/orama/archive-signers. A genesis install creates the
+anchor from --operator-wallet (required) before it verifies the archive; a
+joining node takes it from the cluster in the join response. With --remote,
+--archive names the build: it is verified on this machine against
+--operator-wallet before it is uploaded.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--acme-ca` | — | ACME directory for TLS certificates: letsencrypt (production, the default), letsencrypt-staging (clusters rebuilt many times a week) or an https URL |
+| `--archive` | — | With --remote: the build archive to upload, verified here against --operator-wallet first |
+| `--base-domain` | — | Base domain for deployment routing (e.g., example.com) |
+| `--ca-fingerprint` | — | SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it |
+| `--domain` | — | Domain for HTTPS (auto-generated for non-nameserver nodes if omitted) |
+| `--dry-run` | `false` | Show what would be done without making changes |
+| `--environment` | — | Environment name (devnet, testnet, etc.) |
+| `--expect-archive-signers` | — | When joining: the archive signers the cluster must send (comma-separated); the archive is verified against them before the join |
+| `--force` | `false` | Force reconfiguration even if already installed |
+| `--host-key` | — | Expected SSH host-key fingerprint (SHA256:...) for --remote; omit to confirm it interactively |
+| `--ipfs-addrs` | — | Comma-separated multiaddrs of existing IPFS node |
+| `--ipfs-cluster-addrs` | — | Comma-separated multiaddrs of existing IPFS Cluster node |
+| `--ipfs-cluster-peer` | — | Peer ID of existing IPFS Cluster node |
+| `--ipfs-peer` | — | Peer ID of existing IPFS node to peer with |
+| `--join-sni` | — | Server name to present to --join; the invite carries it, so it is only needed to override it |
+| `--join` | — | Gateway to join; the invite carries this, so it is only needed to override it |
+| `--nameserver` | `false` | Make this node a nameserver (runs CoreDNS + Caddy) |
+| `--operator-wallet` | — | Operator wallet address |
+| `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
+| `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
+| `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
+| `--ssh-user` | — | SSH user for remote management |
+| `--token` | — | Invite from 'orama maint invite'; it carries the gateway to join and the certificate to pin |
+| `--vps-ip` | — | Public IP of this VPS (required) |
+
+## orama maint node migrate-conf
+
+Register nodes.conf nodes with your wallet
+
+```
+orama maint node migrate-conf [flags]
+```
+
+One-time migration: reads nodes from nodes.conf for an environment
+and registers each with your wallet via the gateway API. After migration,
+these nodes will appear in 'orama nodes' output.
+
+Requires: orama auth login (for API authentication)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | — | Environment to migrate (default: active) |
+
+## orama maint node migrate-raft-id
+
+Move nodes to stable, peer-id-based raft identities (one-time)
+
+```
+orama maint node migrate-raft-id [flags]
+```
+
+Give each node a raft identity that survives an address change.
+
+RQLite defaults a node's raft id to its raft advertise address, so identity has
+been a function of routing: give the same machine a new overlay address — a
+replacement, a WireGuard re-provision, a 10.0.0.x reassignment — and it mints a
+new raft id, joins as a SECOND member, and the old entry stays in the
+configuration as a voter nothing can reach. Two such events on a five-voter
+cluster leave quorum at 3-of-7 with five live voters; one more failure freezes
+the registry.
+
+RQLite cannot rename a member in place, so this is a deliberate migration rather
+than something an upgrade does silently. Nodes are migrated ONE AT A TIME. For
+each: the quorum arithmetic is checked, the old id is removed from the raft
+configuration and tombstoned, the node's local raft state is discarded, and it
+rejoins under its libp2p peer id and replicates back from the leader. The next
+node is not touched until the previous one is back in the configuration.
+
+Safe to re-run: nodes already on a stable id are skipped, so an interrupted run
+continues where it stopped.
 
 Examples:
 ```bash
-orama node wipe --env testnet --node 203.0.113.4
-orama node remove --env testnet --node 203.0.113.4
+orama maint node migrate-raft-id --env testnet --dry-run
+orama maint node migrate-raft-id --env testnet
+orama maint node migrate-raft-id --env testnet --node 203.0.113.4
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dry-run` | `false` | Report what would change and exit |
+| `--env` | — | Target environment [required] |
+| `--force` | `false` | Skip the confirmation prompt |
+| `--node` | — | Migrate only this public IP. Default: every node that needs it |
+
+## orama maint node recover-raft
+
+Recover RQLite cluster from split-brain
+
+```
+orama maint node recover-raft [flags]
+```
+
+Recover the RQLite Raft cluster from split-brain failure.
+
+One node's data is kept. Every other node's raft log and database are DELETED
+and rebuilt from it. Nothing is backed up: there is no copy to restore from
+afterwards, and the deleted nodes' data is gone. Take a backup yourself first
+if the surviving node might not be the right one.
+
+What happens:
+```
+1. Stop orama-node on every node
+2. Reset the kept node to a single-member cluster, preserving its data,
+   raft log and raft term
+3. Start it and confirm it comes back as Leader with its data intact
+4. Delete raft.db, raft/, db.sqlite (+shm/wal) and wsnapshots (rsnapshots) on every other
+   node, and record the kept node as the member each one re-joins
+   (data/cluster-membership.json)
+5. Start them one at a time; each pulls a full snapshot from the kept node
+6. Verify cluster health
+```
+
+Which node is kept decides which copy of the data survives. Without --leader
+the command reads every node's applied index, keeps the furthest ahead, and
+prints what each one reported before asking you to confirm. --leader overrides
+that.
+
+Use --leader-raft-addr when quorum is already lost and rqlite is not answering
+anywhere, so the leader's raft address cannot be read from the cluster.
+
+This is a DESTRUCTIVE operation. Use --force to skip confirmation.
+
+Examples:
+```bash
+orama maint node recover-raft --env testnet
+orama maint node recover-raft --env testnet --leader 203.0.113.4
+orama maint node recover-raft --env devnet --leader-raft-addr 10.0.0.1:10101 --force
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
-| `--node` | — | Public IP of the node to wipe; omit to wipe every node in the environment |
-| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) |
+| `--leader-raft-addr` | — | Explicit leader raft address host:port (e.g. 10.0.0.1:10101). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check. |
+| `--leader` | — | IP of the node whose data to keep; default is the node with the highest applied index |
+
+## orama maint node schema
+
+Inspect and apply gateway schema migrations against the local RQLite
+
+```
+orama maint node schema [flags]
+```
+
+Schema lifecycle commands.
+
+The gateway binary embeds a set of SQL migrations. Each migration is numbered;
+the highest number is the schema version the binary requires. After deploying
+a new gateway binary, run 'orama maint node schema apply' on every namespace's RQLite
+to bring the schema up to date — otherwise function deploys fail at runtime
+with cryptic missing-column errors.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dsn` | — | RQLite DSN (default: this node's index rqlite from /opt/orama/.orama/configs/node.yaml) |
+
+Subcommands: `apply`, `status`
+
+## orama maint node schema apply
+
+Apply pending migrations to the local RQLite
+
+```
+orama maint node schema apply [flags]
+```
+
+Apply every embedded migration not yet recorded in schema_migrations.
+
+Each migration runs as one transaction together with its schema_migrations
+row, so it is applied and recorded, or not applied at all. A statement whose
+effect is already in place (an existing column, table or index, left by an older
+engine that applied migrations statement by statement) is skipped. Any other
+error aborts the run at that migration, which leaves no trace; re-running is
+safe because each migration is independently versioned.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--yes` | `false` | Skip the confirmation prompt |
+
+## orama maint node schema status
+
+Show required vs applied schema version + pending migrations
+
+```
+orama maint node schema status
+```
+
+## orama maint node stage-archive
+
+Verify a pushed build archive and put it in place (run by 'orama maint push')
+
+```
+orama maint node stage-archive [flags]
+```
+
+Verify a build archive against this node's trust anchor, /etc/orama/archive-signers,
+and only then replace the archive files under /opt/orama with it.
+
+'orama maint push' runs this on every node with the node's installed orama. The
+archive is extracted into a private directory, its manifest signature must
+recover to a trusted signer and every file must match the signed manifest;
+anything else leaves /opt/orama untouched. The replacement is undone if any
+step of it fails, and holds the lock install and upgrade take on /opt/orama.
+
+--trust-signers creates the anchor on a node installed before archives were
+signed, and only after the archive has verified against those addresses. It
+never changes an existing anchor.
+
+--release-metadata and --release-target opt in to the release root adopted at
+/etc/orama/release-root.json. Before anything is extracted, the archive file
+must be that target in the TUF metadata: the root signs timestamp, snapshot and
+targets, the timestamp is unexpired, the snapshot is not older than the one
+recorded in /etc/orama/release-seen.json, and the file has the target's length
+and hashes. Any failure refuses the archive; the wallet check is not tried
+instead. An archive that passes is then verified against the trust anchor as
+above: the release root is required in addition to it, not in place of it.
+
+--release-only is the one case where the release root is enough: the archive
+is an unsigned release (the CI build), it must not name signers or a release
+root, and the node records in /etc/orama/release-staged.json that it was staged
+through the release root, which is what lets 'orama node upgrade' install it.
+A channel target ('stable/orama-...') is checked against that channel's
+delegated role.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--archive` | — | The pushed archive on this node [required] |
+| `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target |
+| `--release-only` | `false` | Accept the archive on the release root's checks alone, without a wallet signature (an installed node; needs --release-metadata and --release-target) |
+| `--release-target` | — | Name the archive has in the release targets metadata; requires --release-metadata |
+| `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
+
+## orama maint node unlock
+
+Unlock an OramaOS genesis node
+
+```
+orama maint node unlock [flags]
+```
+
+Manually unlock a genesis OramaOS node that cannot reconstruct its LUKS key
+via Shamir shares (not enough peers online).
+
+This is only needed for the genesis node before enough peers have joined for
+Shamir-based unlock. Once 5+ peers exist, the genesis node transitions to
+normal Shamir unlock and this command is no longer needed.
+
+The encrypted genesis key is written where the node was created, and the
+OramaOS agent does not serve it, so --key-file is required. The command used to
+try fetching it from the node first, on a path the agent has never served, and
+spent ten seconds timing out before telling you to pass the flag.
+
+Usage:
+```bash
+orama maint node unlock --genesis --node-ip <wg-ip> --key-file <path>
+```
+
+The node must be reachable over WireGuard on port 9998.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--genesis` | `false` | Confirm genesis node unlock |
+| `--key-file` | — | Path to the encrypted genesis key file (required) |
+| `--node-ip` | — | WireGuard IP of the OramaOS node (required) |
+
+## orama node
+
+Node operator commands
+
+```
+orama node
+```
+
+Operate Orama nodes, both the one on this machine and the fleet you own.
+
+Local, run on the node itself and needing root (sudo):
+```
+uninstall, upgrade, start, stop, restart, status, logs, doctor, report, invite,
+trust
+```
+
+Remote, run from your machine and reaching nodes over SSH:
+```
+list, setup, remove, wipe, dns delegation
+```
+
+Installing a node's software, staging an archive, auto-update, recovery and
+migration are maintainer commands: see 'orama maint node'.
+
+Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `remove`, `report`, `restart`, `setup`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
 
 ## orama node dns
 
@@ -207,92 +513,6 @@ orama node doctor
 
 Run a series of diagnostic checks on this node to identify
 common issues with services, connectivity, disk space, and more.
-
-## orama node enroll
-
-Enroll an OramaOS node into the cluster
-
-```
-orama node enroll [flags]
-```
-
-Enroll a freshly booted OramaOS node into the cluster.
-
-The OramaOS node prints a registration code on its console. Provide that code
-along with an invite token. The Gateway pushes cluster configuration
-(WireGuard, secrets, peer list) to the node, sealed under the code.
-
-The code is not served over the network. A GET on port 9999 used to return it.
-
-Usage:
-```bash
-orama node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
-```
-
---gateway must be an https:// URL: the invite token is a credential and is never
-sent in the clear.
-
-The node must be reachable over the public internet on port 9999 (enrollment only).
-After enrollment, port 9999 is permanently closed and all communication goes over WireGuard.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--code` | — | Registration code from the node's console (required) |
-| `--env` | `production` | Environment name |
-| `--gateway` | — | Gateway URL (required, e.g. https://gateway.example.com) |
-| `--node-ip` | — | Public IP of the OramaOS node (required) |
-| `--token` | — | Invite token for cluster joining (required) |
-
-## orama node install
-
-Install production node (requires sudo)
-
-```
-orama node install [flags]
-```
-
-Install and configure an Orama production node on this machine.
-For the first node, this creates a new cluster. For subsequent nodes,
-use --join and --token to join an existing cluster.
-
-Run it on the node itself with sudo, or from your own machine with --remote to
-drive the install over SSH against --vps-ip. Which of the two happened used to
-be decided by whether you had used sudo.
-
-The build archive must be extracted at /opt/orama and signed by a wallet in the
-node's trust anchor, /etc/orama/archive-signers. A genesis install creates the
-anchor from --operator-wallet (required) before it verifies the archive; a
-joining node takes it from the cluster in the join response. With --remote,
---archive names the build: it is verified on this machine against
---operator-wallet before it is uploaded.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--acme-ca` | — | ACME directory for TLS certificates: letsencrypt (production, the default), letsencrypt-staging (clusters rebuilt many times a week) or an https URL |
-| `--archive` | — | With --remote: the build archive to upload, verified here against --operator-wallet first |
-| `--base-domain` | — | Base domain for deployment routing (e.g., example.com) |
-| `--ca-fingerprint` | — | SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it |
-| `--domain` | — | Domain for HTTPS (auto-generated for non-nameserver nodes if omitted) |
-| `--dry-run` | `false` | Show what would be done without making changes |
-| `--environment` | — | Environment name (devnet, testnet, etc.) |
-| `--expect-archive-signers` | — | When joining: the archive signers the cluster must send (comma-separated); the archive is verified against them before the join |
-| `--force` | `false` | Force reconfiguration even if already installed |
-| `--host-key` | — | Expected SSH host-key fingerprint (SHA256:...) for --remote; omit to confirm it interactively |
-| `--ipfs-addrs` | — | Comma-separated multiaddrs of existing IPFS node |
-| `--ipfs-cluster-addrs` | — | Comma-separated multiaddrs of existing IPFS Cluster node |
-| `--ipfs-cluster-peer` | — | Peer ID of existing IPFS Cluster node |
-| `--ipfs-peer` | — | Peer ID of existing IPFS node to peer with |
-| `--join-sni` | — | Server name to present to --join; the invite carries it, so it is only needed to override it |
-| `--join` | — | Gateway to join; the invite carries this, so it is only needed to override it |
-| `--nameserver` | `false` | Make this node a nameserver (runs CoreDNS + Caddy) |
-| `--operator-wallet` | — | Operator wallet address |
-| `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
-| `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
-| `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
-| `--ssh-user` | — | SSH user for remote management |
-| `--token` | — | Invite from 'orama invite'; it carries the gateway to join and the certificate to pin |
-| `--vps-ip` | — | Public IP of this VPS (required) |
 
 ## orama node invite
 
@@ -359,160 +579,6 @@ Aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqli
 | `-f`, `--follow` | `false` | Stream new log lines as they arrive |
 | `-n`, `--lines` | `50` | How many lines of history to show |
 
-## orama node migrate-conf
-
-Register nodes.conf nodes with your wallet
-
-```
-orama node migrate-conf [flags]
-```
-
-One-time migration: reads nodes from nodes.conf for an environment
-and registers each with your wallet via the gateway API. After migration,
-these nodes will appear in 'orama nodes' output.
-
-Requires: orama auth login (for API authentication)
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | — | Environment to migrate (default: active) |
-
-## orama node migrate-raft-id
-
-Move nodes to stable, peer-id-based raft identities (one-time)
-
-```
-orama node migrate-raft-id [flags]
-```
-
-Give each node a raft identity that survives an address change.
-
-RQLite defaults a node's raft id to its raft advertise address, so identity has
-been a function of routing: give the same machine a new overlay address — a
-replacement, a WireGuard re-provision, a 10.0.0.x reassignment — and it mints a
-new raft id, joins as a SECOND member, and the old entry stays in the
-configuration as a voter nothing can reach. Two such events on a five-voter
-cluster leave quorum at 3-of-7 with five live voters; one more failure freezes
-the registry.
-
-RQLite cannot rename a member in place, so this is a deliberate migration rather
-than something an upgrade does silently. Nodes are migrated ONE AT A TIME. For
-each: the quorum arithmetic is checked, the old id is removed from the raft
-configuration and tombstoned, the node's local raft state is discarded, and it
-rejoins under its libp2p peer id and replicates back from the leader. The next
-node is not touched until the previous one is back in the configuration.
-
-Safe to re-run: nodes already on a stable id are skipped, so an interrupted run
-continues where it stopped.
-
-Examples:
-```bash
-orama node migrate-raft-id --env testnet --dry-run
-orama node migrate-raft-id --env testnet
-orama node migrate-raft-id --env testnet --node 203.0.113.4
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dry-run` | `false` | Report what would change and exit |
-| `--env` | — | Target environment [required] |
-| `--force` | `false` | Skip the confirmation prompt |
-| `--node` | — | Migrate only this public IP. Default: every node that needs it |
-
-## orama node push
-
-Push the binary archive to your nodes
-
-```
-orama node push [flags]
-```
-
-Upload the pre-built binary archive to nodes and extract it.
-
-By default the archive is uploaded once to a hub node, which then distributes
-it to the others server-to-server. Use --direct to upload from this machine to
-each node in turn.
-
-'orama push' and 'orama node push' are the same command.
-
---archive names the build: the path 'orama build' printed. There is no
-default — the newest archive in /tmp may be another checkout's build.
-
-Examples:
-```bash
-orama push --env devnet --archive /tmp/orama-0.200.0-linux-amd64.tar.gz
-orama push --env devnet --archive <path> --direct    # Upload to each node in turn
-orama push --env devnet --archive <path> --node 203.0.113.4
-orama push --host 203.0.113.4 --archive <path>           # A node not in the inventory yet
-orama push --env devnet --archive <path> --trust-signers 0xYourWallet  # Nodes from before archive signing
-```
-
-Each node verifies the archive with its installed orama before anything under
-/opt/orama changes: the manifest signature must recover to an address in the
-node's /etc/orama/archive-signers and every file must match the manifest.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--archive` | — | The build archive to push (the path `orama build` printed) [required] |
-| `--direct` | `false` | Upload from here to each node in turn, instead of fanning out |
-| `--env` | — | Target environment (default: active) |
-| `--host` | — | Push to a node that is not in the inventory yet |
-| `--node` | — | Push to a single node IP from the inventory |
-| `--trust-signers` | — | Create the archive trust anchor on nodes that have none (installed before archive signing); never changes an existing one |
-| `--user` | — | SSH user for --host (default: root) |
-
-## orama node recover-raft
-
-Recover RQLite cluster from split-brain
-
-```
-orama node recover-raft [flags]
-```
-
-Recover the RQLite Raft cluster from split-brain failure.
-
-One node's data is kept. Every other node's raft log and database are DELETED
-and rebuilt from it. Nothing is backed up: there is no copy to restore from
-afterwards, and the deleted nodes' data is gone. Take a backup yourself first
-if the surviving node might not be the right one.
-
-What happens:
-```
-1. Stop orama-node on every node
-2. Reset the kept node to a single-member cluster, preserving its data,
-   raft log and raft term
-3. Start it and confirm it comes back as Leader with its data intact
-4. Delete raft.db, raft/, db.sqlite (+shm/wal) and wsnapshots (rsnapshots) on every other
-   node, and record the kept node as the member each one re-joins
-   (data/cluster-membership.json)
-5. Start them one at a time; each pulls a full snapshot from the kept node
-6. Verify cluster health
-```
-
-Which node is kept decides which copy of the data survives. Without --leader
-the command reads every node's applied index, keeps the furthest ahead, and
-prints what each one reported before asking you to confirm. --leader overrides
-that.
-
-Use --leader-raft-addr when quorum is already lost and rqlite is not answering
-anywhere, so the leader's raft address cannot be read from the cluster.
-
-This is a DESTRUCTIVE operation. Use --force to skip confirmation.
-
-Examples:
-```bash
-orama node recover-raft --env testnet
-orama node recover-raft --env testnet --leader 203.0.113.4
-orama node recover-raft --env devnet --leader-raft-addr 10.0.0.1:10101 --force
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | — | Target environment (devnet, testnet) [required] |
-| `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
-| `--leader-raft-addr` | — | Explicit leader raft address host:port (e.g. 10.0.0.1:10101). Use when quorum is already lost so the leader can't be auto-resolved; bypasses the live-Leader check. |
-| `--leader` | — | IP of the node whose data to keep; default is the node with the highest applied index |
-
 ## orama node remove
 
 Remove one node from the cluster, then erase it
@@ -520,8 +586,6 @@ Remove one node from the cluster, then erase it
 ```
 orama node remove [flags]
 ```
-
-Aliases: `decommission`
 
 Retire a node from every store the cluster keeps, then wipe it.
 
@@ -591,88 +655,6 @@ Use --force to bypass quorum safety check.
 |------|---------|-------------|
 | `--force` | `false` | Bypass quorum safety check |
 
-## orama node rollout
-
-Build, push, and rolling upgrade every node in an environment
-
-```
-orama node rollout [flags]
-```
-
-Full deployment pipeline: build the binary archive, push it to every node,
-then upgrade them one at a time.
-
-The rolling upgrade prints its plan — which node holds the raft leadership and
-the order the restarts happen in — and stops unless --yes is given.
-
-'orama rollout' and 'orama node rollout' are the same command.
-
-Examples:
-```bash
-orama rollout --env testnet             # Build, push, then print the plan
-orama rollout --env testnet --yes       # Execute the plan
-orama rollout --env testnet --no-build  # Reuse the existing archive
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--archive` | — | With --no-build: the build archive to roll out |
-| `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
-| `--env` | — | Target environment (devnet, testnet) [required] |
-| `--no-build` | `false` | Skip the build step; roll out the archive named by --archive |
-| `--yes` | `false` | Execute the rollout plan instead of only printing it |
-
-## orama node schema
-
-Inspect and apply gateway schema migrations against the local RQLite
-
-```
-orama node schema [flags]
-```
-
-Schema lifecycle commands.
-
-The gateway binary embeds a set of SQL migrations. Each migration is numbered;
-the highest number is the schema version the binary requires. After deploying
-a new gateway binary, run 'orama node schema apply' on every namespace's RQLite
-to bring the schema up to date — otherwise function deploys fail at runtime
-with cryptic missing-column errors.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--dsn` | — | RQLite DSN (default: this node's index rqlite from /opt/orama/.orama/configs/node.yaml) |
-
-Subcommands: `apply`, `status`
-
-## orama node schema apply
-
-Apply pending migrations to the local RQLite
-
-```
-orama node schema apply [flags]
-```
-
-Apply every embedded migration not yet recorded in schema_migrations.
-
-Each migration runs as one transaction together with its schema_migrations
-row, so it is applied and recorded, or not applied at all. A statement whose
-effect is already in place (an existing column, table or index, left by an older
-engine that applied migrations statement by statement) is skipped. Any other
-error aborts the run at that migration, which leaves no trace; re-running is
-safe because each migration is independently versioned.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--yes` | `false` | Skip the confirmation prompt |
-
-## orama node schema status
-
-Show required vs applied schema version + pending migrations
-
-```
-orama node schema status
-```
-
 ## orama node setup
 
 Set up a fresh VPS as an Orama node
@@ -692,7 +674,7 @@ Examples:
 # Genesis node (first node, creates new cluster).
 # Store the VPS login first: rw vault add 203.0.113.4 (username root).
 # --password is a switch; it reads that login. --archive is the path
-# "orama build" printed.
+# "orama maint build" printed.
 orama node setup --ip 203.0.113.4 --password --env devnet \
   --base-domain orama-devnet.network --role nameserver --genesis \
   --archive /tmp/orama-<version>-linux-amd64.tar.gz
@@ -723,7 +705,7 @@ orama node setup --ip 203.0.113.12 --password --env devnet \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--acme-ca` | — | ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL |
-| `--archive` | — | Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded |
+| `--archive` | — | Build archive to install — the path `orama maint build` printed [required]; a node already running this exact build is not re-uploaded |
 | `--base-domain` | — | Base domain for the network |
 | `--bootstrap-key` | — | SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored |
 | `--channel` | — | Release channel to read (default stable); with --release |
@@ -739,51 +721,6 @@ orama node setup --ip 203.0.113.12 --password --env devnet \
 | `--release` | — | Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet |
 | `--role` | `node` | Node role: node or nameserver |
 | `--user` | `root` | SSH user on the VPS |
-
-## orama node stage-archive
-
-Verify a pushed build archive and put it in place (run by 'orama push')
-
-```
-orama node stage-archive [flags]
-```
-
-Verify a build archive against this node's trust anchor, /etc/orama/archive-signers,
-and only then replace the archive files under /opt/orama with it.
-
-'orama push' runs this on every node with the node's installed orama. The
-archive is extracted into a private directory, its manifest signature must
-recover to a trusted signer and every file must match the signed manifest;
-anything else leaves /opt/orama untouched. The replacement is undone if any
-step of it fails, and holds the lock install and upgrade take on /opt/orama.
-
---trust-signers creates the anchor on a node installed before archives were
-signed, and only after the archive has verified against those addresses. It
-never changes an existing anchor.
-
---release-metadata and --release-target opt in to the release root adopted at
-/etc/orama/release-root.json. Before anything is extracted, the archive file
-must be that target in the TUF metadata: the root signs timestamp, snapshot and
-targets, the timestamp is unexpired, the snapshot is not older than the one
-recorded in /etc/orama/release-seen.json, and the file has the target's length
-and hashes. Any failure refuses the archive; the wallet check is not tried
-instead. An archive that passes is then verified against the trust anchor as
-above: the release root is required in addition to it, not in place of it.
-
---release-only is the one case where the release root is enough: the archive
-is an unsigned release (the CI build), it must not name signers or a release
-root, and the node records in /etc/orama/release-staged.json that it was staged
-through the release root, which is what lets 'orama node upgrade' install it.
-A channel target ('stable/orama-...') is checked against that channel's
-delegated role.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--archive` | — | The pushed archive on this node [required] |
-| `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json; requires --release-target |
-| `--release-only` | `false` | Accept the archive on the release root's checks alone, without a wallet signature (an installed node; needs --release-metadata and --release-target) |
-| `--release-target` | — | Name the archive has in the release targets metadata; requires --release-metadata |
-| `--trust-signers` | — | Create a missing trust anchor with these addresses (nodes installed before archive signing only) |
 
 ## orama node start
 
@@ -849,7 +786,7 @@ and can drop it by deleting the file.
 
 The root is checked before it is written: well-formed, signed by its own keys at
 its threshold, not expired. Adopting a root other than the one already adopted
-needs --replace. This command changes this node only; 'orama build
+needs --replace. This command changes this node only; 'orama maint build
 --release-root' puts the root in a signed archive, and every node that installs
 that archive adopts it.
 
@@ -869,39 +806,6 @@ Remove production services (requires sudo)
 ```
 orama node uninstall
 ```
-
-## orama node unlock
-
-Unlock an OramaOS genesis node
-
-```
-orama node unlock [flags]
-```
-
-Manually unlock a genesis OramaOS node that cannot reconstruct its LUKS key
-via Shamir shares (not enough peers online).
-
-This is only needed for the genesis node before enough peers have joined for
-Shamir-based unlock. Once 5+ peers exist, the genesis node transitions to
-normal Shamir unlock and this command is no longer needed.
-
-The encrypted genesis key is written where the node was created, and the
-OramaOS agent does not serve it, so --key-file is required. The command used to
-try fetching it from the node first, on a path the agent has never served, and
-spent ten seconds timing out before telling you to pass the flag.
-
-Usage:
-```bash
-orama node unlock --genesis --node-ip <wg-ip> --key-file <path>
-```
-
-The node must be reachable over WireGuard on port 9998.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--genesis` | `false` | Confirm genesis node unlock |
-| `--key-file` | — | Path to the encrypted genesis key file (required) |
-| `--node-ip` | — | WireGuard IP of the OramaOS node (required) |
 
 ## orama node upgrade
 
@@ -924,7 +828,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--node` | — | Upgrade a single node IP only |
 | `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
 
 ## orama node wipe

@@ -50,7 +50,7 @@ Load grows with the number of nodes, not the audience: viewers read the cached s
 | Response | Monitor exit code | Meaning |
 |---|---|---|
 | 400 | 2 | The gateway refused the request (for example `--interval` outside 2 to 60 seconds) |
-| 401 | 3 | Credential not accepted. `orama env use <env>`, then `orama auth login` |
+| 401 | 3 | Credential not accepted. `orama network use <env>`, then `orama auth login` |
 | 403 | 3 | This wallet is not an operator of the cluster |
 | 404 | 4 | The gateway predates the telemetry API. Upgrade it, or use `--ssh` |
 | 503 | 5 | The gateway is not ready yet. Retry, or use `--ssh` |
@@ -127,13 +127,13 @@ Derived from cross-node analysis of all reports by the cluster gateway (or by th
 
 Cross-node checks: exactly one RQLite leader; all nodes agree on it; Raft terms within 1; each follower has heard from the leader within 2 seconds; every node has N-1 WireGuard peers; clocks within 5 seconds; all nodes on the same binary version; chain height not far behind the median.
 
-`alerts`, `cluster` and the live view print a next step under each critical and warning alert, for example `orama inspect --env <env> --subsystem rqlite` or `orama ssh <host> --env <env> 'sudo orama node status'`.
+`alerts`, `cluster` and the live view print a next step under each critical and warning alert, for example `orama maint inspect --env <env> --subsystem rqlite` or `orama ssh <host> --env <env> 'sudo orama node status'`.
 
 ## Global nodes
 
 A node with `orama-global-ipfs`, `orama-global-provider` or `orama-global-tor-relay` installed adds a `global` section to its report (see [Global nodes](/docs/operator/global-nodes)). It holds each unit's state and, while the public Kubo is active, its repo size against `StorageMax`. The storage provider and the Tor relay each write a status file, `/var/lib/orama-global/provider/monitor.json` and `/var/lib/orama-global/tor-relay/monitor.json`, and the section adds the fields that file carries.
 
-The Tor relay's file holds only `in_consensus`: whether the consensus the relay holds lists it. `orama-global-tor-monitor.timer` runs `orama global tor monitor` on the relay every five minutes to write it, and leaves the field out while the relay has no valid consensus, so a relay without a consensus is not alerted as missing from the relay set. The node report, the inspector and the health checks follow the Tor relay unit, so a relay that is installed and not active is an alert on its own.
+The Tor relay's file holds only `in_consensus`: whether the consensus the relay holds lists it. `orama-global-tor-monitor.timer` runs `orama maint global tor monitor` on the relay every five minutes to write it, and leaves the field out while the relay has no valid consensus, so a relay without a consensus is not alerted as missing from the relay set. The node report, the inspector and the health checks follow the Tor relay unit, so a relay that is installed and not active is an alert on its own.
 
 ## Components
 
@@ -167,7 +167,7 @@ Each node also probes the namespaces it hosts every 30 seconds and keeps its own
 
 ## Monitor or inspector?
 
-| | `orama monitor` | `orama inspect` |
+| | `orama monitor` | `orama maint inspect` |
 |---|---|---|
 | Data | The gateway's telemetry (or one SSH call per node) | About 12 SSH sessions per node |
 | Focus | Real time health and alerts | Deep diagnostic checks, pass or fail |

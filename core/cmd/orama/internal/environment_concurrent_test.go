@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// Concurrent `orama env add` in one HOME (a CI script configuring several
+// Concurrent `orama network add` in one HOME (a CI script configuring several
 // clusters in parallel) lost environments: each read the file, appended its own
 // and wrote the whole file back, so the last writer won (stagenet e2e,
 // 2026-09-30).

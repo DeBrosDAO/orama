@@ -17,7 +17,7 @@ import (
 )
 
 // nodeReportCommand is what --ssh runs on every node.
-const nodeReportCommand = "sudo orama node report --json"
+const nodeReportCommand = "sudo orama node report"
 
 // maxSSHOutputChars bounds how much of a node's output an error quotes.
 const maxSSHOutputChars = 200
@@ -29,7 +29,7 @@ type CollectorConfig struct {
 	Timeout    time.Duration
 }
 
-// CollectOnce runs `sudo orama node report --json` on all matching nodes
+// CollectOnce runs `sudo orama node report` on all matching nodes
 // in parallel and returns a ClusterSnapshot.
 func CollectOnce(ctx context.Context, cfg CollectorConfig) (*cluster.ClusterSnapshot, error) {
 	nodes, cleanup, err := loadNodes(cfg)
@@ -96,7 +96,7 @@ func collectNodeReport(ctx context.Context, node inspector.Node, timeout time.Du
 	return cs
 }
 
-// withReport parses a node's `orama node report --json` output into cs. The
+// withReport parses a node's `orama node report` output into cs. The
 // node's public address is the one it was reached at; its overlay address is
 // the one it reports, so --node can name it either way.
 func withReport(cs cluster.CollectionStatus, host, stdout string) cluster.CollectionStatus {
@@ -174,7 +174,7 @@ func loadSandboxNodes(cfg CollectorConfig) ([]inspector.Node, func(), error) {
 		return nil, noop, clierr.Wrap(clierr.CodeUsage, fmt.Errorf("find active sandbox: %w", err))
 	}
 	if state == nil {
-		return nil, noop, clierr.NotFound("no active sandbox found (start one with `orama sandbox create`)")
+		return nil, noop, clierr.NotFound("no active sandbox found (start one with `orama maint sandbox create`)")
 	}
 
 	nodes := state.ToNodes(sbxCfg.SSHKey.VaultTarget)

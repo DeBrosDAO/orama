@@ -77,7 +77,7 @@ func ServiceGroupID(service string) (int, error) {
 	}
 	g, err := user.LookupGroup(name)
 	if err != nil {
-		return 0, fmt.Errorf("look up the %s group (orama node install/upgrade creates it): %w", name, err)
+		return 0, fmt.Errorf("look up the %s group (orama maint node install/upgrade creates it): %w", name, err)
 	}
 	gid, err := strconv.Atoi(g.Gid)
 	if err != nil {

@@ -57,7 +57,7 @@ func TestPhaseA7_runYourOwnClusterUseItSteps(t *testing.T) {
 	tenancy.Reserve(t, harness.Fleet(t), 1)
 	cli := harness.CLI(t).Isolated(t)
 	name := ns.UniqueName(t.Name())
-	cli.MustOK(t, "env", "use", f.State.Env)
+	cli.MustOK(t, "network", "use", f.State.Env)
 	cli.MustOK(t, "auth", "login")
 	cli.MustOK(t, "namespace", "create", name)
 	t.Cleanup(func() { deleteCurrent(t, cli, name) })

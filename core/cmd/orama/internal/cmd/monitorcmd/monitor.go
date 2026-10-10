@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	cli "github.com/DeBrosOfficial/network/cmd/orama/internal"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/display"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/monitor/tui"
@@ -28,7 +29,7 @@ view), authenticated with the credentials 'orama auth login' stored for the
 environment's gateway. Only the cluster's operators may read it.
 
 --ssh is the break-glass path for when no gateway answers: it SSHes into every
-node and runs 'sudo orama node report --json' there instead. It is never chosen
+node and runs 'sudo orama node report' there instead. It is never chosen
 automatically; when the API fails the error says so and suggests it. Traffic is
 counted by the gateways, so it is empty over --ssh.
 
@@ -58,11 +59,10 @@ var intervalUsage = fmt.Sprintf("How often the live view refreshes, %.0fs to %.0
 	monitor.MinAPIInterval.Seconds(), monitor.MaxAPIInterval.Seconds(), monitor.MinSSHInterval.Seconds())
 
 func init() {
-	Cmd.PersistentFlags().StringVar(&flagEnv, "env", "", "Environment: devnet, testnet, mainnet (required)")
+	Cmd.PersistentFlags().StringVar(&flagEnv, "env", "", "Environment (default: active)")
 	Cmd.PersistentFlags().StringVar(&flagNode, "node", "", "Show only this node (public IP or WireGuard IP)")
 	Cmd.PersistentFlags().BoolVar(&flagSSH, "ssh", false, "Collect over SSH from every node instead of the gateway API (break-glass)")
 	Cmd.PersistentFlags().StringVar(&flagConfig, "config", "", "With --ssh: read nodes from this file instead of resolving them")
-	Cmd.MarkPersistentFlagRequired("env")
 	Cmd.Flags().DurationVar(&flagInterval, "interval", monitor.DefaultInterval, intervalUsage)
 	liveCmd.Flags().DurationVar(&flagInterval, "interval", monitor.DefaultInterval, intervalUsage)
 
@@ -103,7 +103,7 @@ func newOneShotCmd(v oneShot) *cobra.Command {
 		Use:   v.use,
 		Short: v.short,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			src, err := newSource()
+			src, _, err := newSource()
 			if err != nil {
 				return err
 			}
@@ -119,14 +119,33 @@ func newOneShotCmd(v oneShot) *cobra.Command {
 	}
 }
 
-func newSource() (monitor.Source, error) {
-	return monitor.NewSource(monitor.Options{
-		Env:        flagEnv,
+// resolveEnv is the environment --env names, or the active one when it is left
+// out, as `orama status` does.
+func resolveEnv() (string, error) {
+	if flagEnv != "" {
+		return flagEnv, nil
+	}
+	active, err := cli.GetActiveEnvironment()
+	if err != nil {
+		return "", fmt.Errorf("no --env given and no active environment: %w", err)
+	}
+	return active.Name, nil
+}
+
+// newSource returns the snapshot source and the environment it reads.
+func newSource() (monitor.Source, string, error) {
+	env, err := resolveEnv()
+	if err != nil {
+		return nil, "", err
+	}
+	src, err := monitor.NewSource(monitor.Options{
+		Env:        env,
 		Node:       flagNode,
 		ConfigPath: flagConfig,
 		SSH:        flagSSH,
 		SSHTimeout: monitor.DefaultSSHTimeout,
 	})
+	return src, env, err
 }
 
 func runLive(cmd *cobra.Command, args []string) error {
@@ -134,9 +153,9 @@ func runLive(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	src, err := newSource()
+	src, env, err := newSource()
 	if err != nil {
 		return err
 	}
-	return tui.Run(tui.Config{Source: src, Env: flagEnv, Interval: interval})
+	return tui.Run(tui.Config{Source: src, Env: env, Interval: interval})
 }

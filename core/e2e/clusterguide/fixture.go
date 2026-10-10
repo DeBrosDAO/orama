@@ -54,7 +54,7 @@ type Fixture struct {
 	TokenFile string
 	SiteDir   string
 	// UseOnly runs only the "Use it" and "Check it" sections, against a cluster
-	// that is already up (an `orama sandbox create` cluster).
+	// that is already up (an `orama maint sandbox create` cluster).
 	UseOnly bool
 
 	// DelegationWait bounds the wait for the NS records and the genesis

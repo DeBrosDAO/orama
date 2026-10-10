@@ -96,7 +96,7 @@ The start order is the table's order: chain, Kubo, provider, archiver, indexer, 
 6. **Firewall rules.** ufw allows 31000 tcp and udp for the chain, 31010 tcp and udp for the Kubo swarm, 31013 tcp for the provider, 31020 tcp for a relay or authority, and 31021 tcp for an authority, each with the comment `orama-global`, so the cluster's reconcile never deletes them (`core/pkg/install/firewall.go:globalPortSpecs`).
 7. **Role.** On a machine with no `preferences.yaml`, the installer writes `role: global`. A machine that already has preferences keeps them, which is how a cluster node installs the global services without becoming a global node by accident (`core/pkg/install/global_role.go:recordGlobalRole`). A co-located install writes `role: both` and `global_netns: orama-global` last, so the node accepts `both` only when the files that role needs already exist.
 
-Running the same install again changes nothing but the bytes of the binaries, with one exception that is refused rather than applied: a different `oramad` than the genesis binary already staged. Changing the chain binary is `orama global stage-oramad` ([below](#cosmovisor-staging)).
+Running the same install again changes nothing but the bytes of the binaries, with one exception that is refused rather than applied: a different `oramad` than the genesis binary already staged. Changing the chain binary is `orama maint global stage-oramad` ([below](#cosmovisor-staging)).
 
 The installer does not verify `oramad`, `orama` or `orama-global` against any signature. The release archive does not carry them; the operator stages what they built or verified. The hash pin covers only cosmovisor.
 
@@ -104,7 +104,7 @@ The installer does not verify `oramad`, `orama` or `orama-global` against any si
 
 `RenderGlobalChainUnit` writes the unit (`core/pkg/install/global_units.go:RenderGlobalChainUnit`). Its `ExecStart` is `cosmovisor run start --home /var/lib/orama-global/chain` with `--p2p.laddr tcp://0.0.0.0:31000`, `--rpc.laddr tcp://127.0.0.1:31001`, gRPC on `127.0.0.1:31002`, the REST API on `127.0.0.1:31003`, and `--p2p.persistent_peers` when peers were given. The environment is `DAEMON_NAME=oramad`, `DAEMON_HOME` the chain home, `DAEMON_ALLOW_DOWNLOAD_BINARIES=false`, `DAEMON_RESTART_AFTER_UPGRADE=true` and `GOMEMLIMIT=1GiB`. The Go limit is soft: on a 4 GB machine that shared its memory with IPFS and every namespace, an unconstrained `oramad` heap took the node to 98% (`core/pkg/constants/chain.go:ChainGoMemLimit`). CometBFT v0.39 registers no flag for the Prometheus listener, so the unit only records its address, 31004 on loopback, and the node's `config.toml` sets it.
 
-The unit restarts always, after 5 s, with no start limit, and allows 65,535 open files. `ReadOnlyPaths=` mounts `cosmovisor/genesis` and `cosmovisor/upgrades` read-only for the process. Before every start it runs `ExecStartPre=+/usr/lib/orama-global/bin/orama global validator check-sign-floor`; the `+` runs it as root outside the sandbox, which it needs to read the state root. Because it is an `ExecStartPre`, the guard applies at boot, on a `Restart=always` loop and on a manual `systemctl start`, not only to `orama global start`.
+The unit restarts always, after 5 s, with no start limit, and allows 65,535 open files. `ReadOnlyPaths=` mounts `cosmovisor/genesis` and `cosmovisor/upgrades` read-only for the process. Before every start it runs `ExecStartPre=+/usr/lib/orama-global/bin/orama maint global validator check-sign-floor`; the `+` runs it as root outside the sandbox, which it needs to read the state root. Because it is an `ExecStartPre`, the guard applies at boot, on a `Restart=always` loop and on a manual `systemctl start`, not only to `orama global start`.
 
 The unit has no WireGuard dependency and its peers must be public addresses: `IPAddressDeny=` covers the private ranges. The stagenet deploy script writes a different chain unit that peers over the WireGuard mesh; it is not this one ([chain architecture](39-chain-architecture.md)). The comment on `ChainP2PPort` in `core/pkg/constants/chain.go` still says the listener is on the WireGuard address; the global unit binds `0.0.0.0`.
 
@@ -138,7 +138,7 @@ A binary enters the tree in `place` (`core/pkg/cosmovisor/stage_unix.go:place`):
 
 `StageGenesis` also creates `upgrades/` so the unit's read-only mount has something to mount, and creates `current -> genesis` only if `current` does not exist; an existing `current` is cosmovisor's and is never repointed. Upgrade names must match `^[a-z0-9][a-z0-9._-]{0,63}$`: cosmovisor lowercases and URI-escapes plan names, and only those characters name the same directory on both sides.
 
-The two callers verify differently. The installer verifies the genesis binary by SHA-256 against the hash it computed when it read the staged file (`core/pkg/install/global_install_cosmovisor.go:fileHasSum`). `orama global stage-oramad` verifies against the TUF release root adopted at `/etc/orama/release-root.json`, through the same descriptor, with `--release-metadata` and `--release-target` (`core/cmd/orama/internal/cmd/globalcmd/stage.go`, [the TUF release root](../vol1/29-build-signing-and-release.md#the-tuf-release-root)). Nothing stages automatically. The auto-update policy refuses mode `auto` for a validator, so each chain upgrade is a command the operator runs (`core/pkg/autoupdate/decide.go:RoleValidator`).
+The two callers verify differently. The installer verifies the genesis binary by SHA-256 against the hash it computed when it read the staged file (`core/pkg/install/global_install_cosmovisor.go:fileHasSum`). `orama maint global stage-oramad` verifies against the TUF release root adopted at `/etc/orama/release-root.json`, through the same descriptor, with `--release-metadata` and `--release-target` (`core/cmd/orama/internal/cmd/globalcmd/stage.go`, [the TUF release root](../vol1/29-build-signing-and-release.md#the-tuf-release-root)). Nothing stages automatically. The auto-update policy refuses mode `auto` for a validator, so each chain upgrade is a command the operator runs (`core/pkg/autoupdate/decide.go:RoleValidator`).
 
 An upgrade is scheduled by governance, not by the node: when an `x/houses` proposal's timelock ends, `x/upgrade` records the plan, and at its height the chain halts with "UPGRADE NEEDED" ([governance and contracts](44-governance-and-contracts.md)). Cosmovisor then points `current` at `upgrades/<name>` and restarts `oramad`. With no staged binary for the plan, the chain stays halted until one is staged. The current build is state-breaking against earlier ones, so a chain home from an earlier build cannot be carried over, and no installed path exists for a patch that changes no consensus behaviour: it is staged as an upgrade plan too.
 
@@ -407,7 +407,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 
 **Normal operation.** The chain runs under cosmovisor. Each service signs with its hot key; the hot key pays fees from its own bank balance or earnings, or from a fee-only balance the operator funded with `MsgFundHotKey`. The node report and the inspector read the chain's RPC, the public Kubo and the Tor relay's `monitor.json` ([observability](../vol1/32-observability.md)).
 
-**Chain upgrade.** Governance schedules a plan. The operator stages the binary with `orama global stage-oramad --upgrade <name>` before the height. The chain halts at the height; cosmovisor repoints `current` and restarts it. A global node is not part of `orama rollout` and has no rolling-upgrade protocol of its own: with equal validators a stop of one validator is tolerated up to the chain's fault threshold, and each validator is upgraded by its operator.
+**Chain upgrade.** Governance schedules a plan. The operator stages the binary with `orama maint global stage-oramad --upgrade <name>` before the height. The chain halts at the height; cosmovisor repoints `current` and restarts it. A global node is not part of `orama maint rollout` and has no rolling-upgrade protocol of its own: with equal validators a stop of one validator is tolerated up to the chain's fault threshold, and each validator is upgraded by its operator.
 
 **Restart.** `orama global restart` or a reboot. The sign-floor check runs before every start. The units are enabled, so at boot systemd starts them in its own order; the chain's dependents wait for it with `After=` and start whether or not it is up.
 
@@ -419,7 +419,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 
 | Trigger | What the system does | What you observe |
 |---|---|---|
-| Chain RPC does not answer within 5 min of `start` | the other services are left stopped, the command fails | "the chain started but its RPC did not answer"; `orama global status` shows only the chain |
+| Chain RPC does not answer within 5 min of `start` | the other services are left stopped, the command fails | "the chain started but its RPC did not answer"; only the chain unit is active |
 | Sign floor refuses (state behind floor, key missing with a floor recorded, sentinel present, bad floor file) | `ExecStartPre` fails, the unit does not start; with `Restart=always` it retries every 5 s and fails each time | `systemctl` shows the unit in a restart loop; the journal has "refusing to start the chain" and the cause |
 | Export killed part-way | the sentinel stays; every start is refused | the error names the sentinel path; the operator checks whether the key is still in the chain home, then removes the file |
 | Bundle file cannot be written after the key left | the key is in `validator-key-migrated-*`; the command prints both copy paths | put both copies back to abandon |
@@ -430,7 +430,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 | Upgrade height reached with no staged binary | the chain stays halted | "UPGRADE NEEDED" in the chain log, no new blocks |
 | Disk full under the chain home | `oramad` fails to write; with `Restart=always` it loops | the chain stops advancing; the node report shows a non-responsive RPC |
 | Clock skew | CometBFT's timeout logic and the unbonding queue use block time, not the host clock | a skewed validator proposes late or rejects proposals; unbonding timing is unaffected |
-| Network namespace unit fails, or IPv6 is still on | the unit's `ExecStartPost` fails and, because every global unit is `BindsTo=` it, none starts | `orama global status` shows all units inactive; the journal names the IPv6 file that is not 1 |
+| Network namespace unit fails, or IPv6 is still on | the unit's `ExecStartPost` fails and, because every global unit is `BindsTo=` it, none starts | every `orama-global-*` unit is inactive; the journal names the IPv6 file that is not 1 |
 | Namespace ruleset reload fails during a re-install | the install fails and names the file; the files are written and load at the next start of the unit | the old rules keep running |
 | Provider started before registration | it creates its hot key, logs the address, and exits for lack of `node-id`; restarts every 5 s | a restart loop and a log line naming the missing file |
 | `MsgBondNode` with too little bank balance and earnings | the message fails; the earnings top-up is reversed with it | the CLI reports a failure with the chain's log |
@@ -543,9 +543,9 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 
 **Read-only on a node, as root:**
 
-- `orama global status` lists each installed service, its unit and its `systemctl is-active` state.
+- `systemctl is-active orama-global-chain.service` (and the other `orama-global-*` units) is each installed service's state; there is no `orama global status`, and starting and stopping go through `orama global start`, `stop` and `restart`.
 - `curl http://127.0.0.1:31001/status` (on a co-located machine `curl http://198.18.0.2:31001/status`) is the chain's CometBFT status.
-- `orama global validator check-sign-floor` exits 0 when the chain may start. `ls -l /var/lib/orama-global` shows `validator-sign-floor.json` when a migration ran on this host.
+- `orama maint global validator check-sign-floor` exits 0 when the chain may start. `ls -l /var/lib/orama-global` shows `validator-sign-floor.json` when a migration ran on this host.
 - `ls -l /var/lib/orama-global/chain/cosmovisor` shows `current` and the staged binaries. `readlink /var/lib/orama-global/chain/cosmovisor/current` shows which is running.
 - On a co-located machine: `ip netns list`, `nft list table ip orama_global`, `ip netns exec orama-global nft list table ip orama_global_ns`.
 

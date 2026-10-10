@@ -18,7 +18,7 @@ The torrc sets `SocksPort 127.0.0.1:9050 IsolateSOCKSAuth`, `ClientOnly 1`, `ORP
 
 The unit is sandboxed (`ProtectSystem=strict`, `MemoryDenyWriteExecute`, 1 GB memory limit) and is denied network access to private ranges: `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `100.64/10`, `fc00::/7`, `fe80::/10`. Tor can never reach the WireGuard mesh.
 
-The installer installs Tor on `orama node install` and every upgrade, masks the distribution's own `tor.service`, and removes the old Anyone network if an earlier release left it. If Tor cannot be installed, the install fails: without it the anonymity routes would answer 503.
+The installer installs Tor on `orama maint node install` and every upgrade, masks the distribution's own `tor.service`, and removes the old Anyone network if an earlier release left it. If Tor cannot be installed, the install fails: without it the anonymity routes would answer 503.
 
 ## The gateway routes
 
@@ -55,7 +55,7 @@ A WebAssembly function calls the `anon_fetch` host function to make an outbound 
 
 ### Health
 
-`GET /v1/health` reports `checks.anon_proxy` as `ok` or `unavailable`. A Tor outage is deliberately not an error: the node keeps serving and stays in DNS. `orama inspect --subsystem tor` and `orama monitor` show Tor state.
+`GET /v1/health` reports `checks.anon_proxy` as `ok` or `unavailable`. A Tor outage is deliberately not an error: the node keeps serving and stays in DNS. `orama maint inspect --subsystem tor` and `orama monitor` show Tor state.
 
 ## Submitting chain transactions over Tor
 
@@ -73,7 +73,7 @@ Reads (`orama chain`) do not go through Tor yet.
 
 Add `--onion-network <tor-network.json>` (or `ORAMA_ONION_NETWORK`) instead of `--onion` to have the command start a Tor client for the Orama Tor network for that one run, pick one of the file's `validator_onions` at random and stop the client afterwards. `--onion-socks` together with `--onion-network` is a usage error, since they are two Tor clients.
 
-The server side is an onion service on a validator, installed with `orama global install --services onion`. It forwards to `orama global txgate`, which serves three calls and nothing else of the chain's REST API: read the signer's account, broadcast, and look a transaction up. It logs no request. The wallet's proxy for it must be a client of the Orama Tor network, not the public one, which resolves none of its addresses.
+The server side is an onion service on a validator, installed with `orama global install --services onion`. It forwards to `orama maint global txgate`, which serves three calls and nothing else of the chain's REST API: read the signer's account, broadcast, and look a transaction up. It logs no request. The wallet's proxy for it must be a client of the Orama Tor network, not the public one, which resolves none of its addresses.
 
 ## Orama's own Tor network
 
@@ -88,11 +88,11 @@ A separate anonymity network built from unmodified upstream Tor and run by Orama
 
 A host is an authority or a relay, never both. Each role runs under an account of its own and the global sandbox; none needs the chain except the onion role. The ports are 31020 (ORPort) and 31021 (authorities' DirPort).
 
-**One network file.** `tor-network.json` is the only format and one parser reads it, for the install, `orama vpn up`, `orama vpn check` and every `--onion-network` submission. It carries the network's name, `private`, the authorities (at least three, on public IPv4 literals, with their identities), the voting schedule, `bootstrap`, `allow_exit`, and `validator_onions`. The file is public. The authorities' keys are made once, on an air-gapped machine, by `orama global tor ceremony`; the authority identity key stays offline. After a validator's onion service starts, its address is added with `orama global tor onions add --network-file tor-network.json <addr.onion>`.
+**One network file.** `tor-network.json` is the only format and one parser reads it, for the install, `orama maint vpn up`, `orama maint vpn check` and every `--onion-network` submission. It carries the network's name, `private`, the authorities (at least three, on public IPv4 literals, with their identities), the voting schedule, `bootstrap`, `allow_exit`, and `validator_onions`. The file is public. The authorities' keys are made once, on an air-gapped machine, by `orama maint global tor ceremony`; the authority identity key stays offline. After a validator's onion service starts, its address is added with `orama maint global tor onions add --network-file tor-network.json <addr.onion>`.
 
-**Relay health.** `orama-global-tor-monitor.timer` runs `orama global tor monitor` every five minutes as the relay's own account and writes `monitor.json` with `in_consensus`. `orama monitor node` shows whether the relay is in the relay set, and the health check `global.relay.consensus` warns when it is not.
+**Relay health.** `orama-global-tor-monitor.timer` runs `orama maint global tor monitor` every five minutes as the relay's own account and writes `monitor.json` with `in_consensus`. `orama monitor node` shows whether the relay is in the relay set, and the health check `global.relay.consensus` warns when it is not.
 
-**The client.** `orama vpn up --network tor-network.json` starts a Tor client on the network and offers a loopback SOCKS5 proxy (default `127.0.0.1:9150`). It is a proxy, not a system-wide tunnel: only applications pointed at it use the network. When Tor stops, the port closes and nothing is routed around the network. `orama vpn check` joins the network and reads the all-zero account through each validator's onion service; it passes when at least one answers and fails when Tor cannot bootstrap, none answers or there is nothing to try. See [VPN](/docs/privacy/vpn).
+**The client.** `orama maint vpn up --network tor-network.json` starts a Tor client on the network and offers a loopback SOCKS5 proxy (default `127.0.0.1:9150`). It is a proxy, not a system-wide tunnel: only applications pointed at it use the network. When Tor stops, the port closes and nothing is routed around the network. `orama maint vpn check` joins the network and reads the all-zero account through each validator's onion service; it passes when at least one answers and fails when Tor cannot bootstrap, none answers or there is nothing to try. See [VPN](/docs/privacy/vpn).
 
 **Relay pay.** The bandwidth reporter on an authority host reports each closed emission epoch to `x/relay`, which pays registered relays. See [Relay rewards](/docs/blockchain/relay-rewards). The reporter drops an epoch whose report window has passed or that is already settled instead of retrying it.
 
@@ -109,6 +109,6 @@ The full reference, including the ceremony, exits and the abuse-complaint proced
 
 ## Operating it
 
-- Check: `sudo orama node status`, `orama monitor service`, `orama inspect --subsystem tor`.
+- Check: `sudo orama node status`, `orama monitor service`, `orama maint inspect --subsystem tor`.
 - Logs: `sudo orama node logs orama-namespace-tor@index -f`.
 - If `/v1/proxy/anon` answers 503, Tor is down or not installed on that gateway's node. Restart with `sudo orama node restart`.

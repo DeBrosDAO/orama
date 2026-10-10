@@ -11,7 +11,7 @@ import (
 )
 
 // The check does not install anything. Mode auto still only prints upgrade:
-// installing is `orama node autoupdate run`, which asks the same question of
+// installing is `orama maint node autoupdate run`, which asks the same question of
 // the cluster's real state and installs one node at a time.
 var autoupdateCmd = &cobra.Command{
 	Use:   "autoupdate",
@@ -32,7 +32,7 @@ health-gate failure marked bad.
 
 A validator (--role validator) is never auto: on auto the decision is skip, with
 the reason, and the command exits 0; chain upgrades are staged explicitly with
-'orama global stage-oramad'.`,
+'orama maint global stage-oramad'.`,
 	Args: cobra.NoArgs,
 	RunE: runAutoupdate,
 }
@@ -63,7 +63,7 @@ func init() {
 	autoupdateCmd.Flags().StringVar(&auVerify, "verify", "", "simulated TUF failure: rollback, freeze, threshold, or hash")
 	autoupdateCmd.Flags().StringVar(&auRole, "role", autoupdate.RoleCluster, "this node's role: cluster or validator")
 	autoupdateCmd.Flags().StringVar(&auWindow, "window", "", "maintenance window as start-end hours, for example 1-5")
-	Cmd.AddCommand(autoupdateCmd)
+	MaintCmd.AddCommand(autoupdateCmd)
 }
 
 func runAutoupdate(cmd *cobra.Command, _ []string) error {

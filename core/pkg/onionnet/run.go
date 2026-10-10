@@ -5,7 +5,7 @@
 // pkg/tornet): its directory authorities are the only ones the client's tor is
 // given, and the torrc is rendered by tornet.ClientTorrc. The client built here
 // has one route: the tor it starts. It never falls back to the public Tor
-// network or to a direct connection. The users are orama vpn and onion
+// network or to a direct connection. The users are orama maint vpn and onion
 // transaction submission (--onion-network).
 package onionnet
 

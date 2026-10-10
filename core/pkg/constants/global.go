@@ -26,7 +26,7 @@ const (
 	GlobalTorORPort = 31020
 	// GlobalTorDirPort is a dirauth's DirPort.
 	GlobalTorDirPort = 31021
-	// GlobalTxGatePort is the validator tx gate (orama global txgate), on 127.0.0.1 (the
+	// GlobalTxGatePort is the validator tx gate (orama maint global txgate), on 127.0.0.1 (the
 	// namespace's own loopback when co-located). The validator onion service forwards to it,
 	// and only it: nothing else of the chain is reachable through the onion.
 	GlobalTxGatePort = 31022

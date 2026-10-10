@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** the operator-driven mechanisms that change cluster membership or destroy and rebuild state when the automatic loops cannot or must not: `orama node recover-raft` (reform the index RQLite around one node's data, which is also how a cluster shrinks), `orama node migrate-raft-id` (move members from address ids to peer ids), `orama node remove` and `orama node wipe` (retire a node cluster-side, erase it target-side), the manual path for a namespace RQLite that lost quorum, and `orama namespace restore` (replace a namespace database from an owner-sealed backup). Each is a command run from an operator machine over SSH, and each is destructive in a different place.
+> - **What:** the operator-driven mechanisms that change cluster membership or destroy and rebuild state when the automatic loops cannot or must not: `orama maint node recover-raft` (reform the index RQLite around one node's data, which is also how a cluster shrinks), `orama maint node migrate-raft-id` (move members from address ids to peer ids), `orama node remove` and `orama node wipe` (retire a node cluster-side, erase it target-side), the manual path for a namespace RQLite that lost quorum, and `orama namespace restore` (replace a namespace database from an owner-sealed backup). Each is a command run from an operator machine over SSH, and each is destructive in a different place.
 > - **Key numbers:** applied index read with a 5 s curl per node; all nodes quiesced within 60 s (poll 3 s) or the recovery aborts before it deletes anything; kept node must report `Leader` within 120 s; each follower must report `Follower` within 180 s; final verify 180 s; migration rejoin wait 5 min (poll 5 s); eviction tombstone vetoes automatic re-adding for 24 h; index RQLite HTTP 10100, raft 10101; at most 5 platform voters.
 > - **Code:** `core/cmd/orama/internal/production/recover/`, `core/cmd/orama/internal/production/raftid/`, `core/cmd/orama/internal/production/decommission/`, the shared `core/cmd/orama/internal/production/clusterops/`, and the quorum rule in `core/pkg/rqlite/eviction.go`.
 > - **Depends on:** [cluster state](07-cluster-state.md) for the index RQLite and raft identity, [membership and failure detection](08-membership-and-failure-detection.md) for tombstones and the reconciler, [reconciliation and recovery](10-reconciliation-and-recovery.md) for the automatic namespace paths, [the database](17-database.md) for sealed backups.
@@ -130,7 +130,7 @@ It recovers an available cluster: one leader, the kept node's registry intact, e
 
 ![migrate-raft-id for one node](../diagrams/ch33-migrate-raft-id.svg)
 
-Raft ids derived from addresses mean that giving a machine a new overlay address mints a second member while the old one remains a voter nothing can reach. Two such events on five voters leave quorum at 3 of 7 with five live voters. The migration moves each member to its libp2p peer id, which survives an address change. It runs once per cluster (`orama node migrate-raft-id`, `--dry-run`, `--node` to narrow what is migrated).
+Raft ids derived from addresses mean that giving a machine a new overlay address mints a second member while the old one remains a voter nothing can reach. Two such events on five voters leave quorum at 3 of 7 with five live voters. The migration moves each member to its libp2p peer id, which survives an address change. It runs once per cluster (`orama maint node migrate-raft-id`, `--dry-run`, `--node` to narrow what is migrated).
 
 **Pre-flight.** Every node in the environment must hold a `raft-node-id` marker, read over SSH (`raftid/migrate.go:requireStableIDSupport`). The marker is the probe that the node has booted a binary that understands stable ids. Migrating while one node is on the old binary would make it re-add every migrated node as a duplicate voter every five minutes through orphan recovery. An unreachable node blocks the whole run. `--node` narrows what is migrated, never who is checked or who drives the removal.
 
@@ -389,7 +389,7 @@ Fleet e2e, run by the owner with `make e2e-fleet`:
 Read-only checks on a live cluster:
 
 ```bash
-orama node migrate-raft-id --env <env> --dry-run    # which nodes are on address ids
+orama maint node migrate-raft-id --env <env> --dry-run    # which nodes are on address ids
 orama node remove --env <env> --node <ip> --dry-run  # quorum cost for every raft cluster, and the statements
 orama monitor report --env <env> --ssh               # raft state of every node, read directly
 ```

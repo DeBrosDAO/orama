@@ -33,8 +33,8 @@ var hex64 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // cleanup, and returns the public key it printed.
 func prepareMigration(t *testing.T, c *chain.Chain, n fleet.Node) string {
 	t.Helper()
-	t.Cleanup(func() { c.CleanupExec(t, n, infra.OramaCommand("global", "validator", "migrate", "cancel")) })
-	out := asRoot(t, c.F, n, "global", "validator", "migrate", "prepare")
+	t.Cleanup(func() { c.CleanupExec(t, n, infra.OramaCommand("maint", "global", "validator", "migrate", "cancel")) })
+	out := asRoot(t, c.F, n, "maint", "global", "validator", "migrate", "prepare")
 	infra.ExpectNodeExit(t, n.Name+" migrate prepare", out, infra.ExitOK)
 	key := strings.TrimSpace(out.Stdout)
 	if !hex64.MatchString(key) {
@@ -54,19 +54,19 @@ func TestValidatorMigrate_prepareIsIdempotentAndCancelRemovesTheKey(t *testing.T
 	c := chain.New(t)
 	n := c.Node(t, 2)
 	first := prepareMigration(t, c, n)
-	again := asRoot(t, c.F, n, "global", "validator", "migrate", "prepare")
+	again := asRoot(t, c.F, n, "maint", "global", "validator", "migrate", "prepare")
 	infra.ExpectNodeExit(t, "a second prepare", again, infra.ExitOK)
 	if got := strings.TrimSpace(again.Stdout); got != first {
 		t.Errorf("a second prepare printed %q, want the same key %q", got, first)
 	}
 	infra.RequireStat(t, c.F, n, migrationKeyPath, "root", "root", sealedModeOctal)
-	infra.ExpectNodeExit(t, "prepare as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, n, "global", "validator", "migrate", "prepare"), infra.ExitUsage, infra.MustBeRoot)
-	infra.ExpectNodeExit(t, "cancel as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, n, "global", "validator", "migrate", "cancel"), infra.ExitUsage, infra.MustBeRoot)
-	infra.ExpectNodeExit(t, "cancel", asRoot(t, c.F, n, "global", "validator", "migrate", "cancel"), infra.ExitOK, "migration key removed")
+	infra.ExpectNodeExit(t, "prepare as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, n, "maint", "global", "validator", "migrate", "prepare"), infra.ExitUsage, infra.MustBeRoot)
+	infra.ExpectNodeExit(t, "cancel as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, n, "maint", "global", "validator", "migrate", "cancel"), infra.ExitUsage, infra.MustBeRoot)
+	infra.ExpectNodeExit(t, "cancel", asRoot(t, c.F, n, "maint", "global", "validator", "migrate", "cancel"), infra.ExitOK, "migration key removed")
 	if _, ok := infra.StatFile(t, c.F, n, migrationKeyPath); ok {
 		t.Errorf("%s: %s exists after cancel", n.Name, migrationKeyPath)
 	}
-	infra.ExpectNodeExit(t, "a second cancel", asRoot(t, c.F, n, "global", "validator", "migrate", "cancel"), infra.ExitOK, "no migration was prepared on this host")
+	infra.ExpectNodeExit(t, "a second cancel", asRoot(t, c.F, n, "maint", "global", "validator", "migrate", "cancel"), infra.ExitOK, "no migration was prepared on this host")
 }
 
 // TestValidatorKeyBackup_exportedSealedAndResealedForANewHost: `export-key`
@@ -85,13 +85,13 @@ func TestValidatorKeyBackup_exportedSealedAndResealedForANewHost(t *testing.T) {
 	opPub, opPriv := chain.NewX25519(t)
 	backup := infra.TmpKeyBackup + chain.UniqueID(t, "")
 	t.Cleanup(func() { c.CleanupExec(t, source, "rm -f -- "+fleet.ShellQuote(backup)) })
-	infra.ExpectNodeExit(t, "export-key", asRoot(t, c.F, source, "global", "validator", "export-key", "--recipient", opPub, "--to", backup),
+	infra.ExpectNodeExit(t, "export-key", asRoot(t, c.F, source, "maint", "global", "validator", "export-key", "--recipient", opPub, "--to", backup),
 		infra.ExitOK, "wrote "+backup)
 	infra.RequireStat(t, c.F, source, backup, "root", "root", sealedModeOctal)
-	infra.ExpectNodeExit(t, "export-key onto an existing file", asRoot(t, c.F, source, "global", "validator", "export-key", "--recipient", opPub, "--to", backup), infra.ExitFailure, "create")
-	infra.ExpectNodeExit(t, "export-key to a short recipient", asRoot(t, c.F, source, "global", "validator", "export-key", "--recipient", "abcd", "--to", backup+".x"), infra.ExitUsage, "64 hex characters")
-	infra.ExpectNodeExit(t, "export-key with no --to", asRoot(t, c.F, source, "global", "validator", "export-key", "--recipient", opPub), infra.ExitUsage)
-	infra.ExpectNodeExit(t, "export-key as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, source, "global", "validator", "export-key", "--recipient", opPub, "--to", backup+".y"), infra.ExitUsage, infra.MustBeRoot)
+	infra.ExpectNodeExit(t, "export-key onto an existing file", asRoot(t, c.F, source, "maint", "global", "validator", "export-key", "--recipient", opPub, "--to", backup), infra.ExitFailure, "create")
+	infra.ExpectNodeExit(t, "export-key to a short recipient", asRoot(t, c.F, source, "maint", "global", "validator", "export-key", "--recipient", "abcd", "--to", backup+".x"), infra.ExitUsage, "64 hex characters")
+	infra.ExpectNodeExit(t, "export-key with no --to", asRoot(t, c.F, source, "maint", "global", "validator", "export-key", "--recipient", opPub), infra.ExitUsage)
+	infra.ExpectNodeExit(t, "export-key as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, source, "maint", "global", "validator", "export-key", "--recipient", opPub, "--to", backup+".y"), infra.ExitUsage, infra.MustBeRoot)
 	sealed := c.F.ReadFile(t, source, backup)
 	if len(sealed) == 0 || bytes.HasPrefix(bytes.TrimSpace(sealed), []byte("{")) {
 		t.Fatalf("the key backup is empty or plain JSON (%d bytes)", len(sealed))
@@ -119,7 +119,7 @@ func resealFrom(t *testing.T, sealed []byte, opPriv, recipient string) {
 	write(other, otherPriv, sealedMode)
 	write(backupFile, string(sealed), sealedMode)
 	args := func(id, to string) []string {
-		return []string{"global", "validator", "reseal", "--from", backupFile, "--identity-file", id, "--recipient", recipient, "--to", to}
+		return []string{"maint", "global", "validator", "reseal", "--from", backupFile, "--identity-file", id, "--recipient", recipient, "--to", to}
 	}
 	res := infra.Run(t, harness.CLI(t), args(identity, bundle)...)
 	infra.ExpectExit(t, res, infra.ExitOK, "wrote "+bundle)
@@ -134,7 +134,7 @@ func resealFrom(t *testing.T, sealed []byte, opPriv, recipient string) {
 	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), args(other, bundle+".2")...), infra.ExitFailure, "open the key backup")
 	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), args(loose, bundle+".3")...), infra.ExitUsage, "chmod 600")
 	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), args(filepath.Join(dir, "absent"), bundle+".4")...), infra.ExitUsage, "--identity-file")
-	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), "global", "validator", "reseal", "--from", backupFile), infra.ExitUsage)
+	infra.ExpectExit(t, infra.Run(t, harness.CLI(t), "maint", "global", "validator", "reseal", "--from", backupFile), infra.ExitUsage)
 	for _, refused := range []string{".2", ".3", ".4"} {
 		if _, err := os.Stat(bundle + refused); err == nil {
 			t.Errorf("a refused reseal wrote %s", bundle+refused)

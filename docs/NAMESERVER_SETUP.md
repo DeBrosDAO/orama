@@ -272,7 +272,7 @@ A first cluster, from three VPS through a deployed site, is
 [RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md). `orama node setup`
 provisions a fresh VPS end to end. It reads the VPS
 password from your RootWallet vault (`rw vault add <ip>`) — never from the
-command line — and installs the archive `orama build` printed:
+command line — and installs the archive `orama maint build` printed:
 
 ```bash
 # Genesis nameserver — creates the cluster
@@ -285,17 +285,17 @@ orama node setup --ip <ip> --password --env <env> --archive <archive path> \
 ```
 
 To install by hand on the VPS instead, the genesis node is installed without a
-token and every other node with an invite (`orama invite` from your machine, or
+token and every other node with an invite (`orama maint invite` from your machine, or
 `sudo orama node invite` on a node already in the cluster):
 
 ```bash
 # Genesis — creates the cluster
-sudo orama node install --nameserver \
+sudo orama maint node install --nameserver \
   --domain <base-domain> --base-domain <base-domain> --vps-ip <genesis public IP>
 
 # Every other nameserver — joins it; the invite carries the node to join and
 # the certificate to pin
-sudo orama node install --token <invite> --nameserver \
+sudo orama maint node install --token <invite> --nameserver \
   --domain <base-domain> --base-domain <base-domain> --vps-ip <this node's public IP>
 ```
 

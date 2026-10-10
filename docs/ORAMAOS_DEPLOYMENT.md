@@ -36,7 +36,7 @@ The **orama-agent** is the only root process. It manages:
 
 ## Enrollment Flow
 
-OramaOS nodes join the cluster through an enrollment process (different from the Ubuntu `orama node install` flow):
+OramaOS nodes join the cluster through an enrollment process (different from the Ubuntu `orama maint node install` flow):
 
 ### Step 1: Flash OramaOS to VPS
 
@@ -68,7 +68,7 @@ On your local machine (where you have the `orama` CLI and rootwallet):
 orama node invite --expiry 24h
 
 # Enroll the OramaOS node — --code is the value printed on the node's console
-orama node enroll --node-ip <vps-public-ip> --code <registration-code> --token <invite-token> --gateway <gateway-url>
+orama maint node enroll --node-ip <vps-public-ip> --code <registration-code> --token <invite-token> --gateway <gateway-url>
 ```
 
 The enrollment command:
@@ -120,7 +120,7 @@ Not yet implemented (do not rely on any of this):
 
 - **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers — there is no genesis fallback in the enrollment flow, so a genesis OramaOS node cannot currently complete enrollment.
 - **Key escrow.** The agent never creates or stores a rootwallet-encrypted copy of the LUKS key, and serves no `GET /v1/agent/genesis-key` endpoint.
-- **`orama node unlock --genesis --node-ip <wg-ip> --key-file <path>`.** `--key-file` is required, and it must hold a rootwallet-encrypted LUKS key. The command used to try `GET /v1/agent/genesis-key` first and spend ten seconds timing out on a path the agent has never served; that fetch is gone. Nothing currently produces the key file, so the flow is still not usable end to end — the missing piece is key escrow, not the CLI.
+- **`orama maint node unlock --genesis --node-ip <wg-ip> --key-file <path>`.** `--key-file` is required, and it must hold a rootwallet-encrypted LUKS key. The command used to try `GET /v1/agent/genesis-key` first and spend ten seconds timing out on a path the agent has never served; that fetch is gone. Nothing currently produces the key file, so the flow is still not usable end to end — the missing piece is key escrow, not the CLI.
 - **The 5-peer transition.** No agent code distributes Shamir shares once 5+ peers join, deletes a local escrowed key, or transitions to normal Shamir-based unlock.
 
 ## Normal Reboot (Shamir Unlock)
@@ -214,7 +214,7 @@ Services and their sandbox profiles:
 
 ## Cleaning / Factory Reset
 
-OramaOS nodes cannot be cleaned with the standard `orama node clean` command (no SSH access). Instead:
+OramaOS nodes cannot be wiped with the standard `orama node wipe` command (no SSH access). Instead:
 
 - **Graceful departure:** `POST /v1/node/leave` on the Gateway API (see [Node Management](#node-management); there is no `orama node leave` CLI subcommand) — stops services on the node and removes the WireGuard peer. Shamir share redistribution is not implemented.
 - **Cluster-side removal:** once the node is gone, `orama node remove --env <env> --node <ip> --offline` takes it out of raft, every namespace it served and the node registry from a survivor. `--offline` is required: the command never tries to reach an OramaOS node
@@ -235,7 +235,7 @@ After reboot, the node can't reconstruct its LUKS key.
 
 **Check:** How many peer nodes are online? The node needs at least K peers (threshold) to be reachable over WireGuard.
 
-**Fix:** Ensure enough cluster nodes are online. If reconstruction keeps failing, the agent falls back to genesis unlock mode and waits for a manual `POST /v1/agent/unlock` on port 9998 — see [Genesis Node](#genesis-node). (`orama node unlock --genesis` needs `--key-file` holding a rootwallet-encrypted LUKS key, and nothing produces one yet: key escrow is unimplemented.)
+**Fix:** Ensure enough cluster nodes are online. If reconstruction keeps failing, the agent falls back to genesis unlock mode and waits for a manual `POST /v1/agent/unlock` on port 9998 — see [Genesis Node](#genesis-node). (`orama maint node unlock --genesis` needs `--key-file` holding a rootwallet-encrypted LUKS key, and nothing produces one yet: key escrow is unimplemented.)
 
 ### Update failed, node rolled back
 The node applied an update but reverted to the previous version.

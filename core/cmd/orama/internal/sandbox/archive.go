@@ -30,7 +30,7 @@ var (
 )
 
 // readOperatorWallet is the operator's RootWallet address: the account
-// `orama build` signs with, and the only signer the sandbox trusts.
+// `orama maint build` signs with, and the only signer the sandbox trusts.
 var readOperatorWallet = func() (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentAddressTimeout)
 	defer cancel()

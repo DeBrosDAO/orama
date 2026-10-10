@@ -17,9 +17,9 @@ requires:
   chain: false
 covers:
   cli:
-    - orama push
-    - orama node stage-archive
-    - orama node install
+    - orama maint push
+    - orama maint node stage-archive
+    - orama maint node install
     - orama node status
     - orama node doctor
     - orama node report

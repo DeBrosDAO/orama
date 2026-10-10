@@ -102,7 +102,7 @@ namespaces), the routes that ask for none. The first creates a namespace and mak
 this cluster's namespace-creation setting allows the wallet. A new cluster
 allows its operators only. A cluster that already had data allows any
 signed-in wallet until an operator changes it
-(`orama cluster settings set namespace-creation`). See SECURITY.md.
+(`orama maint cluster settings set namespace-creation`). See SECURITY.md.
 
 Signing in used to claim: the first wallet to reach a namespace with no owner
 became its owner. `default` is created by migration 001 with no owner, so on
@@ -1081,7 +1081,7 @@ unreadable list refuses too: not knowing whether someone is an operator is not
 permission to treat them as one. The list is seeded from `dns_nodes` when the
 operators migration runs. After that, only the first node to register — the
 genesis node, while the list is still empty — adds its wallet. A node that
-joins does not. Further wallets are `orama operator add`, and `orama operator
+joins does not. Further wallets are `orama maint operator add`, and `orama maint operator
 remove` refuses to delete the last one.
 
 A namespace belongs to its owner, and only the owner deletes it. When the
@@ -1097,7 +1097,7 @@ the reason. The lobby and the platform's reserved names cannot be removed.
 
 Every gateway has its own Ed25519 signing key, generated at first boot and kept
 `0600` in its own state directory (`data/namespaces/<ns>/gateway`, `0700`). The
-index gateway's is not there: `orama node install`/`upgrade` creates it, root
+index gateway's is not there: `orama maint node install`/`upgrade` creates it, root
 `0400`, in `/var/lib/orama-gateway-keys/index` and systemd hands it to that unit
 as a credential (see docs/SECURITY.md), so a gateway restart keeps it. Each gateway publishes the public
 half **to the cluster registry** — not to the tenant database it may also be
@@ -1131,7 +1131,7 @@ lifetime after each gateway restarts, and then that key is refused: a key every
 node can derive must not outlive the upgrade.
 
 ```bash
-orama operator rotate-signing-key
+orama maint operator rotate-signing-key
 ```
 
 Publishes a new key, starts signing with it, and leaves the outgoing one
@@ -1141,7 +1141,7 @@ admin grant **and** a wallet on the operator list.
 
 Stored secrets (function secrets, push tokens, TURN, deployment environments,
 agent tokens) are sealed under an encryption root that starts as a copy of the
-cluster secret. `orama operator rotate-secrets` rewrites the envelope;
+cluster secret. `orama maint operator rotate-secrets` rewrites the envelope;
 `--rotate` generates a new root so a captured previous IKM cannot open new
 rows. The cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched.
 

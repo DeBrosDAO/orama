@@ -246,7 +246,7 @@ func (a *Agent) waitForGenesisUnlock() ([]byte, error) {
 	}()
 
 	log.Println("Genesis unlock server listening on :9998")
-	log.Println("Run 'orama node unlock --genesis --node-ip <wg-ip>' to unlock this node")
+	log.Println("Run 'orama maint node unlock --genesis --node-ip <wg-ip>' to unlock this node")
 
 	select {
 	case key := <-keyCh:

@@ -39,9 +39,9 @@ anywhere, so the leader's raft address cannot be read from the cluster.
 This is a DESTRUCTIVE operation. Use --force to skip confirmation.
 
 Examples:
-  orama node recover-raft --env testnet
-  orama node recover-raft --env testnet --leader 1.2.3.4
-  orama node recover-raft --env devnet --leader-raft-addr 10.0.0.1:10101 --force`,
+  orama maint node recover-raft --env testnet
+  orama maint node recover-raft --env testnet --leader 1.2.3.4
+  orama maint node recover-raft --env devnet --leader-raft-addr 10.0.0.1:10101 --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return recover.Run(&recoverFlags)
 	},

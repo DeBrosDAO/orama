@@ -14,7 +14,7 @@ import (
 
 // nodeRole is autoupdate.RoleValidator on a machine that runs the chain and
 // RoleCluster on any other. A validator is never updated automatically: its
-// chain binary changes by hand (`orama global stage-oramad`), in step with the
+// chain binary changes by hand (`orama maint global stage-oramad`), in step with the
 // other validators; on mode auto its agent says so and records the release as
 // skipped (autoupdate.ActionSkip).
 func nodeRole() (string, error) {

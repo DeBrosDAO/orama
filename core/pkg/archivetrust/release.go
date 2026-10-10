@@ -19,7 +19,7 @@ import (
 //
 //   - A manifest signed by a trusted wallet may carry a release root, which
 //     the node adopts the way it takes a signer rotation.
-//   - A tree with no manifest.sig verifies if `orama node stage-archive
+//   - A tree with no manifest.sig verifies if `orama maint node stage-archive
 //     --release-only` staged it, after the archive passed the release root's
 //     TUF checks. The staging recorded that in releaseverify.StagedPath,
 //     keyed by the manifest and the root, which no archive can write.

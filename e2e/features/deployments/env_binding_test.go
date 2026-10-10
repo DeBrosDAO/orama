@@ -32,7 +32,7 @@ func (tn *tenant) storedEnvironment(t testing.TB, name string) string {
 }
 
 // TestDeployEnv_boundToItsRowAfterRotateSecrets: once the operator has run
-// `orama operator rotate-secrets` (docs/CLI_REFERENCE.md), a deployment's
+// `orama maint operator rotate-secrets` (docs/CLI_REFERENCE.md), a deployment's
 // environment is stored sealed to its namespace and deployment id, still
 // reaches the running app, and a later change to it is stored bound too
 // (docs/SECURITY.md "Deployment environment").
@@ -42,7 +42,7 @@ func TestDeployEnv_boundToItsRowAfterRotateSecrets(t *testing.T) {
 	u := tn.deploy(t, "go", tenancy.WriteProbeApp(t, "bound"), "bound", "--env", "SECRET="+secret)
 	serving(t, tn.app(u), "/health", "")
 
-	harness.CLI(t).MustOK(t, "operator", "rotate-secrets")
+	harness.CLI(t).MustOK(t, "maint", "operator", "rotate-secrets")
 
 	if stored := tn.storedEnvironment(t, "bound"); !strings.HasPrefix(stored, boundEnvelopePrefix) {
 		t.Fatalf("after rotate-secrets the environment is stored as %.12s..., want the %s envelope", stored, boundEnvelopePrefix)

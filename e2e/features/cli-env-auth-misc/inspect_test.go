@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// inspectBudget bounds one `orama inspect` of the fleet (an SSH round to
+// inspectBudget bounds one `orama maint inspect` of the fleet (an SSH round to
 // every node, --timeout 30s by default, plus the checks).
 const inspectBudget = 5 * time.Minute
 
@@ -25,7 +25,7 @@ const inspectSubsystems = "wg,system"
 // under ("wg" is an alias of "wireguard", core/pkg/inspector/checker.go).
 var inspectedSubsystems = map[string]bool{"wireguard": true, "system": true}
 
-// inspectReport is `orama inspect --format json` (core/pkg/inspector/report.go PrintJSON).
+// inspectReport is `orama maint inspect --format json` (core/pkg/inspector/report.go PrintJSON).
 type inspectReport struct {
 	Summary struct {
 		Passed  int `json:"passed"`
@@ -49,11 +49,11 @@ type inspectReport struct {
 func expectInspected(t testing.TB, res oramacli.Result, want ...string) {
 	t.Helper()
 	if res.Exit != exitOK && res.Exit != exitFailure {
-		t.Fatalf("orama inspect exit %d, want 0 or 1 (failed checks)\n%s", res.Exit, output(res))
+		t.Fatalf("orama maint inspect exit %d, want 0 or 1 (failed checks)\n%s", res.Exit, output(res))
 	}
 	for _, w := range want {
 		if !strings.Contains(output(res), w) {
-			t.Errorf("orama inspect (exit %d) did not print %q:\n%s", res.Exit, w, output(res))
+			t.Errorf("orama maint inspect (exit %d) did not print %q:\n%s", res.Exit, w, output(res))
 		}
 	}
 }
@@ -74,7 +74,7 @@ func jsonTail(t testing.TB, out string) inspectReport {
 
 // TestInspect_checksEveryNodeOverSSH: inspect SSHes into every node of the
 // environment and reports every check it ran; its exit code says whether any
-// failed (docs/CLI_REFERENCE.md#orama-inspect; a failed check is a failed
+// failed (docs/CLI_REFERENCE.md#orama-maint-inspect; a failed check is a failed
 // command, inspect_command.go).
 func TestInspect_checksEveryNodeOverSSH(t *testing.T) {
 	t.Parallel()
@@ -121,7 +121,7 @@ func TestInspect_jsonFormatIsPureJSON(t *testing.T) {
 }
 
 // TestInspect_writesResultsDirectory: --output saves the results as markdown
-// in the directory (docs/CLI_REFERENCE.md#orama-inspect).
+// in the directory (docs/CLI_REFERENCE.md#orama-maint-inspect).
 func TestInspect_writesResultsDirectory(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -175,7 +175,7 @@ func TestInspect_badArgumentsAreUsage(t *testing.T) {
 // configured has no nodes to SSH into.
 func TestInspect_unknownEnvironmentFindsNoNodes(t *testing.T) {
 	t.Parallel()
-	res := infra.RunFor(t, isolated(t), inspectBudget, "inspect", "--env", e2eEnvPrefix+"absent")
+	res := infra.RunFor(t, isolated(t), inspectBudget, "maint", "inspect", "--env", e2eEnvPrefix+"absent")
 	if res.Exit == exitOK {
 		t.Fatalf("inspect of an unconfigured environment succeeded:\n%s", output(res))
 	}

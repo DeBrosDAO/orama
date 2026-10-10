@@ -172,3 +172,39 @@ func TestSignOramaTx_SignatureOverAnotherSignDoc(t *testing.T) {
 		t.Fatalf("err = %v, want a malformed-signature error", err)
 	}
 }
+
+func TestOramaAccount_Success(t *testing.T) {
+	pubKey := mustHex(t, vectorPubKeyHex)
+	client := agentStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/orama/account" {
+			t.Errorf("request = %s %s, want GET /v1/orama/account", r.Method, r.URL.Path)
+		}
+		rawJSON(200, fmt.Sprintf(`{"ok":true,"data":{"address":%q,"publicKey":%q,"chain":"orama"}}`, vectorAddress, b64(pubKey)))(w, r)
+	})
+	got, err := client.OramaAccount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Address != vectorAddress || hex.EncodeToString(got.PubKey) != vectorPubKeyHex {
+		t.Errorf("account = %+v", got)
+	}
+}
+
+func TestOramaAccount_RefusesMalformedAndLockedAnswers(t *testing.T) {
+	for name, answer := range map[string]struct {
+		status int
+		body   string
+	}{
+		"short key":    {200, fmt.Sprintf(`{"ok":true,"data":{"address":%q,"publicKey":%q}}`, vectorAddress, b64([]byte{1, 2}))},
+		"not base64":   {200, fmt.Sprintf(`{"ok":true,"data":{"address":%q,"publicKey":"!!"}}`, vectorAddress)},
+		"other chain":  {200, fmt.Sprintf(`{"ok":true,"data":{"address":"cosmos1x","publicKey":%q}}`, b64(mustHex(t, vectorPubKeyHex)))},
+		"agent locked": {401, `{"ok":false,"error":"locked","code":"AGENT_LOCKED"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := agentStub(t, rawJSON(answer.status, answer.body))
+			if _, err := client.OramaAccount(context.Background()); err == nil {
+				t.Fatal("OramaAccount accepted it")
+			}
+		})
+	}
+}

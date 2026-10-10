@@ -62,7 +62,7 @@ func TestNodeUnlock_refusals(t *testing.T) {
 		{[]string{"--node-ip", "10.0.0.9", "--key-file", empty, "--genesis"}, exitUsage, "is empty"},
 	}
 	for _, c := range cases {
-		res := run(t, cli, append([]string{"node", "unlock"}, c.args...)...)
+		res := run(t, cli, append([]string{"maint", "node", "unlock"}, c.args...)...)
 		infra.ExpectExit(t, res, c.exit, c.want)
 	}
 }
@@ -83,14 +83,14 @@ func TestNodeEnroll_refusals(t *testing.T) {
 				args = append(args, k, v)
 			}
 		}
-		res := run(t, cli, append([]string{"node", "enroll"}, args...)...)
+		res := run(t, cli, append([]string{"maint", "node", "enroll"}, args...)...)
 		infra.ExpectExit(t, res, exitUsage, strings.TrimPrefix(missing, "--"))
 	}
 	var args []string
 	for k, v := range full {
 		args = append(args, k, v)
 	}
-	res := run(t, cli, append([]string{"node", "enroll"}, args...)...)
+	res := run(t, cli, append([]string{"maint", "node", "enroll"}, args...)...)
 	infra.ExpectRefused(t, res, "enrollment failed")
 }
 
@@ -99,7 +99,7 @@ func TestNodeEnroll_refusals(t *testing.T) {
 func TestNodeEnroll_plainHTTPGatewayRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	res := run(t, harness.CLI(t).NoWallet(t), "node", "enroll", "--node-ip", f.State.Nodes[0].PublicIP,
+	res := run(t, harness.CLI(t).NoWallet(t), "maint", "node", "enroll", "--node-ip", f.State.Nodes[0].PublicIP,
 		"--code", garbageCode, "--token", garbageToken, "--gateway", "http://"+f.State.BaseDomain)
 	infra.ExpectExit(t, res, exitUsage, "https")
 }
@@ -143,15 +143,15 @@ func TestNodeEnrollRoute_refusesBadRequests(t *testing.T) {
 
 // TestNodeMigrateConf_refusedWithoutCredential: migrate-conf registers nodes
 // with the wallet through the gateway and needs `orama auth login` first
-// (docs/CLI_REFERENCE.md#orama-node-migrate-conf); an environment that is not
+// (docs/CLI_REFERENCE.md#orama-maint-node-migrate-conf); an environment that is not
 // configured is refused. Neither registers anything.
 func TestNodeMigrateConf_refusedWithoutCredential(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := harness.CLI(t).Isolated(t)
-	res := run(t, cli, "node", "migrate-conf", "--env", f.State.Env)
+	res := run(t, cli, "maint", "node", "migrate-conf", "--env", f.State.Env)
 	if res.Exit != exitAuth || !strings.Contains(output(res), "orama auth login") {
 		t.Errorf("migrate-conf with no credential: exit %d, want %d\n%s", res.Exit, exitAuth, output(res))
 	}
-	infra.ExpectRefused(t, run(t, cli, "node", "migrate-conf", "--env", "e2e-cli-absent"))
+	infra.ExpectRefused(t, run(t, cli, "maint", "node", "migrate-conf", "--env", "e2e-cli-absent"))
 }

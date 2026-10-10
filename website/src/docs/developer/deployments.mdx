@@ -381,7 +381,7 @@ Your app's own directory is read-only: its files are its build output, and a pro
 
 ### How values are handled
 
-Values are held encrypted in the cluster database (AES-256-GCM, key derived from the cluster secret) and sealed to the deployment's namespace and id, so a copy of the stored value in another deployment's row does not open. On a cluster upgraded from an earlier release the sealing starts when an operator runs `orama operator rotate-secrets`; a new cluster has it from its first row. On the node they are written to a file only the system can read, which systemd hands to your process; they are not written into the unit and are removed when the deployment stops. A value may contain any valid UTF-8 except NUL (a PEM key or a JSON blob goes in as it is), one value is at most 64 KiB, and the whole rendered environment at most 224 KiB (larger is refused `400`).
+Values are held encrypted in the cluster database (AES-256-GCM, key derived from the cluster secret) and sealed to the deployment's namespace and id, so a copy of the stored value in another deployment's row does not open. On a cluster upgraded from an earlier release the sealing starts when an operator runs `orama maint operator rotate-secrets`; a new cluster has it from its first row. On the node they are written to a file only the system can read, which systemd hands to your process; they are not written into the unit and are removed when the deployment stops. A value may contain any valid UTF-8 except NUL (a PEM key or a JSON blob goes in as it is), one value is at most 64 KiB, and the whole rendered environment at most 224 KiB (larger is refused `400`).
 
 ### What your app runs as
 

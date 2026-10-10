@@ -33,7 +33,15 @@ const (
 
 var torCmd = &cobra.Command{
 	Use:   "tor",
-	Short: "The Orama Tor network: authority key ceremony, node identity, vote archive",
+	Short: "This node's Tor identities and the consensus it holds",
+	Long: `Show the Tor roles installed on this node. The authority key ceremony, the vote
+archive, the relay monitor and the onion list are maintainer commands: see
+'orama maint global tor'.`,
+}
+
+var maintTorCmd = &cobra.Command{
+	Use:   "tor",
+	Short: "The Orama Tor network: authority key ceremony, vote archive, relay monitor, onion list",
 	Long: `The Orama Tor network is a separate anonymity network built from unmodified
 upstream Tor code, run by Orama's own directory authorities (docs/TOR_NETWORK.md).
 The roles are installed by 'orama global install --services dirauth|relay|relay,exit|onion'.`,
@@ -319,6 +327,11 @@ func init() {
 	a.StringVar(&archiveFlags.archiveDir, "archive-dir", "", "Where the archive is written [required]")
 	a.StringVar(&archiveFlags.bandwidthFile, "bandwidth-file", "", "The bandwidth file the authority votes with")
 	a.StringVar(&archiveFlags.exportVotesDir, "export-votes-dir", "", "Also copy the authority's own vote to <dir>/<valid-after>.vote for the bandwidth reporter (the directory must exist)")
-	torCmd.AddCommand(ceremonyCmd, cmdmeta.MarkNodeLocal(archiveCmd), infoCmd)
+	maintTorCmd.AddCommand(ceremonyCmd, cmdmeta.MarkNodeLocal(archiveCmd))
+	// orama-global-tor-archive.timer runs `orama maint global tor archive`. The
+	// command moved to `orama maint global tor archive`; the installed unit keeps
+	// its path until an upgrade rewrites it.
+	torCmd.AddCommand(infoCmd, cmdmeta.HiddenAlias(archiveCmd))
+	MaintCmd.AddCommand(maintTorCmd)
 	Cmd.AddCommand(torCmd)
 }

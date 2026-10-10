@@ -15,26 +15,27 @@ import (
 // these tests drive the real commands rather than a parser that no longer runs.
 
 // runParse parses args for a subcommand without executing it, and returns any
-// parse error. Execution must go through the parent: cobra resolves a
-// subcommand's args from its root, so calling Execute on the child parses them
-// against "node" instead.
+// parse error. Execution must go through the parent (node, or maint node for
+// the commands that moved there): cobra resolves a subcommand's args from its
+// root, so calling Execute on the child parses them against the parent instead.
 func runParse(t *testing.T, cmd *cobra.Command, args ...string) error {
 	t.Helper()
 	original := cmd.RunE
 	originalRun := cmd.Run
 	cmd.RunE = func(*cobra.Command, []string) error { return nil }
 	cmd.Run = nil
+	parent := cmd.Parent()
 	t.Cleanup(func() {
 		cmd.RunE = original
 		cmd.Run = originalRun
-		Cmd.SetArgs(nil)
+		parent.SetArgs(nil)
 	})
 
 	var out bytes.Buffer
-	Cmd.SetOut(&out)
-	Cmd.SetErr(&out)
-	Cmd.SetArgs(append([]string{cmd.Name()}, args...))
-	return Cmd.Execute()
+	parent.SetOut(&out)
+	parent.SetErr(&out)
+	parent.SetArgs(append([]string{cmd.Name()}, args...))
+	return parent.Execute()
 }
 
 // The orchestrator sets this flag on its own argv when it re-execs after

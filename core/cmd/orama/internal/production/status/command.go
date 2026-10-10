@@ -42,7 +42,7 @@ func Handle(out *printer.Printer) error {
 
 	if len(rows) == 0 {
 		out.Printf("No Orama services are installed on this machine.\n")
-		out.Printf("Install one with: sudo orama node install --vps-ip <ip>\n")
+		out.Printf("Install one with: sudo orama maint node install --vps-ip <ip>\n")
 		return nil
 	}
 

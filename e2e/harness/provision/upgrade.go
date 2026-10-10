@@ -38,7 +38,7 @@ func upgradeToHead(ctx context.Context, st *fleet.State, log Logger, cmd command
 	if err := u.prepareTmp(); err != nil {
 		return err
 	}
-	if _, err := u.orama(ctx, "push", "node", "push", "--env", st.Env, "--archive", st.ArchivePath); err != nil {
+	if _, err := u.orama(ctx, "push", "maint", "push", "--env", st.Env, "--archive", st.ArchivePath); err != nil {
 		return fmt.Errorf("failed to push the HEAD archive %s: %w", st.ArchivePath, err)
 	}
 	h, err := u.waitCluster(ctx)

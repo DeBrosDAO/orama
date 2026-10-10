@@ -17,22 +17,22 @@ Collect (parallel SSH) → Check (deterministic Go) → Report (table/JSON) → 
 
 ```bash
 # Inspect all subsystems on devnet
-orama inspect --env devnet
+orama maint inspect --env devnet
 
 # Inspect only RQLite
-orama inspect --env devnet --subsystem rqlite
+orama maint inspect --env devnet --subsystem rqlite
 
 # JSON output
-orama inspect --env devnet --format json
+orama maint inspect --env devnet --format json
 
 # With AI analysis
-orama inspect --env devnet --ai
+orama maint inspect --env devnet --ai
 ```
 
 ## Usage
 
 ```
-orama inspect [flags]
+orama maint inspect [flags]
 ```
 
 | Flag | Default | Description |
@@ -153,13 +153,13 @@ When `--ai` is enabled, failures and warnings are sent to an LLM via OpenRouter 
 
 ```bash
 # Use default model (kimi-k2.5)
-orama inspect --env devnet --ai
+orama maint inspect --env devnet --ai
 
 # Use a different model
-orama inspect --env devnet --ai --model openai/gpt-4o
+orama maint inspect --env devnet --ai --model openai/gpt-4o
 
 # Pass API key directly
-orama inspect --env devnet --ai --api-key sk-or-...
+orama maint inspect --env devnet --ai --api-key sk-or-...
 ```
 
 The API key can be set via:
@@ -216,23 +216,23 @@ Blank lines and lines starting with `#` are ignored.
 
 ```bash
 # Full cluster inspection
-orama inspect --env devnet
+orama maint inspect --env devnet
 
 # Check only networking
-orama inspect --env devnet --subsystem wireguard,network
+orama maint inspect --env devnet --subsystem wireguard,network
 
 # Quick RQLite health check
-orama inspect --env devnet --subsystem rqlite
+orama maint inspect --env devnet --subsystem rqlite
 
 # Verbose mode (shows collection progress)
-orama inspect --env devnet --verbose
+orama maint inspect --env devnet --verbose
 
 # JSON for scripting / piping
-orama inspect --env devnet --format json | jq '.checks[] | select(.status == "fail")'
+orama maint inspect --env devnet --format json | jq '.checks[] | select(.status == "fail")'
 
 # AI-assisted debugging
-orama inspect --env devnet --ai --model anthropic/claude-sonnet-4
+orama maint inspect --env devnet --ai --model anthropic/claude-sonnet-4
 
 # Custom config file
-orama inspect --config /path/to/nodes.conf --env testnet
+orama maint inspect --config /path/to/nodes.conf --env testnet
 ```

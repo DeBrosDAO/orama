@@ -64,7 +64,7 @@ func LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("sandbox not configured, run: orama sandbox setup")
+			return nil, fmt.Errorf("sandbox not configured, run: orama maint sandbox setup")
 		}
 		return nil, fmt.Errorf("read config: %w", err)
 	}
@@ -114,7 +114,7 @@ func (c *Config) validate() error {
 		return fmt.Errorf("2 floating IPs required, got %d", len(c.FloatingIPs))
 	}
 	if c.SSHKey.VaultTarget == "" {
-		return fmt.Errorf("ssh_key.vault_target is required (run: orama sandbox setup)")
+		return fmt.Errorf("ssh_key.vault_target is required (run: orama maint sandbox setup)")
 	}
 	return nil
 }

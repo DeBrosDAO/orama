@@ -8,7 +8,7 @@ Short definitions of the words these docs use. Each links to the page that expla
 
 **Cluster.** The set of nodes that share one registry database and one DNS zone. Sometimes called "the network" or an environment.
 
-**Environment.** A named cluster that your CLI knows about, for example `mycluster` pointing at `https://cluster.example.com`. Stored in `~/.orama/environments.json`. A fresh CLI has none. See [`orama env`](/docs/developer/cli/env).
+**Network.** A name your CLI knows: a cluster reached through a gateway, for example `mycluster` pointing at `https://cluster.example.com` (stored in `~/.orama/environments.json`; a fresh CLI has none), or a network of the registry such as stagenet, whose manifest names its chain and the release root its software is verified against (built into the CLI, or added by its manifest URL). Called an environment in flags such as `--env`, and before `orama network` replaced `orama env`. See [`orama network`](/docs/developer/cli/network).
 
 **Base domain.** The domain the cluster owns, such as `cluster.example.com`. Deployments get names under it. See [Choosing the base domain](/docs/operator/nameserver#choosing-the-base-domain).
 
@@ -28,7 +28,7 @@ Short definitions of the words these docs use. Each links to the page that expla
 
 **Supervisor.** `orama-node`, the process that starts every other service as a component with declared dependencies and keeps them running. See [Node process model](/docs/architecture/node-process-model).
 
-**Archive.** The signed tarball `orama build` makes and `orama node setup` installs. Nodes install only archives signed by an address in `/etc/orama/archive-signers`, or a release that a TUF release root they adopted vouches for. See [Build and sign](/docs/operator/build-and-sign) and [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
+**Archive.** The signed tarball `orama maint build` makes and `orama node setup` installs. Nodes install only archives signed by an address in `/etc/orama/archive-signers`, or a release that a TUF release root they adopted vouches for. See [Build and sign](/docs/operator/build-and-sign) and [Release and rollout](/docs/contributor/deployment#releases-tuf-and-auto-update).
 
 **OramaOS.** A locked-down operating system for nodes: no SSH, no shell, read-only root, encrypted data partition. See [OramaOS](/docs/operator/orama-os).
 

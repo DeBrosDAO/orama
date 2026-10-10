@@ -97,7 +97,7 @@ func BreakNode(t *testing.T, c *Cluster, host string) {
 // ProvisionNode creates a new VM and joins it, returning its host.
 //
 // The join itself goes through the CLI — `orama node invite` then
-// `orama node install --join` — because that is the path being tested. The hook
+// `orama maint node install --join` — because that is the path being tested. The hook
 // only supplies a machine.
 func ProvisionNode(t *testing.T, c *Cluster) string {
 	t.Helper()
@@ -115,7 +115,7 @@ func ProvisionNode(t *testing.T, c *Cluster) string {
 	if token == "" {
 		t.Fatal("orama node invite produced no token")
 	}
-	c.MustCLI("node", "install", "--env", c.Env, "--vps-ip", host, "--token", token)
+	c.MustCLI("maint", "node", "install", "--env", c.Env, "--vps-ip", host, "--token", token)
 	return host
 }
 

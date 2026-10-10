@@ -19,6 +19,9 @@ type Environment struct {
 	GatewayURL  string `json:"gateway_url"`
 	Description string `json:"description"`
 	IsActive    bool   `json:"is_active"`
+	// Network is the registry network (see pkg/netregistry) this gateway's
+	// cluster runs on. Empty when the cluster belongs to none.
+	Network string `json:"network,omitempty"`
 	// CAFile is a PEM bundle trusted, in addition to the system roots, for
 	// the gateway's domain and every name under it: a cluster on Let's
 	// Encrypt staging or on a private CA. Only for this environment's domain.
@@ -49,7 +52,7 @@ type EnvironmentConfig struct {
 
 // noEnvironmentHelp is what a command says when this computer has no cluster
 // configured. A fresh install does not point at anyone else's network.
-const noEnvironmentHelp = "no environment is configured; add the cluster you use with `orama env add <name> https://<gateway>`"
+const noEnvironmentHelp = "no network is configured; add the cluster you use with `orama network add <name> https://<gateway>`"
 
 const (
 	// environmentLockSuffix names the lock file beside environments.json.
@@ -214,7 +217,7 @@ func UpsertEnvNode(envName string, node EnvNode) error {
 			cfg.Environments[i].Nodes = nodes
 			return nil
 		}
-		return fmt.Errorf("environment %q is not configured; add it with `orama env add` before recording a node", envName)
+		return fmt.Errorf("network %q is not configured; add it with `orama network add` before recording a node", envName)
 	})
 }
 
@@ -241,7 +244,7 @@ func GetActiveEnvironment() (*Environment, error) {
 	for _, env := range envConfig.Environments {
 		names = append(names, env.Name)
 	}
-	return nil, fmt.Errorf("active environment %q is not configured (configured: %s); choose one with `orama env use <name>` or pass --env",
+	return nil, fmt.Errorf("active network %q is not configured (configured: %s); choose one with `orama network use <name>` or pass --env",
 		envConfig.ActiveEnvironment, strings.Join(names, ", "))
 }
 
@@ -254,7 +257,7 @@ func SwitchEnvironment(name string) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("environment '%s' not found", name)
+		return fmt.Errorf("network '%s' not found", name)
 	})
 }
 
@@ -271,13 +274,19 @@ func GetEnvironmentByName(name string) (*Environment, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("environment '%s' not found", name)
+	return nil, fmt.Errorf("network '%s' not found", name)
 }
 
 // AddEnvironment adds a new environment or updates an existing one.
-// If an environment with the same name already exists, its gateway URL and
-// description are updated in place.
+// If an environment with the same name already exists, its gateway URL,
+// description and, when one is given, registry network are updated in place.
 func AddEnvironment(name, gatewayURL, description string) error {
+	return AddEnvironmentOn(name, gatewayURL, description, "")
+}
+
+// AddEnvironmentOn is AddEnvironment for a cluster that runs on a registry
+// network. An empty network leaves an existing environment's network as it is.
+func AddEnvironmentOn(name, gatewayURL, description, network string) error {
 	return updateEnvironmentConfig(func(envConfig *EnvironmentConfig) error {
 		for i, env := range envConfig.Environments {
 			if env.Name == name {
@@ -289,6 +298,9 @@ func AddEnvironment(name, gatewayURL, description string) error {
 				}
 				envConfig.Environments[i].GatewayURL = gatewayURL
 				envConfig.Environments[i].Description = description
+				if network != "" {
+					envConfig.Environments[i].Network = network
+				}
 				return nil
 			}
 		}
@@ -297,13 +309,14 @@ func AddEnvironment(name, gatewayURL, description string) error {
 			Name:        name,
 			GatewayURL:  gatewayURL,
 			Description: description,
+			Network:     network,
 		})
 		return nil
 	})
 }
 
 // RemoveEnvironment removes an environment by name. If it was the active one,
-// nothing else is selected: the next command asks for `orama env use`.
+// nothing else is selected: the next command asks for `orama network use`.
 func RemoveEnvironment(name string) error {
 	return updateEnvironmentConfig(func(envConfig *EnvironmentConfig) error {
 		newEnvs := make([]Environment, 0, len(envConfig.Environments))
@@ -369,7 +382,7 @@ func SetEnvironmentCA(name, caFile string) error {
 			envConfig.Environments[i].CAFile = abs
 			return nil
 		}
-		return fmt.Errorf("environment %q is not configured", name)
+		return fmt.Errorf("network %q is not configured", name)
 	})
 }
 
@@ -391,7 +404,7 @@ func TrustEnvironmentCAs() error {
 			return fmt.Errorf("environment %q: %w", env.Name, err)
 		}
 		if err := tlsutil.TrustCAForDomain(domain, env.CAFile); err != nil {
-			return fmt.Errorf("environment %q: %w (fix it with `orama env add %s %s --ca-file <file>`)",
+			return fmt.Errorf("environment %q: %w (fix it with `orama network add %s %s --ca-file <file>`)",
 				env.Name, err, env.Name, env.GatewayURL)
 		}
 	}

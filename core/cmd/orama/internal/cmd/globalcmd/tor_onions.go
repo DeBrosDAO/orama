@@ -21,7 +21,7 @@ var onionsAddCmd = &cobra.Command{
 	Long: `A validator's onion address exists only once its onion role has started, which
 is after the ceremony wrote tor-network.json. Read it on the validator with
 'orama global tor info' (as root), then add it to the network file here and
-republish the file to clients: orama vpn, --onion-network and the relay reporter
+republish the file to clients: orama maint vpn, --onion-network and the relay reporter
 all read validator_onions from it.
 
 Each address is checked as a v3 onion address with an optional port (default 80,
@@ -46,5 +46,5 @@ validator_onions, so adding an onion never needs a node restart.`,
 func init() {
 	onionsAddCmd.Flags().StringVar(&onionsFlags.networkFile, "network-file", "", "The tor-network.json to update [required]")
 	onionsCmd.AddCommand(onionsAddCmd)
-	torCmd.AddCommand(onionsCmd)
+	maintTorCmd.AddCommand(onionsCmd)
 }

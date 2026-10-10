@@ -1,6 +1,6 @@
 // Package updateagent wires the auto-update agent (pkg/autoupdate) to the node
 // it runs on: its index RQLite, its installed release, `orama node
-// stage-archive` and `orama node upgrade`. `orama node autoupdate run`, fired
+// stage-archive` and `orama node upgrade`. `orama maint node autoupdate run`, fired
 // by orama-autoupdate.timer, is its only caller.
 package updateagent
 

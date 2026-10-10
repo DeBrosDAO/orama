@@ -120,7 +120,7 @@ const defaultSSHUser = "root"
 // vault target that says which wallet key opens it. Sandbox nodes are created
 // from one shared key; every other node has a key of its own, keyed by host and
 // user. Callers that reach a machine the inventory does not know about yet --
-// `orama push --host` seeding a fresh node -- go through here too, so a target
+// `orama maint push --host` seeding a fresh node -- go through here too, so a target
 // is addressed the same way whether or not it has been registered.
 func NewNode(host, user, env string) inspector.Node {
 	if user == "" {

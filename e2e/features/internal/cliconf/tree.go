@@ -23,10 +23,16 @@ type LiveCommand struct {
 // WalkLive follows "Available Commands:" from `orama --help` down, and
 // returns every command below the root with the one-line description its
 // parent lists for it.
-func WalkLive(t testing.TB, cli *oramacli.Runner) []LiveCommand {
+//
+// A top-level group hidden from `orama --help` (orama maint, and the operator
+// groups that setup, status and upgrade replace) is walked too when it is
+// named in hidden: nothing lists it, so it is added with its documented
+// description, and its own subcommands are read from its help as usual.
+func WalkLive(t testing.TB, cli *oramacli.Runner, hidden ...Command) []LiveCommand {
 	t.Helper()
 	var out []LiveCommand
 	queue := []string{rootPath}
+	listed := map[string]bool{}
 	for len(queue) > 0 {
 		path := queue[0]
 		queue = queue[1:]
@@ -36,8 +42,17 @@ func WalkLive(t testing.TB, cli *oramacli.Runner) []LiveCommand {
 		h := ParseHelp(res.Stdout)
 		for _, sub := range h.Subcommands {
 			child := path + " " + sub
+			listed[child] = true
 			out = append(out, LiveCommand{Path: child, Short: h.Shorts[sub]})
 			queue = append(queue, child)
+		}
+		if path == rootPath {
+			for _, c := range hidden {
+				if !listed[c.Path] {
+					out = append(out, LiveCommand{Path: c.Path, Short: c.Short})
+					queue = append(queue, c.Path)
+				}
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })

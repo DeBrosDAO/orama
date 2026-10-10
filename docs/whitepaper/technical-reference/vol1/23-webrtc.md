@@ -535,7 +535,7 @@ At 10x the load: join cost is one registry read (cached 10 s) and one health pro
 ```bash
 orama namespace webrtc-status --namespace NS
 orama monitor report --env ENV
-orama inspect --env ENV
+orama maint inspect --env ENV
 ```
 
 `webrtc-status` returns the config row without the secret; the monitor report carries per-namespace `sfu_up` (the unit is active) and `turn_up` (the host's shared server is running and lists the namespace as a tenant); the inspector checks SFU coverage on 3 nodes and TURN on 2 (`core/pkg/inspector/checks/webrtc.go`).

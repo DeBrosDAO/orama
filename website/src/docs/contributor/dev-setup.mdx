@@ -25,7 +25,7 @@ How to build and test Orama from a checkout. Everything lives in one repository.
 | Go | 1.27.2 or newer | Everything in Go |
 | Node.js | 22.12 or newer (the repo pins 24 in `.nvmrc`) | The SDK and the website |
 | pnpm | Current | TypeScript packages |
-| Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama build` (it builds the vault), the vault |
+| Zig | 0.15.x (the minor release `vault/build.zig.zon` names; `ORAMA_ZIG` overrides) | `orama maint build` (it builds the vault), the vault |
 | git, make | Current | Version stamps, the Makefiles |
 
 ```bash
@@ -62,15 +62,15 @@ make lint
 | The vault | `cd vault && zig build && zig build test` |
 | This website | `cd website && pnpm install && pnpm dev` (build: `pnpm build`; docs check: `node scripts/check-docs.mjs`) |
 
-`make build` writes an `orama` into `core/bin/`. A signed archive for a cluster is `orama build` from `core/` ([Build and sign](/docs/operator/build-and-sign)); it builds Caddy from the repository's `caddy/` module, so no xcaddy is needed. Set `SOURCE_DATE_EPOCH` to get a reproducible archive ([Release and rollout](/docs/contributor/deployment#reproducible-builds)).
+`make build` writes an `orama` into `core/bin/`. A signed archive for a cluster is `orama maint build` from `core/` ([Build and sign](/docs/operator/build-and-sign)); it builds Caddy from the repository's `caddy/` module, so no xcaddy is needed. Set `SOURCE_DATE_EPOCH` to get a reproducible archive ([Release and rollout](/docs/contributor/deployment#reproducible-builds)).
 
 ## Run against a cluster
 
 There is no local single-process mode that skips systemd. To exercise node code, use a sandbox ([Sandbox clusters](/docs/contributor/sandbox)) or the one-VPS evaluation path ([One-VPS evaluation](/docs/operator/one-vps)).
 
 ```bash
-orama env add dev https://cluster.example.com
-orama env use dev
+orama network add dev https://cluster.example.com
+orama network use dev
 orama auth login
 ```
 

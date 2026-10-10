@@ -76,7 +76,7 @@ func tokenError(env, gatewayURL string, err error) error {
 			return withSSHHint(clierr.Unavailable("cannot renew the session with the %s gateway at %s: %v", env, gatewayURL, err))
 		}
 	}
-	return clierr.Auth("no usable credentials for the %s gateway at %s: %v; sign in with `orama env use %s` then `orama auth login`",
+	return clierr.Auth("no usable credentials for the %s gateway at %s: %v; sign in with `orama network use %s` then `orama auth login`",
 		env, gatewayURL, err, env)
 }
 

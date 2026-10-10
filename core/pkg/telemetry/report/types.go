@@ -7,7 +7,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/updatenotice"
 )
 
-// NodeReport is the top-level JSON output of `orama node report --json`.
+// NodeReport is the top-level JSON output of `orama node report`.
 type NodeReport struct {
 	Timestamp time.Time `json:"timestamp"`
 	Hostname  string    `json:"hostname"`

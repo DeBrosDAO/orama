@@ -26,7 +26,7 @@ const (
 	PathList   = "/v1/namespace/list"
 	pathQuery  = "/v1/rqlite/query"
 	pathHealth = "/health"
-	// Creation modes (docs/CLI_REFERENCE.md "orama cluster settings set").
+	// Creation modes (docs/CLI_REFERENCE.md "orama maint cluster settings set").
 	modeOpen      = "open"
 	modeAllowlist = "allowlist"
 )
@@ -48,16 +48,16 @@ func Creator(t testing.TB, f *fleet.Fleet) *gw.User {
 	t.Helper()
 	u := gw.NewUser(t, f, gw.LobbyNamespace)
 	cli := oramacli.ForState(f.State, f.Recorder()).For(t)
-	out := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	out := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	switch mode := settingValue(out, "namespace-creation"); mode {
 	case modeOpen:
 	case modeAllowlist:
 		addr := u.Wallet.Address()
-		cli.MustOK(t, "cluster", "creators", "add", addr)
+		cli.MustOK(t, "maint", "cluster", "creators", "add", addr)
 		t.Cleanup(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), cleanupBudget)
 			defer cancel()
-			if res, err := cli.Run(ctx, "cluster", "creators", "remove", addr); err != nil || res.Exit != 0 {
+			if res, err := cli.Run(ctx, "maint", "cluster", "creators", "remove", addr); err != nil || res.Exit != 0 {
 				t.Errorf("cleanup: failed to remove creator %s: %v %s", addr, err, res.Stderr)
 			}
 		})

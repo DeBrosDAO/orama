@@ -12,7 +12,7 @@ import (
 // environment key from every other key derived from the encryption root.
 //
 // This label is a domain separator, not a rotation handle. Rotating stored
-// secrets is `orama operator rotate-secrets --rotate`.
+// secrets is `orama maint operator rotate-secrets --rotate`.
 const EnvEncryptionPurpose = "orama-deployment-environment-v1"
 
 // EnvCodec turns a deployment's environment into the single column it is stored
@@ -63,7 +63,7 @@ func envAAD(namespace, deploymentID string) ([]byte, error) {
 // Encode returns the stored form of the environment of deployment deploymentID
 // in namespace.
 //
-// Once the operator has enabled bound writes (`orama operator rotate-secrets`,
+// Once the operator has enabled bound writes (`orama maint operator rotate-secrets`,
 // run when every gateway is on a binary that reads enc:v2:) the stored form is
 // bound to the namespace and the deployment id. Before that it is the unbound
 // form, which every gateway of the fleet can read during a rolling upgrade.

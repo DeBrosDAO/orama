@@ -31,14 +31,14 @@ RootWallet, installs it on the VPS, uploads the binary archive, mints an invite
 where one is needed, and runs the install. You never SSH in yourself.
 
 It needs an unlocked RootWallet, and the archive to install: build it once
-with `orama build` and pass the path it prints as `--archive` (there is no
+with `orama maint build` and pass the path it prints as `--archive` (there is no
 default — the newest archive in `/tmp` may be another checkout's build).
 
 **The first archive must be signed by the wallet that creates the cluster.**
 The genesis install writes the cluster's archive trust anchor,
 `/etc/orama/archive-signers`, from `--operator-wallet` — setup passes your
 RootWallet's active address — and only then verifies the archive against it.
-`orama build` signs with that same RootWallet account by default, so build and
+`orama maint build` signs with that same RootWallet account by default, so build and
 setup with the same wallet unlocked. Setup verifies the archive on your machine
 against that account before uploading anything — the new machine has no
 verified binary of its own to check it with — so an archive signed by anyone
@@ -52,7 +52,7 @@ as on the VPS) — and never appears on a command line, where `ps` and shell
 history would keep it.
 
 ```bash
-orama build     # prints the archive path, e.g. /tmp/orama-0.200.0-linux-amd64.tar.gz
+orama maint build     # prints the archive path, e.g. /tmp/orama-0.200.0-linux-amd64.tar.gz
 ARCHIVE=/tmp/orama-0.200.0-linux-amd64.tar.gz
 
 # ns1 — genesis nameserver, creates the cluster
@@ -75,7 +75,7 @@ it shows against your provider's console — and every connection of the run
 
 `--genesis` records the environment as `https://<base-domain>` in
 `~/.orama/environments.json` and leaves the active environment alone; name it
-with `--env` in later commands. Every `orama env` and setup change to that file
+with `--env` in later commands. Every `orama network` and setup change to that file
 holds an exclusive lock (`environments.json.lock`) and replaces the file by
 rename, so commands running in parallel each keep their environment. Joins need the minting node's certificate
 issued: the invite names that node by its public IP and its site name, and the
@@ -124,7 +124,7 @@ Let's Encrypt's staging roots, trusted for that environment's domain only:
 ```bash
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem  > le-staging.pem
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le-staging.pem
-orama env add <env> https://<base-domain> --ca-file le-staging.pem
+orama network add <env> https://<base-domain> --ca-file le-staging.pem
 ```
 
 Every command then verifies `<base-domain>` and the names under it against
@@ -161,7 +161,7 @@ reach some other way. It does the same thing with more steps.
 From your own machine:
 
 ```bash
-orama invite                 # usable for 1h, the gateway's cap
+orama maint invite                 # usable for 1h, the gateway's cap
 ```
 
 Or from an existing node:
@@ -175,7 +175,7 @@ address, the domain to present to it, and the fingerprint of the TLS
 certificate it serves — which the joining node connects to and pins instead of
 resolving the cluster's domain (which reaches any nameserver, each with a
 certificate of its own) or trusting whatever certificate it is first shown.
-`orama invite` picks the lowest address the domain resolves to; name another
+`orama maint invite` picks the lowest address the domain resolves to; name another
 with `--node <public IP>`. There is nothing else to copy across, and nothing to
 get the wrong way round.
 
@@ -186,7 +186,7 @@ Invites are **single-use**. Mint one per join.
 ```bash
 # SSH: <user>@<ns1-ip>
 
-sudo orama node install \
+sudo orama maint node install \
   --vps-ip <ns1-ip> \
   --domain <your-domain.com> \
   --base-domain <your-domain.com> \
@@ -196,7 +196,7 @@ sudo orama node install \
 
 `--operator-wallet` is required on the genesis node: it becomes the only
 signer of `/etc/orama/archive-signers`, so the archive extracted in
-`/opt/orama` must be signed by that wallet (`orama build` with it as the active
+`/opt/orama` must be signed by that wallet (`orama maint build` with it as the active
 RootWallet account). The anchor is written before the archive is verified.
 
 ### 3. Joining nodes
@@ -204,7 +204,7 @@ RootWallet account). The anchor is written before the archive is verified.
 ```bash
 # SSH: <user>@<ns-ip>
 
-sudo orama node install \
+sudo orama maint node install \
   --token <INVITE> \
   --vps-ip <ns-ip> \
   --domain <your-domain.com> \
@@ -218,7 +218,7 @@ is auto-generated.
 Or drive it from your own machine over SSH:
 
 ```bash
-orama node install --remote --token <INVITE> \
+orama maint node install --remote --token <INVITE> \
   --vps-ip <node-ip> --base-domain <your-domain.com>
 ```
 
@@ -228,7 +228,7 @@ meant two different things on two different machines.
 
 ## Verification
 
-`orama node install` verifies the node itself before printing `✅` — supervisor active and not crash-looping, rqlite in `Leader`/`Follower`, `wg0` up, gateway `/health` 200 — and exits non-zero naming the first component that did not come up. A successful install therefore already means the node works; the checks below verify the **cluster**.
+`orama maint node install` verifies the node itself before printing `✅` — supervisor active and not crash-looping, rqlite in `Leader`/`Follower`, `wg0` up, gateway `/health` 200 — and exits non-zero naming the first component that did not come up. A successful install therefore already means the node works; the checks below verify the **cluster**.
 
 After all nodes are installed, verify cluster health:
 

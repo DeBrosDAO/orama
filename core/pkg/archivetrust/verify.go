@@ -19,7 +19,7 @@ import (
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
 )
 
-// Manifest describes the contents of a build archive: `orama build` writes it
+// Manifest describes the contents of a build archive: `orama maint build` writes it
 // as manifest.json and signs it, and nodes verify it.
 type Manifest struct {
 	Version   string            `json:"version"`
@@ -124,7 +124,7 @@ func SigningMessage(manifestJSON []byte) (string, error) {
 }
 
 // RecoverSigner returns the lowercase address whose EIP-191 personal_sign
-// signature over SigningMessage(manifestJSON) signature is. `orama build`
+// signature over SigningMessage(manifestJSON) signature is. `orama maint build`
 // signs through the RootWallet agent's /v1/wallet/sign, which produces exactly
 // this.
 func RecoverSigner(manifestJSON []byte, signature string) (string, error) {
@@ -224,7 +224,7 @@ func verifySignature(dir string, trusted []string) ([]byte, string, error) {
 	sig, err := root.ReadFile(filepath.Join(dir, SignatureName), signatureLimit)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, "", fmt.Errorf("the archive in %s is unsigned (no %s); nodes install only signed builds — "+
-			"build it with `orama build`, which signs with your RootWallet", dir, SignatureName)
+			"build it with `orama maint build`, which signs with your RootWallet", dir, SignatureName)
 	}
 	if err != nil {
 		return nil, "", fmt.Errorf("read the archive signature: %w", err)

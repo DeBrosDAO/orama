@@ -6,7 +6,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/discovery"
 )
 
-// A cluster part-way through `orama node migrate-raft-id` holds members under
+// A cluster part-way through `orama maint node migrate-raft-id` holds members under
 // two kinds of id at once: migrated nodes under their libp2p peer id, the rest
 // under their raft address. Every path that reads membership has to cope, and
 // the ones that did not were the ones that added a duplicate voter for each

@@ -9,17 +9,17 @@ A new Orama version is a new **signed archive** and a **rolling restart**. Extra
 ```bash
 cd orama/core
 git pull                                   # the version you want to roll out
-orama rollout --env mycluster              # build, push, and PRINT the plan
-orama rollout --env mycluster --yes        # do it
+orama maint rollout --env mycluster              # build, push, and PRINT the plan
+orama maint rollout --env mycluster --yes        # do it
 ```
 
-`orama rollout` (the same as `orama node rollout`) builds a signed archive, pushes it to every node, prints the restart plan, and stops unless `--yes` is given. It never reuses an older archive on its own; to roll out a specific one use `--no-build --archive <path>`.
+`orama maint rollout` (the same as `orama maint rollout`) builds a signed archive, pushes it to every node, prints the restart plan, and stops unless `--yes` is given. It never reuses an older archive on its own; to roll out a specific one use `--no-build --archive <path>`.
 
 Step by step, with more control:
 
 ```bash
-orama build                                                   # signed with your RootWallet
-orama push --env mycluster --archive $ARCHIVE                 # upload and verify on every node
+orama maint build                                                   # signed with your RootWallet
+orama maint push --env mycluster --archive $ARCHIVE                 # upload and verify on every node
 orama node upgrade --env mycluster                            # read every node, print the plan
 orama node upgrade --env mycluster --yes                      # execute it
 orama node upgrade --env mycluster --node 203.0.113.11 --yes  # one node only
@@ -30,7 +30,7 @@ You need RootWallet unlocked for the whole run. The CLI touches the agent every 
 
 ## What `push` does
 
-`orama push` uploads the archive once to a hub node, which fans it out to the others (`--direct` uploads from your machine to each node in turn). On each node it runs the node's **installed** CLI, which, under a lock on `/opt/orama`:
+`orama maint push` uploads the archive from your machine to each node in turn; no node is a hub and no node's SSH key leaves your machine (`--direct` is accepted and changes nothing). On each node it runs the node's **installed** CLI, which, under a lock on `/opt/orama`:
 
 1. extracts into a private directory (regular files and directories only; at most 1024 entries, 512 MiB per file, 4 GiB total)
 2. verifies the signature against `/etc/orama/archive-signers`, every file against the signed manifest, and the architecture
@@ -79,8 +79,8 @@ an applied index caught up to the leader, and a gateway serving /health.
 The gateway embeds SQL migrations. The highest-numbered one is the schema version that gateway **requires**: it refuses to start if that schema is not applied. Migrations take a cluster-wide lock (`cluster_locks('schema-migrations')`), so gateways starting together do not each run the pending list. Check and apply:
 
 ```bash
-sudo orama node schema status      # required vs applied version, and pending migrations
-sudo orama node schema apply       # apply pending migrations to the local RQLite
+sudo orama maint node schema status      # required vs applied version, and pending migrations
+sudo orama maint node schema apply       # apply pending migrations to the local RQLite
 ```
 
 A namespace owner can check drift without SSH with `GET /v1/schema-status`.
@@ -125,7 +125,7 @@ Carry on only when both pass. If a node shows problems, investigate; do not skip
 If nodes are stuck in `Candidate` or report "leader not found":
 
 ```bash
-orama node recover-raft --env mycluster
+orama maint node recover-raft --env mycluster
 ```
 
 **One node's data is kept. Every other node's Raft log and database are deleted. Nothing is backed up.** The command reads every node's applied index, keeps the one furthest ahead, prints what each reported and asks you to confirm. `--leader <ip>` names the node whose data to keep; `--leader-raft-addr <wg-ip>:10101` is for when RQLite is not answering anywhere. It resets the kept node to a single-member cluster, confirms it comes back as Leader before touching any other node, wipes the others, and starts them one at a time, each pulling a full snapshot. Take a backup yourself first if the surviving node might not be the right one.
@@ -135,14 +135,14 @@ orama node recover-raft --env mycluster
 A cluster can keep itself on a release channel. It does nothing until you tell it where releases are. These are cluster settings, changed by an operator and written to the audit trail:
 
 ```bash
-orama cluster settings set release-repo https://releases.example.org/tuf
-orama cluster settings set update-channel stable            # stable (the default) or nightly
-orama cluster settings set update-window 1-5                # hours UTC when auto may install; empty is any hour
-orama cluster settings set auto-update notify               # off, notify (the default) or auto
-orama cluster settings show
+orama maint cluster settings set release-repo https://releases.example.org/tuf
+orama maint cluster settings set update-channel stable            # stable (the default) or nightly
+orama maint cluster settings set update-window 1-5                # hours UTC when auto may install; empty is any hour
+orama maint cluster settings set auto-update notify               # off, notify (the default) or auto
+orama maint cluster settings show
 ```
 
-Every node runs `orama-autoupdate.timer`, which runs `orama node autoupdate run` as root 10 minutes after boot and then every 15 minutes (you can run it by hand; it does the same). The agent does nothing, and says why, until the cluster has a `release-repo` and the node has adopted a release root. A cluster installed with `orama node setup --release` has the root on every node; for any other node, `sudo orama node trust add-root root.json` adopts one, as does installing an archive built with `orama build --release-root`.
+Every node runs `orama-autoupdate.timer`, which runs `orama maint node autoupdate run` as root 10 minutes after boot and then every 15 minutes (you can run it by hand; it does the same). The agent does nothing, and says why, until the cluster has a `release-repo` and the node has adopted a release root. A cluster installed with `orama node setup --release` has the root on every node; for any other node, `sudo orama node trust add-root root.json` adopts one, as does installing an archive built with `orama maint build --release-root`.
 
 Each run fetches the channel's metadata and verifies it against the adopted root (every role at its threshold, an unexpired timestamp, a snapshot not older than the newest the node has seen, and the channel's own keys for its own files). What does not verify is refused, shown by `orama monitor` as a warning, and never installed.
 
@@ -150,14 +150,14 @@ Each run fetches the channel's metadata and verifies it against the adopted root
 - **`auto`**: the node installs it, but only when the cluster is not degraded and a majority of the Raft voters are up, the hour is inside `update-window`, no node has failed that release, and it is this node's turn. The turn is the rollout plan: followers first, the leader last, nameservers spaced, **one node at a time**, under a cluster-wide lock. A downgrade is refused.
 - **A validator** (a machine that runs the chain) is never `auto`; its chain binary is changed by hand. On `auto` its agent writes a refusal notice saying so, records the release as `skipped`, and exits 0; the rollout counts a skipped node as done and moves on to the next.
 
-An install is `orama node stage-archive --release-only` (which keeps the release it replaces), then that release's `orama node upgrade --restart`, then a health gate: Raft `Leader` or `Follower`, a leader known, an applied index within 200 of the commit index, and the gateway serving. If the upgrade or the gate fails, the previous release is put back and the node is upgraded onto it again. The release is then marked bad for the whole cluster, so the rollout stops: no other node tries it, and `orama monitor` warns. A newer release supersedes a bad one. If a run is killed in the middle of an install, the next run finishes or rolls back first, before it reads the policy. A release that could not start installing on a node (a check refused before anything stopped) is not downloaded again every 15 minutes: the node waits 15 minutes, then doubles the wait after each failure, up to 12 hours, and the notice in `orama monitor` says when the next try is (the record is `/var/lib/orama-autoupdate/install-retry.json`; a different release is not held back, and an install that succeeds clears it). A failure that cannot be written to the registry right after the rollback is kept in the install intent, and the next run records it instead of installing the release again. Each run first removes the fetch directories a killed run left in `/var/lib/orama-autoupdate`.
+An install is `orama maint node stage-archive --release-only` (which keeps the release it replaces), then that release's `orama node upgrade --restart`, then a health gate: Raft `Leader` or `Follower`, a leader known, an applied index within 200 of the commit index, and the gateway serving. If the upgrade or the gate fails, the previous release is put back and the node is upgraded onto it again. The release is then marked bad for the whole cluster, so the rollout stops: no other node tries it, and `orama monitor` warns. A newer release supersedes a bad one. If a run is killed in the middle of an install, the next run finishes or rolls back first, before it reads the policy. A release that could not start installing on a node (a check refused before anything stopped) is not downloaded again every 15 minutes: the node waits 15 minutes, then doubles the wait after each failure, up to 12 hours, and the notice in `orama monitor` says when the next try is (the record is `/var/lib/orama-autoupdate/install-retry.json`; a different release is not held back, and an install that succeeds clears it). A failure that cannot be written to the registry right after the rollback is kept in the install intent, and the next run records it instead of installing the release again. Each run first removes the fetch directories a killed run left in `/var/lib/orama-autoupdate`.
 
-`orama node autoupdate --current <ver> --candidate <ver>` only answers what the policy would do for values you give it, and changes nothing.
+`orama maint node autoupdate --current <ver> --candidate <ver>` only answers what the policy would do for values you give it, and changes nothing.
 
 The install keeps the release it replaced beside the new one (hundreds of megabytes under `/opt/orama`), and nothing checks free space first. The full behaviour is in the repository's `docs/DEV_DEPLOY.md`, "Auto-update".
 
 ## Versions and first upgrades
 
-- The first upgrade from a 0.122.x cluster needs `orama push --trust-signers <your address>` because those nodes have no trust anchor, and must run this release's code from your checkout, not the old CLI. The index Raft port moves from 7001 to 10101; one node's address may change at a time with every other voter up, which the one-node-at-a-time rollout guarantees. A cluster of one reforms with `orama node recover-raft --leader-raft-addr <wg-ip>:10101`.
-- After upgrading from 0.122.x, rotate the index gateway's signing key on every node, one node at a time, after the whole fleet is upgraded. `orama operator rotate-signing-key` has no node flag: it calls the gateway of the active environment (or of `ORAMA_API_URL`), and the index gateway that answers rotates its own key. The index gateway's signing keys are now systemd credentials (`/var/lib/orama-gateway-keys/index`, root `0400`), but the key carried over from the old layout was readable by every tenant gateway, and the index key signs for any namespace. Nobody is signed out.
+- The first upgrade from a 0.122.x cluster needs `orama maint push --trust-signers <your address>` because those nodes have no trust anchor, and must run this release's code from your checkout, not the old CLI. The index Raft port moves from 7001 to 10101; one node's address may change at a time with every other voter up, which the one-node-at-a-time rollout guarantees. A cluster of one reforms with `orama maint node recover-raft --leader-raft-addr <wg-ip>:10101`.
+- After upgrading from 0.122.x, rotate the index gateway's signing key on every node, one node at a time, after the whole fleet is upgraded. `orama maint operator rotate-signing-key` has no node flag: it calls the gateway of the active environment (or of `ORAMA_API_URL`), and the index gateway that answers rotates its own key. The index gateway's signing keys are now systemd credentials (`/var/lib/orama-gateway-keys/index`, root `0400`), but the key carried over from the old layout was readable by every tenant gateway, and the index key signs for any namespace. Nobody is signed out.
 - Access tokens issued before a node's upgrade stop verifying on that node; clients get a 401 and refresh (refresh tokens are registry rows, so they survive), or log in again.

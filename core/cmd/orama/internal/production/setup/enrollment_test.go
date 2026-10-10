@@ -369,7 +369,7 @@ func TestEnrollKey_PasswordComesFromTheVault(t *testing.T) {
 	}
 }
 
-// The gateway path mints the invite the way `orama invite` does: it names one
+// The gateway path mints the invite the way `orama maint invite` does: it names one
 // node of the cluster by the domain its certificate is served under. It used
 // to hand the gateway URL to install unpinned, so a gateway given as an
 // address produced an invite with nothing to present and nothing to pin.

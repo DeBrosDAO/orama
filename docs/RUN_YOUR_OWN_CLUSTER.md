@@ -4,7 +4,7 @@ A private Orama cluster is three or more Linux machines that you install with
 `orama node setup`, plus a domain whose nameserver records you can publish.
 The installer refuses a machine that fails the checks in
 `core/pkg/install/checks.go`. This page is that sequence. It does not create
-servers: `orama sandbox create` does, on Hetzner, and
+servers: `orama maint sandbox create` does, on Hetzner, and
 [SANDBOX.md](SANDBOX.md) is that command.
 
 ## What you need
@@ -14,7 +14,7 @@ must be one of debian 12, 13; ubuntu 22.04, 24.04, 26.04, with at least 2 CPU
 cores (`runtime.NumCPU`), 2GB of RAM and 10GB free disk. Those floors are
 `MinCPUCores`, `MinRAMBytes` and `MinFreeDiskBytes`. The RAM and disk checks
 count 1024³ bytes and the error text calls that GB. The archive you install
-must match the machine: `orama build --arch` builds amd64 (the default) or arm64, and
+must match the machine: `orama maint build --arch` builds amd64 (the default) or arm64, and
 nothing else.
 
 **A domain.** Genesis records the environment gateway as `https://<base-domain>`.
@@ -104,7 +104,7 @@ the parent zone to match. A nameserver slot stays with its machine until
 ## Use it
 
 ```bash
-orama env use mycluster
+orama network use mycluster
 orama auth login
 orama namespace create myapp
 orama auth login --namespace myapp
@@ -117,7 +117,7 @@ static` publishes a directory (any directory with an `index.html`; `./site` here
 as the deployment `www`.
 
 Further nameserver detail, including installing by hand on the VPS with
-`orama node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+`orama maint node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
 
 ## Check it
 
@@ -144,16 +144,16 @@ are settings of the cluster, changed by an operator and written to the audit
 trail:
 
 ```bash
-orama cluster settings set release-repo https://releases.example.org/tuf
-orama cluster settings set update-channel stable
-orama cluster settings set auto-update notify
-orama cluster settings show
+orama maint cluster settings set release-repo https://releases.example.org/tuf
+orama maint cluster settings set update-channel stable
+orama maint cluster settings set auto-update notify
+orama maint cluster settings show
 ```
 
 With `notify`, the default, every node looks every 15 minutes, verifies what it
 finds against the release root it adopted at install, and `orama monitor` shows
 a newer release as information (a release that does not verify, or that a node
-rolled back, as a warning). Nothing is installed. With `orama cluster settings
+rolled back, as a warning). Nothing is installed. With `orama maint cluster settings
 set auto-update auto` the nodes install it themselves, one at a time, followers
 first and the leader last, only while the cluster is healthy and the hour is
 inside `update-window`, and a release that fails on one node is not tried on the
@@ -168,10 +168,10 @@ the RootWallet agent, and pass the path to setup in place of the three release
 flags (`--archive` and `--release` are alternatives):
 
 ```bash
-orama build
+orama maint build
 ```
 
-`orama build` prints the archive's path. The build is reproducible, so a second
+`orama maint build` prints the archive's path. The build is reproducible, so a second
 build of the same commit with `SOURCE_DATE_EPOCH` set to the commit's time gives
 the same archive, byte for byte (DEV_DEPLOY.md, "Reproducible builds").
 

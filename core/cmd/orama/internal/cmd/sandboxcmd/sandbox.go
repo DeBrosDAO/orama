@@ -15,22 +15,22 @@ var Cmd = &cobra.Command{
 	Long: `Spin up temporary 5-node Orama clusters on Hetzner Cloud for development and testing.
 
 Setup (one-time):
-  orama sandbox setup
+  orama maint sandbox setup
 
 Usage:
-  orama sandbox create [--name <name>] [--archive <path>]
+  orama maint sandbox create [--name <name>] [--archive <path>]
                                            Create a new 5-node cluster
-  orama sandbox destroy [--name <name>]    Tear down a cluster
-  orama sandbox list                       List active sandboxes
-  orama sandbox status [--name <name>]     Show cluster health
-  orama sandbox rollout [--name <name>] [--archive <path>]
+  orama maint sandbox destroy [--name <name>]    Tear down a cluster
+  orama maint sandbox list                       List active sandboxes
+  orama maint sandbox status [--name <name>]     Show cluster health
+  orama maint sandbox rollout [--name <name>] [--archive <path>]
                                            Build + push + rolling upgrade
-  orama sandbox ssh <node-number>          SSH into a sandbox node (1-5)
-  orama sandbox reset                      Delete all infra and config to start fresh
+  orama maint sandbox ssh <node-number>          SSH into a sandbox node (1-5)
+  orama maint sandbox reset                      Delete all infra and config to start fresh
 
 The archive (--archive, or this checkout built now) must be signed by the
 RootWallet account that is unlocked: it is the only signer a sandbox trusts.
-Create and rollout install it the way 'orama node setup' and 'orama push' do.`,
+Create and rollout install it the way 'orama node setup' and 'orama maint push' do.`,
 }
 
 var setupCmd = &cobra.Command{

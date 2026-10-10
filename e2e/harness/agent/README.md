@@ -55,7 +55,7 @@ The orama CLI needs these capabilities pre-approved (`agent.OramaCaps`):
 - `wallet:sign:orama-archive` cannot be pre-approved by `rw-agent-headless`
   on RootWallet main today; the fix exists only in an uncommitted worktree.
   Until task 2857 lands, `Start` fails with the agent's own refusal message
-  and names the task, and `orama build` cannot sign an archive headless.
+  and names the task, and `orama maint build` cannot sign an archive headless.
 - `wallet:sign:orama-tx` is always refused by a headless agent. It is not in
   `OramaCaps`; chain transactions signed through the wallet wait for task
   2857.

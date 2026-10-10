@@ -89,7 +89,7 @@ func restoreAtCleanup(t *testing.T, c *chain.Chain, n fleet.Node, bundle string)
 			}
 		}
 		if bundle != "" && keyMissing(t, c, n) {
-			try("import the validator key back", infra.OramaCommand("global", "validator", "migrate", "import", "--from", bundle), globalBudget)
+			try("import the validator key back", infra.OramaCommand("maint", "global", "validator", "migrate", "import", "--from", bundle), globalBudget)
 		}
 		if keyMissing(t, c, n) {
 			try("copy the quarantined validator key back", restoreKey, chain.QueryBudget)
@@ -113,8 +113,8 @@ func keyMissing(t *testing.T, c *chain.Chain, n fleet.Node) bool {
 // cleanup, and returns the migration public key.
 func prepareMigration(t *testing.T, c *chain.Chain, n fleet.Node) string {
 	t.Helper()
-	t.Cleanup(func() { c.CleanupExec(t, n, infra.OramaCommand("global", "validator", "migrate", "cancel")) })
-	out := orama(t, c, n, "global", "validator", "migrate", "prepare")
+	t.Cleanup(func() { c.CleanupExec(t, n, infra.OramaCommand("maint", "global", "validator", "migrate", "cancel")) })
+	out := orama(t, c, n, "maint", "global", "validator", "migrate", "prepare")
 	infra.ExpectNodeExit(t, "migrate prepare", out, infra.ExitOK)
 	return strings.TrimSpace(out.Stdout)
 }

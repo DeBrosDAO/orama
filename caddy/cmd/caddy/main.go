@@ -1,7 +1,7 @@
 // Command caddy is the Caddy the node runs: Caddy's standard modules plus the
 // Orama DNS provider and certificate storage in the parent package.
 //
-// `orama build` compiles this package against this module's checked-in go.sum.
+// `orama maint build` compiles this package against this module's checked-in go.sum.
 // It used to run xcaddy, which resolved its own temporary module on every
 // build with the checksum database switched off, so two builds of the same
 // release could hold different dependencies.

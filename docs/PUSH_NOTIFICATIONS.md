@@ -556,7 +556,7 @@ These bits are for whoever runs the Orama gateway cluster, NOT tenants.
 
 ### Self-hosted ntfy (installed on every node)
 
-ntfy is installed unconditionally on every node by `orama node install`
+ntfy is installed unconditionally on every node by `orama maint node install`
 and `orama node upgrade` — there is no flag to enable or disable it,
 and nothing is persisted to `preferences.yaml`. Each node:
 
@@ -608,7 +608,7 @@ DNS topology changes.
 - Push-topic registrations (Step 5b) live in the namespace table
   `push_topics` (migration 059), keyed on `(namespace, topic_id)`. The
   provider token is sealed under the encryption root with purpose
-  `push-topic-tokens`, and `orama operator rotate-secrets` re-encrypts it with
+  `push-topic-tokens`, and `orama maint operator rotate-secrets` re-encrypts it with
   the other stored secrets. Its fingerprint (`token_fp`, purpose
   `push-topic-token-fp`) is keyed from the **cluster secret** instead, which a
   secrets rotate leaves alone — the walk cannot recompute fingerprints, so a
