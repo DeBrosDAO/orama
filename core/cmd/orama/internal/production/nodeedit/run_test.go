@@ -425,3 +425,22 @@ func TestRun_anExitEditWithoutAChainNodeIDSaysItDidNotCompare(t *testing.T) {
 		t.Errorf("the chain was reached without a node id: %v", h.opened)
 	}
 }
+
+// An edit that changes the exit policy and the capacity opens the chain once: the exit-role check and
+// the capacity preflight share one connection, which close ends. A second Open used to replace the
+// first, whose tunnels were never closed.
+func TestRun_exitAndCapacityShareOneChainConnection(t *testing.T) {
+	storageOnly := newHarness()
+	r, _ := storageOnly.runner(Options{Node: "10.0.0.1", Settings: Settings{StorageGB: gb(100)}, ChainNodeID: "node-1", Yes: true})
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	both := newHarness()
+	r, _ = both.runner(Options{Node: "10.0.0.1", Settings: Settings{StorageGB: gb(100), Exit: flag(true)}, ChainNodeID: "node-1", Yes: true})
+	if err := r.run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(both.opened) != len(storageOnly.opened) || len(both.opened) == 0 {
+		t.Fatalf("exit + capacity opened %d tunnels, capacity alone %d: one chain connection must serve both", len(both.opened), len(storageOnly.opened))
+	}
+}

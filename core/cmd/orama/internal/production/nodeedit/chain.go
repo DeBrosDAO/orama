@@ -64,11 +64,17 @@ func (d *declarer) preflight(ctx context.Context, env, explicitChainID, nodeID, 
 	if err != nil {
 		return err
 	}
-	reach, err := d.runner.Open(ctx, candidates)
-	if err != nil {
-		return clierr.Unavailable("declare the capacity of %s on the chain: %v", nodeID, err)
+	// The exit-role check may already have opened the chain; one connection serves both, and close
+	// ends it.
+	reach := d.reach
+	if reach == nil {
+		reach, err = d.runner.Open(ctx, candidates)
+		if err != nil {
+			return clierr.Unavailable("declare the capacity of %s on the chain: %v", nodeID, err)
+		}
+		d.reach = reach
 	}
-	d.reach, d.chainID = reach, chainID
+	d.chainID = chainID
 	if err := d.checkChain(ctx, reach, chainID); err != nil {
 		return clierr.Failure("%v. Nothing was changed", err)
 	}
