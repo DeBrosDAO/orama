@@ -150,39 +150,53 @@ func HandleStopWithFlags(force bool) error {
 	return nil
 }
 
-// stopAllNamespaceServices stops all running namespace services
+// namespaceUnitPattern matches every namespace unit instance, timers included.
+const namespaceUnitPattern = "orama-namespace-*@*"
+
+// stopAllNamespaceServices stops every namespace unit, its timers first.
 func stopAllNamespaceServices() {
-	// Find all running namespace services using systemctl list-units
-	cmd := exec.Command("systemctl", "list-units", "--type=service", "--all", "--no-pager", "--no-legend", "orama-namespace-*@*.service")
+	// --plain: without it a failed unit's line starts with a bullet, and the
+	// unit was skipped.
+	cmd := exec.Command("systemctl", "list-units", "--type=service,timer", "--all", "--plain", "--no-pager", "--no-legend", namespaceUnitPattern)
 	output, err := cmd.Output()
 	if err != nil {
 		fmt.Printf("    ⚠️  Warning: Failed to list namespace services: %v\n", err)
 		return
 	}
 
-	lines := strings.Split(string(output), "\n")
-	var namespaceServices []string
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			serviceName := fields[0]
-			if strings.HasPrefix(serviceName, "orama-namespace-") {
-				namespaceServices = append(namespaceServices, serviceName)
-			}
-		}
-	}
-
-	if len(namespaceServices) == 0 {
+	units := namespaceStopOrder(string(output))
+	if len(units) == 0 {
 		fmt.Printf("    No namespace services found\n")
 		return
 	}
 
-	// Stop all namespace services
-	for _, svc := range namespaceServices {
-		if err := exec.Command("systemctl", "stop", svc).Run(); err != nil {
-			fmt.Printf("    ⚠️  Warning: Failed to stop %s: %v\n", svc, err)
+	for _, unit := range units {
+		if err := exec.Command("systemctl", "stop", unit).Run(); err != nil {
+			fmt.Printf("    ⚠️  Warning: Failed to stop %s: %v\n", unit, err)
 		}
 	}
 
-	fmt.Printf("    ✓ Stopped %d namespace service(s)\n", len(namespaceServices))
+	fmt.Printf("    ✓ Stopped %d namespace unit(s)\n", len(units))
+}
+
+// namespaceStopOrder returns the namespace units of a list-units listing,
+// timers before services. A timer still running while the services go down can
+// start its oneshot in the middle of the stop, and the stop then kills the
+// oneshot before it has installed its SIGTERM handler, leaving it failed: on
+// stagenet orama-namespace-ipfs-gc@index's timer fell due between the stops of
+// ipfs-cluster@index and ipfs@index.
+func namespaceStopOrder(listing string) []string {
+	var timers, services []string
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.HasPrefix(fields[0], "orama-namespace-") {
+			continue
+		}
+		if strings.HasSuffix(fields[0], ".timer") {
+			timers = append(timers, fields[0])
+		} else {
+			services = append(services, fields[0])
+		}
+	}
+	return append(timers, services...)
 }
