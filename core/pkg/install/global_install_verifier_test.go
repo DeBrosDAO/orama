@@ -208,3 +208,52 @@ func assertHostUntouched(t *testing.T, f *globalFixture) {
 		t.Errorf("accounts were created: %v", calls)
 	}
 }
+
+func TestInstallGlobal_aNodeRunningAnUpgradeStagedWithoutAVerifierIsRefusedUntilItIsRestaged(t *testing.T) {
+	f := newGlobalFixture(t)
+	root := filepath.Join(f.host.ChainHome, "cosmovisor")
+	bin := filepath.Join(root, "upgrades", "v2", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("upgrades/v2", filepath.Join(root, "current")); err != nil {
+		t.Fatal(err)
+	}
+	err := InstallGlobal(f.options(GlobalServiceChain), f.host)
+	if err == nil || !strings.Contains(err.Error(), "stage that upgrade again") {
+		t.Fatalf("err = %v", err)
+	}
+	assertHostUntouched(t, f)
+
+	if err := os.WriteFile(filepath.Join(bin, "orama-orchard-verifier"), []byte("v"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
+		t.Fatalf("an upgrade that has its verifier: %v", err)
+	}
+}
+
+func TestCheckCurrentHasVerifier_genesisAbsentAndEscapingLinks(t *testing.T) {
+	layout := cosmovisor.Layout{Home: t.TempDir(), Daemon: constants.ChainDaemonName}
+	if err := checkCurrentHasVerifier(layout); err != nil {
+		t.Fatalf("no current yet: %v", err)
+	}
+	if err := os.MkdirAll(layout.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("genesis", layout.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCurrentHasVerifier(layout); err != nil {
+		t.Fatalf("current at genesis: %v", err)
+	}
+	if err := os.Remove(layout.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../etc", layout.Current()); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkCurrentHasVerifier(layout); err == nil {
+		t.Fatal("a current that points outside the cosmovisor directory was accepted")
+	}
+}

@@ -44,7 +44,7 @@ func versionedRootName(version int64) string { return fmt.Sprintf("%d.root.json"
 func (r Repo) ReadRoot() ([]byte, *metadata.Metadata[metadata.RootType], error) {
 	data, err := os.ReadFile(r.path(RootFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, fmt.Errorf("%s has no %s: make the root first (orama maint release init-root)", r.Dir, RootFile)
+		return nil, nil, fmt.Errorf("%s has no %s: make the root first (orama maint release init-root): %w", r.Dir, RootFile, fs.ErrNotExist)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s: %w", r.path(RootFile), err)

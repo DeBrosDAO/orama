@@ -344,3 +344,77 @@ func TestSync_readsTheChannelThroughTheRotatedRoot(t *testing.T) {
 		t.Fatalf("targets = %v", v.Targets)
 	}
 }
+
+// A chain that moves the snapshot key and moves it back still moved it: a
+// record the middle key raised must not survive.
+func TestUpdateRoot_aKeyRotatedAwayAndBackStillClearsTheRollbackRecord(t *testing.T) {
+	c := newRootChain(t, 1, true)
+	until := testNow.Add(24 * time.Hour)
+	other, err := releaserepo.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := releaserepo.NextRoot(c.versions[0], c.keys[0], other, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := releaserepo.NextRoot(second, other, c.keys[0], until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.keys, c.versions = append(c.keys, other, c.keys[0]), append(c.versions, second, third)
+	u := c.adopted(t, 1)
+	if err := writeSeen(u.SeenPath, 900); err != nil {
+		t.Fatal(err)
+	}
+	repo := Repository{BaseURL: serveRepo(t, c.served(2, 3), nil)}
+
+	if _, err := repo.UpdateRoot(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	if seen, _ := readSeen(u.SeenPath); seen.SnapshotVersion != 0 {
+		t.Fatalf("seen = %+v, want cleared", seen)
+	}
+}
+
+// A caller that rebuilds RootPath from a pinned root on every run keeps the
+// newest root in Adopted; the same rotation then clears the record once, not
+// on every run.
+func TestUpdateRoot_aCallerThatStartsFromAPinnedRootClearsTheRecordOncePerRotation(t *testing.T) {
+	c := newRootChain(t, 2, true)
+	repo := Repository{BaseURL: serveRepo(t, c.served(2, 2), nil)}
+	adopted := filepath.Join(t.TempDir(), "adopted-root.json")
+	run := func() RootUpdate {
+		u := c.adopted(t, 1)
+		u.Adopted = adopted
+		return u
+	}
+
+	first := run()
+	if err := writeSeen(first.SeenPath, 900); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateRoot(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if seen, _ := readSeen(first.SeenPath); seen.SnapshotVersion != 0 {
+		t.Fatalf("first run: seen = %+v, want cleared", seen)
+	}
+	if got, err := os.ReadFile(adopted); err != nil || string(got) != string(c.versions[1]) {
+		t.Fatalf("the newest root was not kept: %v", err)
+	}
+
+	again := run()
+	if err := writeSeen(again.SeenPath, 900); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpdateRoot(context.Background(), again); err != nil {
+		t.Fatal(err)
+	}
+	if seen, _ := readSeen(again.SeenPath); seen.SnapshotVersion != 900 {
+		t.Fatalf("second run: seen = %+v, want the record kept", seen)
+	}
+	if got, _ := os.ReadFile(again.RootPath); string(got) != string(c.versions[1]) {
+		t.Fatal("RootPath was not brought to the newest root")
+	}
+}

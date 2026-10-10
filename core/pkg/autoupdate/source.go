@@ -27,6 +27,10 @@ const (
 type Source struct {
 	RootPath string
 	SeenPath string
+	// AdoptedRoot, when set, keeps the newest root this machine has adopted
+	// beside the rollback record, for a caller that rebuilds RootPath from a
+	// pinned root on every run (releaseverify.RootUpdate.Adopted).
+	AdoptedRoot string
 	// WorkDir is where metadata and archives are fetched to, below which a
 	// fresh directory is made for each fetch. Only root may read it.
 	WorkDir string
@@ -88,7 +92,7 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
 	defer cancel()
-	update := releaseverify.RootUpdate{RootPath: s.RootPath, SeenPath: s.SeenPath, Now: s.Now()}
+	update := releaseverify.RootUpdate{RootPath: s.RootPath, SeenPath: s.SeenPath, Adopted: s.AdoptedRoot, Now: s.Now()}
 	if err := (releaseverify.Repository{BaseURL: repoURL}).Sync(ctx, rel.MetadataDir(), update); err != nil {
 		return Release{}, false, fmt.Errorf("fetch the %s channel: %w", channel, err)
 	}

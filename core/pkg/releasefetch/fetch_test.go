@@ -71,7 +71,8 @@ func (r *repo) params(t *testing.T) Params {
 	t.Helper()
 	return Params{
 		RepoURL: r.url, Channel: "nightly", Arch: "amd64", Root: r.root, RootSHA256: releaseverify.RootDigest(r.root),
-		WorkDir: filepath.Join(t.TempDir(), "work"), SeenPath: filepath.Join(t.TempDir(), "seen.json"), Now: now,
+		WorkDir: filepath.Join(t.TempDir(), "work"), SeenPath: filepath.Join(t.TempDir(), "seen.json"),
+		AdoptedRoot: filepath.Join(t.TempDir(), "adopted-root.json"), Now: now,
 	}
 }
 
@@ -259,5 +260,56 @@ func TestFetch_badParametersAreRefusedBeforeTheNetwork(t *testing.T) {
 		if _, err := Fetch(t.Context(), p); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+}
+
+// A second fetch walks the same rotation again from the pinned root; it must
+// not clear the rollback record the first one raised, or a replayed snapshot
+// would be taken.
+func TestFetch_aRotationAlreadyTakenDoesNotClearTheRollbackRecordAgain(t *testing.T) {
+	r := newRepo(t)
+	next, err := releaserepo.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := releaserepo.NextRoot(r.root, r.keys, next, now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dir, "2.root.json"), second, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.keys = next
+	r.publish(t, 9, "0.3.2", r.archive, r.archive)
+	p := r.params(t)
+	if _, err := Fetch(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	// The same repository replays an older snapshot.
+	r.publish(t, 4, "0.3.2", r.archive, r.archive)
+	p.WorkDir = filepath.Join(t.TempDir(), "again")
+	if _, err := Fetch(t.Context(), p); err == nil {
+		t.Fatal("a snapshot older than the one accepted was taken after the same rotation was walked again")
+	}
+}
+
+func TestFetch_aSymlinkLeftInTheWorkDirectoryIsNotWrittenThrough(t *testing.T) {
+	r := newRepo(t)
+	p := r.params(t)
+	if err := os.MkdirAll(p.WorkDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(p.WorkDir, "release-root.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Fetch(t.Context(), p); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "keep" {
+		t.Fatalf("the symlink target was overwritten: %q", got)
 	}
 }

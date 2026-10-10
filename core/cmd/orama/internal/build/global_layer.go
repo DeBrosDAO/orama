@@ -33,6 +33,8 @@ const (
 	globalLayerArch = "amd64"
 	// globalLayerRustTarget is the musl target the static chain build links.
 	globalLayerRustTarget = "x86_64-unknown-linux-musl"
+	// digestFileMode is the verifier's digest file in the archive.
+	digestFileMode = 0o644
 	// skipGlobalFlag is the flag that leaves the layer out.
 	skipGlobalFlag = "--skip-global-layer"
 )
@@ -158,7 +160,7 @@ func stageGlobalFiles(buildDir, binDir string) error {
 			return fmt.Errorf("add %s to the archive: %w", dst, err)
 		}
 	}
-	return os.WriteFile(filepath.Join(binDir, constants.ChainVerifierSHA256File), []byte(sum+"\n"), 0o644)
+	return os.WriteFile(filepath.Join(binDir, constants.ChainVerifierSHA256File), []byte(sum+"\n"), digestFileMode)
 }
 
 // fileContains reports whether the file holds needle.

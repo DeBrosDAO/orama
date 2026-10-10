@@ -3,6 +3,7 @@ package releasepub
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +36,9 @@ func ExecRunner(out io.Writer) Runner {
 	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		var buf bytes.Buffer
 		cmd := exec.CommandContext(ctx, name, args...)
-		cmd.Stdout, cmd.Stderr = io.MultiWriter(&buf, out), io.MultiWriter(&buf, out)
+		// One writer for both streams, so exec serialises the writes to buf.
+		w := io.MultiWriter(&buf, out)
+		cmd.Stdout, cmd.Stderr = w, w
 		err := cmd.Run()
 		return buf.Bytes(), err
 	}
@@ -64,6 +67,9 @@ func Publish(ctx context.Context, p PublishParams) error {
 		p.Progress = io.Discard
 	}
 	if err := p.checkLocal(); err != nil {
+		return err
+	}
+	if err := p.checkDestinations(); err != nil {
 		return err
 	}
 	pending, err := p.Repo.ReadPending()
@@ -112,6 +118,9 @@ func (p PublishParams) checkLocal() error {
 	if err != nil || pending == nil {
 		return err
 	}
+	if err := checkPending(pending); err != nil {
+		return err
+	}
 	for _, a := range pending.Assets {
 		target, ok := verified.Targets[a.Target]
 		if !ok {
@@ -129,8 +138,11 @@ func (p PublishParams) checkLocal() error {
 }
 
 // uploadAssets creates the GitHub release for the tag if there is none and
-// uploads the archives to it. An asset that is already there is an error:
-// a published archive is never overwritten.
+// uploads the archives it does not hold yet. An archive already there is
+// skipped when it has the size (and, where GitHub reports one, the digest) of
+// the one the cut listed, so a publish that stopped after the upload can be run
+// again; one that differs is an error, because a published archive is never
+// overwritten.
 func (p PublishParams) uploadAssets(ctx context.Context, pending *Pending) error {
 	fmt.Fprintf(p.Progress, "Uploading %d archive(s) to %s release %s...\n", len(pending.Assets), p.GitHubRepo, pending.Tag)
 	create := []string{"release", "create", pending.Tag, "--repo", p.GitHubRepo,
@@ -139,28 +151,90 @@ func (p PublishParams) uploadAssets(ctx context.Context, pending *Pending) error
 	if pending.Channel != ChannelMain {
 		create = append(create, "--prerelease")
 	}
-	upload := []string{"release", "upload", pending.Tag, "--repo", p.GitHubRepo}
-	for _, a := range pending.Assets {
-		upload = append(upload, a.Path)
-	}
+	view := []string{"release", "view", pending.Tag, "--repo", p.GitHubRepo, "--json", "assets"}
 	if p.DryRun {
-		p.print("gh", []string{"release", "view", pending.Tag, "--repo", p.GitHubRepo}, "(create it if it is not there:)")
+		p.print("gh", view, "(create it if it is not there, and upload the archives it lacks:)")
 		p.print("gh", create, "")
-		p.print("gh", upload, "")
+		p.print("gh", uploadArgs(pending, pending.Assets, p.GitHubRepo), "")
 		return nil
 	}
-	out, err := p.Run(ctx, "gh", "release", "view", pending.Tag, "--repo", p.GitHubRepo)
+	held, err := p.heldAssets(ctx, view, create)
+	if err != nil {
+		return err
+	}
+	var missing []Asset
+	for _, a := range pending.Assets {
+		have, ok := held[a.Name]
+		if !ok {
+			missing = append(missing, a)
+			continue
+		}
+		if err := sameAsset(a, have); err != nil {
+			return err
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if _, err := p.Run(ctx, "gh", uploadArgs(pending, missing, p.GitHubRepo)...); err != nil {
+		return fmt.Errorf("upload the archives to %s: %w", pending.Tag, err)
+	}
+	return nil
+}
+
+func uploadArgs(pending *Pending, assets []Asset, repo string) []string {
+	args := []string{"release", "upload", pending.Tag, "--repo", repo}
+	for _, a := range assets {
+		args = append(args, a.Path)
+	}
+	return args
+}
+
+// githubAsset is one asset of a release as `gh release view --json assets` lists it.
+type githubAsset struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	Digest string `json:"digest"`
+}
+
+// heldAssets are the release's assets by name, after creating the release if
+// there is none. Any other failure of gh is an error.
+func (p PublishParams) heldAssets(ctx context.Context, view, create []string) (map[string]githubAsset, error) {
+	out, err := p.Run(ctx, "gh", view...)
 	switch {
 	case err == nil:
 	case strings.Contains(string(out), releaseNotFound):
 		if _, err := p.Run(ctx, "gh", create...); err != nil {
-			return fmt.Errorf("create the GitHub release %s: %w", pending.Tag, err)
+			return nil, fmt.Errorf("create the GitHub release: %w", err)
 		}
+		return map[string]githubAsset{}, nil
 	default:
-		return fmt.Errorf("look up the GitHub release %s (is gh installed and logged in?): %w", pending.Tag, err)
+		return nil, fmt.Errorf("look up the GitHub release (is gh installed and logged in?): %w", err)
 	}
-	if _, err := p.Run(ctx, "gh", upload...); err != nil {
-		return fmt.Errorf("upload the archives to %s: %w", pending.Tag, err)
+	var doc struct {
+		Assets []githubAsset `json:"assets"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		return nil, fmt.Errorf("read the GitHub release's assets: %w", err)
+	}
+	held := make(map[string]githubAsset, len(doc.Assets))
+	for _, a := range doc.Assets {
+		held[a.Name] = a
+	}
+	return held, nil
+}
+
+// sameAsset refuses a published asset that is not the archive the cut listed.
+func sameAsset(want Asset, have githubAsset) error {
+	info, err := os.Stat(want.Path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", want.Path, err)
+	}
+	if have.Size != info.Size() {
+		return fmt.Errorf("the GitHub release already holds %s with %d bytes, not the cut's %d: a published archive is never overwritten (cut a new version)", want.Name, have.Size, info.Size())
+	}
+	if have.Digest != "" && have.Digest != "sha256:"+want.SHA256 {
+		return fmt.Errorf("the GitHub release already holds %s with digest %s, not the cut's sha256:%s: a published archive is never overwritten (cut a new version)", want.Name, have.Digest, want.SHA256)
 	}
 	return nil
 }
@@ -179,7 +253,7 @@ func (p PublishParams) metadataFiles() ([]string, error) {
 
 // sync copies files to the metadata destination with rsync over ssh.
 func (p PublishParams) sync(ctx context.Context, files []string) error {
-	args := append([]string{"-a", "--chmod=F644", "-e", "ssh -o BatchMode=yes"}, files...)
+	args := append([]string{"-a", "--chmod=F644", "-e", "ssh -o BatchMode=yes", "--"}, files...)
 	args = append(args, p.MetadataDest)
 	if p.DryRun {
 		p.print("rsync", args, "")
@@ -205,4 +279,35 @@ func baseNames(paths []string) []string {
 		out[i] = filepath.Base(p)
 	}
 	return out
+}
+
+// checkDestinations refuses a destination that rsync or gh would read as an
+// option.
+func (p PublishParams) checkDestinations() error {
+	for name, v := range map[string]string{"--github-repo": p.GitHubRepo, "--metadata-dest": p.MetadataDest} {
+		if v == "" || strings.HasPrefix(v, "-") {
+			return fmt.Errorf("%s %q is empty or starts with '-'", name, v)
+		}
+	}
+	return nil
+}
+
+// checkPending holds the pending record, a file the maintainer's account can
+// write, to what a cut would have written: the tag is the channel's tag for the
+// version, and every asset is an absolute path of an archive named for them.
+func checkPending(p *Pending) error {
+	ch, err := ParseChannel(p.Channel)
+	if err != nil || ch.Name != p.Channel {
+		return fmt.Errorf("the pending record names the channel %q, which is not one a cut makes", p.Channel)
+	}
+	if want := ch.Tag(p.Version); p.Tag != want {
+		return fmt.Errorf("the pending record's tag %q is not %q, the tag of %s %s", p.Tag, want, p.Channel, p.Version)
+	}
+	for _, a := range p.Assets {
+		ref, err := releaseverify.ParseArchiveTarget(a.Target)
+		if err != nil || ref.Channel != p.Channel || ref.Version != p.Version || !filepath.IsAbs(a.Path) || filepath.Base(a.Path) != a.Name {
+			return fmt.Errorf("the pending record's asset %q (%s) is not an archive of %s %s at an absolute path", a.Name, a.Path, p.Channel, p.Version)
+		}
+	}
+	return nil
 }

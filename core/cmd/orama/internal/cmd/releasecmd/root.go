@@ -53,7 +53,7 @@ before the root expires; an expired root stops every release.`,
 			if err != nil {
 				return fail("renew the root", err)
 			}
-			printf(cmd.OutOrStdout(), "root version %d written to %s; publish it with: orama maint release publish --dir %s\n", version, repo.Dir, repo.Dir)
+			printf(cmd.OutOrStdout(), "root version %d written to %s. Targets and snapshot still expire with the previous root until the next cut; publish it with: orama maint release publish --dir %s\n", version, repo.Dir, repo.Dir)
 			return nil
 		},
 	}

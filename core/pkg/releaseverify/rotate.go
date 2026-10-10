@@ -42,6 +42,13 @@ type RootUpdate struct {
 	// or snapshot keys clears it: a record a compromised key raised must not
 	// outlast the key (TUF 5.3.11, fast-forward attack recovery).
 	SeenPath string
+	// Adopted, when set, is where the newest root this machine has adopted is
+	// kept, for a caller whose RootPath is rebuilt from a pinned root on every
+	// run (releasefetch). Whether keys changed is judged against it, not
+	// against RootPath, so the same rotation does not clear the rollback
+	// record on every run; the newest root is written to it when it is newer.
+	// Empty: RootPath is the persistent record.
+	Adopted string
 	// Now is the clock the final root's expiry is judged by.
 	Now time.Time
 }
@@ -63,7 +70,7 @@ func (r Repository) UpdateRoot(ctx context.Context, u RootUpdate) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("the adopted release root: %w", err)
 	}
-	first := trusted.Root
+	first, keysChanged := trusted.Root, false
 	newest, applied := adopted, 0
 	for {
 		next, err := r.getMetadata(ctx, fmt.Sprintf(rootVersionFile, trusted.Root.Signed.Version+1))
@@ -77,28 +84,42 @@ func (r Repository) UpdateRoot(ctx context.Context, u RootUpdate) (int, error) {
 			return applied, fmt.Errorf("%w: the repository publishes more than %d root versions after version %d",
 				ErrRootRotation, maxRootRotations, first.Signed.Version)
 		}
+		before := trusted.Root
 		if _, err := trusted.UpdateRoot(next); err != nil {
-			return applied, fmt.Errorf("%w: root version %d: %w", ErrRootRotation, trusted.Root.Signed.Version+1, err)
+			return applied, fmt.Errorf("%w: root version %d: %w", ErrRootRotation, before.Signed.Version+1, err)
 		}
+		keysChanged = keysChanged || rolesChanged(before, trusted.Root, metadata.TIMESTAMP, metadata.SNAPSHOT)
 		newest, applied = next, applied+1
 	}
-	if applied == 0 {
-		return 0, nil
-	}
-	if err := adoptRotated(u, first, trusted.Root, newest); err != nil {
-		return 0, err
-	}
-	return applied, nil
+	return applied, r.settle(u, first, trusted.Root, newest, keysChanged)
 }
 
-// adoptRotated makes newest the adopted root. When it replaces the timestamp or
-// snapshot keys, the rollback record goes first: if the process stops between
-// the two steps, the next update sees the same rotation and finishes it.
-func adoptRotated(u RootUpdate, first, last *metadata.Metadata[metadata.RootType], newest []byte) error {
+// settle records the outcome of an update: the newest root becomes the adopted
+// one and, if any step of the chain changed the timestamp or snapshot keys, the
+// rollback record is cleared first. If the process stops between the two
+// steps, the next update sees the same rotation and finishes it.
+func (r Repository) settle(u RootUpdate, first, last *metadata.Metadata[metadata.RootType], newest []byte, keysChanged bool) error {
+	if first.Signed.Version == last.Signed.Version {
+		return nil
+	}
 	if _, err := ValidateRoot(newest, u.Now); err != nil {
 		return fmt.Errorf("%w: the newest root (version %d): %w", ErrRootRotation, last.Signed.Version, err)
 	}
-	if rolesChanged(first, last, metadata.TIMESTAMP, metadata.SNAPSHOT) {
+	remember := u.Adopted != ""
+	if remember {
+		known, err := readAdoptedRoot(u.Adopted)
+		if err != nil {
+			return err
+		}
+		if known != nil {
+			// Judged against what this machine adopted, not against the pinned
+			// root the chain starts from.
+			newer := known.Signed.Version < last.Signed.Version
+			keysChanged = newer && rolesChanged(known, last, metadata.TIMESTAMP, metadata.SNAPSHOT)
+			remember = newer
+		}
+	}
+	if keysChanged {
 		if err := clearSeen(u.SeenPath); err != nil {
 			return err
 		}
@@ -106,7 +127,27 @@ func adoptRotated(u RootUpdate, first, last *metadata.Metadata[metadata.RootType
 	if _, err := AdoptRoot(u.RootPath, newest, u.Now); err != nil {
 		return err
 	}
+	if remember {
+		_, err := AdoptRoot(u.Adopted, newest, u.Now)
+		return err
+	}
 	return nil
+}
+
+// readAdoptedRoot parses the root kept at path, or returns nil if there is none.
+func readAdoptedRoot(path string) (*metadata.Metadata[metadata.RootType], error) {
+	data, err := ReadRoot(path)
+	if errors.Is(err, ErrNoRoot) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	root, err := metadata.Root().FromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse the adopted release root %s: %w", path, err)
+	}
+	return root, nil
 }
 
 // rolesChanged reports whether any of roles has other keys or another

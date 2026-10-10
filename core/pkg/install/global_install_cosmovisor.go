@@ -133,6 +133,9 @@ func preflightChain(h GlobalHost, opts GlobalInstallOptions, manifest stagedMani
 	if _, err := stagedBinaryHasSum(layout.GenesisBinary(), hex.EncodeToString(sum[:])); err != nil {
 		return nil, err
 	}
+	if err := checkCurrentHasVerifier(layout); err != nil {
+		return nil, err
+	}
 	return &chainPlan{cosmovisor: cosmovisorBinary, oramadSum: hex.EncodeToString(sum[:]), verifierSum: verifierSum}, nil
 }
 

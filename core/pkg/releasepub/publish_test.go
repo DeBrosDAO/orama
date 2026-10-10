@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +23,8 @@ type recorder struct {
 	calls     []string
 	viewError string
 	failOn    string
+	// assets is what `gh release view --json assets` lists.
+	assets string
 }
 
 func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -32,6 +35,11 @@ func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, 
 		return []byte("boom"), errors.New("exit status 1")
 	case strings.HasPrefix(line, "gh release view") && r.viewError != "":
 		return []byte(r.viewError), errors.New("exit status 1")
+	case strings.HasPrefix(line, "gh release view"):
+		if r.assets == "" {
+			return []byte(`{"assets":[]}`), nil
+		}
+		return []byte(r.assets), nil
 	}
 	return nil, nil
 }
@@ -59,7 +67,7 @@ func TestPublish_uploadsArchivesFirstThenMetadataWithTheTimestampLast(t *testing
 		t.Fatal(err)
 	}
 	want := []string{
-		"gh release view release-nightly-0.3.1 --repo DeBrosDAO/orama",
+		"gh release view release-nightly-0.3.1 --repo DeBrosDAO/orama --json assets",
 		"gh release upload release-nightly-0.3.1 --repo DeBrosDAO/orama " + path,
 	}
 	if len(rec.calls) != 4 || rec.calls[0] != want[0] || rec.calls[1] != want[1] {
@@ -273,4 +281,89 @@ func copyDir(t *testing.T, from, to string, names ...string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestPublish_aPublishThatStoppedAfterTheUploadCanBeRunAgain(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	path := cutOne(t, repo, agent, "nightly", "0.3.1", "bytes")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &recorder{assets: fmt.Sprintf(`{"assets":[{"name":%q,"size":%d,"digest":""}]}`, filepath.Base(path), info.Size())}
+
+	if err := Publish(t.Context(), publishParams(repo, rec)); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range rec.calls {
+		if strings.HasPrefix(c, "gh release upload") {
+			t.Fatalf("an archive the release already holds was uploaded again: %q", rec.calls)
+		}
+	}
+	if !strings.HasPrefix(rec.calls[len(rec.calls)-1], "rsync") {
+		t.Fatalf("the metadata was not sent: %q", rec.calls)
+	}
+}
+
+func TestPublish_anArchiveOfThatNameWithOtherBytesIsNeverOverwritten(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	path := cutOne(t, repo, agent, "nightly", "0.3.1", "bytes")
+	name := filepath.Base(path)
+	for label, assets := range map[string]string{
+		"another size":   fmt.Sprintf(`{"assets":[{"name":%q,"size":1}]}`, name),
+		"another digest": fmt.Sprintf(`{"assets":[{"name":%q,"size":%d,"digest":"sha256:%s"}]}`, name, mustStat(t, path), strings.Repeat("0", 64)),
+	} {
+		rec := &recorder{assets: assets}
+		if err := Publish(t.Context(), publishParams(repo, rec)); err == nil || !strings.Contains(err.Error(), "never overwritten") {
+			t.Errorf("%s: err = %v", label, err)
+		}
+		for _, c := range rec.calls {
+			if strings.HasPrefix(c, "rsync") || strings.HasPrefix(c, "gh release upload") {
+				t.Errorf("%s: %q ran", label, c)
+			}
+		}
+	}
+}
+
+func TestPublish_aTamperedPendingRecordOrAnOptionLookingDestinationIsRefused(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	cutOne(t, repo, agent, "nightly", "0.3.1", "bytes")
+	good := mustRead(t, filepath.Join(repo.Dir, PendingFile))
+	cases := map[string]func(p *PublishParams) string{
+		"a tag that is not the cut's": func(*PublishParams) string {
+			return strings.Replace(string(good), "release-nightly-0.3.1", "--repo=evil/x", 1)
+		},
+		"a relative asset path": func(*PublishParams) string {
+			return strings.Replace(string(good), `"path": "/`, `"path": "-x/`, 1)
+		},
+		"a destination that is an option": func(p *PublishParams) string { p.MetadataDest = "-e"; return string(good) },
+		"a repository that is an option":  func(p *PublishParams) string { p.GitHubRepo = "--help"; return string(good) },
+	}
+	for name, change := range cases {
+		p := publishParams(repo, &recorder{})
+		body := change(&p)
+		if err := os.WriteFile(filepath.Join(repo.Dir, PendingFile), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		rec := &recorder{}
+		p.Run = rec.run
+		if err := Publish(t.Context(), p); err == nil {
+			t.Errorf("%s was published", name)
+		}
+		if len(rec.calls) != 0 {
+			t.Errorf("%s: commands ran: %q", name, rec.calls)
+		}
+	}
+}
+
+func mustStat(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
 }

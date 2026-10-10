@@ -72,7 +72,11 @@ func repoFlag(cmd *cobra.Command, dir *string) {
 // repoFor resolves --dir.
 func repoFor(dir string) (releasepub.Repo, error) {
 	if dir != "" {
-		return releasepub.Repo{Dir: dir}, nil
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return releasepub.Repo{}, clierr.Usage("--dir %q: %v", dir, err)
+		}
+		return releasepub.Repo{Dir: abs}, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

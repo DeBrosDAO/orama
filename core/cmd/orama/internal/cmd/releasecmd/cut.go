@@ -30,7 +30,7 @@ writes only to --dir; it uploads nothing. Run publish to upload.
 An archive must be one built with "orama build --unsigned" (a release is trusted
 through the release root, not a wallet), and an amd64 one carries the global layer.
 A version must be dotted numeric (0.3.1) and newer than the channel's newest;
-a release is immutable (--replace is for a dev build that reuses a version).
+a release is immutable (--replace is for a dev/<branch> build that reuses a version).
 Only the newest --retention versions of the channel stay listed. The timestamp
 is valid 7 days for nightly and dev, 30 for main.
 

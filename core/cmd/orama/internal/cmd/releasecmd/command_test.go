@@ -155,6 +155,9 @@ func TestPublish_runsTheCommandsThroughTheRunner(t *testing.T) {
 	var calls []string
 	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
 		calls = append(calls, name+" "+args[0])
+		if name == "gh" && args[1] == "view" {
+			return []byte(`{"assets":[]}`), nil
+		}
 		return nil, nil
 	}
 	if _, err := exec(t, a, run, "publish", "--dir", dir, "--github-repo", "o/r", "--metadata-dest", "h:/d/"); err != nil {

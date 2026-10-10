@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,10 +51,22 @@ func verifyStagedVerifier(stagedDir string, manifest stagedManifest, oramad []by
 	if got := strings.TrimSpace(string(digest)); got != hexSum {
 		return "", fmt.Errorf("%s says %s but the staged %s is %s", globalVerifierDigest, got, globalVerifierBinary, hexSum)
 	}
-	if !bytes.Contains(oramad, []byte(hexSum)) {
-		return "", fmt.Errorf("the staged oramad does not pin the staged %s (sha256 %s): it would refuse to start with it; stage the verifier of the same release", globalVerifierBinary, hexSum)
+	if err := CheckOramadPinsVerifier(oramad, hexSum); err != nil {
+		return "", err
 	}
 	return hexSum, nil
+}
+
+// CheckOramadPinsVerifier refuses an oramad whose bytes do not contain the
+// digest of the verifier: a release links the digest in, and oramad runs no
+// other verifier, so a pair that fails this would refuse to start. It is a
+// consistency check made before anything is installed or staged; the pin that
+// binds is oramad's own check when it starts the verifier.
+func CheckOramadPinsVerifier(oramad []byte, verifierSHA256 string) error {
+	if !bytes.Contains(oramad, []byte(verifierSHA256)) {
+		return fmt.Errorf("oramad does not pin the %s (sha256 %s): it would refuse to start with it; use the verifier of the same release", globalVerifierBinary, verifierSHA256)
+	}
+	return nil
 }
 
 // stageGenesisInLayout is GlobalHost.StageGenesis on a real node: root stages
@@ -117,4 +131,29 @@ func sumOf(files []StagedFile, name string) string {
 
 func hashVerify(sum string) cosmovisor.Verify {
 	return func(f *os.File) error { return fileHasSum(f, sum) }
+}
+
+// checkCurrentHasVerifier refuses an install over a node whose cosmovisor
+// `current` runs an upgrade that was staged without a verifier. The chain unit
+// this install writes passes oramad the verifier in current/bin, so that node
+// would stop starting; the upgrade has to be staged again with its own.
+func checkCurrentHasVerifier(layout cosmovisor.Layout) error {
+	target, err := os.Readlink(layout.Current())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", layout.Current(), err)
+	}
+	if target == "genesis" {
+		return nil
+	}
+	if !filepath.IsLocal(target) {
+		return fmt.Errorf("%s points at %q, outside the cosmovisor directory", layout.Current(), target)
+	}
+	if _, err := os.Lstat(filepath.Join(layout.Root(), target, "bin", globalVerifierBinary)); err != nil {
+		return fmt.Errorf("cosmovisor runs %s, which was staged without %s, and the chain unit now passes oramad the verifier in current/bin: "+
+			"stage that upgrade again with 'orama global stage-oramad --verifier' before installing (%w)", target, globalVerifierBinary, err)
+	}
+	return nil
 }

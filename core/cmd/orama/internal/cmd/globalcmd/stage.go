@@ -1,13 +1,17 @@
 package globalcmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
+	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/spf13/cobra"
 )
@@ -86,6 +90,9 @@ func runStageOramad(cmd *cobra.Command, _ []string) error {
 		ChainUID: uid,
 		ChainGID: gid,
 	}
+	if err := checkVerifierPinned(stageFlags.binary, stageFlags.verifier); err != nil {
+		return clierr.Failure("%v", err)
+	}
 	verifier := cosmovisor.Companion{Name: constants.ChainVerifierBinary, Src: stageFlags.verifier, Verify: verifyAsTarget(stageFlags.verifierTarget)}
 	verify := verifyAsTarget(stageFlags.target)
 	var dst string
@@ -115,4 +122,24 @@ func verifyAsTarget(target string) cosmovisor.Verify {
 		})
 		return err
 	}
+}
+
+// checkVerifierPinned refuses an oramad and a verifier that are not of one
+// release, before either is staged: a halted chain at the upgrade height is the
+// price of finding out later.
+func checkVerifierPinned(binary, verifier string) error {
+	oramad, err := os.ReadFile(binary)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", binary, err)
+	}
+	f, err := os.Open(verifier)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", verifier, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash %s: %w", verifier, err)
+	}
+	return install.CheckOramadPinsVerifier(oramad, hex.EncodeToString(h.Sum(nil)))
 }

@@ -63,34 +63,6 @@ func (l Layout) StageGenesis(src string, verify Verify, companions ...Companion)
 	return dst, l.linkCurrent(rootFD)
 }
 
-// StageGenesisCompanions places files beside a genesis binary that is already
-// staged: a node installed before its release shipped a companion (the
-// shielded verifier) gets it without its oramad being replaced. A file already
-// there is refused, as for any staged file.
-func (l Layout) StageGenesisCompanions(companions ...Companion) (err error) {
-	homeFD, rootFD, err := l.openTop()
-	if err != nil {
-		return err
-	}
-	genesisFD, binFD := -1, -1
-	defer func() { err = errors.Join(err, closeAll(homeFD, rootFD, genesisFD, binFD)) }()
-	if genesisFD, err = l.openDir(rootFD, genesisDir, false, false); err != nil {
-		return err
-	}
-	if binFD, err = l.openDir(genesisFD, binDir, false, false); err != nil {
-		return err
-	}
-	for _, c := range companions {
-		if err := l.checkCompanion(c); err != nil {
-			return err
-		}
-		if err := l.placeFile(rootFD, binFD, c.Name, c.Src, filepath.Join(l.GenesisBinDir(), c.Name), c.Verify); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // StageUpgrade places the binary for the upgrade plan name and the
 // upgrade-info.json link cosmovisor writes through. A binary already staged
 // for name is refused: a staged upgrade is replaced by removing it on
@@ -152,31 +124,6 @@ func (l Layout) openTop() (homeFD, rootFD int, err error) {
 	return homeFD, rootFD, nil
 }
 
-// placeAll stages the companions, then the daemon, into binFD. The daemon goes
-// last: cosmovisor treats a directory with its binary as a staged version, so a
-// failure part way never leaves one that lacks a companion. Whatever was placed
-// before a failure is removed.
-func (l Layout) placeAll(rootFD, binFD int, src, dst string, verify Verify, companions []Companion) (err error) {
-	var placed []string
-	defer func() {
-		if err != nil {
-			for _, name := range placed {
-				err = errors.Join(err, unlinkIfPresent(binFD, name))
-			}
-		}
-	}()
-	for _, c := range companions {
-		if err := l.checkCompanion(c); err != nil {
-			return err
-		}
-		if err := l.placeFile(rootFD, binFD, c.Name, c.Src, filepath.Join(filepath.Dir(dst), c.Name), c.Verify); err != nil {
-			return err
-		}
-		placed = append(placed, c.Name)
-	}
-	return l.placeFile(rootFD, binFD, l.Daemon, src, dst, verify)
-}
-
 // placeFile writes src into a fresh root-only staging directory under
 // cosmovisor/ as name, syncs it, sets its mode through the descriptor,
 // verifies that descriptor, and hard-links it into binFD. The link fails if the
@@ -208,7 +155,9 @@ func (l Layout) placeFile(rootFD, binFD int, name, src, dst string, verify Verif
 		return fmt.Errorf("link the verified file to %s: %w", dst, err)
 	}
 	if err := unix.Fsync(binFD); err != nil {
-		return fmt.Errorf("sync %s: %w", filepath.Dir(dst), err)
+		// Linked but not durable: take it back out rather than leave a file
+		// no one verified the durability of.
+		return errors.Join(fmt.Errorf("sync %s: %w", filepath.Dir(dst), err), unlinkIfPresent(binFD, name))
 	}
 	return nil
 }

@@ -3,8 +3,10 @@ package releasepub
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"time"
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
@@ -22,8 +24,11 @@ var topRoles = []string{metadata.ROOT, metadata.TIMESTAMP, metadata.SNAPSHOT, me
 // the SHA-256 of the root, the digest a network manifest pins. It refuses a
 // directory that already has a root.
 func InitRoot(ctx context.Context, agent Agent, repo Repo, now time.Time, progress io.Writer) (string, error) {
-	if _, _, err := repo.ReadRoot(); err == nil {
-		return "", fmt.Errorf("%s already has a root; change it with renew-root, never by making a second one", repo.Dir)
+	if _, _, err := repo.ReadRoot(); !errors.Is(err, fs.ErrNotExist) {
+		if err == nil {
+			err = fmt.Errorf("%s already has a root; change it with renew-root, never by making a second one", repo.Dir)
+		}
+		return "", err
 	}
 	pub, err := agent.ReleaseKey(ctx)
 	if err != nil {

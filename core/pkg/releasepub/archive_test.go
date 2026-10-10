@@ -45,6 +45,7 @@ func TestCut_clusterOnlyArchivesAreReleasableOnRequestAndArm64NeedsNoGlobalLayer
 	if _, err := Cut(t.Context(), cutParams(repo, agent, ch, arm)); err != nil {
 		t.Fatalf("an arm64 archive: %v", err)
 	}
+	published(t, repo)
 	p := cutParams(repo, agent, ch, pubtest.ArchiveWith(t, "0.3.2", "amd64", "b", pubtest.Options{ClusterOnly: true}))
 	p.AllowClusterOnly = true
 	if _, err := Cut(t.Context(), p); err != nil {

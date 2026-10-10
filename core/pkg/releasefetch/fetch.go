@@ -25,6 +25,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,9 +65,13 @@ type Params struct {
 	// deletes what the fetch made in it.
 	WorkDir string
 	// SeenPath is the rollback record of this machine, kept between fetches so
-	// a repository cannot replay an older snapshot.
-	SeenPath string
-	Now      time.Time
+	// a repository cannot replay an older snapshot. AdoptedRoot is the newest
+	// root this machine has followed the repository to, kept beside it: each
+	// fetch starts from the pinned root and walks the rotations again, and this
+	// is what tells a rotation this machine has already taken from a new one.
+	SeenPath    string
+	AdoptedRoot string
+	Now         time.Time
 }
 
 // Release is a downloaded, verified release.
@@ -98,12 +103,12 @@ func Fetch(ctx context.Context, p Params) (*Release, error) {
 		return nil, fmt.Errorf("create %s: %w", p.WorkDir, err)
 	}
 	rootPath := filepath.Join(p.WorkDir, rootFileName)
-	if err := os.WriteFile(rootPath, p.Root, rootFilePerm); err != nil {
-		return nil, fmt.Errorf("keep the release root for the checks: %w", err)
+	if err := writeRoot(rootPath, p.Root); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
 	defer cancel()
-	src := autoupdate.Source{RootPath: rootPath, SeenPath: p.SeenPath, WorkDir: p.WorkDir, Arch: p.Arch, Now: func() time.Time { return p.Now }}
+	src := autoupdate.Source{RootPath: rootPath, SeenPath: p.SeenPath, AdoptedRoot: p.AdoptedRoot, WorkDir: p.WorkDir, Arch: p.Arch, Now: func() time.Time { return p.Now }}
 	rel, ok, err := src.Newest(ctx, p.RepoURL, p.Channel)
 	if err != nil {
 		return nil, fmt.Errorf("the %s channel of %s: %w", p.Channel, p.RepoURL, err)
@@ -137,8 +142,8 @@ func (p Params) check() error {
 	if p.Arch != "amd64" && p.Arch != "arm64" {
 		return fmt.Errorf("architecture %q is not amd64 or arm64", p.Arch)
 	}
-	if p.WorkDir == "" || p.SeenPath == "" || p.Now.IsZero() {
-		return errors.New("a fetch needs a work directory, a rollback record and a clock")
+	if p.WorkDir == "" || p.SeenPath == "" || p.AdoptedRoot == "" || p.Now.IsZero() {
+		return errors.New("a fetch needs a work directory, a rollback record, a place to keep the adopted root and a clock")
 	}
 	pin := strings.ToLower(strings.TrimSpace(p.RootSHA256))
 	if _, err := hex.DecodeString(pin); err != nil || len(pin) != 64 {
@@ -166,4 +171,21 @@ func (p Params) checkMinVersion(version string) error {
 		return fmt.Errorf("the newest release on the %s channel is %s, older than the %s this network requires", p.Channel, version, p.MinVersion)
 	}
 	return nil
+}
+
+// writeRoot writes the root the fetch starts from. The file is created new:
+// a path that already exists (a symlink left in the work directory included) is
+// removed first, never written through.
+func writeRoot(path string, root []byte) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("clear the release root of an earlier fetch: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, rootFilePerm)
+	if err != nil {
+		return fmt.Errorf("keep the release root for the checks: %w", err)
+	}
+	if _, err := f.Write(root); err != nil {
+		return errors.Join(fmt.Errorf("keep the release root for the checks: %w", err), f.Close())
+	}
+	return f.Close()
 }

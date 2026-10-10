@@ -177,6 +177,7 @@ func TestCut_aSecondVersionRaisesEveryVersionAndRetentionDropsTheOldest(t *testi
 		if err != nil {
 			t.Fatalf("%s: %v", v, err)
 		}
+		published(t, repo)
 		if plan.TargetsVersion != int64(i+1) || plan.SnapshotVersion != int64(i+1) || plan.TimestampVersion != int64(i+1) {
 			t.Fatalf("%s: versions %d/%d/%d", v, plan.TargetsVersion, plan.SnapshotVersion, plan.TimestampVersion)
 		}
@@ -202,6 +203,7 @@ func TestCut_channelsShareOneTargetsFileAndRetentionIsPerChannel(t *testing.T) {
 		if _, err := Cut(t.Context(), p); err != nil {
 			t.Fatalf("%s %s: %v", c.channel, c.version, err)
 		}
+		published(t, repo)
 	}
 	verified, err := clientView(t, repo, testNow)
 	if err != nil {
@@ -263,6 +265,7 @@ func TestCut_replaceChangesTheBytesOfAListedPath(t *testing.T) {
 	if _, err := Cut(t.Context(), cutParams(repo, agent, ch, archive(t, "0.3.5", "amd64", "one"))); err != nil {
 		t.Fatal(err)
 	}
+	published(t, repo)
 	two := archive(t, "0.3.5", "amd64", "two")
 	p := cutParams(repo, agent, ch, two)
 	p.Replace = true
@@ -417,4 +420,56 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+func TestCut_aSecondCutBeforeThePublishIsRefused(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	ch := mustChannel(t, "nightly")
+	if _, err := Cut(t.Context(), cutParams(repo, agent, ch, archive(t, "0.3.1", "amd64", "one"))); err != nil {
+		t.Fatal(err)
+	}
+	before := agent.approvals()
+	_, err := Cut(t.Context(), cutParams(repo, agent, ch, archive(t, "0.3.2", "amd64", "two")))
+	if err == nil || !strings.Contains(err.Error(), "never published") {
+		t.Fatalf("err = %v", err)
+	}
+	if agent.approvals() != before {
+		t.Fatal("a person was asked to approve a cut that would orphan the first")
+	}
+}
+
+func TestCut_replaceIsForDevChannelsOnly(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	for _, channel := range []string{"nightly", "main"} {
+		p := cutParams(repo, agent, mustChannel(t, channel), archive(t, "0.3.1", "amd64", "x"))
+		p.Replace = true
+		if _, err := Cut(t.Context(), p); err == nil || !strings.Contains(err.Error(), "dev/<branch>") {
+			t.Errorf("%s: err = %v", channel, err)
+		}
+	}
+}
+
+func TestInitRoot_aRootThatCannotBeReadIsNotOverwritten(t *testing.T) {
+	agent := newFakeAgent(t)
+	repo := newRepo(t, agent)
+	if err := os.WriteFile(filepath.Join(repo.Dir, RootFile), []byte("{corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := agent.approvals()
+	if _, err := InitRoot(t.Context(), agent, repo, testNow, nil); err == nil {
+		t.Fatal("a corrupt root was replaced by a new version 1")
+	}
+	if agent.approvals() != before {
+		t.Fatal("a person was asked to approve a root over a corrupt one")
+	}
+}
+
+// published stands for a successful publish: the pending record is gone.
+func published(t *testing.T, repo Repo) {
+	t.Helper()
+	if err := repo.clearPending(); err != nil {
+		t.Fatal(err)
+	}
 }

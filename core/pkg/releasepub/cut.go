@@ -92,6 +92,15 @@ func planCut(p CutParams) (*CutPlan, error) {
 	if _, err := releaseverify.ValidateRoot(rootBytes, p.Now); err != nil {
 		return nil, fmt.Errorf("the repository's root: %w; renew it (orama maint release renew-root)", err)
 	}
+	if pending, err := p.Repo.ReadPending(); err != nil {
+		return nil, err
+	} else if pending != nil {
+		return nil, fmt.Errorf("%s holds a cut of %s %s that was never published: publish it (orama maint release publish) before cutting again, "+
+			"or delete %s if you mean to throw it away", p.Repo.Dir, pending.Channel, pending.Version, PendingFile)
+	}
+	if p.Replace && !strings.HasPrefix(p.Channel.Name, devPrefix) {
+		return nil, fmt.Errorf("--replace changes the bytes of a published archive and is for dev/<branch> channels only; %s is immutable", p.Channel.Name)
+	}
 	version, assets, entries, err := readArchives(p.Channel, p.Archives, p.AllowClusterOnly)
 	if err != nil {
 		return nil, err
@@ -139,7 +148,11 @@ func readArchives(channel Channel, paths []string, clusterOnly bool) (version st
 			return "", nil, nil, err
 		}
 		entries[target] = info
-		assets = append(assets, Asset{Name: filepath.Base(path), Path: path, Target: target, SHA256: fmt.Sprintf("%x", info.Hashes["sha256"])})
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("resolve %s: %w", path, err)
+		}
+		assets = append(assets, Asset{Name: filepath.Base(path), Path: abs, Target: target, SHA256: fmt.Sprintf("%x", info.Hashes["sha256"])})
 	}
 	return version, assets, entries, nil
 }
