@@ -73,7 +73,7 @@ At lambda = 1 a seat that exists only on the committee drops to zero power.
 
 At the end of an epoch `x/emission` mints the 60% validator share and `x/power` pays it on the same power figures CometBFT used. Rewards are paid on *capped* power, not on the stock distribution module.
 
-Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account. There is no withdraw transaction. A delegation smaller than 1 ORAMA is skipped.
+Each validator's amount is split by its commission. The commission plus the operator's own self-delegation share goes to the operator. The rest is split across delegators in proportion to their shares. Everyone is credited in an earnings account, and each owner moves their own earnings to their bank balance with `MsgWithdrawEarnings` (`orama chain withdraw-earnings`) when they choose; see [Fees](/docs/blockchain/fees#using-your-rewards). A delegation smaller than 1 ORAMA is skipped.
 
 ## Slashing and jailing
 

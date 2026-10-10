@@ -15,7 +15,7 @@ Orama has a public chain, and a public chain leaks who pays whom. The network's 
 
 First, norama may move between users in the open, and a user who wants privacy uses the pool. A bank send of norama between plain accounts is a public payment; the chain keeps no send restriction on norama, only the blocked module accounts (`BlockedAddresses`), so the pool's account `shielded` cannot be paid except through its own messages.
 
-Second, the way to pay a person is the pool. A payment inside the pool reveals nothing but its fee. The design takes its constraints from what a chain can and cannot do cheaply:
+Second, the private way to pay a person is the pool, and using it is optional. A payment inside the pool reveals nothing but its fee. The design takes its constraints from what a chain can and cannot do cheaply:
 
 - **Nodes verify and never prove.** Halo 2 proofs take seconds to build and milliseconds to check. The prover lives in a wallet crate that is never linked into `oramad` (`chain/x/shielded/wallet/`).
 - **The set of spent notes grows forever.** One 32-byte nullifier per spend can never be pruned, because a nullifier proves nothing about age. The set has to live somewhere that scales better than the IAVL tree that the app hash walks.

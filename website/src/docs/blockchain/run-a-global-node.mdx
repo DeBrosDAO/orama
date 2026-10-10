@@ -87,6 +87,17 @@ Anyone else becomes a validator with a normal `MsgCreateValidator`, bonded from 
 
 `x/emission` mints once per epoch. The validator share is paid by `x/power` on capped power (5% per operator, or 3% once many operators are active), split between the validator (commission and its own delegation) and its delegators, and credited to **earnings accounts**, not bank balances. A delegation below 1 ORAMA is refused. See [Validators](/docs/blockchain/validators) for the power rules.
 
+### Using your rewards
+
+Rewards sit in your earnings account until you move them. See what you have with `orama chain earnings <your-address>`, then choose:
+
+```bash
+orama chain withdraw-earnings 25            # earnings -> your own bank balance (25 ORAMA)
+orama chain send <to> 5 --public            # pay another account in the open
+```
+
+Both are signed by your RootWallet, which shows the transaction first. `withdraw-earnings` can only pay you; the destination is not a field. `send --public` shows the sender, the recipient and the amount on the chain to everyone, permanently: the command prints that warning and asks you to type `yes` (`--yes` skips the question). `orama chain send` without `--public` is a private send, the default so that a payment cannot become public by omission. A private send needs a wallet that builds the shielded bundle, and the RootWallet cannot yet, so it stops with that explanation and sends nothing. Earnings can also go straight into the shielded pool (`MsgShieldEarnings`) by a tool that builds the bundle. [Fees](/docs/blockchain/fees#using-your-rewards) has the whole picture.
+
 ### Slashing and tombstoning
 
 | Fault | Penalty |

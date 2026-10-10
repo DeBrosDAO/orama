@@ -121,7 +121,7 @@ func (r *Reader) gatewayPostTx(ctx context.Context, route string, txRaw []byte) 
 		return nil, &refused
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("%s answered HTTP %d: %s", req.URL.Host, resp.StatusCode, truncate(string(body)))
+		return nil, &StatusError{Host: req.URL.Host, Code: resp.StatusCode, Body: truncate(string(body))}
 	}
 	return body, nil
 }

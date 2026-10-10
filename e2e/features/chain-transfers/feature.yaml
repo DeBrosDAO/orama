@@ -1,0 +1,37 @@
+# Stage 8: the user's chain transactions, `orama chain send` and
+# `orama chain withdraw-earnings`, against the run's co-hosted chain through
+# the environment's gateway. A send is PRIVATE unless --public is given: with
+# no choice made, with --yes and without --public, the command stops before it
+# opens the chain or the RootWallet and pays nothing (a private send needs a
+# wallet that builds the shielded bundle, which the RootWallet cannot yet); it
+# never turns into a public payment. Every refusal the CLI can judge (an
+# address that is not orama1..., a valoper address, a zero, negative,
+# exponent or over-precise amount) is a usage error before any wallet or
+# chain. A public send and a withdrawal read the chain id and the account
+# through the gateway's public routes (status, the AccountInfo wallet query),
+# and stop at the run agent's account, which the chain has never seen: the
+# failure names the account that must be funded first, and nothing is signed
+# or broadcast. The success paths need a funded RootWallet account that
+# signs orama-tx; the run's headless agent refuses to (RootWallet task 2857),
+# so the on-chain effect of MsgWithdrawEarnings and of a public MsgSend is
+# proven by chain-core (withdraw_test.go, send tests) and the CLI's own
+# unit tests drive the whole path with a fake chain and wallet.
+id: chain-transfers
+title: orama chain send and withdraw-earnings - private by default, public by choice
+area: cli
+subtasks: [3369, 3370]
+stage: 8
+destructive: false
+requires:
+  extra_nodes: 0
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama chain send
+    - orama chain withdraw-earnings
+  claims:
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-send: a send is private unless --public is given; without --public it stops with the private-transfer explanation and pays nothing"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-send: refuses an address that is not orama1... and an amount that is not a positive number of ORAMA with at most nine decimals before it opens the wallet or the chain"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-withdraw-earnings: refuses an amount that is not a positive number of ORAMA with at most nine decimals before it opens the wallet or the chain"
+    - "docs/whitepaper/technical-reference/vol1/35-the-cli.md: a public send prints the payment and the visibility warning and asks for yes; the private path never becomes a public payment; the chain id is read from the chain the transaction is sent to"

@@ -3,6 +3,7 @@ import { BASE_DENOM } from "./format";
 import type { AnyMsg } from "./msg";
 import type { OramaSigner } from "./signer";
 import { signTx, type SignedTx } from "./tx";
+import { transfer, withdrawEarnings, type TransferOptions, type TransferRequest, type TransferResult } from "./transfer";
 
 /** Where the chain is read from. Each read names the base it uses. */
 export interface ChainClientConfig {
@@ -664,6 +665,24 @@ export class OramaChainClient {
       signer,
     );
     return { signed, result: await this.broadcast(signed.txBytes) };
+  }
+
+  /**
+   * Sends ORAMA, privately unless `request.public` is `true`. A private transfer needs
+   * `options.shielded`; without one it throws and never falls back to a public payment. See
+   * {@link TransferRequest}.
+   */
+  transfer(request: TransferRequest, options?: TransferOptions): Promise<TransferResult> {
+    return transfer(this, request, options);
+  }
+
+  /** Moves norama of the signer's earnings to the signer's own bank balance (MsgWithdrawEarnings). */
+  withdrawEarnings(
+    amount: bigint | number | string,
+    signer: OramaSigner,
+    options: SignAndBroadcastOptions,
+  ): Promise<{ txHash: string; withdrawn: string }> {
+    return withdrawEarnings(this, amount, signer, options);
   }
 
   // ---- transport ----

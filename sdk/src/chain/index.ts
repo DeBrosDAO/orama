@@ -22,6 +22,16 @@ export type {
   WalletPageOptions,
 } from "./client";
 
+export { PUBLIC_TRANSFER_WARNING, PrivateTransferUnavailableError, transfer, withdrawEarnings } from "./transfer";
+export type {
+  PrivateTransferResult,
+  PublicTransferResult,
+  ShieldedTransferBuilder,
+  TransferOptions,
+  TransferRequest,
+  TransferResult,
+} from "./transfer";
+
 export { LocalSigner, verifyDirectSignature } from "./signer";
 export type { OramaSigner } from "./signer";
 
