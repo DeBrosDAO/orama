@@ -1,7 +1,9 @@
 # Published networks
 
-One directory per network, written by `orama maint network publish` when a chain
-is deployed. Do not edit it by hand.
+One directory per network, written when a chain is created: `orama setup
+--create-network` writes it to its `--publish-dir`, and `orama maint network publish`
+writes it from a genesis that already exists. Copy what setup wrote here, run
+`make -C core sync-networks`, and commit both. Do not edit it by hand.
 
 ```
 networks/<name>/

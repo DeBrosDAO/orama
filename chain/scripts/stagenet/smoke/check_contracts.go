@@ -149,20 +149,17 @@ func checkCW20(ctx context.Context, e *env, c *node.Client) Result {
 func (e *env) otherOperator(ctx context.Context, c *node.Client, self string) (string, error) {
 	for _, n := range e.nodes {
 		var resp nodestypes.QueryNodeResponse
-		err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: nodeID(n.Name)}, &resp)
+		err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: n.Name}, &resp)
 		if err != nil {
 			var qerr *node.QueryError
 			if errors.As(err, &qerr) && qerr.NotFound() {
 				continue
 			}
-			return "", fmt.Errorf("look up node %s: %w", nodeID(n.Name), err)
+			return "", fmt.Errorf("look up node %s: %w", n.Name, err)
 		}
 		if resp.Node.Operator != self {
 			return resp.Node.Operator, nil
 		}
 	}
-	return "", errors.New("no other registered operator to receive the transfer (run `deploy.sh register` first)")
+	return "", errors.New("no other registered operator to receive the transfer (`orama setup` registers the nodes; run it first)")
 }
-
-// nodeID is the x/nodes id deploy.sh registers a node under.
-func nodeID(name string) string { return "stagenet-" + name }

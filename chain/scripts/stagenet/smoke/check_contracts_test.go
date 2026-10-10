@@ -45,7 +45,3 @@ func TestCW20InstantiateMsg_holdsTheSupplyForTheOperator(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"name":"Stagenet Smoke","symbol":"SMK","decimals":6,"initial_balances":[{"address":"orama1holder","amount":"1000"}]}`, string(raw))
 }
-
-func TestNodeID(t *testing.T) {
-	require.Equal(t, "stagenet-mew", nodeID("mew"))
-}

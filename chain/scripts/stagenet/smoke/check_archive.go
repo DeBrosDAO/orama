@@ -174,8 +174,8 @@ func (e *env) providerASNs(ctx context.Context, c *node.Client) ([]uint32, error
 	var asns []uint32
 	for _, n := range e.nodes {
 		var resp nodestypes.QueryNodeResponse
-		if err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: nodeID(n.Name)}, &resp); err != nil {
-			return nil, fmt.Errorf("look up node %s: %w", nodeID(n.Name), err)
+		if err := c.Query(ctx, "/orama.nodes.v1.Query/Node", &nodestypes.QueryNodeRequest{NodeId: n.Name}, &resp); err != nil {
+			return nil, fmt.Errorf("look up node %s: %w", n.Name, err)
 		}
 		asns = append(asns, resp.Node.Asn)
 	}

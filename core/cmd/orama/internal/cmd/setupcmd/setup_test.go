@@ -26,6 +26,7 @@ func resetFlags(t *testing.T) {
 	flags.ips, flags.hostKeys = nil, nil
 	flags.clusterOnly, flags.exit, flags.yes, flags.password, flags.noValidator = false, false, false, false, false
 	flags.storageGB, flags.asn = 0, 0
+	flags.create = createFlags{}
 	Cmd.Flags().VisitAll(func(f *pflag.Flag) { f.Changed = false })
 }
 
@@ -105,6 +106,8 @@ func TestWantWizard(t *testing.T) {
 		{"no name for a full node", setup.Options{IPs: full.IPs}, true, true},
 		{"no name needed cluster-only", setup.Options{IPs: full.IPs, ClusterOnly: true}, true, false},
 		{"--yes asks nothing", setup.Options{Yes: true}, true, false},
+		{"a creation needs no node name", setup.Options{IPs: full.IPs, Create: &setup.CreateOptions{}}, true, false},
+		{"a creation still needs machines", setup.Options{Create: &setup.CreateOptions{}}, true, true},
 		{"no terminal, no questions", setup.Options{}, false, false},
 	}
 	for _, c := range cases {
@@ -231,7 +234,8 @@ func TestCleanError_keepsTheCodeAndDropsTheEscapes(t *testing.T) {
 }
 
 func TestCmd_isRegisteredWithItsFlags(t *testing.T) {
-	for _, name := range []string{"network", "ip", "name", "cluster-only", "exit", "storage-gb", "yes", "user", "password", "bootstrap-key", "host-key", "domain", "env", "tor-network", "asn", "no-validator", "contact", "acme-ca"} {
+	for _, name := range []string{"network", "ip", "name", "cluster-only", "exit", "storage-gb", "yes", "user", "password", "bootstrap-key", "host-key", "domain", "env", "tor-network", "asn", "no-validator", "contact", "acme-ca",
+		"create-network", "chain-id", "release-root", "release-repo", "channel", "min-version", "seed", "publish-dir", "force-new-genesis", "no-faucet"} {
 		if Cmd.Flags().Lookup(name) == nil {
 			t.Errorf("orama setup has no --%s", name)
 		}
@@ -280,5 +284,62 @@ func TestCleanError_theOriginalErrorStaysReachable(t *testing.T) {
 	var nf interface{ Error() string }
 	if !errors.As(err, &nf) {
 		t.Error("errors.As must work")
+	}
+}
+
+func TestOptionsFromFlags_createNetwork(t *testing.T) {
+	resetFlags(t)
+	for name, value := range map[string]string{
+		"create-network": "stagenet", "chain-id": "orama-stagenet-7", "release-root": "root.json", "publish-dir": "out",
+		"seed": "seed.example.org", "no-faucet": "true", "force-new-genesis": "true", "ip": "203.0.113.10",
+	} {
+		if err := Cmd.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts, err := optionsFromFlags(Cmd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := setup.CreateOptions{
+		Name: "stagenet", ChainID: "orama-stagenet-7", ReleaseRoot: "root.json", PublishDir: "out",
+		Seeds: []string{"seed.example.org"}, NoFaucet: true, ForceNewGenesis: true,
+	}
+	if opts.Create == nil || fmt.Sprint(*opts.Create) != fmt.Sprint(want) {
+		t.Errorf("create = %+v, want %+v", opts.Create, want)
+	}
+	resetFlags(t)
+}
+
+func TestOptionsFromFlags_aCreationFlagWithoutCreateNetworkIsRefused(t *testing.T) {
+	for _, name := range createOnly {
+		resetFlags(t)
+		value := "x"
+		if name == "force-new-genesis" || name == "no-faucet" {
+			value = "true"
+		}
+		if err := Cmd.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+		_, err := optionsFromFlags(Cmd, nil)
+		if clierr.CodeOf(err) != clierr.CodeUsage || err == nil || !strings.Contains(err.Error(), "--"+name) {
+			t.Errorf("--%s without --create-network: %v", name, err)
+		}
+	}
+	resetFlags(t)
+}
+
+func TestPrintSummary_aCreationSaysHowToPublish(t *testing.T) {
+	var out bytes.Buffer
+	plan := &setup.Plan{Nodes: []setup.NodePlan{{IP: "203.0.113.10"}}}
+	created := &setup.CreatedNetwork{
+		Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-7", Seeds: []string{"seed1.stagenet.orama.network"}},
+		Dir:      "networks/stagenet", Machines: []string{"203.0.113.10"},
+	}
+	printSummary(&out, &setup.Result{Plan: plan, Env: "stagenet", Created: created})
+	for _, want := range []string{"make -C core sync-networks", "orama network add https://orama.network/networks/stagenet/manifest.json", "seed1.stagenet.orama.network."} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("summary lacks %q:\n%s", want, out.String())
+		}
 	}
 }

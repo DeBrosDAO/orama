@@ -117,6 +117,9 @@ type Options struct {
 	TorNetwork string
 	// NoValidator skips creating the validator (and the 1,000 ORAMA self-bond).
 	NoValidator bool
+	// Create, when set, makes the run create the network instead of joining one:
+	// the machines are its bootstrap committee.
+	Create *CreateOptions
 }
 
 // Normalize checks the options and fills the defaults. It touches no machine.
@@ -141,6 +144,11 @@ func (o *Options) Normalize() error {
 	}
 	if err := o.checkHostKeys(); err != nil {
 		return err
+	}
+	if o.Create != nil {
+		if err := o.prepareCreate(); err != nil {
+			return err
+		}
 	}
 	if err := o.checkProfile(); err != nil {
 		return err

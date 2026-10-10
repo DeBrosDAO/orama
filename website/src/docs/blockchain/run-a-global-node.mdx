@@ -4,7 +4,7 @@
 
 A global node runs the public Orama L1 (`oramad`) and, optionally, the services beside it: the storage provider, the history archiver, or the repair delegate. It needs no domain, no WireGuard and no cluster. This guide covers what the `orama` CLI does today on such a machine. The chain itself is described in [What the chain is](/docs/blockchain/what-it-is) and [Running a chain node](/docs/blockchain/running).
 
-To put a global node beside a cluster node on fresh machines, and register it on the chain, use [`orama setup`](/docs/operator/setup): it runs the commands on this page for you, over SSH. This page is what they do, and what to run by hand.
+To put a global node beside a cluster node on fresh machines, and register it on the chain, use [`orama setup`](/docs/operator/setup): it runs the commands on this page for you, over SSH. This page is what they do, and what to run by hand. The same command creates a chain: `orama setup --create-network` makes each machine's chain home with `--init-chain` and a placeholder genesis, builds the real genesis from all the machines' keys, and installs it ([Create a network](/docs/operator/setup#create-a-network)).
 
 Every command on the node runs as root. None of them needs raw `systemctl`.
 

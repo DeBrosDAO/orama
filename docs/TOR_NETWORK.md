@@ -658,8 +658,8 @@ If a step fails, do not fix the node by hand: fix the source, and install again
 and the staging directory, so it removes the Tor roles with the rest, including a
 relay's identity (the relay gets a new fingerprint when it is installed again; an
 authority keeps its identity because the bundle is in the ceremony output, which
-is why that output stays with the operator). After a reset and `deploy.sh up`,
-repeat steps 4 to 7. `deploy.sh up` installs `chain,ipfs,provider,archiver`
+is why that output stays with the operator). After a reset and `orama setup --create-network`,
+repeat steps 4 to 7. `orama setup` installs `chain,ipfs,provider`
 without Tor flags; it does not remove a Tor role, and the namespace keeps the
 Tor ports because the layout is built from the installed units.
 

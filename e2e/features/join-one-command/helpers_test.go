@@ -45,17 +45,23 @@ func network(t *testing.T, cli *oramacli.Runner) string {
 	return name
 }
 
-// setupArgs is `orama setup` for the fresh servers, unattended: each server's
-// host key is pinned from the fingerprint the provisioner recorded, and the
-// run's key opens it once.
-func setupArgs(t *testing.T, net, env string, extras ...harness.Extra) []string {
+// machineArgs name the fresh servers, unattended: each server's host key is
+// pinned from the fingerprint the provisioner recorded, and the run's key opens
+// it once.
+func machineArgs(t *testing.T, extras ...harness.Extra) []string {
 	t.Helper()
 	f := harness.Fleet(t)
-	args := []string{"setup", "--network", net, "--env", env, "--yes", "--user", extras[0].SSHUser, "--bootstrap-key", f.State.SSHKeyFile}
+	args := []string{"--user", extras[0].SSHUser, "--bootstrap-key", f.State.SSHKeyFile}
 	for _, e := range extras {
 		args = append(args, "--ip", e.PublicIP, "--host-key", e.PublicIP+"="+e.HostKey)
 	}
 	return args
+}
+
+// setupArgs is `orama setup` for the fresh servers, joining net.
+func setupArgs(t *testing.T, net, env string, extras ...harness.Extra) []string {
+	t.Helper()
+	return append([]string{"setup", "--network", net, "--env", env, "--yes"}, machineArgs(t, extras...)...)
 }
 
 // isolatedCLI is the operator's CLI in a HOME of its own: setup records the

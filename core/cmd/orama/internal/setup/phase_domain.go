@@ -44,6 +44,9 @@ func (r *runner) waitDomain(ctx context.Context) error {
 // resumeCommand is the command that runs the same setup again.
 func (r *runner) resumeCommand() string {
 	o := r.opts
-	o.Network, o.Env = r.plan.Network, r.plan.Env
+	o.Env = r.plan.Env
+	if o.Create == nil {
+		o.Network = r.plan.Network
+	}
 	return o.CommandLine()
 }

@@ -4772,6 +4772,18 @@ The operator account needs ORAMA for the bonds and for the validator's 1,000 ORA
 On a network with a faucet and a node of it in your CLI configuration it is requested; otherwise
 setup stops, says how much to send and to which address, and resumes when you run it again.
 
+--create-network <name> makes a new network instead of joining one. Every machine is a bootstrap
+validator of it: setup installs the cluster and the global layer on all of them, makes each
+machine's chain keys, builds the genesis on the first machine from all the keys, gives it to
+the others, starts the chains one after the other, waits for blocks, and then registers your
+operator and the nodes as it does for a join. It writes networks/<name>/ (manifest, genesis,
+release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
+id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
+needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
+releases are verified against. Running it again with the same machines resumes: a machine that
+has its keys keeps them, and a genesis the machines carry is kept (--force-new-genesis builds a
+new one, and only while no chain has run).
+
 --cluster-only installs the cluster node alone (2 vCPU, 2 GiB, 10 GiB free). The full profile
 needs 4 vCPU, 8 GiB and 80 GiB free plus the storage you offer. Nothing is installed on any
 machine until every machine passes.
@@ -4781,17 +4793,27 @@ machine until every machine passes.
 | `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
 | `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
 | `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
+| `--chain-id` | — | With --create-network: the chain id. A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
+| `--channel` | — | With --create-network: the release channel, nightly, main or dev/<branch> (default nightly, main for a production chain id) |
 | `--cluster-only` | `false` | Install the cluster node only, without the chain, storage or relay |
 | `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
+| `--create-network` | — | Create a network of this name instead of joining one: the machines are its bootstrap validators |
 | `--domain` | — | Base domain of a cluster of your own: setup prints the NS and glue records to create, then waits until they resolve and the cluster has a certificate |
 | `--env` | — | CLI environment to record the cluster under (default: the active one on this network, else <network>-<name>) |
 | `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes |
+| `--force-new-genesis` | `false` | With --create-network: build a new genesis although the machines carry one. Refused once a chain has run |
 | `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or <ip>=SHA256:... for each (repeatable) |
 | `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
+| `--min-version` | — | With --create-network: the oldest orama version that may join, X.Y.Z (default: this CLI's version) |
 | `--name` | — | Node name, the node's id on the chain; several machines are named <name>, <name>-2, ... (required unless --cluster-only) |
 | `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |
+| `--no-faucet` | `false` | With --create-network: leave the test-network faucet out of the genesis |
 | `--no-validator` | `false` | Do not create a validator (and do not bond the 1,000 ORAMA self-bond) |
 | `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add <ip>), never from the command line |
+| `--publish-dir` | — | With --create-network: where networks/<name>/ is written (default ./networks) |
+| `--release-repo` | — | With --create-network: the https base URL of the release repository (default https://releases.orama.network) |
+| `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest |
+| `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.<name>.orama.network, one per machine) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |
 | `--user` | `root` | SSH login on the machines |

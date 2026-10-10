@@ -164,7 +164,7 @@ native-lib-linux-amd64:
 	./native/build.sh build
 
 ## build-linux-amd64-full: the static linux/amd64 oramad with CosmWasm and the Orchard verifier library in one
-## binary (what scripts/stagenet/deploy.sh builds), and beside it build/orama-orchard-verifier-linux-amd64, the
+## binary (what `orama maint build` stages for a release), and beside it build/orama-orchard-verifier-linux-amd64, the
 ## out-of-process second verifier whose sha256 is linked into oramad (the pin: oramad runs no other file).
 ## One native library, so one copy of the Rust std.
 build-linux-amd64-full: native-lib-linux-amd64 orchard-verifier-linux-amd64
@@ -178,7 +178,7 @@ build-linux-amd64-full: native-lib-linux-amd64 orchard-verifier-linux-amd64
 
 ## build-linux-amd64-global: the static linux/amd64 orama-global (the provider, archiver, indexer and repair
 ## services that run beside oramad, staged by `orama global install`) and stagenet-node (the helper
-## scripts/stagenet/deploy.sh runs on a stagenet node: signing agent, operator registration). Both are pure Go,
+## scripts/stagenet/deploy.sh smoke runs on a stagenet node: the signing agent). Both are pure Go,
 ## so no native library is involved.
 build-linux-amd64-global:
 	mkdir -p $(BUILD_DIR)

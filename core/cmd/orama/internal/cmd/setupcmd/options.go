@@ -17,12 +17,17 @@ func optionsFromFlags(cmd *cobra.Command, args []string) (setup.Options, error) 
 	if err != nil {
 		return setup.Options{}, err
 	}
+	create, err := flags.create.options(cmd)
+	if err != nil {
+		return setup.Options{}, err
+	}
 	opts := setup.Options{
 		Network: flags.network, IPs: append(append([]string(nil), flags.ips...), args...), Name: flags.name,
 		ClusterOnly: flags.clusterOnly, Exit: flags.exit, StorageGB: flags.storageGB, Yes: flags.yes,
 		User: flags.user, UsePassword: flags.password, BootstrapKey: flags.bootstrapKey, HostKeys: hostKeys,
 		Domain: flags.domain, ACMECA: flags.acmeCA, Env: flags.env, Contact: flags.contact,
 		ASN: flags.asn, ASNSet: cmd.Flags().Changed("asn"), TorNetwork: flags.torNetwork, NoValidator: flags.noValidator,
+		Create: create,
 	}
 	return opts, nil
 }
@@ -63,6 +68,9 @@ func orBare(ip string) string {
 func wantWizard(opts setup.Options, tty bool) bool {
 	if !tty || opts.Yes {
 		return false
+	}
+	if opts.Create != nil {
+		return len(opts.IPs) == 0
 	}
 	return len(opts.IPs) == 0 || (!opts.ClusterOnly && strings.TrimSpace(opts.Name) == "")
 }

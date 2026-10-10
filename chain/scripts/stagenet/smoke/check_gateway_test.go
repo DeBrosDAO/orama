@@ -39,10 +39,10 @@ func TestCheckGateway_readsEveryNodeOverTLSWithTheGivenCA(t *testing.T) {
 		require.Equal(t, "/v1/chain/query/orama.nodes.v1.Query/Node", r.URL.Path)
 		id := r.URL.Query().Get("json")
 		switch {
-		case id == `{"node_id":"stagenet-mew"}`:
-			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-mew","operator":"orama1a"}}`))
-		case id == `{"node_id":"stagenet-mewtwo"}`:
-			_, _ = w.Write([]byte(`{"node":{"node_id":"stagenet-mewtwo","operator":"orama1b"}}`))
+		case id == `{"node_id":"seed"}`:
+			_, _ = w.Write([]byte(`{"node":{"node_id":"seed","operator":"orama1a"}}`))
+		case id == `{"node_id":"seed-2"}`:
+			_, _ = w.Write([]byte(`{"node":{"node_id":"seed-2","operator":"orama1b"}}`))
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -52,11 +52,11 @@ func TestCheckGateway_readsEveryNodeOverTLSWithTheGivenCA(t *testing.T) {
 	cert := srv.TLS.Certificates[0].Certificate[0]
 	require.NoError(t, os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert}), 0o600))
 
-	e := &env{gateway: srv.URL, caFile: ca, nodes: []nodeRef{{Name: "mew"}, {Name: "mewtwo"}}}
+	e := &env{gateway: srv.URL, caFile: ca, nodes: []nodeRef{{Name: "seed"}, {Name: "seed-2"}}}
 	r := checkGateway(context.Background(), e)
 	require.Equal(t, Pass, r.Status, r.Detail)
 
-	e.nodes = append(e.nodes, nodeRef{Name: "gengar"})
+	e.nodes = append(e.nodes, nodeRef{Name: "seed-3"})
 	r = checkGateway(context.Background(), e)
 	require.Equal(t, Fail, r.Status)
 	require.Contains(t, r.Detail, "HTTP 404")

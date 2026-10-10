@@ -2,6 +2,8 @@
 
 `orama setup` turns fresh machines into nodes of an Orama network in one command. It gives your RootWallet an SSH key on each machine, installs the signed release the network's channel publishes, installs the cluster node, installs the global layer beside it (the chain joins by state sync), and registers you, your nodes and your validator on the chain, signing with your RootWallet. Re-running it with more addresses adds nodes to the same cluster.
 
+It also creates a network: with `--create-network` the machines are the first validators of a chain that does not exist yet, and setup builds its genesis ([Create a network](#create-a-network)).
+
 This page describes what the command does today. The flags are in the [`orama setup` reference](/docs/developer/cli/setup).
 
 ## Before you run it
@@ -58,6 +60,77 @@ orama setup --network stagenet --name alice --yes \
 8. **Your own domain** (`--domain`). Setup prints the NS and glue records to create at the parent zone as soon as the cluster exists, and at the end polls DNS until the parent zone returns them and the cluster serves a certificate for the domain.
 9. **The record.** The operator account is stored on the environment, so `orama status` shows your earnings, balance and bond without `--operator`. On a terminal, setup then offers to open `orama status`.
 
+## Create a network
+
+`orama setup --create-network <name>` makes a network instead of joining one. Every machine you give it becomes a bootstrap validator of the new chain, the committee that holds equal power from block 1 without any stake ([the bootstrap committee](/docs/blockchain/validators#the-bootstrap-committee-and-the-hand-over)). It is how a test network such as stagenet is started, and how you run a network of your own.
+
+### What you need
+
+- **The same as a join:** RootWallet unlocked, fresh machines, and each machine's SSH host key.
+- **A chain id** (`--chain-id`). A test network's carries `-stagenet-`, `-devnet-` or `-localnet-`, for example `orama-stagenet-7`. Every reset of a network gets a new chain id, and a published chain id keeps its genesis for good. A `-localnet-` id is refused (the chain locks no parameter on a localnet, which is for one machine). Any other id is a production one: the chain refuses it with fewer than 30 bootstrap validators, a faucet, a genesis supply and short epochs. Setup refuses a production id below 30 machines before it touches any, and one run takes at most 20 machines, so this command creates test networks only: a production network would also need seat keys held outside `oramad`'s test keyring.
+- **The release root** (`--release-root`): the `release-root.json` the network's releases are verified against. The manifest pins its digest, and the release setup installs is fetched from `--release-repo` (default `https://releases.orama.network`), channel `--channel` (default `nightly`, `main` for a production id), and verified against this root.
+- **Machines of the full profile**, since each runs the chain. `--cluster-only` and `--no-validator` make no sense here and are refused.
+
+### The command
+
+```bash
+orama setup --create-network stagenet --chain-id orama-stagenet-7 \
+  --release-root ./release-root.json --yes \
+  --ip 57.129.166.16 --ip 57.129.166.17 --ip 161.97.184.199 --ip 161.97.184.202 --ip 161.97.151.255 \
+  --host-key 57.129.166.16=SHA256:... --host-key 57.129.166.17=SHA256:... --host-key 161.97.184.199=SHA256:... \
+  --host-key 161.97.184.202=SHA256:... --host-key 161.97.151.255=SHA256:...
+```
+
+On a terminal with no flags, the wizard offers **Create a new network** at the list of networks and asks for the name, the chain id and the release root. The nodes are named `--name` (default `seed`), `seed-2`, and so on, in the order of the addresses: their names are their ids on the chain.
+
+| Flag | Meaning |
+|---|---|
+| `--create-network <name>` | The network's name, the one `--network` and `orama network use` take |
+| `--chain-id <id>` | The chain's id |
+| `--release-root <file>` | The `release-root.json` the network's releases are verified against |
+| `--release-repo <url>` | The release repository (default `https://releases.orama.network`) |
+| `--channel <channel>` | `nightly`, `main` or `dev/<branch>` |
+| `--min-version <X.Y.Z>` | The oldest orama version that may join (default: this CLI's version) |
+| `--seed <name>` | A seed DNS name, repeatable (default `seed1.<name>.orama.network`, one per machine) |
+| `--publish-dir <dir>` | Where `networks/<name>/` is written (default `./networks`) |
+| `--no-faucet` | Leave the test-network faucet out of the genesis |
+| `--force-new-genesis` | Build a new genesis although the machines carry one; refused once a chain has run |
+
+### What happens, in order
+
+The first steps are the join's: the preflight, enrolling and checking every machine, the signed release, and the cluster (the first machine creates it). Then:
+
+1. **Keys, no genesis yet.** On every machine, `orama global install --colocated --init-chain` makes the chain home and the node's keys with a placeholder genesis that only names the chain. Nothing is started. A machine that already has a chain home keeps its keys; `--init-chain` is never run twice on one.
+2. **The seats.** On every machine setup reads the chain node id and the consensus public key, and makes the seat's account: the key named `validator` in `oramad`'s test keyring on the machine (unencrypted, never copied off it). The seat's account receives the seat's share of the epochs, and signs the faucet's drips.
+3. **The genesis, built on the first machine** (and again on the second, as a witness: the two builds must be the same document but for the time they were made at, so a genesis that one machine changed is refused with the modules that differ) in a scratch home, by `oramad`'s own commands: `init`, then for a test network `genesis set-emission-params` (epochs of 300 seconds or 10 blocks, a genesis that allows a supply, the faucet unless `--no-faucet`), `genesis add-bootstrap-validator` for each seat with `--min-committee-size` set to the number of machines, `genesis add-standard-contracts` and `genesis validate`. A production id keeps the chain's epochs and gets no `set-emission-params`. Setup then sets two consensus parameters no module owns: a finite block `max_gas` of 100,000,000 and vote extensions from height 2.
+4. **The genesis goes to every machine** that does not hold it, and setup checks the digest of the file on each. Before that it checks the genesis itself: its chain id, a bootstrap committee that is exactly the seats (the same accounts, keys and names, none twice, none extra), zero supply with no balances and no gentxs, no module holding a list of anything (a validator, an account, an operator, a node, a token, a contract instance) except the committee, the denomination metadata and the standard contracts, x/power starting at lambda 0 and not from an exported state, no field named twice (the chain also reads the camelCase spelling of a field, so a genesis that has both shows setup one committee and the chain another), the faucet and the bootstrap-stake switch as the class of the chain id says, and the two consensus parameters. The code bytes of the standard contracts are not compared. A genesis that is not the committee's is refused, whether setup built it or a machine carries it.
+5. **Written down before anything starts.** `networks/<name>/` is written to `--publish-dir`: `manifest.json`, `genesis.json` and `release-root.json`. A chain id that is already published with another genesis is refused here, before a chain starts: pass a new `--chain-id`. Then each chain is wired to the other seats' node ids (`orama global install --persistent-peers`, the same command again, without `--init-chain`).
+6. **The chains start one at a time.** Each is started and setup waits until its unit is active and its RPC answers before it starts the next. A chain of five seats needs more than two thirds of them before the first block, so the first blocks come with the fourth start. Setup then waits until every chain has reached block 3, or the unit stays down (the end of its log is quoted).
+7. **Restart the cluster nodes, one at a time**, as for a join, then on a network with a faucet **wait for epoch 2**: the seats earn from the first epoch that closes, and the faucet is paid from their earnings.
+8. **On the chain**, as for a join: register the operator (funded from the faucet on a test network), then each node: register, bond, declare capacity, start the provider. No validator is created: the seats are validators already, and nothing is bonded for them.
+9. **The record**, as for a join: the cluster is recorded under the environment named after the network (the faucet looks for it), and the operator account is stored on it.
+
+### Running it again
+
+Every step first asks the machines what they have. A machine with a chain home keeps its keys, also when an earlier run died inside the install (the install is finished without `--init-chain`, which refuses a home that has a genesis); a genesis the machines carry is kept and read back (and published again), never replaced, but a machine other than the one that supplied it builds it once more and the two must agree, because a machine that says it carries a genesis is believed no more than one that builds it (with one machine there is no other to ask, and once a chain has run on the genesis it is history and is not asked again); a machine that holds the placeholder takes the genesis; a chain that runs is not touched. Two machines that carry different genesis files, or a genesis that does not name this committee's keys, stop the run. `--force-new-genesis` builds a new genesis anyway, with a warning, and only while no chain has run on any machine: a chain's genesis is part of its history, so after blocks a reset needs a new chain id and clean machines.
+
+### Publish it
+
+Setup ends by printing what makes the network joinable:
+
+1. **DNS.** A joiner reaches the chain through the seeds, which are DNS names. Create the A records setup prints (`seed1.<name>.orama.network` to the first machine, and so on).
+2. **In the repository.** Copy `networks/<name>/` to the repository's `networks/`, run `make -C core sync-networks`, and commit `networks/` and `core/pkg/netregistry/embedded/` together. The next CLI release knows the network by name.
+3. **The website.** `website/deploy.sh` serves `networks/` at `https://orama.network/networks/<name>/`.
+
+Until a release carries the network, anyone can join it from the website's copy:
+
+```bash
+orama network add https://orama.network/networks/stagenet/manifest.json
+orama setup --network stagenet --name alice --ip ...
+```
+
+`orama network add` shows the digest of the release root and asks for confirmation. The manifest is not secret and does not change: a joiner checks the genesis it fetches against the digest the manifest pins.
+
 ## Funding
 
 The operator account needs ORAMA for the bonds (the storage bond is the network's bond per GiB times the capacity you declare, the relay and exit bonds are the network's minimums), the validator's 1,000 ORAMA self-bond, and fees. Setup reads the network's parameters and tells you the exact amount.
@@ -78,6 +151,10 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 
 ## Known gaps
 
+- **A created network's seat accounts are test-keyring keys.** The seat's account (the one that receives the seat's share and signs the faucet) is a key in `oramad`'s unencrypted test keyring on its machine. That is acceptable for a test network; a production network needs its seat keys held elsewhere, and this command does not make one (it takes at most 20 machines, and a production id needs 30 bootstrap validators).
+- **No setup flow sends the consensus binding.** x/power's operator-level cap counts a validator under the operator of the x/nodes node that binds its consensus key. Setup registers the nodes of a created network, as it does for a join, but sends no such binding, so the seats stay in x/power's unlinked bucket until a binding is sent.
+- **A created network has no archiver or indexer.** The full profile installs the chain, public storage and its provider.
+- **The seeds are not checked.** Setup prints the DNS records and does not wait for them; a joiner needs them, the seeds' gateways and their certificates.
 - **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.
 - **Name claim.** The chain transaction that claims `<name>.<network>.orama.network` is not part of this build. The step says "name claim not available on this chain yet" and does nothing.
 - **The faucet is SSH-signed.** There is no public faucet endpoint; see Funding.
