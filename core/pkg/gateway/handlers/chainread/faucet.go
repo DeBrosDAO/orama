@@ -78,6 +78,12 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not found")
 		return
 	}
+	// The request is read and checked before a slot is taken: a request that would be refused
+	// anyway must not use up the slots that drips need.
+	req, amount, ok := readFaucetRequest(w, r)
+	if !ok {
+		return
+	}
 	select {
 	case p.faucetSlots <- struct{}{}:
 	default:
@@ -86,10 +92,6 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { <-p.faucetSlots }()
-	req, amount, ok := readFaucetRequest(w, r)
-	if !ok {
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), faucetWait)
 	defer cancel()
 	// The allowance is charged before the drip and given back if it is not made, so a refused

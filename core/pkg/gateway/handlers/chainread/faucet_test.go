@@ -287,6 +287,37 @@ func TestFaucet_requestsInFlightAreBounded(t *testing.T) {
 	}
 }
 
+// A request that is refused for what it says takes no slot: a flood of malformed requests must not
+// keep the drips of honest ones out.
+func TestFaucet_aRefusedRequestTakesNoSlot(t *testing.T) {
+	f := &fakeFaucet{block: make(chan struct{}), started: make(chan struct{}, faucetMaxConcurrent)}
+	p := faucetProxy(t, f)
+	done := make(chan int, faucetMaxConcurrent)
+	for i := 0; i < faucetMaxConcurrent; i++ {
+		go func() { done <- postFaucet(p, `{"recipient":"`+faucetRecipient+`"}`).Code }()
+	}
+	for i := 0; i < faucetMaxConcurrent; i++ {
+		<-f.started
+	}
+	for name, body := range map[string]string{
+		"not json":     `nope`,
+		"unknown key":  `{"recipient":"` + faucetRecipient + `","extra":1}`,
+		"a bad amount": `{"recipient":"` + faucetRecipient + `","amount":"-5"}`,
+	} {
+		rec := postFaucet(p, body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s with every slot taken = %d, want 400 (the request is checked before a slot is asked for)", name, rec.Code)
+		}
+	}
+	if rec := postFaucet(p, `{"recipient":"`+faucetRecipient+`"}`); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("a valid request with every slot taken = %d, want 503", rec.Code)
+	}
+	close(f.block)
+	for i := 0; i < faucetMaxConcurrent; i++ {
+		<-done
+	}
+}
+
 // One client network cannot ask for the chain's maximum drip over and over for fresh recipients
 // until the epoch's cap is spent for everyone: it has an allowance for the day.
 func TestFaucet_aClientNetworkHasADailyAllowance(t *testing.T) {
