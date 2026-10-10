@@ -6,6 +6,10 @@ It needs no domain, no WireGuard, and no cluster. This guide covers what the
 `orama` CLI does today on such a machine. The chain itself is described in
 [CHAIN.md](CHAIN.md).
 
+To put a global node beside a cluster node on fresh machines, and register it
+on the chain, use `orama setup`: it runs the commands on this page for you, over
+SSH. This page is what they do, and what to run by hand.
+
 Every command on the node runs as root. None of them needs raw `systemctl`.
 
 ## Hardware
@@ -133,12 +137,28 @@ sudo orama global install \
 - `oramad start` refuses to start when `<home>/config/app.toml` has
   `query-gas-limit = "0"` (unbounded) on any chain id that is not a localnet.
   `--init-chain` runs `oramad init`, which writes `query-gas-limit = "2000000"`.
-  A chain home created by an earlier build keeps its old `app.toml` (install
-  never rewrites it): before starting the new binary on such a node, set
-  `query-gas-limit = "2000000"` in `<home>/config/app.toml`. This release is
+  A chain home created by an earlier build keeps its old `app.toml` unless the
+  install is given `--external-address`, which rewrites the settings in the next items,
+  `query-gas-limit` among them: either pass it, or set
+  `query-gas-limit = "2000000"` in `<home>/config/app.toml` by hand. This release is
   also state-breaking, so a chain home from an earlier build cannot be carried
   over at all: the chain restarts from a new genesis
   ([CHAIN.md](CHAIN.md#what-s-running)).
+- `--external-address <public ip>:31000` writes the chain's `config.toml` and
+  `app.toml`: the address the node announces to its peers (the chain listens at
+  the namespace address, 198.18.0.2, which no peer can reach), peer exchange
+  off, Prometheus on 127.0.0.1:31004, custom pruning (keep 100 states, every 10
+  blocks), `min-retain-blocks` 201600, `query-gas-limit` and `iavl-cache-size`
+  as `oramad init` writes them, and a state-sync snapshot every 1000 blocks with
+  two kept. A key the chain's template no longer has is an error. The files must
+  exist: use `--init-chain` on the first install.
+- `--statesync-rpc` (twice), `--statesync-trust-height` and
+  `--statesync-trust-hash` make the node restore a snapshot on its first start
+  instead of replaying the chain. The servers are two seeds' light-client routes
+  (`https://<host>/v1/chain/light`); the height and hash are a block both
+  returned, which `orama setup` reads through the two seeds (the newest block
+  less 100, refused unless they agree); the trust period is 7 days, shorter than
+  the 21-day unbonding.
 - Running the command again with the same flags changes nothing but the
   binaries' bytes. A service left out of `--services` is not removed.
 

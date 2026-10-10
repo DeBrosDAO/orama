@@ -43,7 +43,7 @@ sudo orama global install \
 - With `provider` installed, `PUBLIC_PIN` and `ARCHIVE` deals are pinned in the public Kubo before the slot is accepted. `PRIVATE` deals never touch it.
 - `--init-chain` runs `oramad init` as `orama-chain` and puts `--genesis` in place (its `chain_id` must equal `--chain-id`). The flag is refused when the home already has a genesis.
 - `ufw`: the chain's 31000 tcp and udp, Kubo's 31010 tcp and udp and the provider's 31013 tcp are allowed with the comment `orama-global`. An inactive `ufw` is refused unless `--enable-firewall` is given; then incoming is denied by default, the SSH port allowed and `ufw` enabled. `--ssh-port` must be a port `sshd -T` says sshd listens on. Loopback listeners (31001 to 31004) are not opened.
-- `oramad start` refuses `query-gas-limit = "0"` on any non-localnet chain id. `--init-chain` writes `"2000000"`; a home from an earlier build must be edited by hand, and this release is state-breaking, so such a home cannot be carried over at all: the chain restarts from a new genesis.
+- `oramad start` refuses `query-gas-limit = "0"` on any non-localnet chain id. `--init-chain` writes `"2000000"`; a home from an earlier build must be edited by hand (or given `--external-address`, which rewrites it), and this release is state-breaking, so such a home cannot be carried over at all: the chain restarts from a new genesis.
 - Running the command again with the same flags changes nothing but the binaries' bytes. A service left out of `--services` is not removed.
 
 ## The Tor network roles

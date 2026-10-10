@@ -1,0 +1,34 @@
+# A newcomer's whole join: `orama setup`, unattended, on fresh servers. The
+# first run turns one fresh server into a full node of the network (the
+# cluster node, the chain restored by state sync, the operator, the node and
+# the validator on the chain), a second run of the same command changes
+# nothing, a third adds two more servers to the same cluster, and every step
+# ends with `orama status --json` saying "healthy": true. A cluster-only run
+# installs the cluster node and none of the global layer. The refusals that
+# happen before any server is touched (an unpinned host key, an exit relay
+# nobody accepted, a missing name) are checked without a server.
+#
+# The network is the fleet's chain: E2E_SETUP_NETWORK names a network the CLI
+# knows (built in, or added from E2E_SETUP_MANIFEST_URL) whose seeds and
+# release are the fleet's. Without it the tests that need a network report
+# "not applicable" and the refusals still run.
+id: join-one-command
+title: Join a network with orama setup, 1 to 3 nodes
+area: infrastructure
+subtasks: [3306]
+stage: 9
+destructive: true
+requires:
+  extra_nodes: 3
+  probe: false
+  chain: true
+covers:
+  cli:
+    - orama setup
+  claims:
+    - "docs/CLI_REFERENCE.md#orama-setup: unattended, a machine needs a --host-key and a host key setup was not given is never trusted"
+    - "docs/CLI_REFERENCE.md#orama-setup: the first machine creates the cluster, the others join it, and a second run with the same arguments changes nothing"
+    - "docs/CLI_REFERENCE.md#orama-setup: running it again with more addresses adds nodes to the same cluster"
+    - "docs/CLI_REFERENCE.md#orama-setup: --cluster-only installs the cluster node alone"
+    - "docs/CLI_REFERENCE.md#orama-setup: --exit needs --tor-network and the warning accepted"
+    - "docs/CLI_REFERENCE.md#orama-setup: nothing is installed on any machine until every machine passes"

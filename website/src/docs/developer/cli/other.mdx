@@ -455,62 +455,6 @@ Requires: orama auth login (for API-based resolution)
 |------|---------|-------------|
 | `--env` | — | Filter by environment (default: active environment) |
 
-## orama setup
-
-Join an Orama network: turn fresh VPSes into nodes
-
-```
-orama setup [ip ...] [flags]
-```
-
-Turn fresh VPSes into nodes of an Orama network, in one command.
-
-For each machine setup gives your RootWallet an SSH key (and pins the machine's host key),
-checks the hardware against what the machine will run, installs the signed release of the
-network's channel (verified against the release root the network pins), installs the cluster
-node and, beside it, the global layer: the chain (it joins by state sync from two seeds that
-must agree), public storage and its provider, and a Tor relay when you give the network's Tor
-file. Then it registers your operator, each node, its bonds and its storage capacity on the
-chain and creates your validator, signing every transaction with your RootWallet. Nodes are
-restarted one at a time, each waiting until it carries its share of the cluster again.
-
-The first machine creates the cluster; the others join it. Running setup again with more
-addresses adds nodes to the same cluster, and a machine that already has a step does not get
-it again, so a run that stopped can be run again as it was.
-
-With no addresses and no --yes, on a terminal, setup asks for everything. With --yes it asks
-nothing: give the addresses, --name, and a --host-key for each machine (the fingerprint your
-provider's console shows; setup never trusts a host key it was not given).
-
-The operator account needs ORAMA for the bonds and for the validator's 1,000 ORAMA self-bond.
-On a network with a faucet and a node of it in your CLI configuration it is requested; otherwise
-setup stops, says how much to send and to which address, and resumes when you run it again.
-
---cluster-only installs the cluster node alone (2 vCPU, 2 GiB, 10 GiB free). The full profile
-needs 4 vCPU, 8 GiB and 80 GiB free plus the storage you offer. Nothing is installed on any
-machine until every machine passes.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
-| `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
-| `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
-| `--cluster-only` | `false` | Install the cluster node only, without the chain, storage or relay |
-| `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
-| `--domain` | — | Base domain of a cluster of your own: setup prints the NS and glue records to create, then waits until they resolve and the cluster has a certificate |
-| `--env` | — | CLI environment to record the cluster under (default: the active one on this network, else &lt;network>-&lt;name>) |
-| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes |
-| `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or &lt;ip>=SHA256:... for each (repeatable) |
-| `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
-| `--name` | — | Node name, the node's id on the chain; several machines are named &lt;name>, &lt;name>-2, ... (required unless --cluster-only) |
-| `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |
-| `--no-validator` | `false` | Do not create a validator (and do not bond the 1,000 ORAMA self-bond) |
-| `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add &lt;ip>), never from the command line |
-| `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
-| `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |
-| `--user` | `root` | SSH login on the machines |
-| `-y`, `--yes` | `false` | Ask nothing: use the answers given as flags (every machine needs a --host-key) |
-
 ## orama ssh
 
 SSH into a node

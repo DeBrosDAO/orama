@@ -335,3 +335,13 @@ func TestTail(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestLineWriter_aMachineCannotDriveTheTerminal(t *testing.T) {
+	r := &bufReporter{}
+	w := &lineWriter{prefix: ip1, report: r}
+	fmt.Fprint(w, "ok\x1b[2J\x1b]0;owned\x07 done\tx\n")
+	got := r.text()
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "ok?[2J?]0;owned? done\tx") {
+		t.Errorf("got %q: control characters must be replaced, tabs kept", got)
+	}
+}

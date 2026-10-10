@@ -24,6 +24,8 @@ Ordering is done by the CLI, not by systemd, which uses `Wants=` rather than `Re
 
 `orama global install` validates everything that can refuse before the first change: option shapes, firewall state, the cosmovisor tarball against its pinned SHA-256, every staged binary and the shielded verifier against the release manifest, `oramad` against the verifier it pins, and a staged `oramad` against the genesis binary already installed. It starts nothing. The verifier is placed in the cosmovisor layout beside `oramad`, so each version of the chain runs the verifier it was built with.
 
+`orama setup` runs this install over SSH on every machine it is given, beside the cluster node, and then registers the operator, the nodes, their bonds and the validator on the chain, signing with the RootWallet. It passes `--external-address`, which makes the installer write the chain's configuration (the announced address, no peer exchange, custom pruning, a snapshot every 1,000 blocks) and, from two seeds' light-client routes and a block both returned, the state-sync block, so a joiner restores a snapshot instead of replaying the chain. `core/pkg/install/chainconfig.go:RenderChainConfig`, `core/pkg/statesync/trust.go:Resolve`.
+
 ## Upgrading the chain
 
 The chain home belongs to the `orama-chain` account, but root puts binaries in it, and that account could plant a symlink where root is about to write. `core/pkg/cosmovisor/` therefore never resolves a path. It walks to the chain home one component at a time with `O_NOFOLLOW`, copies the binary into a private directory, runs the verifier on the open descriptor, and links it into place with `linkat`, which fails if the name exists. The bytes checked are the bytes installed, and nothing is replaced.

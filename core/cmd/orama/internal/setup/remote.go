@@ -69,11 +69,23 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		if line := strings.TrimRight(string(w.buf[:i]), "\r"); strings.TrimSpace(line) != "" {
+		if line := printable(strings.TrimRight(string(w.buf[:i]), "\r")); strings.TrimSpace(line) != "" {
 			w.report.Linef("  [%s] %s", w.prefix, line)
 		}
 		w.buf = w.buf[i+1:]
 	}
+}
+
+// printable replaces the control characters of a line a machine printed. What a
+// machine prints reaches the operator's terminal, and an escape sequence in it
+// could rewrite the screen; tabs stay.
+func printable(line string) string {
+	return strings.Map(func(r rune) rune {
+		if r != '\t' && (r < ' ' || r == 0x7f) {
+			return '?'
+		}
+		return r
+	}, line)
 }
 
 // sshMachine is a VPS setup drives over SSH.

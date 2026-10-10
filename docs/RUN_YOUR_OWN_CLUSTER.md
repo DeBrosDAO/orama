@@ -2,6 +2,10 @@
 
 A private Orama cluster is three or more Linux machines that you install with
 `orama node setup`, plus a domain whose nameserver records you can publish.
+(`orama setup --cluster-only --domain <domain>` does the same for every machine
+you give it, prints the NS and glue records the domain needs and waits until
+they resolve; `orama setup` without `--cluster-only` also joins the network's
+chain. Its reference is the website's "Join with orama setup".)
 The installer refuses a machine that fails the checks in
 `core/pkg/install/checks.go`. This page is that sequence. It does not create
 servers: `orama maint sandbox create` does, on Hetzner, and

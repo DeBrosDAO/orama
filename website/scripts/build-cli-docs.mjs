@@ -31,6 +31,7 @@ const PAGES = [
   { slug: "function", title: "orama function", blurb: "Build, deploy and run serverless functions.", commands: ["function"] },
   { slug: "global", title: "orama global", blurb: "Install and operate a global node, and build its chain messages.", commands: ["global", "maint global"] },
   { slug: "members", title: "orama members and audit", blurb: "Who may work in a namespace, and the namespace's audit trail.", commands: ["members", "audit"] },
+  { slug: "setup", title: "orama setup", blurb: "Join an Orama network: turn fresh VPSes into nodes, in one command.", commands: ["setup"] },
   { slug: "status", title: "orama status", blurb: "Your nodes, the cluster, the chain and your account, live or one view at a time.", commands: ["status"] },
   { slug: "namespace", title: "orama namespace", blurb: "Create namespaces, mint API keys, back up and restore.", commands: ["namespace"] },
   { slug: "node", title: "orama node", blurb: "Install, run, upgrade and remove nodes.", commands: ["node", "maint node"] },

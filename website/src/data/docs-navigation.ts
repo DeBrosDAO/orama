@@ -113,6 +113,7 @@ export const DEVELOPER_DOCS: DocLink[] = [
   { title: "orama function", slug: "developer/cli/function", icon: Terminal, description: "Serverless functions", group: "CLI commands" },
   { title: "orama global", slug: "developer/cli/global", icon: Terminal, description: "Global nodes and chain messages", group: "CLI commands" },
   { title: "orama members, audit", slug: "developer/cli/members", icon: Terminal, description: "Namespace members and audit", group: "CLI commands" },
+  { title: "orama setup", slug: "developer/cli/setup", icon: Terminal, description: "Join a network from fresh machines", group: "CLI commands" },
   { title: "orama status", slug: "developer/cli/status", icon: Terminal, description: "Nodes, cluster, chain and account", group: "CLI commands" },
   { title: "orama namespace", slug: "developer/cli/namespace", icon: Terminal, description: "Namespaces, keys, backups", group: "CLI commands" },
   { title: "orama node", slug: "developer/cli/node", icon: Terminal, description: "Nodes", group: "CLI commands" },
@@ -126,6 +127,7 @@ export const OPERATOR_DOCS: DocLink[] = [
   { title: "What you need", slug: "operator/getting-started", icon: Play, description: "Machines, domain and your computer", group: "Plan" },
   { title: "One-VPS evaluation", slug: "operator/one-vps", icon: Server, description: "Try it on one machine, not highly available", group: "Plan" },
 
+  { title: "Join with orama setup", slug: "operator/setup", icon: Play, description: "Fresh machines to nodes in one command", group: "Install" },
   { title: "Install a cluster from scratch", slug: "operator/install-from-scratch", icon: ServerCog, description: "Every step, with checks and recovery", group: "Install" },
   { title: "Build and sign", slug: "operator/build-and-sign", icon: Hammer, description: "Archives and the trust anchor", group: "Install" },
   { title: "DNS and nameservers", slug: "operator/nameserver", icon: Globe2, description: "Base domain, NS records, glue", group: "Install" },

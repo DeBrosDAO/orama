@@ -1,5 +1,7 @@
 # What you need to run a cluster
 
+To join a network with machines you rent, run [`orama setup`](/docs/operator/setup): it does what the pages below do by hand, for every machine at once, and registers you on the chain. This page and the ones after it are for a cluster of your own: your domain, your build, step by step with `orama node setup`.
+
 This page lists everything to have in place before you install. The next page, [Install a cluster from scratch](/docs/operator/install-from-scratch), is the exact sequence. If you only want to try Orama on a single machine, read [One-VPS evaluation](/docs/operator/one-vps).
 
 ## What a cluster is
@@ -20,6 +22,8 @@ Three VPSes (or more). For each:
 | Memory | at least 2 GB | Installer |
 | Free disk | at least 10 GB | Installer |
 | Network | A public IPv4 address, static | You |
+
+Those are the floors of a cluster node. `orama setup` also installs the global layer (the chain and public storage) unless you pass `--cluster-only`; that profile needs 4 vCPUs, 8 GiB of RAM and 80 GiB of free disk plus the storage you offer (`--storage-gb`, default 50), and setup refuses a machine below it before it installs anything.
 
 Those are floors. A comfortable node is 4 vCPUs, 8 GB of RAM and a 160 GB SSD, because IPFS storage is sized to half of a node's disk and every namespace adds processes.
 
@@ -69,7 +73,7 @@ Debian and Ubuntu packages and tarballs for macOS and Linux are on the [releases
 
 **A build to install.** Every node runs one signed archive, and you get it one of two ways.
 
-*Install a published release.* You need no checkout, Go or Zig. `orama node setup --release <version>` fetches the release from a release repository, verifies it against a TUF root you chose to trust, and has your RootWallet sign it as the build your cluster runs. You supply three things, none of which it fetches for you: the version, the repository's https address (`--release-repo`) and the release signers' `root.json` (`--release-root`). The root has to reach you by another road than the repository (the project publishes its SHA-256; check the file against it). Every node adopts the root, which is what lets the cluster update itself later ([Upgrades](/docs/operator/upgrades#automatic-updates)).
+*Install a published release.* You need no checkout, Go or Zig. `orama setup` does it for a network the CLI knows: it fetches the newest release of the network's channel and verifies it against the release root the network pins, with nothing to supply. For a cluster that is not on a network of the registry, `orama node setup --release <version>` fetches the release from a release repository, verifies it against a TUF root you chose to trust, and has your RootWallet sign it as the build your cluster runs. You supply three things, none of which it fetches for you: the version, the repository's https address (`--release-repo`) and the release signers' `root.json` (`--release-root`). The root has to reach you by another road than the repository (the project publishes its SHA-256; check the file against it). Every node adopts the root, which is what lets the cluster update itself later ([Upgrades](/docs/operator/upgrades#automatic-updates)).
 
 *Build it yourself.* Use a checkout of the Orama repository and a build toolchain on your computer:
 

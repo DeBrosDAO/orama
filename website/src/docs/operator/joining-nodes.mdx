@@ -19,6 +19,8 @@ sudo orama node invite --expiry 24h           # on a node already in the cluster
 sudo orama node invite --raw                  # print only the string, for scripts
 ```
 
+`orama setup` joins the machines you give it to the environment's cluster by itself: it mints each invite over SSH on a node that is already in, and `orama setup --ip <new ip>` with the same `--env` adds a node later ([Join with orama setup](/docs/operator/setup)). The rest of this page is `orama node setup` and the invite by hand.
+
 ## Join with `orama node setup`
 
 ```bash

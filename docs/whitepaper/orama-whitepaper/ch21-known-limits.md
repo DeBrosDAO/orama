@@ -35,6 +35,7 @@ Every item below describes the code as it is. Several are marked as bugs in thei
 - **One- and two-voter clusters cannot be rolled, and no override exists.** The refusal text suggests a flag that does something else. `core/cmd/orama/internal/production/lifecycle/quorum.go:evaluateQuorumSafety`.
 - **No release gate runs the fleet suite, and a dirty tree is signed as its clean commit.** Documents say `release.sh` refuses a commit without a green fleet report, but it has no such check, and a build from uncommitted changes carries a commit that does not describe it. `core/cmd/orama/version.go:buildInfo`.
 - **Chain tests are in no automated gate.** `chain/` is a separate module that the root test target and CI do not run, so the chain side of the shared test vectors is unchecked by automation. `.github/workflows/ci.yml`.
+- **A joiner starts on the genesis binary.** A snapshot taken after a chain upgrade needs that upgrade's binary, the release metadata lists no upgrade heights, and `orama setup` can only end its sync wait with the chain's log. `core/cmd/orama/internal/setup/phase_global.go:waitSynced`.
 - **Governed upgrade heights are absolute.** A proposal fixes a block height 60 days ahead and fails at execution if the height has passed. `chain/x/houses/keeper/proposal.go:checkUpgradeHeight`.
 
 ## Payment and proof correctness
