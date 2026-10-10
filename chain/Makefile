@@ -23,7 +23,7 @@ BUILD_FLAGS := -trimpath -ldflags "$(LDFLAGS)"
 WASMVM_DIR := $(shell go list -m -f '{{.Dir}}' github.com/CosmWasm/wasmvm/v3 2>/dev/null)
 LIBWASMVM := $(firstword $(wildcard $(WASMVM_DIR)/internal/api/libwasmvm.dylib $(WASMVM_DIR)/internal/api/libwasmvm.aarch64.so $(WASMVM_DIR)/internal/api/libwasmvm.x86_64.so))
 
-.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 proto-shielded proto-emission proto-fees orchard-verifier orchard-verifier-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full build-linux-amd64-global
+.PHONY: build build-wasm contracts-verify test chain-test lint chain-sim localnet localnet-stop localnet-clean orchard-lib orchard-lib-linux-amd64 proto-shielded proto-emission proto-fees proto-power orchard-verifier orchard-verifier-linux-amd64 orchard-test build-linux-amd64-orchard orchard-smoke orchard-smoke-linux-amd64 native-lib-linux-amd64 build-linux-amd64-full build-linux-amd64-global
 
 ## build: cross-compile oramad for linux/amd64, darwin/amd64 and darwin/arm64.
 ## CGO_ENABLED=0 and -tags nowasm: these binaries are static and do not include CosmWasm.
@@ -249,3 +249,16 @@ proto-fees:
 		--gocosmos_out=plugins=grpc,Mgoogle/protobuf/any.proto=github.com/cosmos/gogoproto/types/any:$$out \
 		proto/orama/fees/v1/tx.proto && \
 	cp $$out/github.com/DeBrosOfficial/network/chain/x/fees/types/tx.pb.go x/fees/types/ && rm -rf $$out
+
+## proto-power: regenerate x/power's gogoproto code from proto/orama/power/v1.
+## Same toolchain as proto-shielded, plus the googleapis protos its query service imports.
+proto-power:
+	@out=$$(mktemp -d) && \
+	protoc -I proto \
+		-I $(GOPROTO_MOD)/cosmos-sdk@$(shell go list -m -f '{{.Version}}' github.com/cosmos/cosmos-sdk)/proto \
+		-I $(GOPROTO_MOD)/gogoproto@$(shell go list -m -f '{{.Version}}' github.com/cosmos/gogoproto) \
+		-I $(shell go list -m -f '{{.Dir}}' github.com/grpc-ecosystem/grpc-gateway)/third_party/googleapis \
+		-I $(GOPROTO_MOD)/cosmos-proto@$(shell go list -m -f '{{.Version}}' github.com/cosmos/cosmos-proto)/proto \
+		--gocosmos_out=plugins=grpc,Mgoogle/protobuf/any.proto=github.com/cosmos/gogoproto/types/any:$$out \
+		proto/orama/power/v1/*.proto && \
+	cp $$out/github.com/DeBrosOfficial/network/chain/x/power/types/*.pb.go x/power/types/ && rm -rf $$out

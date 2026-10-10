@@ -101,6 +101,9 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 		if err := types.CheckHotKeyBinding(hot, msg.Bindings); err != nil {
 			return err
 		}
+		if err := types.CheckConsensusBinding(msg.Bindings); err != nil {
+			return err
+		}
 		for _, binding := range msg.Bindings {
 			if err := k.assertPubkeyAvailable(ctx, binding.Pubkey, ""); err != nil {
 				return err
@@ -186,6 +189,9 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 			return err
 		}
 		if err := types.CheckHotKeyBinding(node.HotKey, node.Bindings); err != nil {
+			return err
+		}
+		if err := types.CheckConsensusBinding(node.Bindings); err != nil {
 			return err
 		}
 		if err := k.reindexNode(ctx, before, node); err != nil {

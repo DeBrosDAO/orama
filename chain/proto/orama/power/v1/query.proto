@@ -71,6 +71,11 @@ message QueryValidatorPowerResponse {
     (gogoproto.nullable) = false
   ];
   int64 comet_power = 5;
+  // operator is the operator the validator's stake counts toward under the
+  // per-operator cap: the account that registered the x/nodes node binding the
+  // validator's consensus key, or "unlinked" when no live node binds it. Empty
+  // when there is no such validator.
+  string operator = 6;
 }
 
 message QueryInvariantsRequest {}

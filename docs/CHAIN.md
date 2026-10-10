@@ -731,9 +731,13 @@ P_i = (1 - lambda) * B_i + lambda * C_i
 
 - **`B_i`** (`types.EqualBootstrapShares`): `1/n` for each of the `n` committee members, `0` for
   everyone else. This is what makes a committee seat "worth" voting power without any stake.
-- **`C_i`** (`types.ComputeCappedShares`): each validator's share of total bonded stake, **capped**
+- **`C_i`** (`types.ComputeOperatorCappedShares`, over `types.ComputeCappedShares`): each
+  operator's share of total bonded stake, where an operator is the account that registered the
+  `x/nodes` node whose `consensus` binding holds the validator's consensus key (validators no node
+  binds share one operator, `unlinked`), **capped**
   at `Params.CapFractionNormal` (5%) or `Params.CapFractionReduced` (3%, once more than
-  `Params.CapStepDownValidatorCount` validators are active), with the excess above the cap
+  `Params.CapStepDownValidatorCount` operators are active), and split back over the operator's
+  validators in proportion to their admitted stake, with the excess above the cap
   redistributed proportionally among not-yet-capped validators (an iterative "water-filling" pass,
   ICS power-shaping's algorithm) until it converges - or, if the cap can't be respected by *any*
   distribution (`cap * n < 1`), an **equal fallback** (every validator in that calculation gets

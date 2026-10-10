@@ -484,6 +484,8 @@ func NewOramaApp(
 		app.FeesKeeper,
 		app.AccountKeeper,
 	)
+	// A validator counts toward the operator of the node that binds its consensus key.
+	app.PowerKeeper = app.PowerKeeper.WithOperators(app.NodesKeeper)
 	app.CnftKeeper = cnftkeeper.NewKeeper(
 		appCodec,
 		runtime.NewKVStoreService(keys[cnfttypes.StoreKey]),

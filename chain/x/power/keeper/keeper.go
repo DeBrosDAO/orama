@@ -27,6 +27,9 @@ type Keeper struct {
 	slashingKeeper types.SlashingKeeper
 	bankKeeper     types.BankKeeper
 	earningsKeeper types.EarningsKeeper
+	// operators names the operator a validator's consensus key belongs to. Nil means there is no
+	// operator registry, and every validator is its own operator.
+	operators types.OperatorResolver
 
 	Schema collections.Schema
 	Params collections.Item[types.Params]
@@ -123,6 +126,13 @@ func NewKeeper(
 	}
 	k.Schema = schema
 
+	return k
+}
+
+// WithOperators returns a copy of the keeper that caps voting power per operator, as named by
+// resolver, instead of per validator.
+func (k Keeper) WithOperators(resolver types.OperatorResolver) Keeper {
+	k.operators = resolver
 	return k
 }
 

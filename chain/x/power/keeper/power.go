@@ -82,21 +82,40 @@ func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeep
 		return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to load bonded validators: %w", err)
 	}
 
-	// activeValidatorCount (security review, non-blocking "UpdateCapState should count committee
-	// members") is the number of DISTINCT validators actually participating in consensus this
-	// block: every bonded (stake-indexed) validator, plus every currently eligible committee
-	// member not already counted among them (a committee member who has self-bonded enough to
-	// appear in the bonded-by-power index is not double-counted).
-	activeSet := make(map[string]bool, len(bonded)+len(committee))
+	// activeOperatorCount (security review, non-blocking "UpdateCapState should count committee
+	// members") is the number of DISTINCT operators actually participating in consensus this
+	// block: the operator of every bonded (stake-indexed) validator, plus the operator of every
+	// currently eligible committee member not already counted among them (a committee member who
+	// has self-bonded enough to appear in the bonded-by-power index is not double-counted). The
+	// cap, its hysteresis and the hand-over gate all measure independent parties, so a party that
+	// runs many validators counts once.
+	activeSet := make(map[string][]byte, len(bonded)+len(committee))
 	for _, v := range bonded {
-		activeSet[v.OperatorAddress] = true
-	}
-	for addr, ok := range eligible {
-		if ok {
-			activeSet[addr] = true
+		pk, err := consPubKeyBytes(v)
+		if err != nil {
+			return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("failed to read consensus pubkey for %q: %w", v.OperatorAddress, err)
 		}
+		activeSet[v.OperatorAddress] = pk
 	}
-	activeValidatorCount := uint64(len(activeSet))
+	for _, m := range committee {
+		valAddrStr, err := valoperFromAccountBech32(m.OperatorAddress)
+		if err != nil {
+			return types.Params{}, math.LegacyDec{}, nil, fmt.Errorf("corrupted bootstrap committee operator_address %q: %w", m.OperatorAddress, err)
+		}
+		if _, counted := activeSet[valAddrStr]; counted || !eligible[valAddrStr] {
+			continue
+		}
+		activeSet[valAddrStr] = m.ConsensusPubkey
+	}
+	activeOperators := make([]string, 0, len(activeSet))
+	for addr, pk := range activeSet {
+		operator, err := k.operatorOf(ctx, addr, pk)
+		if err != nil {
+			return types.Params{}, math.LegacyDec{}, nil, err
+		}
+		activeOperators = append(activeOperators, operator)
+	}
+	activeValidatorCount := types.CountOperators(activeOperators)
 
 	lambda, err := k.Lambda.Get(ctx)
 	if err != nil {
@@ -123,15 +142,20 @@ func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeep
 	// Full-token shares are the latent stake the lambda clamp measures.
 	// Published shares use only the tokens whose ramp has admitted them, so a
 	// bond added after the ramp finished cannot move voting power in that block.
-	fullShares := types.ComputeCappedShares(stakes, capFraction, p.MaxRedistributionMultiplier)
-	effective := make([]types.ValidatorStake, len(stakes))
+	// The cap binds per operator: the shares of one operator's validators sum to at most the cap.
+	tagged, err := k.operatorStakes(ctx, stakes, pubKeyByAddr)
+	if err != nil {
+		return types.Params{}, math.LegacyDec{}, nil, err
+	}
+	fullShares := types.ComputeOperatorCappedShares(tagged, capFraction, p.MaxRedistributionMultiplier)
+	effective := make([]types.OperatorStake, len(stakes))
 	effectiveTotal := math.ZeroInt()
-	for i, s := range stakes {
+	for i, s := range tagged {
 		tokens, err := k.effectiveBond(ctx, s.OperatorAddress, s.BondedTokens, currentEpoch, p.RampEpochs, advance)
 		if err != nil {
 			return types.Params{}, math.LegacyDec{}, nil, err
 		}
-		effective[i] = types.ValidatorStake{OperatorAddress: s.OperatorAddress, BondedTokens: tokens}
+		effective[i] = types.OperatorStake{OperatorAddress: s.OperatorAddress, Operator: s.Operator, BondedTokens: tokens}
 		effectiveTotal = effectiveTotal.Add(tokens)
 	}
 	// Validators with nothing admitted yet stay at C_i = 0. Passing them into
@@ -140,13 +164,13 @@ func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeep
 	// at the 5% cap.
 	admittedByAddr := make(map[string]math.LegacyDec, len(stakes))
 	if effectiveTotal.IsPositive() {
-		positive := make([]types.ValidatorStake, 0, len(effective))
+		positive := make([]types.OperatorStake, 0, len(effective))
 		for _, s := range effective {
 			if s.BondedTokens.IsPositive() {
 				positive = append(positive, s)
 			}
 		}
-		computed := types.ComputeCappedShares(positive, capFraction, p.MaxRedistributionMultiplier)
+		computed := types.ComputeOperatorCappedShares(positive, capFraction, p.MaxRedistributionMultiplier)
 		for i, s := range positive {
 			admittedByAddr[s.OperatorAddress] = computed[i]
 		}

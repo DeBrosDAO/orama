@@ -25,7 +25,7 @@ All are signed by the owning operator. None needs an authority.
 | `FundHotKey` | Moves earnings into the hot key's fee-only balance |
 | `RegisterCluster`, `UpdateCluster`, `RetireCluster` | Manage the optional public cluster row |
 
-**Bindings.** A node proves control of each service key by signing `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)` with that key (secp256k1 or ed25519). Exactly one `hot-key` binding is required. The hot key must differ from the operator key and from any other live node's hot key. `orama global bind` produces a binding.
+**Bindings.** A node proves control of each service key by signing `orama-global-bind-v1|chain-id|operator|service|hex(pubkey)` with that key (secp256k1 or ed25519). Exactly one `hot-key` binding is required. A node that runs a validator also binds the validator's ed25519 consensus key under the service name `consensus` (optional, at most one): that binding is what attributes the validator to this node's operator for the per-operator power cap, see [Validators](/docs/blockchain/validators). Retiring the node, or rotating the key away, unlinks the validator. The hot key must differ from the operator key and from any other live node's hot key. `orama global bind` produces a binding.
 
 ## Parameters (production genesis values)
 
