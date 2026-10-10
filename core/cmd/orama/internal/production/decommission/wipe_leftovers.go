@@ -23,7 +23,7 @@ func wipedPaths() []string {
 	return []string{
 		install.OramaBase, "/etc/orama", "/etc/wireguard/wg0.conf",
 		"/var/lib/orama-unit-env", "/var/lib/orama-deploy", "/var/lib/orama-autoupdate",
-		"/var/lib/caddy", "/var/lib/ntfy", "/etc/coredns", "/etc/caddy",
+		"/var/lib/caddy", "/var/lib/ntfy", "/etc/ntfy", "/etc/coredns", "/etc/caddy",
 		filepath.Dir(constants.TorConfigPath), installers.TorDataDir,
 		filepath.Join(systemdUnitDir, "coredns.service"), filepath.Join(systemdUnitDir, "caddy.service"),
 		archivetrust.AnchorPath, privhelper.Path,
@@ -36,7 +36,7 @@ func nuclearPaths() []string {
 		"/usr/local/bin/orama", "/usr/local/bin/orama-node", "/usr/local/bin/gateway",
 		"/usr/local/bin/identity", "/usr/local/bin/sfu", "/usr/local/bin/turn", "/usr/local/bin/orama-sni-router",
 		"/usr/local/bin/olric-server", "/usr/local/bin/ipfs", "/usr/local/bin/ipfs-cluster-service",
-		"/usr/local/bin/rqlited", "/usr/local/bin/coredns", "/usr/bin/caddy",
+		"/usr/local/bin/rqlited", "/usr/local/bin/coredns", "/usr/local/bin/ntfy", "/usr/bin/caddy",
 		installers.TorAptSourcePath, installers.TorKeyringPath,
 	}
 }

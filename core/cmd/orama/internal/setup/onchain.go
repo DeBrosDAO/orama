@@ -275,8 +275,9 @@ func (r *runner) createValidator(ctx context.Context, sess ChainSession, n *node
 	return nil
 }
 
-// claimName claims <name>.<network>.orama.network for the node: the name is the
-// node's name in the plan, which is also its id on the chain.
+// claimName claims the node's identification name, which the network's own cluster
+// serves as <name>.nodes.<domain>: the name is the node's name in the plan, which is
+// also its id on the chain.
 func (r *runner) claimName(ctx context.Context, sess ChainSession, n *nodeRun) error {
 	if err := r.d.Names.Claim(ctx, sess, n.plan.Name, n.plan.Name); err != nil {
 		r.emit(n.plan.IP, StepName, StateFailed, err.Error())

@@ -148,7 +148,7 @@ rm -rf /opt/orama
 # plus the per-deployment state and cache systemd keeps for DynamicUser units.
 rm -rf /var/lib/orama-unit-env /var/lib/orama-deploy
 rm -rf /var/lib/private/orama-deploy-* /var/cache/private/orama-deploy-* /var/cache/private/orama-build
-rm -rf /var/lib/ntfy /run/ntfy
+rm -rf /var/lib/ntfy /run/ntfy /etc/ntfy
 # Fetched releases and the install intent of the auto-update agent.
 rm -rf /var/lib/orama-autoupdate
 # Caddy storage: the TLS private keys of the node and its ACME account key.
@@ -179,7 +179,7 @@ if [ -n "$NUCLEAR" ]; then
     rm -f /usr/local/bin/orama /usr/local/bin/orama-node /usr/local/bin/gateway
     rm -f /usr/local/bin/identity /usr/local/bin/sfu /usr/local/bin/turn /usr/local/bin/orama-sni-router
     rm -f /usr/local/bin/olric-server /usr/local/bin/ipfs /usr/local/bin/ipfs-cluster-service
-    rm -f /usr/local/bin/rqlited /usr/local/bin/coredns
+    rm -f /usr/local/bin/rqlited /usr/local/bin/coredns /usr/local/bin/ntfy
     rm -f /usr/bin/caddy
     DEBIAN_FRONTEND=noninteractive apt-get purge -y %[6]s 2>/dev/null || true
     rm -f %[7]s

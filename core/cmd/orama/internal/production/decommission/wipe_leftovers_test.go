@@ -314,3 +314,21 @@ func TestWipeScript_accountsAreRemovedOnlyByNuclear(t *testing.T) {
 		t.Error("only a nuclear wipe sets NUCLEAR")
 	}
 }
+
+// A nuclear wipe deletes the ntfy account, so it must take the ntfy binary and config with
+// it: on stagenet a wiped machine kept /usr/local/bin/ntfy, and the next install saw ntfy as
+// already installed and failed to chown its data directory to an account that was gone.
+func TestWipeScript_nuclearRemovesNtfyWithItsAccount(t *testing.T) {
+	nuclear := removalPart(wipeScript(true))
+	for _, path := range []string{"/usr/local/bin/ntfy", "/etc/ntfy", "/var/lib/ntfy"} {
+		if !strings.Contains(nuclear, path) {
+			t.Errorf("a nuclear wipe does not remove %s", path)
+		}
+		if !slices.Contains(checkedPaths(leftoverCheck(true)), path) {
+			t.Errorf("the nuclear leftover check does not look at %s", path)
+		}
+	}
+	if slices.Contains(checkedPaths(leftoverCheck(false)), "/usr/local/bin/ntfy") {
+		t.Error("a plain wipe keeps the shared binaries, so its check must not look at the ntfy binary")
+	}
+}

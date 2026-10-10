@@ -91,14 +91,25 @@ func verifyNtfyTarball(arch string, data []byte) (string, error) {
 // production. Gated on by the orchestrator when WithNtfy is true.
 type NtfyInstaller struct {
 	*BaseInstaller
+	run commandRunner
+	// installed reports whether the pinned ntfy binary is in place; IsInstalled on a node.
+	installed func() bool
+	// root prefixes every directory and file the installer writes; "/" on a node.
+	root string
 }
 
 // NewNtfyInstaller returns a new ntfy installer.
 func NewNtfyInstaller(arch string, logWriter io.Writer) *NtfyInstaller {
-	return &NtfyInstaller{
+	ni := &NtfyInstaller{
 		BaseInstaller: NewBaseInstaller(arch, logWriter),
+		run:           execRunner,
+		root:          "/",
 	}
+	ni.installed = ni.IsInstalled
+	return ni
 }
+
+func (ni *NtfyInstaller) path(p string) string { return filepath.Join(ni.root, p) }
 
 // IsInstalled returns true when the ntfy binary is on disk AND reports
 // a version matching the expected pin. A version mismatch returns
@@ -123,27 +134,27 @@ func ntfyReportsVersion(help, version string) bool {
 	return strings.Contains(help, "ntfy "+version+" ")
 }
 
-// Install downloads the ntfy binary, creates the `ntfy` user and lays out
-// data + config directories. Idempotent:
-// re-running on a correctly-installed system is a no-op.
+// Install creates the `ntfy` user, downloads the ntfy binary unless the pinned
+// version is already in place, and lays out the data and config directories.
+// The binary being in place says nothing about the account: a nuclear wipe
+// deletes the account and a machine can keep the binary, so the account and the
+// directories are ensured on every run and only the download is skipped.
 func (ni *NtfyInstaller) Install() error {
-	if ni.IsInstalled() {
-		fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s already installed\n", ntfyVersion)
-		return nil
-	}
-
-	fmt.Fprintf(ni.logWriter, "  Installing ntfy %s...\n", ntfyVersion)
-
 	if err := ni.ensureUser(); err != nil {
 		return fmt.Errorf("ntfy: create user: %w", err)
 	}
-	if err := ni.downloadBinary(); err != nil {
-		return fmt.Errorf("ntfy: download binary: %w", err)
+	if ni.installed() {
+		fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s already installed\n", ntfyVersion)
+	} else {
+		fmt.Fprintf(ni.logWriter, "  Installing ntfy %s...\n", ntfyVersion)
+		if err := ni.downloadBinary(); err != nil {
+			return fmt.Errorf("ntfy: download binary: %w", err)
+		}
+		fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s installed\n", ntfyVersion)
 	}
 	if err := ni.ensureDirs(); err != nil {
 		return fmt.Errorf("ntfy: prepare directories: %w", err)
 	}
-	fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s installed\n", ntfyVersion)
 	return nil
 }
 
@@ -158,14 +169,14 @@ func (ni *NtfyInstaller) Configure(publicBaseURL string) error {
 		return err
 	}
 	cfg := ni.generateServerYAML(publicBaseURL)
-	if err := os.WriteFile(ntfyConfigPath, []byte(cfg), 0640); err != nil {
+	if err := os.WriteFile(ni.path(ntfyConfigPath), []byte(cfg), 0640); err != nil {
 		return fmt.Errorf("ntfy Configure: write server.yml: %w", err)
 	}
 	// Make config readable by ntfy user (group ntfy is set via ensureDirs).
 	// A chown failure here means the unit cannot read the config, so it
 	// fails the install now rather than as a confusing service-start error.
-	if out, err := exec.Command("chown", "root:"+ntfyUser, ntfyConfigPath).CombinedOutput(); err != nil {
-		return fmt.Errorf("ntfy Configure: chown %s to root:%s so the ntfy unit can read it: %w (%s)", ntfyConfigPath, ntfyUser, err, strings.TrimSpace(string(out)))
+	if out, err := ni.run("chown", "root:"+ntfyUser, ni.path(ntfyConfigPath)); err != nil {
+		return fmt.Errorf("ntfy Configure: chown %s to root:%s so the ntfy unit can read it: %w (%s)", ntfyConfigPath, ntfyUser, err, strings.TrimSpace(out))
 	}
 	fmt.Fprintf(ni.logWriter, "  ✓ ntfy server.yml written (base_url=%s)\n", publicBaseURL)
 	return nil
@@ -178,33 +189,33 @@ func (ni *NtfyInstaller) Configure(publicBaseURL string) error {
 // non-privileged identity.
 func (ni *NtfyInstaller) ensureUser() error {
 	// Check if user already exists.
-	if err := exec.Command("id", ntfyUser).Run(); err == nil {
+	if _, err := ni.run("id", ntfyUser); err == nil {
 		return nil
 	}
-	cmd := exec.Command("useradd",
-		"--system",
-		"--no-create-home",
-		"--shell", "/usr/sbin/nologin",
-		ntfyUser)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("useradd: %w (%s)", err, strings.TrimSpace(string(out)))
+	if out, err := ni.run("useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", ntfyUser); err != nil {
+		return fmt.Errorf("useradd: %w (%s)", err, strings.TrimSpace(out))
 	}
 	return nil
 }
 
-// ensureDirs creates and chowns the ntfy config + data directories.
+// ensureDirs creates and chowns the ntfy config + data directories. They are
+// owned by the ntfy account, so the account is ensured first: Configure runs on
+// every config regeneration, which can come without an Install.
 func (ni *NtfyInstaller) ensureDirs() error {
-	if err := os.MkdirAll(ntfyConfigDir, 0755); err != nil {
+	if err := ni.ensureUser(); err != nil {
+		return fmt.Errorf("ntfy: create user: %w", err)
+	}
+	if err := os.MkdirAll(ni.path(ntfyConfigDir), 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", ntfyConfigDir, err)
 	}
-	if err := os.MkdirAll(ntfyDataDir, 0750); err != nil {
+	if err := os.MkdirAll(ni.path(ntfyDataDir), 0750); err != nil {
 		return fmt.Errorf("mkdir %s: %w", ntfyDataDir, err)
 	}
 	// Data dir must be writable by the ntfy user. Config dir stays
 	// root-owned so the unit can read it; group=ntfy so the service can
 	// also stat it. Without the chown ntfy cannot write its cache database.
-	if out, err := exec.Command("chown", "-R", ntfyUser+":"+ntfyUser, ntfyDataDir).CombinedOutput(); err != nil {
-		return fmt.Errorf("chown %s to %s so ntfy can write its cache database: %w (%s)", ntfyDataDir, ntfyUser, err, strings.TrimSpace(string(out)))
+	if out, err := ni.run("chown", "-R", ntfyUser+":"+ntfyUser, ni.path(ntfyDataDir)); err != nil {
+		return fmt.Errorf("chown %s to %s so ntfy can write its cache database: %w (%s)", ntfyDataDir, ntfyUser, err, strings.TrimSpace(out))
 	}
 	return nil
 }

@@ -14,6 +14,9 @@ import (
 func newTestNtfyInstaller() *NtfyInstaller {
 	return &NtfyInstaller{
 		BaseInstaller: NewBaseInstaller("amd64", io.Discard),
+		run:           func(string, ...string) (string, error) { return "", nil },
+		installed:     func() bool { return true },
+		root:          "/",
 	}
 }
 

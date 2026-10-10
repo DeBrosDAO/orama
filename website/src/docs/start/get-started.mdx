@@ -2,8 +2,6 @@
 
 This is the one page for joining the Orama network with machines of your own: from empty servers and a wallet to nodes that show up in `orama status`, a validator on the chain, and rewards you can use. Everything is typed on your own computer. You never log in to a server yourself.
 
-> **Verify this page against the binary.** The `orama setup` command this page describes is being built (the join-in-one-command work) and is not in the code this page was written against. The flags below are the planned set: `--network`, `--ip`, `--name`, `--cluster-only`, `--exit`, `--storage-gb`, `--domain` and `--yes`. Before you rely on a flag, run `orama setup --help` and trust it over this page; where the two differ, the binary is right and this page needs fixing.
-
 If you want to *use* a network (deploy an app, a database, a function) rather than run machines on it, start with the [Quickstart](/docs/developer/getting-started) instead.
 
 ## 1. Pick your path
@@ -31,7 +29,7 @@ Check each box before you start. Setup checks the hardware on every machine firs
 | Full (the default) | 4 | 8 GiB | 80 GiB, plus the storage you offer (`--storage-gb`, 50 GB unless you say) | The cluster node, the chain, public storage and its provider, a relay |
 
 - Debian 12 or 13, or Ubuntu 22.04, 24.04 or 26.04, on amd64 or arm64. Interim Ubuntu releases are not supported.
-- A static public IPv4 address, and root over SSH or a sudo user with a key.
+- A static public IPv4 address, and a way in over SSH as root or a sudo user: a key your RootWallet already installed, the root password in your vault (`rw vault add <ip>`, then `--password`), or a private key that opens the machine today (`--bootstrap-key <file>`, used once to install the RootWallet key and never stored). Setup logs in as `root` unless you pass `--user`; a machine whose image logs in as another user (Ubuntu images often use `ubuntu`) is given as `--ip ubuntu@<address>`.
 - Ports `22`, `51820/udp`, `80`, `443` open in your provider's firewall too. The installer opens them in `ufw`, which cannot open a provider's firewall for you. A nameserver also needs `53` (TCP and UDP).
 - The SSH **host-key fingerprint** of each machine, from your provider's console. Setup never trusts a host key it was not given.
 
@@ -75,11 +73,13 @@ On a terminal, `orama setup` with no addresses asks for everything instead. In a
 | Flag | What it does |
 |---|---|
 | `--network` | The network to join, from `orama network list` |
-| `--ip`, or the addresses as arguments | Machines to turn into nodes, one public IPv4 each |
+| `--ip`, or the addresses as arguments | Machines to turn into nodes, one public IPv4 each, or `<user>@<address>` for a machine that logs in as another user than `--user` |
+| `--host-key` | The SSH host-key fingerprint, `<ip>=SHA256:...` for each machine (required with `--yes`) |
+| `--bootstrap-key` | A private key that opens the machines today, used once |
 | `--name` | Your node name, the node's id on the chain. Several machines become `alice`, `alice-2`, `alice-3` |
 | `--cluster-only` | The cluster node alone, no chain, storage or relay |
 | `--exit` | Make the relay an **exit** relay (see [Exit relays](#exit-relays-read-this-first)) |
-| `--storage-gb` | Public storage each node offers |
+| `--storage-gb` | Public storage each node offers, in GB (50 unless you say). It counts towards the disk floor: a machine with 90 GiB free passes with `--storage-gb 10`, not with the default |
 | `--domain` | The base domain of a cluster of your own |
 | `--yes` | Ask nothing |
 
@@ -105,7 +105,7 @@ Setup never turns an exit on for you. It needs `--exit`, a Tor network file and 
 
 There are two ways to be found by name.
 
-**A free identification name** (the default). `<name>.<zone>`, in the dedicated names sub-zone the network publishes under its domain (for example `nodes.stagenet.orama.network`), is one address record, A or AAAA, for each literal public IP of your node, served by the network's own nameservers from the chain. It identifies the node and nothing more: no NS records, no glue, no certificate, and nothing delegated to you. The name is claimed on the chain (`MsgClaimNodeName`, with a refundable deposit that comes back when you release the name or retire the node); the setup flow is planned to send that claim for the `--name` you give, and until it does you send it yourself with `oramad tx nodes claim-name <node-id> <name>` on a node. Names are 3 to 32 characters, first come first served, one per node. See [Serving node names](/docs/operator/nameserver#serving-node-names).
+**A free identification name** (the default). `<name>.<zone>`, in the dedicated names sub-zone the network publishes under its domain (for example `nodes.stagenet.orama.network`), is one address record, A or AAAA, for each literal public IP of your node, served by the network's own nameservers from the chain. It identifies the node and nothing more: no NS records, no glue, no certificate, and nothing delegated to you. Setup claims it on the chain for the `--name` you give (`MsgClaimNodeName`, with a 1 ORAMA deposit that comes back when you release the name or retire the node), signed by your RootWallet like the other registrations. Names are 3 to 32 characters, first come first served, one per node. See [Serving node names](/docs/operator/nameserver#serving-node-names).
 
 **Your own domain** (`--domain`). Your cluster becomes the authoritative nameserver for it, so apps, namespaces and certificates under it are answered by your own nodes. You publish NS and glue records at your registrar, or in the parent zone for a subdomain. Setup prints the exact records, then waits until they resolve and the cluster has a certificate. The steps, and the choice between a subdomain and a whole domain, are in [DNS and nameservers](/docs/operator/nameserver).
 
