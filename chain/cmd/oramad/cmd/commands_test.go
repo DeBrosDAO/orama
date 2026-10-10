@@ -176,20 +176,22 @@ func TestInitAppConfig_sizesTheIAVLCacheForASharedHost(t *testing.T) {
 	}
 }
 
-// deploy.sh writes the same values into an app.toml that predates them; a value changed in one
-// place only would leave existing nodes on the old one.
-func TestStagenetDeploy_setsTheValuesOramadInitWrites(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "stagenet", "deploy.sh"))
+// `orama global install --external-address` writes the same values into an app.toml that predates
+// them (core/pkg/install/chainconfig.go); a value changed in one place only would leave existing
+// nodes on the old one.
+func TestGlobalInstall_setsTheValuesOramadInitWrites(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "core", "pkg", "install", "chainconfig.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(raw)
+	src := string(raw)
 	for _, want := range []string{
-		fmt.Sprintf("\nQUERY_GAS_LIMIT=%d\n", defaultQueryGasLimit),
-		fmt.Sprintf("\nIAVL_CACHE_SIZE=%d\n", defaultIAVLCacheSize),
+		fmt.Sprintf("chainQueryGasLimit = %d\n", defaultQueryGasLimit),
+		fmt.Sprintf("chainIAVLCacheSize = %d\n", defaultIAVLCacheSize),
 	} {
-		if !strings.Contains(script, want) {
-			t.Errorf("deploy.sh does not set %q", strings.TrimSpace(want))
+		// gofmt aligns the constants of a block, so compare on the spaced-out form.
+		if !strings.Contains(strings.Join(strings.Fields(src), " "), strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("core/pkg/install/chainconfig.go does not set %q", strings.TrimSpace(want))
 		}
 	}
 }

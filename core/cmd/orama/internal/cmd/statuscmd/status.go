@@ -42,8 +42,8 @@ var Cmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show your nodes, the cluster, the chain and your account",
 	Long: `Show everything about your nodes in one place: each node's cluster health and chain
-(height, syncing, validator), the verdict with what to do, and, with --operator, your account on
-the chain (earnings, spendable balance, bond).
+(height, syncing, validator), the verdict with what to do, and your account on the chain (earnings,
+spendable balance, bond): the one 'orama setup' registered your nodes under, or the one --operator names.
 
 In a terminal this is the live view (tab/1-0 switch tabs, ? help, q quit). Piped or with --once it
 prints one table; --json prints a document whose "healthy" is true only when the verdict is
@@ -75,7 +75,7 @@ func run(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	readOperator, err := operatorReader(flags.operator)
+	readOperator, err := operatorReader(operatorToShow(flags.operator, flags.env))
 	if err != nil {
 		return err
 	}
@@ -101,6 +101,19 @@ func run(cmd *cobra.Command, _ []string) error {
 		return display.StatusJSON(snap, op, os.Stdout)
 	}
 	return display.StatusTable(snap, op, os.Stdout)
+}
+
+// operatorToShow is the account the operator section reads: the one --operator names, else the one
+// `orama setup` recorded on the environment, else none.
+func operatorToShow(flagged, env string) string {
+	if flagged != "" {
+		return flagged
+	}
+	e, err := cli.GetEnvironmentByName(env)
+	if err != nil {
+		return ""
+	}
+	return e.Operator
 }
 
 // newSource is the snapshot source of the selected environment.

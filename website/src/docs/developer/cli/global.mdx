@@ -158,6 +158,19 @@ StorageMax is that plus 10%. It never touches a private cluster's Kubo.
 the network's --genesis in place. It is never done without the flag, and it is
 refused when the home already has a genesis.
 
+--external-address &lt;public ip>:31000 writes the chain's config.toml and app.toml
+(the settings chain/scripts/stagenet/deploy.sh used to sed in): the address the
+node announces to its peers (the chain itself listens at the namespace address,
+198.18.0.2, which no peer can reach), peer exchange off, Prometheus on 127.0.0.1,
+custom pruning (keep 100, every 10 blocks), and a state-sync snapshot every 1000
+blocks with two kept. A setting the chain's template no longer has is an error,
+not a skipped line. Giving --statesync-rpc twice, with --statesync-trust-height
+and --statesync-trust-hash, makes the node restore a snapshot on its first start
+instead of replaying the chain: the servers are two nodes' light-client routes
+(https://&lt;host>/v1/chain/light), the height and hash a block both agreed on, and
+the trust period is 7 days, shorter than the 21-day unbonding. Running it again
+with the same flags changes nothing.
+
 An inactive ufw is refused unless --enable-firewall is given; then incoming is
 denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
@@ -220,6 +233,7 @@ refuses the install, and the set is kept by later installs.
 | `--chain-id` | — | Chain id, with --init-chain |
 | `--colocated` | `false` | Run the services in their own network namespace on a machine that also runs a cluster node |
 | `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |
+| `--external-address` | — | chain: the &lt;public ip>:31000 the node announces to its peers; writes config.toml and app.toml (pruning, snapshots, no peer exchange) |
 | `--genesis` | — | The network's genesis.json, with --init-chain |
 | `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
 | `--manifest` | `/opt/orama/manifest.json` | The release's manifest.json, which must list every file the install reads with its digest |
@@ -229,6 +243,9 @@ refuses the install, and the set is kept by later installs.
 | `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama-orchard-verifier (and its .sha256), orama, orama-global, ipfs and the cosmovisor tarball: the release's bin/ [required] |
+| `--statesync-rpc` | — | chain: a light-client server https://&lt;host>/v1/chain/light the node restores a snapshot through (twice, from independent nodes); with --external-address |
+| `--statesync-trust-hash` | — | chain: that block's hash (64 hex characters); with --statesync-rpc |
+| `--statesync-trust-height` | `0` | chain: the block height both state-sync servers agreed on; with --statesync-rpc |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
 | `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/&lt;nickname>) |
 | `--tor-bandwidth-mbit` | `0` | dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited) |

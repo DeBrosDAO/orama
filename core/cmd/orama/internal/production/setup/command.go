@@ -46,9 +46,12 @@ type Options struct {
 	// line, where ps and shell history would keep the credential that owns
 	// the machine.
 	UsePassword bool
-	BaseDomain  string
-	Gateway     string // Gateway URL (the cluster domain) to mint the invite through (overrides env config)
-	Genesis     bool   // If true, create a new cluster instead of joining
+	// Password, when set, is the VPS password for this run, typed into the
+	// wizard: it is used in place of the vault lookup and never stored.
+	Password   string
+	BaseDomain string
+	Gateway    string // Gateway URL (the cluster domain) to mint the invite through (overrides env config)
+	Genesis    bool   // If true, create a new cluster instead of joining
 	// HostKey pins the VPS's expected SSH host-key fingerprint (SHA256:...) so
 	// enrollment can run unattended. Empty means confirm it interactively.
 	HostKey string
@@ -115,55 +118,16 @@ func Run(opts Options) error {
 	wallet := []string{operator}
 	fmt.Printf("  Wallet: %s\n", operator)
 
-	// 3. Create SSH key in rootwallet vault for this node
-	vaultTarget := fmt.Sprintf("%s/%s", opts.IP, opts.User)
-	fmt.Printf("  Setting up SSH key for %s...\n", vaultTarget)
-
-	if err := remotessh.EnsureVaultEntry(vaultTarget); err != nil {
-		return fmt.Errorf("failed to create SSH key in vault: %w", err)
-	}
-
-	pubKey, err := remotessh.ResolveVaultPublicKey(vaultTarget)
-	if err != nil {
-		return fmt.Errorf("failed to get public key: %w", err)
-	}
-
-	// 4. Pin the VPS host key, then install the public key with the
-	// operator's existing credential, if one was given. The pin holds for
-	// every connection this run makes, not only the enrollment one: the
-	// archive upload, the root extract and the install carrying the invite all
-	// go to the host the operator verified.
-	knownHosts, unpin, err := pinHostKey(opts)
+	// 3-5. Reach the node with a RootWallet-managed key.
+	enrolled, err := Enroll(EnrollRequest{
+		IP: opts.IP, User: opts.User, UsePassword: opts.UsePassword, BootstrapKey: opts.BootstrapKey,
+		HostKey: opts.HostKey, Role: opts.Role, Env: opts.Env,
+	})
 	if err != nil {
 		return err
 	}
-	defer unpin()
-	if err := enrollKey(opts, pubKey, knownHosts); err != nil {
-		return err
-	}
-
-	// 5. Test SSH with rootwallet key
-	fmt.Println("  Testing SSH connection...")
-	node := inspector.Node{
-		Host:           opts.IP,
-		User:           opts.User,
-		VaultTarget:    vaultTarget,
-		Environment:    opts.Env,
-		Role:           opts.Role,
-		KnownHostsFile: knownHosts,
-	}
-	nodes := []inspector.Node{node}
-	cleanup, err := remotessh.PrepareNodeKeys(nodes)
-	if err != nil {
-		return fmt.Errorf("failed to prepare SSH key: %w", err)
-	}
-	defer cleanup()
-	node = nodes[0] // SSHKey is now set
-
-	if err := checkNodeAccess(opts, node); err != nil {
-		return err
-	}
-	fmt.Println("  SSH connection OK")
+	defer enrolled.Close()
+	node := enrolled.Node
 
 	// 6. Put exactly this build on the node.
 	archive := opts.Archive
@@ -283,7 +247,7 @@ func enrollKey(opts Options, pubKey, knownHosts string) error {
 	var err error
 	if opts.UsePassword {
 		var password string
-		if password, err = vaultPassword(opts.IP, opts.User); err != nil {
+		if password, err = enrollPassword(opts); err != nil {
 			return err
 		}
 		err = installPublicKey(opts.IP, opts.User, password, pubKey, knownHosts)
@@ -295,6 +259,15 @@ func enrollKey(opts Options, pubKey, knownHosts string) error {
 	}
 	fmt.Println("  SSH key installed")
 	return nil
+}
+
+// enrollPassword is the VPS password for this run: the one typed into the wizard,
+// else the login entry in the RootWallet vault.
+func enrollPassword(opts Options) (string, error) {
+	if opts.Password != "" {
+		return opts.Password, nil
+	}
+	return vaultPassword(opts.IP, opts.User)
 }
 
 // pinHostKey scans the VPS host key, has the operator confirm it (or matches

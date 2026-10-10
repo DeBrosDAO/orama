@@ -156,6 +156,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 			return err
 		}
 	}
+	if opts.ChainConfig != nil {
+		if err := applyChainConfig(h, *opts.ChainConfig); err != nil {
+			return err
+		}
+	}
 	if plan != nil {
 		if err := writeNetns(h, plan); err != nil {
 			return err

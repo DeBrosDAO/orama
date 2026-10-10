@@ -21,6 +21,20 @@ type NodePreferences struct {
 
 const preferencesFile = "preferences.yaml"
 
+// PreferencesForInstall is the preferences `orama node install` writes: the
+// install's own choices (branch, nameserver) laid over what the machine already
+// records. Role and GlobalNetns belong to the global layer, which may have been
+// installed first (a global-only machine becoming a cluster node) or since the
+// last install (a co-located machine re-installed); writing a fresh struct made
+// the node forget role both, and a node that has lost it refuses to start the
+// global graph or runs it outside its namespace.
+func PreferencesForInstall(oramaDir string, nameserver bool) *NodePreferences {
+	prefs := LoadPreferences(oramaDir)
+	prefs.Branch = "main"
+	prefs.Nameserver = nameserver
+	return prefs
+}
+
 // SavePreferences saves node preferences to disk
 func SavePreferences(oramaDir string, prefs *NodePreferences) error {
 	root := OramaRoot(oramaDir)

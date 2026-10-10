@@ -98,6 +98,21 @@ func RunSSHStreaming(node inspector.Node, command string, opts ...SSHOption) err
 	return nil
 }
 
+// Command is the ssh process that runs command on node, with the node's key and
+// host-key policy and the same liveness options every other session has. The
+// caller sets its stdin, stdout and stderr and runs it: RunSSHStreaming prints to
+// the operator's terminal, which a full-screen UI cannot share.
+func Command(ctx context.Context, node inspector.Node, command string) (*exec.Cmd, error) {
+	if node.SSHKey == "" {
+		return nil, fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
+	}
+	args := append(node.HostKeyOptions(), baseSSHOptions()...)
+	// ClearAllForwardings: no port forward from the operator's ssh_config.
+	args = append(args, "-o", "ClearAllForwardings=yes",
+		"-i", node.SSHKey, fmt.Sprintf("%s@%s", node.User, node.Host), command)
+	return exec.CommandContext(ctx, "ssh", args...), nil
+}
+
 // SudoPrefix returns "sudo " for non-root users, empty for root.
 func SudoPrefix(node inspector.Node) string {
 	if node.User == "root" {
@@ -113,7 +128,7 @@ func SudoPrefix(node inspector.Node) string {
 func RunSSHOutput(node inspector.Node, command string, opts ...SSHOption) (string, error) {
 	res := inspector.RunSSH(context.Background(), node, command)
 	if !res.OK() {
-		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, res.Stderr)
+		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, oneLine(res.Stderr))
 	}
 	return res.Stdout, nil
 }
@@ -135,5 +150,13 @@ func baseSSHOptions() []string {
 		"-o", fmt.Sprintf("ServerAliveInterval=%d", sshServerAliveInterval),
 		"-o", fmt.Sprintf("ServerAliveCountMax=%d", sshServerAliveCountMax),
 		"-o", "IdentitiesOnly=yes",
+		// The operator's ssh_config may forward an agent; a machine the CLI reaches is
+		// never given one.
+		"-o", "ForwardAgent=no",
+		// Every session authenticates with the RootWallet's key: a server's
+		// keyboard-interactive prompt is never put on the operator's terminal, where
+		// no filter reaches it.
+		"-o", "BatchMode=yes",
+		"-o", "PreferredAuthentications=publickey",
 	}
 }

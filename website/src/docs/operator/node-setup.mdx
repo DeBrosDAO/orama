@@ -1,6 +1,6 @@
 # Installing by hand
 
-`orama node setup` ([Install a cluster from scratch](/docs/operator/install-from-scratch)) is the normal way. It runs `orama maint node install` for you over SSH. This page is for when you cannot use it: no RootWallet, or a server you reach some other way. It does the same thing with more steps.
+[`orama setup`](/docs/operator/setup) is the normal way to join a network: it installs the cluster node and the global layer on every machine you give it. `orama node setup` ([Install a cluster from scratch](/docs/operator/install-from-scratch)) still works, as a hidden alias that prints that `orama setup` replaces it, and installs the cluster node alone. Both run `orama maint node install` for you over SSH. This page is for when you cannot use it: no RootWallet, or a server you reach some other way. It does the same thing with more steps.
 
 ## What `orama maint node install` does
 

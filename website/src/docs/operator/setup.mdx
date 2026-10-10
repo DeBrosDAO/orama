@@ -1,0 +1,87 @@
+# Join with orama setup
+
+`orama setup` turns fresh machines into nodes of an Orama network in one command. It gives your RootWallet an SSH key on each machine, installs the signed release the network's channel publishes, installs the cluster node, installs the global layer beside it (the chain joins by state sync), and registers you, your nodes and your validator on the chain, signing with your RootWallet. Re-running it with more addresses adds nodes to the same cluster.
+
+This page describes what the command does today. The flags are in the [`orama setup` reference](/docs/developer/cli/setup).
+
+## Before you run it
+
+- **RootWallet open and unlocked.** Every step after the first signs something.
+- **A network the CLI knows.** `orama network list` shows them. A network is chosen with `--network <name>`; without it, setup uses the network the active environment runs on, or the only one the CLI has. A network you add by URL (`orama network add <manifest-url>`) shows the digest of its release root and asks you to confirm it first; `--network` takes only the name, never a URL.
+- **Fresh machines** with a public IPv4 address, a supported OS ([What you need](/docs/operator/getting-started)) and a way in: a key your RootWallet already has installed, the root password stored in your vault (`rw vault add <ip>`, then `--password`), or a private key that opens it today (`--bootstrap-key`).
+- **The machine's SSH host key**, from your provider's console. Setup never uses your credential on a host key it was not shown and given: interactively it asks you to compare the fingerprint, unattended it needs `--host-key`.
+
+## The two profiles
+
+| | Cluster node only (`--cluster-only`) | Full (the default) |
+|---|---|---|
+| Installs | the cluster node | the cluster node, the chain, public IPFS and its provider, and, with `--tor-network`, a Tor relay |
+| vCPU | 2 | 4 |
+| RAM | 2 GiB | 8 GiB |
+| Free disk | 10 GiB | 80 GiB plus `--storage-gb` (default 50 GB) |
+| On the chain | nothing | operator, node, bonds, capacity, validator |
+
+A machine below the floor of its profile is refused with every shortfall named, before anything is installed on any machine of the run.
+
+## Running it
+
+On a terminal, with no addresses or no name, setup asks the questions: addresses, the SSH login and how you log in, the host key (you compare the fingerprint with your provider's console and press its number), the network, what each machine does, the node name, then it reaches the machines and shows each one's hardware result and the plan, and asks you to confirm. Progress is shown per machine while it runs.
+
+Unattended, give the answers as flags and `--yes`:
+
+```bash
+orama setup --network stagenet --name alice --yes \
+  --ip 203.0.113.10 --ip 203.0.113.11 --ip 203.0.113.12 \
+  --host-key 203.0.113.10=SHA256:... --host-key 203.0.113.11=SHA256:... --host-key 203.0.113.12=SHA256:...
+```
+
+`--name` is the first node's name and its id on the chain; the others are `alice-2` and `alice-3`. A cluster-only run needs no name.
+
+## What happens, in order
+
+1. **Preflight, nothing changed.** The RootWallet agent is checked, the network's manifest is loaded and its genesis is fetched and checked against the digest the manifest pins, and the plan is built and shown (and confirmed, unless `--yes`).
+2. **Enrol and check every machine.** For each address: an SSH key in your vault, the host key pinned, the key installed over the credential you named, the architecture, hardware and what is already installed read. A machine below its floor stops the run here.
+3. **The release.** The newest release of the network's channel is fetched from the manifest's release repository and verified against the TUF root the network pins (the root built into your CLI, followed through the repository's rotations), then your RootWallet signs it as the build your cluster runs, and each machine verifies it again before it is put under `/opt/orama`. A machine that already runs exactly that build is left alone.
+4. **The cluster.** The first machine creates the cluster, the others join it, one after another; each invite is minted over SSH on a node that is already in. With `--domain`, the nodes are nameservers of that domain. After each machine the cluster and its nodes are recorded in your CLI configuration under the environment (`--env`, else the active environment on this network, else `<network>-<name>`).
+5. **The global layer** (full profile), on several machines at once: as many as the cluster could lose and still hold its Raft quorum (one on a cluster of three, two on five), never more than four:
+   - the trust point is read through two of the network's seeds: the newest block both serve less 100 blocks, which must have the same hash on both (seeds that disagree stop the run);
+   - `orama global install --colocated` installs the services; the chain home is created from the network's genesis, and the chain's configuration is written by the installer: the address it announces (your public IP, port 31000), no peer exchange, Prometheus on loopback, custom pruning, a snapshot every 1,000 blocks (two kept), and the state-sync block with the two seeds, the trusted block and a 7-day trust period;
+   - the chain, the public IPFS and the relay (if any) are started;
+   - setup waits, with a deadline, until the chain has restored a snapshot and caught up. If the chain unit stays down, or the machine cannot be polled five times running, the wait ends, with the end of the chain's log or the last error.
+6. **Restart, one machine at a time.** The cluster gateway reads the chain's listeners when it starts, so each cluster node whose gateway started before its chain unit was installed (this run's installs, and a machine an earlier run left that way) is restarted, and setup waits until it carries its share of the cluster again before it touches the next. Each restart goes through the node's own quorum check. A cluster of fewer than three voters cannot keep a quorum through any restart, so if (and only if) the node's refusal says it counts fewer than three voters, setup says so and restarts it with `--force`. Any other refusal, such as a check that could not read the cluster or a cluster of three or more, is the answer and stops the run.
+7. **On the chain**, one transaction at a time, signed by your RootWallet with the account number, sequence, gas and fee derived:
+   - the budget is printed (the bonds, the self-bond, the fee allowance) and checked against a ceiling of 1,000,000 ORAMA, because the figures come from the chain node setup has just installed; the operator account is then checked for funds (see below);
+   - register the operator, unless it is registered;
+   - for each node: read its keys (the hot key is created on first use), register it with its roles, endpoint and autonomous system number, bond each role, declare its storage capacity, start the provider, and, on the first node, create the validator with the 1,000 ORAMA self-bond;
+   - claim the node's name.
+   Each step first asks the chain whether it is already done.
+8. **Your own domain** (`--domain`). Setup prints the NS and glue records to create at the parent zone as soon as the cluster exists, and at the end polls DNS until the parent zone returns them and the cluster serves a certificate for the domain.
+9. **The record.** The operator account is stored on the environment, so `orama status` shows your earnings, balance and bond without `--operator`. On a terminal, setup then offers to open `orama status`.
+
+## Funding
+
+The operator account needs ORAMA for the bonds (the storage bond is the network's bond per GiB times the capacity you declare, the relay and exit bonds are the network's minimums), the validator's 1,000 ORAMA self-bond, and fees. Setup reads the network's parameters and tells you the exact amount.
+
+- On a network with a faucet, setup asks it for the shortfall. The faucet signs on a node of the network over SSH, so this works when your CLI has an environment named after the network with nodes in it; for anyone else there is no faucet yet.
+- Otherwise setup stops with the exact amount and your operator address. Send it and run the same command again: it resumes where it stopped and bonds only what is missing.
+- `--no-validator` skips the validator and its self-bond.
+
+## Running it again
+
+Setup reads each machine before it changes it, so the same command, or the same command with more addresses, is safe to run again. A machine with `orama-node.service` has its cluster step skipped, once it answers; one with the chain unit has its global layer skipped, and its chain started if a stopped run left it down; a machine whose `/opt/orama/manifest.json` and `bin/orama` are the release's has its upload skipped; a node, a bond, a capacity or a validator the chain already shows is not sent again. The wait for the chain to catch up is always made, so a run that stopped while it was syncing never registers anything on a chain that is behind. A failed run leaves a CLI that knows the nodes that were installed, and a node of that cluster is reached again with the key and host key setup stored the first time, without asking.
+
+When a run stops at a step that waits (the chain, DNS), the error ends with the `orama setup` command that runs the same setup again.
+
+## The exit relay
+
+`--exit` makes the relay an exit: other people's traffic leaves from your address, abuse complaints reach your hosting provider and the `--contact` you give, and some providers forbid it. Setup prints this and needs `--yes` or your confirmation. An exit needs `--tor-network` because it is a relay.
+
+## Known gaps
+
+- **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.
+- **Name claim.** The chain transaction that claims `<name>.<network>.orama.network` is not part of this build. The step says "name claim not available on this chain yet" and does nothing.
+- **The faucet is SSH-signed.** There is no public faucet endpoint; see Funding.
+- **Earnings are not counted** when setup checks the account has enough. A bond can be paid from earnings, so an operator who holds only earnings is told to fund the account.
+- **A chain that has upgraded since its genesis.** A joiner starts on the genesis binary in the cosmovisor layout. If the snapshot it restores was taken after an upgrade, the chain stops asking for that upgrade's binary; setup ends the wait with the chain's log. The release metadata does not list upgrade heights, so setup cannot stage the right binary itself yet.
+- **Release signing on a fresh machine.** A machine with no trust anchor installs a build your RootWallet signed after your CLI verified it; staging with the release root alone (`stage-archive --release-only`) needs a machine that is already installed.
+- **Passwords typed in the wizard are used once.** The RootWallet agent has no call to store a login, so a password typed into the wizard is not saved to your vault; store it first with `rw vault add`.

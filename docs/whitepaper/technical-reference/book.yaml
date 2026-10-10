@@ -342,6 +342,9 @@ volumes:
             verified: "0.3.0"
             owns:
               - core/pkg/install/
+              - core/pkg/statesync/
+              - core/cmd/orama/internal/setup/
+              - core/cmd/orama/internal/cmd/setupcmd/
               - core/pkg/autoupdate/
               - core/pkg/updatenotice/
               - core/pkg/updatepolicy/

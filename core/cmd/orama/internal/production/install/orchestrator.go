@@ -135,10 +135,7 @@ func (o *Orchestrator) Execute() error {
 	}
 
 	// Save preferences for future upgrades.
-	prefs := &oramainstall.NodePreferences{
-		Branch:     "main",
-		Nameserver: o.flags.Nameserver,
-	}
+	prefs := oramainstall.PreferencesForInstall(o.oramaDir, o.flags.Nameserver)
 	if err := oramainstall.SavePreferences(o.oramaDir, prefs); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  Warning: Failed to save preferences: %v\n", err)
 	}

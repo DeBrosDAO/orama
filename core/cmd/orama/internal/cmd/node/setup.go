@@ -1,16 +1,26 @@
 package node
 
 import (
+	"fmt"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/setup"
 	"github.com/spf13/cobra"
 )
 
 var setupOpts setup.Options
 
+// setupDeprecation is what `orama node setup` prints before it runs.
+const setupDeprecation = "orama node setup is replaced by `orama setup`, which also installs the global layer and registers the node; this command still works for now"
+
 var setupCmd = &cobra.Command{
-	Use:   "setup",
-	Short: "Set up a fresh VPS as an Orama node",
-	Long: `Bootstrap a fresh VPS into a running Orama node in one command.
+	Use:    "setup",
+	Hidden: true,
+	Short:  "Set up a fresh VPS as an Orama node (use orama setup)",
+	Long: `Use "orama setup": it does this for every machine you give it, and the rest of joining the
+network as well. This command stays for now and installs the cluster node only.
+
+Bootstrap a fresh VPS into a running Orama node in one command.
 
 Creates an SSH key in rootwallet, installs it on the VPS, uploads the binary
 archive, and runs the node install. For the first node, use --genesis to
@@ -47,6 +57,7 @@ Examples:
     --base-domain orama-devnet.network --role nameserver \
     --archive /tmp/orama-<version>-linux-amd64.tar.gz`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(cmd.ErrOrStderr(), setupDeprecation)
 		return setup.Run(setupOpts)
 	},
 }
@@ -70,4 +81,5 @@ func init() {
 	setupCmd.Flags().StringVar(&setupOpts.ReleaseRoot, "release-root", "", "The TUF root.json of the release signers you trust, checked out of band; with --release. The cluster adopts it")
 	setupCmd.Flags().StringVar(&setupOpts.Channel, "channel", "", "Release channel to read (default stable); with --release")
 	setupCmd.MarkFlagRequired("ip")
+	cmdmeta.MarkListed(setupCmd)
 }

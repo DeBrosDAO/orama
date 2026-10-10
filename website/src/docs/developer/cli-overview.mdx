@@ -36,7 +36,7 @@ orama network use mycluster
 orama auth login
 ```
 
-The gateway URL must be `https://` with a host (`http://` only for a gateway on this machine). Every command sends its credential there. `orama network add` also takes `--ca-file` to trust a private or staging CA for that cluster only, and `--network` to record which network of the registry it runs on. `orama network list` and `orama network current` show what is configured, next to the networks built into the CLI. A network that publishes a manifest is added by its URL: `orama network add https://example.org/networks/mine/manifest.json` shows the chain id and the digest of the release root it would trust and asks you to type `yes` (`--yes` in a script). `orama env` is the old name of `orama network`: hidden, prints a deprecation line, and goes in the next release. The list is stored in `~/.orama/environments.json`, and `orama node setup --genesis` adds the cluster it creates.
+The gateway URL must be `https://` with a host (`http://` only for a gateway on this machine). Every command sends its credential there. `orama network add` also takes `--ca-file` to trust a private or staging CA for that cluster only, and `--network` to record which network of the registry it runs on. `orama network list` and `orama network current` show what is configured, next to the networks built into the CLI. A network that publishes a manifest is added by its URL: `orama network add https://example.org/networks/mine/manifest.json` shows the chain id and the digest of the release root it would trust and asks you to type `yes` (`--yes` in a script). `orama env` is the old name of `orama network`: hidden, prints a deprecation line, and goes in the next release. The list is stored in `~/.orama/environments.json`, and `orama setup` (or `orama node setup --genesis`) adds the cluster it creates, with its nodes and, for `orama setup`, the operator account `orama status` shows.
 
 ## Which cluster, which namespace, which credential
 
@@ -73,7 +73,7 @@ Colour and emoji appear only on a terminal. Piping gives plain ASCII markers (`O
 
 ## RootWallet
 
-Commands that reach a node or sign something (`node setup`, `maint push`, `maint rollout`, `maint build`, `ssh`, `monitor`, `auth login`, anything that signs a chain transaction) ask the RootWallet desktop app's agent. See [The agent](/docs/rootwallet/agent). A command that seems to hang is usually an approval prompt in the app.
+Commands that reach a node or sign something (`setup`, `node setup`, `maint push`, `maint rollout`, `maint build`, `ssh`, `monitor`, `auth login`, anything that signs a chain transaction) ask the RootWallet desktop app's agent. See [The agent](/docs/rootwallet/agent). A command that seems to hang is usually an approval prompt in the app.
 
 ## Command families
 

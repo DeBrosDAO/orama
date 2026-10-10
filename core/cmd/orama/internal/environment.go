@@ -22,6 +22,10 @@ type Environment struct {
 	// Network is the registry network (see pkg/netregistry) this gateway's
 	// cluster runs on. Empty when the cluster belongs to none.
 	Network string `json:"network,omitempty"`
+	// Operator is the operator account (orama1...) `orama setup` registered the
+	// cluster's nodes under: `orama status` shows its earnings, balance and bond
+	// without --operator.
+	Operator string `json:"operator,omitempty"`
 	// CAFile is a PEM bundle trusted, in addition to the system roots, for
 	// the gateway's domain and every name under it: a cluster on Let's
 	// Encrypt staging or on a private CA. Only for this environment's domain.
@@ -312,6 +316,23 @@ func AddEnvironmentOn(name, gatewayURL, description, network string) error {
 			Network:     network,
 		})
 		return nil
+	})
+}
+
+// RecordOperator stores the operator account of an environment: the account
+// `orama setup` registered its nodes under. The environment must exist.
+func RecordOperator(envName, operator string) error {
+	if !strings.HasPrefix(operator, "orama1") || strings.ContainsAny(operator, "/?#% ") {
+		return fmt.Errorf("operator %q is not an orama address (orama1...)", operator)
+	}
+	return updateEnvironmentConfig(func(cfg *EnvironmentConfig) error {
+		for i := range cfg.Environments {
+			if cfg.Environments[i].Name == envName {
+				cfg.Environments[i].Operator = operator
+				return nil
+			}
+		}
+		return fmt.Errorf("network %q is not configured; add it before recording its operator", envName)
 	})
 }
 

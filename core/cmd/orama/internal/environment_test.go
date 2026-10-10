@@ -196,3 +196,34 @@ func TestFreshConfigHasNoEnvironments(t *testing.T) {
 		t.Fatalf("active environment error = %v, want the env add hint", err)
 	}
 }
+
+func TestRecordOperator_storesItOnTheEnvironment(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	const operator = "orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53"
+	if err := RecordOperator("devnet", operator); err != nil {
+		t.Fatal(err)
+	}
+	env, err := GetEnvironmentByName("devnet")
+	if err != nil || env.Operator != operator {
+		t.Fatalf("operator = %q, %v; want %q", env.Operator, err, operator)
+	}
+	if err := RecordOperator("devnet", operator); err != nil {
+		t.Fatalf("recording the same operator again: %v", err)
+	}
+}
+
+func TestRecordOperator_refusals(t *testing.T) {
+	cleanup := writeTestConfig(t, defaultTestConfig())
+	defer cleanup()
+
+	if err := RecordOperator("missing", "orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53"); err == nil {
+		t.Error("an unknown environment accepted an operator")
+	}
+	for _, bad := range []string{"", "0xabc", "orama1abc/../x", "orama1 abc"} {
+		if err := RecordOperator("devnet", bad); err == nil {
+			t.Errorf("operator %q was accepted", bad)
+		}
+	}
+}

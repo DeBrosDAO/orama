@@ -225,7 +225,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node remove`](#orama-node-remove) — Remove one node from the cluster, then erase it (replaced by orama remove)
   - [`orama node report`](#orama-node-report) — Output comprehensive node health data as JSON
   - [`orama node restart`](#orama-node-restart) — Restart all production services (requires sudo)
-  - [`orama node setup`](#orama-node-setup) — Set up a fresh VPS as an Orama node
+  - [`orama node setup`](#orama-node-setup) — Set up a fresh VPS as an Orama node (use orama setup)
   - [`orama node start`](#orama-node-start) — Start all production services (requires sudo)
   - [`orama node status`](#orama-node-status) — Show the service status of the node on this machine
   - [`orama node stop`](#orama-node-stop) — Stop all production services (requires sudo)
@@ -236,6 +236,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node wipe`](#orama-node-wipe) — Erase Orama from remote nodes (target-side only)
 - [`orama nodes`](#orama-nodes) — List your nodes across environments
 - [`orama remove`](#orama-remove) — Remove one node from your network, then erase it
+- [`orama setup`](#orama-setup) — Join an Orama network: turn fresh VPSes into nodes
 - [`orama ssh`](#orama-ssh) — SSH into a node
 - [`orama status`](#orama-status) — Show your nodes, the cluster, the chain and your account
   - [`orama status alerts`](#orama-status-alerts) — Alerts, most severe first, with what to do (one-shot)
@@ -1596,6 +1597,19 @@ StorageMax is that plus 10%. It never touches a private cluster's Kubo.
 the network's --genesis in place. It is never done without the flag, and it is
 refused when the home already has a genesis.
 
+--external-address <public ip>:31000 writes the chain's config.toml and app.toml
+(the settings chain/scripts/stagenet/deploy.sh used to sed in): the address the
+node announces to its peers (the chain itself listens at the namespace address,
+198.18.0.2, which no peer can reach), peer exchange off, Prometheus on 127.0.0.1,
+custom pruning (keep 100, every 10 blocks), and a state-sync snapshot every 1000
+blocks with two kept. A setting the chain's template no longer has is an error,
+not a skipped line. Giving --statesync-rpc twice, with --statesync-trust-height
+and --statesync-trust-hash, makes the node restore a snapshot on its first start
+instead of replaying the chain: the servers are two nodes' light-client routes
+(https://<host>/v1/chain/light), the height and hash a block both agreed on, and
+the trust period is 7 days, shorter than the 21-day unbonding. Running it again
+with the same flags changes nothing.
+
 An inactive ufw is refused unless --enable-firewall is given; then incoming is
 denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
@@ -1656,6 +1670,7 @@ refuses the install, and the set is kept by later installs.
 | `--chain-id` | — | Chain id, with --init-chain |
 | `--colocated` | `false` | Run the services in their own network namespace on a machine that also runs a cluster node |
 | `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |
+| `--external-address` | — | chain: the <public ip>:31000 the node announces to its peers; writes config.toml and app.toml (pruning, snapshots, no peer exchange) |
 | `--genesis` | — | The network's genesis.json, with --init-chain |
 | `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
 | `--manifest` | `/opt/orama/manifest.json` | The release's manifest.json, which must list every file the install reads with its digest |
@@ -1665,6 +1680,9 @@ refuses the install, and the set is kept by later installs.
 | `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama-orchard-verifier (and its .sha256), orama, orama-global, ipfs and the cosmovisor tarball: the release's bin/ [required] |
+| `--statesync-rpc` | — | chain: a light-client server https://<host>/v1/chain/light the node restores a snapshot through (twice, from independent nodes); with --external-address |
+| `--statesync-trust-hash` | — | chain: that block's hash (64 hex characters); with --statesync-rpc |
+| `--statesync-trust-height` | `0` | chain: the block height both state-sync servers agreed on; with --statesync-rpc |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
 | `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>) |
 | `--tor-bandwidth-mbit` | `0` | dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited) |
@@ -4176,7 +4194,7 @@ Remote, run from your machine and reaching nodes over SSH:
 Installing a node's software, staging an archive, auto-update, recovery and
 migration are maintainer commands: see 'orama maint node'.
 
-Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `report`, `restart`, `setup`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
+Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `report`, `restart`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
 
 ### orama node dns
 
@@ -4358,11 +4376,14 @@ Use --force to bypass quorum safety check.
 
 ### orama node setup
 
-Set up a fresh VPS as an Orama node
+Set up a fresh VPS as an Orama node (use orama setup)
 
 ```
 orama node setup [flags]
 ```
+
+Use "orama setup": it does this for every machine you give it, and the rest of joining the
+network as well. This command stays for now and installs the cluster node only.
 
 Bootstrap a fresh VPS into a running Orama node in one command.
 
@@ -4638,6 +4659,62 @@ Examples:
 | `--offline` | `false` | The machine is already gone: retire it from the cluster only, do not wipe it |
 | `--yes` | `false` | Do not ask for confirmation (DESTRUCTIVE) |
 
+### orama setup
+
+Join an Orama network: turn fresh VPSes into nodes
+
+```
+orama setup [ip ...] [flags]
+```
+
+Turn fresh VPSes into nodes of an Orama network, in one command.
+
+For each machine setup gives your RootWallet an SSH key (and pins the machine's host key),
+checks the hardware against what the machine will run, installs the signed release of the
+network's channel (verified against the release root the network pins), installs the cluster
+node and, beside it, the global layer: the chain (it joins by state sync from two seeds that
+must agree), public storage and its provider, and a Tor relay when you give the network's Tor
+file. Then it registers your operator, each node, its bonds and its storage capacity on the
+chain and creates your validator, signing every transaction with your RootWallet. Nodes are
+restarted one at a time, each waiting until it carries its share of the cluster again.
+
+The first machine creates the cluster; the others join it. Running setup again with more
+addresses adds nodes to the same cluster, and a machine that already has a step does not get
+it again, so a run that stopped can be run again as it was.
+
+With no addresses and no --yes, on a terminal, setup asks for everything. With --yes it asks
+nothing: give the addresses, --name, and a --host-key for each machine (the fingerprint your
+provider's console shows; setup never trusts a host key it was not given).
+
+The operator account needs ORAMA for the bonds and for the validator's 1,000 ORAMA self-bond.
+On a network with a faucet and a node of it in your CLI configuration it is requested; otherwise
+setup stops, says how much to send and to which address, and resumes when you run it again.
+
+--cluster-only installs the cluster node alone (2 vCPU, 2 GiB, 10 GiB free). The full profile
+needs 4 vCPU, 8 GiB and 80 GiB free plus the storage you offer. Nothing is installed on any
+machine until every machine passes.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
+| `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
+| `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
+| `--cluster-only` | `false` | Install the cluster node only, without the chain, storage or relay |
+| `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
+| `--domain` | — | Base domain of a cluster of your own: setup prints the NS and glue records to create, then waits until they resolve and the cluster has a certificate |
+| `--env` | — | CLI environment to record the cluster under (default: the active one on this network, else <network>-<name>) |
+| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes |
+| `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or <ip>=SHA256:... for each (repeatable) |
+| `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
+| `--name` | — | Node name, the node's id on the chain; several machines are named <name>, <name>-2, ... (required unless --cluster-only) |
+| `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |
+| `--no-validator` | `false` | Do not create a validator (and do not bond the 1,000 ORAMA self-bond) |
+| `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add <ip>), never from the command line |
+| `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
+| `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |
+| `--user` | `root` | SSH login on the machines |
+| `-y`, `--yes` | `false` | Ask nothing: use the answers given as flags (every machine needs a --host-key) |
+
 ### orama ssh
 
 SSH into a node
@@ -4669,8 +4746,8 @@ orama status [flags]
 ```
 
 Show everything about your nodes in one place: each node's cluster health and chain
-(height, syncing, validator), the verdict with what to do, and, with --operator, your account on
-the chain (earnings, spendable balance, bond).
+(height, syncing, validator), the verdict with what to do, and your account on the chain (earnings,
+spendable balance, bond): the one 'orama setup' registered your nodes under, or the one --operator names.
 
 In a terminal this is the live view (tab/1-0 switch tabs, ? help, q quit). Piped or with --once it
 prints one table; --json prints a document whose "healthy" is true only when the verdict is

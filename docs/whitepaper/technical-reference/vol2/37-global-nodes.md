@@ -108,7 +108,7 @@ The unit restarts always, after 5 s, with no start limit, and allows 65,535 open
 
 The unit has no WireGuard dependency and its peers must be public addresses: `IPAddressDeny=` covers the private ranges. The stagenet deploy script writes a different chain unit that peers over the WireGuard mesh; it is not this one ([chain architecture](39-chain-architecture.md)). The comment on `ChainP2PPort` in `core/pkg/constants/chain.go` still says the listener is on the WireGuard address; the global unit binds `0.0.0.0`.
 
-`oramad start` refuses a node whose `app.toml` sets `query-gas-limit` to 0 on any chain id that is not a localnet, and a node of a stagenet, testnet or mainnet chain that cannot verify shielded bundles (`chain/cmd/oramad/cmd/commands.go:guardStart`). `oramad init` writes `2000000`. The installer never rewrites an existing `app.toml`.
+`oramad start` refuses a node whose `app.toml` sets `query-gas-limit` to 0 on any chain id that is not a localnet, and a node of a stagenet, testnet or mainnet chain that cannot verify shielded bundles (`chain/cmd/oramad/cmd/commands.go:guardStart`). `oramad init` writes `2000000`. The installer rewrites an existing `app.toml` only when it is given `--external-address`: `core/pkg/install/chainconfig.go` then sets the external address, peer exchange, pruning, `min-retain-blocks`, the query gas limit, the IAVL cache and the snapshot interval (1000 blocks, two kept), and, for a joiner, the `[statesync]` block (two light-client servers, a trusted height and hash, a 7-day trust period). A key its template lacks is an error.
 
 ### Cosmovisor staging
 
@@ -215,7 +215,7 @@ A machine can be a cluster node and a global node at once, so a small operator c
 
 - It installs missing `iproute2`, `nftables` and `procps` with `apt-get`, the one change made before the check, since a stock Debian 12 image has no nftables.
 - It runs `globalnetns.Preflight`: Linux; `/proc/self/ns/net` exists; systemd 242 or newer (`NetworkNamespacePath=`); and a probe that creates and deletes a throwaway namespace and a veth pair, so a container without `CAP_NET_ADMIN` is refused here and not halfway through; and no route for `198.18.` other than the layout's own (`core/pkg/globalnetns/preflight.go:Preflight`).
-- It requires `/opt/orama/.orama/preferences.yaml`, which means a cluster node is installed (and `orama node setup` run later would overwrite the co-located role), and refuses `role: global`.
+- It requires `/opt/orama/.orama/preferences.yaml`, which means a cluster node is installed (a later `orama maint node install` keeps the co-located role it records, `core/pkg/install/preferences.go:PreferencesForInstall`), and refuses `role: global`.
 - It resolves the cluster node's account `orama` to a uid, and every `--chain-client-user` name to a uid. An unknown name or root refuses the install.
 
 The layout (`core/pkg/globalnetns/layout.go`): namespace `orama-global` at `/run/netns/orama-global`; veth ends `ogl-host` (root side, `198.18.0.1/30`) and `ogl-ns` (inside, `198.18.0.2/30`). `198.18.0.0/15` is RFC 2544 benchmarking space, in none of the ranges the units deny, and no provider routes it.
