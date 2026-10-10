@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/install/installers"
@@ -55,11 +56,20 @@ systemctl disable orama-autoupdate.timer 2>/dev/null
 # Stop every namespace unit FIRST. These are template instances
 # (orama-namespace-rqlite@index, ...@<tenant>) and match none of the legacy
 # host unit names below, so they used to keep running under a deleted data dir.
-for unit in $(systemctl list-units --all --plain --no-legend "orama-namespace-*" "orama-deploy-*" | awk "{print \$1}"); do
+# The global layer stops here too, while its unit files exist: stopping
+# orama-global-netns runs its ExecStop, which deletes the namespace, its veth and
+# its nft table. Stopped only after its file was gone, systemd no longer had the
+# ExecStop, and the namespace stayed.
+for unit in $(systemctl list-units --all --plain --no-legend "orama-namespace-*" "orama-deploy-*" "orama-global-*" | awk "{print \$1}"); do
     systemctl stop "$unit" 2>/dev/null
     systemctl disable "$unit" 2>/dev/null
 done
 systemctl stop "orama-namespace-*@*.service" 2>/dev/null || true
+# A namespace whose unit an earlier wipe already removed has no ExecStop left to
+# run: delete what the unit would have, in its order (the check below verifies).
+nft delete table ip %[17]s 2>/dev/null || true
+ip link del %[18]s 2>/dev/null || true
+ip netns del %[19]s 2>/dev/null || true
 
 # The privileged helper: stop its socket so nothing can reach root through it
 # while the rest is torn down. Its unit files and binary go below.
@@ -215,6 +225,7 @@ fi
 		leftoverCheck(nuclear),
 		constants.WireGuardSubnet,
 		strings.Join(globalPaths(), " "),
+		globalnetns.HostTable, globalnetns.HostIface, globalnetns.Name,
 	)
 }
 

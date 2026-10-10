@@ -357,3 +357,25 @@ func TestWipeScript_everyWipeRemovesTheGlobalLayerAndChecksForIt(t *testing.T) {
 		}
 	}
 }
+
+// The second wipe of the stagenet founder left the orama-global namespace, its veth and
+// its nft table: the global units were stopped only after their files were removed, so
+// the namespace unit's ExecStop never ran. They stop with the namespace units now, and
+// a namespace whose unit is already gone is deleted directly, all before the files go.
+func TestWipeScript_theGlobalNamespaceIsTornDownBeforeItsUnitFileGoes(t *testing.T) {
+	script := removalPart(wipeScript(true))
+	stop := strings.Index(script, `"orama-global-*" | awk`)
+	direct := strings.Index(script, "ip netns del orama-global")
+	unitFiles := strings.Index(script, "rm -f /etc/systemd/system/orama-*.service")
+	if stop < 0 || direct < 0 || unitFiles < 0 {
+		t.Fatalf("missing step: stop %d, direct %d, unit files %d", stop, direct, unitFiles)
+	}
+	if !(stop < direct && direct < unitFiles) {
+		t.Errorf("want the global units stopped, then the namespace deleted, then the unit files removed")
+	}
+	for _, cmd := range []string{"nft delete table ip orama_global", "ip link del ogl-host"} {
+		if i := strings.Index(script, cmd); i < 0 || i > direct {
+			t.Errorf("%q must come before the namespace is deleted, as in the unit's ExecStop", cmd)
+		}
+	}
+}
