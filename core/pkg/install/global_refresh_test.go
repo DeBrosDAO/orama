@@ -169,6 +169,25 @@ func TestRefreshGlobal_aServiceStillRunningAReplacedFileIsRestartedEvenWhenNothi
 	}
 }
 
+func TestRefreshGlobal_theOnionServiceIsJudgedByItsTxGateNotByTor(t *testing.T) {
+	f := installedFixture(t)
+	var asked []string
+	opts := f.refreshOptions(GlobalServiceOnion)
+	opts.Stale = staleUnits(&asked, constants.GlobalTxGateUnit)
+
+	res, err := RefreshGlobal(f.host, opts)
+	if err != nil {
+		t.Fatalf("RefreshGlobal: %v", err)
+	}
+
+	if !slices.Equal(asked, []string{constants.GlobalTxGateUnit}) {
+		t.Errorf("asked %v, want only the tx gate: the onion unit runs the distro's tor, and the gate is what runs the orama CLI", asked)
+	}
+	if !slices.Equal(res.Restart, []GlobalService{GlobalServiceOnion}) {
+		t.Errorf("restart %v, want the onion service (its restart takes the gate with it)", res.Restart)
+	}
+}
+
 func TestRefreshGlobal_aServiceThatIsNotRunningIsNotStarted(t *testing.T) {
 	f := installedFixture(t)
 	f.restage(t, "orama-global", "binary orama-global v2")

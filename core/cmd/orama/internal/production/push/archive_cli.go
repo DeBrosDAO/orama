@@ -1,13 +1,13 @@
 package push
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
 
 // Staging a push.
@@ -122,6 +122,5 @@ func archiveCLIStage(sudo, archivePath, cliSum string, trust []string, removeDir
 		`echo "` + cliSum + `  $cli/bin/` + archiveCLIName + `" | sha256sum -c --quiet -`,
 		`"$cli/bin/` + archiveCLIName + `" node stage-archive --archive ` + archivePath + ` --trust-signers ` + strings.Join(trust, ","),
 	}, "\n") + "\n"
-	encoded := base64.StdEncoding.EncodeToString([]byte(script))
-	return "printf %s " + encoded + " | base64 -d | " + sudo + "bash -s"
+	return remotessh.ScriptCommand(sudo, script)
 }

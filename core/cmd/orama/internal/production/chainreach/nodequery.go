@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -18,6 +21,9 @@ const (
 	// on the chain.
 	StatusRetired    = "NODE_STATUS_RETIRED"
 	StatusTombstoned = "NODE_STATUS_TOMBSTONED"
+	// multiaddrHostIndex is where the address sits in "/ip4/<ip>/tcp/<port>"
+	// split on "/".
+	multiaddrHostIndex = 2
 )
 
 // ChainNode is a node's record in x/nodes.
@@ -32,23 +38,53 @@ type ChainNode struct {
 	Endpoints []string
 }
 
-// endpointSeparators split an endpoint into the host and the rest: a port, a
-// scheme, a path, an address in brackets.
-const endpointSeparators = "/:@[] "
-
-// ListsHost reports whether one of the node's registered endpoints is host, and
-// whether the node registered any endpoint at all. A node with none cannot be
-// matched to a machine by its record.
+// ListsHost reports whether one of the node's registered endpoints is the IPv4
+// address host, and whether the record names any IPv4 address at all. Endpoints
+// are host:port, a URL, or a multiaddr (/ip4/<ip>/tcp/<port>); a hostname, an
+// IPv6 address or a multiaddr of another kind cannot be compared with the
+// address of a machine, so a node whose endpoints are all of those is unknown,
+// not mismatched.
 func (n ChainNode) ListsHost(host string) (listed, known bool) {
+	want, err := netip.ParseAddr(host)
+	if err != nil || !want.Is4() {
+		return false, false
+	}
 	for _, ep := range n.Endpoints {
+		got, err := netip.ParseAddr(endpointHost(ep))
+		if err != nil || !got.Is4() {
+			continue
+		}
 		known = true
-		for _, tok := range strings.FieldsFunc(ep, func(r rune) bool { return strings.ContainsRune(endpointSeparators, r) }) {
-			if strings.EqualFold(tok, host) {
-				return true, true
-			}
+		if got == want {
+			return true, true
 		}
 	}
 	return false, known
+}
+
+// endpointHost is the host part of a registered endpoint, "" when the form is
+// not one this reads.
+func endpointHost(ep string) string {
+	switch {
+	case strings.HasPrefix(ep, "/"):
+		parts := strings.Split(ep, "/")
+		if len(parts) >= multiaddrHostIndex+1 && parts[1] == "ip4" {
+			return parts[multiaddrHostIndex]
+		}
+		return ""
+	case strings.Contains(ep, "://"):
+		u, err := url.Parse(ep)
+		if err != nil {
+			return ""
+		}
+		return u.Hostname()
+	default:
+		host, _, err := net.SplitHostPort(ep)
+		if err != nil {
+			return ep
+		}
+		return host
+	}
 }
 
 // Gone reports whether the node has left the chain for good.

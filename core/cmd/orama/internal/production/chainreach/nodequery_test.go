@@ -68,9 +68,15 @@ func TestChainNode_ListsHost(t *testing.T) {
 		{"one of several", []string{"198.51.100.2:31000", "203.0.113.9:31010"}, "203.0.113.9", true, true},
 		{"a URL", []string{"https://203.0.113.9:4001/path"}, "203.0.113.9", true, true},
 		{"a multiaddr", []string{"/ip4/203.0.113.9/tcp/4001"}, "203.0.113.9", true, true},
+		{"a bare address", []string{"203.0.113.9"}, "203.0.113.9", true, true},
 		{"another machine", []string{"198.51.100.2:4001"}, "203.0.113.9", false, true},
-		{"an address that only contains the host", []string{"1203.0.113.99:4001"}, "203.0.113.9", false, true},
+		{"an address that only contains the host", []string{"1203.0.113.99:4001"}, "203.0.113.9", false, false},
+		{"the host only in a path", []string{"https://evil.example/203.0.113.9"}, "203.0.113.9", false, false},
+		{"hostnames only cannot be compared", []string{"node.example:443", "/dns4/node.example/tcp/443"}, "203.0.113.9", false, false},
+		{"an IPv6 endpoint cannot be compared", []string{"[2001:db8::1]:443"}, "203.0.113.9", false, false},
+		{"a hostname beside a literal that is another machine", []string{"node.example:443", "198.51.100.2:443"}, "203.0.113.9", false, true},
 		{"no endpoint registered", nil, "203.0.113.9", false, false},
+		{"a target that is not an IPv4 address", []string{"203.0.113.9:4001"}, "node.example", false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

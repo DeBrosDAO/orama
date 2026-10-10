@@ -19,20 +19,22 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/rootfs"
 )
 
-// globalRunsBinary names, for the services whose long-lived process is one of
-// the release's binaries, which one it is. A service not listed is not
+// globalRuns says, for the services whose long-lived process is one of the
+// release's binaries, which unit that process belongs to. Usually it is the
+// service's own unit; the onion service's own unit runs the distro's tor and its
+// tx gate, a companion unit, runs the orama CLI. A service not listed is not
 // restarted when a binary changes: the chain runs oramad out of the cosmovisor
-// layout (the orama CLI is only its pre-start check, run afresh at every
-// start), and a Tor role runs the distro's tor (the CLI is its timers', run
-// afresh at every firing).
-var globalRunsBinary = map[GlobalService]string{
-	GlobalServiceIPFS:     globalKuboBinary,
-	GlobalServiceProvider: globalServiceBin,
-	GlobalServiceArchiver: globalServiceBin,
-	GlobalServiceIndexer:  globalServiceBin,
-	GlobalServiceRepair:   globalServiceBin,
-	GlobalServiceReporter: globalServiceBin,
-	GlobalServiceOnion:    globalOramaCLI,
+// layout (the orama CLI is only its pre-start check, run afresh at every start),
+// and a Tor relay or authority runs the distro's tor (the CLI is its timers',
+// run afresh at every firing).
+var globalRuns = map[GlobalService]string{
+	GlobalServiceIPFS:     constants.GlobalIPFSUnit,
+	GlobalServiceProvider: constants.GlobalProviderUnit,
+	GlobalServiceArchiver: constants.GlobalArchiverUnit,
+	GlobalServiceIndexer:  constants.GlobalIndexerUnit,
+	GlobalServiceRepair:   constants.GlobalRepairUnit,
+	GlobalServiceReporter: constants.GlobalReporterUnit,
+	GlobalServiceOnion:    constants.GlobalTxGateUnit,
 }
 
 // RefreshOptions is one refresh of the installed global layer to the release
@@ -92,10 +94,11 @@ func RefreshGlobal(h GlobalHost, opts RefreshOptions) (RefreshResult, error) {
 		stale = func(unit string) (bool, error) { return RunningStale(h.Run, unit) }
 	}
 	for _, s := range opts.Installed {
-		if _, runs := globalRunsBinary[s]; !runs {
+		unit, runs := globalRuns[s]
+		if !runs {
 			continue
 		}
-		old, err := stale(globalServiceSpecs[s].unit)
+		old, err := stale(unit)
 		if err != nil {
 			return RefreshResult{}, err
 		}
