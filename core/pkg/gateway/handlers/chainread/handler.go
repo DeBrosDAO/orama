@@ -174,6 +174,8 @@ type Proxy struct {
 	faucet       FaucetService
 	faucetSlots  chan struct{}
 	faucetBudget *chainfaucet.Budget
+	// faucetCeiling is what the gateway gives out in all, whoever asks.
+	faucetCeiling *chainfaucet.Budget
 	// heightMu guards the cached latest height the query window check reads.
 	heightMu  sync.Mutex
 	heightVal int64
@@ -217,6 +219,7 @@ func New(cfg Config) (*Proxy, error) {
 		faucet:         cfg.Faucet,
 		faucetSlots:    make(chan struct{}, faucetMaxConcurrent),
 		faucetBudget:   chainfaucet.NewBudget(big.NewInt(chainfaucet.DefaultBudgetNorama), chainfaucet.BudgetWindow),
+		faucetCeiling:  chainfaucet.NewBudget(big.NewInt(chainfaucet.DefaultCeilingNorama), chainfaucet.BudgetWindow),
 	}, nil
 }
 

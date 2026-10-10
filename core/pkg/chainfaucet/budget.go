@@ -15,6 +15,12 @@ const (
 	// near it; a script that asks for the chain's maximum drip for fresh recipients, to spend the
 	// chain's cap for everyone else, is stopped after two.
 	DefaultBudgetNorama = 20_000 * 1_000_000_000
+	// DefaultCeilingNorama is what one gateway gives out in a window to all clients together: 200,000
+	// ORAMA, some two hundred setups. A client network's allowance cannot bound a caller that names
+	// its own network (a process on the node sends X-Forwarded-For as Caddy does), nor an attacker with
+	// many networks, nor an allowance table that is full; the ceiling does, because no client key goes
+	// into it.
+	DefaultCeilingNorama = 200_000 * 1_000_000_000
 	// maxBudgetClients bounds the clients a Budget tracks. Past it a client's entry is dropped to
 	// make room, which gives that client a fresh allowance: memory stays bounded, and the rate
 	// limiter in front of the route remains the limit on how often it can ask.

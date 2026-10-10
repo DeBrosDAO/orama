@@ -3,7 +3,9 @@ package onchain
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
@@ -63,5 +65,44 @@ func TestFaucet_aRefusalInTheSimulationSignsNothing(t *testing.T) {
 	}
 	if len(signer.signed) != 0 || len(chain.sent) != 0 {
 		t.Errorf("signed %d, sent %d", len(signer.signed), len(chain.sent))
+	}
+}
+
+// Once the chain has taken the transaction, every later error says so: it may still be in a block.
+func TestFaucet_anErrorAfterTheBroadcastIsASentError(t *testing.T) {
+	for name, edit := range map[string]func(*fakeChain){
+		"the wait ends":                func(c *fakeChain) { c.waitErr = context.DeadlineExceeded },
+		"the chain answers another tx": func(c *fakeChain) { c.answerHash = strings.Repeat("AB", 32) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain := newFakeChain()
+			edit(chain)
+
+			_, err := newClient(t, chain, newSigner()).Faucet(context.Background(), testRecipient, big.NewInt(1))
+
+			var sent *SentError
+			if !errors.As(err, &sent) || len(sent.Hash) != 64 {
+				t.Fatalf("err = %v, want a SentError with the hash", err)
+			}
+		})
+	}
+}
+
+func TestFaucet_anErrorBeforeTheBroadcastIsNotASentError(t *testing.T) {
+	for name, edit := range map[string]func(*fakeChain){
+		"the simulation refuses": func(c *fakeChain) { c.simErr = errors.New("refused") },
+		"the broadcast fails":    func(c *fakeChain) { c.broadcast = errors.New("mempool full") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain := newFakeChain()
+			edit(chain)
+
+			_, err := newClient(t, chain, newSigner()).Faucet(context.Background(), testRecipient, big.NewInt(1))
+
+			var sent *SentError
+			if err == nil || errors.As(err, &sent) {
+				t.Fatalf("err = %v, want an error from before the transaction was taken", err)
+			}
+		})
 	}
 }

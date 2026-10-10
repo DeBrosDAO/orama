@@ -166,18 +166,50 @@ func (s *switchingIDs) ChainID(context.Context) (string, error) {
 // A drip that was broadcast and is not in a block by the deadline may still land, so it is pending
 // and not a fault: the requester is told to look at the balance, and the allowance stays charged.
 func TestDrip_aDripThatIsNotInABlockByTheDeadlineIsPending(t *testing.T) {
-	chain := &fakeChain{t: t, waitErr: fmt.Errorf("transaction ABCD: %w", clusterreg.ErrNotIncluded)}
+	for name, waitErr := range map[string]error{
+		"the deadline":            fmt.Errorf("transaction ABCD: %w", clusterreg.ErrNotIncluded),
+		"a lookup that failed":    errors.New("read the transaction result: connection reset"),
+		"the run being cancelled": context.Canceled,
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain := &fakeChain{t: t, waitErr: waitErr}
+			svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+			_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+			requireRefusal(t, err, KindPending)
+		})
+	}
+}
+
+// A transaction that is in a block and failed there paid its fee and minted nothing: it is a fault,
+// and the allowance goes back, unlike a drip that may still land.
+func TestDrip_aDripThatFailedInItsBlockIsNotPending(t *testing.T) {
+	chain := &fakeChain{t: t, waitErr: fmt.Errorf("%w in block 7 (code 9): out of gas", clusterreg.ErrTxFailed)}
 	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
 
 	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
 
-	requireRefusal(t, err, KindPending)
+	if !errors.Is(err, ErrFault) {
+		t.Fatalf("err = %v, want ErrFault", err)
+	}
+}
+
+// A chain that refuses the drip when its block runs it (the cooldown raced) is a refusal the
+// requester can act on, though the transaction was sent.
+func TestDrip_aRefusalInTheBlockIsTypedNotPending(t *testing.T) {
+	chain := &fakeChain{t: t, waitErr: fmt.Errorf("%w in block 7 (code 5): faucet recipient is still within its cooldown: soon", clusterreg.ErrTxFailed)}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+	requireRefusal(t, err, KindCooldown)
 }
 
 func TestDrip_aFaultIsHiddenFromTheRequesterAndNotAKnownRefusal(t *testing.T) {
 	for name, chain := range map[string]*fakeChain{
 		"the chain cannot be reached": {simErr: errors.New("dial tcp 198.18.0.2:31003: connect: connection refused")},
-		"the block failed":            {waitErr: errors.New("the transaction failed in block 7 (code 9): out of gas")},
+		"the block failed":            {waitErr: fmt.Errorf("%w in block 7 (code 9): out of gas", clusterreg.ErrTxFailed)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain.t = t

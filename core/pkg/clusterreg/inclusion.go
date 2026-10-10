@@ -37,6 +37,10 @@ func oneLine(s string) string { return httputil.OneLine(s) }
 // ErrNotIncluded is returned when a broadcast transaction is not in a block by the deadline.
 var ErrNotIncluded = errors.New("the transaction is not in a block")
 
+// ErrTxFailed is wrapped by the error WaitIncluded returns for a transaction that is in a block and
+// failed there: it was run, the fee was paid, and what its messages would have done was not done.
+var ErrTxFailed = errors.New("the transaction failed")
+
 // WaitIncluded asks the chain REST API at base for the transaction hash every poll until it is in
 // a block, and returns that block's height. A broadcast only admits a transaction to the mempool:
 // it can still fail when its block runs it, and that failure is returned here with the chain's log.
@@ -112,7 +116,7 @@ func txResult(ctx context.Context, url, hash string) (int64, bool, error) {
 		if len(log) > maxResultLog {
 			log = log[:maxResultLog]
 		}
-		return height, true, fmt.Errorf("the transaction failed in block %d (code %d): %s", height, resp.TxResponse.Code, string(log))
+		return height, true, fmt.Errorf("%w in block %d (code %d): %s", ErrTxFailed, height, resp.TxResponse.Code, string(log))
 	}
 	return height, true, nil
 }

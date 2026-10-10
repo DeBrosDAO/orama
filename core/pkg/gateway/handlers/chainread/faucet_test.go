@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +347,63 @@ func TestFaucet_aPendingDripStaysCharged(t *testing.T) {
 	f.err = nil
 	if rec := postFaucet(p, body); rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindAllowance) {
 		t.Errorf("a pending drip gave its allowance back: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A caller that names its own network (a process on the node sends X-Forwarded-For as the proxy
+// does) gets a fresh allowance for every name, so the gateway as a whole gives out only a ceiling.
+func TestFaucet_theGatewayHasACeilingNoClientNameCanRaise(t *testing.T) {
+	f := &fakeFaucet{}
+	p := faucetProxy(t, f)
+	each := big.NewInt(chainfaucet.DefaultBudgetNorama)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + each.String() + `"}`
+	asClient := func(n int) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, mountPrefix+faucetPath, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "127.0.0.1:4000"
+		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", n))
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		return rec
+	}
+	granted := int(chainfaucet.DefaultCeilingNorama / chainfaucet.DefaultBudgetNorama)
+	for n := 1; n <= granted; n++ {
+		if rec := asClient(n); rec.Code != http.StatusOK {
+			t.Fatalf("client %d inside the ceiling: %d %s", n, rec.Code, rec.Body)
+		}
+	}
+	rec := asClient(granted + 1)
+	if rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindAllowance) || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("a client past the ceiling: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(faucetErrorOf(t, rec).Message, "gateway") {
+		t.Errorf("message %q does not say it is the gateway that has given out its share", faucetErrorOf(t, rec).Message)
+	}
+	if len(f.got()) != granted {
+		t.Errorf("%d drips reached the faucet, want %d", len(f.got()), granted)
+	}
+}
+
+// A drip that the client's own allowance refuses gives the ceiling back what it took.
+func TestFaucet_aRefusalByTheAllowanceDoesNotSpendTheCeiling(t *testing.T) {
+	f := &fakeFaucet{}
+	p := faucetProxy(t, f)
+	whole := big.NewInt(chainfaucet.DefaultBudgetNorama)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + whole.String() + `"}`
+	if rec := postFaucet(p, body); rec.Code != http.StatusOK {
+		t.Fatalf("the first drip: %d %s", rec.Code, rec.Body)
+	}
+	for i := 0; i < 50; i++ {
+		if rec := postFaucet(p, body); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("repeat %d: %d", i, rec.Code)
+		}
+	}
+	other := httptest.NewRequest(http.MethodPost, mountPrefix+faucetPath, strings.NewReader(body))
+	other.Header.Set("Content-Type", "application/json")
+	other.RemoteAddr = "198.51.100.9:4000"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, other)
+	if rec.Code != http.StatusOK {
+		t.Errorf("another network after 50 refusals: %d %s; the refused asks must not have used the ceiling up", rec.Code, rec.Body)
 	}
 }

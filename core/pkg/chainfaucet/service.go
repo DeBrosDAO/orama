@@ -197,12 +197,13 @@ func (s *Service) drip(j *job) (*Dripped, error) {
 	}
 	receipt, err := client.Faucet(ctx, j.recipient, j.amount)
 	if err != nil {
-		if errors.Is(err, clusterreg.ErrNotIncluded) {
-			// Broadcast and not in a block by the deadline: it may still land.
-			return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", j.recipient)
-		}
 		if refusal := classify(err, s.key.Address()); refusal != nil {
 			return nil, refusal
+		}
+		var sent *onchain.SentError
+		if errors.As(err, &sent) && !errors.Is(err, clusterreg.ErrTxFailed) {
+			// Broadcast, and then the wait or the lookup failed: it may still land.
+			return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", j.recipient)
 		}
 		return nil, err
 	}

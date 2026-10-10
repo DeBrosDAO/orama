@@ -65,6 +65,20 @@ var (
 // endpoint check it with this before they show it.
 func ValidChainID(id string) bool { return chainIDPattern.MatchString(id) }
 
+// SentError is an error after the transaction was broadcast: the chain took it, so it may still be
+// in a block whatever went wrong afterwards (a wait that ended, a lookup that failed). A caller that
+// must not send the same thing twice, or must not take back what it charged for it, tells this from
+// an error before the broadcast, where nothing was sent. A transaction that is in a block and failed
+// there is a SentError too; errors.Is(err, clusterreg.ErrTxFailed) tells it apart.
+type SentError struct {
+	// Hash is the transaction's hash.
+	Hash string
+	Err  error
+}
+
+func (e *SentError) Error() string { return e.Err.Error() }
+func (e *SentError) Unwrap() error { return e.Err }
+
 // ErrAccountNotFound says the signing account is not on the chain yet. An
 // account exists once it has received funds, and only an existing account can
 // pay a fee.
@@ -296,12 +310,12 @@ func (p *Prepared) submit(ctx context.Context) (*Receipt, error) {
 		return nil, fmt.Errorf("broadcast the transaction: %w", err)
 	}
 	if !strings.EqualFold(answered, local) {
-		return nil, fmt.Errorf("the chain answered the transaction hash %q for a transaction whose hash is %s; refusing to follow or report it",
-			httputil.Printable(answered), local)
+		return nil, &SentError{Hash: local, Err: fmt.Errorf("the chain answered the transaction hash %q for a transaction whose hash is %s; refusing to follow or report it",
+			httputil.Printable(answered), local)}
 	}
 	height, err := c.chain.WaitIncluded(ctx, local)
 	if err != nil {
-		return nil, fmt.Errorf("transaction %s: %w", local, err)
+		return nil, &SentError{Hash: local, Err: fmt.Errorf("transaction %s: %w", local, err)}
 	}
 	return &Receipt{Hash: local, Height: height, Gas: tx.Gas, Fee: tx.FeeAmount}, nil
 }
