@@ -19,6 +19,7 @@ const (
 	StepRelease  Step = "release"
 	StepCluster  Step = "cluster"
 	StepGlobal   Step = "global"
+	StepGenesis  Step = "genesis"
 	StepSync     Step = "sync"
 	StepRestart  Step = "restart"
 	StepOnchain  Step = "onchain"
@@ -27,7 +28,7 @@ const (
 )
 
 // StepOrder lists the steps in the order a run takes them.
-var StepOrder = []Step{StepEnroll, StepHardware, StepRelease, StepCluster, StepGlobal, StepSync, StepRestart, StepOnchain, StepName, StepDNS}
+var StepOrder = []Step{StepEnroll, StepHardware, StepRelease, StepCluster, StepGlobal, StepGenesis, StepSync, StepRestart, StepOnchain, StepName, StepDNS}
 
 // State is how a step is going.
 type State string

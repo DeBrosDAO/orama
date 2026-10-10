@@ -50,6 +50,12 @@ func (m *Model) body() string {
 		return m.hostKeyBody()
 	case stepNetwork:
 		return "Which network do you join?\n\n" + m.list(m.networkLabels())
+	case stepCreateName:
+		return "What is the new network called? Joiners type this name.\n\n" + m.input.View()
+	case stepCreateChainID:
+		return "The chain id of " + m.opts.Create.Name + ". A test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id and needs 30 bootstrap validators.\n\n" + m.input.View()
+	case stepCreateRoot:
+		return "Where is the release-root.json the network's releases are verified against?\n\n" + m.input.View()
 	case stepOptions:
 		return m.optionsBody()
 	case stepStorage:
@@ -88,12 +94,15 @@ func (m *Model) list(items []string) string {
 	return b.String()
 }
 
+// createNetworkLabel is the last row of the network list.
+const createNetworkLabel = "Create a new network: these machines become its first validators"
+
 func (m *Model) networkLabels() []string {
-	labels := make([]string, len(m.networks))
-	for i, n := range m.networks {
-		labels[i] = fmt.Sprintf("%s  (chain %s)", n.Name, n.ChainID)
+	labels := make([]string, 0, len(m.networks)+1)
+	for _, n := range m.networks {
+		labels = append(labels, fmt.Sprintf("%s  (chain %s)", n.Name, n.ChainID))
 	}
-	return labels
+	return append(labels, createNetworkLabel)
 }
 
 func (m *Model) hostKeyBody() string {
@@ -143,6 +152,9 @@ func (m *Model) optionsBody() string {
 }
 
 func (m *Model) nameBody() string {
+	if m.opts.Create != nil {
+		return "Name for the nodes. They are the network's seeds and bootstrap validators; several machines get name-2, name-3, ... (enter keeps \"" + setup.DefaultCreateNodeName + "\").\n\n" + m.input.View()
+	}
 	if m.opts.ClusterOnly {
 		return "Name for the machines (optional; several get name-2, name-3, ...):\n\n" + m.input.View()
 	}
@@ -230,6 +242,11 @@ func (m *Model) summary() string {
 		if m.result.Operator != "" {
 			b.WriteString("Operator account: " + m.result.Operator + "\n")
 		}
+		if m.result.Created != nil {
+			for _, line := range m.result.Created.NextSteps() {
+				b.WriteString(setup.CleanTerminal(line) + "\n")
+			}
+		}
 	}
 	return b.String()
 }
@@ -238,7 +255,7 @@ func (m *Model) hint() string {
 	switch m.step {
 	case stepWallet:
 		return "q quit"
-	case stepIPs, stepUser, stepSecret, stepName, stepStorage, stepTor:
+	case stepIPs, stepUser, stepSecret, stepName, stepStorage, stepTor, stepCreateName, stepCreateChainID, stepCreateRoot:
 		return "enter continue   esc back   ctrl+c quit"
 	case stepLogin, stepNetwork:
 		return "up/down choose   enter continue   esc back"

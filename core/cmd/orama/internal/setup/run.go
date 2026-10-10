@@ -41,6 +41,8 @@ type Result struct {
 	Operator string
 	// Skipped lists, by IP, the steps the machine already had.
 	Skipped map[string][]Step
+	// Created is set when the run created the network.
+	Created *CreatedNetwork
 }
 
 // nodeRun is one machine of the run.
@@ -68,6 +70,8 @@ type runner struct {
 	// clusterSize is how many nodes the cluster has once this run is done.
 	clusterSize int
 	res         *Result
+	// create is what a network creation keeps between its phases.
+	create *createState
 }
 
 // Run sets up every machine of opts. It returns early, with nothing changed,
@@ -79,6 +83,9 @@ func Run(ctx context.Context, opts Options, d Deps) (*Result, error) {
 	}
 	r := &runner{opts: opts, d: d, res: &Result{Skipped: map[string][]Step{}}}
 	defer r.close()
+	if opts.Create != nil {
+		return r.runCreate(ctx)
+	}
 	return r.run(ctx)
 }
 
@@ -187,6 +194,9 @@ func planForNetwork(opts Options, d Deps, n *netregistry.Network) (*Plan, error)
 func PlanFor(ctx context.Context, opts Options, d Deps) (*Plan, error) {
 	if err := opts.Normalize(); err != nil {
 		return nil, err
+	}
+	if opts.Create != nil {
+		return planForCreate(ctx, opts, d)
 	}
 	n, err := d.Networks.Resolve(ctx, opts.Network)
 	if err != nil {

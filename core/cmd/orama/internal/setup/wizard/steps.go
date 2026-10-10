@@ -65,6 +65,8 @@ func (m *Model) onInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.takeSecret(value)
 	case stepName:
 		return m.takeName(value)
+	case stepCreateName, stepCreateChainID, stepCreateRoot:
+		return m.takeCreate(value)
 	case stepStorage:
 		gb, err := strconv.ParseUint(value, 10, 64)
 		if err != nil || gb == 0 {
@@ -111,6 +113,9 @@ func (m *Model) takeName(value string) (tea.Model, tea.Cmd) {
 		m.opts.Name = ""
 		return m.goTo(stepInspect)
 	}
+	if value == "" && m.opts.Create != nil {
+		value = setup.DefaultCreateNodeName
+	}
 	if err := setup.ValidateNodeName(strings.ToLower(value)); err != nil {
 		return m.fail("%v", err)
 	}
@@ -122,7 +127,7 @@ func (m *Model) takeName(value string) (tea.Model, tea.Cmd) {
 func (m *Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	size := len(loginLabels)
 	if m.step == stepNetwork {
-		size = len(m.networks)
+		size = len(m.networks) + 1
 	}
 	switch msg.Type {
 	case tea.KeyUp:
@@ -132,6 +137,9 @@ func (m *Model) onListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if m.step == stepLogin {
 			return m.takeLogin(loginMethod(m.cursor))
+		}
+		if m.cursor == len(m.networks) {
+			return m.startCreate()
 		}
 		return m.takeNetwork(m.networks[m.cursor])
 	}
@@ -149,25 +157,20 @@ func (m *Model) takeLogin(method loginMethod) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) takeNetwork(n NetworkChoice) (tea.Model, tea.Cmd) {
-	m.opts.Network = n.Name
+	m.opts.Network, m.opts.Create = n.Name, nil
 	return m.goTo(stepOptions)
 }
 
 func (m *Model) onNetworks(msg networksMsg) (tea.Model, tea.Cmd) {
-	if msg.err != nil || len(msg.choices) == 0 {
-		return m.fail("%v", orErr(msg.err, errors.New("this CLI knows no network: add one with `orama network add <manifest-url>`")))
+	if msg.err != nil {
+		return m.fail("%v", msg.err)
 	}
+	// A CLI that knows no network can still create one.
 	m.networks = msg.choices
 	for i, c := range msg.choices {
 		if c.Default {
 			m.cursor = i
 		}
-	}
-	if len(msg.choices) == 1 {
-		// One network is no question: go on without leaving the step in the history,
-		// or going back from the next question would land here and come straight back.
-		m.opts.Network = msg.choices[0].Name
-		return m.enter(stepOptions)
 	}
 	return m, nil
 }

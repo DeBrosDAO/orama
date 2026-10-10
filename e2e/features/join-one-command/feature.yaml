@@ -8,6 +8,14 @@
 # happen before any server is touched (an unpinned host key, an exit relay
 # nobody accepted, a missing name) are checked without a server.
 #
+# `orama setup --create-network` makes a network from nothing on three fresh
+# servers (the bootstrap committee, the genesis built from their keys, the
+# operator and nodes registered, networks/<name>/ written for publishing) and,
+# run again, keeps the genesis; E2E_SETUP_RELEASE_ROOT names the
+# release-root.json it needs (E2E_SETUP_RELEASE_REPO and E2E_SETUP_RELEASE_CHANNEL
+# say where the release comes from). A production chain id is refused before any
+# server is touched.
+#
 # The network is the fleet's chain: E2E_SETUP_NETWORK names a network the CLI
 # knows (built in, or added from E2E_SETUP_MANIFEST_URL) whose seeds and
 # release are the fleet's. Without it the tests that need a network report
@@ -32,3 +40,6 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-setup: --cluster-only installs the cluster node alone"
     - "docs/CLI_REFERENCE.md#orama-setup: --exit needs --tor-network and the warning accepted"
     - "docs/CLI_REFERENCE.md#orama-setup: nothing is installed on any machine until every machine passes"
+    - "docs/CLI_REFERENCE.md#orama-setup: --create-network makes the machines the bootstrap committee of a new chain, builds its genesis from their keys and writes networks/<name>/ for publishing"
+    - "docs/CLI_REFERENCE.md#orama-setup: running a creation again keeps the keys the machines made and the genesis they carry"
+    - "docs/CLI_REFERENCE.md#orama-setup: a production chain id needs 30 bootstrap validators and is refused before any machine is touched"

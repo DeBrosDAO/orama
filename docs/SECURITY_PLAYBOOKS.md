@@ -49,7 +49,7 @@ height, or the chain splits. There is no on-chain switch that can do it for them
 1. **Disclose privately.** Keep the finding with the release signers until the fix is
    built. Do not open a public issue before step 4.
 2. **Build the fix reproducibly** from a tagged commit: `make build` in `chain/`, same
-   `-trimpath` and version ldflags as `chain/scripts/stagenet/deploy.sh`.
+   `-trimpath` and version ldflags as the chain's `make build-linux-amd64-full`.
 3. **Sign the release.** The TUF release root verifies the archive (`orama node
    stage-archive --release-metadata --release-target`, see `docs/DEV_DEPLOY.md`). The
    production signer ceremony has not happened; stagenet uses a test root.

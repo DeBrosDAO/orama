@@ -24,6 +24,9 @@ const (
 	stepOptions
 	stepStorage
 	stepTor
+	stepCreateName
+	stepCreateChainID
+	stepCreateRoot
 	stepInspect
 	stepConfirm
 	stepRun
@@ -212,7 +215,7 @@ func (m *Model) onStepKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.back()
 	}
 	switch m.step {
-	case stepIPs, stepUser, stepSecret, stepName, stepStorage, stepTor:
+	case stepIPs, stepUser, stepSecret, stepName, stepStorage, stepTor, stepCreateName, stepCreateChainID, stepCreateRoot:
 		return m.onInputKey(msg)
 	case stepLogin, stepNetwork:
 		return m.onListKey(msg)
@@ -263,11 +266,23 @@ func (m *Model) enter(s step) (tea.Model, tea.Cmd) {
 	case stepName:
 		m.input.Placeholder = "alice"
 		m.input.SetValue(m.opts.Name)
+		if m.opts.Create != nil {
+			m.input.Placeholder = setup.DefaultCreateNodeName
+		}
 	case stepStorage:
 		m.input.SetValue(orDefaultNum(m.opts.StorageGB, setup.DefaultStorageGB))
 	case stepTor:
 		m.input.Placeholder = "path to tor-network.json"
 		m.input.SetValue(m.opts.TorNetwork)
+	case stepCreateName:
+		m.input.Placeholder = "stagenet"
+		m.input.SetValue(m.opts.Create.Name)
+	case stepCreateChainID:
+		m.input.Placeholder = "orama-" + orDefault(m.opts.Create.Name, "name") + "-stagenet-1"
+		m.input.SetValue(m.opts.Create.ChainID)
+	case stepCreateRoot:
+		m.input.Placeholder = "path to release-root.json"
+		m.input.SetValue(m.opts.Create.ReleaseRoot)
 	case stepNetwork:
 		return m, m.loadNetworks()
 	case stepHostKeys:

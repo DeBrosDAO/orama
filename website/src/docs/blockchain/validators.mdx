@@ -50,7 +50,7 @@ A "useful-work multiplier" parameter exists with default 1.0 and `activated = fa
 
 ## The bootstrap committee and the hand-over
 
-A new chain has no stake, so it starts with a *bootstrap committee*: validators declared in genesis (`oramad genesis add-bootstrap-validator`) who hold equal power without any stake. A production chain id requires at least 30 of them. A devnet, stagenet or localnet may have fewer.
+A new chain has no stake, so it starts with a *bootstrap committee*: validators declared in genesis (`oramad genesis add-bootstrap-validator`) who hold equal power without any stake. A production chain id requires at least 30 of them. A devnet, stagenet or localnet may have fewer. `orama setup --create-network` runs these commands for the machines you give it, with the committee size set to their number ([Create a network](/docs/operator/setup#create-a-network)).
 
 `lambda` starts at 0 and only ever goes up. It is recomputed once per closed epoch:
 

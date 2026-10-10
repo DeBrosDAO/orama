@@ -155,6 +155,8 @@ func (d *driver) toOptions() {
 	d.wantStep(stepHostKeys)
 	d.press("1")
 	d.press("1")
+	d.wantStep(stepNetwork)
+	d.enter() // the only network
 	d.wantStep(stepOptions)
 }
 
@@ -540,15 +542,13 @@ func TestInput_editing(t *testing.T) {
 	}
 }
 
-func TestWizard_withOneNetworkEscFromTheNextQuestionDoesNotBounceBack(t *testing.T) {
+func TestWizard_escFromTheOptionsGoesBackToTheNetworks(t *testing.T) {
 	d := newDriver(t, newFake(), setup.Options{})
 	d.toOptions()
-	d.wantStep(stepOptions)
 	d.esc()
-	if d.m.step == stepOptions || d.m.step == stepNetwork {
-		t.Fatalf("on step %d: going back from the question after a one-choice step must not land on it again", d.m.step)
-	}
-	d.wantStep(stepHostKeys)
+	d.wantStep(stepNetwork)
+	d.wantView("stagenet  (chain orama-stagenet-6)")
+	d.wantView("Create a new network")
 }
 
 func TestWizard_aHostKeyAnswerForAnotherMachineIsIgnored(t *testing.T) {

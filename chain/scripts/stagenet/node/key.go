@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"regexp"
 	"strings"
 
@@ -41,21 +40,4 @@ func accountFromStdin(r io.Reader) (tx.Account, error) {
 		return tx.Account{}, err
 	}
 	return tx.DeriveAccount(key)
-}
-
-// addressOfKeyFile is the orama address of a hex key file such as a provider's hot-key.
-func addressOfKeyFile(path string) (string, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", path, err)
-	}
-	key, err := hex.DecodeString(strings.TrimSpace(string(body)))
-	if err != nil {
-		return "", fmt.Errorf("%s is not hex", path)
-	}
-	acct, err := tx.DeriveAccount(key)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", path, err)
-	}
-	return acct.Address, nil
 }

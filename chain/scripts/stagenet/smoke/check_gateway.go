@@ -72,7 +72,7 @@ func checkGateway(ctx context.Context, e *env) Result {
 		return fail(gatewayName, "%v", err)
 	}
 	for _, n := range e.nodes {
-		id := nodeID(n.Name)
+		id := n.Name
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, gatewayNodeURL(e.gateway, id), nil)
 		if err != nil {
 			return fail(gatewayName, "%v", err)

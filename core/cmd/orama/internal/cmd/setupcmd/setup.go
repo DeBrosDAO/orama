@@ -49,6 +49,18 @@ The operator account needs ORAMA for the bonds and for the validator's 1,000 ORA
 On a network with a faucet and a node of it in your CLI configuration it is requested; otherwise
 setup stops, says how much to send and to which address, and resumes when you run it again.
 
+--create-network <name> makes a new network instead of joining one. Every machine is a bootstrap
+validator of it: setup installs the cluster and the global layer on all of them, makes each
+machine's chain keys, builds the genesis on the first machine from all the keys, gives it to
+the others, starts the chains one after the other, waits for blocks, and then registers your
+operator and the nodes as it does for a join. It writes networks/<name>/ (manifest, genesis,
+release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
+id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
+needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
+releases are verified against. Running it again with the same machines resumes: a machine that
+has its keys keeps them, and a genesis the machines carry is kept (--force-new-genesis builds a
+new one, and only while no chain has run).
+
 --cluster-only installs the cluster node alone (2 vCPU, 2 GiB, 10 GiB free). The full profile
 needs 4 vCPU, 8 GiB and 80 GiB free plus the storage you offer. Nothing is installed on any
 machine until every machine passes.`,
@@ -59,6 +71,12 @@ machine until every machine passes.`,
   orama setup --network stagenet --name alice --yes \
     --ip 203.0.113.10 --ip 203.0.113.11 --ip 203.0.113.12 \
     --host-key 203.0.113.10=SHA256:... --host-key 203.0.113.11=SHA256:... --host-key 203.0.113.12=SHA256:...
+
+  # Create a network: the five machines are its bootstrap validators
+  orama setup --create-network stagenet --chain-id orama-stagenet-7 --release-root release-root.json --yes \
+    --ip 203.0.113.10 --ip 203.0.113.11 --ip 203.0.113.12 --ip 203.0.113.13 --ip 203.0.113.14 \
+    --host-key 203.0.113.10=SHA256:... --host-key 203.0.113.11=SHA256:... --host-key 203.0.113.12=SHA256:... \
+    --host-key 203.0.113.13=SHA256:... --host-key 203.0.113.14=SHA256:...
 
   # A cluster of your own, on your own domain, without the chain
   orama setup --cluster-only --domain cluster.example.org --yes --ip 203.0.113.10 --host-key SHA256:...`,
@@ -72,6 +90,7 @@ var flags struct {
 	clusterOnly, exit, yes, password, noValidator                               bool
 	storageGB                                                                   uint64
 	asn                                                                         uint32
+	create                                                                      createFlags
 }
 
 func init() {
@@ -94,6 +113,7 @@ func init() {
 	f.Uint32Var(&flags.asn, "asn", 0, "Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared)")
 	f.StringVar(&flags.torNetwork, "tor-network", "", "The Orama Tor network's tor-network.json: with it each node also runs a relay")
 	f.BoolVar(&flags.noValidator, "no-validator", false, "Do not create a validator (and do not bond the 1,000 ORAMA self-bond)")
+	flags.create.bind(f)
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -205,6 +225,12 @@ func printSummary(out io.Writer, res *setup.Result) {
 		fmt.Fprintf(out, "Operator account: %s\n", res.Operator)
 	}
 	fmt.Fprintf(out, "See how it is doing with: orama status --env %s\n", res.Env)
+	if res.Created != nil {
+		fmt.Fprintln(out)
+		for _, line := range res.Created.NextSteps() {
+			fmt.Fprintln(out, line)
+		}
+	}
 }
 
 // openStatus runs `orama status` for the environment, on the terminal.

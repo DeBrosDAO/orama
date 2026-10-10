@@ -67,6 +67,7 @@ func (o Options) CommandLine() string {
 	}
 	flag("tor-network", o.TorNetwork)
 	on("no-validator", o.NoValidator)
+	parts = append(parts, o.Create.commandLine()...)
 	parts = append(parts, "--yes")
 	return strings.Join(parts, " ")
 }

@@ -855,94 +855,45 @@ Two related orderings changed in the same commit:
 
 ### Stagenet: the chain and the global services
 
-`chain/scripts/stagenet/deploy.sh` deploys the L1 chain and the global services (provider, archiver, indexer,
-public Kubo) to the five stagenet nodes (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`, ssh aliases from `~/.ssh/config`)
-through the product's own commands, so the stagenet deploy exercises the code operators run. It is separate from
-the cluster deploy above: `orama maint build`, `orama maint push` and `orama node upgrade --env stagenet` deploy the
-private-cluster node, and the global services are installed beside it, co-located in the `orama-global` network
-namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). The cluster must
-already be installed on each node. The script never starts, stops or reconfigures a cluster service. What it
-changes on a node: the `orama-global-*` units and state, the namespace, veth and nftables rulesets and the ufw
-rules tagged `orama-global`, `net.ipv4.ip_forward` (`reset` puts it back to the value the install recorded in
-`/var/lib/orama-global/netns-prior-ip-forward`), and the two lines (`role: both`, `global_netns`) that the
-install adds to the cluster's `/opt/orama/.orama/preferences.yaml`. It refuses to run for a `CHAIN_ID` that does
-not contain `-stagenet-` or `-devnet-`. Because it never restarts a cluster service, a node's cluster gateway
-that started before `up` keeps reading the chain at loopback for its `/v1/chain/` route: restart the cluster
-node (`orama node restart`, one node at a time) after the first `up`, as the co-located install's output says.
-The node report needs no restart.
+The stagenet is five machines (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`; ssh aliases from `~/.ssh/config`). `orama setup --create-network` makes it: it installs the signed release and the cluster node on all five, makes each machine's chain keys, builds the genesis from all five, starts the chains, registers the operator and the nodes, and writes `networks/stagenet/` for the maintainer to publish ([Create a network](../website/src/docs/operator/setup.mdx)). The global services run beside the cluster node, co-located in the `orama-global` network namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node").
 
-| Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Role |
+| Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Chain id |
 |---|---|---|---|---|---|---|
-| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | genesis, nameserver, chain indexer |
-| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | nameserver, chain indexer |
-| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | nameserver, chain indexer |
-| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node, chain indexer |
-| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node, chain indexer |
+| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `seed` |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `seed-2` |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-3` |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-4` |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-5` |
 
-All five are chain validators (the bootstrap committee is the five of them) and all five run the chain indexer: a gateway
-proxies `/v1/chain/index/` to the indexer beside it and a client reaches the public name on any node, so a node without one
-would fail its share of the explorer's reads (it answers 503, see docs/CHAIN.md, "The gateway's chain proxy"). Without BPF_FRAMEWORK systemd accepts
-`SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
+All five are chain validators: the bootstrap committee is the five of them. The last column is the node's id on the chain when the addresses are given to `orama setup` in this order with the default `--name seed`. Without BPF_FRAMEWORK systemd accepts `SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
 
-Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
-`curl` and `ssh` access to the nodes. On each node: `apt-get` (the install adds iproute2 and nftables if they are missing), an **active** ufw (the install
-refuses an inactive one, and enabling it would change the cluster's firewall, so the script does not), and systemd
-242 or newer.
+The five are made with one command (every reset of the stagenet gets a new chain id, `orama-stagenet-N`):
 
-**This release is state-breaking (no in-place upgrade).** Stored types and their semantics changed
-(`x/archive` `RangeRecord` and `Params`, `x/storage` `Settlement.attempts`, `x/houses` `Proposal.advance_failures`,
-slash and settlement behaviour) and no `ConsensusVersion` was bumped, so a running stagenet chain does not
-upgrade: run `./deploy.sh reset` and then `./deploy.sh up`, which starts from a new genesis. The new `oramad`
-also refuses to start with `query-gas-limit = "0"` in `<home>/config/app.toml` on any chain id that is not a
-localnet. `up` installs with `--init-chain`, so `oramad init` writes `query-gas-limit = "2000000"` and the
-script asserts it; a node kept from an earlier install (not the reset-then-up path) must have that line set
-in `app.toml` by hand before the new binary is started.
+```bash
+orama setup --create-network stagenet --chain-id orama-stagenet-N --release-root ./release-root.json --yes \
+  --ip 57.129.166.16 --ip 57.129.166.17 --ip 161.97.184.199 --ip 161.97.184.202 --ip 161.97.151.255 \
+  --host-key 57.129.166.16=SHA256:... --host-key 57.129.166.17=SHA256:... --host-key 161.97.184.199=SHA256:... \
+  --host-key 161.97.184.202=SHA256:... --host-key 161.97.151.255=SHA256:...
+```
+
+`chain/scripts/stagenet/deploy.sh` is what is left of the old deploy script: the maintenance of the stagenet that runs. It refuses to run for a `CHAIN_ID` that does not contain `-stagenet-` or `-devnet-`, and it never starts, stops or reconfigures a cluster service.
 
 ```bash
 cd chain/scripts/stagenet
 
-./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state
-./deploy.sh up         # build, stage, build the genesis, orama global install --colocated, orama global start
+./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state; do it before the next creation
 ./deploy.sh status
-./deploy.sh register   # after 2 epochs: operator, node, bonds, hot key, capacity, then provider and archiver
 ./deploy.sh invariants
 ./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
 SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke   # gen-shielded prints this path
 ```
 
-`up` builds `oramad` (`make build-linux-amd64-full`), `orama-global` and the `stagenet-node` helper
-(`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.43.1 and cosmovisor v1.7.3 from their
-official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
-directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
-chain,ipfs,provider,archiver,indexer` twice: first with `--init-chain` and a placeholder genesis
-so each node creates its own keys, then, once the script has built the real genesis from the three public keys and
-put it in place, with `--persistent-peers`. The keys are generated on the node and never copied off it. The chain
-peers over the nodes' **public** addresses, because the namespace cannot reach the WireGuard mesh. `orama global
-start chain ipfs indexer` then starts the chain first and waits for its RPC; the provider and
-archiver need a node id, so `register` starts them once it has written it.
-
-`register` waits until the chain is at epoch 2 (polled), then, for each node, runs the commands an operator runs
-with a wallet, on the node: it registers the operator, generates the hot-key binding and registers the node with
-the STORAGE and ARCHIVER roles, the declared ASN and the provider endpoint, bonds both roles from the operator's
-earnings, funds the hot key and declares the capacity. The `orama` commands ask the RootWallet agent to sign; on the
-node `stagenet-node agent` answers instead, fed the operator's test-keyring key over a pipe on the node for the
-length of the run (stagenet only: the keyring is unencrypted). See [CHAIN.md](CHAIN.md), "The stagenet deploy
-script", for why each step is what it is.
-
-`smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental
-cause the script detected in the chain's state and is never used to hide a failure.
+`reset` removes the `orama-global-*` units and state, the namespace, veth and nftables rulesets, the ufw rules tagged `orama-global`, puts `net.ipv4.ip_forward` back to the value the install recorded in `/var/lib/orama-global/netns-prior-ip-forward`, and removes the two lines (`role: both`, `global_netns`) the install added to the cluster's `/opt/orama/.orama/preferences.yaml`. `smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental cause the script detected in the chain's state and is never used to hide a failure; the archive and storage checks SKIP on a network whose nodes run no archiver, which `orama setup` does not install.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
-| `ASN_mew`, `ASN_mewtwo`, `ASN_gengar`, `ASN_magicarp`, `ASN_froakie` | `16276` for mew and mewtwo (OVH), `51167` for the other three (Contabo) | the ASN each node declares; the true one of its provider. Protocol deals need distinct ASNs per slot and the five nodes span only two, so a range's three ARCHIVE slots cannot all be assigned and its deals stay unassigned (the smoke check SKIPs naming that cause) |
-| `PUBLIC_STORAGE_GB` | `10` | capacity each provider declares, and the size of its public Kubo |
-| `STORAGE_BOND_NORAMA` | the least that backs the capacity | 1 ORAMA of bond backs 1 GiB |
-| `ARCHIVER_BOND_NORAMA` | `1000000000` | 1 ORAMA, the role minimum |
-| `HOT_KEY_FUND_NORAMA` | `2000000000` | fee-only balance of each hot key |
-| `TX_GAS` | `600000` | gas limit of each `orama global` transaction. Its fee is read from the chain right before it is sent: gas × the current base fee, with no tip, because the operator pays from earnings and x/fees pays a tip only from a bank balance |
-| `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
-| `FAUCET_ENABLED` | `1` | `1` sets `app_state.emission.params.faucet_enabled` in genesis, which switches on the test-network faucet (`MsgFaucet`; fund an account with `orama chain faucet <addr> --env stagenet`). `0` leaves it off. A genesis-only switch: it cannot be changed on a running chain |
+| `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `2` | the height vote extensions turn on at; `orama setup` writes 2 into the genesis it builds and `smoke` checks it |
 | `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-roots.pem` | CA bundle that signs the gateway's certificate (Let's Encrypt production's ISRG roots: stagenet serves production certificates) |
 | `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
 | `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |
