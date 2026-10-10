@@ -3,6 +3,7 @@ package chainfaucet
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/httputil"
@@ -91,11 +92,19 @@ func classify(err error, faucetAddress string) *Refusal {
 // statusSuffix ends the chain's reason in a simulation refusal: the HTTP status error that carried it.
 const statusSuffix = " (chain API returned HTTP"
 
-// reasonFrom is the chain's reason, starting at line, cut before the status error that wraps it and
-// bounded. It is text a node produced.
+// sdkTrailer is what the SDK appends to a registered error it returns from a message:
+// " [<module path>/<file>.go:<line>] with gas used: '<n>'". The source location and the gas
+// accounting are the node's internals, not the chain's reason, and the faucet answers anyone.
+var sdkTrailer = regexp.MustCompile(`\s*\[[^\s\[\]]+\.go:\d+(?::\d+)?\]`)
+
+// reasonFrom is the chain's reason, starting at line, cut before the SDK's trailer or the status
+// error that wraps it, and bounded. It is text a node produced.
 func reasonFrom(line string) string {
 	if at := strings.Index(line, statusSuffix); at >= 0 {
 		line = line[:at]
+	}
+	if loc := sdkTrailer.FindStringIndex(line); loc != nil {
+		line = line[:loc[0]]
 	}
 	return httputil.PrintableMax(line, maxDetail)
 }

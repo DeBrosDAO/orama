@@ -441,3 +441,18 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// The live stagenet faucet answered an anonymous caller with "faucet recipient is still within its
+// cooldown [DeBrosOfficial/network/chain/x/emission/keeper/msg_server.go:98] with gas used: '94339'":
+// the SDK's trailer names a source file and the gas the node spent. The reason ends before it.
+func TestDrip_theSDKsSourceLocationAndGasAreNotPartOfTheReason(t *testing.T) {
+	chain := &fakeChain{t: t, simErr: errors.New("the chain refused the transaction in simulation: failed to execute message; message index: 0: faucet recipient is still within its cooldown [DeBrosOfficial/network/chain/x/emission/keeper/msg_server.go:98] with gas used: '94339' (chain API returned HTTP 500)")}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+	r := requireRefusal(t, err, KindCooldown)
+	if want := "faucet recipient is still within its cooldown"; r.Message != want {
+		t.Errorf("message = %q, want %q", r.Message, want)
+	}
+}
