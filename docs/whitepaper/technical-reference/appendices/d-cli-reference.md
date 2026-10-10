@@ -5377,6 +5377,7 @@ machine until every machine passes.
 | Flag | Default | Description |
 |---|---|---|
 | `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
+| `--allow-quorum-loss` | `false` | Restart a cluster of fewer than three voters with --force when the global layer is installed: the cluster is unavailable while the node restarts (without it, a run with --yes stops there) |
 | `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
 | `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
 | `--chain-id` | — | With --create-network: the chain id (default: the announced network's). A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
