@@ -540,6 +540,50 @@ func TestWalletFlow_registerNodeBondFromEarningsAndFundHotKey(t *testing.T) {
 	f.requireInvariants()
 }
 
+// An operator that holds ORAMA in its bank balance and has earned nothing (the operator of a network
+// it created) funds its node's hot key from the bank, through the real bank and fees keepers.
+func TestWalletFlow_fundHotKeyFromTheBankOfAnOperatorWithNoEarnings(t *testing.T) {
+	f := newFlow(t)
+	op := f.newWallet()
+	f.fundBank(op, flowCredit)
+	hotPriv := secp256k1.GenPrivKey()
+	hot := sdk.AccAddress(hotPriv.PubKey().Address())
+	hotSig, err := hotPriv.Sign(nodestypes.BindingSignBytes(testChainID, op.addr.String(), nodestypes.HotKeyService, hotPriv.PubKey().Bytes()))
+	require.NoError(t, err)
+	requireOK(t, f.deliver(op,
+		&nodestypes.MsgRegisterOperator{Operator: op.addr.String()},
+		&nodestypes.MsgRegisterNode{
+			Operator: op.addr.String(), NodeId: "bank-node", Roles: []nodestypes.Role{nodestypes.RoleStorage}, HotKey: hot.String(),
+			Bindings: []nodestypes.Binding{{
+				Service: nodestypes.HotKeyService, KeyType: nodestypes.KeyTypeSecp256k1, Pubkey: hotPriv.PubKey().Bytes(), Signature: hotSig,
+			}},
+			Endpoints: []string{"https://bank-node.example:443"},
+		}))
+	require.True(t, f.earnings(op.addr).IsZero(), "the operator has earned nothing")
+
+	fund := norama(3)
+	bankBefore := f.bank(op.addr, params.BaseDenom)
+	requireOK(t, f.deliver(op, &nodestypes.MsgFundHotKey{
+		Operator: op.addr.String(), NodeId: "bank-node", Amount: fund, Source: nodestypes.FundSource_FUND_SOURCE_BANK,
+	}))
+	feeBalance, err := f.app.FeesKeeper.GetFeeBalance(f.app.NewContext(true), hot)
+	require.NoError(t, err)
+	require.True(t, feeBalance.Equal(fund), "the hot key's fee-only balance received the funds")
+	require.True(t, bankBefore.Sub(f.bank(op.addr, params.BaseDenom)).GTE(fund), "the bank balance paid the amount")
+	require.True(t, f.earnings(op.addr).IsZero(), "the earnings path was not used")
+	require.True(t, f.bank(hot, params.BaseDenom).IsZero(), "the hot key got a fee balance and no bank balance")
+
+	tooMuch := f.bank(op.addr, params.BaseDenom).Add(fund)
+	res := f.deliver(op, &nodestypes.MsgFundHotKey{
+		Operator: op.addr.String(), NodeId: "bank-node", Amount: tooMuch, Source: nodestypes.FundSource_FUND_SOURCE_BANK,
+	})
+	require.NotZero(t, res.Code, "more than the bank balance is refused")
+	feeBalance, err = f.app.FeesKeeper.GetFeeBalance(f.app.NewContext(true), hot)
+	require.NoError(t, err)
+	require.True(t, feeBalance.Equal(fund), "a refused funding changed nothing")
+	f.requireInvariants()
+}
+
 func TestWalletFlow_aBindingSignedForAnotherOperatorIsRefused(t *testing.T) {
 	f := newFlow(t)
 	op, thief := f.newWallet(), f.newWallet()

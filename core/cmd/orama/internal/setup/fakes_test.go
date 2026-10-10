@@ -45,8 +45,12 @@ type world struct {
 	// foreignNames are names held by someone else, by name.
 	foreignNames map[string]NameHolder
 	balance      *big.Int
-	faucetPays   *big.Int
-	faucetCalls  int
+	// feeBalances are the hot keys' fee-only balances, by hot key address.
+	feeBalances map[string]*big.Int
+	// fundHotKeyErr, when set, is what every MsgFundHotKey fails with.
+	fundHotKeyErr error
+	faucetPays    *big.Int
+	faucetCalls   int
 	// faucetLag is how many balance reads pass before a drip is visible through the session, as a
 	// node that is a block behind the seed that paid shows it.
 	faucetLag int
@@ -58,7 +62,7 @@ type world struct {
 }
 
 func newWorld() *world {
-	return &world{nodes: map[string]*RegisteredNode{}, names: map[string]string{}, balance: new(big.Int)}
+	return &world{nodes: map[string]*RegisteredNode{}, names: map[string]string{}, balance: new(big.Int), feeBalances: map[string]*big.Int{}}
 }
 
 func (w *world) add(format string, args ...any) {
@@ -364,6 +368,32 @@ func (s *fakeSession) Balance(context.Context, string) (*big.Int, error) {
 	}
 	return new(big.Int).Set(s.w.balance), nil
 }
+func (s *fakeSession) FeeBalance(_ context.Context, address string) (*big.Int, error) {
+	s.w.mu.Lock()
+	defer s.w.mu.Unlock()
+	if have := s.w.feeBalances[address]; have != nil {
+		return new(big.Int).Set(have), nil
+	}
+	return new(big.Int), nil
+}
+func (s *fakeSession) FundHotKey(_ context.Context, f clusterreg.HotKeyFunding) (*onchain.Receipt, error) {
+	s.w.add("tx fund-hot-key %s amount=%s bank=%t", f.NodeID, f.Amount, f.FromBank)
+	s.w.mu.Lock()
+	defer s.w.mu.Unlock()
+	if s.w.fundHotKeyErr != nil {
+		return nil, s.w.fundHotKeyErr
+	}
+	amount, _ := new(big.Int).SetString(f.Amount, 10)
+	hot := s.w.nodes[f.NodeID].HotKey
+	if s.w.feeBalances[hot] == nil {
+		s.w.feeBalances[hot] = new(big.Int)
+	}
+	s.w.feeBalances[hot].Add(s.w.feeBalances[hot], amount)
+	if f.FromBank {
+		s.w.balance.Sub(s.w.balance, amount)
+	}
+	return &onchain.Receipt{}, nil
+}
 func (s *fakeSession) OperatorRegistered(context.Context, string) (bool, error) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
@@ -410,7 +440,7 @@ func (s *fakeSession) RegisterOperator(context.Context) (*onchain.Receipt, error
 func (s *fakeSession) RegisterNode(_ context.Context, n clusterreg.NodeRegistration) (*onchain.Receipt, error) {
 	s.w.add("tx register-node %s roles=%v asn=%d bindings=%s", n.NodeID, n.Roles, n.ASN, serviceList(n.Bindings))
 	s.w.mu.Lock()
-	s.w.nodes[n.NodeID] = &RegisteredNode{Roles: n.Roles, Bonds: map[int]*big.Int{}, Bindings: n.Bindings}
+	s.w.nodes[n.NodeID] = &RegisteredNode{Roles: n.Roles, Bonds: map[int]*big.Int{}, Bindings: n.Bindings, HotKey: n.HotKey}
 	s.w.mu.Unlock()
 	return &onchain.Receipt{}, nil
 }

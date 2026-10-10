@@ -99,6 +99,21 @@ func (c *Client) DeclareCapacity(ctx context.Context, capacity clusterreg.Capaci
 	return c.sendMsg(ctx, "declare capacity of node "+capacity.NodeID, clusterreg.DeclareCapacityTypeURL, clusterreg.EncodeCapacity(capacity))
 }
 
+// FundHotKey gives the hot key of one of the signing operator's nodes a fee-only balance
+// (MsgFundHotKey), out of the operator's bank balance when f.FromBank is set and out of its
+// earnings otherwise. The hot key pays a storage provider's proof base fees with it.
+func (c *Client) FundHotKey(ctx context.Context, f clusterreg.HotKeyFunding) (*Receipt, error) {
+	operator, err := c.operatorFor(ctx, f.Operator)
+	if err != nil {
+		return nil, err
+	}
+	f.Operator = operator
+	if err := clusterreg.ValidateFundHotKey(f); err != nil {
+		return nil, fmt.Errorf("fund the hot key of node %q: %w", f.NodeID, err)
+	}
+	return c.sendMsg(ctx, "fund the hot key of node "+f.NodeID, clusterreg.FundHotKeyTypeURL, clusterreg.EncodeFundHotKey(f))
+}
+
 // CreateValidator creates the signing operator's validator (MsgCreateValidator),
 // bonding its own norama.
 func (c *Client) CreateValidator(ctx context.Context, spec ValidatorSpec) (*Receipt, error) {

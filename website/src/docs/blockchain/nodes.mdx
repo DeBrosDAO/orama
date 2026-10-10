@@ -22,7 +22,7 @@ All are signed by the owning operator. None needs an authority.
 | `RetireNode` | Retires a node |
 | `BondNode` / `UnbondNode` | Lock or start unbonding a role bond |
 | `DeclareCapacity` | A STORAGE node says how many bytes it will hold |
-| `FundHotKey` | Moves earnings into the hot key's fee-only balance |
+| `FundHotKey` | Moves earnings (`source` `FUND_SOURCE_EARNINGS`, the default) or bank balance (`FUND_SOURCE_BANK`) into the hot key's fee-only balance |
 | `RegisterCluster`, `UpdateCluster`, `RetireCluster` | Manage the optional public cluster row |
 | `ClaimNodeName` / `ReleaseNodeName` | Claim or give up a node's identification name |
 

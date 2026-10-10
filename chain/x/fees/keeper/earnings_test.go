@@ -214,3 +214,70 @@ func TestCreditFeeBalance_refusesNonPositiveCredits(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.IsZero())
 }
+
+func TestFundFeeBalanceFromBank_movesCoinsIntoTheFeesAccountAsFeeOnlyMoney(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	from := sdk.AccAddress("bank_from____________")
+	to := sdk.AccAddress("bank_to______________")
+	f.Bank.fund(from.String(), math.NewInt(900))
+
+	require.NoError(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.NewInt(400)))
+
+	got, err := f.Keeper.GetFeeBalance(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(400)))
+	earned, err := f.Keeper.GetEarnings(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, earned.IsZero(), "it is not earnings: nothing can bond or shield it")
+	fromEarnings, err := f.Keeper.GetEarnings(f.Ctx, from)
+	require.NoError(t, err)
+	require.True(t, fromEarnings.IsZero(), "the source's earnings ledger is not touched")
+	require.True(t, f.Bank.balanceOf(from.String()).Equal(math.NewInt(500)))
+	require.True(t, f.Bank.balanceOf(types.ModuleName).Equal(math.NewInt(400)))
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+}
+
+func TestFundFeeBalanceFromBank_invariantHoldsAlongsideEarningsAndRepeatedFundings(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	earner := sdk.AccAddress("earner______________")
+	from := sdk.AccAddress("bank_from____________")
+	to := sdk.AccAddress("bank_to______________")
+	fundedEarnings(t, f, earner, 300)
+	f.Bank.fund(from.String(), math.NewInt(1_000))
+
+	require.NoError(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.NewInt(100)))
+	require.NoError(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.NewInt(250)))
+	require.NoError(t, f.Keeper.FundFeeBalance(f.Ctx, earner, to, math.NewInt(50)))
+
+	got, err := f.Keeper.GetFeeBalance(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.Equal(math.NewInt(400)))
+	require.True(t, f.Bank.balanceOf(types.ModuleName).Equal(math.NewInt(650)), "300 earned plus 350 from the bank")
+	inv, err := f.Keeper.CheckInvariants(f.Ctx)
+	require.NoError(t, err)
+	require.True(t, inv.EarningsMatchModule, inv.Detail)
+}
+
+func TestFundFeeBalanceFromBank_refusesOverdraftZeroAndSelf(t *testing.T) {
+	f := newTestFixture(t)
+	f.initGenesis(t, nil)
+	from := sdk.AccAddress("bank_from____________")
+	to := sdk.AccAddress("bank_to______________")
+	f.Bank.fund(from.String(), math.NewInt(100))
+
+	require.Error(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.NewInt(101)))
+	require.Error(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.ZeroInt()))
+	require.Error(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.NewInt(-1)))
+	require.Error(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, to, math.Int{}))
+	require.Error(t, f.Keeper.FundFeeBalanceFromBank(f.Ctx, from, from, math.NewInt(1)))
+
+	require.True(t, f.Bank.balanceOf(from.String()).Equal(math.NewInt(100)), "a refused funding leaves the bank balance untouched")
+	require.True(t, f.Bank.balanceOf(types.ModuleName).IsZero())
+	got, err := f.Keeper.GetFeeBalance(f.Ctx, to)
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+}

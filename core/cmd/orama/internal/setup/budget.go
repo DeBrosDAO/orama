@@ -22,6 +22,23 @@ const (
 	// validator. The chain's base fee moves, so this is generous rather than exact.
 	feeReservePerNode  = 2 * noramaPerOrama
 	feeReserveOperator = 2 * noramaPerOrama
+	// hotKeyFundingPerNode is what setup moves from the operator's bank balance to the fee-only
+	// balance of each node's hot key (MsgFundHotKey, source bank). The hot key signs the storage
+	// provider's transactions, and a transaction's base fee is the base fee times its gas limit.
+	// The base fee starts and floors at 1 norama per gas (x/fees DefaultParams). A provider sends
+	// at most one MsgSubmitProofs per epoch while it holds fewer than 32 challenges (chain
+	// provider.MaxProofsPerTx), plus one MsgAcceptDeal per slot assigned to it, and the client
+	// declares 1.5 times the simulated gas. hotKeyProofGas is a generous 1,000,000 gas for one such
+	// transaction, so an epoch of proofs costs about 0.001 ORAMA at the floor. 2,000 epochs is
+	// 2 ORAMA: about a week on a test network (300 second epochs) and about five years on one with
+	// 24 hour epochs. A busier provider or a base fee above the floor spends it faster, and
+	// `orama status` raises a critical finding when the balance reaches zero. Without it a
+	// create-network operator, who earns nothing until its providers have proven, could never
+	// start proving.
+	hotKeyProofGas       = 1_000_000
+	hotKeyBaseFee        = 1
+	hotKeyFundedEpochs   = 2_000
+	hotKeyFundingPerNode = hotKeyProofGas * hotKeyBaseFee * hotKeyFundedEpochs
 	// maxBudgetORAMA is the most a run will bond and spend. The bond amounts come
 	// from the chain node setup just installed, before anything else has vouched
 	// for it; a figure beyond any real network's parameters is refused rather than
@@ -41,6 +58,9 @@ type Budget struct {
 	NameDeposit *big.Int
 	// Reserve is the fee and deposit allowance.
 	Reserve *big.Int
+	// HotKeys is what the run moves into the hot keys' fee balances: hotKeyFundingPerNode for
+	// every full node.
+	HotKeys *big.Int
 	// Total is everything the operator account must hold.
 	Total *big.Int
 }
@@ -52,7 +72,7 @@ func StorageCapacityBytes(storageGB uint64) uint64 { return storageGB * bytesPer
 // role's floor, except storage, whose bond backs the capacity the node declares:
 // bond_per_gib for each GiB of it.
 func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
-	b := &Budget{Bonds: map[string]map[int]*big.Int{}, SelfBond: new(big.Int), NameDeposit: new(big.Int), Reserve: new(big.Int).SetUint64(feeReserveOperator), Total: new(big.Int)}
+	b := &Budget{Bonds: map[string]map[int]*big.Int{}, SelfBond: new(big.Int), NameDeposit: new(big.Int), Reserve: new(big.Int).SetUint64(feeReserveOperator), HotKeys: new(big.Int), Total: new(big.Int)}
 	if params.NameDeposit != nil {
 		b.NameDeposit.Set(params.NameDeposit)
 	}
@@ -67,6 +87,7 @@ func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
 		b.Bonds[n.Name] = bonds
 		b.Reserve.Add(b.Reserve, new(big.Int).SetUint64(feeReservePerNode))
 		b.Reserve.Add(b.Reserve, b.NameDeposit)
+		b.HotKeys.Add(b.HotKeys, big.NewInt(hotKeyFundingPerNode))
 		for _, amount := range bonds {
 			b.Total.Add(b.Total, amount)
 		}
@@ -80,6 +101,7 @@ func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
 	}
 	b.Total.Add(b.Total, b.SelfBond)
 	b.Total.Add(b.Total, b.Reserve)
+	b.Total.Add(b.Total, b.HotKeys)
 	if limit := new(big.Int).Mul(big.NewInt(maxBudgetORAMA), big.NewInt(noramaPerOrama)); b.Total.Cmp(limit) > 0 {
 		return nil, fmt.Errorf("the chain's parameters make this setup cost %s ORAMA, over the %d ORAMA setup will sign: "+
 			"the node it read them from may be wrong; check the network's parameters before running again", Orama(b.Total), maxBudgetORAMA)
@@ -145,8 +167,8 @@ func (e *NotFundedError) Error() string {
 	short := new(big.Int).Sub(e.Need, e.Have)
 	breakdown := ""
 	if e.Budget != nil && e.Need.Cmp(e.Budget.Total) == 0 {
-		breakdown = fmt.Sprintf(" (bonds %s, validator self-bond %s, fees and deposits %s)",
-			Orama(bondTotal(e.Budget)), Orama(e.Budget.SelfBond), Orama(e.Budget.Reserve))
+		breakdown = fmt.Sprintf(" (bonds %s, validator self-bond %s, fees and deposits %s, hot key fee balances %s)",
+			Orama(bondTotal(e.Budget)), Orama(e.Budget.SelfBond), Orama(e.Budget.Reserve), Orama(e.Budget.HotKeys))
 	}
 	msg := fmt.Sprintf("the operator account %s holds %s ORAMA and this setup needs %s ORAMA%s: send at least %s ORAMA to %s, then run the same `orama setup` command again; it resumes where it stopped",
 		e.Address, Orama(e.Have), Orama(e.Need), breakdown, Orama(short), e.Address)
@@ -159,5 +181,6 @@ func (e *NotFundedError) Error() string {
 func bondTotal(b *Budget) *big.Int {
 	t := new(big.Int).Set(b.Total)
 	t.Sub(t, b.SelfBond)
+	t.Sub(t, b.HotKeys)
 	return t.Sub(t, b.Reserve)
 }

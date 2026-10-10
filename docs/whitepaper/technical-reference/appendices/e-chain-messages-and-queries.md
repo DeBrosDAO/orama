@@ -172,7 +172,7 @@ Source: `chain/proto/orama/nodes/v1/tx.proto`
 | `BondNode` | `operator string`, `node_id string`, `role Role`, `amount string` |  |
 | `UnbondNode` | `operator string`, `node_id string`, `role Role`, `amount string` |  |
 | `DeclareCapacity` | `operator string`, `node_id string`, `capacity_bytes uint64` | MsgDeclareCapacity sets STORAGE declared_capacity_bytes. The keeper rejects a value above the bond-backed cap (C6). |
-| `FundHotKey` | `operator string`, `node_id string`, `amount string` | MsgFundHotKey moves amount from the operator's own earnings account to the earnings (fee) balance of the hot key registered on the operator's own node (C2 item 5). The target is never a field: it is always the node's hot key. |
+| `FundHotKey` | `operator string`, `node_id string`, `amount string`, `source FundSource` | MsgFundHotKey moves amount from the operator's own earnings account (or, with source FUND_SOURCE_BANK, its bank balance) to the fee-only balance of the hot key registered on the operator's own node (C2 item 5). The target is never a field: it is always the node's hot key. FundSource is FUND_SOURCE_EARNINGS = 0 (the default, not written on the wire) or FUND_SOURCE_BANK = 1. |
 | `RegisterCluster` | `operator string`, `cluster_id string`, `base_domain string`, `public_endpoints repeated string`, `metadata_uri string` | MsgRegisterCluster adds an optional discovery row. It does not join any node to a cluster (D1, track A8). |
 | `UpdateCluster` | `operator string`, `cluster_id string`, `base_domain string`, `public_endpoints repeated string`, `metadata_uri string` |  |
 | `RetireCluster` | `operator string`, `cluster_id string` |  |

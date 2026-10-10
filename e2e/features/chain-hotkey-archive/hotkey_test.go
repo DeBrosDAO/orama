@@ -50,6 +50,54 @@ func TestFundHotKey_earningsBecomeAFeeOnlyBalance(t *testing.T) {
 	c.RequireInvariants(t, "a hot key funded from earnings")
 }
 
+// TestFundHotKey_bankBalanceBecomesAFeeOnlyBalance: with source FUND_SOURCE_BANK
+// MsgFundHotKey takes the amount from the operator's bank balance, which is what
+// an operator that earned nothing holds. The operator's bank balance falls by
+// the amount (plus the transaction's fee), the hot key gets exactly the amount
+// as a fee-only balance on every validator, its earnings and bank balance stay
+// zero, the operator's earnings are untouched, and the fees invariants hold.
+// More than the bank balance is refused and leaves the fee balance as it was.
+func TestFundHotKey_bankBalanceBecomesAFeeOnlyBalance(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	k := c.FundedValidator(t, chain.OperatorNode, chain.Orama(1))
+	c.EnsureOperator(t, k)
+	node := c.RegisterProvenNode(t, k, []string{chain.RoleRelay}, "relay")
+	n := c.Node(t, chain.OperatorNode)
+	earningsBefore := c.Earnings(t, n, k.Address)
+	bankBefore := c.Bank(t, n, k.Address)
+
+	r := chain.RequireOK(t, "fund the hot key from the bank", c.Submit(t, k, chain.TxOptions{}, fundHotKeyFromBankMsg(k.Address, node.ID, fmt.Sprint(fundAmount))))
+	for key, want := range map[string]string{"operator": k.Address, "node_id": node.ID, "hot_key": node.HotKey, "amount": fmt.Sprint(fundAmount)} {
+		if got, ok := chain.Attr(r.Events, "fund_hot_key", key); !ok || got != want {
+			t.Errorf("fund_hot_key event %s is %q (present %v), want %q", key, got, ok, want)
+		}
+	}
+	for _, v := range c.Nodes() {
+		if got := feeBalance(t, c, v, node.HotKey); got.Cmp(chain.NewInt(fundAmount)) != 0 {
+			t.Errorf("%s: the hot key's fee balance is %s, want %d", v.Name, got.String(), fundAmount)
+		}
+	}
+	if spent := bankBefore.Sub(c.Bank(t, n, k.Address)); spent.Cmp(chain.NewInt(fundAmount)) < 0 {
+		t.Errorf("the operator's bank balance fell by %s, want at least the %d funded", spent.String(), fundAmount)
+	}
+	if got := c.Earnings(t, n, k.Address); got.Cmp(earningsBefore) != 0 {
+		t.Errorf("the operator's earnings went from %s to %s: the bank source must not touch them", earningsBefore.String(), got.String())
+	}
+	if bank := c.Bank(t, n, node.HotKey); !bank.IsZero() {
+		t.Errorf("the hot key holds %s norama in the bank: a fee balance is not a bank balance", bank.String())
+	}
+	if earn := c.Earnings(t, n, node.HotKey); !earn.IsZero() {
+		t.Errorf("the hot key holds %s norama of earnings", earn.String())
+	}
+	chain.RequireRefused(t, "more than the bank balance", c.Submit(t, k, chain.TxOptions{},
+		fundHotKeyFromBankMsg(k.Address, node.ID, "1000000000000000000000000000000")), "insufficient")
+	if got := feeBalance(t, c, n, node.HotKey); got.Cmp(chain.NewInt(fundAmount)) != 0 {
+		t.Errorf("a refused bank funding changed the fee balance to %s", got.String())
+	}
+	c.RequireInvariants(t, "a hot key funded from the bank")
+}
+
 // TestFundHotKey_refusals: only the node's operator funds its hot key, the
 // amount is a positive integer the operator's earnings cover, the node
 // exists and is not retired; every refusal leaves the fee balance as it was.

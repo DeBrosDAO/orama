@@ -270,7 +270,7 @@ The operator's wallet never touches the node. `orama global register`, `bond`, `
 
 `register` verifies every `--binding` file locally with `globalbind.Verify` before building `MsgRegisterNode`, so a wrong signature fails on the operator's machine and not as a refused transaction.
 
-No `orama` command builds `MsgRegisterOperator`, which has to precede `register`; it is sent by the Go client in `chain/client/node` or by the stagenet deploy script's helper. No command builds `MsgUpdateNode` either, so an ASN is set at registration only, and there is no rotation path from the CLI. `oramad tx nodes fund-hot-key` builds `MsgFundHotKey`.
+No `orama` command builds `MsgRegisterOperator`, which has to precede `register`; it is sent by the Go client in `chain/client/node` or by the stagenet deploy script's helper. No command builds `MsgUpdateNode` either, so an ASN is set at registration only, and there is no rotation path from the CLI. `oramad tx nodes fund-hot-key` builds `MsgFundHotKey` (`--from-bank` takes the amount from the bank balance).
 
 ### x/nodes: the records
 
@@ -350,7 +350,7 @@ What the chain does not do: verify that the operator controls an address, or tha
 
 #### Hot key funding
 
-`MsgFundHotKey` moves an amount from the operator's earnings to the fee-only balance of the hot key registered on the operator's own node. The message has no destination field, so the target is always the key that proved possession of itself. The balance can pay a transaction's base fee and cannot be bonded, shielded, deposited or moved on (`chain/x/nodes/keeper/fund_hot_key.go:FundHotKey`). The first funding creates the account for the hot key, because an address with no account cannot sign (the ante handler reads its account number and sequence). It fails for another operator's node, a retired or tombstoned node, a zero amount or more than the operator's earnings, and it follows a rotated hot key.
+`MsgFundHotKey` moves an amount from the operator's earnings, or with `source` `FUND_SOURCE_BANK` from its bank balance, to the fee-only balance of the hot key registered on the operator's own node. The message has no destination field, so the target is always the key that proved possession of itself. `source` is field 4, an enum whose zero is `FUND_SOURCE_EARNINGS` (never written, so the message is byte for byte what it was before the field) and whose 1 is `FUND_SOURCE_BANK`. The bank source exists because an operator that runs no validator earns nothing until its providers have proven, and a provider cannot prove without a fee balance: it sends the coins from the operator's bank balance into the `fees` module account and credits the hot key's fee-only balance, so earnings plus fee-only balances still equal the module balance (`chain/x/fees/keeper/earnings.go:FundFeeBalanceFromBank`). `orama setup` sends it for every full node once the provider has started, 2 ORAMA each, and skips a hot key whose balance already holds that. The balance can pay a transaction's base fee and cannot be bonded, shielded, deposited or moved on (`chain/x/nodes/keeper/fund_hot_key.go:FundHotKey`). The first funding creates the account for the hot key, because an address with no account cannot sign (the ante handler reads its account number and sequence). It fails for another operator's node, a retired or tombstoned node, a zero amount or more than the operator's earnings, and it follows a rotated hot key.
 
 #### State deposits
 

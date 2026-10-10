@@ -221,6 +221,8 @@ type Transactor interface {
 	UpdateNodeBindings(ctx context.Context, u clusterreg.NodeUpdate) (*onchain.Receipt, error)
 	Bond(ctx context.Context, b clusterreg.Bond) (*onchain.Receipt, error)
 	DeclareCapacity(ctx context.Context, c clusterreg.Capacity) (*onchain.Receipt, error)
+	// FundHotKey gives a node's hot key a fee-only balance, from the operator's bank balance or its earnings.
+	FundHotKey(ctx context.Context, f clusterreg.HotKeyFunding) (*onchain.Receipt, error)
 	CreateValidator(ctx context.Context, spec onchain.ValidatorSpec) (*onchain.Receipt, error)
 	ClaimNodeName(ctx context.Context, nodeID, name string) (*onchain.Receipt, error)
 }
@@ -231,6 +233,9 @@ type ChainReader interface {
 	// Balance is the account's spendable norama; zero for an account the chain
 	// has not seen.
 	Balance(ctx context.Context, address string) (*big.Int, error)
+	// FeeBalance is the account's fee-only balance in norama, the money MsgFundHotKey gives a node's
+	// hot key and that pays only transaction base fees; zero for an account with none.
+	FeeBalance(ctx context.Context, address string) (*big.Int, error)
 	OperatorRegistered(ctx context.Context, address string) (bool, error)
 	// Node is the registered node, or nil.
 	Node(ctx context.Context, id string) (*RegisteredNode, error)
@@ -259,6 +264,8 @@ type RegisteredNode struct {
 	Roles         []int
 	Bonds         map[int]*big.Int
 	CapacityBytes uint64
+	// HotKey is the account address of the node's registered hot key.
+	HotKey string
 	// Bindings are the node's service-key bindings, as the chain holds them.
 	Bindings []clusterreg.NodeBinding
 }

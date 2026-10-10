@@ -240,6 +240,23 @@ func (e *fakeEarnings) FundFeeBalance(_ context.Context, from, to sdk.AccAddress
 	return nil
 }
 
+// feesModule is the key the fake bank keeps x/fees's module account under.
+const feesModule = "fees"
+
+// FundFeeBalanceFromBank moves coins from the operator's bank balance into x/fees's module account
+// and credits the hot key's fee-only balance, as x/fees does.
+func (e *fakeEarnings) FundFeeBalanceFromBank(_ context.Context, from, to sdk.AccAddress, amount math.Int) error {
+	if !amount.IsPositive() {
+		return errInsufficient(from.String(), e.bank.balanceOf(from.String()), amount)
+	}
+	if err := e.bank.sub(from.String(), amount); err != nil {
+		return err
+	}
+	e.bank.fund(feesModule, amount)
+	e.feeOnly[to.String()] = e.feeBalanceOf(to).Add(amount)
+	return nil
+}
+
 func (e *fakeEarnings) FundSpendFromEarnings(_ context.Context, addr sdk.AccAddress, _ string, needed math.Int) error {
 	if !needed.IsPositive() || e.bank.balanceOf(addr.String()).GTE(needed) {
 		return nil

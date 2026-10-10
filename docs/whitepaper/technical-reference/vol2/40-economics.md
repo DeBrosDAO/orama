@@ -150,7 +150,7 @@ What earnings can be spent on is the whole restriction. The owner can always tur
 | A state deposit | `fundDeposit`: bank balance first, then the owner's earnings |
 | Shielding | `x/shielded`'s `MsgShieldEarnings` debits the signer's earnings into the pool |
 | A public balance | `x/fees`'s `MsgWithdrawEarnings` debits the signer's earnings and sends the same amount to the signer's own bank balance (`chain/x/fees/keeper/withdraw.go:WithdrawEarnings`) |
-| A node's hot key | `FundFeeBalance` moves earnings to another address's fee-only balance; `x/nodes`'s `MsgFundHotKey` is its only caller |
+| A node's hot key | `FundFeeBalance` moves earnings to another address's fee-only balance, and `FundFeeBalanceFromBank` moves bank balance into the fees module account and credits the same amount to it; `x/nodes`'s `MsgFundHotKey` is the only caller of either, and its `source` field picks which |
 | A contract paying a user | `PayEarnings`, from the contract's bank balance into the recipient's earnings |
 
 `FundSpendFromEarnings` tops the signer's bank balance up from its own earnings, by exactly the shortfall, or does nothing if earnings cannot cover the whole shortfall. It is called from message handlers and never from an ante decorator, because ante writes survive a message that then fails: a top-up in the ante chain would turn earnings into spendable balance for free. A handler runs in the message's cache branch, which is discarded if the message fails, taking the top-up with it (`chain/x/fees/keeper/earnings.go:FundSpendFromEarnings`, `chain/app/staking_topup.go:earningsFundedStaking`).

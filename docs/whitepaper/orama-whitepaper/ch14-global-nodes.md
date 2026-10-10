@@ -52,7 +52,7 @@ Two nftables tables, each replaced atomically, define the boundary. Published po
 
 `x/nodes` has thirteen messages and no authority address, no pause and no parameter-change message; its genesis values are final. Every message is signed by the operator who owns the record, from a wallet key that never sits on a node.
 
-**Registration.** `MsgRegisterNode` fixes the node's roles and carries service-key bindings: each service key signs `orama-global-bind-v1|chain-id|operator|service|pubkey`. A key binds to one live node network-wide and a retired key is revoked forever, so nobody can claim another operator's relay identity. The node's secp256k1 hot key proves itself with a `hot-key` binding; the provider, archiver and reporter sign with it. `MsgFundHotKey` funds it from earnings with no destination field, so the money reaches only that key and pays base fees only.
+**Registration.** `MsgRegisterNode` fixes the node's roles and carries service-key bindings: each service key signs `orama-global-bind-v1|chain-id|operator|service|pubkey`. A key binds to one live node network-wide and a retired key is revoked forever, so nobody can claim another operator's relay identity. The node's secp256k1 hot key proves itself with a `hot-key` binding; the provider, archiver and reporter sign with it. `MsgFundHotKey` funds it from earnings, or from the operator's bank balance for an operator that has not earned yet (the case of a network's first operators), with no destination field, so the money reaches only that key and pays base fees only.
 
 **Endpoints.** Hosts must be public, and no two live nodes may claim one literal IP.
 

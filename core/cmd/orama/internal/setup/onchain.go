@@ -76,8 +76,8 @@ func (r *runner) fund(ctx context.Context, sess ChainSession) (*Budget, error) {
 	if err != nil {
 		return nil, err
 	}
-	r.d.Report.Linef("this setup bonds %s ORAMA, self-bonds %s ORAMA for the validator and sets aside %s ORAMA for fees and deposits",
-		Orama(bondTotal(budget)), Orama(budget.SelfBond), Orama(budget.Reserve))
+	r.d.Report.Linef("this setup bonds %s ORAMA, self-bonds %s ORAMA for the validator, sets aside %s ORAMA for fees and deposits and moves %s ORAMA to the fee balances of the storage providers' hot keys",
+		Orama(bondTotal(budget)), Orama(budget.SelfBond), Orama(budget.Reserve), Orama(budget.HotKeys))
 	have, err := sess.Balance(ctx, r.oper)
 	if err != nil {
 		return nil, fmt.Errorf("read the balance of %s: %w", r.oper, err)
@@ -158,8 +158,8 @@ func (r *runner) registerOperator(ctx context.Context, sess ChainSession) error 
 }
 
 // registerNode registers one node, bonds its roles, declares its capacity, starts
-// the services that need the registration, and creates the validator when the
-// node carries it. Each step first asks the chain whether it is already done.
+// the services that need the registration, funds its hot key and creates the
+// validator when the node carries it. Each step first asks the chain whether it is already done.
 func (r *runner) registerNode(ctx context.Context, sess ChainSession, n *nodeRun, bonds map[int]*big.Int) error {
 	ip, id := n.plan.IP, n.plan.Name
 	r.emit(ip, StepOnchain, StateRunning, "")
@@ -194,12 +194,38 @@ func (r *runner) registerNode(ctx context.Context, sess ChainSession, n *nodeRun
 	if err := n.m.StartServices(ctx, id); err != nil {
 		return fmt.Errorf("start the node's services: %w", err)
 	}
+	if err := r.fundHotKey(ctx, sess, n, ident.HotKey); err != nil {
+		return err
+	}
 	if n.plan.Validator {
 		if err := r.createValidator(ctx, sess, n, ident); err != nil {
 			return err
 		}
 	}
 	r.emit(ip, StepOnchain, StateDone, "node "+id)
+	return nil
+}
+
+// fundHotKey gives the node's hot key the fee-only balance its storage provider pays proof fees
+// from, out of the operator's bank balance. An operator that runs no validator of its own earns
+// nothing until its providers have proven, so earnings cannot start the first proof. A hot key whose
+// balance already covers hotKeyFundingPerNode is left alone; one that holds part of it is given the
+// difference, so a run that stopped half way resumes and a run repeated does not pay twice.
+func (r *runner) fundHotKey(ctx context.Context, sess ChainSession, n *nodeRun, hotKey string) error {
+	id := n.plan.Name
+	have, err := sess.FeeBalance(ctx, hotKey)
+	if err != nil {
+		return fmt.Errorf("read the fee balance of the hot key %s of node %q: %w", hotKey, id, err)
+	}
+	want := big.NewInt(hotKeyFundingPerNode)
+	if have.Cmp(want) >= 0 {
+		r.emit(n.plan.IP, StepOnchain, StateSkipped, "the hot key of node "+id+" holds "+Orama(have)+" ORAMA of fee balance")
+		return nil
+	}
+	delta := new(big.Int).Sub(want, have)
+	if _, err := sess.FundHotKey(ctx, clusterreg.HotKeyFunding{NodeID: id, Amount: delta.String(), FromBank: true}); err != nil {
+		return fmt.Errorf("fund the hot key %s of node %q with %s ORAMA from the operator's bank balance: %w", hotKey, id, Orama(delta), err)
+	}
 	return nil
 }
 
@@ -302,6 +328,11 @@ func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget
 			continue
 		}
 		need.Sub(need, big.NewInt(feeReservePerNode))
+		funded, err := hotKeyFunded(ctx, sess, node)
+		if err != nil {
+			return nil, err
+		}
+		need.Sub(need, funded)
 		for role, target := range b.Bonds[n.plan.Name] {
 			if have := node.Bonds[role]; have != nil {
 				need.Sub(need, minInt(have, target))
@@ -324,6 +355,18 @@ func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget
 		need.SetInt64(0)
 	}
 	return need, nil
+}
+
+// hotKeyFunded is how much of hotKeyFundingPerNode the node's hot key already holds as fee balance.
+func hotKeyFunded(ctx context.Context, sess ChainSession, node *RegisteredNode) (*big.Int, error) {
+	if node.HotKey == "" {
+		return new(big.Int), nil
+	}
+	have, err := sess.FeeBalance(ctx, node.HotKey)
+	if err != nil {
+		return nil, fmt.Errorf("read the fee balance of the hot key %s: %w", node.HotKey, err)
+	}
+	return minInt(have, big.NewInt(hotKeyFundingPerNode)), nil
 }
 
 func minInt(a, b *big.Int) *big.Int {

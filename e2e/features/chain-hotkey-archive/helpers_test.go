@@ -22,6 +22,14 @@ func fundHotKeyMsg(operator, nodeID, amount string) chain.Msg {
 	return chain.NewMsg("/orama.nodes.v1.MsgFundHotKey", map[string]any{"operator": operator, "node_id": nodeID, "amount": amount})
 }
 
+// fundHotKeyFromBankMsg is MsgFundHotKey with source FUND_SOURCE_BANK: the amount comes from the
+// operator's bank balance and not from its earnings.
+func fundHotKeyFromBankMsg(operator, nodeID, amount string) chain.Msg {
+	return chain.NewMsg("/orama.nodes.v1.MsgFundHotKey", map[string]any{
+		"operator": operator, "node_id": nodeID, "amount": amount, "source": "FUND_SOURCE_BANK",
+	})
+}
+
 // feeBalance is orama.fees.v1.Query/FeeBalance of addr on node n.
 func feeBalance(t *testing.T, c *chain.Chain, n fleet.Node, addr string) chain.Int {
 	t.Helper()

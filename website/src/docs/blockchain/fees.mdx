@@ -31,7 +31,7 @@ Earnings can pay:
 - the signer's own storage deals and token-creation fees
 - deposits
 - a move into the shielded pool (`MsgShieldEarnings`)
-- funding a node's hot key (`MsgFundHotKey`)
+- funding a node's hot key (`MsgFundHotKey`, with the default earnings source)
 - a move to the signer's own bank balance (`MsgWithdrawEarnings`)
 
 Earnings cannot pay a tip and cannot be sent to another user directly. Bonding and deal messages top up a shortfall in the signer's bank balance from the signer's own earnings inside the same message, all or nothing.
@@ -62,6 +62,8 @@ The SDK has the same choice: `chain.transfer({ to, amount, public: true })` pays
 ## Hot-key fee balances
 
 A node signs with a *hot key* that holds no ORAMA of its own beyond a fee-only balance. That balance can pay base fees and nothing else. It is funded by `MsgFundHotKey` or by a shielded `FEE_TOPUP` unshield.
+
+`MsgFundHotKey` takes the amount from one of two places, chosen by its `source` field. The default, `FUND_SOURCE_EARNINGS`, moves it out of the operator's earnings. `FUND_SOURCE_BANK` moves it out of the operator's bank balance into the `fees` module account and credits the hot key's fee-only balance with the same amount, so earnings plus fee-only balances still equal the `fees` module balance. The bank source is for an operator that holds ORAMA but has earned nothing yet: a node that runs no validator earns nothing until its storage providers have proven, and a provider cannot prove without a fee balance for the proof's base fee. `oramad tx nodes fund-hot-key <node-id> <amount-norama> --from-bank` sends it, and `orama setup` uses it for every node it sets up. The target is always the node's registered hot key, whichever source is chosen.
 
 ## State deposits
 

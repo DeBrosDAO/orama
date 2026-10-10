@@ -182,6 +182,37 @@ func (k Keeper) FundFeeBalance(ctx context.Context, from, to sdk.AccAddress, amo
 	return k.setFeeBalance(ctx, to, current.Add(amount))
 }
 
+// FundFeeBalanceFromBank moves exactly amount of the base denom from from's bank balance into x/fees's
+// module account and credits it to to's fee-only balance. It is FundFeeBalance for an operator that
+// holds ORAMA but has earned nothing yet: a node that runs no validator of its own earns nothing
+// until its storage providers have proven, and a provider cannot prove without a fee balance for the
+// proof's base fee. The coins enter the module account and the same amount enters the fee ledger, so
+// the invariant "earnings + fee balances == the fees module balance" holds, and the balance keeps
+// every restriction FundFeeBalance documents: it pays base fees and nothing else. The caller chooses
+// the target; this method fails when from's spendable balance is below amount rather than moving a
+// partial amount.
+func (k Keeper) FundFeeBalanceFromBank(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error {
+	if amount.IsNil() || !amount.IsPositive() {
+		return fmt.Errorf("fee balance transfer amount must be positive, got %s", amount)
+	}
+	if from.Equals(to) {
+		return fmt.Errorf("cannot fund %s's fee balance from its own bank balance", from)
+	}
+	spendable := k.bankKeeper.SpendableCoins(ctx, from).AmountOf(params.BaseDenom)
+	if spendable.LT(amount) {
+		return fmt.Errorf("insufficient bank balance: %s has %s%s spendable, needs %s%s", from, spendable, params.BaseDenom, amount, params.BaseDenom)
+	}
+	coins := sdk.NewCoins(sdk.NewCoin(params.BaseDenom, amount))
+	if err := k.bankKeeper.SendCoinsFromAccountToModule(ctx, from, types.ModuleName, coins); err != nil {
+		return fmt.Errorf("failed to move %s from %s's bank balance into %s: %w", coins, from, types.ModuleName, err)
+	}
+	current, err := k.GetFeeBalance(ctx, to)
+	if err != nil {
+		return err
+	}
+	return k.setFeeBalance(ctx, to, current.Add(amount))
+}
+
 // CreditFeeBalance moves amt from senderModule's own account into x/fees's module account and credits
 // it to addr's fee-only balance. It is the entry point for value that becomes fee money from
 // outside the earnings ledger: x/shielded's unshield to the signer's own fee balance. The balance

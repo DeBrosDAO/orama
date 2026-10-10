@@ -18,9 +18,12 @@ func TestComputeBudget_storageBondBacksTheCapacity(t *testing.T) {
 	if got := b.Bonds["alice"][clusterreg.RoleStorage].String(); got != "94000000000" {
 		t.Errorf("storage bond %s, want 94 ORAMA", got)
 	}
-	// 94 + 1000 self-bond + 2 per node + 2 operator reserve.
-	if got := Orama(b.Total); got != "1098" {
-		t.Errorf("total %s ORAMA, want 1098", got)
+	// 94 + 1000 self-bond + 2 per node + 2 operator reserve + 2 for the node's hot key.
+	if got := Orama(b.Total); got != "1100" {
+		t.Errorf("total %s ORAMA, want 1100", got)
+	}
+	if got := Orama(b.HotKeys); got != "2" {
+		t.Errorf("hot key funding %s ORAMA, want 2 for the one node", got)
 	}
 }
 

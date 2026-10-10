@@ -27,15 +27,19 @@ func GetTxCmd() *cobra.Command {
 	return cmd
 }
 
+// flagFromBank makes fund-hot-key take the amount from the signer's bank balance and not from its earnings.
+const flagFromBank = "from-bank"
+
 // GetCmdFundHotKey implements `oramad tx nodes fund-hot-key`. The signer (--from) is the operator;
 // the target is always the registered hot key of the named node.
 func GetCmdFundHotKey() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "fund-hot-key [node-id] [amount-norama]",
-		Short: "Move earnings to the fee balance of your own node's hot key",
+		Short: "Move earnings (or, with --from-bank, bank balance) to the fee balance of your own node's hot key",
 		Long: "Moves the amount, in norama, from the signer's earnings account to the earnings (fee) " +
-			"balance of the hot key registered on the signer's own node. The destination is always " +
-			"that node's hot key and cannot be chosen.",
+			"balance of the hot key registered on the signer's own node. With --from-bank the amount " +
+			"comes from the signer's bank balance instead, for an operator that holds ORAMA but has " +
+			"earned nothing yet. The destination is always that node's hot key and cannot be chosen.",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			amount, ok := math.NewIntFromString(args[1])
@@ -46,10 +50,19 @@ func GetCmdFundHotKey() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to get client context: %w", err)
 			}
+			fromBank, err := cmd.Flags().GetBool(flagFromBank)
+			if err != nil {
+				return fmt.Errorf("failed to read --%s: %w", flagFromBank, err)
+			}
+			source := types.FundSource_FUND_SOURCE_EARNINGS
+			if fromBank {
+				source = types.FundSource_FUND_SOURCE_BANK
+			}
 			msg := &types.MsgFundHotKey{
 				Operator: clientCtx.GetFromAddress().String(),
 				NodeId:   args[0],
 				Amount:   amount,
+				Source:   source,
 			}
 			if err := msg.ValidateBasic(); err != nil {
 				return err
@@ -57,6 +70,7 @@ func GetCmdFundHotKey() *cobra.Command {
 			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
 		},
 	}
+	cmd.Flags().Bool(flagFromBank, false, "take the amount from the signer's bank balance instead of its earnings")
 	flags.AddTxFlagsToCmd(cmd)
 	return cmd
 }

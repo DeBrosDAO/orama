@@ -30,7 +30,9 @@ type DepositKeeper interface {
 //
 //   - FundFeeBalance funds an operator's own node's hot key with a fee-only
 //     balance (item 5). The balance can pay base fees and is not earnings. It
-//     fails when from holds less than amount.
+//     fails when from holds less than amount. FundFeeBalanceFromBank does the
+//     same out of the operator's bank balance, for an operator that has not
+//     earned yet.
 //   - FundSpendFromEarnings tops the operator's bank balance up from its own
 //     earnings so a role bond can be escrowed (item 3). It moves nothing when
 //     the bank balance already covers needed, or when earnings cannot cover
@@ -38,6 +40,7 @@ type DepositKeeper interface {
 //     discards the top-up if the message fails.
 type EarningsKeeper interface {
 	FundFeeBalance(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
+	FundFeeBalanceFromBank(ctx context.Context, from, to sdk.AccAddress, amount math.Int) error
 	FundSpendFromEarnings(ctx context.Context, addr sdk.AccAddress, denom string, needed math.Int) error
 }
 

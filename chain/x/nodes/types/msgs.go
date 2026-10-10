@@ -183,6 +183,9 @@ func (msg MsgFundHotKey) ValidateBasic() error {
 	if err := PositiveAmount(msg.Amount); err != nil {
 		return fmt.Errorf("fund hot key: %w", err)
 	}
+	if _, ok := FundSource_name[int32(msg.Source)]; !ok {
+		return fmt.Errorf("fund hot key: unknown funding source %d (0 is earnings, 1 is the bank balance)", int32(msg.Source))
+	}
 	return nil
 }
 

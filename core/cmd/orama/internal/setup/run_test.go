@@ -334,10 +334,11 @@ func TestRun_alreadyInstalledMachinesAreSkipped(t *testing.T) {
 	h.enroll.facts = map[string]Facts{ip1: installed}
 	h.w.operatorRegistered, h.w.validator = true, true
 	h.w.nodes["alice"] = &RegisteredNode{
-		Roles: []int{clusterreg.RoleStorage}, CapacityBytes: 10_000_000_000,
+		Roles: []int{clusterreg.RoleStorage}, CapacityBytes: 10_000_000_000, HotKey: "orama1hot" + ip1,
 		Bonds:    map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(10 * noramaPerOrama)},
 		Bindings: append(hotOnly(), clusterreg.NodeBinding{Service: clusterreg.ConsensusService, KeyType: "ed25519", Pubkey: fakeConsensusPub(ip1)}),
 	}
+	h.w.feeBalances["orama1hot"+ip1] = big.NewInt(hotKeyFundingPerNode)
 	res := mustRun(t, h, h.opts(ip1))
 	for _, forbidden := range []string{"stage ", "cluster ", "global ", "restart ", "resolve release", "download ", "trust point", "tx "} {
 		if h.w.index(forbidden) >= 0 {
@@ -388,8 +389,8 @@ func TestRun_notFundedStopsWithTheExactShortfall(t *testing.T) {
 	if !errors.As(err, &nf) {
 		t.Fatalf("got %v, want a NotFundedError", err)
 	}
-	// 10 ORAMA storage bond + 1000 self-bond + 2 + 2 reserve = 1014; the account holds 3.
-	for _, want := range []string{testOperator, "holds 3 ORAMA", "needs 1014 ORAMA", "send at least 1011 ORAMA", "resumes"} {
+	// 10 ORAMA storage bond + 1000 self-bond + 2 + 2 reserve + 2 for the hot key = 1016; the account holds 3.
+	for _, want := range []string{testOperator, "holds 3 ORAMA", "needs 1016 ORAMA", "hot key fee balances 2", "send at least 1013 ORAMA", "resumes"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err, want)
 		}
@@ -410,7 +411,7 @@ func TestRun_faucetFundsAUnfundedOperator(t *testing.T) {
 	h.w.balance = new(big.Int)
 	h.w.faucetPays = new(big.Int).Mul(big.NewInt(2000), big.NewInt(noramaPerOrama))
 	mustRun(t, h, h.opts(ip1))
-	if h.w.faucetCalls != 1 || h.w.index("faucet "+testOperator+" 1014000000000") < 0 {
+	if h.w.faucetCalls != 1 || h.w.index("faucet "+testOperator+" 1016000000000") < 0 {
 		t.Errorf("faucet calls: %v", h.w.entries())
 	}
 	if h.w.index("faucet") > h.w.index("tx register-operator") {

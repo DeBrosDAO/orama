@@ -191,6 +191,26 @@ func (s *restSession) Balance(ctx context.Context, address string) (*big.Int, er
 	return amount, nil
 }
 
+// FeeBalance is the account's fee-only balance in norama (x/fees). The query answers zero for an
+// account with none; a 404 is read the same way.
+func (s *restSession) FeeBalance(ctx context.Context, address string) (*big.Int, error) {
+	var doc struct {
+		Balance string `json:"balance"`
+	}
+	found, err := s.get(ctx, "/orama/fees/v1/fee-balance/"+url.PathEscape(address), &doc)
+	if err != nil {
+		return nil, err
+	}
+	if !found || doc.Balance == "" {
+		return new(big.Int), nil
+	}
+	amount, ok := parseAmount(doc.Balance)
+	if !ok {
+		return nil, fmt.Errorf("the fee balance %q of %s is not an amount of norama", doc.Balance, address)
+	}
+	return amount, nil
+}
+
 // OperatorRegistered asks x/nodes whether address is an operator.
 func (s *restSession) OperatorRegistered(ctx context.Context, address string) (bool, error) {
 	var doc struct{}
@@ -207,6 +227,7 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 				Amount string `json:"amount"`
 			} `json:"bonds"`
 			Capacity string `json:"declared_capacity_bytes"`
+			HotKey   string `json:"hot_key"`
 			Bindings []struct {
 				Service   string `json:"service"`
 				KeyType   string `json:"key_type"`
@@ -219,7 +240,7 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 	if err != nil || !found {
 		return nil, err
 	}
-	n := &RegisteredNode{Bonds: map[int]*big.Int{}}
+	n := &RegisteredNode{Bonds: map[int]*big.Int{}, HotKey: doc.Node.HotKey}
 	for _, r := range doc.Node.Roles {
 		if role, ok := roleNumber(r); ok {
 			n.Roles = append(n.Roles, role)

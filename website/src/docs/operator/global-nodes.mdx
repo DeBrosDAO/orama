@@ -124,7 +124,7 @@ Without `--node` they print the sign document; with it the RootWallet agent sign
 
 ### The hot key
 
-The provider and archiver create their own signing key (`hot-key`, 0600) on first start and log its address. Registering a node needs a binding signed by this key (`orama global bind --service hot-key`). It pays fees from its own balance, or from a fee-only balance the operator gives it with `MsgFundHotKey`, which can pay base fees and nothing else.
+The provider and archiver create their own signing key (`hot-key`, 0600) on first start and log its address. Registering a node needs a binding signed by this key (`orama global bind --service hot-key`). It pays fees from its own balance, or from a fee-only balance the operator gives it with `MsgFundHotKey` (out of its earnings, or out of its bank balance with `--from-bank`; `orama setup` funds each node's hot key from the bank), which can pay base fees and nothing else.
 
 ### Back up the consensus key
 
