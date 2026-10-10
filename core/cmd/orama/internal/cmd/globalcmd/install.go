@@ -36,6 +36,10 @@ var installFlags struct {
 	torFamily        []string
 	torAuthorityKeys string
 	torReporterOp    string
+	externalAddress  string
+	stateSyncRPC     []string
+	trustHeight      int64
+	trustHash        string
 }
 
 var installCmd = &cobra.Command{
@@ -84,6 +88,19 @@ StorageMax is that plus 10%. It never touches a private cluster's Kubo.
 --init-chain creates the chain home with 'oramad init' as orama-chain and puts
 the network's --genesis in place. It is never done without the flag, and it is
 refused when the home already has a genesis.
+
+--external-address <public ip>:31000 writes the chain's config.toml and app.toml
+(the settings chain/scripts/stagenet/deploy.sh used to sed in): the address the
+node announces to its peers (the chain itself listens at the namespace address,
+198.18.0.2, which no peer can reach), peer exchange off, Prometheus on 127.0.0.1,
+custom pruning (keep 100, every 10 blocks), and a state-sync snapshot every 1000
+blocks with two kept. A setting the chain's template no longer has is an error,
+not a skipped line. Giving --statesync-rpc twice, with --statesync-trust-height
+and --statesync-trust-hash, makes the node restore a snapshot on its first start
+instead of replaying the chain: the servers are two nodes' light-client routes
+(https://<host>/v1/chain/light), the height and hash a block both agreed on, and
+the trust period is 7 days, shorter than the 21-day unbonding. Running it again
+with the same flags changes nothing.
 
 An inactive ufw is refused unless --enable-firewall is given; then incoming is
 denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
@@ -156,6 +173,10 @@ func init() {
 	f.BoolVar(&installFlags.enableFirewall, "enable-firewall", false, "Enable an inactive ufw (deny incoming, allow --ssh-port)")
 	f.IntVar(&installFlags.sshPort, "ssh-port", defaultSSHPort, "SSH port --enable-firewall allows")
 	f.StringSliceVar(&installFlags.chainClientUsers, "chain-client-user", nil, "With --colocated: a local account, besides root and the cluster node's, allowed to connect to the chain's RPC and REST ports on the namespace address (repeatable; kept by later installs)")
+	f.StringVar(&installFlags.externalAddress, "external-address", "", "chain: the <public ip>:31000 the node announces to its peers; writes config.toml and app.toml (pruning, snapshots, no peer exchange)")
+	f.StringSliceVar(&installFlags.stateSyncRPC, "statesync-rpc", nil, "chain: a light-client server https://<host>/v1/chain/light the node restores a snapshot through (twice, from independent nodes); with --external-address")
+	f.Int64Var(&installFlags.trustHeight, "statesync-trust-height", 0, "chain: the block height both state-sync servers agreed on; with --statesync-rpc")
+	f.StringVar(&installFlags.trustHash, "statesync-trust-hash", "", "chain: that block's hash (64 hex characters); with --statesync-rpc")
 	f.StringVar(&installFlags.torAddress, "tor-address", "", "dirauth, relay: the public IPv4 address the relay publishes")
 	f.StringVar(&installFlags.torContact, "tor-contact", "", "dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes)")
 	f.StringVar(&installFlags.torNodeID, "tor-node-id", "", "relay: the on-chain node id the relay's nickname is derived from")
@@ -185,6 +206,11 @@ func runInstall(cmd *cobra.Command, _ []string) error {
 	if err := checkChainClientUsers(opts.ChainClientUsers, opts.Colocated); err != nil {
 		return err
 	}
+	chainConfig, err := chainConfigFromFlags()
+	if err != nil {
+		return err
+	}
+	opts.ChainConfig = chainConfig
 	if installFlags.initChain {
 		opts.InitChain = &install.ChainInit{
 			ChainID: installFlags.chainID, Moniker: installFlags.moniker, GenesisPath: installFlags.genesis,
@@ -216,4 +242,28 @@ func checkChainClientUsers(users []string, colocated bool) error {
 		return clierr.Usage("--chain-client-user only applies with --colocated")
 	}
 	return nil
+}
+
+// chainConfigFromFlags is the chain config the --external-address and
+// --statesync-* flags describe, or nil when none is given. The state-sync flags
+// are one block: a server list without a trusted block, or the reverse, would
+// leave the node trusting whatever the first server said.
+func chainConfigFromFlags() (*install.ChainConfig, error) {
+	syncFlags := len(installFlags.stateSyncRPC) > 0 || installFlags.trustHeight != 0 || installFlags.trustHash != ""
+	if installFlags.externalAddress == "" {
+		if syncFlags {
+			return nil, clierr.Usage("--statesync-* needs --external-address: the chain config is written as one")
+		}
+		return nil, nil
+	}
+	c := &install.ChainConfig{ExternalAddress: installFlags.externalAddress}
+	if syncFlags {
+		c.StateSync = &install.StateSyncJoin{
+			RPCServers: installFlags.stateSyncRPC, TrustHeight: installFlags.trustHeight, TrustHash: installFlags.trustHash,
+		}
+	}
+	if err := c.Validate(); err != nil {
+		return nil, clierr.Usage("%v", err)
+	}
+	return c, nil
 }

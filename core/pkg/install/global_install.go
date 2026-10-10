@@ -205,8 +205,12 @@ type GlobalInstallOptions struct {
 	Manifest        string
 	PersistentPeers string
 	InitChain       *ChainInit
-	EnableFirewall  bool
-	SSHPort         int
+	// ChainConfig, when set, is written into the chain home's config.toml and
+	// app.toml (ChainConfig): external address, peer exchange, pruning,
+	// snapshots, and the joiner's state-sync block.
+	ChainConfig    *ChainConfig
+	EnableFirewall bool
+	SSHPort        int
 	// Colocated runs the services in the orama-global network namespace, so
 	// the machine can also be a cluster node (role both).
 	Colocated bool
@@ -265,6 +269,14 @@ func (o GlobalInstallOptions) validate() error {
 	}
 	if err := o.Tor.validate(o.Services); err != nil {
 		return err
+	}
+	if o.ChainConfig != nil {
+		if !slices.Contains(o.Services, GlobalServiceChain) {
+			return fmt.Errorf("the chain config applies to the chain service: add chain to --services")
+		}
+		if err := o.ChainConfig.Validate(); err != nil {
+			return err
+		}
 	}
 	if slices.Contains(o.Services, GlobalServiceIPFS) && o.PublicStorageBytes == 0 {
 		return fmt.Errorf("the public Kubo needs its storage budget: give the capacity you will declare with --public-storage-gb")

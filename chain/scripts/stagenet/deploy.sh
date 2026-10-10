@@ -66,10 +66,6 @@ case "$CHAIN_ID" in
 	;;
 esac
 
-# Keep equal to defaultQueryGasLimit in chain/cmd/oramad/cmd/commands.go.
-QUERY_GAS_LIMIT=2000000
-# Keep equal to defaultIAVLCacheSize in chain/cmd/oramad/cmd/commands.go.
-IAVL_CACHE_SIZE=100000
 DENOM="norama"
 # name:ssh-alias:public-ip. The public address is what peers and clients dial: the global services
 # run in a network namespace that cannot reach the WireGuard mesh, so the chain peers over the
@@ -435,7 +431,7 @@ stage_tools() {
 global_install() {
 	# The indexer runs on every node: a gateway proxies the indexer beside it, and a client reaches
 	# the public name on any of them.
-	local alias="$1" name="$2" phase="$3" peers="${4:-}" services="chain,ipfs,provider,archiver,indexer"
+	local alias="$1" name="$2" phase="$3" peers="${4:-}" ip="${5:-}" services="chain,ipfs,provider,archiver,indexer"
 	# The login user is resolved on its own line: inside the array a failing command substitution
 	# would not stop the script (the status of `local` and of an array assignment hides it).
 	local login
@@ -449,7 +445,7 @@ global_install() {
 	if [ "$phase" = 1 ]; then
 		args+=(--init-chain --chain-id "$CHAIN_ID" --moniker "$name" --genesis "$STAGE_DIR/genesis.json")
 	else
-		args+=(--persistent-peers "$peers")
+		args+=(--persistent-peers "$peers" --external-address "$ip:$P2P_PORT")
 	fi
 	log "[$name] orama global install (phase $phase)"
 	remote_run "$alias" "${args[@]}"
@@ -556,54 +552,14 @@ with open(path, 'w') as f:
 "
 }
 
-# assert_set <alias> <file> <grep-pattern> <what>: fails loudly if a config edit didn't actually
-# take effect (e.g. because the upstream template changed and a sed pattern no longer matches),
-# instead of silently leaving a node's config unset while the script marches on.
-assert_set() {
-	local alias="$1" file="$2" pattern="$3" what="$4"
-	if ! on "$alias" "sudo -u $SVC_USER grep -q -- $(printf '%q' "$pattern") $file"; then
-		echo "failed to set $what in $file on $alias (pattern not found after edit: $pattern)" >&2
-		exit 1
-	fi
-}
-
-# configure_node distributes the genesis and sets the two config files. The chain unit's own flags
-# set the listeners (p2p 0.0.0.0:31000, and loopback RPC, gRPC and REST, all inside the namespace)
-# and the persistent peers, so those lines are left alone; what is set here is what no flag covers.
+# configure_node distributes the genesis. The rest of the node's chain configuration (the external
+# address, peer exchange, pruning, snapshots, query gas limit and IAVL cache) is written by
+# `orama global install --external-address` (core/pkg/install ChainConfig), which refuses a template
+# whose key it cannot find; the chain unit's own flags set the listeners and the persistent peers.
 configure_node() {
-	local alias="$1" name="$2" ip="$3"
-	log "[$name] distributing genesis and writing config"
+	local alias="$1" name="$2"
+	log "[$name] distributing genesis"
 	put_file "$alias" 0600 "$HOME_DIR/config/genesis.json" < "$work/genesis.json"
-	on "$alias" "sudo -u $SVC_USER sed -i \
-		-e 's#^addr_book_strict = true#addr_book_strict = false#' \
-		-e 's#^pex = true#pex = false#' \
-		-e 's#^external_address = .*#external_address = \"$ip:$P2P_PORT\"#' \
-		-e 's#^prometheus_listen_addr = .*#prometheus_listen_addr = \"127.0.0.1:31004\"#' \
-		-e 's#^prometheus = false#prometheus = true#' \
-		$HOME_DIR/config/config.toml"
-	assert_set "$alias" "$HOME_DIR/config/config.toml" "external_address = \"$ip:$P2P_PORT\"" "the external address"
-	assert_set "$alias" "$HOME_DIR/config/config.toml" "pex = false" "pex"
-
-	on "$alias" "sudo -u $SVC_USER sed -i \
-		-e 's#^pruning = .*#pruning = \"custom\"#' \
-		-e 's#^pruning-keep-recent = .*#pruning-keep-recent = \"100\"#' \
-		-e 's#^pruning-interval = .*#pruning-interval = \"10\"#' \
-		-e 's#^min-retain-blocks = .*#min-retain-blocks = 201600#' \
-		-e 's#^app-db-backend = .*#app-db-backend = \"pebbledb\"#' \
-		-e 's#^iavl-cache-size = .*#iavl-cache-size = $IAVL_CACHE_SIZE#' \
-		$HOME_DIR/config/app.toml"
-	assert_set "$alias" "$HOME_DIR/config/app.toml" "app-db-backend = \"pebbledb\"" "the app-db-backend"
-	# 201600 blocks is 14 days at 6 seconds (x/archive DefaultBlocksIn14Days). oramad's Commit
-	# never returns a retain height above the last archived height, so this prunes nothing while
-	# no range is archived.
-	assert_set "$alias" "$HOME_DIR/config/app.toml" "min-retain-blocks = 201600" "min-retain-blocks"
-	# The public /v1/chain/query route reaches module queries; oramad init writes this gas limit
-	# (chain/cmd/oramad/cmd defaultQueryGasLimit) so one query cannot scan unbounded state.
-	assert_set "$alias" "$HOME_DIR/config/app.toml" "query-gas-limit = \"$QUERY_GAS_LIMIT\"" "the query gas limit"
-	# The SDK's IAVL cache default is sized for a host running nothing else; oramad init writes
-	# this one (chain/cmd/oramad/cmd defaultIAVLCacheSize), and a node whose app.toml predates it
-	# gets it here.
-	assert_set "$alias" "$HOME_DIR/config/app.toml" "iavl-cache-size = $IAVL_CACHE_SIZE" "the IAVL cache size"
 }
 
 cmd_up() {
@@ -623,8 +579,8 @@ cmd_up() {
 	local peer_list; peer_list="$(IFS=,; echo "${peers[*]}")"
 	for n in "${NODES[@]}"; do
 		alias="$(field "$n" 2)"; name="$(field "$n" 1)"; ip="$(field "$n" 3)"
-		configure_node "$alias" "$name" "$ip"
-		global_install "$alias" "$name" 2 "$peer_list"
+		configure_node "$alias" "$name"
+		global_install "$alias" "$name" 2 "$peer_list" "$ip"
 	done
 	cmd_start
 	cmd_status
