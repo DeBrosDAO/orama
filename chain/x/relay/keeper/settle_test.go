@@ -291,3 +291,49 @@ func TestCeilingInvariantBreaksWhenMintedIsInflated(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, checked.CeilingHolds)
 }
+
+func TestSettleEpochPaysNothingToARelayWhoseNodeLeft(t *testing.T) {
+	f := newTestFixture(t)
+	reporter := acc(1)
+	stays, leaves := acc(2), acc(3)
+	f.init(t, 1, []sdk.AccAddress{reporter}, nil)
+	rkStays := newRelayKey(t, "node-stays", 0x11, stays, "10.1.2.3")
+	rkLeaves := newRelayKey(t, "node-leaves", 0x22, leaves, "10.5.6.7")
+	f.register(t, rkStays, false)
+	f.register(t, rkLeaves, false)
+	f.activate(t, []sdk.AccAddress{reporter}, []types.RelayObservation{obs(rkStays, 1, "1", false), obs(rkLeaves, 1, "1", false)})
+
+	f.Emission.setCeiling(2, math.NewInt(1000))
+	require.NoError(t, f.submit(t, reporter, 2, []types.RelayObservation{obs(rkStays, 40, "1", false), obs(rkLeaves, 60, "1", false)}))
+	f.Nodes.leave("node-leaves")
+
+	result, err := f.Keeper.SettleEpoch(f.Ctx, 2)
+
+	require.NoError(t, err)
+	require.True(t, result.Minted.Equal(math.NewInt(40)), "only the relay whose node is live is paid")
+	require.True(t, f.Earnings.balance(stays).Equal(math.NewInt(36)))
+	require.True(t, f.Earnings.balance(leaves).IsZero())
+}
+
+func TestSettleEpochPaysARelayAgainOnceItsNodeIsLiveAgain(t *testing.T) {
+	f := newTestFixture(t)
+	reporter := acc(1)
+	operator := acc(2)
+	f.init(t, 1, []sdk.AccAddress{reporter}, nil)
+	rk := newRelayKey(t, "node-a", 0x11, operator, "10.1.2.3")
+	f.register(t, rk, false)
+	f.activate(t, []sdk.AccAddress{reporter}, []types.RelayObservation{obs(rk, 1, "1", false)})
+	f.Nodes.leave("node-a")
+	f.Emission.setCeiling(2, math.NewInt(1000))
+	require.NoError(t, f.submit(t, reporter, 2, []types.RelayObservation{obs(rk, 40, "1", false)}))
+	result, err := f.Keeper.SettleEpoch(f.Ctx, 2)
+	require.NoError(t, err)
+	require.True(t, result.Minted.IsZero(), "a node that left earns nothing for the epoch")
+
+	f.Nodes.rejoin("node-a")
+	f.Emission.setCeiling(3, math.NewInt(1000))
+	require.NoError(t, f.submit(t, reporter, 3, []types.RelayObservation{obs(rk, 40, "1", false)}))
+	result, err = f.Keeper.SettleEpoch(f.Ctx, 3)
+	require.NoError(t, err)
+	require.True(t, result.Minted.Equal(math.NewInt(40)), "a live node is paid again")
+}

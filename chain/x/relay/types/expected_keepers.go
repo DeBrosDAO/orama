@@ -16,6 +16,9 @@ import (
 // It is used only to derive the /16 cap bucket (see RelayPrefix16).
 type NodeView interface {
 	RelayBinding(ctx context.Context, nodeID string) (ed25519Pub []byte, operator sdk.AccAddress, network string, err error)
+	// NodeLive reports whether the node can still earn relay pay: it is registered and active, and
+	// is not jailed, retired or tombstoned. Settlement pays no relay whose node is not live.
+	NodeLive(ctx context.Context, nodeID string) (bool, error)
 }
 
 // EmissionKeeper is the subset of x/emission x/relay mints against. RelayCeiling
