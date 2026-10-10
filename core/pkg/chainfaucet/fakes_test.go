@@ -41,6 +41,7 @@ type fakeChain struct {
 
 	// simErr fails a simulation; waitErr fails the wait for a block; accountErr the account read.
 	simErr     error
+	broadcast  error
 	waitErr    error
 	accountErr error
 	// sim is called with the transaction bytes of each simulation, when set.
@@ -67,6 +68,9 @@ func (f *fakeChain) SimulateGas(_ context.Context, tx []byte) (uint64, error) {
 func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.broadcast != nil {
+		return "", f.broadcast
+	}
 	f.inFlight++
 	if f.inFlight > f.maxFlight {
 		f.maxFlight = f.inFlight

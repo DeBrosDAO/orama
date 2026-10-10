@@ -182,6 +182,45 @@ func TestDrip_aDripThatIsNotInABlockByTheDeadlineIsPending(t *testing.T) {
 	}
 }
 
+// What a node says in an error after the transaction went out is not read as a refusal: a drip that
+// may land is pending, whatever words the error carries.
+func TestDrip_textInAnErrorAfterTheBroadcastIsNotReadAsARefusal(t *testing.T) {
+	chain := &fakeChain{t: t, waitErr: errors.New("read the transaction result: faucet recipient is still within its cooldown")}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+	requireRefusal(t, err, KindPending)
+}
+
+// A broadcast whose answer is lost may have been taken by the node: it is pending, and a node that
+// refused it is a fault the allowance goes back for.
+func TestDrip_aBroadcastWhoseAnswerIsLostIsPending(t *testing.T) {
+	for name, tc := range map[string]struct {
+		broadcast error
+		pending   bool
+	}{
+		"a timeout":        {context.DeadlineExceeded, true},
+		"a server error":   {&clusterreg.StatusError{Code: 502}, true},
+		"unreadable":       {errors.New("broadcast response is not JSON"), true},
+		"a client error":   {&clusterreg.StatusError{Code: 400}, false},
+		"refused by check": {fmt.Errorf("%w (code 5): unauthorized", clusterreg.ErrBroadcastRejected), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain := &fakeChain{t: t, broadcast: tc.broadcast}
+			svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+			_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+			if tc.pending {
+				requireRefusal(t, err, KindPending)
+			} else if !errors.Is(err, ErrFault) {
+				t.Fatalf("err = %v, want ErrFault", err)
+			}
+		})
+	}
+}
+
 // A transaction that is in a block and failed there paid its fee and minted nothing: it is a fault,
 // and the allowance goes back, unlike a drip that may still land.
 func TestDrip_aDripThatFailedInItsBlockIsNotPending(t *testing.T) {

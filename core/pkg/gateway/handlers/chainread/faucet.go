@@ -95,7 +95,8 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 	// The allowance is charged before the drip and given back if it is not made, so a refused
 	// request costs the client nothing; a drip that is sent and not yet in a block stays charged.
 	client := clientkey.BucketKey(clientkey.Attribute(r))
-	if wait, message, ok := p.chargeFaucet(client, amount); !ok {
+	charge, wait, message, ok := p.chargeFaucet(client, amount)
+	if !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeFaucetError(w, http.StatusTooManyRequests, string(chainfaucet.KindAllowance), message)
 		return
@@ -103,7 +104,7 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 	dripped, err := p.faucet.Drip(ctx, req.Recipient, amount)
 	if err != nil {
 		if !isPending(err) {
-			p.refundFaucet(client, amount)
+			p.refundFaucet(charge)
 		}
 		writeFaucetFailure(w, err)
 		return
@@ -114,23 +115,26 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 // faucetCeilingKey is the one key the gateway-wide ceiling is held under.
 const faucetCeilingKey = "gateway"
 
+// faucetCharge is what one request took from the gateway's ceiling and from its client's allowance.
+type faucetCharge struct{ ceiling, client chainfaucet.Ticket }
+
 // chargeFaucet charges amount to the gateway's ceiling and to client's allowance, or to neither. It
 // says how long until the one that refused gives its allowance back, and what to tell the client.
-func (p *Proxy) chargeFaucet(client string, amount *big.Int) (wait time.Duration, message string, ok bool) {
-	if wait, ok = p.faucetCeiling.Take(faucetCeilingKey, amount); !ok {
-		return wait, "this gateway has given out all it gives of the faucet for now; try again later or ask another gateway", false
+func (p *Proxy) chargeFaucet(client string, amount *big.Int) (charge faucetCharge, wait time.Duration, message string, ok bool) {
+	if charge.ceiling, wait, ok = p.faucetCeiling.Take(faucetCeilingKey, amount); !ok {
+		return charge, wait, "this gateway has given out all it gives of the faucet for now; try again later or ask another gateway", false
 	}
-	if wait, ok = p.faucetBudget.Take(client, amount); !ok {
-		p.faucetCeiling.Return(faucetCeilingKey, amount)
-		return wait, "this network has asked for its whole allowance of the faucet for now; try again later", false
+	if charge.client, wait, ok = p.faucetBudget.Take(client, amount); !ok {
+		p.faucetCeiling.Return(charge.ceiling)
+		return charge, wait, "this network has asked for its whole allowance of the faucet for now; try again later", false
 	}
-	return 0, "", true
+	return charge, 0, "", true
 }
 
 // refundFaucet gives back what chargeFaucet took for a drip that was not made.
-func (p *Proxy) refundFaucet(client string, amount *big.Int) {
-	p.faucetBudget.Return(client, amount)
-	p.faucetCeiling.Return(faucetCeilingKey, amount)
+func (p *Proxy) refundFaucet(c faucetCharge) {
+	p.faucetBudget.Return(c.client)
+	p.faucetCeiling.Return(c.ceiling)
 }
 
 // isPending reports a drip that was sent and is not in a block yet.

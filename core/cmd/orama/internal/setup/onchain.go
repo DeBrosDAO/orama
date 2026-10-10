@@ -99,9 +99,11 @@ func (r *runner) awaitFunds(ctx context.Context, sess ChainSession, need *big.In
 	var have *big.Int
 	var readErr error
 	_ = pollUntil(ctx, r.d.Timing.BalancePoll, r.d.Timing.BalanceDeadline, "the faucet's drip to reach "+r.oper, func(ctx context.Context) (bool, error) {
-		if have, readErr = sess.Balance(ctx, r.oper); readErr != nil {
-			return false, readErr
+		balance, err := sess.Balance(ctx, r.oper)
+		if readErr = err; err != nil {
+			return false, err
 		}
+		have = balance
 		return have.Cmp(need) >= 0, nil
 	})
 	if err := ctx.Err(); err != nil {

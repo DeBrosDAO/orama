@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -73,6 +74,10 @@ func TestFaucet_anErrorAfterTheBroadcastIsASentError(t *testing.T) {
 	for name, edit := range map[string]func(*fakeChain){
 		"the wait ends":                func(c *fakeChain) { c.waitErr = context.DeadlineExceeded },
 		"the chain answers another tx": func(c *fakeChain) { c.answerHash = strings.Repeat("AB", 32) },
+		// The node may have taken the transaction before the answer was lost.
+		"the broadcast times out":      func(c *fakeChain) { c.broadcast = context.DeadlineExceeded },
+		"the node fails after reading": func(c *fakeChain) { c.broadcast = &clusterreg.StatusError{Code: 502} },
+		"the answer cannot be read":    func(c *fakeChain) { c.broadcast = errors.New("broadcast response is not JSON") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain := newFakeChain()
@@ -91,7 +96,10 @@ func TestFaucet_anErrorAfterTheBroadcastIsASentError(t *testing.T) {
 func TestFaucet_anErrorBeforeTheBroadcastIsNotASentError(t *testing.T) {
 	for name, edit := range map[string]func(*fakeChain){
 		"the simulation refuses": func(c *fakeChain) { c.simErr = errors.New("refused") },
-		"the broadcast fails":    func(c *fakeChain) { c.broadcast = errors.New("mempool full") },
+		"the node refuses it": func(c *fakeChain) {
+			c.broadcast = fmt.Errorf("%w (code 5): insufficient fee", clusterreg.ErrBroadcastRejected)
+		},
+		"the node answers a client error": func(c *fakeChain) { c.broadcast = &clusterreg.StatusError{Code: 400} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain := newFakeChain()

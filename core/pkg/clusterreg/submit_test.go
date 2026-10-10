@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,5 +138,36 @@ func TestStatusError_aMultiLineMessageIsOnOneLine(t *testing.T) {
 	}
 	if want := "rpc error: | code = Unknown | desc = boom[2J"; status.Message != want {
 		t.Fatalf("message = %q, want %q", status.Message, want)
+	}
+}
+
+func TestNotSent_onlyADefiniteRefusalMeansNothingWasSent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":                 {nil, false},
+		"refused by CheckTx":  {fmt.Errorf("broadcast the transaction: %w (code 5): fee", ErrBroadcastRejected), true},
+		"a bad request":       {&StatusError{Code: http.StatusBadRequest}, true},
+		"not found":           {&StatusError{Code: http.StatusNotFound}, true},
+		"a server error":      {&StatusError{Code: http.StatusBadGateway}, false},
+		"a lost connection":   {errors.New("connection reset by peer"), false},
+		"a deadline":          {context.DeadlineExceeded, false},
+		"an unreadable reply": {errors.New("broadcast response is not JSON"), false},
+	} {
+		if got := NotSent(tc.err); got != tc.want {
+			t.Errorf("%s: NotSent = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestBroadcast_aRefusalIsErrBroadcastRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"tx_response":{"code":5,"raw_log":"insufficient fee"}}`))
+	}))
+	defer srv.Close()
+	_, err := Broadcast(context.Background(), srv.URL, []byte{1})
+	if !errors.Is(err, ErrBroadcastRejected) || !NotSent(err) {
+		t.Fatalf("err = %v", err)
 	}
 }

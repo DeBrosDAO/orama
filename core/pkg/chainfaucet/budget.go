@@ -50,30 +50,38 @@ func NewBudget(limit *big.Int, window time.Duration) *Budget {
 	return &Budget{limit: new(big.Int).Set(limit), window: window, now: time.Now, spent: map[string]*ledger{}}
 }
 
+// Ticket is what a Take charged, to give back with Return. It names the window it was charged in.
+type Ticket struct {
+	client string
+	amount *big.Int
+	since  time.Time
+}
+
 // Take charges amount to client. It reports false, and how long until the client's allowance
 // comes back, when that would pass the limit; nothing is charged then.
-func (b *Budget) Take(client string, amount *big.Int) (retryAfter time.Duration, ok bool) {
+func (b *Budget) Take(client string, amount *big.Int) (ticket Ticket, retryAfter time.Duration, ok bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
 	l := b.ledgerFor(client, now)
 	next := new(big.Int).Add(l.amount, amount)
 	if next.Cmp(b.limit) > 0 {
-		return l.since.Add(b.window).Sub(now), false
+		return Ticket{}, l.since.Add(b.window).Sub(now), false
 	}
 	l.amount = next
-	return 0, true
+	return Ticket{client: client, amount: new(big.Int).Set(amount), since: l.since}, 0, true
 }
 
-// Return gives back what Take charged for a drip that was not made.
-func (b *Budget) Return(client string, amount *big.Int) {
+// Return gives back what a Take charged for a drip that was not made. A charge from a window that
+// is over is not given back to the window that replaced it: that one never held it.
+func (b *Budget) Return(t Ticket) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	l, ok := b.spent[client]
-	if !ok {
+	l, ok := b.spent[t.client]
+	if !ok || !l.since.Equal(t.since) {
 		return
 	}
-	if l.amount.Sub(l.amount, amount).Sign() < 0 {
+	if l.amount.Sub(l.amount, t.amount).Sign() < 0 {
 		l.amount.SetInt64(0)
 	}
 }
