@@ -104,11 +104,13 @@ func (r *runner) awaitFunds(ctx context.Context, sess ChainSession, need *big.In
 		}
 		return have.Cmp(need) >= 0, nil
 	})
-	if readErr != nil {
-		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, readErr)
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// A read that was still in flight when this wait's own deadline passed is the deadline, not a
+	// failed read: the balance last seen is reported.
+	if readErr != nil && !(have != nil && errors.Is(readErr, context.DeadlineExceeded)) {
+		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, readErr)
 	}
 	return have, nil
 }

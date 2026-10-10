@@ -281,7 +281,7 @@ func TestGatewayFaucet_aSeedThatCannotPayIsPassedOver(t *testing.T) {
 
 // What the chain refused, every seed would refuse: the run is told at once and no other seed is asked.
 func TestGatewayFaucet_aRefusalOfTheChainEndsTheAsking(t *testing.T) {
-	for kind, status := range map[string]int{"cooldown": 429, "epoch_cap": 503, "bad_amount": 400, "bad_recipient": 400, "pending": 504} {
+	for kind, status := range map[string]int{"cooldown": 429, "epoch_cap": 503, "bad_amount": 400, "bad_recipient": 400} {
 		t.Run(kind, func(t *testing.T) {
 			d := &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": refused(status, kind, "the chain says no")}}
 			err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1))
@@ -292,6 +292,18 @@ func TestGatewayFaucet_aRefusalOfTheChainEndsTheAsking(t *testing.T) {
 				t.Errorf("asked %v after a refusal no other seed could change", d.asked)
 			}
 		})
+	}
+}
+
+// A drip that is being made or was sent is not refused: no other seed is asked, since it could drip
+// twice, and the balance poll that follows every drip says whether the account was paid.
+func TestGatewayFaucet_aPendingDripEndsTheAskingWithoutAnError(t *testing.T) {
+	d := &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": refused(504, "pending", "being made")}}
+	if err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1)); err != nil {
+		t.Fatalf("a pending drip is an error: %v", err)
+	}
+	if len(d.asked) != 1 {
+		t.Errorf("asked %v after a drip that is on its way", d.asked)
 	}
 }
 

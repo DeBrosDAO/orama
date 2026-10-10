@@ -26,11 +26,13 @@ const (
 	KindDisabled Kind = "faucet_disabled"
 	// KindAllowance: the client network has asked for its whole allowance of the window.
 	KindAllowance Kind = "allowance_spent"
-	// KindBusy: too many drips are waiting for the faucet's turn.
+	// KindBusy: too many drips are waiting for the faucet's turn, or the requester left while its
+	// drip was queued and nothing was sent.
 	KindBusy Kind = "busy"
 	// KindUnavailable: the faucet cannot pay for the drip, or cannot reach its chain.
 	KindUnavailable Kind = "unavailable"
-	// KindPending: the drip was sent and is not in a block yet.
+	// KindPending: the drip is being made or was sent, and is not in a block yet. It may still
+	// land, so whoever charged for it keeps the charge.
 	KindPending Kind = "pending"
 )
 

@@ -24,7 +24,8 @@ const faucetRequestTimeout = 60 * time.Second
 // asked in order and the first to pay ends the matter; a seed that serves no faucet, is busy or
 // cannot pay is not an answer about the network, and the next is asked. An answer that no other
 // seed could change (the recipient is in its cooldown, the drip is over the maximum, the epoch's
-// cap is spent) ends the run at once. When no seed pays, every seed's answer is reported.
+// cap is spent) ends the run at once, and a drip that is on its way ends the asking without an
+// error: setup waits for the balance. When no seed pays, every seed's answer is reported.
 //
 // `orama chain faucet` signs on a node of the network over SSH and stays for the operators of one.
 type gatewayFaucet struct {
@@ -43,8 +44,6 @@ var chainWide = map[chainfaucet.Kind]bool{
 	chainfaucet.KindBadAmount:    true,
 	chainfaucet.KindCooldown:     true,
 	chainfaucet.KindEpochCap:     true,
-	// A drip that was sent and is not in a block yet: asking another seed could drip twice.
-	chainfaucet.KindPending: true,
 }
 
 // Fund asks the network's seeds, in order, for amount norama for address.
@@ -62,6 +61,12 @@ func (f gatewayFaucet) Fund(ctx context.Context, network *netregistry.Manifest, 
 			return ctx.Err()
 		}
 		var refusal *chainfaucet.Refusal
+		if errors.As(err, &refusal) && refusal.Kind == chainfaucet.KindPending {
+			// The drip was made or sent and is not in a block yet: another seed must not be asked
+			// (it could drip twice). That the account was paid is read from the chain, as it is after
+			// every drip, which waits for it.
+			return nil
+		}
 		if errors.As(err, &refusal) && chainWide[refusal.Kind] {
 			return fmt.Errorf("the faucet of %s refused: %s (%s)", seed, refusal.Message, refusal.Kind)
 		}

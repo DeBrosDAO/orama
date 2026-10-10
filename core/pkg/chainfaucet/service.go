@@ -126,7 +126,7 @@ func (s *Service) Drip(ctx context.Context, recipient string, amount *big.Int) (
 			return res.dripped, res.err
 		default:
 		}
-		return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", recipient)
+		return nil, refuse(KindPending, "the drip is being made or was sent, and is not in a block yet; look at the balance of %s shortly", recipient)
 	case <-s.ctx.Done():
 		return nil, fmt.Errorf("%w: the gateway is shutting down", ErrFault)
 	}
@@ -203,7 +203,7 @@ func (s *Service) drip(j *job) (*Dripped, error) {
 		var sent *onchain.SentError
 		if errors.As(err, &sent) && !errors.Is(err, clusterreg.ErrTxFailed) {
 			// Broadcast, and then the wait or the lookup failed: it may still land.
-			return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", j.recipient)
+			return nil, refuse(KindPending, "the drip is being made or was sent, and is not in a block yet; look at the balance of %s shortly", j.recipient)
 		}
 		return nil, err
 	}

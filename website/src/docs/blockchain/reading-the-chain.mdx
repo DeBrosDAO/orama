@@ -90,7 +90,7 @@ curl -sS -X POST https://<gateway>/v1/chain/faucet \
   -d '{"recipient":"orama1…","amount":"100000000000"}'
 ```
 
-The amount is norama, a decimal string, and optional (100 ORAMA). The answer is `{"tx_hash","amount","height"}` once the drip is in a block. A refusal is `{"error","message"}` with one of these errors: `bad_recipient` (400), `bad_amount` (400, over the network's maximum drip), `cooldown` (429, one drip per recipient per day by default), `allowance_spent` (429, 20,000 ORAMA a day per client network and 200,000 ORAMA a day per gateway), `epoch_cap` (503), `faucet_disabled` (403), `busy` and `unavailable` (503), `pending` (504, sent and not yet in a block). A gateway with no faucet key answers 404. `orama setup` uses this route on a network whose manifest says it has a faucet. Operators who run it: [Run a faucet](/docs/operator/global-nodes#run-a-faucet).
+The amount is norama, a decimal string, and optional (100 ORAMA). The answer is `{"tx_hash","amount","height"}` once the drip is in a block. A refusal is `{"error","message"}` with one of these errors: `bad_recipient` (400), `bad_amount` (400, over the network's maximum drip), `cooldown` (429, one drip per recipient per day by default), `allowance_spent` (429, 20,000 ORAMA a day per client network and 200,000 ORAMA a day per gateway), `epoch_cap` (503), `faucet_disabled` (403), `busy` and `unavailable` (503), `pending` (504, being made or sent and not yet in a block: look at the balance of the recipient). A gateway with no faucet key answers 404. `orama setup` uses this route on a network whose manifest says it has a faucet. Operators who run it: [Run a faucet](/docs/operator/global-nodes#run-a-faucet).
 
 ## The TypeScript SDK
 
