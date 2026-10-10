@@ -381,8 +381,7 @@ func TestFaucet_aPendingDripStaysCharged(t *testing.T) {
 	}
 }
 
-// A caller that names its own network (a process on the node sends X-Forwarded-For as the proxy
-// does) gets a fresh allowance for every name, so the gateway as a whole gives out only a ceiling.
+// Many client networks together are held to the gateway's ceiling: no number of them lifts it.
 func TestFaucet_theGatewayHasACeilingNoClientNameCanRaise(t *testing.T) {
 	f := &fakeFaucet{}
 	p := faucetProxy(t, f)
@@ -391,8 +390,7 @@ func TestFaucet_theGatewayHasACeilingNoClientNameCanRaise(t *testing.T) {
 	asClient := func(n int) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, mountPrefix+faucetPath, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req.RemoteAddr = "127.0.0.1:4000"
-		req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", n))
+		req.RemoteAddr = fmt.Sprintf("198.51.100.%d:4000", n)
 		rec := httptest.NewRecorder()
 		p.ServeHTTP(rec, req)
 		return rec
@@ -412,6 +410,35 @@ func TestFaucet_theGatewayHasACeilingNoClientNameCanRaise(t *testing.T) {
 	}
 	if len(f.got()) != granted {
 		t.Errorf("%d drips reached the faucet, want %d", len(f.got()), granted)
+	}
+}
+
+// A caller on the node writes X-Forwarded-For as the proxy does, and any name it writes is its own
+// to choose: the allowance is the connection's address's, so a made-up network is not a fresh one.
+func TestFaucet_aForwardedForNamesNoAllowanceOfItsOwn(t *testing.T) {
+	f := &fakeFaucet{}
+	p := faucetProxy(t, f)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + big.NewInt(chainfaucet.DefaultBudgetNorama).String() + `"}`
+	asClient := func(remote, name string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, mountPrefix+faucetPath, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = remote
+		req.Header.Set("X-Forwarded-For", name)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, remote := range []string{"127.0.0.1:4000", "10.0.0.2:4000"} {
+		p = faucetProxy(t, f)
+		if rec := asClient(remote, "198.51.100.1"); rec.Code != http.StatusOK {
+			t.Fatalf("%s: the first drip: %d %s", remote, rec.Code, rec.Body)
+		}
+		for _, name := range []string{"198.51.100.2", "203.0.113.77", "2001:db8::1"} {
+			rec := asClient(remote, name)
+			if rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindAllowance) {
+				t.Errorf("%s naming %s got a fresh allowance: %d %s", remote, name, rec.Code, rec.Body)
+			}
+		}
 	}
 }
 

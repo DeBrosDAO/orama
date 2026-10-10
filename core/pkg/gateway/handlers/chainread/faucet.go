@@ -96,7 +96,7 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// The allowance is charged before the drip and given back if it is not made, so a refused
 	// request costs the client nothing; a drip that is sent and not yet in a block stays charged.
-	client := clientkey.BucketKey(clientkey.Attribute(r))
+	client := clientkey.BucketKey(clientkey.Peer(r))
 	charge, wait, message, ok := p.chargeFaucet(client, amount)
 	if !ok {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))

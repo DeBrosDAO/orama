@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
@@ -146,8 +147,13 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 		client, exempt := rateLimitClient(r)
 		// A process on this machine is exempt from the limits, and a tenant's code can be one:
 		// the faucet mints for whoever asks, so its buckets apply to the node's own loopback
-		// callers too (they share the one bucket of the loopback address).
-		if exempt && !isFaucetPost(r) {
+		// callers too. They are keyed by the address the connection came from, never by an
+		// X-Forwarded-For: the header is the word of whoever wrote it, and a caller on the node
+		// that names a network of its own would get a bucket of its own for every name.
+		if isFaucetPost(r) {
+			client, exempt = clientkey.Peer(r), false
+		}
+		if exempt {
 			next.ServeHTTP(w, r)
 			return
 		}

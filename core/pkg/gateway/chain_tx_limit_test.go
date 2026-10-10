@@ -22,6 +22,11 @@ func chainTxGateway(t *testing.T, sim, bcast *chainTxLimiter) (http.Handler, *in
 	return g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ })), &served
 }
 
+// directClient is a request from the public address 198.51.100.n with no forwarding header.
+func directClient(path string, n int) *http.Request {
+	return request(fmt.Sprintf("198.51.100.%d:9999", n), "", path)
+}
+
 func fromClient(path string, n int) *http.Request {
 	return request("127.0.0.1:9999", fmt.Sprintf("198.51.100.%d", n), path)
 }
@@ -138,7 +143,7 @@ func TestChainTxRoutes_oneClientCannotUseUpTheFaucetForOthers(t *testing.T) {
 	var last *httptest.ResponseRecorder
 	for i := 0; i < 10; i++ {
 		last = httptest.NewRecorder()
-		handler.ServeHTTP(last, fromClient(chainFaucetPath, 5))
+		handler.ServeHTTP(last, directClient(chainFaucetPath, 5))
 	}
 	if served != chainFaucetPerAddressBurst || last.Code != http.StatusTooManyRequests {
 		t.Fatalf("one client was served %d of 10 asks with last code %d; want its burst of %d and a 429", served, last.Code, chainFaucetPerAddressBurst)
@@ -147,14 +152,36 @@ func TestChainTxRoutes_oneClientCannotUseUpTheFaucetForOthers(t *testing.T) {
 	// asks took none, so the rest of the burst is left for other clients.
 	served = 0
 	for n := 6; n < 6+chainFaucetRouteBurst; n++ {
-		handler.ServeHTTP(httptest.NewRecorder(), fromClient(chainFaucetPath, n))
+		handler.ServeHTTP(httptest.NewRecorder(), directClient(chainFaucetPath, n))
 	}
 	if want := chainFaucetRouteBurst - chainFaucetPerAddressBurst; served != want {
 		t.Errorf("other clients were served %d, want %d: a refused client must take nothing from the route's bucket", served, want)
 	}
-	handler.ServeHTTP(last, fromClient(chainFaucetPath, 200))
+	handler.ServeHTTP(last, directClient(chainFaucetPath, 200))
 	if last.Code != http.StatusTooManyRequests {
 		t.Errorf("a client past the route's burst got %d, want 429: many addresses must not lift the route's limit", last.Code)
+	}
+}
+
+// A caller on this machine is the loopback address whatever it writes in X-Forwarded-For: a name
+// it makes up is not a bucket of its own, and neither is the name an overlay peer forwards.
+func TestChainTxRoutes_aForwardedForNamesNoFaucetBucketOfItsOwn(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{
+		logger:             logger,
+		rateLimiter:        NewRateLimiter(100000, 100000),
+		chainFaucetLimiter: newChainTxLimiter(chainFaucetPerAddressPerMinute, chainFaucetPerAddressBurst, chainFaucetRoutePerMinute, chainFaucetRouteBurst),
+	}
+	for name, remote := range map[string]string{"loopback": "127.0.0.1:9999", "an overlay peer": "10.0.0.2:9999"} {
+		served := 0
+		handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+		g.chainFaucetLimiter = newChainTxLimiter(chainFaucetPerAddressPerMinute, chainFaucetPerAddressBurst, chainFaucetRoutePerMinute, chainFaucetRouteBurst)
+		for n := 1; n <= 20; n++ {
+			handler.ServeHTTP(httptest.NewRecorder(), request(remote, fmt.Sprintf("198.51.100.%d", n), chainFaucetPath))
+		}
+		if served != chainFaucetPerAddressBurst {
+			t.Errorf("%s: %d of 20 asks naming 20 networks were served, want the one bucket's burst of %d", name, served, chainFaucetPerAddressBurst)
+		}
 	}
 }
 

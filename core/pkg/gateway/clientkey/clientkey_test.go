@@ -3,6 +3,7 @@ package clientkey
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -57,5 +58,18 @@ func TestResolve_keepsItsRateLimitSemantics(t *testing.T) {
 	client, exempt = Resolve(req("198.51.100.7:5000", "203.0.113.9", ""))
 	if client != "198.51.100.7" || exempt {
 		t.Errorf("direct: %q exempt=%v", client, exempt)
+	}
+}
+
+func TestPeer_isTheConnectionsAddressWhateverTheHeadersSay(t *testing.T) {
+	for _, remote := range []string{"127.0.0.1:1", "10.0.0.2:1", "198.51.100.7:1", "[2001:db8::1]:1"} {
+		r := httptest.NewRequest(http.MethodPost, "/v1/chain/faucet", nil)
+		r.RemoteAddr = remote
+		r.Header.Set("X-Forwarded-For", "203.0.113.9, 203.0.113.10")
+		r.Header.Set("X-Real-IP", "203.0.113.11")
+		want := strings.TrimSuffix(strings.TrimPrefix(remote[:strings.LastIndex(remote, ":")], "["), "]")
+		if got := Peer(r); got != want {
+			t.Errorf("Peer(%s) = %q, want %q", remote, got, want)
+		}
 	}
 }

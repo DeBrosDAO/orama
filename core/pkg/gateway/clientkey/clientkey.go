@@ -90,6 +90,14 @@ func Attribute(r *http.Request) string {
 	return peer
 }
 
+// Peer returns the address the connection came from and nothing else: no forwarding header is read.
+// It is the client of a route that must not take a caller's word for who it is (the faucet): a
+// process on the node, tenant code included, reaches the gateway from the loopback address and can
+// write any X-Forwarded-For, and a header written by whoever sent the request is not proof of the
+// local reverse proxy. Behind that proxy every public caller therefore shares the proxy's address
+// until the proxy proves itself to the gateway with a header only it can write.
+func Peer(r *http.Request) string { return peerIP(r) }
+
 // lastForwardedFor returns the final entry of X-Forwarded-For, which is the
 // address the nearest proxy appended.
 func lastForwardedFor(r *http.Request) string {
