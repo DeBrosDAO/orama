@@ -23,3 +23,9 @@ var CosmovisorTarballSHA256 = map[string]string{
 func CosmovisorTarball(goarch string) string {
 	return "cosmovisor-" + CosmovisorVersion + "-linux-" + goarch + ".tar.gz"
 }
+
+// CosmovisorTarballURL is where the release asset for goarch is downloaded
+// from. The pinned digest decides whether the bytes are accepted.
+func CosmovisorTarballURL(goarch string) string {
+	return "https://github.com/cosmos/cosmos-sdk/releases/download/cosmovisor%2F" + CosmovisorVersion + "/" + CosmovisorTarball(goarch)
+}

@@ -16,6 +16,11 @@ then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
   - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy (built from
     checked-in, checksum-pinned modules; Kubo and RQLite by pinned digest)
+  - The global layer, for amd64: oramad (with the orchard verifier linked) and its
+    out-of-process verifier orama-orchard-verifier, orama-global and the pinned
+    cosmovisor release, which 'orama global install' puts on a node. It needs
+    rustup with the x86_64-unknown-linux-musl target, cargo, make and rsync.
+    --skip-global-layer leaves it out (a cluster-only archive; arm64 always is).
   - Systemd namespace templates
   - manifest.json with checksums of every file, and manifest.sig
 
@@ -55,6 +60,8 @@ func init() {
 	f := Cmd.Flags()
 	f.StringVar(&buildFlags.Arch, "arch", "amd64", "Target architecture (amd64, arm64)")
 	f.StringVar(&buildFlags.Output, "output", "", "Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz)")
+	f.BoolVar(&buildFlags.SkipGlobalLayer, "skip-global-layer", false,
+		"Leave out the global layer (oramad, its verifier, orama-global, cosmovisor): a cluster-only archive")
 	f.BoolVar(&buildFlags.Verbose, "verbose", false, "Verbose output")
 	f.BoolVar(&buildFlags.Unsigned, "unsigned", false, "Do not sign the manifest (a node installs it only through its adopted TUF release root)")
 	f.StringSliceVar(&buildFlags.Signers, "signers", nil,

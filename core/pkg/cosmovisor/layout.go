@@ -57,6 +57,17 @@ var upgradeName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // Verify checks a staged binary through the descriptor it was written with.
 type Verify func(f *os.File) error
 
+// Companion is a file that rides in a version's bin directory beside the
+// daemon, so that version of the daemon runs the companion it was built with:
+// the shielded verifier. It is staged and verified like the daemon.
+type Companion struct {
+	// Name is the file name in bin/. It is a plain name and not the daemon's.
+	Name string
+	// Src is the file to copy.
+	Src    string
+	Verify Verify
+}
+
 // Layout is one DAEMON_HOME and the account cosmovisor runs as.
 type Layout struct {
 	Home     string
@@ -76,6 +87,14 @@ func (l Layout) GenesisBinary() string {
 	return filepath.Join(l.Root(), genesisDir, binDir, l.Daemon)
 }
 
+// GenesisBinDir is the directory the genesis binary and its companions are in.
+func (l Layout) GenesisBinDir() string { return filepath.Dir(l.GenesisBinary()) }
+
+// CurrentBinDir is the bin directory of the version cosmovisor runs, through
+// the current link. It is what a companion's path in a unit's arguments names,
+// so an upgrade switches companions with the daemon.
+func (l Layout) CurrentBinDir() string { return filepath.Join(l.Current(), binDir) }
+
 // UpgradeBinary is the binary cosmovisor switches to for plan name.
 func (l Layout) UpgradeBinary(name string) (string, error) {
 	if err := checkUpgradeName(name); err != nil {
@@ -92,6 +111,14 @@ func (l Layout) ReadOnlyDirs() []string {
 
 // Current is the symlink cosmovisor runs through.
 func (l Layout) Current() string { return filepath.Join(l.Root(), currentLink) }
+
+// checkCompanion refuses a companion name that could name another file.
+func (l Layout) checkCompanion(c Companion) error {
+	if c.Name == "" || filepath.Base(c.Name) != c.Name || c.Name == "." || c.Name == ".." || c.Name == l.Daemon {
+		return fmt.Errorf("companion %q must be a plain file name other than %s", c.Name, l.Daemon)
+	}
+	return nil
+}
 
 func checkUpgradeName(name string) error {
 	if !upgradeName.MatchString(name) {

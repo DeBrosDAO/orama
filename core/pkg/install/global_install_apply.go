@@ -1,8 +1,6 @@
 package install
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -52,9 +50,10 @@ type GlobalHost struct {
 	// CosmovisorPins is the pinned SHA-256 of the cosmovisor tarball, by GOARCH.
 	CosmovisorPins map[string]string
 	// StageGenesis puts the staged oramad in the cosmovisor layout as the
-	// genesis binary; sum is the SHA-256 of src. It is idempotent for the
-	// same bytes.
-	StageGenesis func(src, sum string) (string, error)
+	// genesis binary, with the companions (the shielded verifier) beside it;
+	// sum is the SHA-256 of src. It is idempotent for the same bytes, and adds a
+	// companion an installed binary lacks.
+	StageGenesis func(src, sum string, companions []StagedFile) (string, error)
 	Chown        func(r rootfs.Root, path string, uid, gid int) error
 	Logf         func(format string, args ...any)
 	// Netns is the co-located layout's host; the zero value is a global-only
@@ -123,9 +122,13 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err != nil {
 		return err
 	}
-	var cosmovisorBinary []byte
+	manifest, err := readStagedManifest(opts.Manifest)
+	if err != nil {
+		return err
+	}
+	var chain *chainPlan
 	if slices.Contains(opts.Services, GlobalServiceChain) {
-		if cosmovisorBinary, err = preflightChain(h, opts); err != nil {
+		if chain, err = preflightChain(h, opts, manifest); err != nil {
 			return err
 		}
 	}
@@ -137,12 +140,11 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 	if err := ensureGlobalAccounts(h.Run, opts.Services); err != nil {
 		return err
 	}
-	sums, err := installGlobalBinaries(h, opts.StagedDir, opts.binaries())
-	if err != nil {
+	if err := installGlobalBinaries(h, opts.StagedDir, opts.binaries(), manifest); err != nil {
 		return err
 	}
 	if slices.Contains(opts.Services, GlobalServiceChain) {
-		if err := installCosmovisor(h, cosmovisorBinary); err != nil {
+		if err := installCosmovisor(h, chain.cosmovisor); err != nil {
 			return err
 		}
 	}
@@ -160,7 +162,7 @@ func InstallGlobal(opts GlobalInstallOptions, h GlobalHost) error {
 		}
 	}
 	if slices.Contains(opts.Services, GlobalServiceChain) {
-		if err := stageGenesisBinary(h, filepath.Join(opts.StagedDir, globalOramadBinary), sums[globalOramadBinary]); err != nil {
+		if err := stageGenesisBinary(h, opts.StagedDir, chain); err != nil {
 			return err
 		}
 	}
@@ -247,35 +249,36 @@ func ensureSystemGroup(run commandRunner, name string) error {
 // root, one that is not root's or is writable by others is refused, and a
 // symlink in it is never followed. The bin directory is made root's 0755.
 //
-// It returns the SHA-256 (hex) of each installed binary by name.
-func installGlobalBinaries(h GlobalHost, stagedDir string, names []string) (map[string]string, error) {
+// Each is held to the release manifest first: a file the manifest does not list,
+// or lists with other bytes, is not installed.
+func installGlobalBinaries(h GlobalHost, stagedDir string, names []string, manifest stagedManifest) error {
 	staged := rootfs.At(stagedDir)
 	if err := h.BinRoot.MkdirAll(h.BinDir, globalDirMode); err != nil {
-		return nil, fmt.Errorf("create %s: %w", h.BinDir, err)
+		return fmt.Errorf("create %s: %w", h.BinDir, err)
 	}
 	for _, dir := range []string{filepath.Dir(h.BinDir), h.BinDir} {
 		if err := rootOwned(h, dir, globalDirMode); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	sums := map[string]string{}
 	for _, name := range names {
 		data, err := staged.ReadFile(filepath.Join(stagedDir, name), globalBinaryLimit)
 		if err != nil {
-			return nil, fmt.Errorf("read the staged %s (put the release's %s in %s): %w", name, name, stagedDir, err)
+			return fmt.Errorf("read the staged %s (put the release's %s in %s): %w", name, name, stagedDir, err)
+		}
+		if err := manifest.verify(name, data); err != nil {
+			return err
 		}
 		dst := filepath.Join(h.BinDir, name)
 		if err := h.BinRoot.WriteFile(dst, data, globalBinaryMode); err != nil {
-			return nil, fmt.Errorf("install %s: %w", dst, err)
+			return fmt.Errorf("install %s: %w", dst, err)
 		}
 		if err := rootOwned(h, dst, globalBinaryMode); err != nil {
-			return nil, err
+			return err
 		}
-		sum := sha256.Sum256(data)
-		sums[name] = hex.EncodeToString(sum[:])
 		h.Logf("  ✓ %s installed", dst)
 	}
-	return sums, nil
+	return nil
 }
 
 // rootOwned makes path, below BinRoot, owned by root with mode.

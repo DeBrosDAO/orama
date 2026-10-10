@@ -30,6 +30,13 @@ const (
 	ChainUser = "orama-chain"
 	// ChainDaemonName is the chain binary, cosmovisor's DAEMON_NAME.
 	ChainDaemonName = "oramad"
+	// ChainVerifierBinary is the out-of-process shielded verifier, the second
+	// verifier of x/shielded (chain/app.ShieldedVerifierBinary). It rides in the
+	// cosmovisor layout beside oramad, so each version of oramad runs the
+	// verifier it was built with, and the release ships its SHA-256 as
+	// ChainVerifierSHA256File.
+	ChainVerifierBinary     = "orama-orchard-verifier"
+	ChainVerifierSHA256File = ChainVerifierBinary + ".sha256"
 
 	// ChainGoMemLimit is the chain unit's GOMEMLIMIT: a soft limit, so Go's
 	// collector works to keep oramad near it rather than letting the heap

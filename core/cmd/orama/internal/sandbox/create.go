@@ -369,7 +369,7 @@ func resolveArchive(archive string) (string, error) {
 		return archive, nil
 	}
 	fmt.Println("  [--] No --archive given, building this checkout...")
-	builder := build.NewBuilder(&build.Flags{Arch: "amd64"})
+	builder := build.NewBuilder(&build.Flags{Arch: "amd64", SkipGlobalLayer: true})
 	if err := builder.Build(); err != nil {
 		return "", fmt.Errorf("build archive: %w", err)
 	}

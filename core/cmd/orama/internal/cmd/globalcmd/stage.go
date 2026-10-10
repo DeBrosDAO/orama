@@ -16,9 +16,13 @@ var stageFlags struct {
 	binary   string
 	metadata string
 	target   string
-	upgrade  string
-	genesis  bool
-	home     string
+	// verifier and verifierTarget are the shielded verifier of the same
+	// release and its name in the targets metadata.
+	verifier       string
+	verifierTarget string
+	upgrade        string
+	genesis        bool
+	home           string
 }
 
 var stageOramadCmd = &cobra.Command{
@@ -51,6 +55,8 @@ func init() {
 	f.StringVar(&stageFlags.binary, "binary", "", "The oramad binary to stage [required]")
 	f.StringVar(&stageFlags.metadata, "release-metadata", "", "Directory holding timestamp.json, snapshot.json and targets.json [required]")
 	f.StringVar(&stageFlags.target, "release-target", "", "Name the binary has in the release targets metadata [required]")
+	f.StringVar(&stageFlags.verifier, "verifier", "", "The release's orama-orchard-verifier, staged beside oramad [required]")
+	f.StringVar(&stageFlags.verifierTarget, "verifier-target", "", "Name the verifier has in the release targets metadata [required]")
 	f.StringVar(&stageFlags.upgrade, "upgrade", "", "Upgrade plan name to stage for")
 	f.BoolVar(&stageFlags.genesis, "genesis", false, "Stage the genesis binary instead of an upgrade")
 	f.StringVar(&stageFlags.home, "home", constants.ChainHome, "cosmovisor DAEMON_HOME")
@@ -60,6 +66,9 @@ func init() {
 func runStageOramad(cmd *cobra.Command, _ []string) error {
 	if stageFlags.binary == "" || stageFlags.metadata == "" || stageFlags.target == "" {
 		return clierr.Usage("--binary, --release-metadata and --release-target are required")
+	}
+	if stageFlags.verifier == "" || stageFlags.verifierTarget == "" {
+		return clierr.Usage("--verifier and --verifier-target are required: oramad does not start without the shielded verifier of its own release")
 	}
 	if stageFlags.genesis == (stageFlags.upgrade != "") {
 		return clierr.Usage("give exactly one of --upgrade <name> and --genesis")
@@ -77,26 +86,33 @@ func runStageOramad(cmd *cobra.Command, _ []string) error {
 		ChainUID: uid,
 		ChainGID: gid,
 	}
-	verify := func(f *os.File) error {
-		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
-			RootPath:    releaseverify.RootPath,
-			SeenPath:    releaseverify.SeenPath,
-			MetadataDir: stageFlags.metadata,
-			Target:      stageFlags.target,
-			File:        f,
-			Now:         time.Now(),
-		})
-		return err
-	}
+	verifier := cosmovisor.Companion{Name: constants.ChainVerifierBinary, Src: stageFlags.verifier, Verify: verifyAsTarget(stageFlags.verifierTarget)}
+	verify := verifyAsTarget(stageFlags.target)
 	var dst string
 	if stageFlags.genesis {
-		dst, err = layout.StageGenesis(stageFlags.binary, verify)
+		dst, err = layout.StageGenesis(stageFlags.binary, verify, verifier)
 	} else {
-		dst, err = layout.StageUpgrade(stageFlags.upgrade, stageFlags.binary, verify)
+		dst, err = layout.StageUpgrade(stageFlags.upgrade, stageFlags.binary, verify, verifier)
 	}
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "staged %s\n", dst)
 	return nil
+}
+
+// verifyAsTarget checks a staged file, through its descriptor, as the named
+// target of the release metadata under the adopted release root.
+func verifyAsTarget(target string) cosmovisor.Verify {
+	return func(f *os.File) error {
+		_, err := releaseverify.CheckFile(releaseverify.FileCheck{
+			RootPath:    releaseverify.RootPath,
+			SeenPath:    releaseverify.SeenPath,
+			MetadataDir: stageFlags.metadata,
+			Target:      target,
+			File:        f,
+			Now:         time.Now(),
+		})
+		return err
+	}
 }

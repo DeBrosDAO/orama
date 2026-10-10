@@ -8,7 +8,12 @@ import "errors"
 var errUnix = errors.New("staging oramad needs a unix system")
 
 // StageGenesis needs a unix system.
-func (l Layout) StageGenesis(string, Verify) (string, error) { return "", errUnix }
+func (l Layout) StageGenesis(string, Verify, ...Companion) (string, error) { return "", errUnix }
+
+// StageGenesisCompanions needs a unix system.
+func (l Layout) StageGenesisCompanions(...Companion) error { return errUnix }
 
 // StageUpgrade needs a unix system.
-func (l Layout) StageUpgrade(string, string, Verify) (string, error) { return "", errUnix }
+func (l Layout) StageUpgrade(string, string, Verify, ...Companion) (string, error) {
+	return "", errUnix
+}

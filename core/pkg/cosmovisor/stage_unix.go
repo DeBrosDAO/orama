@@ -33,7 +33,10 @@ const (
 // mount it read-only, and, when current does not exist yet, creates
 // current -> genesis owned by the chain account, as `cosmovisor init` does.
 // An existing genesis binary is refused.
-func (l Layout) StageGenesis(src string, verify Verify) (dst string, err error) {
+//
+// companions are placed in genesis/bin beside oramad, before it, each verified
+// the same way: if any fails, none is left behind.
+func (l Layout) StageGenesis(src string, verify Verify, companions ...Companion) (dst string, err error) {
 	homeFD, rootFD, err := l.openTop()
 	if err != nil {
 		return "", err
@@ -54,17 +57,46 @@ func (l Layout) StageGenesis(src string, verify Verify) (dst string, err error) 
 		return "", err
 	}
 	dst = l.GenesisBinary()
-	if err := l.place(rootFD, binFD, src, dst, verify); err != nil {
+	if err := l.placeAll(rootFD, binFD, src, dst, verify, companions); err != nil {
 		return "", err
 	}
 	return dst, l.linkCurrent(rootFD)
+}
+
+// StageGenesisCompanions places files beside a genesis binary that is already
+// staged: a node installed before its release shipped a companion (the
+// shielded verifier) gets it without its oramad being replaced. A file already
+// there is refused, as for any staged file.
+func (l Layout) StageGenesisCompanions(companions ...Companion) (err error) {
+	homeFD, rootFD, err := l.openTop()
+	if err != nil {
+		return err
+	}
+	genesisFD, binFD := -1, -1
+	defer func() { err = errors.Join(err, closeAll(homeFD, rootFD, genesisFD, binFD)) }()
+	if genesisFD, err = l.openDir(rootFD, genesisDir, false, false); err != nil {
+		return err
+	}
+	if binFD, err = l.openDir(genesisFD, binDir, false, false); err != nil {
+		return err
+	}
+	for _, c := range companions {
+		if err := l.checkCompanion(c); err != nil {
+			return err
+		}
+		if err := l.placeFile(rootFD, binFD, c.Name, c.Src, filepath.Join(l.GenesisBinDir(), c.Name), c.Verify); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // StageUpgrade places the binary for the upgrade plan name and the
 // upgrade-info.json link cosmovisor writes through. A binary already staged
 // for name is refused: a staged upgrade is replaced by removing it on
 // purpose, not by staging over it.
-func (l Layout) StageUpgrade(name, src string, verify Verify) (dst string, err error) {
+// companions ride beside the binary, as for StageGenesis.
+func (l Layout) StageUpgrade(name, src string, verify Verify, companions ...Companion) (dst string, err error) {
 	if err := checkUpgradeName(name); err != nil {
 		return "", err
 	}
@@ -92,7 +124,7 @@ func (l Layout) StageUpgrade(name, src string, verify Verify) (dst string, err e
 		return "", err
 	}
 	dst, _ = l.UpgradeBinary(name)
-	if err := l.place(rootFD, binFD, src, dst, verify); err != nil {
+	if err := l.placeAll(rootFD, binFD, src, dst, verify, companions); err != nil {
 		// A refused stage leaves no upgrade directory behind: cosmovisor
 		// treats upgrades/<name> as a staged upgrade.
 		if !binExisted {
@@ -120,15 +152,40 @@ func (l Layout) openTop() (homeFD, rootFD int, err error) {
 	return homeFD, rootFD, nil
 }
 
-// place writes src into a fresh root-only staging directory under
-// cosmovisor/, syncs it, sets its mode through the descriptor, verifies
-// that descriptor, and hard-links it into binFD. The link fails if the
-// binary already exists, so nothing is ever replaced.
-func (l Layout) place(rootFD, binFD int, src, dst string, verify Verify) (err error) {
+// placeAll stages the companions, then the daemon, into binFD. The daemon goes
+// last: cosmovisor treats a directory with its binary as a staged version, so a
+// failure part way never leaves one that lacks a companion. Whatever was placed
+// before a failure is removed.
+func (l Layout) placeAll(rootFD, binFD int, src, dst string, verify Verify, companions []Companion) (err error) {
+	var placed []string
+	defer func() {
+		if err != nil {
+			for _, name := range placed {
+				err = errors.Join(err, unlinkIfPresent(binFD, name))
+			}
+		}
+	}()
+	for _, c := range companions {
+		if err := l.checkCompanion(c); err != nil {
+			return err
+		}
+		if err := l.placeFile(rootFD, binFD, c.Name, c.Src, filepath.Join(filepath.Dir(dst), c.Name), c.Verify); err != nil {
+			return err
+		}
+		placed = append(placed, c.Name)
+	}
+	return l.placeFile(rootFD, binFD, l.Daemon, src, dst, verify)
+}
+
+// placeFile writes src into a fresh root-only staging directory under
+// cosmovisor/ as name, syncs it, sets its mode through the descriptor,
+// verifies that descriptor, and hard-links it into binFD. The link fails if the
+// file already exists, so nothing is ever replaced.
+func (l Layout) placeFile(rootFD, binFD int, name, src, dst string, verify Verify) (err error) {
 	if verify == nil {
 		return fmt.Errorf("staging %s needs a verification", dst)
 	}
-	if err := refuseExisting(binFD, l.Daemon, dst); err != nil {
+	if err := refuseExisting(binFD, name, dst); err != nil {
 		return err
 	}
 	stageName, stageFD, err := makeStaging(rootFD)
@@ -136,10 +193,10 @@ func (l Layout) place(rootFD, binFD int, src, dst string, verify Verify) (err er
 		return err
 	}
 	defer func() {
-		err = errors.Join(err, unlinkIfPresent(stageFD, l.Daemon), unix.Close(stageFD),
+		err = errors.Join(err, unlinkIfPresent(stageFD, name), unix.Close(stageFD),
 			unix.Unlinkat(rootFD, stageName, unix.AT_REMOVEDIR))
 	}()
-	f, err := writeStaged(stageFD, l.Daemon, src)
+	f, err := writeStaged(stageFD, name, src)
 	if err != nil {
 		return err
 	}
@@ -147,8 +204,8 @@ func (l Layout) place(rootFD, binFD int, src, dst string, verify Verify) (err er
 	if err := errors.Join(verr, f.Close()); err != nil {
 		return fmt.Errorf("%s did not verify, nothing was staged: %w", src, err)
 	}
-	if err := unix.Linkat(stageFD, l.Daemon, binFD, l.Daemon, 0); err != nil {
-		return fmt.Errorf("link the verified binary to %s: %w", dst, err)
+	if err := unix.Linkat(stageFD, name, binFD, name, 0); err != nil {
+		return fmt.Errorf("link the verified file to %s: %w", dst, err)
 	}
 	if err := unix.Fsync(binFD); err != nil {
 		return fmt.Errorf("sync %s: %w", filepath.Dir(dst), err)
