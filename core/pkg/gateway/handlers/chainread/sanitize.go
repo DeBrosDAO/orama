@@ -17,8 +17,10 @@ const (
 
 var (
 	// A node's own message can name where it runs: a file in its source tree or on its disk, an
-	// address and port. A transaction's refusal is useful to a wallet without any of it.
-	sourceLocation = regexp.MustCompile(`\S+\.go:\d+(?::\d+)?`)
+	// address and port. A transaction's refusal is useful to a wallet without any of it. The SDK
+	// wraps its own location in brackets ("[cosmos/cosmos-sdk@v0.54.4/baseapp/baseapp.go:1066]"),
+	// which is replaced whole so no bracket is left over.
+	sourceLocation = regexp.MustCompile(`\[[^\s\[\]]+\.go:\d+(?::\d+)?\]|[^\s\[\]]+\.go:\d+(?::\d+)?`)
 	filesystemPath = regexp.MustCompile(`/(?:var|home|root|etc|tmp|opt|usr|srv|data|mnt|proc|run|lib)(?:/[\w.@+\-]+)*`)
 	ipv4Address    = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b`)
 	ipv6Address    = regexp.MustCompile(`\[?(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\]?(?::\d{1,5})?`)

@@ -502,6 +502,22 @@ func TestSanitizeLog_table(t *testing.T) {
 	}
 }
 
+// The SDK writes where it refused in brackets; the whole bracketed location is
+// replaced, so the wallet's reason reads "insufficient funds [redacted] with ..."
+// rather than with a stray "]" after it.
+func TestSanitizeLog_sdkBracketedLocationLeavesNoStrayBracket(t *testing.T) {
+	in := "spendable balance 0norama is smaller than 1000norama: insufficient funds " +
+		"[cosmos/cosmos-sdk@v0.54.4/baseapp/baseapp.go:1066] with gas used: '1168': unknown request"
+	want := "spendable balance 0norama is smaller than 1000norama: insufficient funds " +
+		"[redacted] with gas used: '1168': unknown request"
+	if got := sanitizeLog(in); got != want {
+		t.Errorf("sanitizeLog = %q, want %q", got, want)
+	}
+	if got := sanitizeLog("refused at [x/fees/ante/fee.go:120:7"); strings.Contains(got, "fee.go") {
+		t.Errorf("a location in an unclosed bracket survived: %q", got)
+	}
+}
+
 func TestSanitizeCodespace(t *testing.T) {
 	for in, want := range map[string]string{"sdk": "sdk", "wasm": "wasm", "": "", "a b": "", "/etc/passwd": "", strings.Repeat("a", 65): ""} {
 		if got := sanitizeCodespace(in); got != want {
