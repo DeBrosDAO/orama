@@ -125,7 +125,7 @@ func TestRelayTorrc_authority(t *testing.T) {
 	for _, want := range []string{
 		"AuthoritativeDirectory 1", "V3AuthoritativeDirectory 1",
 		"V3AuthVotingInterval 30 minutes", "V3AuthVoteDelay 300 seconds", "V3AuthDistDelay 300 seconds",
-		"AuthDirMaxServersPerAddr 1", "DirPort 31021", "ExitPolicy reject *:*",
+		"AuthDirMaxServersPerAddr 1", "ConsensusParams hsdir_interval=720", "DirPort 31021", "ExitPolicy reject *:*",
 		"V3BandwidthsFile /var/lib/orama-global/sbws/latest.v1",
 	} {
 		has(t, got, want)
@@ -371,5 +371,50 @@ func TestTorrc_smallNetworkOptions(t *testing.T) {
 	plain.Network.HSDirMinUptimeHours = 2
 	if got, _ := RelayTorrc(plain); hasPrefix(got, "MinUptimeHidServDirectoryV2") {
 		t.Error("a relay that is not an authority carries the authority option")
+	}
+}
+
+// A service rotates its descriptors at the end of every shared-random run, which
+// lasts 24 voting intervals; the time period clients ask for must last as long,
+// or the service is unreachable for the rest of the period after each rotation.
+// Only an authority votes the parameter: services and clients read it from the
+// consensus, so a wallet's own torrc needs no copy that could disagree.
+func TestRelayTorrc_authorityVotesTheOnionTimePeriodAsOneSharedRandomRun(t *testing.T) {
+	for _, interval := range []int{30, 60} {
+		c := relayConfig()
+		c.Authority, c.DirPort = true, 31021
+		c.Network.VotingIntervalMinutes = interval
+		got, err := RelayTorrc(c)
+		if err != nil {
+			t.Fatalf("interval %d: %v", interval, err)
+		}
+		has(t, got, fmt.Sprintf("V3AuthVotingInterval %d minutes", interval))
+		has(t, got, fmt.Sprintf("ConsensusParams hsdir_interval=%d", 24*interval))
+	}
+}
+
+func TestTorrc_onlyAnAuthorityVotesConsensusParams(t *testing.T) {
+	relay, err := RelayTorrc(relayConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	exit := relayConfig()
+	exit.Exit, exit.Network.AllowExit = true, true
+	exitTorrc, err := RelayTorrc(exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onion, err := OnionTorrc(OnionConfig{Network: testNetwork(), Home: "/var/lib/orama-global/tor-onion", Target: "127.0.0.1:31022"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := ClientTorrc(ClientConfig{Network: testNetwork(), Home: "/var/lib/orama-tornet", SOCKSAddr: "127.0.0.1:9052"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for role, torrc := range map[string]string{"relay": relay, "exit": exitTorrc, "onion service": onion, "client": client} {
+		if hasPrefix(torrc, "ConsensusParams") || hasPrefix(torrc, "TestingTorNetwork") {
+			t.Errorf("the %s torrc sets the network's parameters itself; they come from the consensus:\n%s", role, torrc)
+		}
 	}
 }

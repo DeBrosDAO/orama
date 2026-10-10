@@ -22,5 +22,7 @@ V3AuthVoteDelay 300 seconds
 V3AuthDistDelay 300 seconds
 # Sybil control: at most one relay per address is listed.
 AuthDirMaxServersPerAddr 1
+# Onion service time period = one shared-random run (24 voting intervals), voted into the consensus for every service and client (Network.HSDirIntervalMinutes).
+ConsensusParams hsdir_interval=720
 ExitRelay 0
 ExitPolicy reject *:*

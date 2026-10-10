@@ -61,6 +61,39 @@ func TestAuthorities_signAConsensusThatListsEveryRelay(t *testing.T) {
 	}
 }
 
+// TestNetwork_consensusVotesTheOnionTimePeriodOfOneSharedRandomRun: every tor
+// process of the network (authority, relay and onion service) holds a consensus
+// whose hsdir_interval is 24 voting intervals, the length of one shared-random
+// run. A service rotates its descriptors at the end of each run, and clients
+// look it up by the time period: with Tor's default of 1440 minutes and a
+// voting interval shorter than an hour, the service is unreachable from each
+// rotation until the period ends (docs/TOR_NETWORK.md#onion-service-time-periods).
+func TestNetwork_consensusVotesTheOnionTimePeriodOfOneSharedRandomRun(t *testing.T) {
+	t.Parallel()
+	f, r := requireRoles(t)
+	type holder struct {
+		node fleet.Node
+		home string
+	}
+	var holders []holder
+	for _, n := range r.publishers() {
+		holders = append(holders, holder{n, firstHome(r, n)})
+	}
+	for _, n := range r.onion {
+		holders = append(holders, holder{n, constants.GlobalTorOnionHome})
+	}
+	for _, h := range holders {
+		want := networkOf(t, f, h.node).HSDirIntervalMinutes()
+		eventually.Require(t, pollEvery, consensusBudget, h.node.Name+" ("+h.home+") to hold a consensus with hsdir_interval "+strconv.Itoa(want), func() (bool, error) {
+			c := homeInfo(t, infoOf(t, f, h.node), h.node, h.home).Consensus
+			if c == nil || c.HSDirIntervalMinutes != want {
+				return false, fmt.Errorf("consensus %+v", c)
+			}
+			return true, nil
+		})
+	}
+}
+
 // globalCLI is the orama CLI `orama global install` puts beside the other global binaries.
 const globalCLI = constants.GlobalBinDir + "/orama"
 

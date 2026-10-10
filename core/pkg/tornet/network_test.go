@@ -46,28 +46,29 @@ func TestNetwork_validAcceptedAndRoundTrips(t *testing.T) {
 
 func TestNetwork_refusals(t *testing.T) {
 	cases := map[string]func(*Network){
-		"two authorities":        func(n *Network) { n.Authorities = n.Authorities[:2] },
-		"no authorities":         func(n *Network) { n.Authorities = nil },
-		"empty name":             func(n *Network) { n.Name = "" },
-		"uppercase name":         func(n *Network) { n.Name = "Orama" },
-		"interval not a divisor": func(n *Network) { n.VotingIntervalMinutes = 50 },
-		"interval too short":     func(n *Network) { n.VotingIntervalMinutes = 1 },
-		"delays fill the round":  func(n *Network) { n.VoteDelaySeconds, n.DistDelaySeconds = 500, 500 },
-		"vote delay too low":     func(n *Network) { n.VoteDelaySeconds = 5 },
-		"private address":        func(n *Network) { n.Authorities[0].Address = "10.0.0.5" },
-		"namespace address":      func(n *Network) { n.Authorities[0].Address = "198.18.0.2" },
-		"ipv6 address":           func(n *Network) { n.Authorities[0].Address = "2606:4700::1111" },
-		"same nickname":          func(n *Network) { n.Authorities[1].Nickname = n.Authorities[0].Nickname },
-		"same address":           func(n *Network) { n.Authorities[1].Address = n.Authorities[0].Address },
-		"same fingerprint":       func(n *Network) { n.Authorities[1].Fingerprint = n.Authorities[0].Fingerprint },
-		"short fingerprint":      func(n *Network) { n.Authorities[0].Fingerprint = "ABCD" },
-		"lowercase v3 ident":     func(n *Network) { n.Authorities[0].V3Ident = strings.ToLower(n.Authorities[0].V3Ident) },
-		"same ports":             func(n *Network) { n.Authorities[0].DirPort = n.Authorities[0].ORPort },
-		"port zero":              func(n *Network) { n.Authorities[0].ORPort = 0 },
-		"bad nickname":           func(n *Network) { n.Authorities[0].Nickname = "has space" },
-		"bad ed25519 id":         func(n *Network) { n.Authorities[0].Ed25519ID = "short" },
-		"negative hsdir uptime":  func(n *Network) { n.HSDirMinUptimeHours = -1 },
-		"hsdir uptime past 96h":  func(n *Network) { n.HSDirMinUptimeHours = 97 },
+		"two authorities":                     func(n *Network) { n.Authorities = n.Authorities[:2] },
+		"no authorities":                      func(n *Network) { n.Authorities = nil },
+		"empty name":                          func(n *Network) { n.Name = "" },
+		"uppercase name":                      func(n *Network) { n.Name = "Orama" },
+		"interval not a divisor":              func(n *Network) { n.VotingIntervalMinutes = 50 },
+		"interval too short":                  func(n *Network) { n.VotingIntervalMinutes = 1 },
+		"delays fill the round":               func(n *Network) { n.VoteDelaySeconds, n.DistDelaySeconds = 500, 500 },
+		"vote delay too low":                  func(n *Network) { n.VoteDelaySeconds = 5 },
+		"private address":                     func(n *Network) { n.Authorities[0].Address = "10.0.0.5" },
+		"namespace address":                   func(n *Network) { n.Authorities[0].Address = "198.18.0.2" },
+		"ipv6 address":                        func(n *Network) { n.Authorities[0].Address = "2606:4700::1111" },
+		"same nickname":                       func(n *Network) { n.Authorities[1].Nickname = n.Authorities[0].Nickname },
+		"same address":                        func(n *Network) { n.Authorities[1].Address = n.Authorities[0].Address },
+		"same fingerprint":                    func(n *Network) { n.Authorities[1].Fingerprint = n.Authorities[0].Fingerprint },
+		"short fingerprint":                   func(n *Network) { n.Authorities[0].Fingerprint = "ABCD" },
+		"lowercase v3 ident":                  func(n *Network) { n.Authorities[0].V3Ident = strings.ToLower(n.Authorities[0].V3Ident) },
+		"same ports":                          func(n *Network) { n.Authorities[0].DirPort = n.Authorities[0].ORPort },
+		"port zero":                           func(n *Network) { n.Authorities[0].ORPort = 0 },
+		"bad nickname":                        func(n *Network) { n.Authorities[0].Nickname = "has space" },
+		"bad ed25519 id":                      func(n *Network) { n.Authorities[0].Ed25519ID = "short" },
+		"negative hsdir uptime":               func(n *Network) { n.HSDirMinUptimeHours = -1 },
+		"hsdir uptime past 96h":               func(n *Network) { n.HSDirMinUptimeHours = 97 },
+		"run past Tor's longest hsdir period": func(n *Network) { n.VotingIntervalMinutes = 720 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -128,5 +129,18 @@ func TestAuthorityAt(t *testing.T) {
 	}
 	if _, ok := n.AuthorityAt("1.2.3.4"); ok {
 		t.Fatal("found an authority that is not there")
+	}
+}
+
+func TestNetwork_HSDirIntervalMinutes_isOneSharedRandomRun(t *testing.T) {
+	for interval, want := range map[int]int{5: 120, 30: 720, 60: 1440, 480: 11520} {
+		n := testNetwork()
+		n.VotingIntervalMinutes, n.VoteDelaySeconds, n.DistDelaySeconds = interval, minDelaySeconds, minDelaySeconds
+		if err := n.Validate(); err != nil {
+			t.Fatalf("interval %d: %v", interval, err)
+		}
+		if got := n.HSDirIntervalMinutes(); got != want {
+			t.Errorf("voting interval %d min: onion service time period = %d min, want %d (24 intervals)", interval, got, want)
+		}
 	}
 }

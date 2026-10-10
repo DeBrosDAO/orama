@@ -279,6 +279,11 @@ func printTorInfo(cmd *cobra.Command, infos []tornet.NodeInfo, asJSON bool) erro
 		if c := i.Consensus; c != nil {
 			fmt.Fprintf(out, "  consensus    %s, valid after %s, fresh until %s (fresh %t, valid %t)\n", c.Flavor, c.ValidAfter.Format(time.RFC3339), c.FreshUntil.Format(time.RFC3339), c.Fresh, c.Valid)
 			fmt.Fprintf(out, "  network      %d relays, %d running, %d exits, %d guards, %d signatures\n", c.Relays, c.Running, c.Exits, c.Guards, c.Signatures)
+			if c.HSDirIntervalMinutes > 0 {
+				fmt.Fprintf(out, "  onion period %d minutes (hsdir_interval)\n", c.HSDirIntervalMinutes)
+			} else {
+				fmt.Fprintf(out, "  onion period not voted: Tor's default of 1440 minutes (a service is unreachable part of each day unless the voting interval is 60 minutes)\n")
+			}
 			if c.ExitsWithoutPorts > 0 {
 				fmt.Fprintf(out, "  exits        %d of %d accept no port in their policy summary: clients do not use them\n", c.ExitsWithoutPorts, c.Exits)
 			}

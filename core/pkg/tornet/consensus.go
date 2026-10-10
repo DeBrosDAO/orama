@@ -19,6 +19,10 @@ const (
 	// consensusLineLimit bounds one line of a consensus read.
 	consensusLineLimit = 1 << 20
 
+	// paramHSDirInterval is the consensus parameter that sets the length, in
+	// minutes, of an onion service time period (hs_common.c).
+	paramHSDirInterval = "hsdir_interval"
+
 	flagExit    = "Exit"
 	flagGuard   = "Guard"
 	flagRunning = "Running"
@@ -44,12 +48,15 @@ type Relay struct {
 // Consensus is a parsed network-status consensus (dir-spec section 3.4).
 type Consensus struct {
 	// Flavor is "ns" for the full consensus and "microdesc" for the one clients fetch.
-	Flavor      string
-	ValidAfter  time.Time
-	FreshUntil  time.Time
-	ValidUntil  time.Time
-	Signatures  int
-	Relays      []Relay
+	Flavor     string
+	ValidAfter time.Time
+	FreshUntil time.Time
+	ValidUntil time.Time
+	Signatures int
+	Relays     []Relay
+	// Params are the integer network parameters of the params line, as the
+	// authorities voted them (dir-spec 3.4.1): hsdir_interval is one.
+	Params      map[string]int64
 	knownFlags  []string
 	versionLine string
 }
@@ -89,6 +96,8 @@ func ParseConsensus(r io.Reader) (Consensus, error) {
 			c.ValidUntil, err = parseConsensusTime(rest)
 		case "known-flags":
 			c.knownFlags = strings.Fields(rest)
+		case "params":
+			c.Params, err = parseParams(rest)
 		case "directory-signature":
 			c.Signatures++
 		case "r":
@@ -122,6 +131,20 @@ func ParseConsensus(r io.Reader) (Consensus, error) {
 		return Consensus{}, errors.New("not a network-status document: its version line or valid-after, fresh-until or valid-until is missing")
 	}
 	return c, nil
+}
+
+// parseParams reads the params line: space-separated key=integer pairs.
+func parseParams(rest string) (map[string]int64, error) {
+	out := map[string]int64{}
+	for _, kv := range strings.Fields(rest) {
+		k, v, ok := strings.Cut(kv, "=")
+		n, err := strconv.ParseInt(v, 10, 64)
+		if !ok || k == "" || err != nil {
+			return nil, fmt.Errorf("bad network parameter %q", kv)
+		}
+		out[k] = n
+	}
+	return out, nil
 }
 
 func parseConsensusTime(s string) (time.Time, error) {

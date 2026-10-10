@@ -116,6 +116,8 @@ func (b *torrc) authority(c RelayConfig) {
 	b.line(fmt.Sprintf("V3AuthDistDelay %d seconds", n.DistDelaySeconds))
 	b.comment("Sybil control: at most one relay per address is listed.")
 	b.line("AuthDirMaxServersPerAddr 1")
+	b.comment("Onion service time period = one shared-random run (24 voting intervals), voted into the consensus for every service and client (Network.HSDirIntervalMinutes).")
+	b.line(fmt.Sprintf("ConsensusParams %s=%d", paramHSDirInterval, n.HSDirIntervalMinutes()))
 	if n.HSDirMinUptimeHours > 0 {
 		b.comment("A new network cannot wait the default 96 hours for onion services to have directories.")
 		b.line(fmt.Sprintf("MinUptimeHidServDirectoryV2 %d hours", n.HSDirMinUptimeHours))

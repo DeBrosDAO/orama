@@ -88,3 +88,23 @@ func TestReadNodeInfo_countsExitsThatAcceptNoPort(t *testing.T) {
 		t.Fatalf("exits %d without ports %d, want 1 and 1", c.Exits, c.ExitsWithoutPorts)
 	}
 }
+
+func TestReadNodeInfo_reportsTheOnionTimePeriodTheAuthoritiesVoted(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 10, 0, 0, time.UTC)
+	for name, tc := range map[string]struct {
+		params string
+		want   int
+	}{"voted": {"params hsdir_interval=720\n", 720}, "not voted": {"", 0}} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			write(t, filepath.Join(home, dataDirMicrodescConsens), []byte(withParams(t, tc.params)))
+			info, err := ReadNodeInfo(home, now)
+			if err != nil || info.Consensus == nil {
+				t.Fatalf("info = %+v %v", info, err)
+			}
+			if info.Consensus.HSDirIntervalMinutes != tc.want {
+				t.Errorf("hsdir interval = %d, want %d", info.Consensus.HSDirIntervalMinutes, tc.want)
+			}
+		})
+	}
+}

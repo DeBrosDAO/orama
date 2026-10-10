@@ -60,6 +60,10 @@ type ConsensusInfo struct {
 	// accepting no port, which no client uses (full consensus only).
 	ExitsWithoutPorts int `json:"exits_without_ports,omitempty"`
 	Guards            int `json:"guards"`
+	// HSDirIntervalMinutes is the consensus's hsdir_interval: the length of the
+	// time period an onion service publishes for. Zero when the authorities
+	// vote none, which leaves Tor's 1440 minutes in force.
+	HSDirIntervalMinutes int `json:"hsdir_interval_minutes,omitempty"`
 	// Listed is true when the consensus lists this process's own relay.
 	Listed      bool     `json:"listed"`
 	ListedFlags []string `json:"listed_flags,omitempty"`
@@ -133,6 +137,7 @@ func summarise(c Consensus, fingerprint string, now time.Time) *ConsensusInfo {
 		Flavor: c.Flavor, ValidAfter: c.ValidAfter, FreshUntil: c.FreshUntil, ValidUntil: c.ValidUntil,
 		Fresh: c.Fresh(now), Valid: c.Valid(now), Signatures: c.Signatures,
 		Relays: len(c.Relays), Running: c.Running(), Exits: c.Exits(), ExitsWithoutPorts: c.ExitsWithoutPorts(), Guards: c.Guards(),
+		HSDirIntervalMinutes: int(c.Params[paramHSDirInterval]),
 	}
 	if fingerprint != "" {
 		if r, ok := c.Listed(fingerprint); ok {

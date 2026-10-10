@@ -38,3 +38,4 @@ covers:
     - "docs/TOR_NETWORK.md#exits: an exit refuses reserved ranges and mail ports; a relay that was not installed as an exit has no Exit flag"
     - "docs/TOR_NETWORK.md#relays: the ORPort is reachable from outside and the tx gate is not"
     - "docs/TOR_NETWORK.md#relays: a relay and a directory authority each write monitor.json in their own home (in_consensus), which the node report reads"
+    - "docs/TOR_NETWORK.md#onion-service-time-periods: the authorities vote hsdir_interval as 24 voting intervals, one shared-random run, so a validator's onion service stays reachable across the descriptor rotation at the end of each run"

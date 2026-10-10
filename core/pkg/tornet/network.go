@@ -49,6 +49,13 @@ const (
 
 	// minVotingIntervalMinutes is Tor's own floor for a production voting interval.
 	minVotingIntervalMinutes = 5
+	// sharedRandomRounds is how many voting rounds one shared-random protocol run
+	// takes: SHARED_RANDOM_N_ROUNDS (12) times SHARED_RANDOM_N_PHASES (2) in Tor's
+	// shared_random_client.h. A run lasts that many voting intervals.
+	sharedRandomRounds = 24
+	// maxHSDirIntervalMinutes is HS_TIME_PERIOD_LENGTH_MAX in Tor's hs_common.h:
+	// the longest time period an authority can ask clients to use.
+	maxHSDirIntervalMinutes = 60 * 24 * 10
 	// minDelaySeconds is Tor's floor for V3AuthVoteDelay and V3AuthDistDelay.
 	minDelaySeconds = 20
 	minutesPerDay   = 24 * 60
@@ -298,9 +305,31 @@ func (n Network) validateOnions() error {
 	return nil
 }
 
+// HSDirIntervalMinutes is the length, in minutes, of the time period an onion
+// service publishes a descriptor for: one shared-random protocol run, which is
+// 24 voting intervals. The authorities write it into the consensus as the
+// hsdir_interval parameter (torrc ConsensusParams), so every service and client
+// of the network reads the same value from the consensus and needs no setting
+// of its own.
+//
+// Tor's default is 1440 minutes, which is a protocol run only when the voting
+// interval is the public network's 60 minutes. With a shorter interval a run
+// ends several times inside one default period, and a service rotates its
+// descriptors at the end of every run (rotate_all_descriptors in hs_service.c):
+// each rotation promotes the descriptor for the NEXT period to current and
+// closes the introduction circuits of the one clients still ask for, so the
+// service is unreachable until the period itself ends. A period one run long,
+// started half a run after the run does (the rotation offset Tor derives from
+// the voting interval), is the arrangement of the public network at any interval.
+func (n Network) HSDirIntervalMinutes() int { return sharedRandomRounds * n.VotingIntervalMinutes }
+
 func (n Network) validateSchedule() error {
 	if n.VotingIntervalMinutes < minVotingIntervalMinutes || minutesPerDay%n.VotingIntervalMinutes != 0 {
 		return fmt.Errorf("voting_interval_minutes %d must be at least %d and divide 24 hours evenly", n.VotingIntervalMinutes, minVotingIntervalMinutes)
+	}
+	if n.HSDirIntervalMinutes() > maxHSDirIntervalMinutes {
+		return fmt.Errorf("voting_interval_minutes %d makes a shared-random run of %d minutes, longer than the %d minutes Tor allows an onion service time period (hsdir_interval); use at most %d",
+			n.VotingIntervalMinutes, n.HSDirIntervalMinutes(), maxHSDirIntervalMinutes, maxHSDirIntervalMinutes/sharedRandomRounds)
 	}
 	if n.VoteDelaySeconds < minDelaySeconds || n.DistDelaySeconds < minDelaySeconds {
 		return fmt.Errorf("vote_delay_seconds %d and dist_delay_seconds %d must each be at least %d", n.VoteDelaySeconds, n.DistDelaySeconds, minDelaySeconds)

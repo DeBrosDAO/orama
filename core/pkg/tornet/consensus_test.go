@@ -111,3 +111,44 @@ func TestConsensus_exitsWithoutPorts(t *testing.T) {
 		t.Errorf("policy = %q", got)
 	}
 }
+
+func withParams(t *testing.T, params string) string {
+	t.Helper()
+	good := string(readFixture(t, "consensus-microdesc.txt"))
+	const anchor = "known-flags Authority Exit Fast Guard HSDir Running Stable V2Dir Valid\n"
+	if !strings.Contains(good, anchor) {
+		t.Fatal("the fixture has no known-flags line to put the params line after")
+	}
+	return strings.Replace(good, anchor, anchor+params, 1)
+}
+
+func TestParseConsensus_readsTheNetworkParameters(t *testing.T) {
+	c, err := ParseConsensus(strings.NewReader(withParams(t, "params AuthDirMaxServersPerAddr=1 hsdir_interval=720\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Params["hsdir_interval"] != 720 || c.Params["AuthDirMaxServersPerAddr"] != 1 || len(c.Params) != 2 {
+		t.Errorf("params = %v", c.Params)
+	}
+	bare, err := ParseConsensus(strings.NewReader(string(readFixture(t, "consensus-microdesc.txt"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bare.Params) != 0 {
+		t.Errorf("a consensus with no params line has params %v", bare.Params)
+	}
+}
+
+func TestParseConsensus_refusesABrokenParameter(t *testing.T) {
+	for name, line := range map[string]string{
+		"not a number": "params hsdir_interval=soon\n",
+		"no value":     "params hsdir_interval\n",
+		"no key":       "params =720\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseConsensus(strings.NewReader(withParams(t, line))); err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+}

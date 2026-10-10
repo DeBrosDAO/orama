@@ -133,10 +133,13 @@ data after the object is an error, and the file is at most 1 MiB.
   (see Rolling it out, step 8). The command validates every address, does not
   list one twice, keeps the file's mode and replaces it atomically; a file that
   does not already load is left untouched.
-- `voting_interval_minutes` must divide 24 hours, delays are at least 20 s and
-  `2 x (vote + dist)` must be under the interval: the same checks Tor makes,
-  made at install so a bad file fails there and not on a restart. All
-  authorities must run the same schedule, which is why it is in the file.
+- `voting_interval_minutes` must divide 24 hours and be at most 600 (a
+  shared-random run, 24 intervals, must fit Tor's longest onion service time
+  period), delays are at least 20 s and `2 x (vote + dist)` must be under the
+  interval: the same checks Tor makes, made at install so a bad file fails there
+  and not on a restart. All authorities must run the same schedule, which is why
+  it is in the file. The interval also sets the onion service time period the
+  authorities vote (`hsdir_interval`, [Onion service time periods](#onion-service-time-periods)).
 - `bootstrap`: a new network has no consensus yet, and its relays cannot prove
   themselves reachable through it. With `bootstrap` true every authority and
   relay sets `AssumeReachable 1` (the Tor manual's "used when bootstrapping a
@@ -291,7 +294,8 @@ is not yet a reward basis.
 
 Look at an authority with `orama global tor info` (as root on the host; `--json`
 for scripts): the nickname, RSA fingerprint, ed25519 id, the consensus it holds
-(flavour, validity, signature count, relay/exit/guard counts) and whether it
+(flavour, validity, signature count, relay/exit/guard counts, the onion service
+time period the authorities voted, `hsdir_interval_minutes` in `--json`) and whether it
 lists the authority itself. When the consensus carries exit policy summaries (the full one an
 authority or relay holds) and some exit's summary accepts no port, it also says how many exits
 are in that state (`exits_without_ports` in `--json`): a client does not use them. A role whose DataDirectory cannot be read is shown
@@ -471,6 +475,52 @@ client; a wallet runs one with `tornet.ClientTorrc`.
 The onion service needs HSDir-flagged relays to publish its descriptor, which is
 why a new network sets `hsdir_min_uptime_hours`.
 
+### Onion service time periods
+
+A v3 onion service publishes its descriptor for a *time period*, under a key
+derived from the period's number, and a client works the period out from the
+consensus and asks for that one. Tor's shared-random protocol (SRV) runs in
+**24 voting intervals** (12 commit rounds, 12 reveal rounds), and a service
+**rotates its descriptors at the end of every run** (`rotate_all_descriptors` in
+Tor's `hs_service.c`): it closes the introduction circuits of the descriptor it
+serves, makes the descriptor it had prepared for the *next* period the current
+one, and prepares another. Tor's time period is 1440 minutes (the consensus
+parameter `hsdir_interval`) and starts half a run after the run does (Tor
+derives that offset from the voting interval, `hs_get_time_period_num`). Those
+two are the same length, and the rotation falls on a period boundary, only when
+the voting interval is the public network's 60 minutes.
+
+With a shorter interval a run is shorter than the period. Stagenet's 30 minutes
+makes a run 12 hours: the service rotates at 00:00 and 12:00 UTC, the period
+still changes at 06:00 UTC only. The rotation at 00:00 hands out the descriptor
+for the next period and closes the introduction circuits of the one that clients
+still ask for, so from 00:00 to 06:00 UTC the service answers nothing
+(`INTRODUCE_ACK` "unknown service" from every introduction point, then "descriptor
+not found" once the directories drop the old copy after its 3-hour lifetime).
+The fleet e2e `TestNetwork_circuitsAndOnionServicesWorkThroughOurAuthorities`
+passed at 23:05 UTC and timed out at 00:45 UTC for this reason, with every
+service up, `txgate` answering, and all five tor processes healthy.
+
+The fix is Tor's own parameter, voted by the authorities: every authority's torrc
+carries `ConsensusParams hsdir_interval=<24 x voting_interval_minutes>`
+(`Network.HSDirIntervalMinutes`; 720 for stagenet, 1440 for a 60-minute network),
+which makes the period as long as the run and keeps the half-run offset Tor
+already derives, the same arrangement as the public network at any interval. The
+parameter reaches the consensus when more than half of the authorities vote it
+(`dirvote_compute_params`), and then every service and every client of the
+network, wallets included, reads it from the consensus: nobody needs a setting of
+their own. The alternative Tor documents for test networks, `TestingTorNetwork 1`,
+also sets the period to the run's length, but on every party's own torrc and
+together with a bundle of unsafe defaults (`ExtendAllowPrivateAddresses 1`,
+`ClientRejectInternalAddresses 0`, ...); it is not used. A voting interval above
+600 minutes would make a run longer than the 14400 minutes Tor accepts for
+`hsdir_interval`, so the network file is refused.
+
+`orama global tor info` shows the value the node's consensus carries
+(`onion period`). A running onion service keeps the period it started with until
+its next rotation, so after the consensus carries the parameter the services are
+restarted (Rolling it out, step 10).
+
 ## Rolling it out on stagenet
 
 Stagenet is five machines that each run a cluster node and, co-located, the
@@ -546,8 +596,19 @@ two /16 networks, hence `allow_shared_subnets`.
    node at a time, authorities first and verifying `tor info` between each
    (`orama global restart dirauth|relay|onion`). Three authorities hold a
    majority with one down; two restarting at once lose the consensus.
-10. **Verify** with the fleet e2e on the stagenet target: feature `tor-network`,
+10. **Onion service time period** (a network installed before the authorities
+   voted `hsdir_interval`, [Onion service time periods](#onion-service-time-periods)).
+   Stage the new `orama`, then on each authority in turn re-run its step 5
+   command (it rewrites the torrc, the other services of the node are kept) and
+   `sudo /root/orama-global-release/orama global restart dirauth`; wait until
+   `orama global tor info` on it shows a fresh consensus with three signatures
+   before the next one. When two authorities vote it, every node's consensus
+   carries `hsdir_interval` (`onion period 720 minutes` in `tor info`). Then restart
+   the onion services one node at a time (`orama global restart onion`): they
+   build their descriptors for the period the consensus now names.
+11. **Verify** with the fleet e2e on the stagenet target: feature `tor-network`,
    stage 8 (`TestAuthorities_signAConsensusThatListsEveryRelay`,
+   `TestNetwork_consensusVotesTheOnionTimePeriodOfOneSharedRandomRun`,
    `TestAuthorities_archiveMatchesItsManifest`, `TestRelays_orPortIsReachableAndTheGateIsNot`,
    `TestRelays_onlyAnInstalledExitHasTheExitFlag`,
    `TestNetwork_circuitsAndOnionServicesWorkThroughOurAuthorities`,
