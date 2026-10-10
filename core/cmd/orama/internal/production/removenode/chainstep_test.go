@@ -46,6 +46,12 @@ type world struct {
 	opened    [][]string
 	tx        *fakeTx
 	clientErr error
+	// chainID is the chain the environment is pinned to; pinErr and checkErr are the refusals.
+	chainID  string
+	pinErr   error
+	checkErr error
+	pinned   []string
+	checked  []string
 }
 
 func newWorld() *world {
@@ -54,6 +60,7 @@ func newWorld() *world {
 		validator: map[string]bool{},
 		unknown:   map[string]bool{},
 		tx:        &fakeTx{operator: operatorAddr},
+		chainID:   "orama-stagenet-1",
 	}
 }
 
@@ -77,7 +84,12 @@ func (w *world) step(opts Options) *chainStep {
 		readNode: func(context.Context, *chainreach.Reach, string) (*chainreach.ChainNode, error) {
 			return w.chain, nil
 		},
-		newClient: func(context.Context, *chainreach.Reach) (txClient, error) { return w.tx, w.clientErr },
+		newClient: func(context.Context, *chainreach.Reach, string) (txClient, error) { return w.tx, w.clientErr },
+		pin:       func(env, explicit string) (string, error) { w.pinned = append(w.pinned, env+"/"+explicit); return w.chainID, w.pinErr },
+		checkChain: func(_ context.Context, _ *chainreach.Reach, want string) error {
+			w.checked = append(w.checked, want)
+			return w.checkErr
+		},
 	}
 }
 
@@ -386,5 +398,54 @@ func TestOptions_validate(t *testing.T) {
 func TestStatusWord(t *testing.T) {
 	if got := statusWord("NODE_STATUS_RETIRED"); got != "retired" {
 		t.Errorf("statusWord = %q", got)
+	}
+}
+
+func TestPreflight_theWalletIsPinnedToTheChainOfTheEnvironmentBeforeAnythingIsReached(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+	w.probes["10.0.0.3"] = "yes yes\n"
+	step := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3", ChainID: "orama-stagenet-1"})
+
+	if _, err := step.Preflight(plan()); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.pinned) != 1 || w.pinned[0] != "stagenet/orama-stagenet-1" {
+		t.Errorf("the pin was asked for %v: it is the environment's and the --chain-id", w.pinned)
+	}
+	if len(w.checked) != 1 || w.checked[0] != "orama-stagenet-1" {
+		t.Errorf("the node's chain was checked against %v", w.checked)
+	}
+}
+
+func TestPreflight_aNetworkWithNoKnownChainIDStopsBeforeTheChainIsReached(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+	w.probes["10.0.0.3"] = "yes yes\n"
+	w.pinErr = clierr.Usage("cannot tell which chain %q runs: pass --chain-id <id>", "stagenet")
+
+	_, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
+
+	if clierr.CodeOf(err) != clierr.CodeUsage || !strings.Contains(err.Error(), "--chain-id") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(w.opened) != 0 {
+		t.Errorf("the chain was reached (%v) although the wallet could not be pinned", w.opened)
+	}
+}
+
+func TestPreflight_aNodeOnAnotherChainThanTheNetworksIsRefusedBeforeAnythingIsSigned(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+	w.probes["10.0.0.3"] = "yes yes\n"
+	w.checkErr = errors.New(`10.0.0.1 runs the chain "orama-evil-1", not the "orama-stagenet-1" this network runs: refusing to sign for it`)
+
+	_, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
+
+	if err == nil || !strings.Contains(err.Error(), "refusing to sign") || !strings.Contains(err.Error(), "Nothing was removed") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(w.tx.retired) != 0 {
+		t.Errorf("a retirement was signed: %v", w.tx.retired)
 	}
 }

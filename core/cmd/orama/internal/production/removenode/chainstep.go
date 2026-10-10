@@ -27,10 +27,15 @@ type chainStep struct {
 	runner    chainreach.Runner
 	validator func(ctx context.Context, env, host string) (isValidator, known bool, err error)
 	readNode  func(ctx context.Context, r *chainreach.Reach, id string) (*chainreach.ChainNode, error)
-	newClient func(ctx context.Context, r *chainreach.Reach) (txClient, error)
+	newClient func(ctx context.Context, r *chainreach.Reach, want string) (txClient, error)
+	// pin is the chain id the environment runs (chainreach.Pin); checkChain refuses a node on another.
+	pin        func(env, explicit string) (string, error)
+	checkChain func(ctx context.Context, r *chainreach.Reach, want string) error
 
 	reach *chainreach.Reach
 	node  *chainreach.ChainNode
+	// chainID is the chain the retirement is signed for, decided before anything is changed.
+	chainID string
 }
 
 // txClient is the operator's transaction client (onchain.Client).
@@ -46,8 +51,12 @@ func newChainStep(ctx context.Context, env string, opts Options) *chainStep {
 		readNode: func(ctx context.Context, r *chainreach.Reach, id string) (*chainreach.ChainNode, error) {
 			return r.ChainNode(ctx, id)
 		},
-		newClient: func(ctx context.Context, r *chainreach.Reach) (txClient, error) {
-			return r.Client(ctx, defaultSigner())
+		newClient: func(ctx context.Context, r *chainreach.Reach, want string) (txClient, error) {
+			return r.Client(ctx, defaultSigner(), want)
+		},
+		pin: chainreach.Pin,
+		checkChain: func(ctx context.Context, r *chainreach.Reach, want string) error {
+			return r.CheckChain(ctx, want)
 		},
 	}
 }
@@ -127,11 +136,18 @@ func (s *chainStep) targetHasGlobalLayer(target inspector.Node) (bool, error) {
 // planRetire reads the node's record from the chain and decides whether there is
 // anything to retire.
 func (s *chainStep) planRetire(p *decommission.Plan) ([]string, error) {
+	chainID, err := s.pin(s.env, s.opts.ChainID)
+	if err != nil {
+		return nil, err
+	}
 	reach, err := s.runner.Open(s.ctx, s.chainCandidates(p))
 	if err != nil {
 		return nil, clierr.Unavailable("retire %s on the chain: %v", s.opts.ChainNodeID, err)
 	}
-	s.reach = reach
+	s.reach, s.chainID = reach, chainID
+	if err := s.checkChain(s.ctx, reach, chainID); err != nil {
+		return nil, clierr.Failure("%v. Nothing was removed", err)
+	}
 	node, err := s.readNode(s.ctx, reach, s.opts.ChainNodeID)
 	if err != nil {
 		return nil, clierr.Failure("%v", err)
@@ -194,7 +210,7 @@ func (s *chainStep) Before(*decommission.Plan) error {
 	if s.node == nil {
 		return nil
 	}
-	client, err := s.newClient(s.ctx, s.reach)
+	client, err := s.newClient(s.ctx, s.reach, s.chainID)
 	if err != nil {
 		return clierr.Unavailable("%v", err)
 	}

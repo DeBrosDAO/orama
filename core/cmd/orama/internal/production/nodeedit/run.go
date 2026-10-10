@@ -26,6 +26,9 @@ type Options struct {
 	// resizes the node only.
 	ChainNodeID string
 	NoChain     bool
+	// ChainID is the chain id the capacity is signed for, for a network that is on no registry
+	// network and so does not name its chain; it must agree with the one a registry network names.
+	ChainID string
 	// Yes skips the confirmation.
 	Yes bool
 	// Interactive is true when the form may be used: input and output are a terminal.
@@ -68,6 +71,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer cleanup()
+	opts.Env = env
 	r := &runner{opts: opts, nodes: nodes, seams: defaultSeams()}
 	defer r.seams.declarer.close()
 	return r.run(ctx)
@@ -110,8 +114,9 @@ func (r *runner) run(ctx context.Context) error {
 	if plan.Nothing() {
 		return nil
 	}
+	r.warnExitRole(ctx, node, plan, chainID, out)
 	if plan.DeclareOnChain {
-		if err := r.seams.declarer.preflight(ctx, chainID, node.Host, *plan.Storage*bytesPerGB, r.candidates(node)); err != nil {
+		if err := r.seams.declarer.preflight(ctx, r.opts.Env, r.opts.ChainID, chainID, node.Host, *plan.Storage*bytesPerGB, r.candidates(node)); err != nil {
 			return err
 		}
 	}
@@ -123,6 +128,21 @@ func (r *runner) run(ctx context.Context) error {
 		}
 	}
 	return r.apply(ctx, node, plan, chainID, out)
+}
+
+// warnExitRole prints a warning when the relay policy the edit sets and the node's exit role on the
+// chain disagree. It needs the node's id on the chain; without one it says what was not compared.
+func (r *runner) warnExitRole(ctx context.Context, node inspector.Node, plan *Plan, chainID string, out io.Writer) {
+	if plan.Exit == nil || r.opts.NoChain {
+		return
+	}
+	if chainID == "" {
+		fmt.Fprintln(out, "\n  ! the node's exit role on the chain was not compared with the new relay policy: pass --chain-node-id <id> to compare it")
+		return
+	}
+	if w := r.seams.declarer.exitRoleWarning(ctx, chainID, *plan.Exit, r.candidates(node)); w != "" {
+		fmt.Fprintf(out, "\n  ! %s\n", w)
+	}
 }
 
 // apply makes the changes: the chain first, since the chain is the one that can

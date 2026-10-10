@@ -87,3 +87,16 @@ func TestChainNode_ListsHost(t *testing.T) {
 		})
 	}
 }
+
+func TestParseChainNode_readsTheRegisteredRoles(t *testing.T) {
+	n, err := parseChainNode([]byte(`{"node":{"node_id":"n1","operator":"orama1x","status":"NODE_STATUS_ACTIVE","roles":["ROLE_STORAGE","ROLE_EXIT"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !n.HasRole("exit") || !n.HasRole("STORAGE") || n.HasRole("relay") {
+		t.Errorf("roles %v: HasRole(exit)=%v HasRole(relay)=%v", n.Roles, n.HasRole("exit"), n.HasRole("relay"))
+	}
+	if (ChainNode{}).HasRole("exit") {
+		t.Error("a node with no roles holds the exit role")
+	}
+}

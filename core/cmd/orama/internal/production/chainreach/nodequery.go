@@ -36,6 +36,18 @@ type ChainNode struct {
 	DeclaredBytes, ReservedBytes uint64
 	// Endpoints are the public addresses the node registered.
 	Endpoints []string
+	// Roles are the roles the node is registered with, as the chain names them (ROLE_EXIT).
+	Roles []string
+}
+
+// HasRole reports whether the node is registered with role ("exit", "relay", ...).
+func (n ChainNode) HasRole(role string) bool {
+	for _, r := range n.Roles {
+		if strings.EqualFold(strings.TrimPrefix(r, "ROLE_"), role) {
+			return true
+		}
+	}
+	return false
 }
 
 // ListsHost reports whether one of the node's registered endpoints is the IPv4
@@ -118,6 +130,7 @@ func parseChainNode(raw json.RawMessage) (*ChainNode, error) {
 			DeclaredBytes string   `json:"declared_capacity_bytes"`
 			ReservedBytes string   `json:"reserved_capacity_bytes"`
 			Endpoints     []string `json:"endpoints"`
+			Roles         []string `json:"roles"`
 		} `json:"node"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -133,7 +146,7 @@ func parseChainNode(raw json.RawMessage) (*ChainNode, error) {
 	}
 	return &ChainNode{
 		ID: resp.Node.NodeID, Operator: resp.Node.Operator, Status: resp.Node.Status,
-		DeclaredBytes: declared, ReservedBytes: reserved, Endpoints: resp.Node.Endpoints,
+		DeclaredBytes: declared, ReservedBytes: reserved, Endpoints: resp.Node.Endpoints, Roles: resp.Node.Roles,
 	}, nil
 }
 

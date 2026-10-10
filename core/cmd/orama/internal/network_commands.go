@@ -164,6 +164,26 @@ func ExpectedChainID() (chainID, network string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("read the active network to find the chain it runs: %w", err)
 	}
+	return expectedChainIDOf(env)
+}
+
+// ExpectedChainIDOf is ExpectedChainID for the environment named envName, which a command
+// that takes --env signs for (the active one is not always the one it was told to work on).
+// An environment that is not configured has no pin.
+func ExpectedChainIDOf(envName string) (chainID, network string, err error) {
+	cfg, err := LoadEnvironmentConfig()
+	if err != nil {
+		return "", "", fmt.Errorf("read the networks to find the chain %q runs: %w", envName, err)
+	}
+	for i := range cfg.Environments {
+		if cfg.Environments[i].Name == envName {
+			return expectedChainIDOf(&cfg.Environments[i])
+		}
+	}
+	return "", "", nil
+}
+
+func expectedChainIDOf(env *Environment) (chainID, network string, err error) {
 	if env.Network == "" {
 		return "", "", nil
 	}

@@ -486,3 +486,23 @@ func TestExpectedChainID_aFaultIsAnErrorWithItsCause(t *testing.T) {
 		t.Fatalf("an unreadable registry: err = %v, want it to wrap the cause", err)
 	}
 }
+
+func TestExpectedChainIDOf_followsTheNamedEnvironmentNotTheActiveOne(t *testing.T) {
+	cfg := &EnvironmentConfig{
+		ActiveEnvironment: "other",
+		Environments: []Environment{
+			{Name: "main", GatewayURL: "https://gw.example.org", Network: "stagenet"},
+			{Name: "other", GatewayURL: "https://other.example.org", Network: ""},
+		},
+	}
+	useNetworkFixtures(t, cfg, "stagenet")
+	if id, network, err := ExpectedChainIDOf("main"); err != nil || id != "orama-stagenet-1" || network != "stagenet" {
+		t.Errorf("main: %q, %q, %v", id, network, err)
+	}
+	if id, _, err := ExpectedChainIDOf("other"); err != nil || id != "" {
+		t.Errorf("an environment on no registry network has no pin: %q, %v", id, err)
+	}
+	if id, _, err := ExpectedChainIDOf("ghost"); err != nil || id != "" {
+		t.Errorf("an environment that is not configured has no pin: %q, %v", id, err)
+	}
+}

@@ -79,6 +79,7 @@ func init() {
 	d.BoolVar(&removeForce, "force", false, "Skip confirmation (DESTRUCTIVE)")
 	d.BoolVar(&removeFlags.DryRun, "dry-run", false, "Print the quorum impact and the statements, change nothing")
 	d.StringVar(&removeFlags.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry: retire it there before removing it")
+	d.StringVar(&removeFlags.ChainID, "chain-id", "", "The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain")
 	d.BoolVar(&removeFlags.NoChain, "no-chain", false, "Leave the node's chain registration alone (its bonds stay locked until you retire it)")
 	d.BoolVar(&removeFlags.DropValidator, "drop-validator", false, "Remove the node although it signs for the validator set; its consensus key is erased with it")
 

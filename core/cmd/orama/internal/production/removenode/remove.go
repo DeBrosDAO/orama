@@ -28,6 +28,9 @@ type Options struct {
 	Yes, DryRun bool
 	// ChainNodeID is the node's id in x/nodes, to retire it on the chain.
 	ChainNodeID string
+	// ChainID is the chain id the retirement is signed for, for a network that is on no registry
+	// network and so does not name its chain; it must agree with the one a registry network names.
+	ChainID string
 	// NoChain leaves the node's chain registration alone.
 	NoChain bool
 	// DropValidator accepts that a node in the validator set stops signing and

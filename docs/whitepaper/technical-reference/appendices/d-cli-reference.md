@@ -1346,6 +1346,7 @@ Examples:
 
 | Flag | Default | Description |
 |---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain |
 | `--chain-node-id` | — | The node's id in the chain's node registry, to declare its capacity there |
 | `--env` | — | Network the node belongs to (default: the active one) |
 | `--exit` | `false` | Make the node's Tor relay an exit (true) or a plain relay (false) |
@@ -4963,6 +4964,7 @@ Examples:
 
 | Flag | Default | Description |
 |---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain |
 | `--chain-node-id` | — | The node's id in the chain's node registry: retire it there before removing it |
 | `--drop-validator` | `false` | Remove the node although it signs for the validator set; its consensus key is erased with it |
 | `--dry-run` | `false` | Print the quorum impact and the statements, change nothing |
@@ -5312,6 +5314,7 @@ Examples:
 
 | Flag | Default | Description |
 |---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain |
 | `--chain-node-id` | — | The node's id in the chain's node registry: retire it there before removing it |
 | `--drop-validator` | `false` | Remove the node although it signs for the validator set; its consensus key is erased with it |
 | `--dry-run` | `false` | Print the quorum impact and every step, change nothing |

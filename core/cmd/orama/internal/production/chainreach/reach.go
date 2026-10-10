@@ -15,6 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/chainread"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/onchain"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
@@ -172,13 +173,29 @@ func (r *Reach) ChainID(ctx context.Context) (string, error) {
 	return info.Node.Network, nil
 }
 
-// Client is the operator's transaction client for this chain, signing with
-// signer (the RootWallet). The gas, fee, account number and sequence of every
-// transaction are derived from the chain.
-func (r *Reach) Client(ctx context.Context, signer onchain.Signer) (*onchain.Client, error) {
+// CheckChain refuses a node that is not on the chain id want. The node is the one
+// the operator manages, but its answer is only a claim: the wallet signs for the chain
+// the network is known to run, never for the one the node says it is.
+func (r *Reach) CheckChain(ctx context.Context, want string) error {
+	if want == "" {
+		return errors.New("no chain id to sign for: pass --chain-id <id>")
+	}
 	id, err := r.ChainID(ctx)
 	if err != nil {
+		return err
+	}
+	if id != want {
+		return fmt.Errorf("%s runs the chain %q, not the %q this network runs: refusing to sign for it", r.Node.Host, httputil.Printable(id), want)
+	}
+	return nil
+}
+
+// Client is the operator's transaction client for the chain want, signing with
+// signer (the RootWallet). The node must be on that chain (CheckChain). The gas,
+// fee, account number and sequence of every transaction are derived from the chain.
+func (r *Reach) Client(ctx context.Context, signer onchain.Signer, want string) (*onchain.Client, error) {
+	if err := r.CheckChain(ctx, want); err != nil {
 		return nil, err
 	}
-	return onchain.New(onchain.REST{Base: r.Base}, signer, id)
+	return onchain.New(onchain.REST{Base: r.Base}, signer, want)
 }

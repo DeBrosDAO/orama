@@ -66,6 +66,7 @@ Examples:
 	f.BoolVar(&opts.Yes, "yes", false, "Do not ask for confirmation (DESTRUCTIVE)")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "Print the quorum impact and every step, change nothing")
 	f.StringVar(&opts.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry: retire it there before removing it")
+	f.StringVar(&opts.ChainID, "chain-id", "", "The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain")
 	f.BoolVar(&opts.NoChain, "no-chain", false, "Leave the node's chain registration alone (its bonds stay locked until you retire it)")
 	f.BoolVar(&opts.DropValidator, "drop-validator", false, "Remove the node although it signs for the validator set; its consensus key is erased with it")
 	return cmd

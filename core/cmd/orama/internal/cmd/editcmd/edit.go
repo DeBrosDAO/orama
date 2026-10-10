@@ -83,6 +83,7 @@ Examples:
 	f.BoolVar(&exit, exitFlag, false, "Make the node's Tor relay an exit (true) or a plain relay (false)")
 	f.BoolVar(&global, globalFlag, false, "Ask for the global layer on or off (refused, with what does it)")
 	f.StringVar(&opts.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry, to declare its capacity there")
+	f.StringVar(&opts.ChainID, "chain-id", "", "The chain id you expect, for a network that is on no registry network (one from the registry already names it); the wallet signs for no other chain")
 	f.BoolVar(&opts.NoChain, "no-chain", false, "Resize the node without declaring the capacity on the chain")
 	f.BoolVar(&opts.Yes, "yes", false, "Do not ask for confirmation")
 	return cmd
