@@ -77,7 +77,7 @@ func planPreflight(cfg Config) []string {
 }
 
 func planBinaries(cfg Config) []string {
-	out := []string{"go build ./cmd/orama in " + cfg.RepoRoot + "/core -> " + cfg.WorkDir + "/bin/orama"}
+	out := []string{"go build -tags localrepo ./cmd/orama in " + cfg.RepoRoot + "/core -> " + cfg.WorkDir + "/bin/orama"}
 	if ref, ok := strings.CutPrefix(cfg.PreviousArchive, previousRefPrefix); ok {
 		out = append(out, "git archive "+ref+" -> "+prevSourceDir+", go build its orama CLI -> bin/"+oramaPrevName)
 	}
@@ -89,7 +89,7 @@ func planAgent(cfg Config) []string {
 }
 
 func planArchives(cfg Config) []string {
-	out := []string{"orama maint build --output " + archiveDir + "/" + headArchive + " (signed through the test agent)"}
+	out := []string{"orama maint build --output " + archiveDir + "/" + headArchive + " --test-local-release-repo (signed through the test agent)"}
 	switch ref, isRef := strings.CutPrefix(cfg.PreviousArchive, previousRefPrefix); {
 	case isRef:
 		out = append(out, "orama-prev build of "+ref+" --output "+archiveDir+"/"+prevArchive)

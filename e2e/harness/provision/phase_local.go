@@ -122,9 +122,15 @@ func (r *run) resolveGoEnv(ctx context.Context) ([]string, error) {
 	return append(env, goSettings()...), nil
 }
 
+// localRepoTag is the build tag under which ORAMA_ALLOW_LOCAL_RELEASE_REPO=1 lets the CLI fetch a
+// release repository from a loopback address (core/pkg/releaseverify). The features that serve one
+// from a node's loopback need it on the operator's CLI and, through `orama maint build
+// --test-local-release-repo`, on the nodes'; a release build has neither.
+const localRepoTag = "localrepo"
+
 func (r *run) goBuild(ctx context.Context, moduleDir, out string) error {
 	env := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}, r.goEnv...)
-	_, err := r.runLogged(ctx, command{name: "go", args: []string{"build", "-o", out, "./cmd/orama"}, dir: moduleDir, env: env})
+	_, err := r.runLogged(ctx, command{name: "go", args: []string{"build", "-tags", localRepoTag, "-o", out, "./cmd/orama"}, dir: moduleDir, env: env})
 	if err != nil {
 		return fmt.Errorf("failed to build %s: %w", out, err)
 	}
@@ -179,7 +185,7 @@ func (r *run) startTestAgent(ctx context.Context) error {
 func (r *run) buildArchives(ctx context.Context) error {
 	head := filepath.Join(r.cfg.WorkDir, archiveDir, headArchive)
 	coreDir := filepath.Join(r.cfg.RepoRoot, "core")
-	if _, err := r.runLogged(ctx, command{name: r.st.OramaBin, args: []string{"maint", "build", "--output", head}, dir: coreDir, env: r.cliEnv()}); err != nil {
+	if _, err := r.runLogged(ctx, command{name: r.st.OramaBin, args: []string{"maint", "build", "--output", head, "--test-local-release-repo"}, dir: coreDir, env: r.cliEnv()}); err != nil {
 		return fmt.Errorf("failed to build the HEAD archive: %w", err)
 	}
 	r.st.ArchivePath = head

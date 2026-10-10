@@ -253,9 +253,8 @@ func TestFetch_badParametersAreRefusedBeforeTheNetwork(t *testing.T) {
 	for name, change := range cases {
 		p := r.params(t)
 		change(&p)
-		releaseverify.AllowLocalRepositories(t)
-		if name == "a private repository" {
-			t.Setenv(releaseverify.AllowLocalEnv, "")
+		if name != "a private repository" {
+			releaseverify.AllowLocalRepositories(t)
 		}
 		if _, err := Fetch(t.Context(), p); err == nil {
 			t.Errorf("%s was accepted", name)

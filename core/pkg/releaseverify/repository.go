@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,24 +60,30 @@ type Repository struct {
 
 // AllowLocalEnv, set to "1" in the environment of a process, lets
 // ParseRepositoryURL accept http to, and https to, a loopback or private
-// address. Only a test sets it: it serves its repository from httptest on
-// 127.0.0.1, and the fleet e2e suite from a server on a node's loopback. The
-// installed units never carry it.
+// address, in a binary built with the localrepo tag (`orama maint build
+// --test-local-release-repo`, which only the fleet e2e suite passes, to serve
+// a repository from a node's loopback). A binary built without the tag ignores
+// the variable, and the installed units never carry it. A Go test asks with
+// AllowLocalRepositories instead and needs neither the variable nor the tag.
 const AllowLocalEnv = "ORAMA_ALLOW_LOCAL_RELEASE_REPO"
 
-func localAllowed() bool { return os.Getenv(AllowLocalEnv) == "1" }
+// testAllowed is set by AllowLocalRepositories, for the length of a test.
+var testAllowed atomic.Bool
+
+func localAllowed() bool { return testAllowed.Load() || localAllowedByEnv() }
 
 // testEnv is the part of testing.TB AllowLocalRepositories needs.
 type testEnv interface {
 	Helper()
-	Setenv(key, value string)
+	Cleanup(func())
 }
 
-// AllowLocalRepositories sets AllowLocalEnv for the test (and so restores it
-// when the test ends). It takes a test so that only a test can call it.
+// AllowLocalRepositories lets the test serve its repository from a loopback
+// address, until the test ends. It takes a test so that only a test can call it.
 func AllowLocalRepositories(t testEnv) {
 	t.Helper()
-	t.Setenv(AllowLocalEnv, "1")
+	testAllowed.Store(true)
+	t.Cleanup(func() { testAllowed.Store(false) })
 }
 
 // ParseRepositoryURL checks a repository URL: https, with a public host, no

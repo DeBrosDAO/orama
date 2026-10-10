@@ -265,3 +265,22 @@ func TestUp_reportsOwnership(t *testing.T) {
 		t.Fatal("a plain error reported ownership")
 	}
 }
+
+// The features that serve a release repository from a node's loopback (release-install,
+// autoupdate-agent) need a CLI that honours ORAMA_ALLOW_LOCAL_RELEASE_REPO, and release builds do
+// not (core/pkg/releaseverify): the run builds its operator CLI with the localrepo tag and the
+// HEAD archive with --test-local-release-repo.
+func TestUp_buildsTheCLIsThatMayFetchFromLoopback(t *testing.T) {
+	e := newTestEnv(t)
+	if _, err := up(context.Background(), e.cfg, &testLogger{}, e.d); err != nil {
+		t.Fatal(err)
+	}
+	var tagged, archive bool
+	for _, l := range e.cmd.lines() {
+		tagged = tagged || (strings.Contains(l, "go build") && strings.Contains(l, "-tags localrepo"))
+		archive = archive || (strings.Contains(l, "maint build --output") && strings.Contains(l, "--test-local-release-repo"))
+	}
+	if !tagged || !archive {
+		t.Errorf("tagged operator CLI %v, tagged HEAD archive %v; calls:\n%s", tagged, archive, strings.Join(e.cmd.lines(), "\n"))
+	}
+}

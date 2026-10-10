@@ -171,3 +171,27 @@ func TestBroadcast_aRefusalIsErrBroadcastRejected(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestDefaultClient_followsNoRedirect(t *testing.T) {
+	followed := false
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		followed = true
+		w.Write([]byte(`{"tx_response":{"code":0,"txhash":"ELSEWHERE"}}`))
+	}))
+	defer elsewhere.Close()
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer node.Close()
+
+	var statusErr *StatusError
+	if _, err := Broadcast(context.Background(), node.URL, []byte{1, 2, 3}); !errors.As(err, &statusErr) || statusErr.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("a POST answered with a redirect: err = %v, want a StatusError 307", err)
+	}
+	if _, err := FetchAccount(context.Background(), node.URL, vectorAddress); !errors.As(err, &statusErr) || statusErr.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("a GET answered with a redirect: err = %v, want a StatusError 307", err)
+	}
+	if followed {
+		t.Error("the redirect was followed: the transaction went to the address the node pointed at")
+	}
+}

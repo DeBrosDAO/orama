@@ -28,6 +28,11 @@ type Flags struct {
 	// manifest: a node that installs the build adopts it as its release root,
 	// the way it takes a signer rotation.
 	ReleaseRoot string
+	// LocalReleaseRepo builds the orama CLI with the localrepo tag, so that a process with
+	// ORAMA_ALLOW_LOCAL_RELEASE_REPO=1 may fetch a release repository from a loopback or private
+	// address. Only the fleet e2e suite, which serves one from a node's loopback, passes it; an
+	// archive built with it must never reach a network that is not a test fleet.
+	LocalReleaseRepo bool
 }
 
 // Run executes the build command.

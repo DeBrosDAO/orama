@@ -2245,6 +2245,7 @@ Examples:
 | `--release-root` | — | A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root |
 | `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
 | `--skip-global-layer` | `false` | Leave out the global layer (oramad, its verifier, orama-global, cosmovisor): a cluster-only archive |
+| `--test-local-release-repo` | `false` | FOR TEST FLEETS ONLY: build the orama CLI so that ORAMA_ALLOW_LOCAL_RELEASE_REPO=1 lets it fetch releases from a loopback or private address |
 | `--unsigned` | `false` | Do not sign the manifest (a node installs it only through its adopted TUF release root) |
 | `--verbose` | `false` | Verbose output |
 

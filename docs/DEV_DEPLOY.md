@@ -489,8 +489,10 @@ a public address (a host that is `localhost`, or an address on this machine or a
 private network, is refused by `ParseRepositoryURL` — cluster setting and
 `--release-repo` alike — and by the client's connection to it, which is checked
 against `pkg/netguard`'s reserved ranges once the name is resolved, redirects
-included; only a test sets `ORAMA_ALLOW_LOCAL_RELEASE_REPO=1` to serve one from
-loopback): `timestamp.json`, `snapshot.json`,
+included; only a binary built with the `localrepo` tag honours `ORAMA_ALLOW_LOCAL_RELEASE_REPO=1`
+to serve one from loopback, and only the fleet e2e suite builds one: `orama maint build
+--test-local-release-repo` for the archive, `go build -tags localrepo` for the operator's CLI; a
+release build ignores the variable, and a Go test asks with `releaseverify.AllowLocalRepositories`): `timestamp.json`, `snapshot.json`,
 `targets.json`, `root.json` and every `<N>.root.json`, and the files under `targets/`, such as
 `targets/nightly/orama-0.3.1-linux-amd64.tar.gz`. A channel (`nightly`, `main`,
 `dev/<branch>`) is the path prefix of its targets in the one targets file, not a

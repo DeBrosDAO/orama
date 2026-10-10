@@ -3,6 +3,7 @@ package build
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 )
@@ -67,12 +68,21 @@ func (b *Builder) buildEnvFor(bin oramaBinary) ([]string, error) {
 	return cgoEnv(hermeticGoEnv(os.Environ()), b.flags.Arch, b.zig)
 }
 
+// localRepoTag is the build tag under which the environment may allow a local release repository
+// (pkg/releaseverify). Release builds never have it.
+const localRepoTag = "localrepo"
+
 // goBuildArgs returns the `go` arguments that build bin into output.
 func goBuildArgs(bin oramaBinary, ldflags, output string) []string {
-	if !bin.CGO {
-		return goBuildCommandArgs(ldflags, output, bin.Package)
+	flags, tags := ldflags, bin.Tags
+	if bin.CGO {
+		flags = ldflags + " " + cgoLinkFlags
+		tags = strings.Trim(cgoBuildTags+","+bin.Tags, ",")
 	}
-	args := goBuildCommandArgs(ldflags+" "+cgoLinkFlags, output, bin.Package)
+	args := goBuildCommandArgs(flags, output, bin.Package)
+	if tags == "" {
+		return args
+	}
 	// -tags is a build flag like the others; it goes before the package.
-	return append([]string{args[0], "-tags", cgoBuildTags}, args[1:]...)
+	return append([]string{args[0], "-tags", tags}, args[1:]...)
 }

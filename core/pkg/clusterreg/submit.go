@@ -146,7 +146,7 @@ func postJSON(ctx context.Context, url string, payload []byte) ([]byte, error) {
 type httpClientKey struct{}
 
 // WithHTTPClient makes every chain request made with ctx use client instead
-// of http.DefaultClient, and the client's Timeout instead of the default
+// of the default client (which follows no redirect), and the client's Timeout instead of the default
 // request timeout when it is set. An onion submission passes a client whose
 // only route to the network is a Tor SOCKS proxy.
 func WithHTTPClient(ctx context.Context, client *http.Client) context.Context {
@@ -163,8 +163,15 @@ type StatusError struct {
 
 func (e *StatusError) Error() string { return fmt.Sprintf("chain API returned HTTP %d", e.Code) }
 
+// noRedirectClient is the client a request uses when its context names none. A node that answers
+// with a redirect is not followed: the request carries a signed transaction or the operator's
+// account, and a redirect (to plain http included) would send them wherever the node points.
+var noRedirectClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
 func doLimited(req *http.Request) ([]byte, error) {
-	client, timeout := http.DefaultClient, submitTimeout
+	client, timeout := noRedirectClient, submitTimeout
 	if c, ok := req.Context().Value(httpClientKey{}).(*http.Client); ok && c != nil {
 		client = c
 		if c.Timeout > 0 {
@@ -186,7 +193,8 @@ func doLimited(req *http.Request) ([]byte, error) {
 	if len(body) > submitLimit {
 		return nil, fmt.Errorf("response from the chain is over %d bytes", submitLimit)
 	}
-	if resp.StatusCode >= 400 {
+	// A redirect that was not followed is an answer that is not the node's reply to the request.
+	if resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, &StatusError{Code: resp.StatusCode, Message: errorMessage(body)}
 	}
 	return body, nil

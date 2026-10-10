@@ -21,6 +21,8 @@ type oramaBinary struct {
 	ExtraLDFlags string
 	// CGO builds the binary with cgo through zig cc (see cgo.go).
 	CGO bool
+	// Tags are Go build tags beyond the ones cgo.go sets.
+	Tags string
 }
 
 // Builder orchestrates the entire build process.
@@ -220,6 +222,10 @@ func (b *Builder) buildOramaBinaries() error {
 		flags := ldflags
 		if bin.ExtraLDFlags != "" {
 			flags = bin.ExtraLDFlags
+		}
+		if bin.Name == "orama" && b.flags.LocalReleaseRepo {
+			bin.Tags = localRepoTag
+			fmt.Printf("  ! the orama binary is built with the %s tag: it accepts a release repository on a loopback or private address when ORAMA_ALLOW_LOCAL_RELEASE_REPO=1. For test fleets only.\n", localRepoTag)
 		}
 
 		env, err := b.buildEnvFor(bin)

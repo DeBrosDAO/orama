@@ -67,6 +67,8 @@ func init() {
 	f.StringSliceVar(&buildFlags.Signers, "signers", nil,
 		"Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated)")
 
+	f.BoolVar(&buildFlags.LocalReleaseRepo, "test-local-release-repo", false,
+		"FOR TEST FLEETS ONLY: build the orama CLI so that ORAMA_ALLOW_LOCAL_RELEASE_REPO=1 lets it fetch releases from a loopback or private address")
 	f.StringVar(&buildFlags.ReleaseRoot, "release-root", "",
 		"A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root")
 }

@@ -82,6 +82,21 @@ func TestGoBuildArgs_PureGoBinaryHasNoCGOFlags(t *testing.T) {
 	}
 }
 
+func TestGoBuildArgs_theLocalrepoTagIsOnlyOnTheBinaryThatAsksForIt(t *testing.T) {
+	plain := strings.Join(goBuildArgs(oramaBinary{Name: "orama", Package: "./cmd/orama/"}, "-s -w", "/out/orama"), " ")
+	if strings.Contains(plain, localRepoTag) {
+		t.Errorf("a release build carries the %s tag: %q", localRepoTag, plain)
+	}
+	tagged := strings.Join(goBuildArgs(oramaBinary{Name: "orama", Package: "./cmd/orama/", Tags: localRepoTag}, "-s -w", "/out/orama"), " ")
+	if !strings.Contains(tagged, "-tags "+localRepoTag+" ") {
+		t.Errorf("the tag is not on the binary that asked for it: %q", tagged)
+	}
+	both := strings.Join(goBuildArgs(oramaBinary{Name: "x", Package: "./x/", CGO: true, Tags: localRepoTag}, "-s -w", "/out/x"), " ")
+	if !strings.Contains(both, "-tags "+cgoBuildTags+","+localRepoTag+" ") {
+		t.Errorf("cgo tags and the extra tag are one -tags value: %q", both)
+	}
+}
+
 func TestCGOEnv_TargetsMuslThroughZig(t *testing.T) {
 	env, err := cgoEnv(nil, "arm64", "/opt/zig/bin/zig")
 	if err != nil {
