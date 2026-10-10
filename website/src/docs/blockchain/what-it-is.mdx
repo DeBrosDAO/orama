@@ -33,7 +33,7 @@ Orama modules: `emission`, `power`, `fees`, `token`, `archive`, `nodes`, `cnft`,
 
 ## Two rules to know before reading further
 
-**You cannot pay another user directly.** A bank send of `norama` from one user account to another is refused, and so is a send from a contract to a user. Modules can pay anyone, and a user can pay a contract. Protocol payouts (emission, tips, sale proceeds, royalties) land in a restricted *earnings account*, which can pay fees, bonds and deals but cannot be sent to someone else. The private way to move value between users is the [shielded pool](/docs/blockchain/shielded). On a node that does not have both shielded verifiers, a user cannot pay another user at all.
+**Paying another user is public by default and private by choice.** A bank send of `norama` between users, from a contract to a user, or from a user to a contract is an ordinary public payment: anyone can see who paid whom and how much. The private way to move value is the [shielded pool](/docs/blockchain/shielded), which hides the sender, the receiver and the amount. Nobody can pay a module account with a bank message. Protocol payouts (emission, tips, sale proceeds, royalties) land in an *earnings account* in `x/fees`, which pays fees, bonds and deals; see [Fees](/docs/blockchain/fees) for how earnings reach a bank balance. On a node that does not have both shielded verifiers, only the public path works.
 
 **Nothing changes by admin key.** There is no admin, no pause, no freeze, no multisig. The only ways the chain's behaviour changes are a passed governance proposal inside the bounds the code allows, or a coordinated hard fork.
 

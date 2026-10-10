@@ -46,7 +46,7 @@ export const MSG = {
   // ---- bank, staking, slashing, distribution ----
   bankSend: defineMsg("/cosmos.bank.v1beta1.MsgSend", bank.MsgSend, (m) =>
     desc("Send", `Send ${formatCoins(m.amount)} from ${m.fromAddress} to ${m.toAddress}`, [
-      "The chain refuses public user-to-user norama sends; a payment goes through the shielded path.",
+      "A public payment: the sender, the recipient and the amount are visible on chain. A shielded transfer keeps them private.",
     ]),
   ),
   stakingCreateValidator: defineMsg("/cosmos.staking.v1beta1.MsgCreateValidator", staking.MsgCreateValidator, (m) =>

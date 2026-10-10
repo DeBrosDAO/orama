@@ -197,15 +197,15 @@ func TestWalletRoutes_contractInfoOfANonContractIs404(t *testing.T) {
 }
 
 // TestWalletRoutes_aRefusedTransactionIsATypedRefusal: the chain's refusal of a signed transaction
-// (a user-to-user send, which x/bank refuses) and of undecodable bytes is a 422 with code,
+// (a send to a module account, which x/bank refuses) and of undecodable bytes is a 422 with code,
 // codespace and a log that names no path, source file or address.
 func TestWalletRoutes_aRefusedTransactionIsATypedRefusal(t *testing.T) {
 	c := chain.New(t)
 	n := c.FaucetNode(t)
 	g := gateway(t, c)
 	k := c.NewFundedKey(t, n, "e2e-wallet-routes-refused", chain.Orama(2))
-	other := c.NewKey(t, n, "e2e-wallet-routes-payee")
-	raw := c.EncodeTx(t, n, c.Sign(t, k, chain.TxOptions{}, sendMsg(k.Address, other.Address, chain.Orama(1))))
+	other := chain.ModuleAddress("fees")
+	raw := c.EncodeTx(t, n, c.Sign(t, k, chain.TxOptions{}, sendMsg(k.Address, other, chain.Orama(1))))
 
 	sim := decodeRefusal(t, postTx(t, g, "simulate", raw))
 	if sim.Codespace == "" || sim.Log == "" {
@@ -217,9 +217,6 @@ func TestWalletRoutes_aRefusedTransactionIsATypedRefusal(t *testing.T) {
 	garbage := decodeRefusal(t, postTx(t, g, "broadcast", []byte("not a transaction")))
 	if garbage.Codespace != "sdk" || garbage.Log == "" {
 		t.Errorf("undecodable bytes: %+v, want an sdk refusal with a reason", garbage)
-	}
-	if got := c.Bank(t, n, other.Address); !got.IsZero() {
-		t.Errorf("a refused send paid %s norama", got.String())
 	}
 }
 

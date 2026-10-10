@@ -260,9 +260,8 @@ func TestContracts_gasExhaustionAndUnboundedRecursionFailTheTransaction(t *testi
 }
 
 // TestContracts_aUserCanInstantiateWithNoramaAttached covers wasmd's instantiate: it moves the
-// attached funds before it registers the new contract, so the norama send restriction has to
-// treat the recipient as the contract it is becoming. A user still cannot send norama to a plain
-// address, or to a contract address before it exists.
+// attached funds before it registers the new contract. A plain account can be paid publicly as
+// well.
 func TestContracts_aUserCanInstantiateWithNoramaAttached(t *testing.T) {
 	r := newRelayChain(t, wasmChainOptions{})
 	funded := r.instantiate(r.bob, r.codeID, map[string]any{}, noramaCoins(7*params.NoramaPerOrama))
@@ -271,10 +270,9 @@ func TestContracts_aUserCanInstantiateWithNoramaAttached(t *testing.T) {
 	// Attaching funds to an execute of an existing contract works too.
 	r.mustExec(r.bob, funded, map[string]any{"store": map[string]string{"key": "x", "value": "y"}}, noramaCoins(1))
 
-	// A plain user address is still not payable.
+	// A plain user address is payable too.
 	res := r.deliver(r.bob, &banktypes.MsgSend{FromAddress: r.bob.addr.String(), ToAddress: r.alice.addr.String(), Amount: noramaCoins(1)})
-	require.NotZero(t, res.Code)
-	require.Contains(t, res.Log, "user-to-user norama transfer is refused")
+	require.Zero(t, res.Code, res.Log)
 }
 
 func TestDeposit_aTransactionCannotLockMoreThanTheCap(t *testing.T) {

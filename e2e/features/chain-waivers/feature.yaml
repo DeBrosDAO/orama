@@ -1,7 +1,6 @@
 # Stage 8, E2E-37: tripwires for the chain code that is built but not wired
 # into oramad (x/vpnlaunch, x/confidential, x/wasmbindings). They assert the documented absence on the live chain: no
-# message registered, no query answered, no genesis state, no user-to-user
-# payment; that x/inclusion's vote extensions are on exactly from the height the
+# message registered, no query answered, no genesis state; that x/inclusion's vote extensions are on exactly from the height the
 # deploy's genesis names; and that the orama messages the node
 # registers are exactly those chain/proto declares. A surface that ships
 # turns its test red, which forces real tests and the removal of its waiver.

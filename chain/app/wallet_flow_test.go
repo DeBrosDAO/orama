@@ -15,6 +15,7 @@ import (
 	shieldedtypes "github.com/DeBrosOfficial/network/chain/x/shielded/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
@@ -22,6 +23,7 @@ import (
 	oramatx "github.com/DeBrosOfficial/network/chain/client/tx"
 	cnfttypes "github.com/DeBrosOfficial/network/chain/x/cnft/types"
 	emissiontypes "github.com/DeBrosOfficial/network/chain/x/emission/types"
+	feestypes "github.com/DeBrosOfficial/network/chain/x/fees/types"
 	housetypes "github.com/DeBrosOfficial/network/chain/x/houses/types"
 	markettypes "github.com/DeBrosOfficial/network/chain/x/market/types"
 	nodestypes "github.com/DeBrosOfficial/network/chain/x/nodes/types"
@@ -35,11 +37,11 @@ import (
 // ante chain (signature, fee from earnings, bond top-up) and the message
 // router like a real one. State is read back from the keepers afterwards.
 //
-// The chain refuses public user-to-user norama sends, and without the Orchard
-// verifiers linked it refuses every shielded bundle, so the payment tests pin
-// what a wallet can do on this build: pay fees from earnings, move value only in
-// factory denoms, and turn earnings into stake, bonds, hot-key funds and market
-// proceeds.
+// Norama moves publicly between plain accounts, and without the Orchard
+// verifiers linked the chain refuses every shielded bundle, so the payment tests
+// pin what a wallet can do on this build: pay fees from earnings, send norama and
+// factory denoms publicly, and turn earnings into stake, bonds, hot-key funds and
+// market proceeds.
 
 const (
 	oneOrama   = int64(params.NoramaPerOrama)
@@ -204,17 +206,59 @@ func TestWalletFlow_aTransactionWithoutEarningsOrBankCannotPayItsFee(t *testing.
 	require.Error(t, err, "the refused transaction registered nothing")
 }
 
-func TestWalletFlow_publicUserToUserNoramaSendIsRefused(t *testing.T) {
+func TestWalletFlow_publicUserToUserNoramaSendMovesTheBalance(t *testing.T) {
 	f := newFlow(t)
 	alice, bob := f.newWallet(), f.newWallet()
-	f.fundEarnings(alice, flowCredit)
 	f.fundBank(alice, 10)
 
 	res := f.deliver(alice, banktypes.NewMsgSend(alice.addr, bob.addr, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, oneOrama))))
 
-	requireRejected(t, res, "public")
-	require.True(t, f.bank(bob.addr, params.BaseDenom).IsZero(), "the recipient received nothing")
-	require.Equal(t, norama(10).SubRaw(feeOf(1)).String(), f.bank(alice.addr, params.BaseDenom).String(), "the sender kept its balance, less the fee the failed transaction still paid")
+	requireOK(t, res)
+	require.Equal(t, norama(1).String(), f.bank(bob.addr, params.BaseDenom).String(), "the recipient received exactly the amount")
+	require.Equal(t, norama(9).SubRaw(feeOf(1)).String(), f.bank(alice.addr, params.BaseDenom).String(), "the sender paid the amount and the fee")
+	require.True(t, f.earnings(bob.addr).IsZero(), "a public payment is a balance, never earnings")
+	f.requireInvariants()
+}
+
+func TestWalletFlow_publicMultiSendPaysSeveralRecipients(t *testing.T) {
+	f := newFlow(t)
+	alice, bob, carol := f.newWallet(), f.newWallet(), f.newWallet()
+	f.fundBank(alice, 10)
+	one := sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, oneOrama))
+
+	res := f.deliver(alice, banktypes.NewMsgMultiSend(
+		banktypes.NewInput(alice.addr, one.MulInt(math.NewInt(2))),
+		[]banktypes.Output{banktypes.NewOutput(bob.addr, one), banktypes.NewOutput(carol.addr, one)},
+	))
+
+	requireOK(t, res)
+	require.Equal(t, norama(1).String(), f.bank(bob.addr, params.BaseDenom).String())
+	require.Equal(t, norama(1).String(), f.bank(carol.addr, params.BaseDenom).String())
+	f.requireInvariants()
+}
+
+func TestWalletFlow_publicSendToAModuleAccountIsRefused(t *testing.T) {
+	f := newFlow(t)
+	alice := f.newWallet()
+	f.fundBank(alice, 10)
+	for _, module := range []string{feestypes.ModuleName, feestypes.DepositsModuleName} {
+		res := f.deliver(alice, banktypes.NewMsgSend(alice.addr, authtypes.NewModuleAddress(module), sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, oneOrama))))
+		requireRejected(t, res, "not allowed to receive")
+	}
+	f.requireInvariants()
+}
+
+func TestWalletFlow_publicSendCannotSpendEarnings(t *testing.T) {
+	f := newFlow(t)
+	alice, bob := f.newWallet(), f.newWallet()
+	f.fundEarnings(alice, flowCredit)
+	f.fundBank(alice, 1)
+
+	res := f.deliver(alice, banktypes.NewMsgSend(alice.addr, bob.addr, sdk.NewCoins(sdk.NewInt64Coin(params.BaseDenom, 5*oneOrama))))
+
+	requireRejected(t, res, "insufficient")
+	require.True(t, f.bank(bob.addr, params.BaseDenom).IsZero(), "earnings are not a spendable balance")
+	f.requireInvariants()
 }
 
 // The wallet builds and signs the shielded messages with the same builder as every other message.

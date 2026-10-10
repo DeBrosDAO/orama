@@ -6,7 +6,7 @@
 # state change), its broadcast (CometBFT broadcast_tx_sync), and
 # /v1/chain/tx?hash= until the transaction is in a block (a 404 while it is
 # not, never a 502), after which the delegation is visible through the same
-# reads. A transaction the chain refuses (a user-to-user send, which x/bank
+# reads. A transaction the chain refuses (a send to a module account, which x/bank
 # refuses; undecodable bytes) is a 422 {code, codespace, log} with a log that
 # names no path, source file or address, and the same bytes sent again are the
 # SDK's already-in-the-mempool refusal with the hash. ContractInfo of an address
@@ -34,4 +34,4 @@ covers:
     - "docs/CHAIN.md#the-gateways-chain-proxy: a transaction not yet in a block is a 404 with Retry-After on /v1/chain/tx, never a 502"
     - "docs/CHAIN.md#the-gateways-chain-proxy: wallet queries (bank, auth, staking, distribution, wasm ContractInfo) are served on /v1/chain/query/; a non-contract address is a 404"
     - "docs/CHAIN.md#the-gateways-chain-proxy: a page limit over 100 is refused, and simulate and broadcast have their own rate-limit buckets"
-    - "website docs developer/api-surface: POST /v1/chain/light answers the state-sync light client's status, commit, validators and consensus_params with the caller's JSON-RPC id, and refuses every other method (broadcast_evidence included)"
+    - "docs/API_SURFACE.md: POST /v1/chain/light answers the state-sync light client's status, commit, validators and consensus_params with the caller's JSON-RPC id, and refuses every other method (broadcast_evidence included)"

@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** `oramad` is the Orama L1: a Cosmos SDK v0.54.4 application on CometBFT v0.39.4, wired by hand in one Go module (`chain/`) that `core/` never imports. It runs 21 stores of stock SDK modules and Orama's own (`x/emission`, `x/fees`, `x/power`, `x/token`, `x/nodes`, `x/storage`, `x/archive`, `x/relay`, `x/houses`, `x/cnft`, `x/market`, `x/shielded`, `x/wasmpolicy`, plus wasmd's `x/wasm` when libwasmvm is linked). Four things set it apart from a stock chain: a user-to-user norama send is refused; the validator set comes from `x/power`, a blend of an equal-share bootstrap committee and capped stake, not from `x/staking`; ordinary transactions pay a burned base fee through `x/fees`; and a block must contain the transactions a 2/3 quorum of validators listed in their vote extensions. No governance module can change anything. A change to a stock module needs a new binary on a new genesis.
+> - **What:** `oramad` is the Orama L1: a Cosmos SDK v0.54.4 application on CometBFT v0.39.4, wired by hand in one Go module (`chain/`) that `core/` never imports. It runs 21 stores of stock SDK modules and Orama's own (`x/emission`, `x/fees`, `x/power`, `x/token`, `x/nodes`, `x/storage`, `x/archive`, `x/relay`, `x/houses`, `x/cnft`, `x/market`, `x/shielded`, `x/wasmpolicy`, plus wasmd's `x/wasm` when libwasmvm is linked). Four things set it apart from a stock chain: norama is public by default, with a shielded pool for private payments; the validator set comes from `x/power`, a blend of an equal-share bootstrap committee and capped stake, not from `x/staking`; ordinary transactions pay a burned base fee through `x/fees`; and a block must contain the transactions a 2/3 quorum of validators listed in their vote extensions. No governance module can change anything. A change to a stock module needs a new binary on a new genesis.
 > - **Key numbers:** ports 31000 (P2P), 31001 (RPC), 31002 (gRPC), 31003 (REST), 31004 (Prometheus); 19 ante decorators; voting power scale 10^9; power cap 5% (3% above 60 active validators, back at 5% after 30 epochs below 50); 30-epoch stake ramp; at most one third of voting power moves per block or per lambda step; bootstrap committee of at least 30 on a production chain-id; vote-extension list 32 KiB, 4 MiB embedded, 1,024 ante runs and 4,096 signature checks per block; the gateway serves 16 module queries, 8 simulations and 16 broadcasts at once; query gas limit 2,000,000.
 > - **Code:** `chain/app/`, `chain/x/power/`, `chain/x/inclusion/`, `chain/x/confidential/`, `chain/client/`, `chain/cmd/`, `chain/native/`, `chain/proto/`, `chain/scripts/`, `core/pkg/chainread/`, `core/pkg/clusterreg/`, `core/pkg/gateway/handlers/chainread/`.
 > - **Depends on:** [global nodes](37-global-nodes.md) for how `oramad` is installed and who runs it, [economics](40-economics.md) for emission, fees and tokens, [the gateway](../vol1/12-gateway-architecture.md) for the public route policy.
@@ -17,7 +17,7 @@ First, the chain starts with no money and no stake. A proof-of-stake chain needs
 
 Second, a stake-weighted validator set concentrates. The code caps one validator's power share and redistributes the excess, rate-limits how fast power can move, and ramps new stake in over 30 epochs. Each rule exists because the review that wrote it found a way to take over the set without them (the comments in `chain/x/power/keeper/` name the findings).
 
-Third, payments between users are not public. The bank module is kept, but `norama` cannot move from one user to another, and every protocol payout lands in a restricted earnings ledger. The only way to pay a person is the shielded pool.
+Third, payments between users are not public. The bank module is kept, `norama` moves publicly between users, and every protocol payout lands in an earnings ledger. The only way to pay a person is the shielded pool.
 
 Fourth, a validator must not be able to censor for free. Vote extensions carry each validator's list of long-waiting mempool transactions, and a proposal that omits a valid listed transaction is rejected by every other validator (`chain/x/inclusion/`).
 
@@ -121,7 +121,7 @@ CometBFT accepts validator updates from exactly one module per block. `stakingEn
 
 1. `SetUpContext`, `ExtensionOptions`, `ValidateBasic`, the stock decorators.
 2. The shielded `ShapeDecorator`: a shielded message must be the only message of its transaction, refused before any fee is taken.
-3. `UploadSunset` (code upload is closed until the sunset height), `ContractSend` (a contract may not send norama to a user), and `DepositPayer` (records who pays a contract's state deposit).
+3. `UploadSunset` (code upload is closed until the sunset height) and `DepositPayer` (records who pays a contract's state deposit).
 4. `TxTimeoutHeight`, `ValidateMemo`, `ConsumeGasForTxSize`.
 5. `x/fees`' `FeeDecorator` in place of the stock deduct-fee decorator ([economics](40-economics.md#settling-a-fee)).
 6. `UndelegateGuard` and `MinDelegation` from `x/power`.
@@ -133,15 +133,9 @@ A transaction whose only message is a `MsgShieldedTransfer` takes a different, s
 
 `UndelegateGuard` refuses a `MsgUndelegate` or `MsgBeginRedelegate` that would take a bootstrap committee member's own self-bond below the amount `x/power` has force-bonded into it, while lambda is below one. It sums several withdrawals in one transaction before comparing (`chain/x/power/ante/undelegate_guard.go:UndelegateGuard`). `MinDelegationDecorator` simulates the transaction's delegation changes on a copy and refuses any that would leave a delegation strictly between zero and `min_delegation_for_rewards` (1 ORAMA), so the per-epoch reward walk cannot be filled with dust; a full exit is allowed (`chain/x/power/ante/min_delegation.go:MinDelegationDecorator`).
 
-### The bank send restrictions
+### The bank send restriction
 
-Three restrictions are appended to the bank keeper's send path, in this order (`chain/app/app.go`):
-
-1. `NoramaSendRestriction`: a send that moves no norama passes; one with a module account on either side passes; a send to a contract passes; every other norama send is refused with `ErrPublicPayment` (`chain/x/shielded/policy/restriction.go:NoramaSendRestriction`). A user cannot pay a user. A contract cannot pay a user, because a payout from a contract is an earnings credit (`PayEarnings`).
-2. The contract-send restriction, which lets a contract's funds go to the module accounts that `wasmpolicy.FeeEarningsModules()` names (fees, deposits and the like) but nowhere else.
-3. `TokenKeeper.SendRestriction`, which applies every factory token's pause, freeze, non-transferable flag, transfer fee and hook to any send of that token ([economics](40-economics.md#factory-tokens)).
-
-Because bank sends to a module account are blocked by `BlockedAddresses`, wasmd's coin transferrer is wrapped (`allowModuleTransferrer`) so that a contract can still pay the fee and deposit accounts. Nothing here gives the chain a way to pay a user a public balance, apart from stake and node-bond unbonding returning to their owners and the test-network faucet.
+One restriction is appended to the bank keeper's send path (`chain/app/app.go`): `TokenKeeper.SendRestriction`, which applies every factory token's pause, freeze, non-transferable flag, transfer fee and hook to any send of that token ([economics](40-economics.md#factory-tokens)). Norama has no send restriction of its own. A bank send of norama between users, from a contract to a user and from a user to a contract is a public payment, limited only by the sender's spendable balance. Every module account is a blocked address (`BlockedAddresses`), so no bank message can pay one: a public send can never reach the `fees` account that backs the earnings ledger or the `fees_deposits` account that backs the deposits, and the invariants that tie those ledgers to their accounts cannot be unbalanced from outside. Module keepers still move norama between module accounts and to plain accounts (the faucet, unbonding, `MsgWithdrawEarnings`). The private path is the shielded pool.
 
 ### Voting power
 
@@ -562,14 +556,14 @@ For the archive, `oramad query archive last-archived-height` is the contiguous a
 
 **Unit tests** (all in `make test`, from `chain/`):
 
-- `chain/app/`: `TestOramaApp_buildsAndValidatesDefaultGenesis`, `TestUserToUserNoramaSendIsRefused`, `TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings`, `TestBlockedAddresses_coversEveryModuleAccount`, `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg`, `TestOramaApp_shieldedVerifiersAreTwoAndAnUnconfiguredNodeAcceptsNothing`, `TestLockedGenesis_defaultsEqualPlanValues`, `TestLockedGenesis_everyGenesisParameterHasARow`, `TestLockedGenesis_productionChainRejectsEveryChangedParameter`, `TestLockedGenesis_initChainRefusesChangedParameterOnProductionChainID`.
+- `chain/app/`: `TestOramaApp_buildsAndValidatesDefaultGenesis`, `TestBankKeeper_userToUserNoramaSendIsAllowed`, `TestOramaApp_zeroSupplyGenesisProducesBlocksAndPaysEarnings`, `TestBlockedAddresses_coversEveryModuleAccount`, `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg`, `TestOramaApp_shieldedVerifiersAreTwoAndAnUnconfiguredNodeAcceptsNothing`, `TestLockedGenesis_defaultsEqualPlanValues`, `TestLockedGenesis_everyGenesisParameterHasARow`, `TestLockedGenesis_productionChainRejectsEveryChangedParameter`, `TestLockedGenesis_initChainRefusesChangedParameterOnProductionChainID`.
 - Inclusion: `TestInclusion_listedTxMustBeInTheNextBlock`, `TestInclusion_proposalThatDropsAListedTxIsRejected`, `TestInclusion_badCommitIsRejected`, `TestInclusion_forgedSignatureIsNotRequired`, `TestInclusion_oversizedInjectedCommit`, `TestInclusion_disabledBehavesAsBefore` in `chain/app/`; `TestRequired_verifyAttemptsAreCapped`, `TestRequired_oneValidatorsJunkDoesNotStarveAnotherValidatorsTransaction`, `TestRequired_neverExceedsTheEmbeddedCap`, `TestAccept_authenticatedTrimsToTheEmbeddedCap`, `TestProcess_prefix`, `TestProcess_sameSequenceConflict` in `chain/x/inclusion/`.
 - `chain/x/power/`: the power, lambda, cap, ramp and publication-limit tests in `keeper/` and `types/`.
 - `chain/client/tx`: `vectors_test.go` regenerates the cross-language vectors with `-update-tx-vectors`.
 - `core/pkg/gateway/handlers/chainread/`: `TestQuery_everyEmbeddedMethodIsClassified` and the allowlist, sanitiser and limit tests; `core/pkg/clusterreg/` tests read the chain's limit constants.
 - `chain/spikes/`: `TestVoteExtensionBudget` prints the byte budget at 30, 60, 100 and 150 validators.
 
-**Fleet e2e** (the owner runs the fleet suite): `e2e/features/chain-core/` (consensus agreement, fee market, send restriction, unreachable authority, staking from earnings, every module's invariants), `e2e/features/chain-core-destructive/` (restart catch-up, base fee under load, export, the undelegate guard), `e2e/features/chain-economics/` (emission, power, nodes), `e2e/features/chain-waivers/` (unwired modules stay unwired; vote extensions enabled at exactly the genesis height), `e2e/features/chain-cli/`, `e2e/features/chain-explorer/` and `e2e/features/chain-wallet-routes/` (the gateway's chain routes).
+**Fleet e2e** (the owner runs the fleet suite): `e2e/features/chain-core/` (consensus agreement, fee market, public transfers, unreachable authority, staking from earnings, every module's invariants), `e2e/features/chain-core-destructive/` (restart catch-up, base fee under load, export, the undelegate guard), `e2e/features/chain-economics/` (emission, power, nodes), `e2e/features/chain-waivers/` (unwired modules stay unwired; vote extensions enabled at exactly the genesis height), `e2e/features/chain-cli/`, `e2e/features/chain-explorer/` and `e2e/features/chain-wallet-routes/` (the gateway's chain routes).
 
 **Read-only on a node or through the gateway:**
 

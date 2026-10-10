@@ -2,7 +2,7 @@
 
 `x/shielded` is the private way to hold and move ORAMA. It is a shielded pool in the style of Zcash Orchard (orchard 0.15.5, "Ironwood" in Orama's naming): value goes in, moves between private notes with no visible sender, receiver or amount, and comes out again.
 
-**Read this first.** The module is implemented and wired, but it fails closed. A node accepts a shielded bundle only if it has *both* proof verifiers: the in-process Orchard library (built with `-tags orchardffi`) and the pinned out-of-process `orama-orchard-verifier` binary. A plain `make build` produces a binary with neither, so it accepts no shielded transaction. Release builds (`build-linux-amd64-full`, `build-linux-amd64-orchard`) link both. On any node without them, a user cannot pay another user at all, because public sends are refused too. The linux binaries have been built and linked but not yet run as a network. The two verifiers share the same upstream crate; a genuinely independent second implementation is an open item.
+**Read this first.** The module is implemented and wired, but it fails closed. A node accepts a shielded bundle only if it has *both* proof verifiers: the in-process Orchard library (built with `-tags orchardffi`) and the pinned out-of-process `orama-orchard-verifier` binary. A plain `make build` produces a binary with neither, so it accepts no shielded transaction. Release builds (`build-linux-amd64-full`, `build-linux-amd64-orchard`) link both. On any node without them, only public sends work. The linux binaries have been built and linked but not yet run as a network. The two verifiers share the same upstream crate; a genuinely independent second implementation is an open item.
 
 ## Messages
 

@@ -108,7 +108,7 @@ The unit restarts always, after 5 s, with no start limit, and allows 65,535 open
 
 The unit has no WireGuard dependency and its peers must be public addresses: `IPAddressDeny=` covers the private ranges. The stagenet deploy script writes a different chain unit that peers over the WireGuard mesh; it is not this one ([chain architecture](39-chain-architecture.md)). The comment on `ChainP2PPort` in `core/pkg/constants/chain.go` still says the listener is on the WireGuard address; the global unit binds `0.0.0.0`.
 
-`oramad start` refuses a node whose `app.toml` sets `query-gas-limit` to 0 on any chain id that is not a localnet (`chain/cmd/oramad/cmd/commands.go:requireQueryGasLimit`). `oramad init` writes `2000000`. The installer never rewrites an existing `app.toml`.
+`oramad start` refuses a node whose `app.toml` sets `query-gas-limit` to 0 on any chain id that is not a localnet (`chain/cmd/oramad/cmd/commands.go:guardStart`). `oramad init` writes `2000000`. The installer never rewrites an existing `app.toml`.
 
 ### Cosmovisor staging
 

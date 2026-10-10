@@ -25,7 +25,7 @@ This page makes no legal commitment. There is no legal workstream in the plan.
 
 - `chain/`: every module (`x/emission`, `x/fees`, `x/power`, `x/houses`, `x/nodes`, `x/storage`,
   `x/relay`, `x/archive`, `x/token`, `x/cnft`, `x/market`, `x/wasmpolicy`, `x/inclusion`,
-  `x/shielded`, `x/confidential`), the app wiring, ante handlers and send restrictions in
+  `x/shielded`, `x/confidential`), the app wiring, ante handlers and bank send restrictions in
   `chain/app`, and `oramad`.
 - The genesis parameter lock (`app.ValidateLockedGenesis`) and `oramad genesis validate`.
 - `piece/`, and the global services `orama-global` (provider, repair delegate, archiver, indexer).
@@ -62,7 +62,7 @@ attacker gains and how hard it is to undo.
 | Severity | Examples |
 |---|---|
 | Critical | Minting norama outside the emission schedule. Creating or moving funds from any module account without the module's rule. Any key, message or path that pauses, freezes, blacklists, halts or upgrades the chain, or changes an ossified rule. A shielded bundle accepted without two independent verifiers, an unshield that breaks the turnstile or the 2% cap, or double-spend of a nullifier. Treating any quote or blob as a valid TEE attestation, or any way to make a marketplace lease go through. Splitting consensus or halting the chain without more than a third of voting power. Forging a release the node's verifier accepts. |
-| High | Breaking an invariant that `oramad query <module> invariants` checks (`docs/SECURITY_PLAYBOOKS.md`). Governance passing without its opening rule, its votes or its timelock, or a house-bond escape. Bypassing the mandatory-shielding send restriction for user-to-user ORAMA. Bypassing the upload allow-list or sunset. Drawing protocol payments for work not done, or storage or relay payments beyond the ceiling. A validator-set or power computation that can be biased by a non-validator. |
+| High | Breaking an invariant that `oramad query <module> invariants` checks (`docs/SECURITY_PLAYBOOKS.md`). Governance passing without its opening rule, its votes or its timelock, or a house-bond escape. Paying a module account with a bank message, which would unbalance the earnings or deposit ledgers. Bypassing the upload allow-list or sunset. Drawing protocol payments for work not done, or storage or relay payments beyond the ceiling. A validator-set or power computation that can be biased by a non-validator. |
 | Medium | A path that lets an attacker cheaply grief one operator or deal (a slash, jail or eviction they did not earn). A leak that narrows privacy without breaking a proof. An error that halts one node's block processing but not the chain. A parameter accepted outside its coded bound. |
 | Low | Hardening gaps, misleading errors or docs that could lead an operator to a wrong action, and issues with no realistic exploit. |
 

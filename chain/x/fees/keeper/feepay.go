@@ -17,11 +17,9 @@ import (
 // to proposer's earnings account.
 //
 // The tip MUST come entirely from payer's own bank balance (security review M4: "earnings may pay
-// only the base fee; tips must come from the bank balance") - earnings are a restricted balance
-// (usable only for fees and bonding, never a public payment), and letting a tip draw on it would
-// open exactly the public-payment leak mandatory shielding forbids: someone could otherwise pump up
-// a tip while broke in the bank to slip value to a specific address (whichever validator proposes
-// next) using funds that were never supposed to become a public transfer.
+// only the base fee; tips must come from the bank balance"): a tip is a payment to the proposer,
+// and earnings pay fees and bonds. A payer who wants to tip from earnings withdraws them to the
+// bank balance first (MsgWithdrawEarnings).
 //
 // The base fee is paid from payer's bank balance first; if allowEarningsForBase is true and that is
 // not enough, the remainder is drawn from payer's own fee-only balance (funded by an operator for a

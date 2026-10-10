@@ -111,13 +111,10 @@ being duplicated as magic strings.
 (`chain/app/genesis_overrides.go`), so wallets and block explorers that read denom metadata from
 genesis see the display denom without hardcoding it.
 
-A bank send of `norama` from one user account to another is refused, and so is a send from a
-registered contract to a user. Module accounts can still move `norama`, and a user can pay a
-registered contract (a contract is any address wasmd holds a `ContractInfo` for, or is instantiating: it
-moves the attached funds before it registers the contract, so `x/wasmpolicy.WithFundedContract` marks
-that one recipient). The private path between users is a `MsgShieldedTransfer` in `x/shielded`,
-which a node accepts only with both proof verifiers present (see "`x/shielded`" below); on any other
-node a user cannot pay another user at all.
+A bank send of `norama` between accounts (a user, a contract) is an ordinary public payment. The module
+accounts are blocked addresses, so no bank message can pay one. The private path between users is a
+`MsgShieldedTransfer` in `x/shielded`, which a node accepts only with both proof verifiers present (see
+"`x/shielded`" below); on any other node only public payments work.
 
 ### Other genesis defaults
 
@@ -1114,7 +1111,7 @@ pays from the bank balance) or, signed by the seller, accepts a bid (`bid_id` se
 seller still owns the leaf, moves the leaf to the buyer (the delegate is cleared), refunds every other
 bid, and credits the royalty (`price * royalty_bps / 10,000`, rounded down) to the collection creator's
 **earnings account** and the rest to the seller's earnings account. Nothing is paid to a bank balance, so
-the market cannot be a public payment rail. A transfer outside the market pays no royalty. `oramad query
+the payee does not get a balance the buyer chose. A transfer outside the market pays no royalty. `oramad query
 market invariants` checks that the module account holds exactly the open bids.
 
 **Not built.**
@@ -2612,7 +2609,7 @@ carries the human-readable decoders, must hold all of them. Regenerate both with
 **Wallet-flow tests.** `chain/app/wallet_flow_test.go` drives the builder against a real app through
 `FinalizeBlock`, with secp256k1 accounts, so each transaction crosses the ante chain and the message
 router. What the chain lets a wallet do today: the fee comes from the bank balance and falls back to
-earnings when the bank is short; `x/bank` refuses public user-to-user norama sends; the four
+earnings when the bank is short; a public user-to-user norama send moves the bank balance; the four
 shielded messages are registered and signed by the same builder, and refused here because this build
 links neither verifier (the accepted proofs run in `shielded_real_test.go` and
 `shielded_wallet_test.go` under the `orchardffi` build); a wallet delegates and undelegates from earnings; votes in the token house; registers
@@ -2718,12 +2715,11 @@ has no `wasm` module). `chain/scripts/stagenet/deploy.sh` runs it after the boot
 and builds the static binary with `make build-linux-amd64-full`. `WITH_WASM=1 make localnet` does the same on a
 localnet with a host cgo build.
 
-**What the standard contracts cannot do with ORAMA.** They run as contracts, so the send restriction
-applies to them. A CW3 multisig proposal that bank-sends ORAMA to a user fails when executed. The escrow
-releases and refunds by bank send, so ORAMA escrowed for a user recipient cannot leave it (it stays in the
-escrow; token and CW20 escrows work). The vesting contract's instantiate for the native denom sends a
-distribution `SetWithdrawAddress`, which is refused, so ORAMA cannot be vested at all; it can vest a user
-token. A contract pays a user ORAMA through the `earnings` binding below.
+**What the standard contracts can do with ORAMA.** They run as contracts and pay like any account. A CW3
+multisig proposal that bank-sends ORAMA to a user executes, and the escrow releases and refunds ORAMA to its
+recipient or creator. The vesting contract's instantiate for the native denom sends a distribution
+`SetWithdrawAddress`, which is refused, so ORAMA cannot be vested; it can vest a user token. A contract can
+also pay a user's earnings through the `earnings` binding below.
 
 ### Native library
 
@@ -2756,15 +2752,11 @@ names no code id, so even the exact bytes of a genesis contract are refused befo
 Every other message is unaffected: anyone can instantiate a stored code at any time. A contract cannot
 upload code: `CosmosMsg` has no such variant.
 
-### The send restriction and contract messages
+### Norama sends and contract messages
 
-`norama` moves between accounts only when one side is a module account or the recipient is a contract
-(`x/shielded/policy.NoramaSendRestriction`, with `isContract` bound to wasmd's `HasContractInfo`, and
-`x/wasmpolicy/ante.ContractSendDecorator`, which allows every module account). So a user can pay a
-contract, a contract can pay a contract or a module (the token, market and storage bindings pull
-fees and escrow that way) and a contract cannot pay a user. `BankMsg::Send` to a module account is refused
-by bank's blocked-address rule. wasmd's instantiate moves the attached funds before it registers the
-contract, so the coin transferrer marks that recipient (`WithFundedContract`) for the one transfer.
+`norama` has no send restriction. A user can pay a user, a contract or an account, and a contract can pay a
+user or another contract. The module accounts are blocked addresses, so `BankMsg::Send` to one is refused by
+bank's blocked-address rule; the token, market and storage bindings reach module accounts through keeper sends.
 
 The message handler (`wasmbindings.Messenger`) also refuses `CosmosMsg::Staking` (the delegation rules in `x/power` are ante-only, so a contract could otherwise fill the epoch reward walk with dust delegations), `CosmosMsg::Any`, which is how the stargate
 form arrives, and distribution `SetWithdrawAddress`. IBC messages are refused as before. A contract reaches
@@ -3533,11 +3525,11 @@ What the script does that the docs of the individual commands do not say:
   no `Msg` service to fuzz).
 - **`app-db-backend` defaults to `pebbledb`, not `goleveldb`** - see the gotcha section above.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
-- **`x/bank` refuses user-to-user and contract-to-user `norama` sends.** A user can pay a
-  contract, and a contract can pay a contract or a module account. The private path is `x/shielded`: a
-  node accepts a shielded bundle only with the orchard library linked (a cgo `orchardffi` build) and
-  the verifier binary present, so on any other node payments between users are not possible at all.
-  The two verifiers share the upstream `orchard` crate; a genuinely independent implementation is open.
+- **`norama` moves publicly between plain accounts and contracts.** The module accounts are blocked
+  addresses. The private path is `x/shielded`: a node accepts a shielded bundle only with the orchard
+  library linked (a cgo `orchardffi` build) and the verifier binary present, so on any other node only
+  public payments work. The two verifiers share the upstream `orchard` crate; a genuinely independent
+  implementation is open.
 - **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
   deviation from the first pass.** `x/emission` hands its epoch mint to
   `PowerKeeper.DistributeEpochRewards`, which pays it out on capped power `P_i`, split between each

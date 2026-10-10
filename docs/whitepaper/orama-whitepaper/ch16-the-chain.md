@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** `oramad` is the Orama L1, a Cosmos SDK v0.54.4 application on CometBFT v0.39.4, wired by hand in one Go module (`chain/`) that `core/` never imports. Four things set it apart from a stock chain: a user-to-user norama send is refused; the validator set comes from `x/power`, a blend of an equal-share bootstrap committee and capped stake, not from `x/staking`; ordinary transactions pay a burned base fee through `x/fees`; and a block must contain the transactions a 2/3 quorum of validators listed in their vote extensions. No governance module can change a stock module. A change needs a new binary on a new genesis.
+> - **What:** `oramad` is the Orama L1, a Cosmos SDK v0.54.4 application on CometBFT v0.39.4, wired by hand in one Go module (`chain/`) that `core/` never imports. Four things set it apart from a stock chain: norama is public by default, with a shielded pool for private payments; the validator set comes from `x/power`, a blend of an equal-share bootstrap committee and capped stake, not from `x/staking`; ordinary transactions pay a burned base fee through `x/fees`; and a block must contain the transactions a 2/3 quorum of validators listed in their vote extensions. No governance module can change a stock module. A change needs a new binary on a new genesis.
 > - **Key numbers:** 21 stores; ports 31000 to 31004; blocks every 5 s; 19 ante decorators; voting power scale 10^9; power cap 5% (3% above 60 active validators); 30-epoch stake ramp; at most one third of power moves per block; bootstrap committee of at least 30 on a production chain; vote-extension list 32 KiB; query gas limit 2,000,000.
 > - **Code:** `chain/app/`, `chain/x/power/`, `chain/x/inclusion/`, `chain/client/`, `core/pkg/chainread/`.
 
@@ -16,7 +16,7 @@ First, the chain starts with no money and no stake, and proof of stake needs bon
 
 Second, stake-weighted sets concentrate. The code caps one validator's share, rate-limits how fast power moves and ramps new stake in over 30 epochs. Each rule exists because a review found a way to take the set over without it.
 
-Third, payments between users are not public. The bank module is kept, but norama cannot move from one user to another, and every protocol payout lands in a restricted earnings ledger. The only way to pay a person is the shielded pool.
+Third, payments between users are not public. The bank module is kept, norama moves publicly between users, and every protocol payout lands in an earnings ledger. The only way to pay a person is the shielded pool.
 
 Fourth, a validator must not censor for free. Vote extensions carry each validator's list of long-waiting transactions, and a proposal that omits a valid listed transaction is rejected.
 
@@ -40,9 +40,9 @@ CometBFT accepts validator updates from exactly one module per block. A wrapper 
 
 ### The ante chain
 
-An ordinary transaction passes 19 decorators in stock order, with additions. A shielded message must be alone in its transaction, checked before any fee is taken. Contract code upload is closed until a sunset height, and a contract may not send norama to a user. `x/fees` replaces the stock deduct-fee decorator. `x/power` adds a guard against withdrawing force-bonded committee stake and a minimum delegation of 1 ORAMA, so the reward walk cannot be filled with dust. Signatures are verified before shielded proofs are checked, so unsigned garbage costs no proof work. A shielded transfer, which has no signer and no declared fee, takes a shorter chain that checks the bundle and the fee inside its value balance.
+An ordinary transaction passes 19 decorators in stock order, with additions. A shielded message must be alone in its transaction, checked before any fee is taken. Contract code upload is closed until a sunset height. `x/fees` replaces the stock deduct-fee decorator. `x/power` adds a guard against withdrawing force-bonded committee stake and a minimum delegation of 1 ORAMA, so the reward walk cannot be filled with dust. Signatures are verified before shielded proofs are checked, so unsigned garbage costs no proof work. A shielded transfer, which has no signer and no declared fee, takes a shorter chain that checks the bundle and the fee inside its value balance.
 
-Three restrictions sit on the bank send path. The first refuses any norama send except to or from a module account or a contract, so a user cannot pay a user, and a contract's payout becomes an earnings credit. The second limits where a contract's funds may go. The third applies each factory token's pause, freeze, fee and hook.
+One restriction sits on the bank send path: it applies each factory token's pause, freeze, fee and hook. Norama itself moves publicly between users and contracts, and the chain blocks every module account as a receiver of a bank message. The private way to pay is the shielded pool.
 
 ## Who holds voting power
 

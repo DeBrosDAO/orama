@@ -17,9 +17,9 @@ First, supply has to be a function of the epoch number alone. The schedule count
 
 Second, the validators who secure the chain should not also decide what the storage, relay and development shares are worth. Those shares are written as ceilings per epoch and minted only when a module proves work against them. What nobody claims is never minted, so the real supply is at most the schedule and usually below it.
 
-Third, a payout should not be a public transfer. The chain refuses a bank send of norama from one user to another (see [chain architecture](39-chain-architecture.md#the-bank-send-restrictions)), so every protocol payment lands in the recipient's earnings ledger inside `x/fees`. Earnings can pay fees, bonds, deposits and shielding, and nothing else. That is a privacy rule and a spam rule: a payment cannot be aimed at a chosen address.
+Third, a payout should not be aimed at a chosen address. Every protocol payment lands in the recipient's earnings ledger inside `x/fees` (see [chain architecture](39-chain-architecture.md#the-bank-send-restriction)). Earnings can pay fees, bonds, deposits and shielding, and nothing else. That is a spam rule: a payment cannot be aimed at a chosen address, and a reward is not a spendable balance until its owner moves it. Users can pay each other in the open with an ordinary bank send, or privately through the pool.
 
-Fourth, fees must be priced by load and must not enrich whoever orders the block. The base fee follows the EIP-1559 shape and is burned entirely. Only the voluntary tip reaches the proposer, and a tip has to come from a bank balance, because an earnings tip would be a back door to a public payment.
+Fourth, fees must be priced by load and must not enrich whoever orders the block. The base fee follows the EIP-1559 shape and is burned entirely. Only the voluntary tip reaches the proposer, and a tip has to come from a bank balance: a tip is a payment, and earnings pay fees and bonds.
 
 ## The model
 
@@ -154,7 +154,7 @@ What earnings can be spent on is the whole restriction:
 
 `FundSpendFromEarnings` tops the signer's bank balance up from its own earnings, by exactly the shortfall, or does nothing if earnings cannot cover the whole shortfall. It is called from message handlers and never from an ante decorator, because ante writes survive a message that then fails: a top-up in the ante chain would turn earnings into spendable balance for free. A handler runs in the message's cache branch, which is discarded if the message fails, taking the top-up with it (`chain/x/fees/keeper/earnings.go:FundSpendFromEarnings`, `chain/app/staking_topup.go:earningsFundedStaking`).
 
-A tip cannot come from earnings. `SettleFee` checks the tip against the bank balance alone. If a tip could draw on earnings, an account with no bank balance could send value to the next proposer's address by inflating the tip, which is a public payment through the back door.
+A tip cannot come from earnings. `SettleFee` checks the tip against the bank balance alone. A tip is a payment to the proposer, and earnings pay fees and bonds.
 
 A fee-only balance is the same ledger idea with a narrower use: it pays a base fee and nothing else, it is not bondable, and it is not drawn through a fee granter (`TestFeeBalance_cannotBeBonded`, `TestSettleFee_feeBalanceNeverPaysATip`). `CreditFeeBalance` is the second way in: `x/shielded`'s unshield to the signer's own fee balance.
 
@@ -261,7 +261,7 @@ The `emission` module account holds nothing between blocks except development mi
 
 **Who can mint.** Only `x/emission` holds `Minter` on norama, and its mint paths are the epoch close, the three ceiling-bounded service mints and the faucet. `x/token` also holds `Minter`, but its bank keeper is wrapped with a mint restriction that refuses norama (`TestGetMaccPerms_onlyEmissionMintsNorama`). No message can change the schedule, the split's bounds, the base-fee parameters or the deposit fraction: the stock modules' authority is the hash of a module name that is never registered, and the three modules here have no authority at all. The one lever is the emission split, and it is bounded: each share within 10 points of canonical, the upgrade timelock in `x/houses` (60 days at the defaults, never less), no way to touch the halving table or the tail.
 
-**Who sees what.** Every ledger is public state. The privacy rule is not that earnings are hidden; it is that they cannot be paid to a chosen address. A payout is a ledger credit, a user-to-user bank send is refused, and the only way value reaches a plain user balance is a deliberate mint or release path: node and stake unbonding returning to the owner, and the faucet on a test network. The private path between users is a shielded transfer.
+**Who sees what.** Every ledger is public state. Earnings are not hidden; they cannot be paid to a chosen address. A payout is a ledger credit, a user-to-user bank send of an existing balance is public, and value reaches a plain user balance by a deliberate release path: node and stake unbonding returning to the owner, the faucet on a test network, and the owner moving earnings to the owner's own balance. The private path between users is a shielded transfer.
 
 **An attacker as a validator or proposer.** A proposer chooses transaction order and receives tips, but cannot raise the base fee by stuffing its own blocks without paying it, because the base fee is burned and the fee a stuffing transaction pays is above the floor. A proposer cannot take other people's tips: the tip is credited to the proposer of the block that contains the transaction, resolved from the header. A supermajority that manipulated timestamps cannot close an epoch before 14,400 blocks. A validator whose commission is 100% takes the whole epoch reward of its delegators: commission has no cap in the economics code (it is the stock staking module's rule, `min_commission_rate` 0).
 
@@ -297,7 +297,7 @@ The `emission` module account holds nothing between blocks except development mi
 
 ### Earnings restricted to the signer's own uses
 
-*Chosen:* a ledger usable for fees, bonds, deposits and shielding, with a top-up inside message handlers. *Rejected:* an ordinary bank balance, or a transferable earnings token. *Why:* mandatory shielding of user payments is the chain's privacy rule; a spendable reward would be a public payment channel.
+*Chosen:* a ledger usable for fees, bonds, deposits and shielding, with a top-up inside message handlers. *Rejected:* an ordinary bank balance, or a transferable earnings token. *Why:* a reward must not be aimed at a chosen address, and a spendable reward credited by a proposer or a contract would be.
 
 ### The tip is paid from the bank balance only
 

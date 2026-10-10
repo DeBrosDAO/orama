@@ -13,7 +13,6 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/DeBrosOfficial/network/chain/app/params"
-	shieldedpolicy "github.com/DeBrosOfficial/network/chain/x/shielded/policy"
 	tokentypes "github.com/DeBrosOfficial/network/chain/x/token/types"
 
 	wasmtypes "github.com/CosmWasm/wasmd/x/wasm/types"
@@ -86,10 +85,10 @@ func TestStandardMultisig_proposeVoteExecute(t *testing.T) {
 	require.Contains(t, string(c.smart(multisig, map[string]any{"proposal": map[string]any{"proposal_id": 1}})), `"status":"executed"`)
 }
 
-// TestStandardMultisig_cannotPayNoramaToAUser holds ORAMA in a multisig and passes a proposal that
-// bank-sends it to a user. The proposal executes as the multisig contract, so the send restriction
-// refuses it: a standard contract is no way around the mandatory-shielding rule.
-func TestStandardMultisig_cannotPayNoramaToAUser(t *testing.T) {
+// TestStandardMultisig_paysNoramaToAUser holds ORAMA in a multisig and passes a proposal that
+// bank-sends it to a user. The proposal executes as the multisig contract; norama moves publicly,
+// so the payment goes through and the multisig's balance falls by the same amount.
+func TestStandardMultisig_paysNoramaToAUser(t *testing.T) {
 	c := newWasmChain(t, wasmChainOptions{users: 3})
 	alice, bob, carol := c.users[0], c.users[1], c.users[2]
 	multisig := c.instantiate(alice, codeMultisig, map[string]any{
@@ -105,11 +104,10 @@ func TestStandardMultisig_cannotPayNoramaToAUser(t *testing.T) {
 	c.mustExec(alice, multisig, map[string]any{"propose": map[string]any{"title": "pay carol", "description": "x", "msgs": []any{pay}}}, nil)
 	c.mustExec(bob, multisig, map[string]any{"vote": map[string]any{"proposal_id": 1, "vote": "yes"}}, nil)
 
-	res := c.exec(alice, multisig, map[string]any{"execute": map[string]any{"proposal_id": 1}}, nil)
-	require.NotZero(t, res.Code)
-	require.Contains(t, res.Log, shieldedpolicy.ErrPublicPayment.Error())
-	require.True(t, c.app.BankKeeper.GetBalance(c.ctx(), carol.addr, params.BaseDenom).Amount.Equal(math.NewInt(1_000*params.NoramaPerOrama)),
-		"carol still holds only her genesis funding")
+	c.mustExec(alice, multisig, map[string]any{"execute": map[string]any{"proposal_id": 1}}, nil)
+	require.True(t, c.balance(carol.addr, params.BaseDenom).Equal(math.NewInt(1_001*params.NoramaPerOrama)),
+		"carol holds her genesis funding plus the payment")
+	require.True(t, c.balance(multisig, params.BaseDenom).Equal(math.NewInt(49*params.NoramaPerOrama)))
 }
 
 // createGold creates factory/{alice}/gold with mint authority and mints amount of it to alice,
@@ -149,25 +147,29 @@ func TestStandardEscrow_approveReleasesATokenToTheRecipient(t *testing.T) {
 	require.True(t, c.balance(escrow, gold).IsZero())
 }
 
-// TestStandardEscrow_noramaCannotLeaveToAUser escrows ORAMA. Both release paths pay a user with a
-// bank send, which the send restriction refuses, so the ORAMA stays in the escrow. This is the
-// stock escrow's limit on this chain: it releases ORAMA only to a contract, and user-facing
-// payouts of ORAMA must go through the earnings binding.
-func TestStandardEscrow_noramaCannotLeaveToAUser(t *testing.T) {
+// TestStandardEscrow_noramaReleasesToTheRecipientOrRefunds escrows ORAMA. Approve and refund both
+// pay a user with a bank send, which norama allows: the arbiter's approval pays the recipient, and
+// a second escrow refunds its creator.
+func TestStandardEscrow_noramaReleasesToTheRecipientOrRefunds(t *testing.T) {
 	c := newWasmChain(t, wasmChainOptions{users: 3})
 	alice, bob, carol := c.users[0], c.users[1], c.users[2]
 	escrow := c.instantiate(alice, codeEscrow, map[string]any{}, nil)
-	c.mustExec(alice, escrow, map[string]any{"create": map[string]any{
-		"id": "orama-deal", "arbiter": bob.addr.String(), "recipient": carol.addr.String(),
-		"title": "t", "description": "d", "end_height": nil, "end_time": nil, "cw20_whitelist": nil,
-	}}, noramaCoins(5*params.NoramaPerOrama))
+	for _, id := range []string{"pay-deal", "refund-deal"} {
+		c.mustExec(alice, escrow, map[string]any{"create": map[string]any{
+			"id": id, "arbiter": bob.addr.String(), "recipient": carol.addr.String(),
+			"title": "t", "description": "d", "end_height": nil, "end_time": nil, "cw20_whitelist": nil,
+		}}, noramaCoins(5*params.NoramaPerOrama))
+	}
+	carolBefore := c.balance(carol.addr, params.BaseDenom)
+	aliceBefore := c.balance(alice.addr, params.BaseDenom)
 
-	approve := c.exec(bob, escrow, map[string]any{"approve": map[string]string{"id": "orama-deal"}}, nil)
-	require.NotZero(t, approve.Code)
-	require.Contains(t, approve.Log, shieldedpolicy.ErrPublicPayment.Error())
-	refund := c.exec(bob, escrow, map[string]any{"refund": map[string]string{"id": "orama-deal"}}, nil)
-	require.NotZero(t, refund.Code)
-	require.True(t, c.balance(escrow, params.BaseDenom).Equal(math.NewInt(5*params.NoramaPerOrama)))
+	c.mustExec(bob, escrow, map[string]any{"approve": map[string]string{"id": "pay-deal"}}, nil)
+	require.True(t, c.balance(carol.addr, params.BaseDenom).Sub(carolBefore).Equal(math.NewInt(5*params.NoramaPerOrama)))
+
+	c.mustExec(bob, escrow, map[string]any{"refund": map[string]string{"id": "refund-deal"}}, nil)
+	require.True(t, c.balance(alice.addr, params.BaseDenom).Sub(aliceBefore).Equal(math.NewInt(5*params.NoramaPerOrama)),
+		"the refund returns the escrowed norama to its creator")
+	require.True(t, c.balance(escrow, params.BaseDenom).IsZero())
 }
 
 func TestStandardVesting_distributesATokenOverTime(t *testing.T) {

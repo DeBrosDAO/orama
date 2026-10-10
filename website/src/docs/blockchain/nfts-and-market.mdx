@@ -30,6 +30,6 @@ There is no admin key and no parameter that can be changed. There are no events:
 | `CancelBid` | Returns a bid |
 | `Settle` | With `bid_id` 0 the signer buys at the list price from their bank balance. Otherwise the seller accepts a bid and the other bids are refunded |
 
-At settlement the royalty (`price x royalty_bps / 10000`, rounded down) goes to the collection creator's earnings and the rest goes to the seller's earnings. There is no market fee and no burn. A direct bank send between users is refused, but this payment is made by the market module, and modules can pay anyone.
+At settlement the royalty (`price x royalty_bps / 10000`, rounded down) goes to the collection creator's earnings and the rest goes to the seller's earnings. There is no market fee and no burn. The market module makes this payment into earnings; a bank send between users would pay a public balance instead.
 
 Queries: `Listing` and `Bid` are public. An invariant checks that the market module account holds exactly the open bids.

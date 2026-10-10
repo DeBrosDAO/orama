@@ -397,7 +397,7 @@ export class OramaChainClient {
     return this.runQuery(WASM, "ContractInfo", { address: assertAddress(address) }, options);
   }
 
-  /** Whether an address is a contract, so a wallet can refuse a user-to-user send to one before signing. */
+  /** Whether an address is a contract, so a wallet can tell a contract from a plain account before it signs a send. */
   async isContract(address: string, options: QueryOptions = {}): Promise<boolean> {
     try {
       await this.contractInfo(address, options);
