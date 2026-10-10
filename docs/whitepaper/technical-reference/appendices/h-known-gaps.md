@@ -681,7 +681,7 @@ From [Global nodes](../vol2/37-global-nodes.md#known-gaps).
 - `x/nodes` has no list queries.
 - A global node cannot be removed by the CLI. The installer has no uninstall for a service or for the co-located layout.
 - A host that stages the first `oramad` trusts the operator's staging directory. No TUF check runs at install; only `stage-oramad` verifies. A patch release that changes no consensus behaviour has no installed update path.
-- The shielded verifier binary `orama-orchard-verifier` is not staged by `orama global install`; `oramad` looks for it in the chain home and a node without it accepts no shielded bundle.
+- The shielded verifier binary `orama-orchard-verifier` is not staged by `orama global install`; `oramad` looks for it in the chain home and a stagenet, testnet or mainnet node without it refuses to start.
 - A remote signer (TMKMS, Horcrux) and sentry topologies are not supported.
 - The sign floor protects only hosts that ran the migration commands. A key copied by hand carries no floor.
 - `orama global start` reports success for a unit systemd has started but that exits at once (the provider before registration).
@@ -784,7 +784,7 @@ From [The shielded pool](../vol2/43-the-shielded-pool.md#known-gaps).
 - **The queue is unbounded and cannot be cancelled.** A request whose target never accepts stays forever, and its coins stay in the module account. `chain/x/shielded/keeper/queue.go`.
 - **Multi-asset and vintage migration are not wired.** `pool.Pools`, `AllowAsset`, `AllowToken` and `Pools.Move` hold tested logic that no keeper path calls; the keeper keeps its own balances and names one pool. `chain/x/shielded/pool/pool.go`.
 - **Unused policy helpers.** `policy.CheckTarget`, `policy.BundlePaysFee` and `policy.BlockUserToUser` are called by tests only, and `policy.MaxFeeTopup` (10 ORAMA) disagrees with the parameter default (0.01 ORAMA). `chain/x/shielded/policy/unshield.go`, `chain/x/shielded/policy/fee.go`, `chain/x/shielded/policy/send.go`.
-- **The global installer does not stage the verifier binary.** `orama global install` places `oramad` but nothing in `core/` installs `orama-orchard-verifier`; a node without it accepts no shielded bundle until the operator places the file and the pin. `chain/app/shielded_verifiers.go:shieldedVerifierPath`.
+- **The global installer does not stage the verifier binary.** `orama global install` places `oramad` but nothing in `core/` installs `orama-orchard-verifier`; a stagenet, testnet or mainnet node without it refuses to start until the operator places the file and the pin. `chain/app/shielded_verifiers.go:shieldedVerifierPath`.
 - **Check-then-exec window on the verifier pin.** The hash is verified, then the file is executed; protection is the directory's permissions. `chain/x/shielded/verify/orchardproc/orchardproc.go:checkPin`.
 - **The fleet e2e covers refusals only.** The run chain is built without the Orchard library and the verifier binary, so no bundle is accepted there; the success paths run in `chain/app` tests with the `orchardffi` tag. `e2e/features/chain-shielded/feature.yaml`.
 - **Invariants are queries, not halts.** A node whose accumulator drifts reports it through `Invariants` and at start; a running node does not stop. `chain/x/shielded/keeper/invariants.go`.

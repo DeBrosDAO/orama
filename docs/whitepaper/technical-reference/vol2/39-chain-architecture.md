@@ -75,7 +75,7 @@ CometBFT's `timeout_commit` is not overridden, so blocks come every 5 seconds wh
 | `build-linux-amd64-full` | `muslc orchardffi netgo osusergo` | one static library carrying libwasmvm and the Orchard verifier (`native-lib-linux-amd64`) plus the pinned out-of-process verifier binary |
 | `build-linux-amd64-global` | `nowasm` | `orama-global` and `stagenet-node`, pure Go |
 
-A `nowasm` binary refuses to start a node that claims the wasm module, either in its options or in its genesis (`chain/app/wasm_novm.go:guardWasmClaim`). A binary without the Orchard library accepts no shielded bundle.
+A `nowasm` binary refuses to start a node that claims the wasm module, either in its options or in its genesis (`chain/app/wasm_novm.go:guardWasmClaim`). A binary without the Orchard library refuses to start a stagenet, testnet or mainnet node; on a localnet or a scripted devnet it starts and accepts no shielded bundle (`chain/app/shielded_verifiers.go:verifiersOptional`).
 
 The `chain/native/` crate exists because two Rust static libraries linked into one binary each carry their own copy of the standard library and collide. It builds libwasmvm and the Orchard verifier as rlibs of one crate and archives them once (`chain/native/Cargo.toml`). `chain/native/build.sh` copies libwasmvm from the module cache at the version `chain/go.mod` pins, builds with a pinned Rust toolchain and zig for the C parts, and records the SHA-256 of the archive in `chain/native/libwasmvm_muslc.x86_64.a.sha256`; the `verify` mode fails if a rebuild hashes differently. The crate supplies `__rust_probestack` itself, because the unmangled symbol that wasmer needs is exported only mangled by current `compiler_builtins` (`chain/native/src/probestack.rs`).
 

@@ -64,10 +64,15 @@ const defaultQueryGasLimit uint64 = 2_000_000
 // value on nodes whose app.toml already exists.
 const defaultIAVLCacheSize uint64 = 100_000
 
-// requireQueryGasLimit makes `oramad start` refuse a node whose app.toml has no query-gas-limit
-// (0 means unbounded in the SDK) unless it runs a localnet: the node serves the public
-// /v1/chain/query route, and a query with no gas limit can scan the whole state.
-func requireQueryGasLimit(rootCmd *cobra.Command) {
+// guardStart makes `oramad start` refuse a node that a public network must not run, before it
+// serves a block:
+//   - one whose app.toml has no query-gas-limit (0 means unbounded in the SDK) unless it runs a
+//     localnet: the node serves the public /v1/chain/query route, and a query with no gas limit can
+//     scan the whole state;
+//   - one that cannot verify shielded bundles unless it runs a localnet or a scripted devnet
+//     (app.CheckNodeCanVerify): it would vote on proposals it never verified and fork itself off at
+//     the first shielded transaction it executes.
+func guardStart(rootCmd *cobra.Command) {
 	for _, sub := range rootCmd.Commands() {
 		if sub.Name() != "start" {
 			continue
@@ -81,6 +86,9 @@ func requireQueryGasLimit(rootCmd *cobra.Command) {
 			}
 			limit := svrCtx.Viper.GetUint64(server.FlagQueryGasLimit)
 			if err := checkQueryGasLimit(chainID, limit); err != nil {
+				return err
+			}
+			if err := app.CheckNodeCanVerify(chainID, svrCtx.Viper); err != nil {
 				return err
 			}
 			return run(cmd, args)
@@ -166,7 +174,7 @@ func initRootCmd(
 		},
 	})
 
-	requireQueryGasLimit(rootCmd)
+	guardStart(rootCmd)
 
 	rootCmd.AddCommand(
 		server.StatusCommand(),

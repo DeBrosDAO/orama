@@ -28,7 +28,7 @@ Fifth, there is no admin. The authority address of every stock module is the has
 
 Besides the stock modules, the Orama modules are `emission`, `fees` and `token` (supply and fees), `power` (voting power), `nodes` (the registry in [Global nodes](ch14-global-nodes.md)), `storage`, `archive` and `relay` (services), `houses` (governance), `cnft` and `market`, `shielded` (the shielded pool) and `wasmpolicy` beside wasmd's `wasm` when libwasmvm is linked. Not wired: `x/gov`, `x/mint`, `x/crisis`, `x/authz`, IBC and an EVM. Every module account is a blocked address, so no user can send to one.
 
-The same source builds in several variants. The default is pure Go with no CosmWasm and no Orchard verifier; a full static build links one archive that carries libwasmvm and the Orchard verifier together, because two Rust static libraries in one binary each carry their own standard library and collide. A binary without the library refuses a genesis that claims wasm, and accepts no shielded bundle.
+The same source builds in several variants. The default is pure Go with no CosmWasm and no Orchard verifier; a full static build links one archive that carries libwasmvm and the Orchard verifier together, because two Rust static libraries in one binary each carry their own standard library and collide. A binary without the library refuses a genesis that claims wasm, and refuses to start a node of a public network (stagenet, testnet, mainnet), which could not execute shielded transactions.
 
 ### One block
 

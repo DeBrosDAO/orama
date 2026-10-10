@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cast"
 
@@ -30,6 +31,42 @@ const (
 	// <home>/bin/ when the flag is not given.
 	ShieldedVerifierBinary = "orama-orchard-verifier"
 )
+
+// verifierOptionalMarkers are the chain classes a node may run without the shielded verifiers:
+// localnets and the devnet a script builds for one e2e run (e2e/scripts/chain-deploy.sh), both
+// built without the orchard library. A node of any other chain (stagenet, testnet, mainnet) that
+// cannot verify votes on proposals it never checked and forks itself off at the first shielded
+// transaction it executes, so it refuses to start instead.
+var verifierOptionalMarkers = []string{localnetMarker, "-devnet-"}
+
+// verifiersOptional reports whether a node of chainID may start without the shielded verifiers.
+func verifiersOptional(chainID string) bool {
+	for _, marker := range verifierOptionalMarkers {
+		if strings.Contains(chainID, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckNodeCanVerify is `oramad start`'s refusal to run a node of chainID that cannot verify
+// shielded bundles: one built without the orchard library, or with no verifier binary at the path
+// appOpts names. Localnets and scripted devnets are exempt (verifierOptionalMarkers).
+func CheckNodeCanVerify(chainID string, appOpts servertypes.AppOptions) error {
+	if verifiersOptional(chainID) {
+		return nil
+	}
+	path := shieldedVerifierPath(appOpts)
+	_, statErr := os.Stat(path)
+	present := path != "" && statErr == nil
+	if orchardverify.Linked && present {
+		return nil
+	}
+	return fmt.Errorf("a node of chain %q must verify shielded bundles and this one cannot "+
+		"(orchard library linked: %t; verifier binary %q present: %t): install the release's %s at that "+
+		"path or pass --%s, and run an oramad built with the orchard library",
+		chainID, orchardverify.Linked, path, present, ShieldedVerifierBinary, FlagShieldedVerifier)
+}
 
 // ShieldedVerifierSHA256 is the hex SHA-256 of the verifier binary this oramad was built for. A
 // release sets it at link time (-ldflags "-X .../app.ShieldedVerifierSHA256=<hex>"); the flag
@@ -75,7 +112,9 @@ func FileSHA256(path string) (string, error) {
 // On a node, both verifiers are warmed here, at construction, so their verifying keys are not built
 // inside a consensus handler. When the library is linked the node must have a working process
 // verifier as well, and a failure to warm either stops the app: a node that cannot verify must not
-// serve blocks. A build without the library cannot accept a bundle, so it warms nothing and says so.
+// serve blocks. A build without the library cannot accept a bundle, so it warms nothing and says so;
+// `oramad start` refuses to run such a node on any chain but a localnet or a scripted devnet
+// (CheckNodeCanVerify).
 func (app *OramaApp) newShieldedVerifiers(appOpts servertypes.AppOptions) []verify.Verifier {
 	chainID := app.ChainID()
 	if chainID == "" {

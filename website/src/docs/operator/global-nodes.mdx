@@ -175,7 +175,7 @@ Run it on a machine where `orama node setup` has already installed the cluster n
 - Signature verification of the staged binaries by the installer; an installed update path for a chain patch that changes no consensus behaviour.
 - An `orama global` command for `MsgUpdateNode`: an ASN is set at registration only.
 - An `orama` command for `MsgRegisterOperator`.
-- Staging the shielded verifier: `orama global install` does not place `orama-orchard-verifier`; a node without it accepts no shielded bundle.
+- Staging the shielded verifier: `orama global install` does not place `orama-orchard-verifier`; a stagenet, testnet or mainnet node without it refuses to start.
 - Removing a service, or its firewall rule, that a later install leaves out.
 - An installer for the relay bandwidth reporter (`orama-global reporter` runs from a home you prepare), and on-chain relay registration from `orama global install`.
 - An independent set of directory authorities: Orama runs them all, and the public Tor network is not launched.

@@ -520,7 +520,7 @@ Bring-up follows from that. The first start of the provider creates `hot-key`, l
 - `x/nodes` has no list queries.
 - A global node cannot be removed by the CLI. The installer has no uninstall for a service or for the co-located layout.
 - A host that stages the first `oramad` trusts the operator's staging directory. No TUF check runs at install; only `stage-oramad` verifies. A patch release that changes no consensus behaviour has no installed update path.
-- The shielded verifier binary `orama-orchard-verifier` is not staged by `orama global install`; `oramad` looks for it in the chain home and a node without it accepts no shielded bundle.
+- The shielded verifier binary `orama-orchard-verifier` is not staged by `orama global install`; `oramad` looks for it in the chain home and a stagenet, testnet or mainnet node without it refuses to start.
 - A remote signer (TMKMS, Horcrux) and sentry topologies are not supported.
 - The sign floor protects only hosts that ran the migration commands. A key copied by hand carries no floor.
 - `orama global start` reports success for a unit systemd has started but that exits at once (the provider before registration).

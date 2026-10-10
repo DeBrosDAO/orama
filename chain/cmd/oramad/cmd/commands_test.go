@@ -17,6 +17,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/server"
 	serverconfig "github.com/cosmos/cosmos-sdk/server/config"
+
+	"github.com/DeBrosOfficial/network/chain/app"
 )
 
 // A node that serves the public chain query route must not run a query for unbounded gas: the
@@ -78,17 +80,18 @@ func TestCheckQueryGasLimit_refusesUnboundedOffLocalnet(t *testing.T) {
 	}
 }
 
-// oramad start must not reach the node when the limit is unbounded off localnet, and must reach it
-// otherwise.
-func TestRequireQueryGasLimit_guardsStart(t *testing.T) {
+// oramad start must not reach the node when the query gas limit is unbounded off localnet, or when a
+// node of a public network cannot verify shielded bundles; it must reach it otherwise.
+func TestGuardStart_refusesUnsafeNodesBeforeStart(t *testing.T) {
 	run := func(chainID string, limit uint64) (called bool, err error) {
 		v := viper.New()
 		v.Set(flags.FlagChainID, chainID)
 		v.Set(server.FlagQueryGasLimit, limit)
+		v.Set(flags.FlagHome, t.TempDir())
 		start := &cobra.Command{Use: "start", RunE: func(*cobra.Command, []string) error { called = true; return nil }}
 		root := &cobra.Command{Use: "oramad"}
 		root.AddCommand(start)
-		requireQueryGasLimit(root)
+		guardStart(root)
 		ctx := server.NewDefaultContext()
 		ctx.Viper = v
 		start.SetContext(context.WithValue(context.Background(), server.ServerContextKey, ctx))
@@ -98,11 +101,15 @@ func TestRequireQueryGasLimit_guardsStart(t *testing.T) {
 	if called, err := run("orama-1", 0); err == nil || called {
 		t.Fatalf("an unbounded public node started: called=%v err=%v", called, err)
 	}
-	if called, err := run("orama-1", 2_000_000); err != nil || !called {
-		t.Fatalf("a bounded node was refused: called=%v err=%v", called, err)
+	if called, err := run("orama-devnet-1", 2_000_000); err != nil || !called {
+		t.Fatalf("a bounded devnet node was refused: called=%v err=%v", called, err)
 	}
 	if called, err := run("orama-localnet-1", 0); err != nil || !called {
 		t.Fatalf("a localnet was refused: called=%v err=%v", called, err)
+	}
+	called, err := run("orama-stagenet-1", 2_000_000)
+	if err == nil || called || !strings.Contains(err.Error(), app.ShieldedVerifierBinary) {
+		t.Fatalf("a stagenet node with no shielded verifier started: called=%v err=%v", called, err)
 	}
 }
 
