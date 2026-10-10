@@ -102,3 +102,20 @@ func TestChainTxRoutes_areConfiguredAndTighterThanTheGeneralBucket(t *testing.T)
 		t.Error("a broadcast, a write to every mempool, is not limited tighter than a simulate")
 	}
 }
+
+// The light-client route joining nodes state-sync through draws on buckets of its own, so a syncing
+// node cannot use up a wallet's simulate or broadcast allowance, nor the other way round.
+func TestChainTxRoutes_lightRouteHasBucketsOfItsOwn(t *testing.T) {
+	light := newChainTxLimiter(chainLightPerAddressPerMinute, chainLightPerAddressBurst, chainLightRoutePerMinute, chainLightRouteBurst)
+	g := &Gateway{chainSimulateLimiter: newChainTxLimiter(1, 1, 1, 1), chainBroadcastLimiter: newChainTxLimiter(1, 1, 1, 1), chainLightLimiter: light}
+	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodPost, chainLightPath, nil)); got != light {
+		t.Fatalf("POST %s draws on %p, want the light limiter %p", chainLightPath, got, light)
+	}
+	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodGet, chainLightPath, nil)); got != nil {
+		t.Fatalf("a GET of %s draws on a limiter", chainLightPath)
+	}
+	if chainLightPerAddressBurst <= chainSimulatePerAddressBurst {
+		t.Errorf("a syncing node makes several calls per header; the light burst %d must exceed simulate's %d",
+			chainLightPerAddressBurst, chainSimulatePerAddressBurst)
+	}
+}

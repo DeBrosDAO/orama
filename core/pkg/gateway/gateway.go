@@ -235,6 +235,8 @@ type Gateway struct {
 	// (/v1/chain/simulate, /v1/chain/broadcast), per client network and per route.
 	chainSimulateLimiter  *chainTxLimiter
 	chainBroadcastLimiter *chainTxLimiter
+	// chainLightLimiter caps the light-client route joining nodes state-sync through.
+	chainLightLimiter *chainTxLimiter
 	// webrtcJoinRateLimiter caps the signalling sockets one identity opens. See webrtcJoinAllowed.
 	webrtcJoinRateLimiter *RateLimiter
 	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
@@ -1686,6 +1688,8 @@ func configureRateLimiters(gw *Gateway) {
 		chainSimulateRoutePerMinute, chainSimulateRouteBurst)
 	gw.chainBroadcastLimiter = newChainTxLimiter(chainBroadcastPerAddressPerMinute, chainBroadcastPerAddressBurst,
 		chainBroadcastRoutePerMinute, chainBroadcastRouteBurst)
+	gw.chainLightLimiter = newChainTxLimiter(chainLightPerAddressPerMinute, chainLightPerAddressBurst,
+		chainLightRoutePerMinute, chainLightRouteBurst)
 
 	gw.webrtcJoinRateLimiter = NewRateLimiter(webrtcJoinsPerMinute, webrtcJoinBurst)
 	gw.webrtcJoinRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)

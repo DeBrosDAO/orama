@@ -163,6 +163,8 @@ type Proxy struct {
 	// simulateSlots and broadcastSlots bound the transaction calls in flight, each route apart (tx.go).
 	simulateSlots  chan struct{}
 	broadcastSlots chan struct{}
+	// lightSlots bounds the light-client calls in flight (light.go).
+	lightSlots chan struct{}
 	// heightMu guards the cached latest height the query window check reads.
 	heightMu  sync.Mutex
 	heightVal int64
@@ -202,6 +204,7 @@ func New(cfg Config) (*Proxy, error) {
 		querySlots:     make(chan struct{}, queryMaxConcurrent),
 		simulateSlots:  make(chan struct{}, simulateMaxConcurrent),
 		broadcastSlots: make(chan struct{}, broadcastMaxConcurrent),
+		lightSlots:     make(chan struct{}, lightMaxConcurrent),
 	}, nil
 }
 
@@ -295,6 +298,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case broadcastPath:
 		p.serveBroadcast(w, r)
+		return
+	case lightPath:
+		p.serveLight(w, r)
 		return
 	}
 	if !knownRoute(rest) {
@@ -548,6 +554,11 @@ func (p *Proxy) fetch(w http.ResponseWriter, r *http.Request, base *url.URL, pat
 		return nil, nil, false
 	}
 	req.Header.Set("Accept", "application/json")
+	return p.send(w, req, maxBody)
+}
+
+// send makes req upstream and reads its body as fetch does.
+func (p *Proxy) send(w http.ResponseWriter, req *http.Request, maxBody int64) (*http.Response, []byte, bool) {
 	resp, err := p.client.Do(req)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "chain unreachable")

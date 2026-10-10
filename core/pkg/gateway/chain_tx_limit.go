@@ -16,6 +16,11 @@ import (
 const (
 	chainSimulatePath  = "/v1/chain/simulate"
 	chainBroadcastPath = "/v1/chain/broadcast"
+	// chainLightPath is the light-client route a joining node state-syncs through
+	// (handlers/chainread/light.go). It is a read, but every call is a JSON-RPC request the node
+	// answers, so it is bounded like the transaction routes; a syncing node makes a few calls per
+	// header it verifies, hence the looser buckets.
+	chainLightPath = "/v1/chain/light"
 
 	chainSimulatePerAddressPerMinute = 30
 	chainSimulatePerAddressBurst     = 10
@@ -26,6 +31,11 @@ const (
 	chainBroadcastPerAddressBurst     = 4
 	chainBroadcastRoutePerMinute      = 600
 	chainBroadcastRouteBurst          = 100
+
+	chainLightPerAddressPerMinute = 240
+	chainLightPerAddressBurst     = 60
+	chainLightRoutePerMinute      = 6000
+	chainLightRouteBurst          = 600
 
 	chainTxRetryAfterSeconds = 10
 
@@ -65,6 +75,8 @@ func (g *Gateway) chainTxLimiterFor(r *http.Request) *chainTxLimiter {
 		return g.chainSimulateLimiter
 	case chainBroadcastPath:
 		return g.chainBroadcastLimiter
+	case chainLightPath:
+		return g.chainLightLimiter
 	}
 	return nil
 }

@@ -70,7 +70,8 @@ For a non-exempt request the middleware computes the bucket key once and checks 
 | 2 | chain query | any path under `/v1/chain/query/` | 120 | 30 | 10 s |
 | 3 | chain transaction, per client | `POST /v1/chain/simulate` | 30 | 10 | 10 s |
 | 3 | chain transaction, per client | `POST /v1/chain/broadcast` | 12 | 4 | 10 s |
-| 3 | chain transaction, whole route | simulate / broadcast | 1,200 / 600 | 200 / 100 | 10 s |
+| 3 | chain light client, per client | `POST /v1/chain/light` | 240 | 60 | 10 s |
+| 3 | chain transaction, whole route | simulate / broadcast / light | 1,200 / 600 / 6,000 | 200 / 100 / 600 | 10 s |
 | 4 | capability upgrade | a function WebSocket upgrade that carries a capability | 60 | 20 | 60 s |
 | 5 | relay stream | `/v1/proxy/relay` | 30 | 10 | 60 s |
 | 6 | general | everything else, and everything that passed the above | 10,000 | 5,000 | 5 s |
@@ -196,6 +197,7 @@ The table lists every limiter in the system. "Owner" names the chapter that expl
 | Chain query bucket | client network | 120 / min, burst 30 | per gateway | `core/pkg/gateway/rate_limit_key.go:chainQueriesPerMinute` | this chapter, [39](../vol2/39-chain-architecture.md) |
 | Chain simulate buckets | client network; whole route | 30 / min burst 10; 1,200 / min burst 200 | per gateway | `core/pkg/gateway/chain_tx_limit.go:chainTxLimiter` | this chapter |
 | Chain broadcast buckets | client network; whole route | 12 / min burst 4; 600 / min burst 100 | per gateway | `core/pkg/gateway/chain_tx_limit.go:chainTxLimiter` | this chapter |
+| Chain light-client buckets | client network; whole route | 240 / min burst 60; 6,000 / min burst 600 | per gateway | `core/pkg/gateway/chain_tx_limit.go:chainTxLimiter` | this chapter |
 | Chain tx calls in flight | route | 8 simulate, 16 broadcast | per gateway | `core/pkg/gateway/handlers/chainread/tx.go:simulateMaxConcurrent` | this chapter |
 | Capability upgrade bucket | client network | 60 / min, burst 20 | per gateway | `core/pkg/gateway/ws_capability.go:capabilityUpgradesPerMinute` | this chapter, [14](14-authorization.md) |
 | Relay stream bucket | client network | 30 / min, burst 10 | per gateway | `core/pkg/gateway/relay_tunnel_handler.go:relayStreamsPerMinute` | this chapter, [12](12-gateway-architecture.md#anonymity-proxies) |
