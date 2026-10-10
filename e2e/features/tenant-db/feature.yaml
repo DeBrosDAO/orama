@@ -46,10 +46,10 @@ covers:
     - /v1/db/sqlite/list
     - /v1/db/sqlite/query
   claims:
-    - "docs/API_SURFACE.md#database-rqlite: db.transaction() is atomic; a failing op rolls back the whole batch"
-    - "docs/SECURITY.md: the cluster gateway's database is the registry, which only an operator may read or write"
-    - "docs/SECURITY.md#function-sql: api_keys, grants and the other platform tables are not reachable by tenant SQL"
-    - "docs/SECURITY.md#function-sql: the raw-database routes of a namespace gateway refuse SQL naming a platform table (403 SQL_NOT_ALLOWED) to every role, developer included"
-    - "docs/SECURITY.md#function-sql: a developer's raw SQL cannot write function_cron_triggers, function_pubsub_triggers, deployment_history or functions, through exec or a transaction"
-    - "docs/ARCHITECTURE.md: tenant SQLite files are 0600 in 0700 directories, read and written only by the gateway"
-    - "docs/SECURITY.md: ATTACH/DETACH and multiple statements are refused on tenant SQLite (bugboard 252)"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#database-rqlite: db.transaction() is atomic; a failing op rolls back the whole batch"
+    - "docs/whitepaper/technical-reference/vol1/17-database.md: the cluster gateway's database is the registry, which only an operator may read or write"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#serverless-routing-on-the-index-gateway: api_keys, grants and the other platform tables are not reachable by tenant SQL"
+    - "docs/whitepaper/technical-reference/vol1/21-serverless.md#deploying: the raw-database routes of a namespace gateway refuse SQL naming a platform table (403 SQL_NOT_ALLOWED) to every role, developer included"
+    - "docs/whitepaper/technical-reference/vol1/21-serverless.md#deploying: a developer's raw SQL cannot write function_cron_triggers, function_pubsub_triggers, deployment_history or functions, through exec or a transaction"
+    - "website/src/docs/contributor/architecture-reference.mdx: tenant SQLite files are 0600 in 0700 directories, read and written only by the gateway"
+    - "docs/whitepaper/technical-reference/vol1/17-database.md: ATTACH/DETACH and multiple statements are refused on tenant SQLite (bugboard 252)"

@@ -72,7 +72,7 @@ func TestFlags(t *testing.T) {
 	}
 }
 
-// guidePath finds docs/RUN_YOUR_OWN_CLUSTER.md from the package directory.
+// guidePath finds website/src/docs/operator/run-your-own-cluster.mdx from the package directory.
 func guidePath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -80,12 +80,12 @@ func guidePath(t *testing.T) string {
 		t.Fatal(err)
 	}
 	for ; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
-		p := filepath.Join(dir, "docs", "RUN_YOUR_OWN_CLUSTER.md")
+		p := filepath.Join(dir, "website", "src", "docs", "operator", "run-your-own-cluster.mdx")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	t.Fatal("docs/RUN_YOUR_OWN_CLUSTER.md not found above " + dir)
+	t.Fatal("website/src/docs/operator/run-your-own-cluster.mdx not found above " + dir)
 	return ""
 }
 
@@ -107,7 +107,7 @@ func TestPlanMatchesTheGuideOnDisk(t *testing.T) {
 	}
 	r := Runner{Fx: testFixture()}
 	if err := r.Verify(CoveredCommands(cmds), Plan()); err != nil {
-		t.Fatalf("docs/RUN_YOUR_OWN_CLUSTER.md and core/e2e/clusterguide/plan.go disagree: %v", err)
+		t.Fatalf("website/src/docs/operator/run-your-own-cluster.mdx and core/e2e/clusterguide/plan.go disagree: %v", err)
 	}
 }
 

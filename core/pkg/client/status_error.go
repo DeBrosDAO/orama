@@ -11,7 +11,7 @@ import (
 )
 
 // gatewayStatusError is a gateway answering with an error status. It is one of
-// the typed errors docs/GO_CLIENT_SDK.md promises: errors.IsUnauthorized and
+// the typed errors website/src/docs/developer/go-sdk.mdx promises: errors.IsUnauthorized and
 // the other helpers recognise it by its status. Storage used to return the
 // status as text, which none of them could read.
 type gatewayStatusError struct {

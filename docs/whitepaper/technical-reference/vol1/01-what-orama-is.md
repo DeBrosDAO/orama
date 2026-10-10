@@ -54,7 +54,7 @@ One binary does most of the work of a node, in several roles. `orama-node` is th
 
 ## How people and programs reach it
 
-Two people use it. A *tenant* runs a namespace: deploys apps and functions, uses the database and the cache. An *operator* runs nodes: builds and signs releases, installs and upgrades machines, watches the fleet. Both use the `orama` command, a single Go binary that calls gateway routes with a short-lived bearer, reaches machines over SSH with keys held in the RootWallet agent, and never touches a node's internals directly ([The CLI](35-the-cli.md)). Programs use the TypeScript SDK, the Go client or plain HTTP ([SDKs](36-sdks.md)). There is no dashboard and no Orama MCP server; `docs/CLIENT_SURFACE.md` records which client owns which route.
+Two people use it. A *tenant* runs a namespace: deploys apps and functions, uses the database and the cache. An *operator* runs nodes: builds and signs releases, installs and upgrades machines, watches the fleet. Both use the `orama` command, a single Go binary that calls gateway routes with a short-lived bearer, reaches machines over SSH with keys held in the RootWallet agent, and never touches a node's internals directly ([The CLI](35-the-cli.md)). Programs use the TypeScript SDK, the Go client or plain HTTP ([SDKs](36-sdks.md)). There is no dashboard and no Orama MCP server; `docs/whitepaper/technical-reference/appendices/i-api-surface.md` records which client owns which route.
 
 Every request from either arrives the same way: at a name under the cluster's base domain, resolved by the cluster's own DNS, terminated by the node's Caddy, and handled by a gateway. [One request, end to end](03-one-request-end-to-end.md) follows one through all of it.
 

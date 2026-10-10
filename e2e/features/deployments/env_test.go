@@ -24,7 +24,7 @@ const (
 	// oramaData is where a node keeps its stores (the index rqlite under
 	// rqlite/, namespaces under tenancy.NamespacesDir).
 	oramaData = "/opt/orama/.orama/data"
-	// maxValue is one environment value's cap (docs/DEPLOYMENT_GUIDE.md "How
+	// maxValue is one environment value's cap (website/src/docs/developer/deployments.mdx "How
 	// the values are handled").
 	maxValue = 64 << 10
 )
@@ -59,7 +59,7 @@ func (tn *tenant) waitEnv(t testing.TB, u, key, want string, present bool) {
 
 // TestDeployEnv_setAtDeployAndChangedLater: --env and --env-file reach the
 // process, a --env overrides the file, `app env set|unset` restart it with the
-// change, and `list` shows names only (docs/DEPLOYMENT_GUIDE.md "Environment
+// change, and `list` shows names only (website/src/docs/developer/deployments.mdx "Environment
 // Variables").
 func TestDeployEnv_setAtDeployAndChangedLater(t *testing.T) {
 	t.Parallel()
@@ -101,7 +101,7 @@ func TestDeployEnv_setAtDeployAndChangedLater(t *testing.T) {
 
 // TestDeployEnv_refusals: platform names, invalid UTF-8, NUL, an over-long
 // value and an empty change are refused with 400, and the app keeps its
-// environment (docs/SECURITY.md "Deployment environment variables").
+// environment (docs/whitepaper/technical-reference/vol1/11-app-deployments.md "Deployment environment variables").
 func TestDeployEnv_refusals(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -140,7 +140,7 @@ func TestDeployEnv_refusals(t *testing.T) {
 }
 
 // TestDeployEnv_encryptedAtRest: a value is in no store on any node in the
-// clear (docs/SECURITY.md: deployments.environment is AES-256-GCM encrypted);
+// clear (docs/whitepaper/technical-reference/vol1/11-app-deployments.md: deployments.environment is AES-256-GCM encrypted);
 // only the root-only 0600 file systemd hands the process holds it.
 func TestDeployEnv_encryptedAtRest(t *testing.T) {
 	t.Parallel()

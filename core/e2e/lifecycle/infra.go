@@ -56,7 +56,7 @@ func runHook(t *testing.T, envVar, purpose string, args ...string) string {
 	hook := strings.TrimSpace(os.Getenv(envVar))
 	if hook == "" {
 		t.Skipf("%s is not set; skipping — this scenario needs to %s, "+
-			"which has no CLI equivalent (see docs/DEV_DEPLOY.md, 'Lifecycle harness')",
+			"which has no CLI equivalent (see orama.network/docs/contributor/testing, 'Lifecycle harness')",
 			envVar, purpose)
 	}
 

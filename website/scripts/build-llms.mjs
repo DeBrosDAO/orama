@@ -1,23 +1,26 @@
 // Emits the agent-facing docs endpoint into the built site:
 //   dist/llms.txt        — llmstxt.org index (what an LLM reads first)
-//   dist/llms/<slug>.md  — raw markdown of each curated doc
+//   dist/llms/<slug>.md  — Markdown of each docs page, <persona>-<page>.md
 //
-// Source of truth is the repo-root docs/ tree (../../docs from here). We
-// publish only the curated subset an agent building ON Orama needs — not the
-// internal node-operations runbooks. Adding a doc to a project means adding a
-// line here; a missing source file fails the build loudly (no silent skip).
+// Source of truth is the website's own docs: every src/docs/<persona>/<page>.mdx
+// the navigation publishes. The MDX is reduced to plain Markdown (front matter,
+// imports, exports and JSX tags dropped; everything else, code fences
+// included, kept as written). Titles and descriptions come from the page list
+// the prerenderer already builds, so the index says what the site says. A page
+// the navigation does not list, or a listed page with no file, fails the build
+// loudly (no silent skip).
 
-import { mkdirSync, copyFileSync, writeFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DOCS = resolve(HERE, "../../docs");
-const CHAIN_DOCS = resolve(HERE, "../src/docs/blockchain");
+const SRC_DOCS = resolve(HERE, "../src/docs");
 const DIST = resolve(HERE, "../dist");
 const BLOG = resolve(HERE, "../blog");
 const SERVER_ENTRY = resolve(HERE, "../dist-server/entry-server.js");
 const BASE = "https://orama.network";
+const DOCS_URL_PREFIX = "/docs/";
 
 const PROJECT = "Orama Network";
 const SUMMARY =
@@ -28,24 +31,65 @@ const SUMMARY =
   "not pass through that ledger. Custom domains can be verified, but " +
   "certificates are issued only on the network's own domain.";
 
-// section -> [ [sourceDocPath, slug, title, description] ]
-const MANIFEST = {
-  Deploying: [
-    ["DEPLOYMENT_GUIDE.md", "deploying-apps", "Deploying Apps", "Deploy static, Next.js, Go, and Node.js apps; manage SQLite databases and custom domains via the orama CLI."],
-    ["SERVERLESS.md", "functions", "Serverless Functions", "Write, deploy, and invoke WASM functions; host-function API, secrets, pubsub triggers, lifecycle."],
-    ["DEV_DEPLOY.md", "release-and-rollout", "Release & Rollout", "Build binaries, deploy to VPS nodes, enroll OramaOS (in development), and run rolling cluster upgrades."],
-  ],
-  Reference: [
-    ["CLIENT_SURFACE.md", "client-surface", "Client Surface", "Humans use the orama CLI; programs use the SDK and gateway HTTP. No dashboard, no Orama MCP."],
-    ["ARCHITECTURE.md", "architecture", "Architecture", "System architecture: gateway, namespaces, RQLite, Olric cache, IPFS storage, WASM runtime."],
-    ["CLI_REFERENCE.md", "cli-reference", "CLI Reference", "Every orama command and flag, generated from the command tree."],
-    ["API_SURFACE.md", "api-surface", "API Surface", "Every gateway route and which client owns it: SDK, CLI, direct, or internal."],
-    ["TS_SDK.md", "typescript-sdk", "TypeScript SDK", "@debros/orama — database, pub/sub, cache, storage, functions and auth from application code."],
-    ["GO_CLIENT_SDK.md", "go-client-sdk", "Go Client SDK", "Go client for talking to an Orama gateway from application code."],
-    ["MONITORING.md", "monitoring", "Monitoring", "Cluster health and per-node reporting with the orama monitor / node report commands."],
-    ["COMMON_PROBLEMS.md", "troubleshooting", "Troubleshooting", "Known failure modes and how to diagnose them."],
-  ],
-};
+// persona directory -> section heading, in the order the index lists them
+const SECTIONS = [
+  ["developer", "Developer"],
+  ["operator", "Operator"],
+  ["contributor", "Contributor"],
+  ["blockchain", "Blockchain"],
+];
+
+const FENCE = /^\s*(`{3,}|~{3,})/;
+const JSX_OPEN = /^\s*<\/?[A-Za-z][\w.]*(\s|\/?>|$)/;
+const ESM_LINE = /^(import|export)\s.*\sfrom\s+["'][^"']+["'];?\s*$|^export\s+default\s/;
+
+/** MDX to plain Markdown: drops front matter, ESM lines and JSX tags outside code fences. */
+export function mdxToMarkdown(source) {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let i = 0;
+  if (lines[0] === "---") {
+    const end = lines.indexOf("---", 1);
+    if (end > 0) i = end + 1;
+  }
+  let fence = null;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    const m = FENCE.exec(line);
+    if (m) {
+      if (fence === null) fence = m[1][0].repeat(m[1].length);
+      else if (line.trim().startsWith(fence) && line.trim().replace(/[`~]/g, "") === "") fence = null;
+      out.push(line);
+      continue;
+    }
+    if (fence !== null) {
+      out.push(line);
+      continue;
+    }
+    if (ESM_LINE.test(line)) continue;
+    if (JSX_OPEN.test(line)) {
+      // A tag may span lines (an <iframe> with attributes): skip to the line that ends it.
+      while (i < lines.length - 1 && !/>\s*$/.test(lines[i])) i++;
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+}
+
+/** Every docs page file as a slug ("developer/functions"), sorted. */
+function docFiles() {
+  const slugs = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".mdx")) slugs.push(relative(SRC_DOCS, full).split(sep).join("/").replace(/\.mdx$/, ""));
+    }
+  };
+  walk(SRC_DOCS);
+  return slugs.sort();
+}
 
 /** The published blog posts, newest first, as raw Markdown next to the docs. */
 async function blogLines(llmsDir) {
@@ -65,48 +109,48 @@ async function build() {
   const llmsDir = join(DIST, "llms");
   mkdirSync(llmsDir, { recursive: true });
 
-  const lines = [`# ${PROJECT}`, "", `> ${SUMMARY}`, ""];
+  const { PAGES } = await import(pathToFileURL(SERVER_ENTRY).href);
+  const published = new Map(
+    PAGES.filter((p) => p.path.startsWith(DOCS_URL_PREFIX)).map((p) => [p.path.slice(DOCS_URL_PREFIX.length), p]),
+  );
+  const files = docFiles();
+  for (const slug of files) {
+    if (!published.has(slug)) {
+      throw new Error(`build-llms: src/docs/${slug}.mdx is not in the docs navigation (src/data/docs-navigation.ts)`);
+    }
+  }
+  for (const slug of published.keys()) {
+    if (!existsSync(join(SRC_DOCS, `${slug}.mdx`))) {
+      throw new Error(`build-llms: the navigation lists "${slug}" but src/docs/${slug}.mdx is missing`);
+    }
+  }
 
-  for (const [section, entries] of Object.entries(MANIFEST)) {
-    lines.push(`## ${section}`, "");
-    for (const [srcName, slug, title, desc] of entries) {
-      const src = join(DOCS, srcName);
-      if (!existsSync(src)) {
-        throw new Error(`build-llms: source doc missing: ${src} (referenced by "${title}")`);
-      }
-      copyFileSync(src, join(llmsDir, `${slug}.md`));
-      lines.push(`- [${title}](${BASE}/llms/${slug}.md): ${desc}`);
+  const lines = [`# ${PROJECT}`, "", `> ${SUMMARY}`, ""];
+  let count = 0;
+  for (const [persona, heading] of SECTIONS) {
+    const slugs = [...published.keys()].filter((slug) => slug.startsWith(`${persona}/`));
+    if (slugs.length === 0) throw new Error(`build-llms: no docs page for the "${persona}" section`);
+    lines.push(`## ${heading}`, "");
+    for (const slug of slugs) {
+      const page = published.get(slug);
+      const name = slug.replace("/", "-");
+      writeFileSync(join(llmsDir, `${name}.md`), mdxToMarkdown(readFileSync(join(SRC_DOCS, `${slug}.mdx`), "utf8")));
+      lines.push(`- [${page.card?.title ?? page.title}](${BASE}/llms/${name}.md): ${page.description}`);
+      count++;
     }
     lines.push("");
   }
-
-  const chainPages = [
-    ["what-it-is.mdx", "blockchain-what-it-is", "The Orama chain", "What oramad is, which modules are wired, and what is deliberately absent."],
-    ["supply.mdx", "blockchain-supply", "ORAMA supply", "norama, the epoch schedule, and which shares are actually minted."],
-    ["fees.mdx", "blockchain-fees", "Chain fees", "Base fee burn, tips, state deposits, and earnings accounts."],
-    ["validators.mdx", "blockchain-validators", "Validators and voting power", "x/power, the stake cap, rewards, and slashing."],
-    ["running.mdx", "blockchain-running", "Running a chain node", "Ports, chain id, and the stagenet installer. orama node install does not start the chain."],
-  ];
-  lines.push("## Blockchain", "");
-  for (const [srcName, slug, title, desc] of chainPages) {
-    const src = join(CHAIN_DOCS, srcName);
-    if (!existsSync(src)) {
-      throw new Error(`build-llms: source doc missing: ${src} (referenced by "${title}")`);
-    }
-    copyFileSync(src, join(llmsDir, `${slug}.md`));
-    lines.push(`- [${title}](${BASE}/llms/${slug}.md): ${desc}`);
-  }
-  lines.push("");
 
   const blog = await blogLines(llmsDir);
   lines.push(...blog.lines);
 
   writeFileSync(join(DIST, "llms.txt"), lines.join("\n"));
-  const count = Object.values(MANIFEST).reduce((n, e) => n + e.length, 0) + chainPages.length;
   console.log(`build-llms: wrote llms.txt + ${count} docs + ${blog.count} posts to ${llmsDir}`);
 }
 
-build().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  build().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

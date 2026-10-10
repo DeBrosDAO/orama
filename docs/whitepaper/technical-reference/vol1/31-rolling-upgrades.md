@@ -222,7 +222,7 @@ A node that restarts new against a gateway still running old has one visible sym
 
 #### Operator-owned rules
 
-Some overlaps have no code defence and are documented as rules for the operator (`docs/DEV_DEPLOY.md`, "Mixed-version window" subsections):
+Some overlaps have no code defence and are documented as rules for the operator (`website/src/docs/operator/upgrade-notes.mdx`, "Mixed-version window" subsections):
 
 - **Joins.** Upgrade the node that serves `/v1/internal/join` first and mint no invites during the roll. An old binary allocates the next WireGuard address with `max+1` and writes `INSERT OR REPLACE`, so it can overwrite a row a new binary just inserted and take its overlay address; which behaviour a join gets depends on which node answers.
 - **TURN.** The new node code answers a host-side TURN confirmation only once the running `orama-turn` has loaded the namespace, which it proves by writing `/run/orama-turn/served-tenants.json`. Between the new `orama-node` and the restart of `orama-turn` a confirmation is refused after 6 s. Enable WebRTC after the roll.

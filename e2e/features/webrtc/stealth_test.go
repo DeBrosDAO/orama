@@ -31,7 +31,7 @@ func stealthURI(t testing.TB, fx *fixture) string {
 
 // TestStealth_enableDisableOrRollBack: enabling stealth adds the
 // turns:cdn-<hash>.<base>:443 rung to the credentials; disabling removes the
-// rung and keeps the baseline ladder (docs/STEALTH_TURN.md#enabling-stealth-for-a-namespace).
+// rung and keeps the baseline ladder (website/src/docs/operator/stealth-turn.mdx#enabling-stealth-for-a-namespace).
 // The documented rollback (the TURN re-spawn with the stealth certificate
 // failing) is a failure here: the cluster has a valid wildcard certificate, so
 // a run that always rolls back must not pass.
@@ -75,7 +75,7 @@ func TestStealth_enableDisableOrRollBack(t *testing.T) {
 
 // TestWebRTC_notEnabledAndPrerequisites: without WebRTC the credential and
 // signalling routes do not serve, and stealth cannot be enabled
-// (docs/STEALTH_TURN.md: requires WebRTC).
+// (website/src/docs/operator/stealth-turn.mdx: requires WebRTC).
 func TestWebRTC_notEnabledAndPrerequisites(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

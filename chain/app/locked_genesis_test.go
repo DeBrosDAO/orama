@@ -46,7 +46,7 @@ var lockedRows = []lockedRow{
 	{"emission", "epoch_duration_seconds", "86400", "track-c C3: an epoch is 24 hours of BFT time"},
 	{"emission", "min_blocks_per_epoch", "14400", "track-c C3: minimum blocks per epoch (code default, production floor)"},
 	{"emission", "allow_bootstrap_stake", "false", "plans/open-network.md D12: zero premine"},
-	{"emission", "faucet_enabled", "false", "test-network faucet: off on every production chain (docs/CHAIN.md \"Test-network faucet\")"},
+	{"emission", "faucet_enabled", "false", "test-network faucet: off on every production chain (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md \"Test-network faucet\")"},
 	{"emission", "faucet_max_drip", "1000000000000", "test-network faucet, 1,000 ORAMA (code default)"},
 	{"emission", "faucet_epoch_cap", "100000000000000", "test-network faucet, 100 max drips per epoch (code default)"},
 	{"emission", "faucet_recipient_cooldown_seconds", "86400", "test-network faucet, 24 hours (code default)"},

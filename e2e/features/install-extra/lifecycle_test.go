@@ -63,7 +63,7 @@ func authorizedKeys(t testing.TB, f *fleet.Fleet, n fleet.Node) string {
 }
 
 // wrongHostKeyRefused: a --host-key that is not the server's is refused
-// before the bootstrap key is used on it (docs/CLI_REFERENCE.md "orama node
+// before the bootstrap key is used on it (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node
 // setup" --host-key; production/setup/hostkey.go).
 func wrongHostKeyRefused(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	other, err := fleet.HostKeyFingerprint(f.State, f.State.Nodes[0])
@@ -138,7 +138,7 @@ func fullMember(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 
 // setupAgainChangesNothing: running the same setup on a member does not
 // disturb it: whatever it answers, the node keeps its mesh address and raft
-// id and the cluster stays converged (docs/CLI_REFERENCE.md "orama node
+// id and the cluster stays converged (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node
 // setup": a node already running this exact build is not re-uploaded).
 func setupAgainChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	before := monitor.Fetch(t, harness.CLI(t), f.State.Env)

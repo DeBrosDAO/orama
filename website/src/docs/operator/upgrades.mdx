@@ -30,16 +30,14 @@ Run from your local machine to upgrade all nodes in an environment sequentially:
 
 ```bash
 # Print the plan, then restart only when --yes is passed
-orama node upgrade --env testnet --yes
+orama node upgrade --env devnet --yes
 
 # Upgrade a single node only
-orama node upgrade --env testnet --node 1.2.3.4
+orama node upgrade --env devnet --node 1.2.3.4
 
 # How long a node has to rejoin before the upgrade stops (default: 300 seconds)
-orama node upgrade --env testnet --delay 60 --yes
+orama node upgrade --env devnet --delay 60 --yes
 
-# Upgrade with automatic restart
-orama node upgrade --env testnet --restart
 ```
 
 ### All Upgrade Flags
@@ -49,8 +47,10 @@ orama node upgrade --env testnet --restart
 | `--force` | `false` | Reconfigure all settings during upgrade |
 | `--restart` | `false` | Automatically restart services after upgrade |
 | `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
-| `--env` | | Target environment for remote rolling upgrade (`devnet`, `testnet`, `mainnet`) |
-| `--node` | | Upgrade a single node IP only (requires `--env`) |
+| `--env` | | Target environment for remote rolling upgrade (`devnet`, `testnet`) |
+| `--node` | | Upgrade a single node IP only (requires `--env`). Every node's raft state is still read first, to check the cluster |
+| `--yes` | `false` | Execute the printed rolling plan; without it nothing is restarted |
+| `--public-ip` | | This node's public IP, recorded as `node.public_ip` (default: the recorded one, else the default route's source address) |
 | `--delay` | `300` | Seconds a node has to rejoin before the rollout stops |
 | `--nameserver` | `false` | Make this node a nameserver |
 
@@ -68,13 +68,7 @@ Orama uses a rolling upgrade strategy — nodes are upgraded one at a time to ma
 
 ### Per-Node Process
 
-1. Verify cluster health before starting
-2. Download the new binary to the node
-3. Stop services in reverse dependency order (Gateway → Olric → RQLite → WireGuard)
-4. Replace the binary with the new version
-5. Start services in correct dependency order (WireGuard → RQLite → Olric → Gateway)
-6. Verify node health after restart
-7. Verify cluster health before proceeding to the next node
+The full sequence, with what each step checks, is in [Upgrading a multi-node cluster](/docs/operator/upgrades#upgrading-a-multi-node-cluster-critical) below. In short: the node hands over leadership while it still serves, its services stop in dependency order, the staged build replaces the old one, the services start again, and the rollout does not touch the next node until this one is `Leader` or `Follower` with its applied index caught up and its gateway answering.
 
 ---
 
@@ -154,3 +148,374 @@ The Orama network requires all nodes in an environment to run compatible version
 - Nodes running incompatible versions may be temporarily excluded from the mesh
 
 Use `orama monitor alerts --env <env>` to check for binary version mismatch warnings across the cluster.
+
+---
+
+## Upgrading a multi-node cluster (CRITICAL)
+
+**NEVER restart all nodes simultaneously.** Index RQLite uses Raft consensus and requires a majority (quorum) to function. Never restart multiple RQLite voters in the same step.
+
+### Safe upgrade procedure
+
+```bash
+# Full rollout (build + push + rolling upgrade, one command; pushes exactly
+# the archive it built)
+orama node rollout --env devnet
+orama node rollout --env devnet --no-build --archive <path>   # an existing build
+
+# Or with more control:
+orama node push --env devnet --archive <path>    # Push archive to all nodes
+orama node upgrade --env devnet                  # Print the rolling upgrade plan
+orama node upgrade --env devnet --node 1.2.3.4   # Upgrade one node (reads every node's state first)
+orama node upgrade --env devnet --yes            # Execute the plan
+orama node upgrade --env devnet --delay 600      # Allow 10 min per node to rejoin
+```
+
+What the rolling upgrade does:
+
+1. **Reads every node's raft state** over SSH before touching anything.
+2. **Builds and prints a plan**: followers first, the leader last, nameservers
+   spaced apart so the zone always has one answering. The order is deterministic,
+   so the plan you approve is the plan that runs.
+3. **Stops before starting** if the state does not permit a rollout — no node
+   reports itself leader (no quorum), two do (mid-election), or any node's state
+   could not be read. An unreachable node is never assumed to be a healthy
+   follower.
+   With `--node <ip>` the same checks run against **every** node — they are
+   questions about the cluster, so SSH keys for the whole inventory are resolved
+   and every node's raft state is read — and only then is the plan cut down to
+   the named node. A named follower is one step; a named leader keeps its leader
+   step and hands leadership over before its stop (step 6). An IP that is not in
+   the inventory fails before anything is read. `--node` used to read only the
+   named node, so on a healthy cluster a follower saw no leader and the upgrade
+   refused with "the cluster has no quorum".
+4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
+5. **Runs the staged build's CLI on each node**: `/opt/orama/bin/orama node
+   upgrade --restart`, which `orama push` verified and put in place — never the
+   node's `/usr/local/bin/orama`, the release being replaced — so every step
+   below is the new release's code.
+6. **Hands over before it stops anything.** On each node, while it still
+   serves: record the raft identity — the id the index rqlited runs under, the
+   address its configuration holds it at and the members' addresses, read from
+   its `/status` into `raft-node-id`, `raft-adv-addr` and
+   `data/cluster-membership.json` (a node not in its own configuration, or whose
+   recorded id is not the one rqlited runs under, is not upgraded); then the
+   quorum check, the maintenance flag, leadership transfer on the index and each
+   namespace rqlite, and confirmation that another voter leads. Only then are the
+   services stopped. This used to run in the restart step, after the stop: the
+   leader was stopped without stepping down, and the quorum check, reading a
+   half-upgraded node, refused. A refusal leaves the node serving. If the index
+   rqlite is not running at all (an upgrade re-run after the first attempt
+   stopped the node), there is no leadership to hand over and only the quorum
+   check and the flag remain.
+7. **Stops** `orama-node` first (the supervisor, so it cannot start again what is
+   being stopped), then every namespace unit systemd has loaded — in any state,
+   so a unit between two crash-loop restarts is not missed — then 0.122.x's
+   per-deployment units (`orama-deploy-<instance>.service`), then the host
+   daemons older installs wrote (`installers.LegacyHostUnits`). Every stop is
+   fatal. Nothing is written into the raft directory: the stop used to write a
+   recovery `peers.json` from `/nodes`, taking each member's raft id for its
+   address and leaving the non-voters out, and every upgraded node restarted
+   into a configuration of addresses that do not exist.
+8. **Gates on each node actually rejoining** before touching the next: raft state
+   `Leader` or `Follower`, a leader known to exist, an applied index caught up to
+   the leader's commit index, and a gateway serving `/health`.
+9. **Stops the rollout** the moment a node fails that gate, leaving the remaining
+   voters untouched and the cluster serving. The maintenance flag is cleared only
+   once the node serves again, so a node that did not come back stays out of
+   rotation.
+
+On each node, once `orama-node` is back and the node has rejoined, the upgrade
+restarts the rest of its units: namespace rqlite, then olric, then gateway, then
+everything else. After the Olric restarts it waits (up to 30 s each; running out
+is a warning, not a failure) for each Olric memberlist to accept connections at
+the `memberlist.bindAddr:bindPort` its config names — the node's WireGuard
+address, not localhost. It used to dial localhost, which never connected and
+cost 30 s per namespace per node. `ipfs-gc` is listed as its timer,
+`orama-namespace-ipfs-gc@<ns>.timer`: restarting the timer reschedules the GC
+(`OnActiveSec=20min`), while restarting the oneshot ran `ipfs repo gc` inside
+the upgrade — failing with "cannot connect to the api" straight after the IPFS
+restart, or holding the upgrade for the whole GC. `orama node
+start|stop|restart|status` use the same unit list.
+
+`--delay` is now the per-node budget for step 8 (how long a node has to rejoin
+before the rollout stops), not an unconditional sleep between nodes. A sleep
+cannot tell a node that rejoined in 20 seconds from one that never came back, so
+the old rollout restarted the next voter either way — which is how a rolling
+upgrade takes out a quorum.
+
+Sample output:
+
+```
+Reading cluster state from 3 nodes...
+
+Rolling upgrade plan (3 nodes, 3 nameservers):
+
+  1. 10.0.0.1         nameserver-ns1         follower (nameserver — spaced so the zone keeps answering)
+  2. 10.0.0.3         nameserver-ns3         follower (nameserver — spaced so the zone keeps answering)
+  3. 10.0.0.2         nameserver-ns2         leader — last, after leadership transfer
+
+Each node is upgraded only after the previous one reports Leader or Follower,
+an applied index caught up to the leader, and a gateway serving /health.
+```
+
+The pre-upgrade step (which `orama node upgrade` runs before its stop) hands index
+RQLite leadership to another voter, **aborts** if it cannot, and then confirms
+another node has actually taken leadership before allowing the stop — a node
+that stepped down into a cluster where nobody was elected must not be removed
+from it.
+
+## What NOT to do
+
+- **DON'T** stop all nodes, replace binaries, then start all nodes
+- **DON'T** run `orama node upgrade --restart` on multiple nodes in parallel
+- **DON'T** clear RQLite data directories unless doing a full cluster rebuild
+- **DON'T** use `systemctl stop orama-node` on multiple nodes simultaneously (that also stops `@index` via `PartOf`)
+
+## Schema-migration ordering invariant
+
+The gateway binary embeds a set of SQL migrations. The highest-numbered migration is the schema version that binary REQUIRES — **the gateway will refuse to start if its required schema isn't applied** (the schema-version contract added after the 2026-05-06 incident).
+
+**Migrations take a cluster-wide lock.** Every runner — the node's rqlite, the
+index gateway, each namespace gateway, `orama node schema apply` — acquires
+`cluster_locks('schema-migrations')` before it reads which versions are applied,
+and holds it until it is done. rqlite serialises writes through raft, so a
+conditional UPDATE is a linearizable compare-and-swap and therefore a correct
+mutex across nodes.
+
+Without it, N gateways starting together each snapshotted the applied set
+*before* doing anything and each ran the whole pending list. DDL is guarded by
+`IF NOT EXISTS` and survives that; DML is not. Migration 019 was
+`UPDATE refresh_tokens SET revoked_at = ... WHERE revoked_at IS NULL`, so a
+second node reaching it a minute after the first revoked every token issued in
+between — a silent fleet-wide logout.
+
+The lock is TTL-bounded (10 minutes), so a node that dies mid-apply does not
+block the fleet.
+
+**A migration is one transaction.** Its statements and its tracker row
+(`schema_migrations`, or `orama_schema_migrations` in a namespace RQLite) go to
+rqlite as a single `/db/execute?transaction` request, so a migration is either
+applied and recorded or not applied at all; a lost leader (`503 leader not
+found`) between two statements can no longer leave it half-applied or applied
+but unrecorded. Earlier engines sent each statement and the record as separate
+requests, and the retry re-ran a migration against a schema its own earlier
+attempt, or a later migration, had already changed (`no such table`). The
+tracker tables are unchanged, so old and new engines can apply against the same
+RQLite during a rolling upgrade. The "already exists" / "duplicate column name"
+tolerance is kept for databases an older engine left half-migrated: the
+transaction aborts on such a statement, so the engine drops that one statement
+and sends the transaction again.
+
+Because the record is committed with the migration, a re-run only happens
+after a crash of the old engine, but **every migration's DML should still be
+re-runnable**. `migrations/idempotence_test.go` applies every migration, snapshots the
+database, applies them all again and asserts nothing moved — a new migration
+whose DML is not guarded fails at `go test`, not in production.
+
+This means rolling upgrades have ONE invariant you must respect:
+
+> The new gateway binary's required migrations must be applied to RQLite **before or as part of** starting the new binary on a node.
+
+There are two acceptable patterns:
+
+**Pattern A — let the gateway apply migrations on startup (default).**
+The gateway calls `ApplyEmbeddedMigrations` during `NewDependencies` and asserts the schema is at the required version before serving traffic. If the apply succeeds, you're done. If a transient error blocks the apply, gateway startup aborts with a clear `schema mismatch: binary requires version N, database has M` error.
+
+This is the default for both the genesis startup flow and rolling upgrades. No operator action required when it works.
+
+**Pattern B: pre-apply migrations explicitly via the CLI.**
+
+On any node:
+```bash
+sudo orama node schema status      # show binary required vs applied
+sudo orama node schema apply --yes # apply pending migrations
+```
+Then start the new gateway. Useful when you want explicit control during a high-risk upgrade or when the auto-apply path is failing for reasons you want to debug separately.
+
+### Verifying schema state remotely
+
+Tenants can self-check schema drift without SSH access via:
+```
+GET /v1/schema-status
+```
+Returns `{ok, required_version, applied_version, in_sync, pending: [...]}`. The same data is available via `orama node schema status` for operators with shell access.
+
+### Build-time guard (CI)
+
+`go test ./migrations/` runs a roundtrip test that opens an in-memory SQLite, applies every embedded migration, and exercises representative SQL operations from the platform's Go code. If a Go handler is added that references a column no migration creates, the test fails — drift is caught at PR review time, not at production deploy.
+
+When adding a new platform table or column:
+1. Write the migration in `core/migrations/NNN_description.sql`
+2. Update the relevant Go code that reads/writes the new column
+3. Add an exemplar to `migrations/roundtrip_test.go` mirroring the new SQL — this enforces the contract permanently
+
+## Registry backups and restore
+
+The index RQLite is backed up hourly by the leader. Each snapshot is written to
+the leader's local `backups/rqlite`, **and** encrypted and pinned into IPFS,
+with its CID, SHA-256 and size recorded in `rqlite_backups`.
+
+The off-box copy is the one that matters. A snapshot on the leader's own disk
+protects against nothing that actually happens: the disk fails, the VPS is
+deleted, `orama node wipe` removes it, or leadership moves and the series
+fragments across nodes so no node holds a usable history. And an unrecorded CID
+is unfindable, which is the same as no backup.
+
+Retention is 24 hourly plus one a day for 7 days, locally and pinned. It was
+three files — three hours of history, and only the hours that node was leader.
+
+To see what exists:
+
+```bash
+sudo orama node schema status --env <env>
+```
+
+...and query the index for the newest:
+
+```sql
+SELECT taken_at, taken_by, cid, size_bytes FROM rqlite_backups ORDER BY taken_at DESC LIMIT 5;
+```
+
+To restore, fetch the CID, decrypt it with the node's
+`secrets/secrets-encryption-key`, verify the SHA-256 against the recorded one,
+and hand the resulting SQLite file to `rqlited`'s restore path. **A backup is
+only as good as the last time someone restored it** — exercise this on a
+scratch cluster, not for the first time during an incident.
+
+## A node that boots without a quorum
+
+A cluster-role `orama-node` no longer exits when it cannot reach a raft leader. It brings up
+everything that needs only the local machine — WireGuard, IPFS, the local rqlite
+replica, CoreDNS, the index gateway, Caddy, ntfy, tenants — reports its
+lifecycle state as `degraded`, and keeps retrying the cluster half in the
+background. When quorum returns it goes to `active` with no restart.
+
+So a node in `degraded` is serving. Check which components have not converged
+before reaching for a recovery command:
+
+```bash
+sudo orama node logs node -n 100 | grep "Boot component"
+```
+
+Every failed attempt logs the component name, the attempt count, the retry delay
+and the underlying error. `Node lifecycle state changed` lines carry the list of
+components that are not converged. Only escalate to `recover-raft` when the
+whole cluster is leaderless, not when one node reports `degraded`.
+
+## Recovery from a cluster split
+
+If nodes get stuck in "Candidate" state or show "leader not found" errors:
+
+```bash
+# Reads every node's applied index, keeps the furthest ahead, and prints what
+# each one reported before asking you to confirm.
+orama node recover-raft --env devnet
+
+# Or name the node whose data to keep yourself.
+orama node recover-raft --env devnet --leader 1.2.3.4
+
+# When rqlite is not answering anywhere, so the leader's raft address cannot be
+# read from the cluster.
+orama node recover-raft --env devnet --leader-raft-addr 10.0.0.1:10101
+```
+
+**One node's data is kept. Every other node's raft log and database are
+DELETED.** Nothing is backed up: there is no copy to restore from afterwards.
+Take a backup yourself first if the surviving node might not be the right one.
+This document used to say "backup + delete"; there was never a backup.
+
+What happens:
+1. Stop orama-node on every node
+2. Reset the kept node to a single-member cluster, preserving its data. Its
+   `raft.db` is kept: rqlited recovers from the `peers.json` by restoring its
+   latest snapshot, replaying every log entry after it, and writing a recovery
+   snapshot at the last index and term, and `raft.db` is also where it keeps
+   its current term. Leftovers of an earlier recovery (`recovery.db*`,
+   `restore-wal-*.tmp`) are removed first: they make the recovery fail. This
+   used to delete `raft.db`, which lost the entries after the last snapshot and
+   restarted the recovered cluster at term 1 under a recovery snapshot of the
+   old term; rqlite orders snapshots by term first, so it served that snapshot
+   as the newest forever and a node that needed a snapshot never caught up
+   (stagenet, 2026-10-03).
+
+   The recovery `peers.json` names the kept node under the raft id its rqlited
+   runs with and at its raft address, which are different values: the id is
+   what the node
+   records in `data/rqlite/raft-node-id` (its address only when there is no such
+   file, i.e. it was started without `-node-id`), the address comes from
+   `--leader-raft-addr` or from the leader's entry in `/nodes` (its `addr`
+   field; `/nodes` is keyed by id). On the live path the id `/nodes` reports for
+   the leader must be the one the node records, or nothing is reset. A marker
+   that exists but cannot be read fails the recovery rather than being taken
+   for "no marker". The leader's `raft-adv-addr` and membership record are
+   rewritten to name only its address, the configuration the recovery installs,
+   so a restart before the membership recorder runs does not read a stale
+   address as an address change. This used
+   to take the `/nodes` key for the address — refusing every cluster on
+   peer-id raft ids — and wrote `id=<address>` on the `--leader-raft-addr` path,
+   leaving the leader outside its own configuration.
+3. Start it and confirm it comes back as Leader with its data intact — before
+   touching any other node, so a failed recovery leaves every copy intact
+4. Delete `raft.db`, `raft/`, `db.sqlite` (+`-shm`/`-wal`) and `wsnapshots` (`rsnapshots` before rqlite v10) on
+   every other node, and write its `data/cluster-membership.json` naming the kept
+   node — so a wiped node with no join address of its own (the genesis node)
+   joins it rather than bootstrapping or refusing to start (see
+   [Architecture](/docs/contributor/architecture-reference), "Only a node that has never been a member
+   bootstraps a cluster")
+5. Start them one at a time; each pulls a full snapshot from the kept node
+6. Verify cluster health
+
+## Quorum guard (`--force`)
+
+`stop`, `restart` and the pre-upgrade step refuse to run when stopping this node
+would cost the index RQLite its quorum, and print the arithmetic:
+
+```
+Quorum check: 3/3 voters reachable, 2 would remain (need 2).
+```
+
+Quorum is a majority of the **configured** voters. Stopping a node does not
+remove it from the raft configuration — it only makes it unreachable — so on
+three voters you may stop one, and on two voters you may stop neither.
+Membership shrinks only through an explicit remove.
+
+The guard **fails closed**. If the local RQLite may be running but its status
+cannot be read, the command refuses rather than guessing: "I could not look" is
+not "go ahead". The one case it allows without a reading is neither
+`orama-namespace-rqlite@index` nor (on a 0.122.x node) `orama-node` being active —
+0.122.x ran the index rqlited inside `orama-node`, and the upgrade from it runs
+this check on such a node — since a node whose RQLite is already down contributes nothing to
+quorum. `orama-node` counts only on a node without the
+`orama-namespace-rqlite@.service` template (the 0.122.x layout): on this release
+it is always active and never runs rqlited, so a node whose rqlite@index is down
+stays stoppable without `--force`. The pre-upgrade step then writes the maintenance flag (a failure to
+write it is fatal) and, with no rqlited running, has no leadership to hand over.
+
+`--force` skips the check. Use it when you have confirmed the remaining voters
+can still form quorum — for example when deliberately taking down a cluster, or
+when the node is a non-voter the guard could not classify.
+
+## Leadership handover
+
+The pre-upgrade step — which `orama node upgrade` runs before it stops anything —
+hands index RQLite leadership to another voter before the node stops, and
+**aborts** if this node is still the leader afterwards.
+Restarting a leader that never stepped down forces an election and fails
+in-flight writes, so a failed handover stops the upgrade rather than warning
+about it.
+
+The handover is confirmed against `/status` — the POST only *starts* it, and
+raft still has to elect the target. rqlite 8 takes `POST /leader` with a JSON
+body `{"id":"<raft id>"}`. A build that answers 404 for that route has no
+step-down API and is tolerated: the node falls back to SIGTERM step-down.
+
+Tenant namespace handovers stay advisory. Losing a namespace leader degrades
+that namespace, not the node's ability to restart safely. Finding them is not:
+a tenant namespace with rqlite data on the node but no `rqlite.env` (in
+`/var/lib/orama-unit-env`, or `data/namespaces/<ns>/` on a node still on the old
+layout) fails the step instead of being skipped.
+
+## Replacing a nameserver VPS
+
+See [Node replacement](/docs/operator/node-replacement): join the new node first, sync, DNS, namespace safety, then Raft-remove and clean. For a release-crossing upgrade, read [Upgrade notes](/docs/operator/upgrade-notes) before the first node restarts.

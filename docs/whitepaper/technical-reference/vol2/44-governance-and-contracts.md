@@ -150,6 +150,8 @@ Three rules keep the public payment graph closed:
 
 A token wrapper cannot hold or create norama: `RefuseNoramaWrapper` refuses a created denom that is `norama` or a factory denom whose subdenom is `norama`, and a held factory denom of that form. A contract may hold the native denom, to escrow ORAMA (`chain/x/wasmpolicy/norama.go:RefuseNoramaWrapper`). The same refusal covers mint and burn through the binding.
 
+**The declared limit: a contract can issue a public IOU for ORAMA it holds.** Users may pay ORAMA into a contract (escrow, markets and DeFi need that), and a contract may mint its own token, through the `x/token` binding (`factory/{contract}/{subdenom}`) or as a CW20 from the standard CW20 base. Nothing on chain ties that token's supply to the ORAMA the contract holds, and the token moves publicly between users, so a contract that issues one turns held ORAMA into a public payment rail. The chain does not stop it, because the only way would be to forbid contracts from holding ORAMA between transactions, which breaks escrow, markets and DeFi; the owner chose to allow it (decision O-B). `TestBindings_aContractCanIssueAPublicIOUForOramaItHolds` and `TestBindings_tokenBindingRefusesToWrapNorama` in `chain/app/wasm_bindings_test.go` hold both edges: the IOU is possible, the wrapper named `norama` is refused. What else is refused: a bank send from a contract to a user, `CosmosMsg::Any` (the stargate form) and `SetWithdrawAddress`, so a contract cannot reach a module it has no binding for or redirect staking rewards. The genesis CW20 base is a user-token base and is never given ORAMA to wrap. A holder of an IOU trusts the issuing contract's code as with any wrapped asset: it is not shielded, not redeemable by the protocol, and the protocol makes no claim about its backing, so a wallet should show a token's issuer and mint authority before its balance. A related limit: contract and market payments show the payer, the amount and the contract publicly, and a permissionless relay contract (a user pays it, it calls `earnings.pay`) is a public user-to-user rail whose payee still lands privately in earnings.
+
 ### Bindings
 
 ![A contract call: ante, the VM, the deposit engine, the messenger and the module](../diagrams/ch44-contract-call.svg)
@@ -201,6 +203,19 @@ wasmd has no price on storage, so Orama prices it in a wrapper around wasmd's VM
 | 3 | `cw20-escrow` | escrow | escrow of native and CW20 tokens with an arbiter |
 | 4 | `cw3-fixed-multisig` | CW3 | fixed-membership multisig for users' own use |
 | 5 | `cw-vesting` | vesting | native and CW20 vesting with a schedule |
+
+Each contract is built from a pinned upstream commit, recorded with its patch, toolchain and wasm SHA-256 in `chain/contracts/standard/manifest.json`:
+
+| Contract | Upstream tag | Commit | Patch |
+|---|---|---|---|
+| `cw20-base` 2.0.0, `cw3-fixed-multisig` 2.0.0 | CosmWasm/cw-plus `v2.0.0` | `d91c70ea53acf2ac694efa343f3697e7cd165534` | `Cargo.lock` to cosmwasm-std 2.2.2 |
+| `cw721-base` 0.22.0 | CosmWasm/cw-nfts `v0.22.0` | `b11876a65890cf9ee2201f768e81b0a00ae395e9` | none |
+| `cw20-escrow` 0.14.2 | CosmWasm/cw-tokens `v0.14.2` | `1db4b7387953538d7a0123d3732385981d18db57` | `Cargo.lock` to cosmwasm-std 1.5.4 |
+| `cw-vesting` 2.7.1 | DA0-DA0/dao-contracts `v2.7.1` | `92c44e593e6a0677a437e028514ce207efbd4d66` | `Cargo.lock` to cosmwasm-std 1.5.4, and the `ibc3` feature dropped |
+
+`chain/contracts/standard/build.sh verify` (`make contracts-verify`) fetches each source at its commit and checks the commit, applies the patch, builds with Rust 1.81.0 for `wasm32-unknown-unknown` with `--locked`, runs `wasm-opt -Os --signext-lowering` and compares the SHA-256 with the manifest; `build.sh update` rewrites the files and hashes. No prebuilt wasm is downloaded, and two builds in different directories produce the same hashes provided they use the same `wasm-opt` (the manifest pins version 132; `ALLOW_TOOL_DRIFT=1` overrides and the hashes then differ). The patches have two reasons. wasmvm v3.0.7 aborts, on a dlmalloc assertion, in contracts built with cosmwasm-std 2.0.x or 1.1 to 1.3, so only the lock files move to a newer patch release. The cw-vesting workspace enables cosmwasm-std's `ibc3` feature, which would make the contract require the `stargate` capability this chain does not advertise. Rust 1.81 is used because rustc 1.87 and later emit bulk-memory from the precompiled standard library, which wasmvm rejects. `oramad genesis add-standard-contracts` is the command that applies the set to a genesis, and `chain/scripts/stagenet/deploy.sh` runs it after the bootstrap committee is added.
+
+The standard contracts run as contracts, so the send restriction applies to them and some cannot handle ORAMA: a CW3 multisig proposal that bank-sends ORAMA to a user fails at execution; the escrow releases and refunds by bank send, so ORAMA escrowed for a user recipient cannot leave it (token and CW20 escrows work); and the vesting contract's instantiate for the native denom sends a distribution `SetWithdrawAddress`, which is refused, so it can vest a user token but not ORAMA. A contract pays a user ORAMA through the earnings binding.
 
 They are built from pinned upstream commits with Rust 1.81 and `wasm-opt -Os --signext-lowering`. The pinned `Cargo.lock` files are patched to `cosmwasm-std` 2.2.2 (cw-plus) and 1.5.4 (cw-tokens), because wasmvm 3.0.7 aborts in contracts built with some earlier 2.0.x and 1.1 to 1.3 versions; `cw-vesting` also loses its stargate feature, since `stargate` is not a capability of this chain. The tests show that each contract also respects the norama rule: a multisig, an escrow and a vesting contract cannot pay norama to a user.
 
@@ -323,6 +338,8 @@ Queries for `x/houses`: `Params`, `Proposal`, `Vote`, `HouseBond`, `Tiers`, `Ena
 
 ## Known gaps
 
+- **Contract earnings have no spending path.** Earnings credited to a contract's address are debited only for the signer of a transaction (fees, staking top-up, shielding), and a contract signs none. A contract that expects to be paid in ORAMA must forward the funds another way (`chain/x/fees/keeper/earnings.go:DebitEarningsUpTo`).
+- **Public IOUs for held ORAMA are allowed by decision.** A contract holding ORAMA can issue a public token against it and the chain neither limits nor audits that (`chain/x/wasmpolicy/norama.go:RefuseNoramaWrapper`).
 - **The shielded binding is not built.** Every `shielded` message and query returns `NOT_LINKED`, so a contract cannot take part in the pool; a contract's balance is public. `chain/x/wasmbindings/bindings.go`.
 - **Two enacted outcomes have no consumer.** The power-bounds record (`m_activated`, `m_max`) and the adapter allow-list are stored but read by no module. `chain/x/houses/keeper/enacted.go:AdapterAllowed`.
 - **Upgrade heights are absolute.** A software upgrade proposal fixes a block height 60 days ahead and fails if the height has passed at execution. `chain/x/houses/keeper/proposal.go:checkUpgradeHeight`.

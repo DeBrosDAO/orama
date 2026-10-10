@@ -1,7 +1,7 @@
 package fleet
 
 // Cluster is a second, single-node Orama cluster a test installed beside the
-// run's own (docs/EVAL.md): its own server, its own subdomain
+// run's own (website/src/docs/operator/getting-started.mdx): its own server, its own subdomain
 // e2e-<run>-<name>.<zone> delegated to it, a Let's Encrypt staging
 // certificate, and its own `orama env` entry and CA file in the run's CLI
 // HOME. The run's fleet does not include it; reach its node with the

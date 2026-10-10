@@ -21,6 +21,6 @@ covers:
   routes:
     - /v1/version
   claims:
-    - "docs/CLI_REFERENCE.md#orama-build: the manifest carries checksums of every file and is signed with the operator's RootWallet"
-    - "docs/CLI_REFERENCE.md#orama-node-autoupdate: notify is the default; auto installs only when healthy, newer and in the window"
-    - "docs/CLI_REFERENCE.md#orama-node-autoupdate: a TUF failure, a downgrade or a release marked bad is refused; a validator is never auto"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-build: the manifest carries checksums of every file and is signed with the operator's RootWallet"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-autoupdate: notify is the default; auto installs only when healthy, newer and in the window"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-autoupdate: a TUF failure, a downgrade or a release marked bad is refused; a validator is never auto"

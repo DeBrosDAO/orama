@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	// keyLifetime and maxKeyDays: "90 days by default, a year at most" (docs/AUTH.md#keys).
+	// keyLifetime and maxKeyDays: "90 days by default, a year at most" (docs/whitepaper/technical-reference/vol1/14-authorization.md#api-keys).
 	keyLifetime = 90 * 24 * time.Hour
 	maxKeyDays  = 365
-	// rotationOverlap and maxOverlapDays (docs/CLI_REFERENCE.md "orama namespace keys rotate").
+	// rotationOverlap and maxOverlapDays (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace keys rotate").
 	rotationOverlap = 7 * 24 * time.Hour
 	maxOverlapDays  = 30
 	dayTolerance    = 10 * time.Minute
@@ -28,7 +28,7 @@ const (
 	appRuntimeScopes = "invoke,proxy,push,storage,webrtc"
 )
 
-// keyShape is orama_<sk|rk>_<base62>_<base62 checksum> (docs/AUTH.md#keys).
+// keyShape is orama_<sk|rk>_<base62>_<base62 checksum> (docs/whitepaper/technical-reference/vol1/14-authorization.md#api-keys).
 var keyShape = regexp.MustCompile(`^orama_(sk|rk)_[0-9A-Za-z]+_[0-9A-Za-z]+$`)
 
 func untilTime(t testing.TB, s string) time.Duration {
@@ -47,7 +47,7 @@ func near(got, want time.Duration) bool {
 
 // TestKeys_formatAndShownOnce: rk for the data plane, sk for the control
 // plane, a checksum, no namespace in the string, 90 days by default, and the
-// list never shows it again (docs/AUTH.md#keys).
+// list never shows it again (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func TestKeys_formatAndShownOnce(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -75,7 +75,7 @@ func TestKeys_formatAndShownOnce(t *testing.T) {
 }
 
 // TestKeys_mintRefusals: every key expires within a year; an empty or
-// unknown scope is refused (docs/AUTH.md#keys).
+// unknown scope is refused (docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table).
 func TestKeys_mintRefusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -132,7 +132,7 @@ func mustWhoami(t testing.TB, c *gw.Client, bearer string) []byte {
 }
 
 // TestKeys_revokeStopsKeyAndItsTokens: revoking a key refuses the key and the
-// tokens exchanged from it on every gateway within the revocation staleness (docs/AUTH.md#revoking); revoking twice is
+// tokens exchanged from it on every gateway within the revocation staleness (docs/whitepaper/technical-reference/vol1/13-identity.md#revocation); revoking twice is
 // 404, a malformed id 400.
 func TestKeys_revokeStopsKeyAndItsTokens(t *testing.T) {
 	t.Parallel()
@@ -217,7 +217,7 @@ func TestKeys_rotateKeepsBothForTheOverlap(t *testing.T) {
 
 // TestKeys_legacySpellingsDeprecated: X-API-Key, "ApiKey <k>" and a bare
 // Authorization still work but come back with Deprecation: true and what to
-// send instead; Bearer does not (docs/AUTH.md#sending-a-credential).
+// send instead; Bearer does not (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#credential-resolution).
 func TestKeys_legacySpellingsDeprecated(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

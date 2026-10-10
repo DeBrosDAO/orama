@@ -392,7 +392,7 @@ func recordEnvironment(opts Options) error {
 		return fmt.Errorf("record environment %q: %w", opts.Env, err)
 	}
 	fmt.Printf("  Environment %q recorded: gateway %s (the active environment is unchanged)\n", opts.Env, gatewayURL)
-	fmt.Printf("\n  Next: delegate %s to this cluster's nameservers (see docs/NAMESERVER_SETUP.md),\n", opts.BaseDomain)
+	fmt.Printf("\n  Next: delegate %s to this cluster's nameservers (see orama.network/docs/operator/nameserver),\n", opts.BaseDomain)
 	fmt.Printf("  then join more nodes through this one:\n")
 	fmt.Printf("    orama node setup --ip <IP> --user <user> --env %s --base-domain %s --join-via %s@%s\n",
 		opts.Env, opts.BaseDomain, opts.User, opts.IP)

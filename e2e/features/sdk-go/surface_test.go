@@ -14,7 +14,7 @@ import (
 // accessor ("Cache Client: Not yet available") and no Serverless() accessor
 // ("Serverless Client: Not yet available in the SDK"), and does not expose
 // the anonymity proxy ("Neither is exposed by the SDK yet")
-// (docs/GO_CLIENT_SDK.md). A method appearing under one of these names
+// (website/src/docs/developer/go-sdk.mdx). A method appearing under one of these names
 // means the doc is stale.
 func TestGoClientSurface_documentedAbsences(t *testing.T) {
 	t.Parallel()
@@ -27,7 +27,7 @@ func TestGoClientSurface_documentedAbsences(t *testing.T) {
 		name := typ.Method(i).Name
 		for _, absent := range []string{"Cache", "Serverless", "Function", "Proxy", "Anon", "Tunnel"} {
 			if strings.Contains(name, absent) {
-				t.Errorf("the client has %s(), which docs/GO_CLIENT_SDK.md says does not exist", name)
+				t.Errorf("the client has %s(), which website/src/docs/developer/go-sdk.mdx says does not exist", name)
 			}
 		}
 	}
@@ -41,7 +41,7 @@ func TestGoClientSurface_documentedAbsences(t *testing.T) {
 // TestGoClientConfig_documentedValidation: NewClient refuses a nil config and
 // an empty app name, DefaultClientConfig derives "<AppName>_db", and Connect
 // refuses a listen address that is every interface
-// (docs/GO_CLIENT_SDK.md "Creating a Client", "ClientConfig").
+// (website/src/docs/developer/go-sdk.mdx "Creating a Client", "ClientConfig").
 func TestGoClientConfig_documentedValidation(t *testing.T) {
 	t.Parallel()
 	if _, err := client.NewClient(nil); err == nil {

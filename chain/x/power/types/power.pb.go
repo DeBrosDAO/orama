@@ -44,7 +44,7 @@ type Params struct {
 	// time-based rule (this deadline, the cap hysteresis window, the
 	// new-validator ramp) in x/emission epochs, not calendar days, so they
 	// scale consistently with whatever epoch length a chain is configured
-	// with (see docs/CHAIN.md).
+	// with (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 	BootstrapDeadlineEpochs uint64 `protobuf:"varint,3,opt,name=bootstrap_deadline_epochs,json=bootstrapDeadlineEpochs,proto3" json:"bootstrap_deadline_epochs,omitempty"`
 	// cap_fraction_normal is the per-validator capped-stake-share ceiling while
 	// at most cap_step_down_validator_count validators are active (5% at

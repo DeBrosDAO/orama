@@ -89,7 +89,7 @@ func (tr *traffic) end() { tr.stop(); tr.done.Wait() }
 // namespace keeps serving. Afterwards every node runs HEAD, every node kept
 // its raft id and mesh address, the namespace created before still serves,
 // and the previous release's CLI still reads the upgraded cluster
-// (docs/DEV_DEPLOY.md rolling upgrades; e2e/README.md "the upgrade stage").
+// (website/src/docs/contributor/testing.mdx rolling upgrades; e2e/README.md "the upgrade stage").
 func TestUpgrade_previousReleaseToHeadUnderTraffic(t *testing.T) {
 	f := harness.Fleet(t)
 	if f.State.PreviousArchivePath == "" || f.State.PreviousOramaBin == "" {
@@ -159,7 +159,7 @@ func requireSameIdentities(t testing.TB, before, after *monitor.Report) {
 
 // mixedVersionWindow upgrades one follower to HEAD and holds the cluster
 // there: a mixed-release cluster converges, and both releases' CLIs read it
-// (docs/SECURITY.md "Rollout Strategy": followers first, leader last).
+// (docs/whitepaper/technical-reference/vol1/31-rolling-upgrades.md "Rollout Strategy": followers first, leader last).
 func mixedVersionWindow(t testing.TB, f *fleet.Fleet, before *monitor.Report) {
 	t.Helper()
 	first := infra.Followers(t, before)[0]

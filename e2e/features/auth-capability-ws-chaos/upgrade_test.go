@@ -25,7 +25,7 @@ const (
 	// forgedBytes is the random payload of the capability the flood presents.
 	forgedBytes = 48
 	// noSuchFunction is judged like any other capability: the same 403
-	// (docs/AUTH.md#capability-websockets), so the flood needs no deployment.
+	// (docs/whitepaper/technical-reference/vol1/13-identity.md#open-websockets), so the flood needs no deployment.
 	noSuchFunction = "e2e-no-such-fn"
 )
 

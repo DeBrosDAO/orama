@@ -1,5 +1,5 @@
 # CLI conformance for the environment, auth and miscellaneous commands, and
-# the whole command tree against docs/CLI_REFERENCE.md: the binary under test
+# the whole command tree against docs/whitepaper/technical-reference/appendices/d-cli-reference.md: the binary under test
 # shows exactly the documented commands, flags, aliases and usage lines;
 # unknown commands, flags and subcommands are usage errors; `orama env`
 # add/use/remove/list/current in isolated HOMEs (custom environment signing
@@ -31,9 +31,9 @@ covers:
     - orama ssh
     - orama rollout
   claims:
-    - "docs/CLI_REFERENCE.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
-    - "docs/CLI_REFERENCE.md#orama-env-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
-    - "docs/DEVNET_INSTALL.md: a missing CA file is an error naming the environment"
-    - "docs/AUTH.md: ORAMA_TOKEN is the CI credential; a garbage one is refused"
-    - "docs/DEVNET_INSTALL.md: node host keys are pinned in ~/.orama/known_hosts; orama ssh must not trust on first use"
-    - "docs/CLI_REFERENCE.md#orama-rollout: orama rollout and orama node rollout are the same command"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-env-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
+    - "website/src/docs/operator/node-setup.mdx: a missing CA file is an error naming the environment"
+    - "docs/whitepaper/technical-reference/vol1/35-the-cli.md: ORAMA_TOKEN is the CI credential; a garbage one is refused"
+    - "website/src/docs/operator/node-setup.mdx: node host keys are pinned in ~/.orama/known_hosts; orama ssh must not trust on first use"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-rollout: orama rollout and orama node rollout are the same command"

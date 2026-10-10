@@ -26,7 +26,7 @@ covers:
     - orama env current
     - orama env list
   claims:
-    - "docs/CLI_REFERENCE.md#orama-cluster-settings-set: namespace-creation open admits any signed-in wallet and is set once for the whole run"
-    - "docs/MONITORING.md: a fresh cluster reports quorum ok, one leader, a full WireGuard mesh and no critical alert"
-    - "docs/CHAIN.md: every co-hosted validator is in sync and the chain height advances"
-    - "docs/CLI_REFERENCE.md#orama-monitor: only the cluster's operators may read the telemetry; no credentials is an auth error"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster-settings-set: namespace-creation open admits any signed-in wallet and is set once for the whole run"
+    - "website/src/docs/operator/monitoring.mdx: a fresh cluster reports quorum ok, one leader, a full WireGuard mesh and no critical alert"
+    - "docs/whitepaper/technical-reference/vol2/38-anonymity-and-tor.md: every co-hosted validator is in sync and the chain height advances"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor: only the cluster's operators may read the telemetry; no credentials is an auth error"

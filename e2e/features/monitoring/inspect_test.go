@@ -17,7 +17,7 @@ import (
 // inspectBudget bounds one inspection of the fleet over SSH.
 const inspectBudget = 10 * time.Minute
 
-// The inspector's subsystems, statuses and severities (docs/INSPECTOR.md;
+// The inspector's subsystems, statuses and severities (website/src/docs/operator/inspector.mdx;
 // core/pkg/inspector/checker.go: Low=0 .. Critical=3).
 var (
 	inspectSubsystems = []string{"rqlite", "olric", "ipfs", "dns", "wireguard", "system", "network", "namespace", "tor", "webrtc", "global"}
@@ -64,7 +64,7 @@ func inspect(t *testing.T, extra ...string) (inspectReport, oramacli.Result) {
 
 // TestInspect_allSubsystemsConsistentReport: a full inspection over SSH
 // covers the fleet, every check is well formed, the summary adds up, and
-// the exit code is 1 exactly when a check failed (docs/INSPECTOR.md "Exit
+// the exit code is 1 exactly when a check failed (website/src/docs/operator/inspector.mdx "Exit
 // Codes", "JSON").
 func TestInspect_allSubsystemsConsistentReport(t *testing.T) {
 	t.Parallel()
@@ -136,7 +136,7 @@ func TestInspect_refusals(t *testing.T) {
 }
 
 // TestInspect_jsonStdoutIsOnlyJSON: `--format json` is for piping
-// (docs/INSPECTOR.md: `orama inspect --format json | jq ...`), so stdout must
+// (website/src/docs/operator/inspector.mdx: `orama inspect --format json | jq ...`), so stdout must
 // be the JSON document alone. Today a progress line precedes it on stdout
 // (core/cmd/orama/internal/inspect_command.go fmt.Printf("Inspecting ...")):
 // this test fails until it moves to stderr.

@@ -34,7 +34,7 @@ type clusterView struct {
 // deposit locked from earnings), updates it, and retires it (the deposit
 // released); the id can never be registered again, a retired row cannot be
 // updated or retired again, and another account can neither update nor
-// retire it (docs/CHAIN.md "x/nodes" Cluster). The row names the run's own
+// retire it (docs/whitepaper/technical-reference/vol2/37-global-nodes.md "x/nodes" Cluster). The row names the run's own
 // public base domain and gateway, which is what a real cluster publishes.
 func TestNodesCluster_lifecycle(t *testing.T) {
 	t.Parallel()

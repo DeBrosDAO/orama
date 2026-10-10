@@ -1,12 +1,10 @@
-# Orama Network Go Client SDK
-
-## Overview
+# Go Client SDK
 
 The Orama Network Go Client SDK provides a clean, type-safe Go interface for interacting with the Orama Network. It abstracts away the complexity of peer connections, authentication, and error handling.
 
-For TypeScript, see [TS_SDK.md](TS_SDK.md). Both talk to the same gateway; use
+For TypeScript, see the [SDK Reference](/docs/developer/sdk-reference). Both talk to the same gateway; use
 whichever matches the code you are writing. Humans use the CLI, not a
-dashboard — [CLIENT_SURFACE.md](CLIENT_SURFACE.md).
+dashboard: see the [CLI Reference](/docs/developer/cli-reference).
 
 ## Installation
 
@@ -68,6 +66,7 @@ type ClientConfig struct {
     DatabaseName      string        // Database name (default: "<AppName>_db")
     BootstrapPeers    []string      // LibP2P bootstrap peer multiaddresses
     DatabaseEndpoints []string      // RQLite nodes to dial directly (in-mesh only); empty = through the gateway
+    DatabaseReadLevel string        // rqlite read consistency: "none" (default when empty) or "weak"
     GatewayURL        string        // Gateway URL for HTTP API access
     ConnectTimeout    time.Duration // Connection timeout (default: 30s)
     RetryAttempts     int           // Retry attempts (default: 3)
@@ -102,6 +101,8 @@ if err != nil {
 ```
 
 `DefaultClientConfig` fills in default bootstrap peers and leaves `DatabaseEndpoints` empty; `NewClient` returns an error if the config is nil or the app name is empty.
+
+`DatabaseReadLevel` is the rqlite consistency level reads are served at. `client.ReadLevelNone` (the default) reads this node's local replica: fastest, but it can miss a write the leader has acknowledged and this node has not yet applied. `client.ReadLevelWeak` routes the read to the leader, which has every acknowledged write, at the cost of one hop when this node is not the leader.
 
 ## Authentication
 
@@ -197,7 +198,7 @@ blocks are physically reclaimed only by the periodic GC sweep (~6h). For a
 removed (no other namespace still references it), the blocks are evicted
 cluster-wide right away so the content is no longer fetchable. Use it only for
 genuine privacy deletes — it fans out per-node work and should not be set on
-routine unpins (e.g. avatar rotation) (bugboard #153).
+routine unpins (e.g. avatar rotation).
 
 The cluster keeps ONE pin per CID however many namespaces uploaded the same
 bytes. Whether an unpin removes it is decided from a cluster-wide reference
@@ -487,7 +488,7 @@ anonymity client never receives a wallet address.
 
 ## Serverless Client
 
-**Not yet available in the SDK.** The Go client does not expose a `Serverless()` accessor. Serverless functions are written in Go, compiled with TinyGo, and deployed/managed via the `orama function` CLI — see `SERVERLESS.md` for the full workflow.
+**Not yet available in the SDK.** The Go client does not expose a `Serverless()` accessor. Serverless functions are written in Go, compiled with TinyGo, and deployed/managed via the `orama function` CLI — see [Functions](/docs/developer/functions) for the full workflow.
 
 ## Error Handling
 
@@ -571,12 +572,6 @@ func (m *mockStorage) Upload(ctx context.Context, r io.Reader, name string) (*cl
 
 Serverless function examples (hello, echo, counter) live in `core/examples/functions/`. There are currently no standalone SDK example programs in the repository.
 
-## API Reference
+## API reference
 
-Complete API documentation is available at:
-- GoDoc: https://pkg.go.dev/github.com/DeBrosOfficial/network/pkg/client
-
-## Support
-
-- GitHub Issues: https://github.com/DeBrosOfficial/network/issues
-- Documentation: https://github.com/DeBrosOfficial/network/tree/main/docs
+Complete API documentation is on [GoDoc](https://pkg.go.dev/github.com/DeBrosOfficial/network/pkg/client). Issues go to the [GitHub issue tracker](https://github.com/DeBrosOfficial/network/issues).

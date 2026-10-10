@@ -156,6 +156,23 @@ x/archive's own retain height is `min(tip - retention_window_blocks, last archiv
 
 A path that is not clean, an escaped path, an unknown or repeated parameter, or a value outside `limit` 1 to 100 and `page` 1 to 1,000 is refused. The listener must be a loopback IP or, on a host that also runs a cluster node, the namespace address `198.18.0.2`; `requireLocalOnly` refuses anything else. The gateway's `/v1/chain/index/` route forwards to it after validating the same shapes again, building the upstream path itself and never forwarding the caller's path; the route is open to callers without a credential.
 
+### The explorer
+
+The website explorer (`website/src/explorer`, mounted at `/explorer`) reads the chain only through the gateway's chain proxy, on the origin it is served from. It carries no demo data and no fixture accounts: when the proxy or the indexer is down a page shows an error box and nothing else, and without the indexer the transaction, block and wallet pages fail. Pages call only the `ExplorerDataSource` interface (`website/src/explorer/data/source.ts`), whose one implementation is `data/chain/`: a lookup for something that does not exist resolves to `null`, never an invented record; a real failure rejects with a readable error; pagination is cursor-based and a bad cursor is rejected; limits are clamped; a figure the chain cannot give is absent and the page leaves it out. The folders are `model/` (domain types, ORAMA and norama formatting, what a pasted string is with a bech32 checksum check, the investigation trail, and how a transaction reads as a sentence), `data/`, `ui/`, `shell/` (header, search palette, trail bar, preview drawer) and `pages/` (home, transaction, block, wallet, validators).
+
+| Shown | Read from |
+|---|---|
+| Head, chain id, sync state | `GET /v1/chain/status` |
+| Supply, base fee, epoch, burned fees, transaction counts | `supply/norama`, the `BaseFee`, `CurrentEpoch` and `Params` queries, and the indexer's `stats` (48 hourly buckets) |
+| Validators, power, committee seats, lambda, total bonded | the staking validators, CometBFT `validators`, the power `BootstrapCommittee` and `Lambda` queries and `staking/pool`; a validator's consensus address is the first 20 bytes of the SHA-256 of its ed25519 key, computed in the browser |
+| A transaction | the indexer's record (signer, memo, body, events, code, log); the fee is the `base_fee` and `tip` of the `tx` event, and "balances before and after" is built from the `coin_spent`, `coin_received` and `burn` events, so it leaves out what moved through an earnings account |
+| A wallet | the bank `AllBalances` and the staking delegation queries of the wallet-query route (norama only) and the indexer's account summary; a wallet with no transaction and no funds is not found |
+| A wallet's activity and counterparties | the indexer's per-address transactions, 100 a page, filtered in the browser (cursor `page:position`); counterparties come from the newest 100 transactions only |
+
+Messages with a sentence of their own are norama bank sends, staking delegate and undelegate of norama, and `MsgCreateDeal` (the amount is the escrow: price per epoch times replicas times epochs); any other message or token is shown by its type URL, and a signer-less transaction (a shielded one) has no signer. Not shown, because nothing on chain gives it: a wallet's balance over time, a validator's uptime history, the number of delegators, claimable rewards.
+
+Chain data is written by anyone, so the data source validates it: every amount is checked as a bounded base-unit integer string and a malformed record rejects the query; control and bidirectional-override characters are stripped from monikers, memos, labels and failure reasons; the `verified` badge comes from a curated registry shipped with the site, never from a chain-writable field; indexer path segments and query values are percent-encoded and error messages carry no internal host; and only finalised blocks are served as the head.
+
 ## State it owns
 
 | State | Holds | Writer | Reader | Location |

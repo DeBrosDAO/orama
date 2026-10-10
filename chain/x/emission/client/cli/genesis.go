@@ -45,11 +45,11 @@ chain has produced its first block these parameters are immutable short of a coo
 fork. A devnet or localnet typically shortens both and sets --allow-bootstrap-stake, e.g.
 --epoch-duration 60s --min-blocks-per-epoch 5 --allow-bootstrap-stake. Without
 --allow-bootstrap-stake, epoch-duration must be at least 24h and min-blocks-per-epoch at least
-14,400 (see docs/CHAIN.md).
+14,400 (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 
 The faucet flags (--faucet-enabled and friends) set the test-network faucet's parameters; only
 the ones passed change the value already in genesis. --faucet-enabled is refused on a production
-chain-id (see "Test-network faucet" in docs/CHAIN.md).`,
+chain-id (see "Test-network faucet" in docs/whitepaper/technical-reference/appendices/e-chain-messages-and-queries.md).`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			epochDurationStr, err := cmd.Flags().GetString(flagEpochDuration)

@@ -36,7 +36,7 @@ var rewroteLine = regexp.MustCompile(`Index:\s+scanned (\d+), rewrote (\d+), ski
 
 // TestWalletCap_namespaceQuota: with the per-wallet cap at 1, a wallet that
 // owns a namespace is refused a second with 403 NAMESPACE_QUOTA
-// (docs/API_SURFACE.md "/v1/namespaces": per-wallet cap).
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/namespaces": per-wallet cap).
 func TestWalletCap_namespaceQuota(t *testing.T) {
 	f := harness.Fleet(t)
 	n := ns.New(t, f, ns.Options{})
@@ -77,7 +77,7 @@ func deleteLeaked(t testing.TB, c *gw.Client, w *wallet.EVM, name string) {
 }
 
 // TestOperator_addListRemove: operators are listed, added idempotently and
-// removed (docs/AUTH.md#operating-the-cluster).
+// removed (docs/whitepaper/technical-reference/vol1/14-authorization.md#operators).
 func TestOperator_addListRemove(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
@@ -100,7 +100,7 @@ func TestOperator_addListRemove(t *testing.T) {
 }
 
 // TestOperator_neverRemovesTheLast: removing the only operator is refused and
-// leaves it listed (docs/AUTH.md#operating-the-cluster). It applies only to a
+// leaves it listed (docs/whitepaper/technical-reference/vol1/14-authorization.md#the-route-policy-table). It applies only to a
 // cluster with exactly one operator, and the test never removes an operator
 // to make one: removing a real operator is not something a run may undo
 // safely. The package's feature.yaml does not claim this promise for that
@@ -150,7 +150,7 @@ func TestOperatorRoutes_ownerIsNotAnOperator(t *testing.T) {
 }
 
 // TestRotateSecrets_idempotent: rewriting stored secrets twice leaves nothing
-// for the second run to rewrite (docs/CLI_REFERENCE.md "The walker is
+// for the second run to rewrite (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "The walker is
 // idempotent"). --rotate is not exercised: a new encryption root cannot be
 // undone, and the upgrade stage still has to read this cluster's rows.
 func TestRotateSecrets_idempotent(t *testing.T) {

@@ -18,7 +18,7 @@ const pwnScript = `node -e \"require('fs').writeFileSync('node_modules/.pwned','
 
 // TestDeployNPM_installScriptsNeverRun: the server installs with
 // --ignore-scripts, so a package's own preinstall/install/postinstall/prepare
-// scripts do not run (docs/DEPLOYMENT_GUIDE.md "How the server installs them").
+// scripts do not run (website/src/docs/developer/deployments.mdx "How the server installs them").
 func TestDeployNPM_installScriptsNeverRun(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)
@@ -40,7 +40,7 @@ func TestDeployNPM_installScriptsNeverRun(t *testing.T) {
 
 // TestDeployNPM_nonRegistrySourcesRefused: a git, URL, file, link or path
 // dependency — in any dependency field, overrides or the lockfile — and
-// workspaces are refused before the install starts (docs/DEPLOYMENT_GUIDE.md).
+// workspaces are refused before the install starts (website/src/docs/developer/deployments.mdx).
 func TestDeployNPM_nonRegistrySourcesRefused(t *testing.T) {
 	t.Parallel()
 	tn := newTenant(t)

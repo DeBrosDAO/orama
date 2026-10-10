@@ -54,7 +54,7 @@ func waitMedia(t *testing.T, pubs, subs []*services.RTCPeer) {
 
 // TestMedia_oneToOneRelayOnly: a publisher on the first member's gateway and a
 // subscriber on the second's, both relay-only through the namespace's TURN,
-// exchange real RTP through the SFU (docs/WEBRTC.md#architecture:
+// exchange real RTP through the SFU (website/src/docs/developer/webrtc.mdx#architecture:
 // iceTransportPolicy relay, TURN-shielded SFU).
 func TestMedia_oneToOneRelayOnly(t *testing.T) {
 	t.Parallel()
@@ -84,7 +84,7 @@ func TestMedia_groupCall(t *testing.T) {
 
 // TestSignal_credentialsRefreshedAt80Percent: the SFU sends
 // refresh-credentials at 80% of its 600 s TTL with a later expiry
-// (docs/WEBRTC.md#turn-credential-protocol).
+// (website/src/docs/developer/webrtc.mdx#turn-credential-protocol).
 func TestSignal_credentialsRefreshedAt80Percent(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

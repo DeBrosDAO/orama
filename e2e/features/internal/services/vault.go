@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// The gateway's vault routes (docs/API_SURFACE.md#vault) and the ownership
+// The gateway's vault routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md#vault) and the ownership
 // proof they check (core/pkg/gateway/handlers/vault/ownership.go; the same
 // messages sdk-vault's crypto/ownership.ts signs).
 const (

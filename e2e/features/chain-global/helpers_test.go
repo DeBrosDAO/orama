@@ -20,7 +20,7 @@ import (
 const signDocMarker = "sign document (not submitted):"
 
 // Explicit fee and gas the documents carry: the commands have no default
-// (docs/CLI_REFERENCE.md: "The fee is an explicit amount of norama").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md: "The fee is an explicit amount of norama").
 const (
 	docFee = "1000"
 	docGas = "200000"

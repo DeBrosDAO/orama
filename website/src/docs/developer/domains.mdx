@@ -172,6 +172,10 @@ Every subcommand takes `--json`. `verify --wait` re-asks the gateway every 10 se
 
 `list` takes an optional `?deployment_name=` to narrow it to one app; without it, every domain in the namespace is returned. Methods are enforced -- a request with the wrong verb gets a `405` naming what the endpoint takes.
 
+### Ownership rules
+
+Adding a domain proves nothing, so it does not reserve the name. Only a **verified** domain, or a pending one of your own namespace, refuses an add (`409 Domain already in use`, the same answer whichever namespace holds it). A pending row of another namespace is replaced by your add, and a pending row expires 72 hours after it was added. If two namespaces add the same name, the last add holds the single row, and only its token verifies: re-run `orama domain add` and use the token it prints. `verify --wait` only retries "the record is not visible yet"; a domain that was never added fails immediately.
+
 ### Flow
 
 1. Call the add endpoint with your domain and deployment name -- the response includes a verification token

@@ -20,7 +20,7 @@ import (
 const absentFunction = "e2e-absent-fn"
 
 // TestConformance_functionCommands runs the generic checks (help matches
-// docs/CLI_REFERENCE.md, --json accepted, unknown flags and subcommands are
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md, --json accepted, unknown flags and subcommands are
 // usage errors, every <name> argument required and no surplus accepted) on
 // every `orama function` command.
 func TestConformance_functionCommands(t *testing.T) {
@@ -112,7 +112,7 @@ func TestFunctionTriggersAdd_needsExactlyOneSource(t *testing.T) {
 // TestFunctionInit_scaffoldsProject: init creates <name>/function.yaml and
 // <name>/function.go in the working directory, refuses to overwrite, and
 // refuses names that are not a function name, writing nothing
-// (docs/CLI_REFERENCE.md#orama-function-init, docs/SERVERLESS.md).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-function-init, website/src/docs/developer/functions.mdx).
 func TestFunctionInit_scaffoldsProject(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t).NoWallet(t)

@@ -27,8 +27,8 @@ covers:
     - /v1/node/command
     - /v1/node/leave
   claims:
-    - "docs/ORAMAOS_DEPLOYMENT.md#what-is-oramaos: no SSH, no shell"
-    - "docs/ORAMAOS_DEPLOYMENT.md#step-2-first-boot-enrollment-mode: an 80-bit code on the console TTY, not served over the network"
-    - "docs/SECURITY.md: the gateway proves it holds the code with a payload that decrypts under it; a second POST to /complete is 409"
-    - "docs/ORAMAOS_DEPLOYMENT.md#step-3-run-enrollment-from-cli: port 9999 closes after enrollment"
-    - "docs/ORAMAOS_DEPLOYMENT.md#node-management: status, command, logs and leave need an operator"
+    - "website/src/docs/operator/orama-os.mdx#2-first-boot: no SSH, no shell"
+    - "website/src/docs/operator/orama-os.mdx#2-first-boot: an 80-bit code on the console TTY, not served over the network"
+    - "website/src/docs/operator/orama-os.mdx: the gateway proves it holds the code with a payload that decrypts under it; a second POST to /complete is 409"
+    - "website/src/docs/operator/orama-os.mdx#3-enroll-from-cli: port 9999 closes after enrollment"
+    - "website/src/docs/operator/orama-os.mdx#node-management: status, command, logs and leave need an operator"

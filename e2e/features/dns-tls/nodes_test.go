@@ -27,7 +27,7 @@ const (
 // TestCoreDNS_isolatedAccountAndEmptyOptOrama: CoreDNS runs as
 // orama-coredns, its Corefile (which holds the index rqlite password) is
 // root:orama-coredns 0640, and /opt/orama is an empty read-only tmpfs in its
-// mount namespace (docs/SECURITY.md "Per-service accounts").
+// mount namespace (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Per-service accounts").
 func TestCoreDNS_isolatedAccountAndEmptyOptOrama(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -57,7 +57,7 @@ func mountOption(line, opt string) bool {
 
 // TestCoreDNS_port53OnlyOnNameservers: a nameserver listens on 53/tcp and
 // 53/udp and its firewall opens both; a node without the role does neither
-// (docs/ARCHITECTURE.md "UFW Firewall": 53 on nameservers only).
+// (website/src/docs/contributor/architecture-reference.mdx "UFW Firewall": 53 on nameservers only).
 func TestCoreDNS_port53OnlyOnNameservers(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -87,7 +87,7 @@ func TestCoreDNS_port53OnlyOnNameservers(t *testing.T) {
 // store; the *.<base> pair the cluster gateway exports from it for TURN is
 // orama 0600 on every node; the ACME challenge key and the
 // store key are root:orama 0640, and the admin API is a 0600 unix socket in a
-// 0700 directory (docs/SECURITY.md "ACME DNS-01", "Certificates", "Local
+// 0700 directory (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md "ACME DNS-01", "Certificates", "Local
 // control planes"; core/systemd/orama-namespace-caddy@.service).
 func TestCaddy_certificateFilesAndKeys(t *testing.T) {
 	t.Parallel()
@@ -119,7 +119,7 @@ func hasPort(ls []fleet.Listener, port int) bool {
 
 // TestHTTP_plainPortServesTheGatewayWithoutRedirect records what port 80 does
 // today: Caddy serves the gateway over plain HTTP, by name and by bare IP, so
-// a node is reachable before its certificate exists (docs/ARCHITECTURE.md
+// a node is reachable before its certificate exists (website/src/docs/contributor/architecture-reference.mdx
 // "Production": "use the IP over HTTP port 80"; core/pkg/install/installers
 // caddy.go http:// blocks). There is no redirect to HTTPS, and no HSTS over
 // cleartext. Nothing credential-bearing is sent here.

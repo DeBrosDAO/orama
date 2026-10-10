@@ -23,6 +23,6 @@ covers:
   units:
     - orama-namespace-rqlite@.service
   claims:
-    - "docs/CLI_REFERENCE.md#orama-node-stop: a stop that would break quorum is refused; --force bypasses it"
-    - "docs/CLI_REFERENCE.md#orama-node-remove: a removal that would cost a cluster its quorum is refused"
-    - "docs/CLI_REFERENCE.md#orama-node-recover-raft: with quorum lost, --leader-raft-addr reforms the cluster around the kept node's data"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-stop: a stop that would break quorum is refused; --force bypasses it"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-remove: a removal that would cost a cluster its quorum is refused"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-recover-raft: with quorum lost, --leader-raft-addr reforms the cluster around the kept node's data"

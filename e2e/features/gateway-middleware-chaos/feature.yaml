@@ -22,6 +22,6 @@ covers:
     - /v1/auth/token
     - /v1/auth/challenge
   claims:
-    - "docs/ARCHITECTURE.md#middleware-stack: credential endpoints are limited to 30 a minute per address, burst 10; challenges per wallet too"
-    - "docs/SECURITY.md#authentication: X-Forwarded-For is honoured only from the local proxy and only its last entry; loopback with a forwarding header is not exempt; the overlay is"
-    - "docs/ARCHITECTURE.md#middleware-stack: security headers are set on 429 and 5xx answers too"
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: credential endpoints are limited to 30 a minute per address, burst 10; challenges per wallet too"
+    - "docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md#the-middleware-stack: X-Forwarded-For is honoured only from the local proxy and only its last entry; loopback with a forwarding header is not exempt; the overlay is"
+    - "website/src/docs/contributor/architecture-reference.mdx#middleware-stack: security headers are set on 429 and 5xx answers too"

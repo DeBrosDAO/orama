@@ -13,7 +13,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Namespace RQLite routes (docs/API_SURFACE.md "Database (RQLite)"); shapes
+// Namespace RQLite routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Database (RQLite)"); shapes
 // are core/pkg/rqlite/gateway.go.
 const (
 	pathCreateTable = "/v1/rqlite/create-table"
@@ -172,7 +172,7 @@ func TestRQLite_schemaListsTables(t *testing.T) {
 }
 
 // TestRQLite_transactionCommitsOrRollsBackWhole: a transaction is atomic
-// (docs/API_SURFACE.md db.transaction()): a failing op rolls back every op
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md db.transaction()): a failing op rolls back every op
 // before it, answering 409 with the failing index (core/pkg/rqlite/gateway.go).
 func TestRQLite_transactionCommitsOrRollsBackWhole(t *testing.T) {
 	t.Parallel()

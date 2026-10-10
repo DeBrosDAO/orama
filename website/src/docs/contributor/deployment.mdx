@@ -23,6 +23,12 @@ orama build --arch arm64
 # Custom output path
 orama build --output ./release/orama-v1.0.0.tar.gz
 
+# A local-only archive that no node installs
+orama build --unsigned
+
+# Rotate the trusted archive signers (signed builds only)
+orama build --signers 0xOld,0xNew
+
 # Verbose output
 orama build --verbose
 ```
@@ -32,6 +38,10 @@ orama build --verbose
 | `--arch` | `amd64` | Target architecture (`amd64`, `arm64`) |
 | `--output` | `/tmp/orama-<version>-linux-<arch>.tar.gz` | Output archive path |
 | `--verbose` | `false` | Verbose output |
+| `--unsigned` | `false` | Do not sign the manifest: a local-only archive no node installs |
+| `--signers` | | Rotate the trusted archive signers to these addresses (signed builds only). See [Signed archives](/docs/operator/signed-archives) |
+
+Signing is the default: the build asks the RootWallet agent for its active account and signs the manifest. Open and unlock the RootWallet desktop app first.
 
 The build pipeline:
 1. Cross-compiles all Go binaries for `linux/<arch>` (CLI, gateway, node, SFU, TURN, identity, SNI router)
@@ -47,13 +57,13 @@ Upload the binary archive to nodes without restarting services:
 
 ```bash
 # Push to all nodes in an environment
-orama node push --env devnet
+orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
 # Push to a single node
-orama node push --env devnet --node 1.2.3.4
+orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz --node 1.2.3.4
 
-# Direct upload (no hub fanout)
-orama node push --env devnet --direct
+# An installed node that is not in the inventory yet
+orama node push --host 1.2.3.4 --archive /tmp/orama-<version>-linux-amd64.tar.gz
 ```
 
 ### Rollout (Build + Deploy)
@@ -64,18 +74,18 @@ Build and deploy in one step with automatic rolling restart:
 # Build the archive
 orama build
 
-# Roll out to all your nodes (recommended — uses wallet-based node discovery)
-orama rollout --env devnet
+# Roll out to all your nodes: prints the plan, restarts nothing without --yes
+orama rollout --env devnet --yes
 
-# Custom delay between nodes
-orama rollout --env devnet --delay 60
+# Seconds a node has to rejoin before the rollout stops (default 300)
+orama rollout --env devnet --delay 600 --yes
 ```
 
-The legacy `orama node rollout` command is still available and uses `nodes.conf` directly:
+`orama node rollout` is the same command as `orama rollout`:
 
 ```bash
-orama node rollout --env devnet
-orama node rollout --env devnet --no-build --yes
+orama node rollout --env devnet --yes
+orama node rollout --env devnet --no-build --archive <path> --yes
 ```
 
 ### Upgrade (Restart Only)
@@ -83,14 +93,14 @@ orama node rollout --env devnet --no-build --yes
 When the binary is already on the node, restart services with the new code:
 
 ```bash
-# Rolling upgrade of all nodes in an environment
+# Print the rolling upgrade plan for an environment (nothing restarts)
 orama node upgrade --env devnet
 
-# Upgrade a single node
-orama node upgrade --env devnet --node 1.2.3.4
+# Execute it
+orama node upgrade --env devnet --yes
 
-# Also restart services after upgrade
-orama node upgrade --env devnet --restart
+# Upgrade a single node (every node's raft state is still read first)
+orama node upgrade --env devnet --node 1.2.3.4 --yes
 ```
 
 ## Other Node Management Commands
@@ -203,3 +213,147 @@ The CI pipeline (`.github/workflows/ci.yml`) runs on every push and PR:
 | Version sanity | Checks the root `VERSION` file matches `sdk/package.json` |
 
 There is no `go fmt` check, no all-binaries build stage, and no E2E stage in CI — E2E tests are run manually against a sandbox or real environment.
+
+## Deploy workflow
+
+All binaries are pre-compiled locally and shipped as a binary archive. There is zero compilation on the VPS.
+
+```bash
+# One-command: build + push + rolling upgrade (prints the plan; --yes executes it)
+orama node rollout --env devnet --yes
+
+# Or step by step:
+
+# 1. Build binary archive (cross-compiles all binaries for linux/amd64) and
+#    sign its manifest with your RootWallet (unlock the desktop app first)
+orama build
+# Creates: /tmp/orama-<version>-linux-amd64.tar.gz
+
+# 2. Push archive to all nodes, from this machine. --archive is required:
+#    the newest archive in /tmp may be another checkout's build.
+orama node push --env devnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
+
+# 3. Rolling upgrade (one node at a time: followers first, the leader last).
+#    Without --yes it prints the plan; each node runs the staged build's CLI.
+orama node upgrade --env devnet --yes
+```
+
+Upgrading from 0.122.x the first time: see [First upgrade from 0.122.x](/docs/operator/upgrade-notes#first-upgrade-from-0122x).
+
+**Pause namespace and deployment create and delete during a rolling upgrade.**
+Coordination between nodes now needs the v2 coordination MAC signed for the
+receiving node's peer id, and the deployment replica routes
+(`/v1/internal/deployments/replica/*`) take it instead of the constant header
+they used to. A build that signs only v1 (or signs the replica header) cannot
+coordinate spawns, teardowns or replica operations with an upgraded node, and an
+upgraded node cannot with it, until every node is upgraded: such requests are
+refused `401`/`403` (see the technical reference's inter-node trust chapter (`docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md`, "Coordination MAC v2")). The same goes for
+the secrets re-encrypt fan-out of `orama operator rotate-secrets`, and for
+namespace repair. Network status, telemetry, network detail and storage evict
+still accept v1 during the upgrade, so `orama monitor` keeps working. After the last node is upgraded,
+check that `namespace_pending_cleanup` drains: a teardown refused in the window
+is recorded there and replayed by the tenant reconciler.
+
+## Stagenet: the chain and the global services
+
+`chain/scripts/stagenet/deploy.sh` deploys the L1 chain and the global services (provider, archiver, indexer,
+public Kubo) to the five stagenet nodes (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`, ssh aliases from `~/.ssh/config`)
+through the product's own commands, so the stagenet deploy exercises the code operators run. It is separate from
+the cluster deploy above: `orama build`, `orama node push` and `orama node upgrade --env stagenet` deploy the
+private-cluster node, and the global services are installed beside it, co-located in the `orama-global` network
+namespace ([Run a global node](/docs/blockchain/run-a-global-node), "Sharing a machine with a cluster node"). The cluster must
+already be installed on each node. The script never starts, stops or reconfigures a cluster service. What it
+changes on a node: the `orama-global-*` units and state, the namespace, veth and nftables rulesets and the ufw
+rules tagged `orama-global`, `net.ipv4.ip_forward` (`reset` puts it back to the value the install recorded in
+`/var/lib/orama-global/netns-prior-ip-forward`), and the two lines (`role: both`, `global_netns`) that the
+install adds to the cluster's `/opt/orama/.orama/preferences.yaml`. It refuses to run for a `CHAIN_ID` that does
+not contain `-stagenet-` or `-devnet-`. Because it never restarts a cluster service, a node's cluster gateway
+that started before `up` keeps reading the chain at loopback for its `/v1/chain/` route: restart the cluster
+node (`orama node restart`, one node at a time) after the first `up`, as the co-located install's output says.
+The node report needs no restart.
+
+| Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Role |
+|---|---|---|---|---|---|---|
+| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | genesis, nameserver, chain indexer |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | nameserver |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | nameserver |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | node |
+
+All five are chain validators (the bootstrap committee is the five of them). Without BPF_FRAMEWORK systemd accepts
+`SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
+
+Requirements on this machine: `make`, Go, zig and the Rust toolchain (`make build-linux-amd64-full`), `python3`,
+`curl` and `ssh` access to the nodes. On each node: `apt-get` (the install adds iproute2 and nftables if they are missing), an **active** ufw (the install
+refuses an inactive one, and enabling it would change the cluster's firewall, so the script does not), and systemd
+242 or newer.
+
+**This release is state-breaking (no in-place upgrade).** Stored types and their semantics changed
+(`x/archive` `RangeRecord` and `Params`, `x/storage` `Settlement.attempts`, `x/houses` `Proposal.advance_failures`,
+slash and settlement behaviour) and no `ConsensusVersion` was bumped, so a running stagenet chain does not
+upgrade: run `./deploy.sh reset` and then `./deploy.sh up`, which starts from a new genesis. The new `oramad`
+also refuses to start with `query-gas-limit = "0"` in `<home>/config/app.toml` on any chain id that is not a
+localnet. `up` installs with `--init-chain`, so `oramad init` writes `query-gas-limit = "2000000"` and the
+script asserts it; a node kept from an earlier install (not the reset-then-up path) must have that line set
+in `app.toml` by hand before the new binary is started.
+
+```bash
+cd chain/scripts/stagenet
+
+./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state
+./deploy.sh up         # build, stage, build the genesis, orama global install --colocated, orama global start
+./deploy.sh status
+./deploy.sh register   # after 2 epochs: operator, node, bonds, hot key, capacity, then provider and archiver
+./deploy.sh invariants
+./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
+SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke   # gen-shielded prints this path
+```
+
+`up` builds `oramad` (`make build-linux-amd64-full`), `orama-global` and the `stagenet-node` helper
+(`make build-linux-amd64-global`) and the linux `orama` CLI, downloads Kubo v0.43.1 and cosmovisor v1.7.3 from their
+official releases into `chain/build/stagenet-cache` and checks the pinned digests, stages a root-owned release
+directory (`/root/orama-global-release`) on each node, and runs `orama global install --colocated --services
+chain,ipfs,provider,archiver` (plus `indexer` on mew) twice: first with `--init-chain` and a placeholder genesis
+so each node creates its own keys, then, once the script has built the real genesis from the three public keys and
+put it in place, with `--persistent-peers`. The keys are generated on the node and never copied off it. The chain
+peers over the nodes' **public** addresses, because the namespace cannot reach the WireGuard mesh. `orama global
+start chain ipfs` (plus `indexer` on mew) then starts the chain first and waits for its RPC; the provider and
+archiver need a node id, so `register` starts them once it has written it.
+
+`register` waits until the chain is at epoch 2 (polled), then, for each node, runs the commands an operator runs
+with a wallet, on the node: it registers the operator, generates the hot-key binding and registers the node with
+the STORAGE and ARCHIVER roles, the declared ASN and the provider endpoint, bonds both roles from the operator's
+earnings, funds the hot key and declares the capacity. The `orama` commands ask the RootWallet agent to sign; on the
+node `stagenet-node agent` answers instead, fed the operator's test-keyring key over a pipe on the node for the
+length of the run (stagenet only: the keyring is unencrypted). See the technical reference's chain architecture chapter (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "Local and stagenet scripts"), for the stagenet deploy
+script and why each step is what it is.
+
+`smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental
+cause the script detected in the chain's state and is never used to hide a failure.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
+| `ASN_mew`, `ASN_mewtwo`, `ASN_gengar`, `ASN_magicarp`, `ASN_froakie` | `16276` for mew and mewtwo (OVH), `51167` for the other three (Contabo) | the ASN each node declares; the true one of its provider. Protocol deals need distinct ASNs per slot and the five nodes span only two, so a range's three ARCHIVE slots cannot all be assigned and its deals stay unassigned (the smoke check SKIPs naming that cause) |
+| `PUBLIC_STORAGE_GB` | `10` | capacity each provider declares, and the size of its public Kubo |
+| `STORAGE_BOND_NORAMA` | the least that backs the capacity | 1 ORAMA of bond backs 1 GiB |
+| `ARCHIVER_BOND_NORAMA` | `1000000000` | 1 ORAMA, the role minimum |
+| `HOT_KEY_FUND_NORAMA` | `2000000000` | fee-only balance of each hot key |
+| `TX_GAS` | `600000` | gas limit of each `orama global` transaction. Its fee is read from the chain right before it is sent: gas × the current base fee, with no tip, because the operator pays from earnings and x/fees pays a tip only from a bank balance |
+| `EPOCH_DURATION`, `EPOCH_MIN_BLOCKS`, `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `300s`, `10`, `2` | genesis |
+| `FAUCET_ENABLED` | `1` | `1` sets `app_state.emission.params.faucet_enabled` in genesis, which switches on the test-network faucet (`MsgFaucet`; fund an account with `orama chain faucet <addr> --env stagenet`). `0` leaves it off. A genesis-only switch: it cannot be changed on a running chain |
+| `CA_FILE` | `le-roots.pem in the operator's handoff directory` | CA bundle that signs the gateway's certificate (Let's Encrypt production's ISRG roots: stagenet serves production certificates) |
+| `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
+| `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |
+
+## Debugging production issues
+
+Always follow the local-first approach:
+
+1. **Reproduce locally** — set up the same conditions on your machine
+2. **Find the root cause** — understand why it's happening
+3. **Fix in the codebase** — make changes to the source code
+4. **Test locally** — run `make test` and verify
+5. **Deploy** — only then deploy the fix to production
+
+Never fix issues directly on the server — those fixes are lost on next deployment.

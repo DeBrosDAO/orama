@@ -5,11 +5,11 @@ package chain
 // Funding a run chain (what every chain package assumes; read from code):
 //
 //   - Genesis supply is zero (chain-deploy.sh funds no account; x/emission's
-//     premine gate, docs/CHAIN.md "Genesis starts at exactly zero supply").
+//     premine gate, docs/whitepaper/technical-reference/vol2/40-economics.md "Genesis starts at exactly zero supply").
 //   - x/emission mints only at an epoch close, 60% of the schedule, and hands
 //     it to x/power, which credits it to the committee members' EARNINGS
 //     accounts (x/fees ledger), force-bonding 50% of a member's share until
-//     its self-bond reaches 2x MinSelfBond (docs/CHAIN.md "Force-bonding").
+//     its self-bond reaches 2x MinSelfBond (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Force-bonding").
 //     The run's epochs are E2E_EPOCH_DURATION (default 60s) with
 //     E2E_EPOCH_MIN_BLOCKS (default 5), so by stage 8 each validator operator
 //     key holds thousands of ORAMA of earnings.
@@ -39,7 +39,7 @@ package chain
 // faucet_enabled on every run chain (e2e/scripts/chain-deploy.sh) and on
 // stagenet (chain/scripts/stagenet/deploy.sh), and `orama chain faucet` mints
 // a bank balance to any address, signing on a node with its operator key
-// (docs/CLI_REFERENCE.md#orama-chain-faucet). A recipient may be dripped once
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-faucet). A recipient may be dripped once
 // per cooldown, so a test funds a FRESH key, never a shared one.
 
 import (

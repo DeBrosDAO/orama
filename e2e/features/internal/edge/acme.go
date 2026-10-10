@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// ACME DNS-01 endpoints (docs/API_SURFACE.md "Internal"; core/pkg/gateway/acme_auth.go).
+// ACME DNS-01 endpoints (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Internal"; core/pkg/gateway/acme_auth.go).
 const (
 	ACMEPresent = "/v1/internal/acme/present"
 	ACMECleanup = "/v1/internal/acme/cleanup"

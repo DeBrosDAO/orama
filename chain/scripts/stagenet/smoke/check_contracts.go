@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// standardCodeIDs are the genesis standard contracts, codes 1 to 5 (docs/CHAIN.md, "Genesis
+	// standardCodeIDs are the genesis standard contracts, codes 1 to 5 (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Genesis
 	// standard contracts"): CW20, CW721, escrow, CW3 multisig, vesting.
 	cw20CodeID     = 1
 	codesPageLimit = 100

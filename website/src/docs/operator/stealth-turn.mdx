@@ -1,6 +1,4 @@
-# Stealth TURN Deployment Guide
-
-## What this is
+# Stealth TURN
 
 A TLS-level SNI router that lets Orama serve TURN-over-TLS on `:443`,
 sharing the port with Caddy HTTPS. From a network observer's
@@ -42,6 +40,8 @@ exact app to block. It's deterministic, so the cluster manager, gateway,
 SNI router, and DNS all derive the same value with no coordination. Each
 namespace also gets a human-readable `turn.ns-<namespace>.<base>` alias
 for operator UX.
+
+The plain-TURN host (`turn:` on 3478) is `turn.ns-<namespace>.<base-domain>`. The TURNS host a client uses on 5349 is the single-label `turn-<namespace>.<base-domain>`, which the cluster's `*.<base-domain>` wildcard certificate covers. The stealth host is also one label under the base domain, for the same reason.
 
 ## Components
 
@@ -129,7 +129,7 @@ This drives `POST /v1/namespace/webrtc/stealth/{enable|disable}`, which:
 3. Re-spawns the namespace's TURN servers with the stealth domain,
    served with the cluster's `*.<base>` certificate: the stealth host is
    one label under the base domain, so no certificate is obtained for it
-   (see [WEBRTC.md](WEBRTC.md#turns-tls-certificate)). On failure the
+   (see [WebRTC](/docs/developer/webrtc#turns-tls-certificate)). On failure the
    enable is rolled back so the board never claims a stealth endpoint
    that doesn't terminate TLS.
 4. Refreshes the namespace gateways so `turn.credentials` advertises

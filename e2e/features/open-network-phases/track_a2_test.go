@@ -24,9 +24,9 @@ import (
 
 // TestPhaseA6_delegationNamesEveryNameserver: `orama node dns delegation`
 // prints the records the parent zone needs, one per nameserver, with each
-// nameserver's own address (A6; docs/RUN_YOUR_OWN_CLUSTER.md "Install").
+// nameserver's own address (A6; website/src/docs/operator/run-your-own-cluster.mdx "Install").
 func TestPhaseA6_delegationNamesEveryNameserver(t *testing.T) {
-	phase(t, "A6", "docs/RUN_YOUR_OWN_CLUSTER.md", "orama node dns delegation --env", trackA+" A6")
+	phase(t, "A6", "website/src/docs/operator/run-your-own-cluster.mdx", "orama node dns delegation --env", trackA+" A6")
 	f := harness.Fleet(t)
 	printed := out(harness.CLI(t).MustOK(t, "node", "dns", "delegation", "--env", f.State.Env))
 	if !strings.Contains(printed, f.State.BaseDomain) {
@@ -46,13 +46,13 @@ const restoreVisible = 2 * time.Minute
 var deployURL = regexp.MustCompile(`•\s+(https://\S+)`)
 
 // TestPhaseA7_runYourOwnClusterUseItSteps follows "Use it" of
-// docs/RUN_YOUR_OWN_CLUSTER.md literally, on a machine that has the
+// website/src/docs/operator/run-your-own-cluster.mdx literally, on a machine that has the
 // environment and nothing else: env use, auth login, namespace create, auth
 // login --namespace, deploy static; the site is then served by name (A7).
 // The install half of the page runs in provisioning (node setup per node,
 // dns delegation), which install and invite-join assert.
 func TestPhaseA7_runYourOwnClusterUseItSteps(t *testing.T) {
-	phase(t, "A7", "docs/RUN_YOUR_OWN_CLUSTER.md", "orama namespace create myapp", trackA+" A7")
+	phase(t, "A7", "website/src/docs/operator/run-your-own-cluster.mdx", "orama namespace create myapp", trackA+" A7")
 	f := harness.Fleet(t)
 	tenancy.Reserve(t, harness.Fleet(t), 1)
 	cli := harness.CLI(t).Isolated(t)
@@ -85,9 +85,9 @@ const (
 // TestPhaseA8_clusterRowCarriesNoNodeAddress: registering the cluster on
 // chain describes its public name and endpoints and nothing about its
 // machines: no node address, public or overlay, is in what would be signed
-// (A8; docs/CLI_REFERENCE.md "orama cluster register-onchain").
+// (A8; docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama cluster register-onchain").
 func TestPhaseA8_clusterRowCarriesNoNodeAddress(t *testing.T) {
-	phase(t, "A8", "docs/CLI_REFERENCE.md", "### orama cluster register-onchain", trackA+" A8")
+	phase(t, "A8", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama cluster register-onchain", trackA+" A8")
 	f := harness.Fleet(t)
 	endpoint := "https://" + f.State.BaseDomain
 	res := harness.CLI(t).NoWallet(t).MustOK(t, "cluster", "register-onchain", "--id", "e2e-"+f.State.RunID,
@@ -117,11 +117,11 @@ func TestPhaseA8_clusterRowCarriesNoNodeAddress(t *testing.T) {
 
 // TestPhaseA9_sealedBackupRestoresTheDatabase: a backup sealed to a key the
 // cluster never holds brings the namespace database back after rows were
-// lost: backup, delete, restore-key, restore (A9; docs/RUN_YOUR_OWN_CLUSTER.md
+// lost: backup, delete, restore-key, restore (A9; website/src/docs/operator/run-your-own-cluster.mdx
 // "A sealed backup"). The global-storage deals and schedule of the plan's A9
 // are not in this release ("there is no schedule and no storage deal").
 func TestPhaseA9_sealedBackupRestoresTheDatabase(t *testing.T) {
-	phase(t, "A9", "docs/RUN_YOUR_OWN_CLUSTER.md", "orama namespace backup --key", trackA+" A9")
+	phase(t, "A9", "website/src/docs/operator/run-your-own-cluster.mdx", "orama namespace backup --key", trackA+" A9")
 	f := harness.Fleet(t)
 	n := tenancy.Namespace(t, f, ns.Options{Via: ns.ViaOperator})
 	db := newDB(t, f, n)

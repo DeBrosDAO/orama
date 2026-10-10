@@ -56,7 +56,7 @@ func TestMonitor_noCredentialIsAuthError(t *testing.T) {
 
 // TestMonitor_sshBreakGlassReadsEveryNode: --ssh reads `orama node report`
 // on every node instead of the gateway API, and is never chosen by itself
-// (docs/CLI_REFERENCE.md#orama-monitor).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-monitor).
 func TestMonitor_sshBreakGlassReadsEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

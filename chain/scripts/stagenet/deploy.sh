@@ -6,7 +6,7 @@
 #
 # Each stagenet node already runs an Orama private-cluster node (orama-node, namespace gateways,
 # RQLite, WireGuard). That stays untouched: the global services run co-located, in their own
-# network namespace (orama-global), as docs/RUN_A_GLOBAL_NODE.md describes. Nothing here starts,
+# network namespace (orama-global), as website/src/docs/blockchain/run-a-global-node.mdx describes. Nothing here starts,
 # stops or reconfigures a cluster service; `reset` edits only the two global lines the install
 # added to the cluster's preferences.yaml.
 #
@@ -73,7 +73,7 @@ IAVL_CACHE_SIZE=100000
 DENOM="norama"
 # name:ssh-alias:public-ip. The public address is what peers and clients dial: the global services
 # run in a network namespace that cannot reach the WireGuard mesh, so the chain peers over the
-# public network (docs/RUN_A_GLOBAL_NODE.md, "Sharing a machine with a cluster node").
+# public network (website/src/docs/blockchain/run-a-global-node.mdx, "Sharing a machine with a cluster node").
 # All five stagenet nodes are validators: nothing here fixes the committee size (build_genesis sets it
 # to the number of NODES) and every loop below runs over NODES.
 NODES=("mew:mew:57.129.166.16" "mewtwo:mewtwo:57.129.166.17" "gengar:gengar:161.97.184.199" "magicarp:magicarp:161.97.184.202" "froakie:froakie:161.97.151.255")
@@ -160,7 +160,7 @@ if ! [[ "$STORAGE_BOND_NORAMA" =~ ^[0-9]{1,15}$ ]]; then
 	exit 1
 fi
 
-# The autonomous system each node declares (docs/CHAIN.md, "Node network identity"): the operator's
+# The autonomous system each node declares (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Node network identity"): the operator's
 # true ASN. It is read from ASN_<name> and validated before it reaches a remote command.
 asn_of() {
 	local var="ASN_$1" default value
@@ -479,7 +479,7 @@ build_genesis() {
 
 	# Genesis starts at exactly zero norama supply: every node is a member of x/power's bootstrap
 	# committee (plans/open-network.md D16), which needs no self-bond and no gentx - replacing the
-	# old devnet-only self-bonded-validator exception (see docs/CHAIN.md).
+	# old devnet-only self-bonded-validator exception (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 	# The test-network faucet is a genesis-only switch (x/emission has no Msg that changes params).
 	local faucet_flag=()
 	if [ "$FAUCET_ENABLED" = 1 ]; then faucet_flag=(--faucet-enabled); fi
@@ -509,7 +509,7 @@ build_genesis() {
 	done
 
 	# The standard contracts (CW20, CW721, escrow, CW3 multisig, vesting) are stored in genesis so they
-	# exist from height 1 although upload is closed until the sunset height (docs/CHAIN.md).
+	# exist from height 1 although upload is closed until the sunset height (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 	as_chain_at "$first_alias" "$GENESIS_WORK" genesis add-standard-contracts
 
 	as_chain_at "$first_alias" "$GENESIS_WORK" genesis validate
@@ -530,7 +530,7 @@ params.setdefault('block', {})['max_gas'] = '100000000'
 # C13 inclusion lists: vote extensions are a genesis-only switch here (every consensus-param
 # authority is UnreachableAuthority), so this is where stagenet turns them on. Height 2 leaves
 # block 1 as an ordinary block and exercises the enable transition (extensions from 2, the
-# injected extended commit from 3). See docs/CHAIN.md, C13.
+# injected extended commit from 3). See docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, C13.
 params.setdefault('abci', {})['vote_extensions_enable_height'] = '$VOTE_EXTENSIONS_ENABLE_HEIGHT'
 with open(path, 'w') as f:
     json.dump(doc, f, indent=2)
@@ -651,7 +651,7 @@ cmd_status() {
 }
 
 # INVARIANT_MODULES are the modules whose `oramad query <module> invariants` must hold on every
-# node after a deploy (docs/SECURITY_PLAYBOOKS.md). A literal list: nothing from remote output is
+# node after a deploy (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md). A literal list: nothing from remote output is
 # spliced into the remote command. The same list is stagenetctl's (scripts/stagenet/smoke).
 #
 # Every module that holds or moves norama has an invariants query and is listed here:
@@ -670,7 +670,7 @@ cmd_invariants() {
 			local out
 			# stdout only: a warning on stderr must not be parsed as the answer. The query runs as the ssh
 			# login user, an allowed chain client: the co-located host rules drop the chain's own account
-			# (RUN_A_GLOBAL_NODE.md), and a query needs nothing from the chain's home.
+			# (website/src/docs/blockchain/run-a-global-node.mdx), and a query needs nothing from the chain's home.
 			if ! out="$(remote_run "$alias" "$BIN_DIR/oramad" query "$m" invariants --node "$RPC_ADDR" --output json)"; then
 				printf '%-9s %-9s query failed: %s\n' "$name" "$m" "$out"
 				failed=1

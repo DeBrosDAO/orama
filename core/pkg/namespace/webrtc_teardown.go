@@ -26,7 +26,7 @@ type webrtcTeardownResult struct {
 // (which serialises two units of one node), and an SFU drains for up to 45s, so
 // run one after another a disable took the SUM of every node's drain — 117s on
 // three nodes in the stagenet e2e run, past the gateway's 120s WriteTimeout,
-// which dropped the connection and surfaced as a bare 502 (see docs/WEBRTC.md).
+// which dropped the connection and surfaced as a bare 502 (see website/src/docs/operator/webrtc-operations.mdx).
 // Every task is attempted; a failure never cancels the others.
 func (cm *ClusterManager) teardownWebRTCConcurrently(ctx context.Context, namespace, clusterID string, tasks []webrtcTeardownTask) []webrtcTeardownResult {
 	results := make([]webrtcTeardownResult, len(tasks))

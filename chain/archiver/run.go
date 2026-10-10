@@ -54,7 +54,7 @@ type Chain interface {
 // Runner packs finalised ranges into bundle files, attests them, and opens and records the
 // ARCHIVE deals that make a range archived. Its cursor is the last height it attested; a restart
 // resumes after it. It does not hold the node's block retain height: the chain's own Commit
-// keeps that below the last archived height (docs/CHAIN.md, "History archiver").
+// keeps that below the last archived height (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, "History archiver").
 type Runner struct {
 	chain       Chain
 	archiver    string

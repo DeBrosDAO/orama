@@ -1,17 +1,13 @@
-# Push Notifications — Tenant Guide
+# Push Notifications
 
 This guide explains how a tenant app (any namespace on the Orama
 Network) configures push notifications end-to-end. The platform is
 **bring-your-own-credentials**: you control your Apple Developer
 account, your push keys, and your topic format. The platform provides
 delivery infrastructure (an APNs HTTP/2 client pool, a self-hosted
-ntfy server, and storage for your encrypted credentials).
+ntfy server, and storage for your encrypted credentials). A tenant
+configures push itself, with no operator ticket.
 
-Feature #72 implements this. Closes the "tenants must file an ops
-ticket to get push enabled" workflow that bug #220 partially fixed for
-ntfy/expo.
-
----
 
 ## Provider matrix
 
@@ -94,8 +90,9 @@ All credentials live encrypted in your namespace's row in the gateway's
 RQLite cluster. Stored credentials are NEVER returned by any GET
 endpoint — responses report `has_<field>: true/false` only.
 
-Auth: every request requires a JWT issued for your wallet, scoped to
-your namespace.
+Auth: every request requires a credential for your namespace that holds the
+`secrets:write` grant with ownership, for example the JWT issued for your
+wallet.
 
 ### APNs (iOS)
 
@@ -180,7 +177,7 @@ PUT /v1/push/config
 { "expo_access_token": "…" }
 ```
 
-This is the pre-#72 path; new code should prefer `apns` + `ntfy`.
+This is the legacy path; new code should prefer `apns` + `ntfy`.
 
 ---
 
@@ -217,7 +214,7 @@ GET /v1/namespace/push-credentials
 
 ## Step 5 — Register devices from your client
 
-The client-side flow is unchanged from before #72:
+Registering a device:
 
 ```http
 POST /v1/push/devices
@@ -241,7 +238,7 @@ single path segment, per the topic rule in Step 2.
 
 ### Registrations from a device-bound session
 
-When the registering session is bound to a device ([AUTH.md](AUTH.md#devices)),
+When the registering session is bound to a device,
 the registration is recorded against that device — the `did` the gateway
 verified, not the `device_id` in the body, which stays the app's own label. From
 then on revoking the device and ending its push registrations are one fact:
@@ -294,7 +291,7 @@ so battery impact is the distributor's; high-priority messages
 
 `POST /v1/push/devices` keys a device on the caller's account (the JWT subject,
 or the `account_id` claim), so the gateway holds a lasting account → device
-mapping. A **push topic** registration (FEAT-265) keys the device on a value
+mapping. A **push topic** registration keys the device on a value
 the device chooses instead, and stores nothing about the account. Both modes
 are available per registration; the account-bound path above is unchanged.
 
@@ -392,7 +389,7 @@ cap on the number of topic rows.
   request URL with `[request-url]`. A function that passes its
   `push_send_topic` envelope on does not hand the token to the sender.
 - **Serverless functions cannot touch the table.** `push_topics` is on the SQL
-  guard's reserved list in `SERVERLESS.md`; a function that could write it
+  guard's reserved list (see [Functions](/docs/developer/functions)); a function that could write it
   could re-point a topic without the secret.
 
 ### What this does not protect
@@ -422,7 +419,7 @@ cap on the number of topic rows.
   request that made the row — but a `db:write` member who watches the table
   live can still match a new row to the request that just arrived.
 - **Revoking a device cannot reach its topic registrations.** Nothing ties a
-  topic to an account, so revoking an account's device (the future FEAT-422)
+  topic to an account, so revoking an account's device (a planned feature)
   has no row to find. What bounds a topic is its expiry and the device's own
   rotation; a lost device's topics lapse within 8 days. A device that wants to
   stop receiving at once calls `DELETE /v1/push/topics`.
@@ -447,7 +444,7 @@ function or an external system:
 
 ### From a serverless function
 
-Functions are Go compiled with TinyGo (see `SERVERLESS.md`). Push is
+Functions are Go compiled with TinyGo (see [Functions](/docs/developer/functions)). Push is
 exposed as the `push_send` / `push_send_v2` host functions
 (pointer/length ABI, same as the other host calls):
 
@@ -519,7 +516,7 @@ Authorization: Bearer <your wallet JWT>
 This endpoint is scoped to your namespace and needs its `push:write` grant,
 from a wallet JWT or an API key; the `runtime` role holds that grant, so it is
 not admin-only. **Add a finer allow-list / admin-scope check at your gateway
-layer before exposing it to untrusted callers** — see security note in
+layer before exposing it to untrusted callers** — see the security note in
 `pkg/gateway/handlers/push/handlers.go`.
 
 The push-topic equivalent takes `topic_id` in place of `user_id`, with the same
@@ -576,7 +573,7 @@ rows in the cluster registry's `dns_nodes` (its own RQLite has an empty one; cac
 reached by its public address) and POSTs to each node's index gateway,
 `http://<internal_ip>:10104/v1/internal/push/ntfy/<topic>`, with a v2
 coordination MAC (covers the body; audience is the target node's peer id; see
-`docs/SECURITY.md`). That route requires a WireGuard source and the stamp, then
+the coordination-MAC description in the technical reference's inter-node trust chapter (`docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md`, "Coordination MAC v2")). That route requires a WireGuard source and the stamp, then
 relays the body and the `Title`, `Priority` and `Tags` headers to the node's own
 ntfy on `127.0.0.1:10109`. The topic must be one segment of `[-_A-Za-z0-9]`, at
 most 64 characters (ntfy's own rule). Because the hop is loopback and the local
@@ -595,6 +592,17 @@ ntfy only binds to localhost, so nodes that don't host a public
 uniform install means no per-node toggling and no surprises when the
 DNS topology changes.
 
+### Cluster-wide ntfy default (optional)
+
+An operator can seed a cluster-wide ntfy default in `node.yaml`. Per-namespace config overrides it; namespaces with no row inherit it. It is the only push-related YAML key, nested under `http_gateway`. `node.yaml` is strictly decoded: an unknown key (a top-level `push:` block, say) makes config parsing fail and `orama-node` refuse to start.
+
+```yaml
+http_gateway:
+  ntfy_base_url: "https://ntfy.sh"   # default for namespaces with no override
+```
+
+There is no YAML key for a default Expo access token: Expo tokens can only be set per namespace with `PUT /v1/push/config`. If `cluster_secret` is not configured on the gateway, the push subsystem is disabled and `/v1/push/*` returns 503. The legacy `PUT`, `GET` and `DELETE /v1/push/config` take effect on the next send: the cached dispatcher is invalidated, no restart is needed.
+
 ### How the gateway handles credentials
 
 - `pkg/push/credentials/` — generic per-(namespace, provider) store
@@ -606,7 +614,7 @@ DNS topology changes.
   redaction. Adding a new provider (FCM, SMS, …) is one new package +
   one `pushcreds.Register(...)` call.
 - Push-topic registrations (Step 5b) live in the namespace table
-  `push_topics` (migration 059), keyed on `(namespace, topic_id)`. The
+  `push_topics` , keyed on `(namespace, topic_id)`. The
   provider token is sealed under the encryption root with purpose
   `push-topic-tokens`, and `orama operator rotate-secrets` re-encrypts it with
   the other stored secrets. Its fingerprint (`token_fp`, purpose
@@ -617,15 +625,15 @@ DNS topology changes.
   superseded and expired rows and its upsert run as one atomic RQLite batch;
   there is no background sweeper.
 
-### Backward-compat with bug #220's `/v1/push/config`
+### Backward compatibility with `/v1/push/config`
 
 The legacy `/v1/push/config` endpoint still works for `ntfy_base_url`
 and `ntfy_auth_token` / `expo_access_token`. Field-by-field semantics:
 
-- If a tenant has a row in `namespace_push_credentials` (the new
-  #72 table) for `ntfy`, that record's `base_url` / `auth_token` /
+- If a tenant has a row in `namespace_push_credentials` (the per-provider
+  credentials table) for `ntfy`, that record's `base_url` / `auth_token` /
   topic config takes precedence.
-- Otherwise the gateway reads from `namespace_push_config` (the 026
+- Otherwise the gateway reads from `namespace_push_config` (the legacy
   table).
 
 This lets tenants migrate at their own pace. A future migration will
@@ -667,7 +675,7 @@ Yes. PUT a `base_url` pointing at your ntfy server. The platform's
 ntfy is just a convenience default.
 
 **Q. Are pushes rate-limited?**
-The gateway-level per-client and per-namespace rate limits (feature #69)
+The gateway-level per-client and per-namespace rate limits
 apply to every push route, `POST /v1/push/send` and device and topic
 registration included. Per-provider send rate limits at
 the dispatcher level are not yet implemented — track as a follow-up

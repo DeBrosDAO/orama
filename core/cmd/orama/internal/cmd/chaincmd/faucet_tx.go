@@ -29,7 +29,7 @@ const (
 )
 
 // testNetworkMarkers are the chain id fragments of the networks that may run a faucet: the chain
-// refuses a faucet on any other chain id (docs/CHAIN.md), and the CLI says so before it signs.
+// refuses a faucet on any other chain id (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md), and the CLI says so before it signs.
 var testNetworkMarkers = []string{"-stagenet-", "-devnet-", "-localnet-"}
 
 var plainDecimal = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)

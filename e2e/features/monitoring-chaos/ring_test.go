@@ -15,7 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// The ring failure detector (docs/MONITORING.md "In-cluster failure
+// The ring failure detector (website/src/docs/operator/monitoring.mdx "In-cluster failure
 // detection"): probes every 10s, suspect after 3 misses, but a heartbeat
 // younger than 65s outranks the probe, so a node that stops answering is
 // suspect after about 65s + 30s.
@@ -64,7 +64,7 @@ func sqliteNow(t *testing.T, f *fleet.Fleet, observer fleet.Node) string {
 // hangs (stopped with SIGSTOP, so the unit stays active and nothing restarts
 // it) stops answering the ring's /v1/internal/ping and its heartbeat, and
 // its peers record it suspect within the documented bound; resumed, it is
-// recorded recovered, and it was never declared dead (docs/MONITORING.md
+// recorded recovered, and it was never declared dead (website/src/docs/operator/monitoring.mdx
 // "In-cluster failure detection": suspect ~30s after the heartbeat goes
 // stale, dead only after 12 misses).
 func TestRing_hungGatewaySuspectedThenRecovered(t *testing.T) {

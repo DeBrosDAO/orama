@@ -48,7 +48,7 @@ func noErrorFrames(t *testing.T, name string, p *services.RTCPeer) {
 // it has joined offers while the SFU's own offer, carrying the tracks already
 // in the room, is outstanding. The SFU yields: it answers the client's offer
 // (no offer_failed) and offers its tracks again, so both directions carry
-// media (docs/WEBRTC.md#negotiation-offer-glare-and-the-polite-sfu).
+// media (website/src/docs/developer/webrtc.mdx#negotiation-offer-glare-and-the-polite-sfu).
 func TestSignal_joinGlareIsAnsweredNotRefused(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -88,7 +88,7 @@ func joinVideoPeer(t *testing.T, fx *fixture, i int, room string, publish bool) 
 
 // TestSignal_subscriberKeyframeRequestReachesPublisher: a subscriber's PLI on
 // the video it receives is relayed by the SFU to the publisher of the track
-// (docs/WEBRTC.md#keyframes-plifir).
+// (website/src/docs/developer/webrtc.mdx#keyframes-plifir).
 func TestSignal_subscriberKeyframeRequestReachesPublisher(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -118,7 +118,7 @@ func TestSignal_subscriberKeyframeRequestReachesPublisher(t *testing.T) {
 // used to be minted with the 600 s signalling TTL, so after it expired the
 // SFU's TURN allocation could not be refreshed and media stopped. The call
 // here lasts longer than that credential and the allocation lifetime after it,
-// and media still flows (docs/WEBRTC.md#turn-credential-protocol). The
+// and media still flows (website/src/docs/developer/webrtc.mdx#turn-credential-protocol). The
 // clients use the 24 h REST credential so that only the SFU's side can fail.
 func TestMedia_callOutlivesTheSFUsTURNCredential(t *testing.T) {
 	t.Parallel()

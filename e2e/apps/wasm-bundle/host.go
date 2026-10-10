@@ -2,7 +2,7 @@ package main
 
 import "unsafe"
 
-// Host functions the reference functions use (docs/SERVERLESS.md
+// Host functions the reference functions use (website/src/docs/developer/functions.mdx
 // "Host Functions API"), from the canonical module env.
 
 //go:wasmimport env get_env

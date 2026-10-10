@@ -113,7 +113,7 @@ func TestBindings_tokenBindingRefusesToWrapNorama(t *testing.T) {
 }
 
 // TestBindings_aContractCanIssueAPublicIOUForOramaItHolds is the declared limit O-B
-// (plans/open-network.md D7, docs/SECURITY.md): a contract that holds ORAMA can mint its own
+// (plans/open-network.md D7, docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md): a contract that holds ORAMA can mint its own
 // publicly transferable token against it. The chain does not stop this; a token named norama is
 // the only wrapper it refuses.
 func TestBindings_aContractCanIssueAPublicIOUForOramaItHolds(t *testing.T) {

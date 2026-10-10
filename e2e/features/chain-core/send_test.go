@@ -15,7 +15,7 @@ const publicPaymentRefused = "public user-to-user norama transfer is refused"
 
 // TestSend_userToUserRefused: a bank MsgSend of norama from one user to
 // another is refused by the send restriction before any balance is checked
-// (docs/CHAIN.md "Denom and accounts"; x/shielded/policy/restriction.go runs
+// (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Denom and accounts"; x/shielded/policy/restriction.go runs
 // before subUnlockedCoins in x/bank SendCoins), so even an account with no
 // bank balance gets the restriction, not "insufficient funds". The refusal is
 // delivered (the message runs in the block) and the fee is still charged.

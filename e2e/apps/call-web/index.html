@@ -7,7 +7,7 @@
 <script>
 // The browser half of the reference call app: join a room over the
 // namespace's SFU signalling socket and talk relay-only through its TURN
-// (docs/WEBRTC.md). The e2e suite's headless peers speak the same protocol.
+// (website/src/docs/operator/webrtc-operations.mdx). The e2e suite's headless peers speak the same protocol.
 const params = new URLSearchParams(location.search);
 const gateway = params.get('gateway') || '';
 const room = params.get('room') || 'standup';

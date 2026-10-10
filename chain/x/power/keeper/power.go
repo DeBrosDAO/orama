@@ -205,7 +205,7 @@ func (k Keeper) computePowers(ctx sdk.Context, emissionKeeper types.EmissionKeep
 // record, a jailed one, or a tombstoned one all mean the seat currently carries zero bootstrap
 // power. A tombstone can never revert (x/slashing never un-tombstones), so this permanently retires
 // the seat; a stakeless member that gets jailed has no self-bond to unjail with, so it stays at
-// zero power forever too - both are accepted, documented outcomes (see docs/CHAIN.md).
+// zero power forever too - both are accepted, documented outcomes (see docs/whitepaper/technical-reference/appendices/e-chain-messages-and-queries.md).
 func (k Keeper) committeeEligible(ctx sdk.Context, valAddrStr string) (bool, error) {
 	valAddr, err := sdk.ValAddressFromBech32(valAddrStr)
 	if err != nil {

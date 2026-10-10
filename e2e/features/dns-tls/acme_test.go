@@ -49,8 +49,8 @@ func txtEverywhere(ctx context.Context, servers []fleet.Node, name, value string
 // NXDOMAIN with the zone's SOA in the authority section; a signed present
 // makes it resolve on every nameserver within the 30s negative-cache TTL (a
 // negative answer is never served stale), and a signed cleanup removes it
-// within the plugin's 30s cache (docs/NAMESERVER_SETUP.md "A negative
-// answer"; core/pkg/coredns/rqlite/cache.go NegativeTTL; docs/SECURITY.md
+// within the plugin's 30s cache (website/src/docs/operator/nameserver.mdx "A negative
+// answer"; core/pkg/coredns/rqlite/cache.go NegativeTTL; docs/whitepaper/technical-reference/vol1/24-dns-and-nameservers.md
 // "ACME DNS-01").
 func TestACME_presentCleanupThroughTheNegativeCache(t *testing.T) {
 	t.Parallel()
@@ -102,7 +102,7 @@ func cleanupChallenge(t *testing.T, f *fleet.Fleet, n fleet.Node, body []byte) {
 
 // TestACME_unsignedRefusedFromTheInternet: through Caddy the endpoints are
 // reachable, and without a valid MAC they are 404 — they do not confirm they
-// exist (core/pkg/gateway/acme_auth.go; docs/API_SURFACE.md "Internal").
+// exist (core/pkg/gateway/acme_auth.go; docs/whitepaper/technical-reference/appendices/i-api-surface.md "Internal").
 func TestACME_unsignedRefusedFromTheInternet(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

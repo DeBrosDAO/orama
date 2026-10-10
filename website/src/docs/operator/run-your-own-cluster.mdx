@@ -5,7 +5,7 @@ A private Orama cluster is three or more Linux machines that you install with
 The installer refuses a machine that fails the checks in
 `core/pkg/install/checks.go`. This page is that sequence. It does not create
 servers: `orama sandbox create` does, on Hetzner, and
-[SANDBOX.md](SANDBOX.md) is that command.
+[Sandbox](/docs/contributor/sandbox) is that command.
 
 ## What you need
 
@@ -23,7 +23,7 @@ the registrar. For a name under a zone you already host (`stagenet.example.com`)
 the glue is an ordinary A record in the parent zone. `--cloudflare-token-file`
 writes that parent zone when it is hosted at Cloudflare, and it refuses a
 registry TLD (a parent with no dot, such as `com`). The record format is
-[NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+[Nameserver](/docs/operator/nameserver).
 
 **On the machine you type from.** The RootWallet desktop app, open and
 unlocked. `orama node setup` and `orama auth login` ask its agent for a key
@@ -97,7 +97,7 @@ static` publishes a directory (any directory with an `index.html`; `./site` here
 as the deployment `www`.
 
 Further nameserver detail, including installing by hand on the VPS with
-`orama node install`, is [NAMESERVER_SETUP.md](NAMESERVER_SETUP.md).
+`orama node install`, is [Nameserver](/docs/operator/nameserver).
 
 ## Check it
 
@@ -114,7 +114,7 @@ and its RQLite is Leader or Follower; all three of yours should say so.
 
 Every command in Install, Use it and Check it is executed, in this order, by
 `make e2e-cluster` against machines the repo's owner provides
-(`core/e2e/clusterguide`, see [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide
+(`core/e2e/clusterguide`, see [Testing](/docs/contributor/testing#cluster-guide-e2e), "Cluster guide
 e2e"). Change a command here and that test fails until its plan matches.
 
 ## A sealed backup

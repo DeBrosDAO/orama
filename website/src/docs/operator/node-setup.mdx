@@ -289,21 +289,24 @@ orama node wipe --env devnet --nuclear
 orama node wipe --env devnet --force
 ```
 
-`orama node clean` is the old name. It now runs `wipe`. `--nuclear` removes those shared binaries. It does not delete the node's configuration by itself.
+`orama node clean` is the old name. It now runs `wipe`. `--nuclear` removes those shared binaries. It does not delete the node's configuration by itself. For a node that is or was a cluster member, use `orama node remove` instead of `wipe` (see [Node Management](/docs/operator/node-management#removing-a-node)).
 
 ### Raft Recovery
 
 If the RQLite cluster enters a split-brain state (multiple leaders, or no leader with quorum lost), use the recovery command:
 
 ```bash
-# Recover Raft consensus by specifying the intended leader
-orama node recover-raft --env mainnet --leader 203.0.113.10
+# Keep the node with the highest applied index (the command reads and prints what each node reported)
+orama node recover-raft --env devnet
 
-# Force recovery (skip safety checks)
-orama node recover-raft --env mainnet --leader 203.0.113.10 --force
+# Keep a node of your choice
+orama node recover-raft --env devnet --leader 203.0.113.10
+
+# Skip the confirmation prompt
+orama node recover-raft --env devnet --leader 203.0.113.10 --force
 ```
 
-Raft recovery is a disruptive operation. It forces a single node to become the leader and re-bootstraps consensus. Only use this when the cluster cannot elect a leader on its own.
+Raft recovery is destructive. One node's data is kept; every other node's raft log and database are deleted and rebuilt from it, with no backup. Only use this when the cluster cannot elect a leader on its own. The full procedure is on [Upgrades](/docs/operator/upgrades#recovery-from-a-cluster-split).
 
 ## Verifying the Setup
 
@@ -326,6 +329,404 @@ orama node report
 | RQLite state | `Leader` or `Follower` |
 | WireGuard peers | All connected, recent handshakes |
 | Raft log index | In sync with other nodes |
+
+## Installing a three-nameserver cluster with `orama node setup`
+
+A single VPS (index plus one tenant, not HA) is covered under [Single-VPS evaluation](/docs/operator/getting-started#single-vps-evaluation). This section is the three-nameserver cluster path.
+
+**Supported OS:** Ubuntu 22.04, 24.04 or 26.04, or Debian 12 or 13. The installer refuses anything else in its first phase. Store credentials securely (not in version control).
+
+### Installation Order
+
+Install nodes **one at a time**, waiting for each to complete before starting
+the next:
+
+1. ns1 (genesis nameserver)
+2. ns2 (nameserver)
+3. ns3 (nameserver)
+4. Additional workers as needed (no `--role nameserver`)
+
+---
+
+### The path: `orama node setup`
+
+One command per node, from your own machine. It creates an SSH key in
+RootWallet, installs it on the VPS, uploads the binary archive, mints an invite
+where one is needed, and runs the install. You never SSH in yourself.
+
+It needs an unlocked RootWallet, and the archive to install: build it once
+with `orama build` and pass the path it prints as `--archive` (there is no
+default — the newest archive in `/tmp` may be another checkout's build).
+
+**The first archive must be signed by the wallet that creates the cluster.**
+The genesis install writes the cluster's archive trust anchor,
+`/etc/orama/archive-signers`, from `--operator-wallet` — setup passes your
+RootWallet's active address — and only then verifies the archive against it.
+`orama build` signs with that same RootWallet account by default, so build and
+setup with the same wallet unlocked. Setup verifies the archive on your machine
+against that account before uploading anything — the new machine has no
+verified binary of its own to check it with — so an archive signed by anyone
+else, or built with `--unsigned`, is refused before it leaves your machine. Joining nodes take the
+anchor from the node that minted their invite, so every node trusts the same
+signers; see [Signed archives](/docs/operator/signed-archives) for rotating them.
+
+`--password` bootstraps over password login. The password is read from your
+RootWallet vault — store the VPS login once with `rw vault add <ip>` (username
+as on the VPS) — and never appears on a command line, where `ps` and shell
+history would keep it.
+
+```bash
+orama build     # prints the archive path, e.g. /tmp/orama-0.200.0-linux-amd64.tar.gz
+ARCHIVE=/tmp/orama-0.200.0-linux-amd64.tar.gz
+
+# ns1 — genesis nameserver, creates the cluster
+orama node setup --ip <ns1-ip> --password --env devnet --archive $ARCHIVE \
+  --base-domain <your-domain.com> --role nameserver --genesis
+
+# ns2 / ns3 — join as nameservers; the invite is minted on ns1 over SSH
+orama node setup --ip <ns-ip> --password --env devnet --archive $ARCHIVE \
+  --base-domain <your-domain.com> --role nameserver --join-via root@<ns1-ip>
+
+# Worker — domain is auto-generated, e.g. node-a3f8k2.<your-domain.com>
+orama node setup --ip <node-ip> --password --env devnet --archive $ARCHIVE \
+  --base-domain <your-domain.com>
+```
+
+Setup pins the VPS host key before it uses any credential — pass
+`--host-key SHA256:...` to pin it non-interactively, or confirm the fingerprint
+it shows against your provider's console — and every connection of the run
+(enrollment, archive upload, install) uses only that key.
+
+`--genesis` records the environment as `https://<base-domain>` in
+`~/.orama/environments.json` and leaves the active environment alone; name it
+with `--env` in later commands. Every `orama env` and setup change to that file
+holds an exclusive lock (`environments.json.lock`) and replaces the file by
+rename, so commands running in parallel each keep their environment. Joins need the minting node's certificate
+issued: the invite names that node by its public IP and its site name, and the
+joiner pins the fingerprint of the certificate it serves — delegate the domain
+to the cluster ([Nameserver](/docs/operator/nameserver)) before joining more
+nodes.
+
+**Which CA.** Certificates come from Let's Encrypt production by default. A
+cluster obtains each certificate once, for all its nodes, and keeps it in its
+shared certificate store ([Architecture](/docs/contributor/architecture-reference#tlshttps)), so
+installing, joining, restarting or upgrading nodes issues nothing new, and a
+renewal Caddy makes through Let's Encrypt's renewal information (ARI) is exempt
+from its limits. A cluster you rebuild from scratch
+many times a week starts with an empty store every time, and Let's Encrypt
+issues one set of names at most five times a week: pass
+`--acme-ca letsencrypt-staging` (or any https ACME directory URL) on its genesis
+node. Staging certificates are trusted by no browser or system. The CA is stored
+in `node.yaml` (`tls.acme_ca`) and kept across upgrades. A joiner that omits
+`--acme-ca` takes the directory from the join response, which is the minting
+node's `tls.acme_ca`; pass the flag on a joiner only to override that.
+
+**Changing a running cluster's CA.** Upgrade every node with the new one:
+
+```bash
+orama node upgrade --env <env> --acme-ca letsencrypt --yes
+```
+
+`letsencrypt` is production, `letsencrypt-staging` staging. Each node records it
+in `node.yaml` and restarts Caddy one node at a time; the first node with the new
+CA obtains the certificates for the cluster and the others load them. The
+certificates of the previous CA stay in the store, under their own CA.
+
+**Upgrading a cluster from a release before the shared store.** On each node,
+the cluster gateway first imports the certificates and ACME account that node's
+Caddy kept on disk (`/var/lib/caddy/caddy`, once per node; each name is
+imported whole or not at all, a name the store already holds keeps the store's
+copy, and a file that is not Caddy's is left out and logged), and only then lets
+Caddy use the store. So
+the first node upgraded serves the certificates the cluster already had and
+orders nothing, and every later node loads the same ones. On each node Caddy
+restarts with the gateway and serves HTTPS again once the store is open.
+
+On a staging cluster, the CLI does not trust its certificates either. Give the environment
+Let's Encrypt's staging roots, trusted for that environment's domain only:
+
+```bash
+curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem  > le-staging.pem
+curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le-staging.pem
+orama env add <env> https://<base-domain> --ca-file le-staging.pem
+```
+
+Every command then verifies `<base-domain>` and the names under it against
+those roots as well as the system's, and every other host against the
+system's alone. A missing CA file is an error naming the environment.
+
+`--join-via <user>@<ip>` mints the invite on a node already in the cluster, over
+SSH with its RootWallet key, so joining needs no `orama auth login`. That node's
+host key must already be in `~/.orama/known_hosts` (setup writes it there when it pins the node). Without
+`--join-via`, setup asks the environment's gateway for an invite and needs a
+login. `--archive <path>` picks the build to install (required: the path `orama build` printed); a node already running that exact build is not re-uploaded.
+
+**Key-only VPS images** (a non-root user such as `ubuntu` or `debian`, no
+password login — the default on OVH and most clouds): replace `--password` with
+the private key that opens the VPS today. It is used once to install the
+RootWallet key and never stored. The user needs passwordless sudo; setup checks
+it before installing.
+
+```bash
+orama node setup --ip <ip> --user ubuntu --bootstrap-key ~/.ssh/id_ed25519 \
+  --env devnet --archive $ARCHIVE --base-domain <your-domain.com> --role nameserver
+```
+
+---
+
+
+## Installing by hand
+
+Use this when `orama node setup` cannot be used: no RootWallet, or a VPS you reach some other way. It does the same thing with more steps.
+
+### 1. Mint an invite (not needed for the genesis node)
+
+From your own machine:
+
+```bash
+orama invite                 # usable for 1h, the gateway's cap
+```
+
+Or from an existing node:
+
+```bash
+sudo orama node invite --expiry 24h
+```
+
+Either prints one string. It names **one node** of the cluster — its public
+address, the domain to present to it, and the fingerprint of the TLS
+certificate it serves — which the joining node connects to and pins instead of
+resolving the cluster's domain (which reaches any nameserver, each with a
+certificate of its own) or trusting whatever certificate it is first shown.
+`orama invite` picks the lowest address the domain resolves to; name another
+with `--node <public IP>`. There is nothing else to copy across, and nothing to
+get the wrong way round.
+
+Invites are **single-use**. Mint one per join.
+
+### 2. Genesis node
+
+```bash
+# SSH: <user>@<ns1-ip>
+
+sudo orama node install \
+  --vps-ip <ns1-ip> \
+  --domain <your-domain.com> \
+  --base-domain <your-domain.com> \
+  --operator-wallet <0xYourWallet> \
+  --nameserver
+```
+
+`--operator-wallet` is required on the genesis node: it becomes the only
+signer of `/etc/orama/archive-signers`, so the archive extracted in
+`/opt/orama` must be signed by that wallet (`orama build` with it as the active
+RootWallet account). The anchor is written before the archive is verified.
+
+### 3. Joining nodes
+
+```bash
+# SSH: <user>@<ns-ip>
+
+sudo orama node install \
+  --token <INVITE> \
+  --vps-ip <ns-ip> \
+  --domain <your-domain.com> \
+  --base-domain <your-domain.com> \
+  --nameserver
+```
+
+A worker is the same without `--nameserver` and without `--domain`; the domain
+is auto-generated.
+
+Or drive it from your own machine over SSH:
+
+```bash
+orama node install --remote --token <INVITE> \
+  --vps-ip <node-ip> --base-domain <your-domain.com>
+```
+
+`--remote` is required to install a machine other than the one you are on. It
+used to be inferred from whether you had used sudo, so the same command line
+meant two different things on two different machines.
+
+
+## Verifying the cluster
+
+`orama node install` verifies the node itself before printing `✅` — supervisor active and not crash-looping, rqlite in `Leader`/`Follower`, `wg0` up, gateway `/health` 200 — and exits non-zero naming the first component that did not come up. A successful install therefore already means the node works; the checks below verify the **cluster**.
+
+After all nodes are installed, verify cluster health:
+
+```bash
+# Full cluster report (from local machine)
+./bin/orama monitor report --env devnet
+
+# Single node health
+./bin/orama monitor report --env devnet --node <ip>
+
+# Or manually from any VPS. rqlited listens only on the node's WireGuard IP and
+# always requires basic auth; both come from the node's own config:
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+# Credentials go to curl on stdin (-K -), never on its command line where ps shows them.
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+rqcurl -s "$RQ/status" | jq -r '.store.raft.state, .store.raft.num_peers'
+curl -s http://localhost:10104/health
+systemctl status orama-namespace-tor@index
+```
+
+
+## Fresh node install
+
+```bash
+# Build the archive first (if not already built)
+orama build
+
+# Install on a new VPS: verifies the archive here, uploads it, installs it
+orama node install --remote --vps-ip <ip> --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --operator-wallet 0xYourWallet --nameserver --domain <domain> --base-domain <domain>
+```
+
+The installer installs from the build archive extracted at `/opt/orama` (`manifest.json` beside it) and nothing else; there is no compile-on-the-node mode. The archive must verify first — see [Signed archives](/docs/operator/signed-archives).
+
+**Install verifies the node before it reports success.** The final phase waits for, in dependency order:
+
+1. `orama-node.service` active **and not crash-looping** (`NRestarts` is 0 — an active unit systemd is about to restart for the fifth time is the failure this catches)
+2. rqlite in raft state `Leader` or `Follower` — not merely answering on `:10100`, which it does while still Candidate or still replaying its log
+3. `wg0` up with an interface
+4. the gateway's `/health` returning 200
+
+The first component that does not come up is named, install exits **non-zero**, and no `✅` is printed. Before change-287 install printed `✅ Production installation complete!` unconditionally — after a partial template install, after a failed DNS seed, after a supervisor that started and exited — and the operator, the CLI and the next node's join all proceeded on the assumption that the node was up.
+
+Two related orderings changed in the same commit:
+
+- **Namespace systemd templates install before the services that use them.** Install's Phase 5 starts `orama-node` (an upgrade's Phase 5 only writes and enables it; the upgrade starts it once, in its restart step, which then waits for the node to serve, so the node's stack is not bounced twice), whose first act is to start `orama-namespace-wireguard@index`; with no template installed systemd answers `Unit ... not found` and the supervisor exits. Install used to depend on systemd's restart loop to converge past that. Any missing or unwritable template is now fatal and the error names it.
+- **Install and upgrade seed no DNS records.** They used to write `ns1`..`ns3` NS records, an `ns1` SOA and apex/wildcard A records on every run, whatever slots the cluster had. `orama-node`'s DNS component owns the zone: each `--nameserver` node claims an `nsN` slot and writes its glue and its apex/wildcard A records, and the NS set and SOA follow the glued slots, on the sweep 30 seconds after it starts (see [Nameserver](/docs/operator/nameserver)).
+
+
+## What runs on a node
+
+The installer enables **only** `orama-node`. That unit is the supervisor: it starts `orama-namespace-*@index` (WireGuard, IPFS, rqlite, olric, pubsub, gateway, vault, Caddy, …) and, on `--nameserver` nodes, `orama-namespace-coredns@nameserver`. Tenant clusters are `orama-namespace-{rqlite,olric,gateway}@<name>`.
+
+Use `orama node …` (start/stop/restart/upgrade). Install writes one host unit, `orama-node.service`, which logs to the journal (`orama node logs node`). The per-daemon host units older installs wrote — `orama-ipfs`, `orama-ipfs-gc`, `orama-ipfs-cluster`, `orama-olric`, `orama-vault`, `caddy`, `coredns`, `ntfy` and `orama-sni-router` — are stopped, disabled and deleted by Phase 5 of every install and upgrade; a node that has not been upgraded yet may still have them, disabled. Upgrade and restart used to start them again (they were listed in `GetProductionServices` and the restart priority order), so they raced `@index` for 10102, 10107, `:53` and `:443` until `IndexSupervisor` stopped them on its next start. `systemd.IsLeftoverHostUnit` keeps them out of both lists. Index RQLite data stays at `~/.orama/data/rqlite`. Internals are `10100–10109`, plus the IPFS Cluster swarm on `10114` bound to the node's WireGuard address; do not mix a voter still on 5001 with one on 10100.
+
+The firewall reconcile (Phase 6b) adds and removes only rules tagged `comment orama`, plus one exception: it deletes the exact untagged rules that releases before the tag added and no longer want (`core/pkg/install/firewall_legacy.go`: 9001/tcp, 443/udp, `from 10.0.0.0/8`, the per-namespace TURN relay blocks, and the 2025 setup's Olric/IPFS/Cluster rules with their original comments). A rule on the SSH port is never removed. To keep one of those ports open on purpose, add the rule with a comment of your own.
+
+**Dynamic users resolve through nss-systemd.** Tenant deployments run as `DynamicUser=` units, which have no `/etc/passwd` line; the uid and name resolve only through the `systemd` source in `/etc/nsswitch.conf`'s `passwd` and `group` lines, supplied by `libnss-systemd`. Without it `getpwuid()` fails in the unit and npm exits 254 on `os.homedir()` before it installs anything, in `orama-deploy-build@` and in `npm start` alike. Ubuntu ships and configures the module; Debian 12 does neither. Phase 1 of `orama node install` and of `orama node upgrade` (before anything is stopped) installs `libnss-systemd` when `libnss_systemd.so.2` is missing, adds `systemd` after `files` (or `compat`) and after the `[STATUS=action]` group that follows it, on any of the two lines that lacks it (idempotent, other lines and comments untouched; an empty source list is refused with the line named, since glibc's default for it varies), edits a symlinked `nsswitch.conf` at its target through a synced temp file that keeps its mode and owner, and then verifies both; `apt-get` runs by absolute path with `DEBIAN_FRONTEND=noninteractive` and its output is in the error; if it cannot, the install or upgrade stops with the missing piece named (`pkg/install/nss_systemd.go`).
+
+Every node also runs a client-only **Tor** daemon, `orama-namespace-tor@index`, whose SOCKS port `127.0.0.1:9050` serves `/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` host function. Install and upgrade set it up in **Phase 2d**: remove the Anyone network if present, mask the package's own `tor.service`/`tor@default.service`, add the Tor Project's apt repository if it is not already in place for this OS release (`deb.torproject.org`, key pinned by fingerprint), `apt-get update` and `apt-get install tor deb.torproject.org-keyring` — which installs Tor or upgrades it to the repository's current release — and write `/etc/orama/tor/torrc`. apt is run with `DPkg::Lock::Timeout=300`, so installs and purges wait up to 300 s for a dpkg lock held by unattended-upgrades. Any error fails the install/upgrade.
+
+**Tor is upgraded on every Orama upgrade, before the node's services stop.** `orama node upgrade` runs Phase 2d right after Phase 2, while the node still serves; it needs outbound HTTPS to `deb.torproject.org`, and a failure aborts the upgrade with nothing stopped. The Orama unit keeps running the old Tor binary until the upgrade's stop step; the new one starts when `orama-node` brings `@index` back up. After the post-swap re-exec, Phase 2d runs again under the new binary in "ensure" form: with Tor installed and its repository current it only re-masks the distro units and rewrites the torrc, touching no network. Between Orama upgrades nothing updates Tor — default unattended-upgrades takes only the distribution's own origins. The OS must be one the Tor Project publishes packages for (`jammy`, `noble`, `resolute`, `bookworm`, `trixie`); on any other codename Phase 2d stops with an error naming them, before fetching anything. `IsSupportedOS` lists exactly those releases — Ubuntu 22.04/24.04/26.04 and Debian 12/13 — and Phase 1 of `orama node install` refuses any other release before touching the machine. Interim Ubuntu releases (24.10, 25.04, 25.10) are refused: they are past end of life and have no Tor Project suite; move such a VPS to 26.04 with `do-release-upgrade`, one release at a time.
+
+
+## Joining: the invite flow
+
+```bash
+# 1. Genesis node (first node, creates cluster)
+# Nameserver nodes use the base domain as --domain
+sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
+    --base-domain example.com --nameserver
+
+# 2. On genesis node, generate an invite
+orama node invite --expiry 24h
+# Prints: sudo orama node install --join https://example.com --token <TOKEN> \
+#           [--ca-fingerprint <FP>] --vps-ip <NEW_NODE_IP> --nameserver
+# Drop --nameserver when joining as a regular node.
+
+# 3a. Join as nameserver (requires --domain set to base domain)
+sudo orama node install --join http://1.2.3.4 --token abc123... \
+    --vps-ip 5.6.7.8 --domain example.com --base-domain example.com --nameserver
+
+# 3b. Join as regular node (domain auto-generated, no --domain needed)
+sudo orama node install --join http://1.2.3.4 --token abc123... \
+    --vps-ip 5.6.7.8 --base-domain example.com
+```
+
+The join flow establishes a WireGuard VPN tunnel before starting cluster services.
+All inter-node communication (RQLite, IPFS, Olric) uses WireGuard IPs (10.0.0.x).
+No cluster ports are ever exposed publicly.
+
+### DNS prerequisite
+
+The `--join` URL should use the HTTPS domain of the genesis node (e.g., `https://node1.example.com`).
+For this to work, the domain registrar for `example.com` must have NS records pointing to the genesis
+node's IP so that `node1.example.com` resolves publicly.
+
+**If DNS is not yet configured**, you can use the genesis node's public IP with HTTP as a fallback:
+
+```bash
+sudo orama node install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
+```
+
+This works because Caddy's `:80` block proxies all HTTP traffic to the gateway. However, once DNS
+is properly configured, always use the HTTPS domain URL.
+
+**Important:** Never use `http://<ip>:10104` — that is the internal index gateway and is blocked by
+UFW from external access. The join request goes through Caddy on port 80 (HTTP) or 443 (HTTPS),
+which proxies to the gateway internally.
+
+
+## Pre-install checklist (Ubuntu only)
+
+Before running `orama node install` on a VPS, ensure:
+
+1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer checks for port conflicts and shows which process is using each port, but it's easier to stop Docker first:
+   ```bash
+   sudo systemctl stop docker docker.socket
+   sudo systemctl disable docker docker.socket
+   ```
+
+2. **Stop any existing IPFS instance.**
+   ```bash
+   sudo systemctl stop ipfs
+   ```
+
+3. **Stop any service on port 53** (for nameserver nodes). The installer handles `systemd-resolved` automatically, but other DNS services (like `bind9` or `dnsmasq`) must be stopped manually.
+
+
+## Recovering from failed joins
+
+If a node partially joins the cluster (registers in RQLite's Raft but then fails or gets cleaned), the remaining cluster can lose quorum permanently. This happens because RQLite thinks there are N voters but only N-1 are reachable.
+
+**Symptoms:** RQLite stuck in "Candidate" state, no leader elected, all writes fail.
+
+**Solution:** Do a full clean reinstall of all affected nodes. Use [Wiping a node](/docs/operator/node-management#wiping-a-node) to reset each node, then reinstall starting from the genesis node.
+
+**Prevention:** Always ensure a joining node can complete the full installation before it joins. The installer validates port availability upfront to catch conflicts early.
+
+
+## When a node has no certificate
+
+Caddy does not fall back to a self-signed certificate: a node that has none
+serves plain HTTP on :80 and refuses TLS on :443 for the names it lacks. Every
+node uses the cluster's shared certificate store (see
+[Architecture](/docs/contributor/architecture-reference#tlshttps)), so a node only lacks one while no
+node has obtained it yet — the CA refused (a rate limit, a delegation that is not
+in place yet) or the store is unreachable. `journalctl -u
+orama-namespace-caddy@index` on any node names the reason; a rate limit says when
+it lifts, and Caddy retries on its own.
+
+
+## Relay allowlist (relayed fetch)
+
+A node's gateway serves the anonymous relay `GET /v1/proxy/relay`
+([Architecture](/docs/contributor/architecture-reference), the technical reference's gateway architecture chapter (`docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md`, "Anonymity proxies")),
+which dials only hosts under an allowlist. By default that is the cluster's own
+`http_gateway.base_domain`. To let this node relay for another cluster, list that
+cluster's base domain:
+
+```yaml
+# node.yaml, nested under http_gateway. Strictly decoded, like the rest.
+http_gateway:
+  relay_allowed_suffixes:
+    - partner.example.org      # a host equal to or under it, on whole labels, port 443
+```
+
+Each entry is a lowercase domain of at least two labels and must not be a public
+suffix (`co.uk`, `github.io`): the gateway refuses to start otherwise, naming
+`gateway.relay_allowed_suffixes[<n>]`. A list replaces the default, so keep the
+cluster's own base domain in it if this node should still relay for it. Only the
+index gateway serves the relay, so only it is given the list; a change takes
+effect when the gateway restarts (`orama node restart`).
+
 
 ## Post-Setup
 

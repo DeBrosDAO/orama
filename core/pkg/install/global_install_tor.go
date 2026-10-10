@@ -259,7 +259,7 @@ func readDirauthKeys(dir string, auth tornet.Authority) ([]torKey, error) {
 		return nil, fmt.Errorf("the certificate in %s: %w", dir, err)
 	}
 	if !expires.After(time.Now()) {
-		return nil, fmt.Errorf("the signing certificate in %s expired on %s: renew it offline (docs/TOR_NETWORK.md, Rotating a signing certificate)", dir, expires.Format(time.DateOnly))
+		return nil, fmt.Errorf("the signing certificate in %s expired on %s: renew it offline (orama.network/docs/operator/tor-network, Rotating a signing certificate)", dir, expires.Format(time.DateOnly))
 	}
 	if v3 != auth.V3Ident {
 		return nil, fmt.Errorf("the certificate in %s is for authority identity %s, but authority %s is published as %s", dir, v3, auth.Nickname, auth.V3Ident)

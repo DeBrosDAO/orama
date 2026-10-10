@@ -1898,7 +1898,7 @@ denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
 command again with the same flags changes nothing but the binaries' bytes.
 
-The roles of the Orama Tor network (docs/TOR_NETWORK.md) run the distro's tor,
+The roles of the Orama Tor network (orama.network/docs/operator/tor-network) run the distro's tor,
 installed from the Tor Project's repository, with a torrc this command writes
 from the network's tor-network.json, staged beside the binaries; the network file
 is checked before anything on the host changes.
@@ -2146,7 +2146,7 @@ orama global tor
 
 ```text
 The Orama Tor network is a separate anonymity network built from unmodified
-upstream Tor code, run by Orama's own directory authorities (docs/TOR_NETWORK.md).
+upstream Tor code, run by Orama's own directory authorities (orama.network/docs/operator/tor-network).
 The roles are installed by 'orama global install --services dirauth|relay|relay,exit|onion'.
 ```
 
@@ -3501,7 +3501,7 @@ the domain. A resolver that cannot answer is reported and nothing is
 stored. --json adds "delegated" and "findings" to each domain.
 
 Run it again after adding or removing a nameserver, and update the parent
-zone to match. See docs/NAMESERVER_SETUP.md.
+zone to match. See orama.network/docs/operator/nameserver.
 ```
 
 | Flag | Default | Description |

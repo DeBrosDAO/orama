@@ -12,10 +12,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Appendix D of the whitepaper Technical Reference is the same command tree as
-// docs/CLI_REFERENCE.md, rendered for the book: its Markdown must pass the
-// book's MDX rules (no raw braces or angle brackets outside code), and long
-// help goes in a fenced block. `make -C core docs` rewrites both files.
+// Appendix D of the whitepaper Technical Reference is the CLI reference: the
+// cobra command tree rendered for the book. Its Markdown must pass the book's
+// MDX rules (no raw braces or angle brackets outside code), and long help goes
+// in a fenced block. `make -C core docs` rewrites it. The fleet e2e coverage
+// gate and the CLI conformance features read it too, so its `## orama ...`
+// headings, usage fences, flag tables and `Subcommands:` lines are a format
+// they parse.
 
 const bookReferenceFile = "docs/whitepaper/technical-reference/appendices/d-cli-reference.md"
 
@@ -24,15 +27,19 @@ func bookReferencePath(t *testing.T) string {
 	return filepath.Join(repoRoot(t), filepath.FromSlash(bookReferenceFile))
 }
 
-func TestBookCLIReferenceMatchesTheCommandTree(t *testing.T) {
+func TestCLIReferenceMatchesTheCommandTree(t *testing.T) {
+	rendered := renderBookReference(newRootCmd())
 	if *updateReference {
-		t.Skip("rewritten by TestCLIReferenceMatchesTheCommandTree")
+		if err := os.WriteFile(bookReferencePath(t), []byte(rendered), 0644); err != nil {
+			t.Fatalf("write book reference: %v", err)
+		}
+		t.Logf("wrote %s", bookReferencePath(t))
+		return
 	}
 	existing, err := os.ReadFile(bookReferencePath(t))
 	if err != nil {
 		t.Fatalf("read book reference: %v (run `make -C core docs`)", err)
 	}
-	rendered := renderBookReference(newRootCmd())
 	if string(existing) != rendered {
 		t.Errorf("%s does not match the command tree.\nRun `make -C core docs`.\n%s",
 			bookReferenceFile, firstDifference(string(existing), rendered))

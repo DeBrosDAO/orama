@@ -34,7 +34,7 @@ const (
 	// AcceptLegacyCoordinationMAC lets a request stamped only with the v1 MAC
 	// verify, for callers that do not need the body covered. It exists for the
 	// rolling upgrade from the build that signs nothing else, and is removed in
-	// the release after that one (docs/SECURITY.md, "Coordination MAC v2").
+	// the release after that one (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md, "Coordination MAC v2").
 	AcceptLegacyCoordinationMAC = true
 
 	// coordinationNonceBytes is the size of the random nonce a signer draws.

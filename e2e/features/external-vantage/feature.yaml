@@ -20,7 +20,7 @@ covers:
   units:
     - orama-turn.service
   claims:
-    - "docs/NAMESERVER_SETUP.md#verification: the delegation is visible from the internet and matches the cluster's nameservers"
-    - "docs/ARCHITECTURE.md#tlshttps: TLS verifies against the staging roots over HTTP/1.1 and WebSocket upgrades through Caddy"
-    - "docs/ARCHITECTURE.md#network-security-wireguard-mesh: from outside only SSH, HTTP(S) and DNS on nameservers answer TCP"
-    - "docs/ARCHITECTURE.md#webrtc-voicevideodata: a TURN relay answers STUN on UDP 3478 from the internet"
+    - "website/src/docs/operator/nameserver.mdx#verification: the delegation is visible from the internet and matches the cluster's nameservers"
+    - "website/src/docs/contributor/architecture-reference.mdx#tlshttps: TLS verifies against the staging roots over HTTP/1.1 and WebSocket upgrades through Caddy"
+    - "website/src/docs/contributor/architecture-reference.mdx#network-security-wireguard-mesh: from outside only SSH, HTTP(S) and DNS on nameservers answer TCP"
+    - "website/src/docs/contributor/architecture-reference.mdx#webrtc-voicevideodata: a TURN relay answers STUN on UDP 3478 from the internet"

@@ -56,7 +56,7 @@ func newSealFixture(t *testing.T) sealFixture {
 // different ciphertext per slot and prints each piece root; `open` of any
 // slot returns the plaintext; `rewrap` turns slot 0 into exactly slot 2
 // with the repair seed only; a wrong seed or slot fails and writes nothing;
-// a seed file other users can read is refused (docs/CHAIN.md "Client side").
+// a seed file other users can read is refused (docs/whitepaper/technical-reference/vol2/41-storage-deals.md "Client side").
 func TestStorageFiles_sealOpenRewrapRoundTrip(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)

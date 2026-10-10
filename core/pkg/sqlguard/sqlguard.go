@@ -133,7 +133,7 @@ var protectedTables = map[string]string{
 	"ipfs_cid_refs": "the cluster-wide count of who references stored content",
 
 	// What a function is, and what fires it. A cron or pubsub firing skips the
-	// caller check (docs/SECURITY.md), so a trigger row a tenant could write is
+	// caller check (docs/whitepaper/technical-reference/vol1/17-database.md), so a trigger row a tenant could write is
 	// a way to run a private or internal function nobody granted it. A
 	// `functions` row is the code and the visibility that decide who may
 	// invoke it; a deploy through /v1/functions validates both.

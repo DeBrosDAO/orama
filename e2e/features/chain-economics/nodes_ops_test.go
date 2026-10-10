@@ -9,7 +9,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 )
 
-// gib is one GiB, the default probation capacity (docs/CHAIN.md "Genesis
+// gib is one GiB, the default probation capacity (docs/whitepaper/technical-reference/vol2/37-global-nodes.md "Genesis
 // defaults": probation_capacity_bytes is 1 GiB).
 const gib = 1 << 30
 
@@ -22,7 +22,7 @@ func nodeMsg(typ string, fields map[string]any) chain.Msg {
 // good) and the endpoints; an update that changes nothing, a hot key equal
 // to the operator or a new hot key that did not sign its own binding, and an
 // update by another account are refused
-// (docs/CHAIN.md "x/nodes" Messages).
+// (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/nodes" Messages).
 func TestNodesUpdate_rotatesHotKeyBindingsAndEndpoints(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -58,7 +58,7 @@ func TestNodesUpdate_rotatesHotKeyBindingsAndEndpoints(t *testing.T) {
 // TestNodesCapacity_probationCapWithoutBond: a STORAGE node with no bond may
 // declare up to probation_capacity_bytes (1 GiB) and not one byte more; a
 // node without the STORAGE role cannot declare; an unknown node is not found
-// (docs/CHAIN.md "MsgDeclareCapacity"; x/nodes BackedCapacity).
+// (docs/whitepaper/technical-reference/vol2/37-global-nodes.md "MsgDeclareCapacity"; x/nodes BackedCapacity).
 func TestNodesCapacity_probationCapWithoutBond(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -124,7 +124,7 @@ func TestNodesBond_bankOnlyAndQueueRules(t *testing.T) {
 
 // TestNodesWrongSigner_everyOwnerMessageRefused: MsgUpdateNode, MsgBondNode,
 // MsgUnbondNode, MsgDeclareCapacity and MsgRetireNode naming someone else's
-// node are refused (docs/CHAIN.md: "fail when the signer is not that
+// node are refused (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: "fail when the signer is not that
 // operator"), and the node is untouched.
 func TestNodesWrongSigner_everyOwnerMessageRefused(t *testing.T) {
 	t.Parallel()
@@ -163,7 +163,7 @@ type nodesParams struct {
 	} `json:"params"`
 }
 
-// TestNodesParams_documentedDefaults: docs/CHAIN.md "x/nodes" Genesis
+// TestNodesParams_documentedDefaults: docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/nodes" Genesis
 // defaults: 1 ORAMA minimum for every role, 1 ORAMA per GiB, 21 days
 // unbonding, 68359 norama per deposit byte, 1 GiB probation, 1 byte of
 // service volume, at most 8 endpoints and 8 bindings.

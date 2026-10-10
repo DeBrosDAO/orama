@@ -21,7 +21,7 @@ const (
 	// buildBudget bounds one `go build` or `tinygo build` of an example.
 	buildBudget = 5 * time.Minute
 	// functionExamples holds the serverless function examples
-	// (docs/SERVERLESS.md, docs/GO_CLIENT_SDK.md "Examples").
+	// (website/src/docs/developer/functions.mdx, website/src/docs/developer/go-sdk.mdx "Examples").
 	functionExamples = "core/examples/functions"
 	corePath         = "core"
 	coreModule       = "github.com/DeBrosOfficial/network"

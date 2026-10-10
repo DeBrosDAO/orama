@@ -28,7 +28,7 @@ func TestInstall_firewallDefaultDeny(t *testing.T) {
 }
 
 // TestInstall_firewallRulesAreExactlyOramas: every allow rule is tagged
-// `orama` (Reconcile owns only tagged rules, docs/SECURITY.md "Firewall: only
+// `orama` (Reconcile owns only tagged rules, docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md "Firewall: only
 // Orama's rules"), the desired set is all there, and nothing outside it is
 // open: SSH, WireGuard, HTTP(S), DNS on nameservers only, TURN only while the
 // host relays, and the mesh only on wg0. On the stagenet target a rule the

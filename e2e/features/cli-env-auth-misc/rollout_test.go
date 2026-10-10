@@ -15,7 +15,7 @@ import (
 const dummyArchive = "/nonexistent/e2e-orama.tar.gz"
 
 // TestRollout_refusesBadFlagsBeforeBuilding: `orama rollout` and `orama node
-// rollout` are the same command (docs/CLI_REFERENCE.md#orama-rollout) and
+// rollout` are the same command (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-rollout) and
 // check their flags before building or pushing anything; a flag mistake is
 // the usage code (exit 2) with the reason (production/rollout Flags.validate).
 // Nothing here can roll out: every case is refused at validation.

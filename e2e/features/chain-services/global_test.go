@@ -11,7 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
-// Global services beside oramad (chain/cmd/orama-global, docs/CHAIN.md
+// Global services beside oramad (chain/cmd/orama-global, docs/whitepaper/technical-reference/vol2/37-global-nodes.md
 // "Global services: orama-global"; units core/pkg/constants/global.go).
 const (
 	globalBin      = "/usr/lib/orama-global/bin/orama-global"
@@ -24,14 +24,14 @@ const (
 // provider, repair, archiver and history commands, and the provider unit is
 // active. The run's chain deploy (e2e/scripts/chain-deploy.sh) installs only
 // oramad today, so on such a fleet the provider, archiver and repair flows
-// (docs/CHAIN.md) do not apply and the test says so.
+// (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md) do not apply and the test says so.
 func TestGlobalServices_binaryAndUnitsOnEveryNode(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	for _, n := range c.Nodes() {
 		if c.F.Exec(t, n, "test -x "+globalBin).Exit != 0 {
 			harness.SkipNotApplicable(t, n.Name+" has no "+globalBin+": e2e/scripts/chain-deploy.sh installs only oramad; "+
-				"deploy orama-global (provider, repair, archiver) on the fleet to exercise docs/CHAIN.md \"Global services\"")
+				"deploy orama-global (provider, repair, archiver) on the fleet to exercise docs/whitepaper/technical-reference/vol2/37-global-nodes.md \"Global services\"")
 		}
 		help := c.F.MustExec(t, n, globalBin+" --help").Stdout
 		for _, cmd := range strings.Fields(globalCommands) {
@@ -52,14 +52,14 @@ const providerMonitorFile = "/var/lib/orama-global/provider/monitor.json"
 // TestGlobalServices_monitorShowsTheProvidersDealSlots: a node that runs the
 // provider writes held_slots and pending_slots into its monitor.json, and
 // `orama monitor node` prints them on the node's Global line
-// (docs/MONITORING.md, the node report's global section).
+// (website/src/docs/operator/monitoring.mdx, the node report's global section).
 func TestGlobalServices_monitorShowsTheProvidersDealSlots(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
 	for _, n := range c.Nodes() {
 		if c.F.Exec(t, n, "test -x "+globalBin).Exit != 0 {
 			harness.SkipNotApplicable(t, n.Name+" has no "+globalBin+": e2e/scripts/chain-deploy.sh installs only oramad; "+
-				"deploy orama-global (provider) on the fleet to exercise docs/MONITORING.md \"global\"")
+				"deploy orama-global (provider) on the fleet to exercise website/src/docs/operator/monitoring.mdx \"global\"")
 		}
 		body := c.F.MustExec(t, n, "cat "+providerMonitorFile).Stdout
 		for _, field := range []string{`"held_slots"`, `"pending_slots"`} {

@@ -15,7 +15,7 @@ import (
 
 // TestVerify_lobbySessionShape: a real signature over the issued message buys
 // a 15-minute access token and a refresh token, no API key in the lobby
-// (docs/AUTH.md#signing-in, "#the-lobby").
+// (docs/whitepaper/technical-reference/vol1/13-identity.md#signing-in-with-a-device, "#the-lobby").
 func TestVerify_lobbySessionShape(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
@@ -84,7 +84,7 @@ func TestVerify_refreshLivesThirtyDays(t *testing.T) {
 
 // TestVerify_solanaSignIn: a SIWS signature (base64 Ed25519) signs in, and the
 // session's subject is the address exactly as signed: base58 is case-sensitive,
-// and a lowercased subject names a different key (docs/AUTH.md).
+// and a lowercased subject names a different key (docs/whitepaper/technical-reference/vol1/14-authorization.md).
 func TestVerify_solanaSignIn(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)
@@ -110,7 +110,7 @@ func TestVerify_solanaSignIn(t *testing.T) {
 }
 
 // TestVerify_domainMismatch: a message naming another site is refused even
-// with a valid signature and a live nonce (docs/AUTH.md#signing-in).
+// with a valid signature and a live nonce (docs/whitepaper/technical-reference/vol1/13-identity.md#verifying-and-spending-the-nonce).
 func TestVerify_domainMismatch(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

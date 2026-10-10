@@ -25,7 +25,7 @@ import (
 func (g *Gateway) callerPermissions(r *http.Request) auth.PermissionSet {
 	ctx := r.Context()
 
-	// The lobby belongs to nobody and holds nothing (docs/AUTH.md, "The
+	// The lobby belongs to nobody and holds nothing (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md, "The
 	// lobby"): its session reaches only the routes that ask for no
 	// permission. That holds for a grant too — a cluster from before
 	// ownership was fixed may still record one for whichever wallet signed in

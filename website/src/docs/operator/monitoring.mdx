@@ -1,278 +1,570 @@
 # Monitoring
 
-Orama provides a two-component monitoring system for real-time cluster health visibility. A lightweight collector runs on each VPS node, while a local orchestrator on your machine SSHes into nodes, aggregates results, and presents them through an interactive TUI or structured output. A separate deep-inspection tool handles root-cause analysis when something is known to be broken.
+Cluster health, from your machine. The system has three parts:
+
+1. **`orama node report`** — runs on each node, collects everything local, outputs JSON.
+2. **The cluster gateway's telemetry** — gathers every node's report, adds each gateway's request metrics (traffic), derives alerts, and serves the result to operators at `/v1/operator/telemetry`.
+3. **`orama monitor`** — runs on your machine, reads that telemetry and shows it: a live view, or one aspect at a time.
 
 ## Architecture
 
-The monitoring system is split into two parts:
-
-1. **`orama node report`** — Runs locally on each VPS node. Collects all system and service health data in parallel, outputs a single JSON blob. Requires root privileges.
-2. **`orama monitor`** — Runs on your local machine. SSHes into all nodes in parallel, collects their reports, then runs cross-node analysis to detect cluster-wide issues.
-
-Each node runs `orama node report --json` locally (no SSH to other nodes), collecting data via `os/exec` and `net/http` to localhost services. The monitor aggregates everything and derives alerts from cross-node analysis.
-
-## Quick Status Check
-
-The fastest way to check your nodes:
-
-```bash
-# Health of all your nodes (uses wallet-based node discovery)
-orama status --env devnet
-
-# JSON output for automation
-orama status --env devnet --json
+```
+Your machine                          Cluster gateway                  Nodes
+┌──────────────────────┐   HTTPS     ┌─────────────────────────┐      ┌───────────────────┐
+│ orama monitor        │ ──────────> │ /v1/operator/telemetry  │ <─── │ orama node report │
+│  one-shot: GET       │ <────────── │   (ClusterSnapshot)     │      └───────────────────┘
+│  live:     SSE stream│   JSON/SSE  │ /v1/operator/telemetry/ │ <─── │ orama node report │
+│  verdict, tabs, JSON │             │   stream                │      └───────────────────┘
+└──────────────────────┘             └─────────────────────────┘
+          │  --ssh (break-glass only)
+          └──────── SSH ───────────> sudo orama node report --json   (every node)
 ```
 
-## Detailed Monitoring
+By default the monitor makes **no SSH connection**. It reads a `ClusterSnapshot`
+(every node's report, how old each report is, and the derived alerts) from the
+gateway of the environment you name, authenticated with the credentials
+`orama auth login` stored for that gateway. Only the cluster's operators may read
+it.
 
-For cross-node analysis, alerts, and interactive TUI:
+`--ssh` is the break-glass path for when no gateway answers: it SSHes into every
+node, runs `sudo orama node report --json` there, and derives the alerts locally.
+It is **never chosen automatically** — when the API fails, the monitor stops with
+an error that says why and suggests `--ssh`, so a gateway outage is reported as
+one instead of being hidden behind a slower path. Traffic is counted by the
+gateways, so it is empty over `--ssh`.
+
+### The telemetry API
+
+| Request | Answer |
+|---------|--------|
+| `GET /v1/operator/telemetry` | `200` with one `ClusterSnapshot` as JSON |
+| `GET /v1/operator/telemetry/stream?interval=<seconds>` | `text/event-stream`: `event: snapshot` blocks whose `data:` is one snapshot on one line; `event: error` blocks with `{"error": "..."}`; `: keepalive` comments. The server ends the stream after a long maximum duration. |
+
+Both take `Authorization: Bearer <token>`. How the monitor answers failures:
+
+| Response | Exit code | What the monitor says |
+|----------|-----------|-----------------------|
+| `400` | 2 (usage) | the gateway refused the request as written (for example an `--interval` outside 2–60s) |
+| `401` | 3 (auth) | the credential was not accepted: `orama env use <env>` then `orama auth login` |
+| `403` | 3 (auth) | this wallet is not an operator of the cluster |
+| `404` | 4 (not found) | the gateway predates the telemetry API; upgrade it, or use `--ssh` |
+| `503` | 5 (unavailable) | the gateway is not ready yet; retry, or use `--ssh` |
+| unreachable or too slow | 5 (unavailable) | the gateway cannot be reached, did not answer in time, or cannot renew the session; use `--ssh` |
+
+A missing credential or an ended session is an auth error (3); failing to reach
+the gateway to renew a session, or any renewal answer that is not a refusal
+(a 5xx, a rate limit), is an outage (5) and leaves the session intact — the
+CLI ends a session only when the gateway refuses it (401/403), so a live view
+running through a rolling upgrade keeps its login. The client caches the bearer
+for 30s and renews it one caller at a time (a renewal rotates the refresh
+token, so two at once would end the session), bounds the connect (10s) and the
+wait for response headers (45s: the stream sends them with its first
+snapshot), and follows no redirect; neither does node resolution nor the
+session renewal behind `orama auth login` credentials.
+
+TLS trusts the same CAs as every other API command: `ORAMA_CA_CERT_PATH`, and
+the environment's `ca_file` (`orama env add <name> <url> --ca-file <pem>`).
+
+### Live stream behaviour
+
+The live view keeps one stream open. When the gateway ends a stream that
+delivered snapshots (it does so on a schedule), the monitor reopens it after 1s
+without changing what the view shows. Any other drop — the connection broke, or
+it went silent for longer than max(30s, 3 × interval) with no keepalive — shows
+`↻ reconnecting in Ns (attempt n): <why>` and reconnects with backoff: 1s,
+doubling to at most 30s, each wait spread ±20% so monitors do not reconnect in
+lockstep, starting over after any connection that delivered a snapshot. A
+refused credential (`401`/`403`) is not retried, nor is a missing endpoint
+(`404`) before the first snapshot; after one, a `404` is retried (a reconnect
+may reach a gateway not yet upgraded). The view then shows `✗ stopped: <why>`.
+With `--ssh`, a collection that cannot succeed on retry (an unreadable
+`--config`, an environment with no nodes) stops the view the same way.
+
+Old data is never shown as current. Every view shows the snapshot's age
+("updated 4s ago"; in the live view, measured from when the snapshot arrived on
+this machine, so a gateway clock that differs from yours does not skew it); in
+the live view it turns into **`STALE: updated … ago`**
+once the snapshot is older than three intervals (plus the SSH collection time
+with `--ssh`), or when the source has stopped. A manual refresh (`r`) that
+returns an older snapshot than the stream's is dropped. An `event: error` from the
+gateway is shown beside the connection state and keeps the last snapshot.
+
+## Cluster telemetry on the gateway
+
+What `/v1/operator/telemetry` and `/v1/status` are built from. Each node keeps
+its own health report fresh, and the cluster gateways assemble the cluster view
+from those reports over the WireGuard mesh.
+
+```
+ every node                                          any node
+┌───────────────────────────────┐     mesh (WG)    ┌────────────────────────────┐
+│ orama-namespace-gateway@index │ ◀──────────────▶ │ cluster gateway            │
+│  every 10s: orama-privhelper  │ /v1/internal/    │  aggregator: own report +  │
+│   node-report (as root)       │  telemetry       │  every peer's, 5s cache    │
+│  + this gateway's traffic     │ (coordination    │  → alerts, components      │
+│  = the node's latest report   │  MAC + WG source)│  → /v1/operator/telemetry  │
+└───────────────────────────────┘                  │  → /v1/status, /status     │
+                                                   └────────────────────────────┘
+```
+
+| Piece | What it does | Where |
+|---|---|---|
+| Self collection | Every 10s the cluster gateway asks the privileged helper for `node-report`, which runs the same collectors as `orama node report` as root (60s timeout), then adds the gateway's request metrics. A failed collection keeps the previous report; its timestamp shows its age. | `pkg/telemetry/hub/self.go`, `pkg/gateway/telemetry.go` |
+| Peer fetch | `GET http://<wg-ip>:10104/v1/internal/telemetry`, signed with the coordination MAC (key derived from the cluster secret) and accepted only from a WireGuard address; anything else, of any method, gets 404. It is sent only to an address inside `10.0.0.0/24`. The answer carries `X-Orama-Report-Age-Ms`, the report's age measured on the peer's own clock, so a peer whose clock is off is still judged fresh or stale correctly (clock skew has its own alert). 4s timeout, 4 MiB cap. A peer on an older release knows no such route and answers 401: it is shown as **unknown**, not down. | `pkg/telemetry/hub/fetch.go` |
+| Node list | `dns_nodes` rows heard from in the last 24h, so a dead node shows as unreachable instead of vanishing; after a day it is taken to be removed. | `pkg/telemetry/hub/peers.go` |
+| Aggregation | Own report from memory, peers in parallel (at most 16 at once, the whole assembly bounded at 15s), one assembly shared by concurrent callers and reused for 5s from when it finished. A report older than 90s (three missed collections plus a hung one) counts as unreachable: a node whose collection stopped must not read healthy. | `pkg/telemetry/hub/aggregate.go` |
+| Alerts | The same rules as before (`cluster.DeriveAlerts`), now run on the gateway. | `pkg/telemetry/cluster/alerts*.go` |
+| Components | Each service's state across the cluster: operational (every node that runs it serves it), degraded, outage (no node serves it), unknown. The database is judged by raft itself: it is out when every node reported and none leads or names a leader, or when the leader's own report shows no majority of **voters** reachable; losing non-voters only degrades it. A leader whose report is missing — it runs an older release mid-rollout (the leader is upgraded last), or its gateway is down — is known from its followers naming it, so the database is not called out. Unknown nodes are not in the node total; the page shows them as "upgrading". The chain is out when no node sees a block in the last 60s. A node that sent no report counts against every service it runs (DNS runs on nameservers; the chain where it reported); an **unknown** node — an older release mid-rollout — counts neither way. **DNS & TLS counts only nodes with the nameserver role**: any other node is not applicable and is left out of its total, even when its report carries a DNS section (a node keeps `/etc/coredns` and reports CoreDNS stopped when it is not a nameserver), so a five-node cluster with three nameservers reads `3 of 3`, not `3 of 5`. | `pkg/telemetry/cluster/components.go`, `probes.go` |
+| Uptime history | Once a minute the lowest-id active node adds a minute to each component's current UTC hour in `status_uptime_hourly` (one statement, so one raft entry a minute for the whole cluster) and prunes hours older than 90 days once an hour. When that node stops heartbeating the registry marks it inactive and the next node takes over — no election, no dependence on the raft leader. While any node is unknown (a rolling upgrade is under way) no minute is recorded: the record is public and kept 90 days, and what half a cluster says is not the cluster's state. A handover can leave a minute unrecorded or, rarely, counted twice; the page shows ratios, so either is a rounding error. Uptime averages weigh each day by the minutes sampled in it. | `pkg/telemetry/hub/uptime.go`, `recorder.go`, `migrations/062_status_uptime.sql` |
+
+**Cost at scale.** A node pays one report collection per 10s whatever the
+number of viewers; each collection is one short-lived root helper process
+(one start/stop pair in the journal every 10s, the helper's audit trail). A
+viewer pays nothing beyond the cached snapshot: the public page and the
+operator stream are answered from the 5s cache, so load grows with the number
+of nodes and not with the audience. Each gateway that is being *watched*
+fetches every peer's full report once per 5s, so if every node is serving
+status traffic at once the mesh carries N×N reports per 5s — about 25 MB/s at
+100 nodes. That is acceptable at today's size; the next step, before a fleet of
+hundreds, is a compact per-node component summary for the public page (or one
+aggregator per region) rather than full reports. The 15s assembly bound with
+16-way concurrency covers roughly 60 unresponsive peers before later ones are
+cut off and shown unreachable.
+
+**What an operator sees vs the public.** `/v1/operator/telemetry` (operator
+grant and the operator list) is every node's full report — addresses, ports,
+firewall state, versions. `/v1/status` is the public projection
+(`cluster.PublicStatus`): service states and uptime, node counts, chain
+progress and network traffic, and no address, peer id, hostname or error text.
+The public verdict comes from service states alone; operator alerts (a firewall
+rule, a certificate expiring) do not change it.
+
+## Public status page
+
+`https://<base-domain>/status` in a browser is the status page; `/v1/status`
+is its JSON. On the bare base domain the gateway serves its own pages —
+`/status`, `/status/assets/`, `/health` — instead of looking for a deployment
+there (none may use the apex: a custom domain equal to the base domain is
+refused); a subdomain's `/status` is its deployment's. The page is static and embedded in the gateway
+(`pkg/gateway/statuspage`), loads only its own script and stylesheet under a
+CSP that allows nothing else, and refreshes every 10 seconds. It shows:
+
+- the overall verdict and when it was measured,
+- nodes healthy, network requests per second, error rate and p95 latency,
+- each service with its state and a 90-day uptime bar (one bar per UTC day:
+  ≥ 99.9% green, ≥ 95% amber, below that red, no data grey),
+- the Orama L1: chain id, height, average block time, last block age,
+  mempool, and each validator's share of voting power (consensus addresses
+  are public on-chain data), taken from the node at the **median** height so
+  that one node's view — say an RPC answered by something else on its
+  loopback — cannot set what the public sees.
+
+A namespace gateway answers `/v1/status` with `status` and `server` only; the
+cluster view is the cluster gateway's. The public view is built once per 5s
+however many requests arrive, outside any lock, and a failed build ("Status
+unavailable", state `unknown`) is cached for the same 5s, so a slow registry
+costs one attempt per window. `/status`, `/v1/status`, the page's assets and
+`/v1/internal/telemetry` answer while the gateway is still starting.
+
+## Quick Start
 
 ```bash
-# Interactive TUI (auto-refreshes every 30s)
-orama monitor --env mainnet
+# Live view (streams a snapshot every 5s)
+orama monitor --env devnet
 
-# Cluster overview table
-orama monitor cluster --env mainnet
+# Is everything fine? Verdict, components, a row per node, top alerts
+orama monitor cluster --env devnet
 
-# Only show warnings and errors
-orama monitor alerts --env mainnet
+# Alerts, with what to do about each
+orama monitor alerts --env devnet
 
 # Full JSON report (pipe to jq or feed to an LLM)
-orama monitor report --env mainnet
+orama monitor report --env devnet
+
+# Gateways are down: read the nodes directly
+orama monitor cluster --env devnet --ssh
 ```
 
-## The Monitor CLI
+## `orama monitor` — Local Viewer
 
 ### Usage
 
-```bash
+```
 orama monitor [subcommand] --env <environment> [flags]
 ```
 
-Without a subcommand, the interactive TUI launches automatically.
+Without a subcommand, opens the live view.
 
-### Global Flags
+### Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
-| `--json` | `false` | Machine-readable JSON output |
-| `--node` | | Filter to a specific node host or IP |
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
+| `--json` | `false` | Machine-readable JSON output (one-shot subcommands) |
+| `--node` | | Show only this node, by public IP or WireGuard IP, with the alerts raised about it. The filter is applied locally to the snapshot, with `--ssh` too (every node is collected, so a WireGuard IP works there as well). A node not in the snapshot is an error listing the ones that are. |
+| `--ssh` | `false` | Collect over SSH from every node instead of the gateway API (break-glass) |
+| `--config` | *(resolver)* | With `--ssh` only: read nodes from this file instead of resolving them. An error without `--ssh`. |
+| `--interval` | `5s` | Live view only: how often a snapshot is streamed, 2s–60s (the gateway's range); whole seconds, rounded up. With `--ssh` minimum and default 15s, since every refresh SSHes into every node. |
 
 ### Subcommands
 
+Every table starts with the verdict line; every subcommand takes `--json`.
+
 | Subcommand | Description |
 |------------|-------------|
-| `live` | Interactive TUI monitor (default when no subcommand given) |
-| `cluster` | Cluster overview: all nodes, roles, RQLite state, WireGuard peers |
-| `node` | Per-node health details (system, services, WireGuard, DNS) |
-| `service` | Service status matrix across all nodes |
-| `mesh` | WireGuard mesh connectivity and peer details |
-| `dns` | DNS health: CoreDNS, Caddy, TLS cert expiry, resolution tests |
-| `namespaces` | Namespace health across nodes |
-| `alerts` | Active alerts and warnings sorted by severity |
-| `report` | Full JSON dump optimized for LLM consumption |
+| `live` | Live view (the default when no subcommand is given) |
+| `cluster` | Verdict, component states, a row per node (health, raft, gateway, load, CPU steal, memory, disk, version, report age), unreachable nodes and the top alerts |
+| `node` | Per-node summary of every subsystem (system, RQLite, WireGuard, Olric, IPFS, Tor, chain, global, traffic); `--json` gives each node's full report. The Chain line adds the validator's power, jailed or tombstoned, and the missed-block share when the node is in the validator set. The Global line (only on a node with a global unit installed) shows the public Kubo's repo use against `StorageMax`, the provider's deal slots held and pending, proof misses and hot-key balance, and whether the relay is in the relay set; a figure the status file does not carry is left out |
+| `service` | Service × node matrix of systemd states, restart loops and failed units |
+| `mesh` | WireGuard interfaces (peers against the N-1 a full mesh needs, N counting unreachable nodes too) and every peer link's handshake age and traffic |
+| `dns` | Nameservers: CoreDNS, Caddy, SOA/NS/wildcard resolution, TLS days left |
+| `namespaces` | Each namespace's RQLite, Olric and gateway on each node hosting it |
+| `alerts` | Distinct alerts, most severe first, identical ones counted, each critical and warning one with a hint |
+| `traffic` | Cluster totals (rps, 5xx rate, p50/p95/p99), a row per gateway, the busiest namespaces |
+| `chain` | Orama L1: chain ID, height, last block age, average block time, mempool; each node's sync; validators with their share of voting power |
+| `report` | Full JSON report (always JSON) |
+
+### The verdict line
+
+```
+✓ All systems operational · 3/3 nodes · updated 2s ago
+✗ Degraded: Database (RQLite) · 2 critical, 1 warning · 3/3 nodes · updated 4s ago
+✗ Outage: API Gateway · 3 critical · 3/3 nodes · updated 3s ago
+```
+
+It is `cluster.Summarize` over `cluster.Components`: the worst component state
+(operational, degraded, outage), made at least degraded by any critical alert,
+with the components that are degraded or down named. "3/3 nodes" counts nodes
+whose report came back. Green, yellow and red mark the three states.
+
+Color is used only on a terminal: output to a pipe or file, or any output with
+`NO_COLOR` set, carries no escape codes. Columns are padded by visible width, so
+colored cells line up. Every string that arrives from the cluster (hosts, alert
+messages, a gateway's error answers) and every error the monitor reports (which
+can quote a certificate's hostname, a resolver or a wallet) has its control
+characters replaced before it is shown, so a node or gateway cannot drive the operator's
+terminal with escape sequences. The telemetry client never follows a redirect,
+so the operator's bearer token is only ever sent to the gateway it was issued for.
+
+### Alert hints
+
+`alerts`, `cluster` and the live view print a next step under each critical and
+warning alert. They are real commands and runbook sections, by subsystem. A
+host is only put into a command when it is an IP address:
+
+| Subsystem | Hint |
+|-----------|------|
+| `rqlite` | `orama inspect --env <env> --subsystem rqlite`; [Troubleshooting](/docs/operator/troubleshooting) §6, §14, §15 |
+| `wireguard` | `orama inspect --env <env> --subsystem wg`; [Troubleshooting](/docs/operator/troubleshooting) §1 (WireGuard packet loss) |
+| `olric` | `orama inspect --env <env> --subsystem olric`; [Troubleshooting](/docs/operator/troubleshooting) §1, §7 |
+| `ipfs` | `orama inspect --env <env> --subsystem ipfs`; [Troubleshooting](/docs/operator/troubleshooting) §12 |
+| `dns`, `system`, `network`, `tor`, `global` | `orama inspect --env <env> --subsystem <same>` |
+| `collection` (node unreachable) | `orama monitor node --env <env> --node <host> --ssh` |
+| `service`, `gateway`, `namespace` | `orama ssh <host> --env <env> 'sudo orama node status'` (namespace: also [Troubleshooting](/docs/operator/troubleshooting) §1–§4) |
+| `vault` | `orama monitor node --env <env> --node <host>` |
 
 ### Examples
 
 ```bash
-# Cluster overview
-orama monitor cluster --env mainnet
-
 # Cluster overview as JSON
-orama monitor cluster --env mainnet --json
+orama monitor cluster --env devnet --json
 
 # Single-node deep dive
-orama monitor node --env mainnet --node 51.195.109.238
+orama monitor node --env devnet --node 51.195.109.238
 
-# Services for one node
-orama monitor service --env mainnet --node 51.195.109.238
+# What the gateways are serving
+orama monitor traffic --env devnet
 
-# WireGuard mesh details
-orama monitor mesh --env mainnet
+# Chain height, sync and validators
+orama monitor chain --env devnet
 
-# DNS health
-orama monitor dns --env mainnet
+# Full report for one node
+orama monitor report --env devnet --node 51.195.109.238
 
-# Namespace health
-orama monitor namespaces --env mainnet
+# Break-glass, with a custom node list
+orama monitor cluster --env devnet --ssh --config /path/to/nodes.conf
 
-# Full report for LLM analysis
-orama monitor report --env mainnet | jq .
-
-# Single-node report
-orama monitor report --env mainnet --node 51.195.109.238
+# Live view over SSH, refreshing every 30s
+orama monitor --env devnet --ssh --interval 30s
 ```
 
-## Interactive TUI
+### Live view
 
-The `live` subcommand (or running `orama monitor` with no subcommand) launches a full-screen terminal UI with auto-refresh every 30 seconds.
+`orama monitor` (or `orama monitor live`) opens a full-screen view. The top two
+lines are always the environment with the connection state (`● live`,
+`◌ connecting…`, `↻ reconnecting…`, `✗ stopped`) and the verdict line.
 
-**Tabs:** Overview | Nodes | Services | WG Mesh | DNS | Namespaces | Alerts
+**Tabs:** 1 Overview · 2 Nodes · 3 Services · 4 Traffic · 5 Chain · 6 Mesh · 7 DNS · 8 Namespaces · 9 Alerts
 
-### Key Bindings
+| Tab | Shows |
+|-----|-------|
+| Overview | Component cards (name, state, healthy/total nodes, summary) and the top alerts with hints |
+| Nodes | Node table (host, role, health, raft, gateway, load, steal%, mem%, disk%, version, report age). ↑/↓ select, Enter opens **everything** the node reported, section by section; Esc goes back |
+| Services | Service × node matrix and failed units |
+| Traffic | Sparkline of cluster rps over this session (last 60 samples, in memory only), cluster totals, a row per gateway, busiest namespaces |
+| Chain | Chain ID, height, block age, average block time, mempool; each node's RPC, height, sync and validator status; validator voting-power bars |
+| Mesh | WireGuard interfaces and peer links |
+| DNS | Nameserver checks and TLS expiry |
+| Namespaces | Namespace services per node |
+| Alerts | Every distinct alert, most severe first, with hints; filter by severity |
+
+**Keys:**
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `Shift+Tab` | Switch tabs |
-| `j` / `k` or Arrow keys | Scroll content |
-| `r` | Force refresh |
+| `Tab` / `Shift+Tab` (`l` / `h`) | Next / previous tab |
+| `1`–`9` | Jump to a tab |
+| `↑` / `↓` (`k` / `j`) | Select a node (Nodes) or scroll |
+| `Enter` | Open the selected node's full report (Nodes) |
+| `Esc` | Back from a node's report; close help |
+| `c` / `w` / `i` / `a` | Alerts tab: show critical / warning / info / all |
+| `r` | Fetch a snapshot now |
+| `?` | Help |
 | `q` / `Ctrl+C` | Quit |
 
-Colors indicate health status: green for healthy, red for critical, yellow for warning.
+### Report format
 
-## Node Report Collector
+`orama monitor report` writes one JSON document for scripts, the lifecycle
+harness and LLMs. Fields are only ever added, never renamed or removed:
 
-The `orama node report` command runs locally on a VPS node and collects all system and service data in parallel. All 12 collectors run concurrently using goroutines, with typical collection time under 1 second per node.
+```json
+{
+  "meta": {
+    "environment": "testnet",
+    "collected_at": "2026-02-16T12:00:00Z",
+    "duration_seconds": 3.2,
+    "node_count": 3,
+    "healthy_count": 3,
+    "failed_count": 0
+  },
+  "summary": {
+    "rqlite_leader": "51.195.109.238",
+    "rqlite_quorum": "ok",
+    "wg_mesh_status": "ok",
+    "service_health": "ok",
+    "critical_alerts": 0,
+    "warning_alerts": 1,
+    "verdict": { "state": "operational", "headline": "All systems operational · 1 warning to look at", "critical": 0, "warning": 1, "info": 0, "nodes_healthy": 3, "nodes_total": 3 }
+  },
+  "components": [
+    { "id": "gateway", "name": "API Gateway", "state": "operational", "healthy": 3, "total": 3, "summary": "All 3 nodes healthy" }
+  ],
+  "alerts": [...],
+  "nodes": [
+    { "host": "51.195.109.238", "role": "nameserver-ns1", "status": "ok", "report": { ... } }
+  ]
+}
+```
+
+`summary.rqlite_leader` is the leader's public host, or `"none"`. A node's
+`status` is `ok`, `degraded` (a critical alert names it) or `unreachable`
+(`error` says why; no `report`). `report_age_sec` is how old the node's report
+was when the gateway assembled the snapshot (0 over `--ssh`).
+
+## `orama node report` — VPS-Side Collector
+
+Runs locally on a VPS node. Collects all system and service data in parallel and outputs a single JSON blob. Requires root privileges. A process running as `orama` gets the same report through the privileged helper, `orama-privhelper call node-report` (Go: `privhelper.NodeReport`), which only `orama-node.service` and `orama-namespace-gateway@index.service` may use.
+
+### Usage
+
+```bash
+# On a VPS node
+sudo orama node report --json
+```
 
 ### What It Collects
 
 | Section | Data |
 |---------|------|
-| **system** | CPU count, load average, memory/disk/swap usage, OOM kills, kernel version, uptime |
-| **services** | Systemd service states, restart counts, memory and CPU per service, restart loop detection |
-| **rqlite** | Raft state, leader, term, applied/commit index, peers, strong read test, readiness check |
-| **olric** | Service state, memberlist health, member count, restarts, memory usage, log analysis |
-| **ipfs** | Daemon and cluster state, swarm/cluster peers, repo size, versions, swarm key |
-| **gateway** | HTTP health check, subsystem status |
-| **wireguard** | Interface state, WireGuard IP, peers, handshake ages, MTU, config permissions |
-| **dns** | CoreDNS and Caddy state, port bindings, resolution tests, TLS cert expiry |
-| **tor** | Tor client state, SOCKS port bound, bootstrap progress, Anyone-network leftovers |
+| **system** | CPU count, load average, memory/disk/swap usage, OOM kills in the last hour (`journalctl -k --since -1h`, each `Killed process` line classified by the victim's cgroup from the preceding `oom-kill:constraint=...,task_memcg=...` line; not a since-boot count, so a kill stops alerting an hour later). `oom_kills` counts the node's own kills: global OOMs (whoever the victim was) and kills inside platform cgroups (`orama-*` units). `tenant_oom_kills` (with `tenant_oom_kills_by_unit`, per deployment instance such as `orama-deploy-node@<id>`) counts memory-cgroup kills inside tenant deployment cgroups (`orama-deploy-*@`, build and clean units included): a tenant at its own `MemoryMax` is not a node fault. A kill with no summary line (older kernels) cannot be attributed and counts as the node's. If the kernel log cannot be read the report carries `oom_kills_error` and an entry in `errors` instead of a zero, kernel version, uptime, clock time; CPU steal (the hypervisor giving this VPS's CPU to other guests, sampled over 0.5s from `/proc/stat`) and pressure-stall figures for CPU, I/O and memory (`/proc/pressure/*`, "some" avg60; -1 when the kernel has no PSI); whether systemd can enforce socket-bind rules (`+BPF_FRAMEWORK`); `hardening`, the live values of the settings install hardened (`fs.suid_dumpable`, `kernel.core_pattern`, `kernel.yama.ptrace_scope` from `/proc/sys`, the number of active swap areas in `/proc/swaps`, `apport.service`'s `LoadState`; the expected values are `pkg/hardening`, the same list install writes), with `errors` naming any of them that could not be read |
+| **services** | Systemd service states (active, restarts, memory, CPU, restart loop detection) for 10 core services |
+| **rqlite** | Raft state, leader, term, applied/commit index, peers, strong read test, readyz, debug vars |
+| **olric** | `orama-namespace-olric@index` state, memberlist listener on port 10103, member count, restarts, memory, log analysis |
+| **ipfs** | Daemon/cluster state, swarm/cluster peers, repo size, versions, swarm key; the oldest active Kubo request that holds or waits for the pin lock (`pin/add`, `pin/update`, `repo/gc`, from `/api/v0/diag/cmds`) and how long it has run (`oldest_pin_lock_cmd`, `oldest_pin_lock_age_seconds`; `pin_lock_error` when the list could not be read). A request's options are not read: a CLI request's carry its `--api-auth` bearer |
+| **vault** | Service state, guardian health (healthy/total, read threshold, write quorum), restarts |
+| **gateway** | Index gateway `/v1/health` status and each check's status (`checks`), build version from `/v1/version` (port 10104) |
+| **wireguard** | Interface state, WG IP, peers, handshake ages, MTU, config permissions |
+| **dns** | `orama-namespace-coredns@nameserver` / `orama-namespace-caddy@index` state, port bindings, and — in-process, with no `dig`, `openssl` or shell — SOA, NS, apex A and wildcard A answered by the local nameserver (`127.0.0.1:53`), and the expiry of the certificates Caddy serves for the apex and for a wildcard-covered name (`127.0.0.1:443`); an expired certificate is flagged separately from one that could not be read (days `-1`) |
+| **tor** | Tor client unit state, SOCKS port bound, bootstrap % of the running process (`-1` when its journal no longer has it), Anyone-network leftovers |
 | **network** | Internet reachability, TCP stats, retransmission rate, listening ports, UFW rules |
 | **processes** | Zombie count, orphan orama processes, panic/fatal count in logs |
 | **namespaces** | Per-namespace service probes (RQLite, Olric, Gateway) |
+| **deployments** | This node's `orama-deploy-*` units: total (loaded, stopped included), running, failed; `error` when systemd cannot list them. `static_count` is not collected (static deployments run no process on a node) |
+| **serverless** | Engine status — the WASM engine runs in the index gateway, so this is its `/v1/health` answer: `healthy`, `unhealthy (HTTP n)` or `unreachable`. `function_count` is not collected |
+| **chain** | Only on a node with `orama-global-chain.service` (absent otherwise). Unit state, then the CometBFT RPC on `127.0.0.1:31001`: chain ID, node version, latest height and block time, block age, average block time over the last 20 blocks, catching up, peers, mempool size, whether this node is a validator and its voting power, the validator set and its total power. `/status` must answer with this node's CometBFT id (`node_info.id`, derived from `/var/lib/orama-global/chain/config/node_key.json` as CometBFT does: lower-case hex of the first 20 bytes of SHA-256 over the ed25519 public key); an unreadable or malformed node key is the section's `error`. The chain ID must match `^[A-Za-z0-9._-]{1,64}$`, the node version `^[A-Za-z0-9.+_-]{1,64}$`, every validator address `^[0-9A-F]{40}$`, and at most 1000 validators are kept. Any failed RPC query or malformed field sets `responsive: false` and an `error` that names the query or field without echoing the value (unprintable characters in an RPC error message are replaced with `?`). When `/status` includes this node's consensus address, the section also asks the REST API on `127.0.0.1:31003` for the slashing params, the signing info, and the staking validator: missed-block ratio (`missed_blocks_counter / signed_blocks_window`), `min_signed_per_window`, `jailed`, and `tombstoned`. A failed query sets `signing_error` and leaves `responsive` as the CometBFT RPC reported it. Prometheus on `127.0.0.1:31004` is the chain process's own listener; this report does not scrape it. |
+| **global** | Only when `orama-global-ipfs.service`, `orama-global-provider.service`, or `orama-global-tor-relay.service` is installed (absent on a cluster node). Unit state. While the public Kubo unit is active, `RepoSize` and `StorageMax` from its RPC on `127.0.0.1:31011` (`198.18.0.2:31011` on a co-located machine, chosen on every report by whether the `orama-global-netns` unit is installed, like the chain endpoints; the inspector asks through `sudo -n curl` there), using the bearer in `/var/lib/orama-global/ipfs/api-token` (the token is not written into the report or into errors). Provider and relay add the fields present in `/var/lib/orama-global/provider/monitor.json` and `/var/lib/orama-global/tor-relay/monitor.json`: `hot_key_balance_norama`, `proof_misses`, `disk_bytes`, `storage_max_bytes`, `held_slots`, `pending_slots`, `in_consensus`. The storage provider writes its file every step: `hot_key_balance_norama` is what the hot key can pay a base fee from, its bank balance plus its x/fees fee-only balance (a hot key's bank balance is always zero; `MsgFundHotKey` fills the fee-only one); `held_slots` and `pending_slots` are the storage deals the provider serves (slots bound to a stored piece) and the slots assigned to it that still wait for their piece. A negative count makes the file invalid and the section's `error` says so. The Tor relay's file holds only `in_consensus`, written every five minutes by `orama-global-tor-monitor.timer` (`orama global tor monitor`): whether the consensus the relay holds lists it, left out while the relay has no valid consensus ([Running the Tor network](/docs/operator/tor-network#relays)). |
 
-## Alert System
+### Bounds
 
-Alerts are derived from cross-node analysis of all collected reports. Each alert has a severity level and identifies the affected subsystem and node.
+The collectors read services on loopback, where any local process — a tenant deployment included — can bind a stopped service's port. Every response body the report reads (`httpGet`, the gateway's `/v1/health`, the Kubo RPC, the IPFS Cluster REST API) is capped at 2 MiB (`maxLocalResponseBytes`); a larger body is an error naming the URL, never a truncated read. Bodies that are only drained are discarded up to the same cap. Every external command, the namespace `systemctl is-active` checks included, runs with a 4-second timeout (`runCmd`).
+
+Inside the privileged helper, `node-report` takes a non-blocking exclusive `flock` on `/run/orama-privhelper-node-report.lock`: while one collection runs, another request fails with "a node report collection is already running" instead of queueing. A collection that has not finished within 50 seconds — below the gateway's 60-second client timeout — is answered with a failure; the helper instance exits after responding, which ends the collection and releases the lock.
+
+### Performance
+
+All 17 collectors run in parallel with goroutines. Typical collection time is **< 1 second** per node. HTTP timeouts are 3 seconds, command timeouts are 4 seconds. The chain's slashing and staking queries have their own 8-second budget after the CometBFT RPC and do not change `responsive` when they fail.
+
+### Output Schema
+
+```json
+{
+  "timestamp": "2026-02-16T12:00:00Z",
+  "hostname": "ns1",
+  "public_ip": "51.195.109.238",
+  "wireguard_ip": "10.0.0.1",
+  "version": "",
+  "collect_ms": 526,
+  "system": { "cpu_count": 4, "load_avg_1": 0.1, "mem_total_mb": 7937, ... },
+  "services": { "services": [...], "failed_units": [] },
+  "rqlite": { "responsive": true, "raft_state": "Leader", "term": 42, ... },
+  "olric": { "service_active": true, "memberlist_up": true, ... },
+  "ipfs": { "daemon_active": true, "swarm_peers": 2, ... },
+  "vault": { "service_active": true, "responsive": true, "status": "healthy", ... },
+  "gateway": { "responsive": true, "http_status": 200, ... },
+  "wireguard": { "interface_up": true, "wg_ip": "10.0.0.1", "peers": [...], ... },
+  "dns": { "coredns_active": true, "caddy_active": true, "base_tls_days_left": 88, ... },
+  "tor": { "client_active": true, "socks_listening": true, "bootstrapped": true, "bootstrap_pct": 100, "legacy_anyone": false },
+  "network": { "internet_reachable": true, "ufw_active": true, ... },
+  "processes": { "zombie_count": 0, "orphan_count": 0, "panic_count": 0, ... },
+  "namespaces": [],
+  "deployments": { "total_count": 0, "running_count": 0, "failed_count": 0, "static_count": 0 },
+  "serverless": { "function_count": 0, "engine_status": "healthy" },
+  "chain": { "service_active": true, "responsive": true, "chain_id": "orama-stagenet-1", "latest_height": 1234, "block_age_sec": 1.8, "avg_block_time_sec": 2.0, "is_validator": true, ... }
+}
+```
+
+## Alert Detection
+
+Alerts are derived from cross-node analysis of all collected reports (`cluster.DeriveAlerts`): by the cluster gateway for the telemetry API, and by the monitor itself with `--ssh`. Each alert has a severity level and identifies the affected subsystem and node.
 
 ### Alert Severities
 
 | Severity | Examples |
 |----------|----------|
-| **CRITICAL** | SSH collection failed (node unreachable), no RQLite leader, split brain, WireGuard interface down, WireGuard peer never handshaked, OOM kills, service failed, UFW inactive |
-| **WARNING** | Strong read failed, memory above 90%, disk above 85%, stale WireGuard handshake (over 3 minutes), Raft term inconsistency, applied index lag over 100, restart loop detected, TLS cert under 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew over 5 seconds, binary version mismatch, internet unreachable, high TCP retransmission |
-| **INFO** | Zombie processes, orphan orama processes, swap usage above 30% |
+| **critical** | Expired TLS certificate, clock skew > 60s, Collection failed (node unreachable), no RQLite leader, split brain, RQLite unresponsive, a Raft snapshot term above the node's current term (see COMMON_PROBLEMS.md #21), WireGuard interface down, WG peer never handshaked, node OOM kills in the last hour ("N OOM kills in the last hour"; tenant deployment OOMs excluded), service failed, UFW inactive, chain RPC not answering while its unit is active, validator jailed or tombstoned, missed-block ratio at the chain's downtime threshold, storage-provider hot key balance 0 norama |
+| **warning** | OOM kill count unknown (kernel log unreadable), Strong read failed, memory > 90%, disk > 85%, stale WG handshake (> 3min), Raft term inconsistency, a follower silent for more than 2s ("Follower out of contact with the leader"), RQLite commit-applied gap > 100, restart loop detected, TLS cert < 14 days, DNS down, namespace gateway down, Tor SOCKS port not bound or not bootstrapped, Anyone-network leftovers, clock skew > 5s, internet unreachable, high TCP retransmission, chain height more than 20 blocks behind the median, chain with no peers while the validator set has more than one member, block older than 60 seconds, missed-block ratio at least half the downtime threshold, public Kubo repo over StorageMax, provider proof misses, provider disk over its declared maximum, relay reporting it is not in the relay set |
+| **warning (contention)** | CPU steal > 20% (an oversubscribed host: load average and CPU% do not show it), CPU pressure > 50% |
+| **warning (security)** | systemd without `+BPF_FRAMEWORK`: tenant deployments' `SocketBindAllow`/`SocketBindDeny` are ignored on that node, so a deployment is not confined to its own port (Debian 12's systemd 252 is built without it) |
+| **warning (security)** | RAM hardening drifted: a setting install hardened no longer holds on the node, one alert per setting naming it, its live value and what install set (`fs.suid_dumpable`, `kernel.core_pattern`, `kernel.yama.ptrace_scope`, swap in use, `apport.service` loaded and not masked) or that it could not be read. A warning, not critical: the node still serves, so it does not turn the cluster verdict degraded, but secret-bearing memory can reach the disk until it is restored. Nothing is raised from a node on a release that does not report it |
+| **info** | Zombie processes, orphan orama processes, swap usage > 30%, tenant deployment OOM kills in the last hour ("N tenant deployment OOM kills in the last hour (unit xN)"; never degrades the node verdict) |
 
 ### Cross-Node Checks
 
-The monitor compares data across all nodes to detect cluster-wide issues:
+These checks compare data across all nodes:
 
-- **RQLite Leader** — Exactly one leader exists (detects split brain)
-- **Leader Agreement** — All nodes agree on the same leader address
-- **Raft Term Consistency** — Term values within 1 of each other
-- **Applied Index Lag** — Followers within 100 entries of the leader
-- **WireGuard Peer Symmetry** — Each node has the expected number of peers (N-1)
-- **Clock Skew** — Node clocks within 5 seconds of each other
-- **Binary Version** — All nodes running the same version
+- **RQLite Leader**: Exactly one leader exists (no split brain)
+- **Leader Agreement**: All nodes agree on the same leader address
+- **Raft Term Consistency**: Term values within 1 of each other
+- **Follower Contact**: Every follower has heard from the leader within 2 seconds (`rqlite.StalenessMaxLastContact`, the bound after which a namespace gateway stops serving none-reads from it); a follower that has never heard from one is flagged too. Each node is judged from its own `/status` read (`store.raft.last_contact`). The applied indexes of the nodes are deliberately not compared: each report is collected at a slightly different moment, so under steady writes their spread counts the writes made between the reads, not lag (a healthy 5-node stagenet read 101 apart). A node's own apply backlog is the per-node "RQLite commit-applied gap" warning (`commit_index` minus `applied_index` over 100, both from one read). `orama inspect` follows the same rule: `rqlite.last_contact` warns on a stale follower and there is no cross-node applied-index check
+- **WireGuard Peer Symmetry**: Each node has N-1 peers
+- **Clock Skew**: Node clocks within 5 seconds of each other (critical beyond 60s). The offset is measured when each report is served — the peer sends its clock (`X-Orama-Clock-Ms`) and the collector compares it with the request's midpoint — not read from report timestamps, which differ by up to the collection interval on synchronised clocks. A peer that sends no clock (0.122.109) is left unmeasured and its report still counts
+- **Binary Version**: All nodes running the same version. `orama node report` used to emit an empty `version`, so every node read as "unknown" and the alert could never fire; the version is compiled into the binary now, so it carries a real value.
+- **Chain height**: A responsive node that is not catching up and is more than 20 blocks behind the median responsive height. One node's height cannot set the median.
+
+### The lifecycle harness
+
+`e2e/lifecycle` consumes `orama monitor report --json` as its only view of the
+cluster, so the report's schema is a test contract. It decodes each node's
+`report` into the real `report.NodeReport` and the alerts into `cluster.Alert`;
+only the `meta`/`summary` envelope is declared in the harness. (It used to be a
+hand copy whose field names had drifted — `rqlite.leader`, `allowed_ip`,
+`restart_loop` — so those fields read as zero and the predicates using them
+could not work; bug 2701.) Its predicates assert:
+
+- **`Converged(n)`** — exactly `n` nodes, every report at most 90s old (`report_age_sec`: the age at which the gateway itself stops counting a report, three missed 10s collections plus the 60s collection timeout, so a loaded node whose collection takes a while still reads converged), quorum `ok`, a leader (not `"none"`), WG mesh `ok`,
+  zero critical alerts, and per node: responsive rqlite in `Leader`/`Follower`,
+  gateway 200, `wg0` up with N-1 peers, no service with `restart_loop_risk`, no failed Orama unit (`orama-*`, `wg-quick@wg0`, `caddy`, `coredns`: the inspector's rule; a failed unit the host image ships is a warning alert, not an unconverged cluster).
+- **`LeaderAgreement()`** — every responsive node names the same leader
+  (`rqlite.leader_addr`). Split
+  brain is failed on by name, because both halves look healthy from inside.
+- **`Forgotten(wgIP)`** — no surviving node lists the address, in the node list
+  (`wireguard_ip`) *or* as a WireGuard peer (`allowed_ips`). It does not read raft
+  membership, and through the API the node list is the cluster's node registry
+  as the gateway sees it. A node evicted from raft but left in the mesh is the
+  failure that survives a restart.
+- **`Serving()`** — gateways respond and nameservers run CoreDNS, with raft
+  ignored entirely. A cluster mid-election must still serve.
+
+Adding a field is safe; renaming one that these read fails `make test`:
+`e2e/lifecycle` decodes a marshalled `report.NodeReport`, and
+`cmd/orama/internal/monitor/display/report_contract_test.go` runs the real
+`orama monitor report` output through the harness's `ParseReport` and predicates.
+
+### The rolling-upgrade gate
+
+`orama node upgrade --env <env>` uses the same signals, in `pkg/nodehealth`, as
+its gate between nodes. A node passes when **all** of these hold:
+
+| Signal | Why |
+|--------|-----|
+| Raft state is `Leader` or `Follower` | `Candidate` means an election is running; restarting the next voter during one is how a rollout loses quorum |
+| A leader is known (`store.leader.node_id`, or `raft.leader_id` on an older payload) | A follower that reports no leader is in a cluster that cannot commit a write |
+| Applied index within 200 of the commit index | A follower tens of thousands of entries behind is not carrying reads |
+| Gateway `/health` returns 200 | The node serves no traffic until it does |
+
+Anything short of all four stops the rollout, leaving the remaining voters
+untouched. The same package backs `orama node install`'s post-install
+verification, `orama node start`, and the post-upgrade step of `orama node upgrade`, so "ready"
+means one thing across the CLI.
 
 ### Per-Node Checks
 
-- **RQLite** — Responsive, ready, strong read passes
-- **WireGuard** — Interface up, handshake freshness for all peers
-- **System** — Memory, disk, load average, OOM kills, swap
-- **Services** — Systemd state for all services, restart loop detection
-- **DNS** — CoreDNS and Caddy running, TLS cert expiry, SOA resolution
-- **Tor** — SOCKS port bound and bootstrap progress for the Tor client; Anyone-network leftovers
-- **Processes** — Zombies, orphans, panics in logs
-- **Namespaces** — Gateway and RQLite health per namespace
-- **Network** — UFW active, internet reachability, TCP retransmission rate
+- **RQLite**: Responsive, ready, strong read
+- **WireGuard**: Interface up, handshake freshness
+- **System**: Memory, disk, load, OOM kills, swap
+- **Services**: Systemd state, restart loops
+- **DNS**: CoreDNS/Caddy up, TLS cert expiry, SOA resolution
+- **IPFS**: Daemon/cluster down, no swarm peers, swarm key missing, bootstrap list not empty, repo above 90%/95%, and a `pin/add`, `pin/update` or `repo/gc` active for more than 30 minutes — the repo GC unit's `TimeoutStartSec`. Such a request holds or waits for Kubo's pin lock, so `orama-namespace-ipfs-gc@index` cannot run and times out having freed nothing (a timed-out GC run itself shows as a failed systemd unit)
+- **Tor**: SOCKS port bound while active, bootstrap below 100% (an unknown bootstrap is not an alert), Anyone-network leftovers
+- **Processes**: Zombies, orphans, panics in logs
+- **Namespaces**: Gateway and RQLite per namespace
+- **Network**: UFW, internet reachability, TCP retransmission
+- **Chain**: Unit not active, RPC not answering, height lag, no peers against a multi-member validator set, a block older than 60 seconds, jailed, tombstoned, missed-block ratio against `min_signed_per_window` (warning at half the downtime miss fraction, critical at the fraction). A node that is catching up is not alerted for lag or for a stale block. A signing query that fails while jail and the ratio are both unknown is a warning, not a claim that the validator is fine. A full node that is absent from the validator set is not an error.
+- **Global**: Installed `orama-global-ipfs`, `orama-global-provider`, and `orama-global-tor-relay` units that are not active. Public Kubo repo over `StorageMax`. Provider hot-key balance 0, proof misses, and disk over the declared maximum, and a relay that says it is outside the relay set, only when `monitor.json` carries those fields. The provider writes its file every step, so its three alerts fire; the relay writes its own every five minutes, so the relay-set alert fires when the relay's consensus does not list it and stays quiet while it has no valid consensus.
 
-## Deep Inspection
+## Request metrics
 
-For deeper diagnostics beyond real-time monitoring, the `orama inspect` command performs thorough SSH-based health checks with deterministic pass/fail/warn results per check.
+Every gateway (the cluster gateway `index` and each namespace gateway) keeps
+live request metrics in memory — nothing is written to a database, and a
+restarted gateway starts from zero. They are kept by
+`pkg/telemetry/traffic.Recorder`, fed from the gateway's logging middleware,
+and read with `Gateway.TrafficSnapshot()` as a `report.TrafficReport`.
 
-### Usage
-
-```bash
-orama inspect --env <environment> [flags]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--env` | *(required)* | Environment: `devnet`, `testnet`, `mainnet` |
-| `--subsystem` | `all` | Comma-separated subsystems to inspect |
-| `--format` | `table` | Output format: `table` or `json` |
-| `--timeout` | `30s` | SSH command timeout per node |
-| `--verbose` | `false` | Print collection progress |
-| `--ai` | `false` | Enable AI analysis of failures |
-| `--model` | `moonshotai/kimi-k2.5` | OpenRouter model for AI analysis |
-| `--output` | | Save results to directory as markdown (e.g., `./results`) |
-| `--config` | `scripts/nodes.conf` | Path to node configuration file |
-
-### Subsystems
-
-`rqlite`, `olric`, `ipfs`, `dns`, `wg`, `system`, `network`, `tor`
-
-Multiple subsystems can be combined: `--subsystem rqlite,olric,dns`
-
-### What Each Subsystem Checks
-
-| Subsystem | Checks |
-|-----------|--------|
-| **rqlite** | Raft state, leader election, readyz, commit/applied gap, FSM pending, strong reads, debug vars, cross-node leader agreement, term consistency, applied index convergence, quorum |
-| **olric** | Service active, memberlist up, restart count, memory usage, log analysis (suspects, flapping, errors), cross-node memberlist consistency |
-| **ipfs** | Daemon and cluster active, swarm and cluster peer count, repo usage, swarm key present, cross-node version consistency |
-| **dns** | CoreDNS and Caddy active, ports 53/80/443, memory, restart count, Corefile exists, SOA/NS/wildcard resolution, TLS cert expiry, cross-node nameserver availability |
-| **wg** | Interface up, correct 10.0.0.x IP, listen port 51820, peer count, MTU 1420, config permissions 600, handshake freshness, peer traffic, cross-node consistency |
-| **system** | Core service states, failed systemd units, memory/disk/inode usage, load average, OOM kills, swap, UFW active, process user, panic count, expected ports |
-| **network** | Internet reachability, default route, WireGuard route, TCP connection count, TIME_WAIT count, retransmission rate, WireGuard mesh ping to all peers |
-| **tor** | `orama-namespace-tor@index` active, SOCKS5 `:9050` bound, bootstrap progress of the running process, Anyone-network leftovers |
-
-### Severity Levels
-
-| Level | When Used |
-|-------|-----------|
-| **CRITICAL** | Service completely down, Raft quorum lost, RQLite unresponsive, no leader |
-| **HIGH** | Service degraded: Olric down, gateway not responding, IPFS swarm key missing |
-| **MEDIUM** | Non-ideal but functional: stale handshakes, elevated memory, log suspects |
-| **LOW** | Informational: non-standard MTU, port mismatch, version skew |
-
-### Check Statuses
-
-| Status | Meaning |
-|--------|---------|
-| **pass** | Check passed |
-| **fail** | Check failed, action needed |
-| **warn** | Degraded, monitor or investigate |
-| **skip** | Check could not run due to insufficient data |
-
-### Examples
-
-```bash
-# Full cluster inspection
-orama inspect --env mainnet
-
-# Check only RQLite and Olric
-orama inspect --env mainnet --subsystem rqlite,olric
-
-# Check only networking
-orama inspect --env mainnet --subsystem wg,network
-
-# JSON output for scripting
-orama inspect --env mainnet --format json | jq '.checks[] | select(.status == "fail")'
-
-# Verbose mode (shows collection progress)
-orama inspect --env mainnet --verbose
-
-# Save results as markdown to a directory
-orama inspect --env mainnet --output ./results
-```
-
-### AI-Powered Analysis
-
-When `--ai` is enabled, failures and warnings are sent to an LLM via OpenRouter for root-cause analysis and suggested fixes.
-
-```bash
-# Default model
-orama inspect --env mainnet --ai
-
-# Custom model
-orama inspect --env mainnet --ai --model anthropic/claude-sonnet-4
-```
-
-The API key can be set via the `--api-key` flag, the `OPENROUTER_API_KEY` environment variable, or a `.env` file in the current directory.
+- **What is counted:** every request the gateway answers, with its status,
+  response bytes and duration. `requests`, `errors_4xx`, `errors_5xx`,
+  `bytes_per_sec`, `rps`, and `error_rate` (5xx ÷ requests, 0 with no
+  requests). `total_requests` counts every request since the gateway started.
+  A WebSocket upgrade counts as a request but adds no latency sample, since its
+  duration is the life of the connection.
+- **Window:** the last 60 seconds, as 60 one-second buckets. Rates divide by
+  the time the window actually covers: since the first request when the
+  gateway has served for less than a minute (never less than 1s); `window_sec`
+  says which. After more than 60s without traffic the window is empty.
+- **Percentiles:** `p50_ms`, `p95_ms`, `p99_ms` come from a fixed latency
+  histogram with log-spaced buckets from 1ms to 30s, interpolated linearly
+  inside the bucket the percentile falls in. Anything slower than 30s reports
+  as 30000ms.
+- **Namespaces:** each request is attributed to the namespace auth or domain
+  routing resolved for it (for the cluster gateway, the target of an
+  `ns-<name>.<domain>` or serverless proxy, or a deployment's namespace);
+  otherwise to the gateway's own `client_namespace`. Names are validated
+  (`[A-Za-z0-9][A-Za-z0-9_-]*`, at most 64 characters) or counted as
+  `(invalid)`. Each second tracks at most 256 distinct namespaces and folds
+  the rest into `(other)`, so memory stays bounded whatever hosts clients send.
+  A snapshot lists the 20 busiest namespaces with their requests, rps, 5xx and
+  p95. Paths and client IPs are never labels.
+- **Excluded:** the gateway's own health and telemetry plumbing, so monitoring
+  does not measure itself: `/health`, `/v1/health`, `/v1/internal/ping`, and
+  everything under `/v1/internal/telemetry` and `/v1/operator/telemetry`.
+- **Slow requests:** a request that takes a second or more is also logged at
+  warning level as `slow request`, with the time each step took: `routing_ms`
+  (from the request's arrival until it is routed to a namespace), `auth_ms` (validating the credential for a
+  namespace proxy), `targets_ms` (looking the namespace's gateways up),
+  `upstream_ms` (until the namespace gateway's response headers) and `rest_ms`
+  (everything after the last step, including streaming the response body, so a
+  large download is slow there by design). A step the request did not take is
+  absent. WebSocket upgrades are not logged: their duration is the connection's. Read it with
+  `orama node logs orama-namespace-gateway@index`.
 
 ## Monitor vs Inspector
 
@@ -280,14 +572,118 @@ Both tools check cluster health, but they serve different purposes:
 
 | | `orama monitor` | `orama inspect` |
 |---|---|---|
-| **Data source** | Single `orama node report` call per node | 15+ SSH commands per node per subsystem |
-| **Speed** | 3-5 seconds for full cluster | 4-10 seconds for full cluster |
-| **Output** | Interactive TUI, tables, JSON | Tables, JSON |
+| **Data source** | The gateway's operator telemetry API (every node's `orama node report`, gathered in the cluster); `--ssh`: one SSH call per node | About 12 SSH sessions per node, sharing one connection |
+| **Speed** | One API call; `--ssh` ~3-5s for full cluster | ~10s for a full cluster on healthy nodes; a CPU-starved node takes longer, and `--timeout` (30s per node) is what it has |
+| **Output** | Live view, tables, JSON | Tables, JSON |
 | **Focus** | Real-time monitoring, alert detection | Deep diagnostic checks with pass/fail/warn |
 | **AI support** | `report` subcommand for LLM input | `--ai` flag for inline analysis |
-| **Best for** | "Is anything wrong right now?" | "What exactly is wrong and why?" |
+| **Use case** | "Is anything wrong right now?" | "What exactly is wrong and why?" |
 
-Use `monitor` for day-to-day health checks and the interactive TUI. Use `inspect` for deep diagnostics when something is already known to be broken.
+Use `monitor` for day-to-day health checks and the live view. Use `inspect` for deep diagnostics when something is already known to be broken.
+
+## In-cluster failure detection (the ring monitor)
+
+Separate from the SSH tooling above, every node runs a ring-based failure
+detector inside its **index gateway** process. It is what drives automatic
+recovery, so its thresholds decide how fast a dead node is noticed and how
+easily a healthy one is wrongly evicted.
+
+| Property | Value | Where |
+|---|---|---|
+| Runs on | index gateway only | a tenant gateway's RQLite has no `dns_nodes` rows |
+| Ring | the K nodes after this one in `dns_nodes` sorted by id | K = 3 |
+| Probe | `GET http://<internal_ip>:10104/v1/internal/ping` | port from `constants.GatewayAPIPort` |
+| Probe interval | 10s | |
+| Suspect | 3 consecutive misses (~30s) | disables that node's namespace DNS records |
+| Dead | 12 consecutive misses (~2min) | needs ≥2 distinct observers to agree |
+| Startup grace | 5min | no node is declared dead during it |
+
+**The probe port is configuration, not a literal.** It is the *index gateway*
+port on the peer, because the ring monitors nodes rather than namespaces and
+only the index gateway serves `/v1/internal/ping`. `health.NewMonitor` returns
+an error if it is unset: the port was hardcoded once, survived the move of the
+index internals into the 10100–10109 block untouched, and every probe on a
+healthy fleet then failed — which the ring turns into a cluster-wide false
+eviction about seven minutes after the gateways start.
+
+**A recent heartbeat outranks the probe.** Before issuing HTTP, the monitor
+checks whether the peer updated `dns_nodes.last_seen` within the last 65
+seconds (two heartbeat ticks). That row is a raft write, so a fresh value
+proves the peer was alive *and* had quorum — evidence that does not depend on
+the HTTP path. A stale heartbeat proves nothing either way and falls through to
+the probe rather than counting as a miss.
+
+Observations land in `node_health_events`; recovery is triggered only by the
+lowest-id observer once quorum agrees, so a confirmed death produces one
+recovery action rather than one per observer.
+
+## Namespace DNS self-management
+
+Separately from the ring monitor, each node probes the namespaces it hosts every
+30s and keeps its own DNS records in step. rqlite and Olric are probed by
+dialling their ports on this node's WireGuard address; the gateway is asked
+`GET /v1/health` on that same address, because it binds and answers long before
+it has a usable schema and a TCP dial cannot tell the difference — a gateway
+that could not serve a single request used to stay in the round-robin. A tenant
+gateway does not listen on loopback, so a probe of `127.0.0.1` reports every
+namespace down and withdraws a node that is serving.
+
+The gateway probe reads **readiness only**. `starting` (waiting for its schema)
+and `blocked` (schema below what the binary requires) count against the
+namespace; `degraded` and `unhealthy` do not, because those are subsystem
+health — rqlite and Olric have their own probes above, and withdrawing a node
+because its IPFS daemon blipped would turn one unavailable subsystem into an
+unavailable node.
+
+| Namespace status | When | In DNS |
+|---|---|---|
+| `healthy` | every service reachable and the gateway is ready | yes |
+| `starting` | the gateway is up but waiting for its schema | no |
+| `unhealthy` | a service is unreachable, or the gateway is blocked | no |
+
+| Transition | Threshold | Effect |
+|---|---|---|
+| healthy → not healthy | 3 consecutive non-healthy probes (~90s) | withdraws this node's `ns-<ns>` and `*.ns-<ns>` A records |
+| not healthy → healthy | 3 consecutive healthy probes (~90s) | restores the records it withdrew |
+
+A gateway that is `starting` therefore adds its convergence time to the
+re-advertise lag after a restart (bug-286).
+
+Two safety rules:
+
+- **Never the last record.** A withdrawal is refused when this node's record is
+  the only active one for that name. The count is evaluated inside the UPDATE,
+  so simultaneous withdrawals on different nodes cannot empty the round-robin
+  between them.
+- **A peer's verdict outranks a stale one, not a live one.** Records this
+  process withdrew are restored as soon as its own probe recovers. A record a
+  *peer* disabled (the ring monitor's suspect path) is only reclaimed after it
+  has sat untouched for 10 minutes, so a monitor that still considers this node
+  suspect keeps it out.
+
+Watch it with:
+
+```bash
+sudo orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
+```
+
+## Configuration
+
+The API source uses the environment's gateway URL (`orama env list`) and the
+credentials `orama auth login` stored for it — the same ones `orama nodes` uses to
+list your nodes. With `--ssh`, nodes are resolved the same way the inspector does
+— network API first, `nodes.conf` as the fallback — unless `--config` names a
+file. See [Inspector](/docs/operator/inspector#configuration) for the file format.
+
+## Prerequisites
+
+- **API (default):** a signed-in operator session for the environment's gateway
+  (`orama env use <env>`, then `orama auth login`), and gateways that serve
+  `/v1/operator/telemetry`.
+- **`--ssh`:** nodes must have the `orama` CLI installed (via `orama node install`,
+  or updated via `orama node push` / `orama node rollout`), since the monitor runs
+  `sudo orama node report --json` over SSH; the binary must be at
+  `/usr/local/bin/orama` on each node. SSH keys come from RootWallet.
 
 ## Rolling Upgrade Monitoring Protocol
 

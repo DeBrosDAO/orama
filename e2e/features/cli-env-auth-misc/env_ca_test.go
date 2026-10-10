@@ -18,7 +18,7 @@ const certRefusal = "certificate"
 // TestEnvAdd_withoutCAFileRefusesTheStagingChain: the run's certificates come
 // from Let's Encrypt staging, which no system trust store accepts, so an
 // environment added without --ca-file must refuse the gateway's TLS
-// (docs/CLI_REFERENCE.md#orama-env-add: the CA is trusted only for the
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-env-add: the CA is trusted only for the
 // environment it was given to). The run's own environment, which carries the
 // CA for the same domain, is removed first so it cannot lend its trust.
 func TestEnvAdd_withoutCAFileRefusesTheStagingChain(t *testing.T) {
@@ -76,7 +76,7 @@ func TestEnvAdd_unusableCAFileRefused(t *testing.T) {
 
 // TestEnvCA_missingFileIsNamedError: a CA file that disappears after it was
 // recorded makes every gateway command fail naming the environment and the
-// fix, never a silent downgrade (docs/DEVNET_INSTALL.md "A missing CA file is
+// fix, never a silent downgrade (website/src/docs/operator/node-setup.mdx "A missing CA file is
 // an error naming the environment"). `orama env` and `orama version` still
 // run, so the operator can repair it (core/cmd/orama/root.go needsEnvironmentCAs).
 func TestEnvCA_missingFileIsNamedError(t *testing.T) {

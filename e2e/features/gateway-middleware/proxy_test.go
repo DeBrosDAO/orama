@@ -23,7 +23,7 @@ type queryResult struct {
 // each node's own Caddy and cluster gateway lands on the same namespace: a
 // row written through one node is read back through every other (the
 // cluster gateway proxies ns-<ns> to the namespace's gateways over the mesh;
-// docs/ARCHITECTURE.md "HTTP Request Flow"). A credential of another
+// website/src/docs/contributor/architecture-reference.mdx "HTTP Request Flow"). A credential of another
 // namespace is refused on every node.
 func TestProxy_everyNodeServesTheNamespace(t *testing.T) {
 	t.Parallel()

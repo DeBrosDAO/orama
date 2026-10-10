@@ -32,8 +32,8 @@ const (
 
 // TestNamespaceSessionPolicy_ownerSetsRuntimeCannot: GET reads the policy
 // (optional by default), PUT sets one of optional|required|approval, a bad
-// value is refused, and a runtime member cannot change it (docs/API_SURFACE.md
-// "/v1/namespace/session-policy"; docs/AUTH.md).
+// value is refused, and a runtime member cannot change it (docs/whitepaper/technical-reference/appendices/i-api-surface.md
+// "/v1/namespace/session-policy"; docs/whitepaper/technical-reference/vol1/13-identity.md).
 func TestNamespaceSessionPolicy_ownerSetsRuntimeCannot(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -154,7 +154,7 @@ func clearRateLimit(t testing.TB, c *gw.Client, n *ns.Namespace) {
 // TestNamespaceMembers_transferIsOwnerOnly: the owner hands the namespace to
 // another wallet in one step and keeps an admin grant; an admin cannot
 // transfer (OWNERSHIP_REQUIRED); the new owner can hand it back
-// (docs/CLI_REFERENCE.md "orama members transfer").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama members transfer").
 func TestNamespaceMembers_transferIsOwnerOnly(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

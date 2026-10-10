@@ -10,7 +10,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 )
 
-// x/token genesis defaults (docs/CHAIN.md "x/token"; x/token/types).
+// x/token genesis defaults (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/token"; x/token/types).
 const (
 	creationFeeOrama = 10
 	depositPerByte   = 68359
@@ -87,7 +87,7 @@ func TestToken_createSucceedsWithFaucetFunds(t *testing.T) {
 }
 
 // TestToken_createRefusesATransferHookThatIsNoContract: a token's transfer hook names a contract
-// (docs/CHAIN.md "x/token"): an account that is no contract is refused at creation, and so is a
+// (docs/whitepaper/technical-reference/vol2/40-economics.md "x/token"): an account that is no contract is refused at creation, and so is a
 // string that is no address.
 func TestToken_createRefusesATransferHookThatIsNoContract(t *testing.T) {
 	t.Parallel()
@@ -134,7 +134,7 @@ func TestToken_createShapeRefusals(t *testing.T) {
 // token; on a denom that was never created each is refused as not existing
 // (after its stateless checks), including norama itself: x/token cannot mint,
 // freeze or pause the chain's own denom (only x/emission mints norama,
-// docs/CHAIN.md). A zero amount and from == to are refused first.
+// docs/whitepaper/technical-reference/vol2/40-economics.md). A zero amount and from == to are refused first.
 func TestToken_messagesNeedAnExistingToken(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -186,7 +186,7 @@ func TestToken_bankSendOfUnknownFactoryDenomIsNotANoramaPayment(t *testing.T) {
 }
 
 // TestToken_bankSendHoldsTokenPowers: a token's pause holds on a plain x/bank
-// MsgSend too (docs/CHAIN.md "x/token": the bank send restriction), not only on
+// MsgSend too (docs/whitepaper/technical-reference/vol2/40-economics.md "x/token": the bank send restriction), not only on
 // x/token MsgTransfer. A faucet-funded key creates a token with the pause
 // power, mints to itself, pauses it, and the bank send is refused; after the
 // unpause the same send goes through.

@@ -148,7 +148,7 @@ func (s *Server) Close() error {
 // handleHealth reports readiness (503 while draining) and the room count.
 // With ?room=<id> it also reports whether that room has participants here: the
 // namespace gateway asks this to find the SFU that already hosts a room
-// (docs/WEBRTC.md#room-placement). A room that is empty, or absent, is false.
+// (website/src/docs/operator/webrtc-operations.mdx#room-placement). A room that is empty, or absent, is false.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.drainingMu.RLock()
 	draining := s.draining

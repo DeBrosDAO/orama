@@ -45,7 +45,7 @@ All internal services require authentication:
 - **Olric** — Memberlist gossip encrypted with a shared 32-byte key
 - **IPFS Cluster** — TrustedPeers restricted to known cluster peer IDs
 - **Internal WG endpoints** — Cluster secret required for peer management
-- **Vault** — Session token required for push/pull operations
+- **Vault** — Guardians require a session token and an Ed25519 ownership signature on every share read and write; the guardian port is reachable only over WireGuard (see [Vault guardians](/docs/operator/vault-guardians))
 - **WebSockets** — Origin header validated against the node's domain
 
 ## Data Protection
@@ -96,7 +96,7 @@ On OramaOS nodes, services get additional isolation via Linux namespaces and sec
 
 ### Binary Signing
 
-All build archives are signed with the Orama rootwallet (EVM signature). During installation, the signature is verified against the embedded public key. Unsigned or tampered archives are rejected.
+Nodes install only build archives signed by an address they trust. The list of trusted addresses (the trust anchor) is `/etc/orama/archive-signers` on every node, and there is no unsigned mode, no source-build mode and no built-in signer: a cluster trusts its operator's wallet. The archive's manifest lists the SHA-256 of every file, and the signature covers the manifest. Unsigned, tampered or wrongly signed archives are rejected before anything under `/opt/orama` changes. See [Signed archives](/docs/operator/signed-archives).
 
 ### OramaOS Image Signing
 
@@ -104,7 +104,7 @@ OramaOS images are signed with the same rootwallet. The agent verifies signature
 
 ### dm-verity
 
-OramaOS uses dm-verity on the root filesystem to detect any modification to the OS image at the block level. If the rootfs is tampered with, the kernel refuses to mount it.
+The OramaOS image can carry dm-verity hashes for the root filesystem, but dm-verity is not wired at boot today, so rootfs integrity is not enforced. See [OramaOS](/docs/operator/orama-os).
 
 ## WebSocket Security
 
@@ -116,7 +116,7 @@ Non-browser clients (which don't send an Origin header) are still allowed.
 
 - **SFU binds only to WireGuard IPs** — never exposed on public interfaces
 - **Forced relay mode** — `iceTransportPolicy: relay` enforced server-side, preventing direct peer connections
-- **HMAC credentials** — Per-namespace TURN shared secrets with 10-minute TTL
+- **HMAC credentials** — Per-namespace TURN shared secrets. REST and host-function credentials last 24h (they are minted once per call and not refreshed); credentials the SFU hands out on the signaling socket use the per-namespace TTL, 600s by default, and are refreshed
 - **TURN secrets encrypted at rest** — AES-256-GCM in the database
 
 ## Secrets Management
@@ -126,17 +126,15 @@ Cluster secrets are stored in `/opt/orama/.orama/secrets/`:
 | Secret | Purpose |
 |--------|---------|
 | `cluster-secret` | Cluster identity, used for internal endpoint auth |
-| `rqlite-password` / `rqlite-auth.json` | Written at genesis; **not** passed to `rqlited -auth` today |
+| `rqlite-password` / `rqlite-auth.json` | Written at genesis; `rqlited` starts with `-auth` and every client (node, gateway, CLI, installer) sends the `orama` user and this password |
 | `api-key-hmac-secret` | HMAC key for API key hashing |
 | `olric-encryption-key` | Olric memberlist gossip encryption |
 
 These are generated at cluster genesis and distributed to joining nodes via the encrypted join response over WireGuard.
 
-### RQLite HTTP auth is not currently enforced
+### RQLite HTTP auth
 
-`rqlite-auth.json` is generated and written to the secrets directory, but `rqlited` is **not** started with `-auth`, so its HTTP API does not require those credentials. The config field that would enable it (`RQLiteAuthFile` in `core/pkg/config/database_config.go`) is never assigned, so the `-auth` flag in `core/pkg/rqlite/process.go` is never added to the command line.
-
-What keeps the RQLite API off the public internet is the firewall. `rqlited` binds `0.0.0.0`, but `ufw` denies incoming by default and only opens 22, 80, 443 and 51820 -- plus 53 and the TURN ports on nodes that serve them -- with a blanket `allow from 10.0.0.0/24` for the WireGuard overlay. Anything that can reach `10.0.0.x:5001`, meaning any node in the mesh or any process on the node itself, can query RQLite without credentials.
+`rqlited` starts with `-auth`, so its HTTP API answers 401 to any request without the credentials in `rqlite-auth.json`. It binds only the node's WireGuard advertise address (`discovery.http_adv_address` in `node.yaml`, for example `10.0.0.1:10100`), never loopback and never a public interface, and ufw does not open the port. Namespace instances bind the `HTTP_ADDR` in their `/var/lib/orama-unit-env/<ns>/rqlite.env`. A 401 during a mixed-fleet upgrade means an old binary without the credentials is talking to a new `rqlited`; see [Troubleshooting](/docs/operator/troubleshooting#6-rqlite-returns-401-unauthorized).
 
 ## Security Checklist for Operators
 

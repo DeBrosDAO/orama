@@ -16,7 +16,7 @@ import (
 
 // Membership reporting: every join and leave is posted, in order, to a
 // namespace gateway, which publishes it on the namespace's pubsub
-// (docs/WEBRTC.md#membership-events).
+// (website/src/docs/developer/webrtc.mdx#membership-events).
 //
 // The SFU has no pubsub of its own, and the gateway a socket came through is
 // the one place that dies together with the socket: when that gateway restarts

@@ -19,7 +19,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Anonymity proxy (docs/GO_CLIENT_SDK.md "Anonymity Proxy",
+// Anonymity proxy (website/src/docs/developer/go-sdk.mdx "Anonymity Proxy",
 // core/pkg/gateway/anon_proxy_handler.go, anon_tunnel_handler.go).
 const (
 	anonPath   = "/v1/proxy/anon"
@@ -100,8 +100,8 @@ func TestAnonProxy_needsAUserNotAKey(t *testing.T) {
 
 // TestAnonProxy_requestLeavesThroughTor: a proxied request reaches the
 // destination through the anonymity network: the Tor project's checker sees
-// a Tor exit, never a fleet node's address (docs/GO_CLIENT_SDK.md "Request
-// proxy"). Every node runs the Tor client (docs/ARCHITECTURE.md index units).
+// a Tor exit, never a fleet node's address (website/src/docs/developer/go-sdk.mdx "Request
+// proxy"). Every node runs the Tor client (website/src/docs/contributor/architecture-reference.mdx index units).
 func TestAnonProxy_requestLeavesThroughTor(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -146,7 +146,7 @@ func TestAnonProxy_requestLeavesThroughTor(t *testing.T) {
 
 // TestAnonTunnel_refusals: the tunnel is a WebSocket for a signed-in user to
 // a public host on port 80 or 443; everything else is refused before any
-// dial (docs/GO_CLIENT_SDK.md "Anonymity tunnel").
+// dial (website/src/docs/developer/go-sdk.mdx "Anonymity tunnel").
 func TestAnonTunnel_refusals(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

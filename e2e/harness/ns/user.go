@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Routes and values this package relies on (docs/API_SURFACE.md).
+// Routes and values this package relies on (docs/whitepaper/technical-reference/appendices/i-api-surface.md).
 const (
 	PathCreate    = "/v1/namespaces"
 	PathStatus    = "/v1/namespace/status"

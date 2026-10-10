@@ -68,7 +68,7 @@ func decodeHex(t *testing.T, what, s string) []byte {
 }
 
 // TestGlobalBind_signsTheDocumentedStatement: `orama global bind` signs
-// orama-global-bind-v1|chain-id|operator|service|hex(pubkey) (docs/CHAIN.md
+// orama-global-bind-v1|chain-id|operator|service|hex(pubkey) (docs/whitepaper/technical-reference/vol2/37-global-nodes.md
 // "x/nodes" Messages) with an ed25519 seed and with a secp256k1 secret, prints
 // only the public key and signature, and each signature verifies here for
 // exactly that statement and no other chain id.
@@ -125,7 +125,7 @@ func TestGlobalBind_refusals(t *testing.T) {
 }
 
 // TestGroupCommands_listTheirSubcommands: `orama global` and `orama storage`
-// list the subcommands docs/CLI_REFERENCE.md names for them.
+// list the subcommands docs/whitepaper/technical-reference/appendices/d-cli-reference.md names for them.
 func TestGroupCommands_listTheirSubcommands(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)

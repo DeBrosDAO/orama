@@ -29,7 +29,7 @@ const { createClient } = require("@debros/orama"); // CommonJS
 `@debros/orama/chain` reads the Orama chain, builds and signs its transactions with a
 wallet or a local key, and describes them for an approval screen. It is a separate entry
 with its own optional peers (`@bufbuild/protobuf`, `@noble/curves`, `@noble/hashes`,
-`@scure/base`). See [the chain module](../docs/TS_SDK.md#the-chain-module).
+`@scure/base`). See [the chain module](../website/src/docs/developer/sdk-reference.mdx#the-chain-module).
 
 ## Running the examples
 

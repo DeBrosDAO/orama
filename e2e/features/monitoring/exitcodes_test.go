@@ -16,7 +16,7 @@ const reservedAddr = "203.0.113.250"
 
 // TestMonitor_usageErrorsExitTwo: an --interval outside 2s-60s, --config
 // without --ssh and an --interval under 15s with --ssh are refused as usage
-// before anything is contacted (docs/MONITORING.md "Flags"; core/cmd/orama/
+// before anything is contacted (website/src/docs/operator/monitoring.mdx "Flags"; core/cmd/orama/
 // internal/monitor/source.go ResolveInterval; clierr CodeUsage).
 func TestMonitor_usageErrorsExitTwo(t *testing.T) {
 	t.Parallel()
@@ -40,7 +40,7 @@ func TestMonitor_usageErrorsExitTwo(t *testing.T) {
 }
 
 // TestMonitor_noCredentialsExitThree: a machine with the environment but no
-// session is an auth error, and says how to sign in (docs/MONITORING.md: "A
+// session is an auth error, and says how to sign in (website/src/docs/operator/monitoring.mdx: "A
 // missing credential or an ended session is an auth error (3)").
 func TestMonitor_noCredentialsExitThree(t *testing.T) {
 	t.Parallel()
@@ -52,7 +52,7 @@ func TestMonitor_noCredentialsExitThree(t *testing.T) {
 }
 
 // TestMonitor_unknownNodeExitFour: --node naming a host not in the snapshot
-// is not found and lists the nodes that are (docs/MONITORING.md "--node").
+// is not found and lists the nodes that are (website/src/docs/operator/monitoring.mdx "--node").
 func TestMonitor_unknownNodeExitFour(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -87,7 +87,7 @@ func TestMonitor_nodeFilterByPublicAndOverlayAddress(t *testing.T) {
 
 // TestMonitor_reportIsTheDocumentedEnvelope: `report` is JSON without
 // --json, names the environment, counts every node, and its summary carries
-// the documented fields (docs/MONITORING.md "Report format": fields are only
+// the documented fields (website/src/docs/operator/monitoring.mdx "Report format": fields are only
 // added, never renamed or removed; the harness's decoder is pinned by
 // harness/monitor's drift test).
 func TestMonitor_reportIsTheDocumentedEnvelope(t *testing.T) {

@@ -60,7 +60,7 @@ func (h *herdCount) add(resp *gw.Response, err error) {
 // a sign-in challenge at the same moment from one address, unpaced. The
 // gateway serves up to its limit and answers the rest 429 with Retry-After;
 // nothing is a 5xx or a dropped connection, the gateway stays healthy, and
-// once the budget refills a paced sign-in works (docs/SECURITY.md; README
+// once the budget refills a paced sign-in works (docs/whitepaper/technical-reference/vol1/08-membership-and-failure-detection.md; README
 // "Pacing credential calls": this spends the run's budget, so it runs alone
 // and quiesces the run's pacer before and after).
 func TestChaosLifecycle_authChallengeThunderingHerd(t *testing.T) {

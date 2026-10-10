@@ -22,7 +22,7 @@ const electionBudget = 3 * time.Minute
 // TestQuorum_stopRefusedWhenItWouldBreakQuorum: with as many voters down as
 // the cluster can spare, stopping one more is refused as a conflict that names
 // the arithmetic and the way to force it, and removing it is refused before
-// anything changes (docs/CLI_REFERENCE.md "orama node stop", "orama node
+// anything changes (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node stop", "orama node
 // remove"). A cluster of n voters can spare n - (n/2+1): one of three, two of
 // five.
 func TestQuorum_stopRefusedWhenItWouldBreakQuorum(t *testing.T) {
@@ -64,7 +64,7 @@ func TestQuorum_stopRefusedWhenItWouldBreakQuorum(t *testing.T) {
 // TestLeaderLoss_survivorsElectAndServe: stopping the leader hands raft to a
 // survivor: every responsive node agrees on a new leader that is not the old
 // one, and when the old leader starts again it rejoins without splitting the
-// cluster (docs/CLI_REFERENCE.md "orama node stop": leadership transfers).
+// cluster (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node stop": leadership transfers).
 func TestLeaderLoss_survivorsElectAndServe(t *testing.T) {
 	f := harness.Fleet(t)
 	r := infra.RequireHealthy(t)

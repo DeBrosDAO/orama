@@ -6,29 +6,64 @@ This guide walks you through setting up a local development environment for cont
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Go | 1.24+ | Core network services (go.mod requires 1.24.6) |
-| Node.js | 18+ | SDK, website, tooling |
+| Go | 1.27.1+ | Core network services (`core/go.mod` requires 1.27.1) |
+| Node.js | 22.12+ | TypeScript SDK (20.19+), website (22.12+), tooling |
+| Zig | Latest | `orama build` cross-compiles the vault, and the gateway with cgo through `zig cc` (static musl) |
 | pnpm | Latest | Node.js package management |
 | Git | Latest | Version control |
 | Make | Latest | Build automation |
 
-Zig and WireGuard tools are only needed if you're working on the Vault guardian binary or deploying to production nodes — they are not required for general development.
+Zig is needed for `orama build`: it cross-compiles the vault with it, and the gateway with cgo through `zig cc` (static musl), because the gateway links `mattn/go-sqlite3` for namespace SQLite databases, which does not work in a `CGO_ENABLED=0` build. It is not required for running the unit tests. macOS or Linux works.
 
 ### Installing Prerequisites
 
 ```bash
 # macOS (via Homebrew)
-brew install go node pnpm git make
+brew install go node pnpm git make zig
 
 # Ubuntu/Debian
 sudo apt install -y golang-go nodejs npm git make
 npm install -g pnpm
 
 # Verify installations
-go version    # must be 1.24+
+go version    # must be 1.27.1+
 node --version
 pnpm --version
 ```
+
+
+## RootWallet and the deploy commands
+
+The RootWallet desktop app, open and unlocked, is required by every command in [Deployment](/docs/contributor/deployment) that reaches a node.
+
+There are no SSH keys on disk. Every command that reaches a node — `orama push`,
+`orama rollout`, `orama node setup`, `orama monitor report`, `orama ssh` — asks
+the RootWallet desktop app's agent for a wallet-derived key over a Unix socket
+at `~/.rootwallet/agent.sock`, writes it to a `0600` temp file for the length of
+the command, and wipes it afterwards. `RW_AGENT_SOCK` overrides the path.
+
+**Before a rollout: open the app and unlock it.** Then expect this:
+
+- **First run after a rebuild, one approval prompt.** Approval is keyed on the
+  hash of the calling binary, so every `make build` produces a new `orama` that
+  RootWallet has not seen before and asks about once.
+- **One unlock for the whole run.** The agent locks itself after 30 minutes of
+  no traffic, and a six-node rolling upgrade spends far longer than that in SSH
+  sessions the agent never sees. The CLI touches the agent every five minutes
+  for as long as it holds keys, so the window stays open until the command
+  finishes and closes immediately after.
+- **A command that seems to hang is usually a prompt.** Look at the desktop app.
+  A first run against a locked wallet waits up to two minutes for approval and
+  two more for the unlock before it gives up.
+
+If a command fails with a RootWallet error, the message says what to do; the
+codes are listed in
+[Troubleshooting](/docs/operator/troubleshooting#13-rootwallet-agent-locked-waiting-or-unreachable).
+
+Every command and flag the CLI defines is in the
+[CLI reference](/docs/developer/cli-reference), which is generated from the command tree and
+checked by a test, so it cannot drift from the code. This page covers the
+workflows.
 
 ## Cloning the Repository
 

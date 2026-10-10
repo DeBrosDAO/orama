@@ -22,5 +22,5 @@ covers:
     - orama-namespace-tor@.service
     - orama-namespace-ntfy@.service
   claims:
-    - "docs/MONITORING.md#namespace-dns-self-management: a node that cannot serve leaves DNS; a degraded subsystem does not take the node out"
-    - "docs/NAMESERVER_SETUP.md#record-lifecycle-and-self-healing: a silent node leaves the base round-robin after the 120s reap"
+    - "website/src/docs/operator/monitoring.mdx#namespace-dns-self-management: a node that cannot serve leaves DNS; a degraded subsystem does not take the node out"
+    - "website/src/docs/operator/nameserver.mdx#record-lifecycle-and-self-healing: a silent node leaves the base round-robin after the 120s reap"

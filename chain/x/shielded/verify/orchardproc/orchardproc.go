@@ -4,7 +4,7 @@
 //
 // What the split gives: a memory-corruption bug, a link problem or a hang in one verifier cannot
 // silently pass a bundle in the other. What it does not give: independence of the verification
-// logic, because both binaries call the same upstream crate. See docs/CHAIN.md.
+// logic, because both binaries call the same upstream crate. See docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md.
 //
 // Protocol (every frame length-prefixed, u32 big-endian):
 //

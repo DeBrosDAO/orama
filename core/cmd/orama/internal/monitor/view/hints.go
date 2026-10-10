@@ -8,7 +8,7 @@ import (
 )
 
 // commonProblemsDoc is where the runbooks for recurring failures live.
-const commonProblemsDoc = "docs/COMMON_PROBLEMS.md"
+const commonProblemsDoc = "orama.network/docs/operator/troubleshooting"
 
 // inspectSubsystems maps an alert subsystem to the `orama inspect
 // --subsystem` value that checks it in depth.
@@ -23,7 +23,7 @@ var inspectSubsystems = map[string]string{
 	"tor":       "tor",
 }
 
-// problemSections points a subsystem at the COMMON_PROBLEMS.md sections that
+// problemSections points a subsystem at the troubleshooting page sections that
 // cover it.
 var problemSections = map[string]string{
 	"rqlite":    "§6, §14, §15",

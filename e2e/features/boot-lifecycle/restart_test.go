@@ -32,7 +32,7 @@ func activeSince(t testing.TB, f *fleet.Fleet, n fleet.Node, unit string) int64 
 // hold quorum; it comes back on its own (no CLI), in dependency order
 // (overlay, then rqlite, then the gateway), and the cluster reconverges with
 // every node agreeing on the leader (core/e2e/lifecycle
-// TestReboot_oneNode_quorumIntact; docs/ARCHITECTURE.md unit ordering).
+// TestReboot_oneNode_quorumIntact; website/src/docs/contributor/architecture-reference.mdx unit ordering).
 func TestReboot_oneNodeQuorumIntact(t *testing.T) {
 	f := harness.Fleet(t)
 	r := infra.RequireHealthy(t)

@@ -46,12 +46,12 @@ covers:
     - /v1/operator/settings
     - /v1/operator/settings/
   claims:
-    - "docs/AUTH.md#the-lobby: namespace creation follows the cluster's setting: operators, allowlist or open"
-    - "docs/CLI_REFERENCE.md#orama-cluster-creators: an operator is not on the allowlist unless added; an empty list admits nobody"
-    - "docs/API_SURFACE.md#namespace-management: a wallet at its per-wallet cap is refused (NAMESPACE_QUOTA)"
-    - "docs/AUTH.md#operating-the-cluster: operator endpoints need a wallet on the operator list (NOT_AN_OPERATOR)"
-    - "docs/AUTH.md#which-key-signed-a-token: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
-    - "docs/CLI_REFERENCE.md#orama-operator-rotate-secrets: the walker is idempotent"
-    - "docs/AUTH.md#when-a-request-is-refused: TOO_MANY_CHALLENGES after ten unanswered challenges"
-    - "docs/API_SURFACE.md#operator: an operator removes a namespace whose owner can no longer delete it; its owner, not an operator, is refused"
-    - "docs/AUTH.md#signing-in: a nonce is single-use cluster-wide; concurrent verifies on every gateway have exactly one winner"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#a-lobby-instead-of-claiming-on-first-sign-in: namespace creation follows the cluster's setting: operators, allowlist or open"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster-creators: an operator is not on the allowlist unless added; an empty list admits nobody"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#namespace-management: a wallet at its per-wallet cap is refused (NAMESPACE_QUOTA)"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#the-decision-pipeline: operator endpoints need a wallet on the operator list (NOT_AN_OPERATOR)"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#key-rotation: rotate-signing-key publishes a new key; the outgoing one keeps verifying for one access-token lifetime; nobody is signed out"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-operator-rotate-secrets: the walker is idempotent"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table: TOO_MANY_CHALLENGES after ten unanswered challenges"
+    - "docs/whitepaper/technical-reference/appendices/i-api-surface.md#api-surface: an operator removes a namespace whose owner can no longer delete it; its owner, not an operator, is refused"
+    - "docs/whitepaper/technical-reference/vol1/13-identity.md#single-use-by-a-conditional-update-and-its-row-count: a nonce is single-use cluster-wide; concurrent verifies on every gateway have exactly one winner"

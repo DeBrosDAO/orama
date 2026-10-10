@@ -32,7 +32,7 @@ type raftStatus struct {
 // TestRQLite_raftIdentityMarkers: beside raft.db each node records the raft
 // id it started with (its peer id), the raft address it was last confirmed a
 // member at (its WireGuard address on 10101) and its suffrage
-// (core/pkg/rqlite/identity.go; docs/CLI_REFERENCE.md "orama node migrate-raft-id").
+// (core/pkg/rqlite/identity.go; docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node migrate-raft-id").
 func TestRQLite_raftIdentityMarkers(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -113,7 +113,7 @@ func TestRQLite_readConsistencyLevels(t *testing.T) {
 // TestSchema_inSyncEverywhere: every node's local schema is at the version
 // its binary requires (`orama node schema status`), `schema apply` on an
 // up-to-date database has nothing to do, and /v1/schema-status says so to any
-// credential and refuses none (docs/API_SURFACE.md "/v1/schema-status").
+// credential and refuses none (docs/whitepaper/technical-reference/appendices/i-api-surface.md "/v1/schema-status").
 func TestSchema_inSyncEverywhere(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -152,7 +152,7 @@ func TestSchema_inSyncEverywhere(t *testing.T) {
 
 // TestOperatorHealth_operatorsOnly: the detailed health is for operators: no
 // credential is 401, a signed-in wallet that operates nothing is 403
-// (docs/API_SURFACE.md: the detail is /v1/operator/health's).
+// (docs/whitepaper/technical-reference/appendices/i-api-surface.md: the detail is /v1/operator/health's).
 func TestOperatorHealth_operatorsOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

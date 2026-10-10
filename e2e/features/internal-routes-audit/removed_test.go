@@ -13,7 +13,7 @@ import (
 )
 
 // removedWebRTC are the three internal WebRTC endpoints that were removed
-// rather than authenticated (docs/SECURITY.md "Inter-gateway trust"), and
+// rather than authenticated (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Inter-gateway trust"), and
 // neverRoute a path under the same prefix that never existed: a removed
 // route must be indistinguishable from it.
 var (

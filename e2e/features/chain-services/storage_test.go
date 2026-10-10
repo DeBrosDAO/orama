@@ -165,7 +165,7 @@ type storageParams struct {
 // TestStorageQueries_paramsQueueAndCeilings: the genesis parameters these
 // tests rely on, a well-formed assignment queue, and the storage mint of the
 // last closed epoch: nothing minted (no provider proved anything) against a
-// ceiling of exactly 25% of that epoch's schedule (docs/CHAIN.md "The split").
+// ceiling of exactly 25% of that epoch's schedule (docs/whitepaper/technical-reference/vol2/40-economics.md "The split").
 func TestStorageQueries_paramsQueueAndCeilings(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

@@ -1,0 +1,202 @@
+# Signed archives
+
+Nodes install only build archives signed by an address they trust. The list of
+trusted addresses — the **trust anchor** — is `/etc/orama/archive-signers` on
+every node: root:root 0644 in a root-only directory, one lowercase `0x` address
+per line. There is no unsigned mode, no source-build mode and no built-in
+signer: a cluster trusts its operator's wallet, not a DeBros key.
+
+**Build.** `orama build` signs by default. It asks the RootWallet agent for its
+active account before compiling (a locked or absent wallet fails in seconds),
+then signs through the agent's `wallet:sign:orama-archive` capability (the
+request carries `purpose: "orama-archive"`) — the first time, RootWallet asks
+you to approve `orama` for archive signing, separately from `wallet:sign`, and
+shows the build's version, commit, date and signer rotation. The message signed (EIP-191
+`personal_sign`) is:
+
+```
+Orama build archive v1
+version: <version>
+commit: <commit>
+arch: <arch>
+date: <build date, RFC 3339>
+signers: <the --signers rotation, or none>
+manifest sha256: <hex SHA-256 of manifest.json exactly as archived>
+```
+
+The fixed first line means a signature your wallet gave any other application
+can never pass as a build signature, and the dialog shows a change of who is
+trusted before you approve it. A field with a character that is not printable
+(controls, line separators, bidirectional overrides) is refused. The build checks the signature with the
+same code every node runs before it writes the archive. The manifest lists the
+SHA-256 of every file the archive carries (binaries by name, templates as
+`systemd/<name>`, packages as `packages/<name>`), so nothing in the archive is
+outside the signature. `--unsigned` builds an archive for local inspection
+only; no node installs it. `orama node rollout` builds a signed archive the
+same way.
+
+**Auto-update check.** `orama node autoupdate --current <ver> --candidate <ver>`
+reports whether a newer release should be installed. The cluster default is
+`notify`: the command prints `notify` and does not swap binaries. `auto`
+prints `upgrade` only when the cluster is not degraded, a majority of raft
+voters are up, the candidate is a newer dotted version on the cluster's
+channel, and the hour is inside `--window` when one is set. A downgrade, a
+release marked `--bad`, and a TUF failure (`--verify rollback|freeze|threshold|hash`)
+print `refuse`. `--role validator` with `--mode auto` is an error: a
+validator may be `off` or `notify`, never `auto`; its chain binary is changed by
+hand: the unit `orama global install` writes runs `oramad` under cosmovisor,
+so a new binary goes in through `orama global stage-oramad --upgrade <plan>`
+(see the technical reference's global nodes chapter (`docs/whitepaper/technical-reference/vol2/37-global-nodes.md`, "Cosmovisor staging") and
+[Run a global node](/docs/blockchain/run-a-global-node)); installing again with different
+`oramad` bytes is refused. This command does not take
+a lease and does not restart a node. `max_parallel` is 1; a higher value is
+rejected.
+
+**Auto-update install (library).** `autoupdate.Upgrade` is what installs a
+release on one node once the decision is `upgrade`. It refuses any mode but
+`auto` and any validator. It runs the caller's verification first (the A4 TUF
+check of the archive, `releaseverify.CheckFile`); a failure there changes
+nothing. Then: the caller's stop, and for each binary a stage step (the
+verified file copied beside the live one as `<name>.next`, with the live
+binary's mode and owner, synced) and a swap step (the live binary hard-linked
+to `<name>.prev`, then `<name>.next` renamed over it, so the path is never
+missing), the caller's start (a failed start is stopped again), and the
+`pkg/nodehealth` gate — the same check `orama node start` and `orama node
+upgrade` wait on. A failure undoes what ran, last first (stop, each `.prev`
+renamed back, start), and reads the gate again; the error says whether the
+node came back on the previous release. `Upgrade` reports the release bad only
+when the new binaries ran and failed — the start or the health gate; a failed
+stop, copy or rename is an error about the node and does not mark the release
+bad. Verification and the stage step read each new file by path in turn, so
+the caller must keep the new files in a directory only root can write (the
+0700 staging directory stage-archive extracts into). `<name>.prev` stays after a
+successful swap. The rollout lease (`autoupdate.LockName`) is not taken by
+`Upgrade`; the caller must hold it. Nothing in the CLI calls `Upgrade` yet:
+there is no timer, no metadata fetch, and no command that installs through
+it, and it does not re-apply file capabilities (`setcap`) to a swapped
+binary.
+
+**Push.** `orama push` uploads into a fresh `mktemp -d` directory on each node
+and runs the node's **installed** CLI, `/usr/local/bin/orama node
+stage-archive`. Under a lock on `/opt/orama` that install and upgrade share, it
+removes staging (and setup CLI) directories an interrupted run left, extracts the upload into a
+private directory (regular files and directories under the archive's own paths
+only; at most 1024 entries, 512 MiB per file, 4 GiB in all; modes set
+explicitly), verifies the signature against the node's anchor, every file
+against the signed manifest and the architecture against the node's, makes
+`bin/` and its binaries root:orama 0750, and only then swaps `manifest.json`,
+`manifest.sig`, `bin/`, `systemd/` and `packages/` into place — the old
+manifest out first and the new one in last, and everything put back if any
+step fails. A refused archive leaves `/opt/orama` exactly as it was; this
+matters because systemd runs `orama-node`, the gateway, SFU, TURN and vault
+straight from `/opt/orama/bin`. Because the verifier is the node's installed
+CLI, push reaches only installed nodes; a fresh machine gets its first archive
+from `orama node setup` (or `orama node install --remote`).
+
+**Release root (opt-in).** A node that has adopted a TUF release root — a
+`root.json` placed at `/etc/orama/release-root.json` by its operator; no
+command writes that file yet — can require it when it stages:
+`orama node stage-archive --archive <file> --release-metadata <dir>
+--release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
+`targets.json`. The archive is first copied into the node's 0700 staging
+directory under `/opt/orama`; that copy is what is checked and what is
+extracted. Before anything is extracted, `pkg/releaseverify` checks the
+metadata against the adopted root (every role at its threshold, an unexpired
+timestamp, a snapshot no older than the one recorded in
+`/etc/orama/release-seen.json`, which is read and raised under a `flock` on
+`release-seen.json.lock`) and checks, through the descriptor that wrote the
+copy, that it has the length and hashes `<name>` has in the verified targets.
+Any failure — no adopted root, a tampered archive, an
+expired timestamp, metadata signed under another root, an older snapshot —
+refuses the archive and leaves `/opt/orama` untouched; the command never falls
+back to the wallet-only path when these flags are given, and giving only one of
+the two is an error. An archive that passes is then verified against the
+wallet anchor exactly as above: the release root is required **in addition to**
+the operator's wallet signature, not in place of it. Without these flags
+nothing changes. `orama push`, `orama node setup` and `orama node upgrade` do
+not pass them, and no command fetches release metadata; the operator supplies
+the directory.
+
+**First install.** A new machine has no verified binary of its own: the one
+that runs the install comes out of the archive. So `orama node setup` and
+`orama node install --remote --archive <path>` verify the archive **on your
+machine** — against your RootWallet account (setup) or `--operator-wallet`
+(`--remote`) — check that it is built for the node's architecture (`uname -m`),
+and upload not the file you named but a canonical archive written from the
+verified files, into a `mktemp -d` directory. On the node, `/opt/orama` must be root's alone; only the
+CLI is extracted first, into a root-only directory under it; it runs only if
+its SHA-256 is the one in the verified manifest, and it puts the archive in
+place with `node stage-archive` — the verification, lock and crash-safe swap a
+push uses (creating the anchor from your wallet on a machine that has none).
+Setup is skipped only when the node already has exactly this manifest **and** a
+CLI with its checksum.
+
+**Install and upgrade.** Phase 2b holds the `/opt/orama` lock, verifies the
+extracted archive against the anchor (architecture before any rotation) and only
+then copies anything to `/usr/local/bin` and installs the privileged helper;
+namespace templates are installed under the same lock. No archive, an unreadable manifest, a missing `manifest.sig`,
+an untrusted signer, a file that does not match or is not listed, another
+architecture, or a missing or empty anchor fails the install or upgrade with
+the reason. An upgrade runs the same check (without changing anything) before
+it stops any service, so an archive Phase 2b would refuse never takes the node
+down. A genesis install requires `--operator-wallet` (EIP-55 checked when given in
+mixed case) and creates the anchor from it **before** Phase 2b — only after the
+archive has verified against it, so a mistyped wallet writes nothing — and drops
+any rotation mark an earlier cluster left; an existing anchor must trust exactly
+that wallet. The first archive must therefore be signed by that wallet (see
+[Node Setup](/docs/operator/node-setup)). A joining node installs Tor and checks
+the archive — present, built for this node, every file matching its signed
+manifest — **before** it requests the join, so an archive that cannot be
+installed never spends the invite; then it writes the anchor (and rotation mark)
+the minting node returns in the join response. That list is served by the
+minting node's gateway, which runs as the orama user, so setup passes
+`--expect-archive-signers` — the `--join-via` node's anchor read over your SSH,
+or else your wallet. The joiner sends that expectation in the join request, and
+the minting node refuses a mismatch (HTTP 409, naming the list it trusts)
+before it spends the invite or writes a peer row; the joiner also refuses a
+response naming anything else. A cluster that trusts more than your wallet is
+joined with `--join-via`. A
+node without an anchor refuses to admit anyone, before the invite is spent.
+
+**Rotating signers.** `orama build --signers 0xA,0xB` writes that list into the
+signed manifest. A node that verifies the archive against its current anchor
+rewrites the anchor to exactly that list in Phase 2b (atomically, root-owned).
+The list must include the account signing the build — so the archive still
+verifies after the rotation, and re-running an interrupted upgrade, or a join
+through a node that already rotated, installs it again. Retiring a key
+therefore takes two builds: the old key signs one that adds the new key
+(`--signers 0xOld,0xNew`), then the new key signs one that drops the old
+(`--signers 0xNew`). Each node records the build date of the last rotation it
+took (`/etc/orama/archive-signers.rotated`, written before the anchor and copied
+to joining nodes) and accepts a rotation only from a build at least that new —
+the same date resumes an interrupted rotation of that build — and never moves
+the mark to a date more than an hour ahead of its clock (nor takes such a mark
+from a join), so an older signed build cannot be
+replayed to bring a retired key back. A list of at most 32 signers. Nodes that miss a rotating build still
+trust the old list, so roll it out everywhere before the next one. Signature
+checks prove who built an archive, not that it is the newest: rolling a node
+back to an older build signed by a trusted key is allowed.
+
+**Nodes installed before archive signing** have no anchor, and a plain push
+refuses them until they get one. Create it with the push that carries the first
+signed build:
+
+```bash
+orama push --env devnet --archive <path> --trust-signers 0xYourWallet
+```
+
+A push with `--trust-signers` does not use the node's installed CLI at all, so
+it also reaches 0.122.x nodes, whose CLI has no `node stage-archive`. It stages
+the way `orama node install --remote` does: the archive is verified **on your
+machine** against `--trust-signers`, and what is uploaded is a canonical archive
+written from the verified files; on each node only `bin/orama` is extracted —
+into a root-only `mktemp -d` directory under `/opt/orama`, which must be root's
+and writable only by root — and it runs only if its SHA-256 is the one the
+verified manifest lists. That CLI then runs `node stage-archive --trust-signers
+…`, which verifies the archive again: against the node's anchor when it has one
+(which must then be exactly `--trust-signers`), and otherwise against
+`--trust-signers`, writing the anchor only after the archive passed. A mistyped
+address fails that push and leaves nothing behind. A new anchor never inherits
+a rotation mark left beside a removed one. `--trust-signers` never changes an
+existing anchor (that is what `--signers` is for). The script reaches the node
+base64-encoded on a pipe into `bash -s`, so a shell that wraps the command cannot reinterpret it.

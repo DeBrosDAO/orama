@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// JWKS routes (docs/API_SURFACE.md "Health and version", "Authentication").
+// JWKS routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Health and version", "Authentication").
 const (
 	pathJWKS      = "/v1/auth/jwks"
 	pathWellKnown = "/.well-known/jwks.json"
@@ -66,7 +66,7 @@ func fetchJWKS(t testing.TB, c *gw.Client, path string) map[string]jwk {
 // TestJWKS_publishesEveryLiveKey: both JWKS routes serve the same keys; every
 // EdDSA key carries its kid, curve, 32-byte x and the namespace it is bound
 // to; the key that signed a fresh lobby token is there, bound to nothing
-// (docs/AUTH.md#which-key-signed-a-token).
+// (docs/whitepaper/technical-reference/vol1/13-identity.md#the-http-surface).
 func TestJWKS_publishesEveryLiveKey(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

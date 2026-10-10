@@ -54,7 +54,7 @@ func deployTodoAPI(t *testing.T) (*realistic.Tenant, string) {
 // function and caches each list, all as itself; each user sees exactly their
 // own todos, a second read comes from the cache, sessions refresh with a
 // device proof mid-journey, and nobody gets in without a session
-// (docs/DEPLOYMENT_GUIDE.md "Your app's own credential", docs/AUTH.md "Devices").
+// (website/src/docs/developer/deployments.mdx "Your app's own credential", docs/whitepaper/technical-reference/vol1/14-authorization.md "Devices").
 func TestReferenceNodeAPI_signedInUsersJourney(t *testing.T) {
 	t.Parallel()
 	tn, u := deployTodoAPI(t)

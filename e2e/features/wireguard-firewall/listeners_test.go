@@ -15,7 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 )
 
-// Ports a node may listen on at a public address (docs/ARCHITECTURE.md edge
+// Ports a node may listen on at a public address (website/src/docs/contributor/architecture-reference.mdx edge
 // ports, core/pkg/install/firewall.go GenerateRules): SSH, HTTP(S), WireGuard;
 // DNS on a nameserver; TURN while the host relays; the global layer's ports
 // on a global node. DHCP (68, and DHCPv6's 546 on the link-local address) is
@@ -83,7 +83,7 @@ func private(addr string) bool {
 // TestListeners_onlyEdgePortsPublic: on every node, a socket bound to a
 // public address (a wildcard or the node's own public IP) is one of the
 // documented edge ports; everything else binds loopback or the WireGuard
-// address (docs/SECURITY.md "Listeners on the overlay, not every interface",
+// address (docs/whitepaper/technical-reference/vol1/09-namespaces.md "Listeners on the overlay, not every interface",
 // "Local APIs bind loopback").
 func TestListeners_onlyEdgePortsPublic(t *testing.T) {
 	t.Parallel()

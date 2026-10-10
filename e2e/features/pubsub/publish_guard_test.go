@@ -20,7 +20,7 @@ const (
 	// codeReservedKey is the answer to a payload carrying the reserved `_orama` key.
 	codeReservedKey = "PUBSUB_RESERVED_KEY"
 	// grantCacheBudget: a grant taken away reaches the data plane within the
-	// gateway's ten-second grant cache (docs/AUTH.md), plus the round trip.
+	// gateway's ten-second grant cache (docs/whitepaper/technical-reference/vol1/14-authorization.md), plus the round trip.
 	grantCacheBudget = 25 * time.Second
 )
 
@@ -28,7 +28,7 @@ const (
 // wallet that holds no grant in the namespace is an application's end user. It
 // keeps the data plane and may subscribe, but publishing is refused with
 // INSUFFICIENT_SCOPE and a message naming the remedy, on publish and
-// publish-batch alike (docs/AUTH.md, bugboard #733). The wallet gets there as
+// publish-batch alike (docs/whitepaper/technical-reference/vol1/14-authorization.md, bugboard #733). The wallet gets there as
 // an end user would: its session outlives its grant.
 func TestPublishGuard_walletWithNoGrantMaySubscribeButNotPublish(t *testing.T) {
 	t.Parallel()
@@ -56,7 +56,7 @@ func TestPublishGuard_walletWithNoGrantMaySubscribeButNotPublish(t *testing.T) {
 // TestPublishGuard_reservedKeyIsRefusedForEveryCaller: `_orama` marks events
 // the platform itself publishes, so no publish route carries it, not even for
 // the namespace owner; the batch is refused whole, naming the item, and
-// ordinary payloads are unaffected (docs/SERVERLESS.md, bugboard #733).
+// ordinary payloads are unaffected (website/src/docs/developer/functions.mdx, bugboard #733).
 func TestPublishGuard_reservedKeyIsRefusedForEveryCaller(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -80,7 +80,7 @@ const codeReservedTopic = "PUBSUB_RESERVED_TOPIC"
 // TestPublishGuard_reservedTopicIsThePlatforms: topics under `_orama/` (the
 // WebRTC membership events) are the platform's. No credential, the owner's
 // included, publishes to one; a signed-in user holding no grant may not
-// subscribe to one; a grant that covers the topic may (docs/AUTH.md "Reserved
+// subscribe to one; a grant that covers the topic may (docs/whitepaper/technical-reference/vol1/14-authorization.md "Reserved
 // pub/sub topics").
 func TestPublishGuard_reservedTopicIsThePlatforms(t *testing.T) {
 	t.Parallel()

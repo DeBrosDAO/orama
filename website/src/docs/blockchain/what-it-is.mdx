@@ -6,23 +6,30 @@ Application traffic does not go through this ledger. A database query, a deploy,
 
 ## What is wired
 
-Auth, bank, staking, slashing, distribution, consensus parameters, upgrade, genesis utilities, evidence, and feegrant. Three Orama modules sit on top of those:
+The stock modules are auth, bank, staking, slashing, distribution, consensus parameters, upgrade, genesis utilities, evidence, and feegrant. The Orama modules on top of them are:
 
 - `x/emission` mints new coins, once per epoch.
 - `x/fees` charges a base fee, burns it, and keeps earnings accounts.
+- `x/token` creates factory tokens with fixed capabilities (pause, freeze, non-transferable, transfer fee).
 - `x/power` decides the voting power CometBFT actually uses.
+- `x/nodes` records operators, nodes, role bonds and service-key bindings.
+- `x/storage`, `x/archive` and `x/relay` run storage deals, the history registry and relay rewards.
+- `x/houses` is the governance module: two houses, proposals, votes and timelocks.
+- `x/wasmpolicy` sets what contracts may do, and wasmd's `x/wasm` runs them. A binary built without cgo or with `-tags nowasm` does not link the contract VM and refuses to start a node whose genesis claims the wasm module.
+- `x/cnft` and `x/market` hold compressed NFTs and the market that trades them.
+- `x/shielded` is the shielded pool.
 
 `x/staking` still holds bonds, delegations, unbonding, and jailing. It does not publish the validator set. `x/power` does.
 
 ## What is not wired
 
-There is no governance module. Nothing on the chain can vote to change the emission table. The code treats that change as a hard fork.
+The SDK's `x/gov` is not wired. Governance is `x/houses`, and its rules are floors in code that no vote can lower. A vote can change the emission split between its recipients, schedule a software upgrade and a few other things the proposal types list, but it cannot change the emission schedule: the code treats that as a hard fork.
 
-There is no IBC, no EVM, no CosmWasm, no NFT module, no group module, and no authz. The stock mint module is not wired. `x/emission` replaces it.
+There is no IBC, no EVM, no group module, no authz, no `x/nft`, and no `x/circuit` or `x/crisis`. The stock mint module is not wired. `x/emission` replaces it. `x/inclusion` is a library the application calls from its block handlers, not a module.
 
-Shielded transfers are not implemented. Fee comments refer to a shielding design. No module in this binary hides a transfer.
+The distribution module is wired, and its community tax defaults to zero, because the chain has no path that spends a community pool. Epoch rewards are not paid through that module. `x/power` pays them.
 
-The distribution module is wired, and its community tax is set to zero, because there is no governance module that could spend a community pool. Epoch rewards are not paid through that module. `x/power` pays them.
+The module by module description is in the technical reference (`docs/whitepaper/technical-reference/vol2/39-chain-architecture.md`, "The module set").
 
 ## Addresses and the unit
 

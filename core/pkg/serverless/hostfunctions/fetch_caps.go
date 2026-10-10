@@ -13,7 +13,7 @@ import (
 
 // Fetch capabilities (bugboard #266): a function running for a device mints the
 // tokens a correspondent downloads one stored object with, without presenting
-// an identity (docs/SERVERLESS.md#storage-fetch-capabilities).
+// an identity (website/src/docs/developer/functions.mdx#storage-fetch-capabilities).
 
 var errNoFetchCapIssuer = errors.New("this gateway cannot mint fetch capabilities: it has no cluster secret")
 

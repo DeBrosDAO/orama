@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Ephemeral state limits (docs/SERVERLESS.md#ephemeral-state-ws-subscribe-tracked;
+// Ephemeral state limits (website/src/docs/developer/functions.mdx#ephemeral-state-ws-subscribe-tracked;
 // core/pkg/serverless/ephemeral_state.go).
 const (
 	ephMaxPayload = 16 << 10

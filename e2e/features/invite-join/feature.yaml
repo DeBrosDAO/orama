@@ -23,11 +23,11 @@ covers:
     - /v1/operator/invite
     - /v1/internal/join
   claims:
-    - "docs/SECURITY.md#authentication: a node signs with an Ed25519 key it generated itself; the cluster holds only the public half in node_credentials"
-    - "docs/SECURITY.md#supply-chain: a joiner expecting other archive signers is refused with 409 before the invite is spent or a peer row written"
-    - "docs/SECURITY.md#tls--transport: the invite carries the SHA-256 of the certificate the minting node serves"
-    - "docs/SECURITY.md#supply-chain: invite tokens are stored as sha256 hashes, never the token"
-    - "docs/CLI_REFERENCE.md#orama-invite: the gateway caps an invite at 1h"
-    - "docs/CLI_REFERENCE.md#orama-invite: --expiry is how long the invite stays usable"
-    - "docs/CLI_REFERENCE.md#orama-node-invite: the default expiry is 1h and --raw prints only the invite"
-    - "docs/AUTH.md#operating-the-cluster: the invite route refuses no credential (401) and a non-operator (403 NOT_AN_OPERATOR)"
+    - "docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md#the-join-handler: a node signs with an Ed25519 key it generated itself; the cluster holds only the public half in node_credentials"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: a joiner expecting other archive signers is refused with 409 before the invite is spent or a peer row written"
+    - "docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md#minting-an-invite: the invite carries the SHA-256 of the certificate the minting node serves"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: invite tokens are stored as sha256 hashes, never the token"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-invite: the gateway caps an invite at 1h"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-invite: --expiry is how long the invite stays usable"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-invite: the default expiry is 1h and --raw prints only the invite"
+    - "docs/whitepaper/technical-reference/vol1/14-authorization.md#refusals-and-the-error-code-table: the invite route refuses no credential (401) and a non-operator (403 NOT_AN_OPERATOR)"

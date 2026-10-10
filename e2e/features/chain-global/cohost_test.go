@@ -83,7 +83,7 @@ func requireHiddenInUnit(t *testing.T, c *chain.Chain, n fleet.Node, pid, path s
 
 // TestCoHost_stateOwnedByTheChainUser: the chain home is orama-chain's, mode
 // 0700; the consensus key inside is 0600; the binary is root's, not
-// writable by the chain user (docs/CHAIN.md "The stagenet deploy script").
+// writable by the chain user (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The stagenet deploy script").
 func TestCoHost_stateOwnedByTheChainUser(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -105,7 +105,7 @@ func TestCoHost_stateOwnedByTheChainUser(t *testing.T) {
 // TestCoHost_p2pOnWireGuardRPCOnLoopback: p2p (31000) listens only on the
 // node's WireGuard address; RPC, gRPC, REST and Prometheus (31001-31004)
 // only on loopback; nothing of the chain listens on every interface; the
-// firewall opens none of those ports to the internet (docs/CHAIN.md: "p2p
+// firewall opens none of those ports to the internet (docs/whitepaper/technical-reference/vol2/37-global-nodes.md: "p2p
 // public, RPC, gRPC, REST and Prometheus on loopback"; the run keeps p2p on
 // the overlay).
 func TestCoHost_p2pOnWireGuardRPCOnLoopback(t *testing.T) {
@@ -148,7 +148,7 @@ const clusterPreferences = "/opt/orama/.orama/preferences.yaml"
 
 // TestCoHost_clusterNodeKeepsItsClusterRole: installing the chain beside a
 // cluster node leaves the node's preferences on the cluster role, so
-// orama-node keeps booting the cluster graph (docs/ARCHITECTURE.md, node
+// orama-node keeps booting the cluster graph (website/src/docs/contributor/architecture-reference.mdx, node
 // roles): the role is neither global nor both, and WireGuard, which only the
 // cluster graph starts, is up.
 func TestCoHost_clusterNodeKeepsItsClusterRole(t *testing.T) {

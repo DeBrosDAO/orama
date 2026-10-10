@@ -35,9 +35,9 @@ const (
 
 // TestPhaseB5_monitorReportsTheChain: the operator's monitor report carries
 // a responsive chain section for every node running the chain (B5;
-// docs/MONITORING.md "chain").
+// website/src/docs/operator/monitoring.mdx "chain").
 func TestPhaseB5_monitorReportsTheChain(t *testing.T) {
-	phase(t, "B5", "docs/MONITORING.md", "Only on a node with `orama-global-chain.service`", trackB+" B5")
+	phase(t, "B5", "website/src/docs/operator/monitoring.mdx", "Only on a node with `orama-global-chain.service`", trackB+" B5")
 	f := harness.Fleet(t)
 	nodes := chainNodes(t, f)
 	r := monitor.Fetch(t, harness.CLI(t), f.State.Env)
@@ -58,10 +58,10 @@ func TestPhaseB5_monitorReportsTheChain(t *testing.T) {
 
 // TestPhaseB6_unverifiedOramadIsNotStaged: stage-oramad refuses a binary
 // that does not verify against the adopted release root and stages nothing
-// in the cosmovisor layout (B6; docs/CLI_REFERENCE.md "orama global
+// in the cosmovisor layout (B6; docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama global
 // stage-oramad").
 func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
-	phase(t, "B6", "docs/CLI_REFERENCE.md", "### orama global stage-oramad", trackB+" B6")
+	phase(t, "B6", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama global stage-oramad", trackB+" B6")
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
 	metaDir := "/var/tmp/e2e-b6-meta-" + f.State.RunID
@@ -84,7 +84,7 @@ func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
 // lifecycle commands exist and report the running chain in order (B7). Not
 // applicable until the checkout documents `orama global status`.
 func TestPhaseB7_globalLifecycleCommands(t *testing.T) {
-	phase(t, "B7", "docs/CLI_REFERENCE.md", "### orama global status", trackB+" B7")
+	phase(t, "B7", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama global status", trackB+" B7")
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
 	res := onNode(t, f, n, "global", "status")
@@ -96,9 +96,9 @@ func TestPhaseB7_globalLifecycleCommands(t *testing.T) {
 // TestPhaseC_chainProducesBlocks: the L1 of track C runs on the fleet and
 // makes blocks. Its modules are asserted by the chain packages (chain-core
 // and the stage 8 packages); this is the phase's acceptance that the chain
-// the modules live in is alive (docs/CHAIN.md "What's running").
+// the modules live in is alive (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "The module set").
 func TestPhaseC_chainProducesBlocks(t *testing.T) {
-	phase(t, "C", "docs/CHAIN.md", "### Modules wired", trackC)
+	phase(t, "C", "docs/whitepaper/technical-reference/vol2/39-chain-architecture.md", "### The module set", trackC)
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
 	first := chainHeight(t, f, n)
@@ -124,9 +124,9 @@ func chainHeight(t *testing.T, f *fleet.Fleet, n fleet.Node) int64 {
 // TestPhaseD_sealedSlotsOpenOnlyWithTheSeeds: a private file sealed for a
 // storage deal gives one different ciphertext per slot, each opens back to
 // the file with the right seeds, and a wrong seed opens nothing and writes
-// nothing (D3; docs/CHAIN.md "Client side").
+// nothing (D3; docs/whitepaper/technical-reference/vol2/41-storage-deals.md "Client side").
 func TestPhaseD_sealedSlotsOpenOnlyWithTheSeeds(t *testing.T) {
-	phase(t, "D", "docs/CLI_REFERENCE.md", "### orama storage seal", trackD+" D3")
+	phase(t, "D", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama storage seal", trackD+" D3")
 	cli := harness.CLI(t).NoWallet(t)
 	dir := t.TempDir()
 	plain := randomFile(t, dir, "plain.bin", 20<<10)
@@ -151,12 +151,12 @@ func TestPhaseD_sealedSlotsOpenOnlyWithTheSeeds(t *testing.T) {
 }
 
 // TestPhaseE_torListensOnlyWhereARoleIsInstalled: track E (the Orama Tor
-// network, docs/TOR_NETWORK.md) is delivered as opt-in roles. A node publishes
+// network, website/src/docs/operator/tor-network.mdx) is delivered as opt-in roles. A node publishes
 // a Tor listener only for a role it was installed with: the ORPort for a
 // relay or an authority, the DirPort for an authority, and the node's own Tor
 // client stays on loopback. The roles themselves are tor-network.
 func TestPhaseE_torListensOnlyWhereARoleIsInstalled(t *testing.T) {
-	phase(t, "E", "docs/TOR_NETWORK.md", "Orama Tor network", trackE)
+	phase(t, "E", "website/src/docs/operator/tor-network.mdx", "Orama Tor network", trackE)
 	f := harness.Fleet(t)
 	for _, n := range f.State.Nodes {
 		dirauth := f.Unit(t, n, constants.GlobalTorDirauthUnit) == "active"
@@ -178,9 +178,9 @@ func TestPhaseE_torListensOnlyWhereARoleIsInstalled(t *testing.T) {
 // TestPhaseF_nodesTrustTheOperatorWallet: every node trusts archives signed
 // by the operator's RootWallet (purpose orama-archive through the agent) and
 // nothing else: /etc/orama/archive-signers names exactly the run's operator
-// (F1/F8 as far as they shipped; docs/SECURITY.md "Signing").
+// (F1/F8 as far as they shipped; docs/whitepaper/technical-reference/vol1/36-sdks.md "Signing").
 func TestPhaseF_nodesTrustTheOperatorWallet(t *testing.T) {
-	phase(t, "F", "docs/SECURITY.md", "wallet:sign:orama-archive", trackF)
+	phase(t, "F", "website/src/docs/operator/signed-archives.mdx", "wallet:sign:orama-archive", trackF)
 	f := harness.Fleet(t)
 	want := strings.ToLower(f.State.OperatorAddress)
 	for _, n := range f.State.Nodes {

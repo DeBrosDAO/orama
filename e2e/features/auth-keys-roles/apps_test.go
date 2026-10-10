@@ -22,7 +22,7 @@ type appGrant struct {
 
 // TestAppGrants_dataPlaneOnly: a deployment may be granted runtime or reader,
 // narrowed or not; it may never be granted the control plane — admin, owner
-// or developer (docs/AUTH.md#a-workloads-identity: "A deployment cannot be
+// or developer (docs/whitepaper/technical-reference/vol1/14-authorization.md#workloads-get-identity-and-no-grants-by-default: "A deployment cannot be
 // granted the control plane"). Every refusal is a client error.
 func TestAppGrants_dataPlaneOnly(t *testing.T) {
 	t.Parallel()
@@ -94,7 +94,7 @@ func TestAppGrants_cli(t *testing.T) {
 
 // TestRenew_onlyAWorkloadRenewsItself: a user session is renewed by its
 // refresh token, never at /v1/auth/renew; neither can a key or nothing
-// (docs/AUTH.md#a-workloads-identity). These are the refusals only: the
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#workloads-get-identity-and-no-grants-by-default). These are the refusals only: the
 // positive path, a deployed workload renewing its own token, needs a running
 // app and is asserted by features/reference-apps.
 func TestRenew_onlyAWorkloadRenewsItself(t *testing.T) {

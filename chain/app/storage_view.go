@@ -17,7 +17,7 @@ import (
 // storageNodes is the storage module's view of x/nodes. IsActive is the STORAGE
 // role's own activity, not the node's: a node bonded only on another role is not a
 // storage provider. Network16 is derived from the node's endpoints and ASN is the
-// operator's declaration; neither is verified on chain (docs/CHAIN.md, "Node
+// operator's declaration; neither is verified on chain (docs/whitepaper/technical-reference/vol2/37-global-nodes.md, "Node
 // network identity").
 type storageNodes struct {
 	nodes nodeskeeper.Keeper

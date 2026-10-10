@@ -402,7 +402,7 @@ The book gate scales with the number of chapters and tracked files: it runs `git
 
 ### The cluster trusts its operator's wallet, not a DeBros key
 
-*Chosen:* the anchor is seeded from `--operator-wallet`, copied on join, rotated by signed builds. *Rejected:* a signer baked into the binary, or a certificate authority. *Why:* the code comment on the anchor and `docs/SECURITY.md` state the position: no built-in signer; a cluster is the operator's. The cost is that key loss or compromise is the operator's problem, with rotation as the only tool.
+*Chosen:* the anchor is seeded from `--operator-wallet`, copied on join, rotated by signed builds. *Rejected:* a signer baked into the binary, or a certificate authority. *Why:* the code comment on the anchor and `website/src/docs/operator/signed-archives.mdx` state the position: no built-in signer; a cluster is the operator's. The cost is that key loss or compromise is the operator's problem, with rotation as the only tool.
 
 ### A domain-separated message with a purpose enforced by the agent
 
@@ -452,7 +452,7 @@ The book gate scales with the number of chapters and tracked files: it runs `git
 - **`core/debian/` is dead and wrong.** No workflow or target uses it; `control` says `Version: 0.69.20` and the `postinst`, like the one in `release-apt.yml`, tells users to run `orama install`, which does not exist (`orama node install`).
 - **`core/Makefile` advertises targets that do nothing.** `deps`, `tidy`, `fmt`, `vet` and `lint` are declared `.PHONY` and listed in `make help` but have no recipe, so `make lint` prints "Nothing to be done". `install-hooks` runs `scripts/install-hooks.sh`, which does not exist. `core/.githooks/pre-commit` needs `scripts/update_changelog.sh` and a `CHANGELOG.md`, neither of which exists, and nothing sets `core.hooksPath`. The comment above `docs:` is the stale tail of the `bump` comment.
 - **Workflow actions are pinned inconsistently.** `release.yaml`, `release-apt.yml` and `publish-sdk.yml` pin actions by commit SHA; `ci.yml` and `security.yml` use mutable major tags (`actions/checkout@v7`).
-- **The archive layout has an unused slot.** `packages/` is verified and installed if present, but no code writes one; `docs/DEV_DEPLOY.md` and `orama build --help` list fewer binaries than the archive carries (the guide's output list omits `orama-privhelper` and `pubsub`; the help omits those and `orama-sni-router` and `vault-guardian`).
+- **The archive layout has an unused slot.** `packages/` is verified and installed if present, but no code writes one; `orama build --help` lists fewer binaries than the archive carries (it omits `orama-privhelper`, `pubsub`, `orama-sni-router` and `vault-guardian`).
 - **A signed archive does not prove freshness.** A trusted signer's older build installs (a rollback); only a rotation is replay-protected. Code: `core/pkg/archivetrust/verify.go:VerifyTree`.
 - **`orama node rollout` and `orama sandbox` cannot build for `arm64` or rotate signers.** They construct `Flags{Arch: "amd64"}` and nothing else. Code: `core/cmd/orama/internal/production/rollout/rollout.go:execute`.
 - **The `verified:` stamp is manual.** The book gate proves anchors, structure and links; whether the prose still matches the code is a person's attestation.

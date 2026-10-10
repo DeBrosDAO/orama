@@ -51,7 +51,7 @@ func forged(namespace, subject string) http.Header {
 // the owner, with admin" are deleted by the first middleware unless a valid
 // MAC came with them, so from the internet they are exactly no credential:
 // 401 AUTH_MISSING on the namespace host and on the cluster gateway
-// (docs/SECURITY.md "Inter-gateway trust"; Caddy strips six of them as a
+// (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Inter-gateway trust"; Caddy strips six of them as a
 // second layer, the gateway all of them).
 func TestInternalAuth_forgedHeadersGrantNothingFromTheInternet(t *testing.T) {
 	t.Parallel()

@@ -29,7 +29,7 @@ func nodeFingerprint(t testing.TB, f *fleet.Fleet, n fleet.Node) string {
 
 // installDryRunChangesNothing: `orama node install --dry-run` on a member
 // prints the plan under "DRY RUN - No changes will be made" and
-// leaves the node exactly as it was (docs/CLI_REFERENCE.md "orama node install").
+// leaves the node exactly as it was (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node install").
 func installDryRunChangesNothing(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	n := extra.Node
 	before := nodeFingerprint(t, f, n)

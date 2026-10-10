@@ -12,7 +12,7 @@ import (
 )
 
 // exportedModules are the custom modules whose state must be in an export
-// (chain/app/app.go wiring; docs/CHAIN.md "Modules wired").
+// (chain/app/app.go wiring; docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Modules wired").
 var exportedModules = []string{"emission", "power", "fees", "token", "archive", "nodes", "houses", "storage", "relay", "cnft", "market"}
 
 // exportSummary is what the node-side summariser prints about an export.
@@ -42,7 +42,7 @@ PY`
 // TestChainExport_stoppedNodeExportsValidGenesis: `oramad export` on a
 // stopped validator produces a genesis for the same chain that carries every
 // custom module's state, the validator set and x/emission's accounting, and
-// `oramad genesis validate` accepts it (the hard-fork path docs/CHAIN.md
+// `oramad genesis validate` accepts it (the hard-fork path docs/whitepaper/technical-reference/vol2/39-chain-architecture.md
 // describes; chain/app TestApp_exportImportRoundTrip is its unit twin). The
 // node is started again and must catch up.
 func TestChainExport_stoppedNodeExportsValidGenesis(t *testing.T) {

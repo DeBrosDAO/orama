@@ -34,7 +34,7 @@ func (k Keeper) CodeUploadAllowed(ctx context.Context, sha256Hex string) (bool, 
 
 // AdapterAllowed reports whether adapter is on the enacted adapter
 // allow-list. No module consumes this list yet: the shielded adapter path is
-// not built (docs/CHAIN.md, "Governance enactment").
+// not built (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Governance enactment").
 func (k Keeper) AdapterAllowed(ctx context.Context, adapter string) (bool, error) {
 	enacted, err := k.Enacted.Get(ctx)
 	if err != nil {

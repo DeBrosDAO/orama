@@ -44,7 +44,7 @@ type StakingKeeper interface {
 	// contributes no C_i of its own until it is actually delegated to. This is required for x/slashing's
 	// existing downtime/jailing machinery to work at all for a committee member: its BeginBlocker
 	// calls IsValidatorJailed (and so GetValidatorByConsAddr) for every block signer, which panics
-	// the whole chain with "validator does not exist" if no record exists - see docs/CHAIN.md.
+	// the whole chain with "validator does not exist" if no record exists - see docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md.
 	SetValidator(ctx context.Context, validator stakingtypes.Validator) error
 	SetValidatorByConsAddr(ctx context.Context, validator stakingtypes.Validator) error
 	// Hooks returns x/staking's registered hooks (notably x/slashing's, which creates a
@@ -84,7 +84,7 @@ type EarningsKeeper interface {
 // every one of its own time-based rules (the bootstrap deadline, the cap hysteresis window, the
 // new-validator ramp) in x/emission epochs rather than calendar time or block height, so they
 // track the same notion of "a day" x/emission's own halving schedule uses, on any chain regardless
-// of its configured epoch length (see docs/CHAIN.md).
+// of its configured epoch length (see docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md).
 type EmissionKeeper interface {
 	// CurrentEpoch returns the epoch number currently in progress.
 	CurrentEpoch(ctx context.Context) (uint64, error)

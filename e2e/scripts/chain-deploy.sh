@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stand up (or reset) Orama L1 validators on the servers of one e2e fleet run.
 #
-# Adapted from chain/scripts/stagenet/deploy.sh (see docs/CHAIN.md, "The stagenet deploy script"),
+# Adapted from chain/scripts/stagenet/deploy.sh (see docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, "The stagenet deploy script"),
 # with the fleet passed in instead of hardcoded host aliases: every node is reached by its public IP
 # with the run's own SSH key and pinned known_hosts, and the chain's p2p runs over the WireGuard
 # overlay. It only touches the chain's own user, binary, state directory and systemd unit, never an
@@ -463,7 +463,7 @@ cmd_status() {
 	return "$failed"
 }
 
-# INVARIANT_MODULES must hold on every node (docs/SECURITY_PLAYBOOKS.md). A literal list.
+# INVARIANT_MODULES must hold on every node (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md). A literal list.
 INVARIANT_MODULES=(emission fees storage nodes relay houses token market power shielded)
 
 cmd_invariants() {

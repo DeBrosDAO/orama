@@ -49,7 +49,7 @@ func adoptIfCreated(t testing.TB, f *fleet.Fleet, owner *gw.User, c tenancy.Crea
 }
 
 // TestNamespaceCreate_apiProvisionsAndServes: POST /v1/namespaces answers 202
-// with the cluster being provisioned and a poll URL (docs/API_SURFACE.md
+// with the cluster being provisioned and a poll URL (docs/whitepaper/technical-reference/appendices/i-api-surface.md
 // "Namespace management"); the status route reports progress, and "ready"
 // means a real request through https://ns-<name> succeeds.
 func TestNamespaceCreate_apiProvisionsAndServes(t *testing.T) {
@@ -89,7 +89,7 @@ func TestNamespaceCreate_apiProvisionsAndServes(t *testing.T) {
 
 // TestNamespaceCreate_cliCreatesAndLists: `orama namespace create` makes the
 // operator the owner and `orama namespace list` shows it ready
-// (docs/CLI_REFERENCE.md "orama namespace create").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace create").
 func TestNamespaceCreate_cliCreatesAndLists(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{Via: ns.ViaOperator})

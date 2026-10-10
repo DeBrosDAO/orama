@@ -20,7 +20,7 @@ const sfuDirectoryTTL = 10 * time.Second
 // counts as active and that have a WireGuard address: the SFU binds only to it,
 // and a public IP is never a fallback for inter-node traffic.
 // webrtc_port_allocations is the authority for which node
-// runs an SFU (docs/WEBRTC.md#role-reconciliation); the health probe decides
+// runs an SFU (website/src/docs/operator/webrtc-operations.mdx#role-reconciliation); the health probe decides
 // whether it is serving right now.
 const sfuNodesQuery = `
 	SELECT dn.id, dn.internal_ip, wpa.sfu_signaling_port

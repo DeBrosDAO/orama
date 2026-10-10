@@ -17,7 +17,7 @@ requires:
   chain: false
 covers:
   claims:
-    - "docs/WEBRTC.md#3-connect-signaling-websocket: server-draining tells clients to reconnect to another node"
-    - "docs/WEBRTC.md#signaling-socket-failover: a signalling upgrade whose selected namespace gateway cannot be dialed is taken by the next member; with every member down the answer is a typed, retryable NAMESPACE_GATEWAY_UNAVAILABLE 503"
-    - "docs/WEBRTC.md#room-placement: a room whose SFU is down is placed on a healthy SFU, and all peers reconnecting through different gateways meet there"
-    - "docs/WEBRTC.md#role-reconciliation: roles of a node non-viable past the grace move to live members; DNS advertises only nodes serving TURN"
+    - "website/src/docs/developer/webrtc.mdx#3-connect-signaling-websocket: server-draining tells clients to reconnect to another node"
+    - "website/src/docs/developer/webrtc.mdx#signaling-socket-failover: a signalling upgrade whose selected namespace gateway cannot be dialed is taken by the next member; with every member down the answer is a typed, retryable NAMESPACE_GATEWAY_UNAVAILABLE 503"
+    - "website/src/docs/operator/webrtc-operations.mdx#room-placement: a room whose SFU is down is placed on a healthy SFU, and all peers reconnecting through different gateways meet there"
+    - "website/src/docs/operator/webrtc-operations.mdx#role-reconciliation: roles of a node non-viable past the grace move to live members; DNS advertises only nodes serving TURN"

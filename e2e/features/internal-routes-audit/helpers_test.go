@@ -48,7 +48,7 @@ type route struct {
 	query    url.Values
 	internet int
 	// nodeSelf routes answer 404 to everything from off the host
-	// (docs/SECURITY.md "A node recording itself").
+	// (docs/whitepaper/technical-reference/vol1/04-the-node-as-a-supervisor.md "A node recording itself").
 	nodeSelf bool
 }
 

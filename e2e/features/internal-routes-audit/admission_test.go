@@ -50,7 +50,7 @@ func stamped(t *testing.T, signer auth.NodeStampSigner, nodeID, path string, pay
 // that makes up a libp2p identity can enrol a key for it — that proves only that
 // it holds the key, and records nothing the cluster routes on — but its
 // registration is refused (403) and no dns_nodes row appears: no join admitted
-// the node (docs/SECURITY.md "A node recording itself").
+// the node (docs/whitepaper/technical-reference/vol1/04-the-node-as-a-supervisor.md "A node recording itself").
 func TestNodeRegister_aNeverAdmittedIdentityIsRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

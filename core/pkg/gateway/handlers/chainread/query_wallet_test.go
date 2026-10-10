@@ -58,7 +58,7 @@ func TestQuery_everyWalletMethodIsEmbeddedAndServed(t *testing.T) {
 		}
 	}
 	if len(walletQuery) != 15 {
-		t.Errorf("the wallet list has %d methods; changing it is a decision, update this count and docs/CHAIN.md", len(walletQuery))
+		t.Errorf("the wallet list has %d methods; changing it is a decision, update this count and docs/whitepaper/technical-reference/vol2/39-chain-architecture.md", len(walletQuery))
 	}
 }
 

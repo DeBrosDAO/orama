@@ -16,7 +16,7 @@ import (
 // refusal, tells HTTP caches not to store it, so a user's data does not sit in
 // a browser or WebView disk cache; a route that chooses its own caching, the
 // public status endpoint, keeps it; non-API paths are untouched
-// (docs/SECURITY.md#response-caching, bugboard #735).
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching, bugboard #735).
 func TestCacheControl_apiResponsesAreNoStore(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

@@ -126,7 +126,7 @@ func invoke(t testing.TB, fx *fixture, fn, bearer string, body any) *gw.Response
 		Header: http.Header{"Content-Type": {"application/json"}}, Body: raw})
 }
 
-// minted is what capability_mint returns (docs/SERVERLESS.md#capabilities).
+// minted is what capability_mint returns (website/src/docs/developer/functions.mdx#capabilities).
 type minted struct {
 	Token        string `json:"token"`
 	CapID        string `json:"cap_id"`
@@ -230,7 +230,7 @@ func protect(t testing.TB, c *gw.Client, values ...string) {
 }
 
 // refusedAsRevoked requires an upgrade on token to be refused as revoked within
-// revokedRefusalBound of revokedAt (docs/AUTH.md, "How long a change takes to
+// revokedRefusalBound of revokedAt (docs/whitepaper/technical-reference/vol1/14-authorization.md, "How long a change takes to
 // land": within 10 seconds). Every gateway reloads its own
 // list, so an upgrade that reaches another of the namespace's gateways may be
 // accepted inside the bound; one accepted past it, or refused for any other

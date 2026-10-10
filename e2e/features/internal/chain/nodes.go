@@ -153,7 +153,7 @@ func (c *Chain) OperatorRegistered(t testing.TB, addr string) bool {
 
 // EnsureOperator registers k as an x/nodes operator unless it already is
 // (several chain packages share the run's operator; registration is
-// permanent: x/nodes has no message that removes an operator, docs/CHAIN.md
+// permanent: x/nodes has no message that removes an operator, docs/whitepaper/technical-reference/vol2/37-global-nodes.md
 // "x/nodes"). Losing a race to another package is fine: the record exists.
 func (c *Chain) EnsureOperator(t testing.TB, k Key) {
 	t.Helper()

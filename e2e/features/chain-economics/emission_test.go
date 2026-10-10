@@ -13,7 +13,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 )
 
-// The documented schedule (docs/CHAIN.md "The schedule"): whole ORAMA per
+// The documented schedule (docs/whitepaper/technical-reference/vol2/40-economics.md "The schedule"): whole ORAMA per
 // epoch in brackets of 730 completed epochs, then a 274 ORAMA tail.
 var (
 	bracketOrama = []int64{14848, 7424, 3712, 1856, 928}
@@ -24,7 +24,7 @@ const (
 	epochsPerBracket = 730
 	// maxSafeEpoch is x/emission/types.MaxSafeEpoch, the query bound.
 	maxSafeEpoch = 1_000_000_000
-	// cumulativeAt3650Orama is docs/CHAIN.md's 21,000,640 ORAMA.
+	// cumulativeAt3650Orama is docs/whitepaper/technical-reference/vol2/40-economics.md's 21,000,640 ORAMA.
 	cumulativeAt3650Orama = 21_000_640
 )
 
@@ -62,7 +62,7 @@ type scheduleAt struct {
 
 // TestEmission_scheduleMatchesTheDocumentedTable: schedule-at at every
 // bracket boundary returns the documented maximum and its exact 60/25/10/5
-// split (docs/CHAIN.md "The schedule", "The split"); epoch 0 mints nothing.
+// split (docs/whitepaper/technical-reference/vol2/40-economics.md "The schedule", "The split"); epoch 0 mints nothing.
 func TestEmission_scheduleMatchesTheDocumentedTable(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -100,7 +100,7 @@ func pct(v chain.Int, p int64) chain.Int {
 }
 
 // TestEmission_supplyCapSoFar: the cumulative cap is exactly 21,000,640 ORAMA
-// at epoch 3,650 (docs/CHAIN.md), 0 at epoch 0, one epoch's maximum at 1,
+// at epoch 3,650 (docs/whitepaper/technical-reference/vol2/40-economics.md), 0 at epoch 0, one epoch's maximum at 1,
 // and grows by the tail after it.
 func TestEmission_supplyCapSoFar(t *testing.T) {
 	t.Parallel()
@@ -156,7 +156,7 @@ type emissionParams struct {
 
 // TestEmission_devnetShortEpochParams: the run chain uses the devnet
 // exception: allow_bootstrap_stake with an epoch shorter than the 24h /
-// 14,400-block production floors (docs/CHAIN.md "Genesis parameters"), and
+// 14,400-block production floors (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Genesis parameters"), and
 // genesis supply is exactly zero (no premine).
 func TestEmission_devnetShortEpochParams(t *testing.T) {
 	t.Parallel()
@@ -175,7 +175,7 @@ func TestEmission_devnetShortEpochParams(t *testing.T) {
 		t.Errorf("min blocks per epoch %d, want (0, 14400)", b)
 	}
 	if gs := c.Epoch(t, n, 0).GenesisSupply; !gs.IsZero() {
-		t.Errorf("genesis supply %s, want 0 (docs/CHAIN.md: a genesis starts at exactly zero supply)", gs.String())
+		t.Errorf("genesis supply %s, want 0 (docs/whitepaper/technical-reference/vol2/40-economics.md: a genesis starts at exactly zero supply)", gs.String())
 	}
 }
 
@@ -183,7 +183,7 @@ func TestEmission_devnetShortEpochParams(t *testing.T) {
 // epoch (each read at once: the run chain prunes state older than about 100
 // blocks), cumulative_minted equals exactly 60% of the schedule over the
 // completed epochs, and bank supply equals genesis + minted + development +
-// service - burned (docs/CHAIN.md "Invariants"; only x/emission mints
+// service - burned (docs/whitepaper/technical-reference/vol2/40-economics.md "Invariants"; only x/emission mints
 // norama); cumulative-minted agrees with current-epoch.
 func TestEmission_mintedMatchesScheduleAndSupply(t *testing.T) {
 	t.Parallel()

@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Request metrics (docs/MONITORING.md "Request metrics").
+// Request metrics (website/src/docs/operator/monitoring.mdx "Request metrics").
 const (
 	invalidLabel     = "(invalid)"
 	trafficWindowSec = 60
@@ -27,7 +27,7 @@ const (
 	// trafficBurst is how many requests make a namespace one of the busiest.
 	trafficBurst = 30
 	// collectEvery is the self-collection period; a report may lag it by a
-	// hung collection (docs/MONITORING.md "Self collection").
+	// hung collection (website/src/docs/operator/monitoring.mdx "Self collection").
 	collectEvery = 10 * time.Second
 	collectSlack = 15 * time.Second
 )
@@ -57,7 +57,7 @@ type trafficView struct {
 // host are counted against that namespace, and a host naming an invalid
 // namespace is counted as "(invalid)" rather than as its text; every gateway
 // reports a window of at most 60s with ordered percentiles
-// (docs/MONITORING.md "Request metrics").
+// (website/src/docs/operator/monitoring.mdx "Request metrics").
 func TestTraffic_namespacesAttributedAndInvalidFolded(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -95,7 +95,7 @@ func TestTraffic_namespacesAttributedAndInvalidFolded(t *testing.T) {
 
 // TestTelemetry_reportsRefreshEveryTenSeconds: each node's report timestamp
 // advances about every 10s and no report is older than the freshness bound
-// (docs/MONITORING.md "Self collection", "report_age_sec").
+// (website/src/docs/operator/monitoring.mdx "Self collection", "report_age_sec").
 func TestTelemetry_reportsRefreshEveryTenSeconds(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

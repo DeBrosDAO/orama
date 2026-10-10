@@ -362,7 +362,7 @@ func TestSubjectOwnerType_eachPrincipalKindIsLookedUpUnderItsOwnType(t *testing.
 }
 
 // A workload nobody has granted anything reaches nothing, the safe default
-// docs/AUTH.md promises; resolving its grant must not turn "none" into the
+// docs/whitepaper/technical-reference/vol1/14-authorization.md promises; resolving its grant must not turn "none" into the
 // data plane a wallet with no grant is given.
 func TestForwardedWorkload_withNoGrantReachesNothing(t *testing.T) {
 	g, registry := namespaceGatewayForHops(t, "")

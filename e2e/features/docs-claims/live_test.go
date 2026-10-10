@@ -13,7 +13,7 @@ import (
 )
 
 // TestNamespaceCap_liveDefaultIsTen: the per-wallet cap with no setting row is
-// the documented ten (docs/CLI_REFERENCE.md#orama-cluster "The per-wallet cap
+// the documented ten (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-cluster "The per-wallet cap
 // stays 10 until an operator raises or lowers it"), and the live cluster
 // reports a cap inside the range an operator may store. The live value itself
 // is not asserted to be ten: stage 1 (bootstrap) deliberately raises it for the
@@ -45,7 +45,7 @@ var capLine = regexp.MustCompile(`(?m)^max-namespaces-per-wallet: (\d+)$`)
 var emissionInvariants = []string{"minted_within_schedule", "supply_matches_minted"}
 
 // TestSupplyInvariant_holdsOnEveryNode: the emission module's invariants,
-// the supply rule among them (docs/CHAIN.md "Supply matches minted"), hold
+// the supply rule among them (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Supply matches minted"), hold
 // on every co-hosted validator, asked through the chain helpers so the node,
 // network namespace and RPC address are the target's own.
 func TestSupplyInvariant_holdsOnEveryNode(t *testing.T) {

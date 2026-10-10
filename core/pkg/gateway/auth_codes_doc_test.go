@@ -12,13 +12,13 @@ import (
 )
 
 // A code the SDK switches on and the docs do not mention is a code nobody can
-// act on. The list in docs/AUTH.md is the one clients read, and it drifts the
+// act on. The list in docs/whitepaper/technical-reference/vol1/14-authorization.md is the one clients read, and it drifts the
 // moment a code is added without a line there — which is how the auth docs got
 // into the state this epic had to correct.
 func TestAuthCodes_areAllInTheDocs(t *testing.T) {
-	doc, err := os.ReadFile(filepath.Join(repoRootFor(t), "docs/AUTH.md"))
+	doc, err := os.ReadFile(filepath.Join(repoRootFor(t), "docs/whitepaper/technical-reference/vol1/14-authorization.md"))
 	if err != nil {
-		t.Fatalf("read docs/AUTH.md: %v", err)
+		t.Fatalf("read docs/whitepaper/technical-reference/vol1/14-authorization.md: %v", err)
 	}
 	page := string(doc)
 
@@ -33,7 +33,7 @@ func TestAuthCodes_areAllInTheDocs(t *testing.T) {
 	} {
 		for name, code := range wireCodesIn(t, filepath.Join(repoRootFor(t), file)) {
 			if !strings.Contains(page, "`"+code+"`") {
-				t.Errorf("%s (%s, %s) is a code a client can receive and docs/AUTH.md does not "+
+				t.Errorf("%s (%s, %s) is a code a client can receive and docs/whitepaper/technical-reference/vol1/14-authorization.md does not "+
 					"list it", code, name, file)
 			}
 		}

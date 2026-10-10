@@ -22,7 +22,7 @@ const (
 // before auth; the base domain and any name under it (and the development
 // origins localhost/127.0.0.1) are echoed back with Vary: Origin, and any
 // other origin — a lookalike included — gets the base domain, which a browser
-// then refuses (docs/ARCHITECTURE.md "Middleware Stack": CORS runs before
+// then refuses (website/src/docs/contributor/architecture-reference.mdx "Middleware Stack": CORS runs before
 // authentication).
 func TestCORS_preflightEchoesOnlyTheClusterOrigins(t *testing.T) {
 	t.Parallel()

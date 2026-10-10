@@ -66,7 +66,7 @@ func TestInstall_onlyTheNodeHostUnit(t *testing.T) {
 }
 
 // TestInstall_nameserversRunCoreDNS: a nameserver node runs CoreDNS under
-// its own account, a plain node does not run it at all (docs/SECURITY.md
+// its own account, a plain node does not run it at all (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md
 // "Per-service accounts").
 func TestInstall_nameserversRunCoreDNS(t *testing.T) {
 	t.Parallel()
@@ -117,7 +117,7 @@ func installUnitsDown(out string) (down []string, listed bool) {
 // TestInstall_nodeStatusAndDoctor: the local commands an operator runs on
 // the node itself report a healthy install: `orama node status` lists
 // orama-node and the @index stack running, `orama node doctor` passes every check
-// (docs/CLI_REFERENCE.md "orama node status", "orama node doctor").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node status", "orama node doctor").
 func TestInstall_nodeStatusAndDoctor(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -136,7 +136,7 @@ func TestInstall_nodeStatusAndDoctor(t *testing.T) {
 
 // TestInstall_nodeReportOnNode: `orama node report` on the node is one line
 // of JSON naming this node's WireGuard address and a settled raft state;
-// --pretty indents the same document (docs/CLI_REFERENCE.md "orama node report").
+// --pretty indents the same document (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node report").
 func TestInstall_nodeReportOnNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

@@ -27,7 +27,7 @@ const (
 // TestVantage_delegationChainResolves: from outside, the base name resolves
 // by following the real delegation from the root — the parent zone's NS for
 // the base, then the cluster's own nameservers — to the nameservers'
-// addresses, and a public resolver agrees (docs/NAMESERVER_SETUP.md
+// addresses, and a public resolver agrees (website/src/docs/operator/nameserver.mdx
 // "Verification").
 func TestVantage_delegationChainResolves(t *testing.T) {
 	t.Parallel()
@@ -80,7 +80,7 @@ func publicIPs(nodes []fleet.Node) []string {
 
 // TestVantage_tlsAndHTTP11WithPinnedRoots: from outside, every node serves
 // the base name over TLS that verifies against the pinned roots, speaking
-// HTTP/1.1 (docs/ARCHITECTURE.md "TLS/HTTPS"). A staging chain verifies
+// HTTP/1.1 (website/src/docs/contributor/architecture-reference.mdx "TLS/HTTPS"). A staging chain verifies
 // against those roots only; a production chain against every system store.
 func TestVantage_tlsAndHTTP11WithPinnedRoots(t *testing.T) {
 	t.Parallel()

@@ -19,7 +19,7 @@ func autoupdate(t testing.TB, current, candidate string, flags ...string) (int, 
 }
 
 // TestAutoupdate_decisions: what the cluster should do with a candidate
-// release, one line "<action>: <reason>" (docs/CLI_REFERENCE.md "orama node
+// release, one line "<action>: <reason>" (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node
 // autoupdate"): notify by default, auto installs only when healthy, newer
 // and inside the window, and every TUF failure, a downgrade and a release
 // marked bad are refused.

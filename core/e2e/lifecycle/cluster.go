@@ -76,7 +76,7 @@ func New(t *testing.T) *Cluster {
 	env := os.Getenv(EnvVar)
 	if env == "" {
 		t.Skipf("%s is not set; skipping the lifecycle harness "+
-			"(see docs/DEV_DEPLOY.md, 'Lifecycle harness')", EnvVar)
+			"(see orama.network/docs/contributor/testing, 'Lifecycle harness')", EnvVar)
 	}
 	if strings.EqualFold(env, "testnet") || strings.EqualFold(env, "mainnet") {
 		t.Fatalf("%s=%s: these scenarios reboot nodes and destroy VMs; "+

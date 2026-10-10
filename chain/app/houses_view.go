@@ -77,7 +77,7 @@ func (h housePower) Lambda(ctx context.Context) (math.LegacyDec, error) {
 // eligibility count identity as of a rolling snapshot: a node that has just
 // registered or changed its ASN or endpoints is not counted until the lock has
 // passed, so identity cannot be moved to fit a vote. Both values are operator
-// declarations, not verified on chain (docs/CHAIN.md, "Node network identity").
+// declarations, not verified on chain (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md, "Node network identity").
 type houseOperators struct {
 	nodes nodeskeeper.Keeper
 }

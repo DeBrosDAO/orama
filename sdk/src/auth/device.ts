@@ -6,7 +6,7 @@
  * The SDK does not hold or generate that key; the platform does, and the
  * application hands the SDK a {@link DeviceSigner} that signs with it. What the
  * SDK does is put the right bytes in front of the signer and the right fields
- * on the request. See docs/AUTH.md, "Devices".
+ * on the request. See docs/whitepaper/technical-reference/vol1/13-identity.md, "Devices".
  */
 
 /** An installation's device key, as the application holds it. */

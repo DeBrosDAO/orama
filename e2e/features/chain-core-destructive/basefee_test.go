@@ -18,7 +18,7 @@ const loadPerValidator = 5
 // TestBaseFee_risesOnFullBlocksAndFloorsAtMin: blocks more than half full
 // raise the base fee (by at least one norama at the floor: security review
 // B4, x/fees/types/basefee.go NextBaseFee), emptier blocks lower it again,
-// and it never goes below min_base_fee (docs/CHAIN.md "The base fee").
+// and it never goes below min_base_fee (docs/whitepaper/technical-reference/vol2/40-economics.md "The base fee").
 func TestBaseFee_risesOnFullBlocksAndFloorsAtMin(t *testing.T) {
 	c := chain.New(t)
 	n := c.Node(t, 0)

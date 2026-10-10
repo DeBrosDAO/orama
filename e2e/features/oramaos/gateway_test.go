@@ -30,7 +30,7 @@ func enrollBody(t *testing.T, nodeIP string) []byte {
 // every other node's WireGuard Endpoint and pushes the configuration to it,
 // so anything but a public IPv4 is refused (400) before the invite is looked
 // at; a public address with a token no invite has is 401 and pushes nothing
-// (docs/ORAMAOS_DEPLOYMENT.md "Step 3"; core/pkg/gateway/handlers/enroll
+// (website/src/docs/operator/orama-os.mdx "Step 3"; core/pkg/gateway/handlers/enroll
 // handler.go, nodeip.go).
 func TestOramaOSEnroll_nodeIPMustBePublicIPv4(t *testing.T) {
 	t.Parallel()
@@ -55,7 +55,7 @@ func TestOramaOSEnroll_nodeIPMustBePublicIPv4(t *testing.T) {
 // TestOramaOSNodeRoutes_refuseNonOperators: status, logs, command and leave
 // reach a node's agent and can stop it or drop it from the mesh; with no
 // credential, or as a signed-in wallet that is not an operator, each is
-// refused before anything is proxied (docs/ORAMAOS_DEPLOYMENT.md "Node
+// refused before anything is proxied (website/src/docs/operator/orama-os.mdx "Node
 // Management"; core/pkg/gateway/route_policy.go operator domain).
 func TestOramaOSNodeRoutes_refuseNonOperators(t *testing.T) {
 	t.Parallel()
@@ -86,7 +86,7 @@ func TestOramaOSNodeRoutes_refuseNonOperators(t *testing.T) {
 // reach, so the report shows it uncovered rather than silently absent: the
 // Shamir unlock needs K = max(2, floor(N/3)) peer vault-guardians on the
 // overlay, and enrollment of a node with no peers fails ("no peers available
-// for key distribution", docs/ORAMAOS_DEPLOYMENT.md "Genesis Node"); an A/B
+// for key distribution", website/src/docs/operator/orama-os.mdx "Genesis Node"); an A/B
 // update is fetched only from https://updates.orama.network/v1/latest
 // (os/agent/internal/update/manager.go UpdateURL), which the harness cannot
 // serve a signed test release on.

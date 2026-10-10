@@ -11,7 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// removedAuthRoutes were deleted (docs/SECURITY.md: simple-key, register and
+// removedAuthRoutes were deleted (docs/whitepaper/technical-reference/vol1/13-identity.md: simple-key, register and
 // the Phantom flow). A removed route must not come back under any method.
 var removedAuthRoutes = []gw.Req{
 	{Method: http.MethodPost, Path: "/v1/auth/simple-key"},
@@ -44,7 +44,7 @@ func TestRemovedEndpoints_goneForEveryCaller(t *testing.T) {
 var lobbyRefusalCodes = map[string]bool{"INSUFFICIENT_SCOPE": true, "OWNERSHIP_REQUIRED": true, "NOT_AN_OPERATOR": true}
 
 // TestLobby_reachesOnlyNamespaceCreation: a lobby session holds no grant, and
-// the one thing it reaches is POST /v1/namespaces (docs/AUTH.md#the-lobby).
+// the one thing it reaches is POST /v1/namespaces (docs/whitepaper/technical-reference/vol1/13-identity.md#vocabulary).
 // Every other route refuses it with a 401/403 carrying {error, code, hint}.
 func TestLobby_reachesOnlyNamespaceCreation(t *testing.T) {
 	t.Parallel()
@@ -79,7 +79,7 @@ func TestLobby_reachesOnlyNamespaceCreation(t *testing.T) {
 }
 
 // TestAPIKey_lobbyHasNoKeys: exchanging a lobby signature for a key answers
-// NAMESPACE_HAS_NO_KEYS (docs/AUTH.md, sign-in codes).
+// NAMESPACE_HAS_NO_KEYS (docs/whitepaper/technical-reference/vol1/14-authorization.md, sign-in codes).
 func TestAPIKey_lobbyHasNoKeys(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

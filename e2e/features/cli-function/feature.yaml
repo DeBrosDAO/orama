@@ -1,5 +1,5 @@
 # CLI conformance for `orama function`: every command's help against
-# docs/CLI_REFERENCE.md and its usage errors and arity; no credential is an
+# docs/whitepaper/technical-reference/appendices/d-cli-reference.md and its usage errors and arity; no credential is an
 # auth error on every command that calls the gateway; in a fresh namespace
 # list is empty (text and --json) and every command naming an absent function
 # is "not found"; function names are validated before they reach a request
@@ -32,4 +32,4 @@ covers:
     - orama function triggers list
     - orama function versions
   claims:
-    - "docs/CLI_REFERENCE.md#orama-function-init: scaffolds a directory with function.go and function.yaml templates"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-function-init: scaffolds a directory with function.go and function.yaml templates"

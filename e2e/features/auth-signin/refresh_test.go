@@ -31,7 +31,7 @@ func expectRefreshRefused(t testing.TB, resp *gw.Response, what string) {
 }
 
 // TestRefresh_rotatesOnEveryUse: a refresh returns a new refresh token and a
-// fresh 15-minute access token that works (docs/AUTH.md#signing-in).
+// fresh 15-minute access token that works (docs/whitepaper/technical-reference/vol1/13-identity.md#identity).
 func TestRefresh_rotatesOnEveryUse(t *testing.T) {
 	t.Parallel()
 	c := harness.GW(t)

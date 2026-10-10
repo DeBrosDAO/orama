@@ -97,7 +97,7 @@ func (f *cnftFixture) requireRoot(t *testing.T, when string) {
 // back, update its metadata, decompress it (the leaf empties and the asset is
 // queryable), compress it again (appended with the next nonce), record a
 // snapshot, and burn the other; after every step the chain's root equals the
-// root the client computes (docs/CHAIN.md x/cnft; x/cnft/types merkle.go).
+// root the client computes (docs/whitepaper/technical-reference/vol2/45-nfts-and-the-market.md x/cnft; x/cnft/types merkle.go).
 func TestCnft_lifecycle(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

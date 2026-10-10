@@ -46,7 +46,7 @@ func alertFor(t testing.TB, n fleet.Node, subsystem, text string) bool {
 // reports is pushed to 90% (always leaving a GiB free). The monitor warns
 // about that node's disk, the node keeps serving and accepting writes, and
 // once the space is freed the warning clears and the cluster converges
-// (docs/MONITORING.md: disk > 85% is a warning).
+// (website/src/docs/operator/monitoring.mdx: disk > 85% is a warning).
 func TestChaos_diskPressureAlertsAndDegradesGracefully(t *testing.T) {
 	f := harness.Fleet(t)
 	realistic.RequireFaultBudget(t, "the disk pressure", faultWorst)

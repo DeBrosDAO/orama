@@ -100,7 +100,7 @@ func (g *HTTPGateway) RegisterRoutes(mux *http.ServeMux) {
 // Routes returns every pattern RegisterRoutes mounts.
 //
 // These are composed from the base path rather than written as literals, so the
-// route inventory in docs/API_SURFACE.md cannot discover them by reading the
+// route inventory in docs/whitepaper/technical-reference/appendices/i-api-surface.md cannot discover them by reading the
 // source. It asks here instead.
 func (g *HTTPGateway) Routes() []string {
 	table := g.routes()

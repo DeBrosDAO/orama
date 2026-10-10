@@ -22,7 +22,7 @@ func findNone(t testing.TB, f *fleet.Fleet, n fleet.Node, what, cmd string) {
 }
 
 // TestInstall_wireguardConfPrivate: wg0.conf holds the node's private key
-// and is 0600 root (docs/SECURITY.md "wg0.conf is chmod 0600 after write"),
+// and is 0600 root (docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md "wg0.conf is chmod 0600 after write"),
 // in a directory the orama user cannot write (the node unit keeps
 // /etc/wireguard read-only: wg-quick runs its PostUp as root).
 func TestInstall_wireguardConfPrivate(t *testing.T) {
@@ -37,7 +37,7 @@ func TestInstall_wireguardConfPrivate(t *testing.T) {
 
 // TestInstall_secretsPrivate: the secrets directory is 0700 and every secret
 // in it 0600, owned by the orama user, with no link a reader could be
-// redirected through (docs/SECURITY.md; core/pkg/install/config.go writes
+// redirected through (docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md; core/pkg/install/config.go writes
 // each secret 0600 into a 0700 dir).
 func TestInstall_secretsPrivate(t *testing.T) {
 	t.Parallel()
@@ -56,7 +56,7 @@ func TestInstall_secretsPrivate(t *testing.T) {
 
 // TestInstall_binariesRootOwned: /opt/orama is root's alone, and
 // /opt/orama/bin and every binary in it are root:orama 0750: the orama user
-// runs them and cannot replace them (docs/SECURITY.md "Dedicated User").
+// runs them and cannot replace them (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "Dedicated User").
 func TestInstall_binariesRootOwned(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -77,7 +77,7 @@ func TestInstall_binariesRootOwned(t *testing.T) {
 
 // TestInstall_archiveTrustAnchor: /etc/orama/archive-signers is root:root
 // 0644 and trusts exactly the operator's wallet, one lowercase address per
-// line (docs/SECURITY.md "Supply Chain": a genesis install creates the anchor
+// line (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "Supply Chain": a genesis install creates the anchor
 // from --operator-wallet; a joiner takes the list from the cluster).
 func TestInstall_archiveTrustAnchor(t *testing.T) {
 	t.Parallel()
@@ -119,7 +119,7 @@ func TestInstall_stagedBuildIsSigned(t *testing.T) {
 }
 
 // TestInstall_privhelperSocket: the privileged helper's socket is root:orama
-// 0660 and socket-activated (docs/SECURITY.md: only root and the orama group
+// 0660 and socket-activated (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md: only root and the orama group
 // connect; each connection runs one helper instance as root).
 func TestInstall_privhelperSocket(t *testing.T) {
 	t.Parallel()

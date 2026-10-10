@@ -17,13 +17,13 @@ import (
 
 const (
 	// pathSessionPolicy reads and sets a namespace's sign-in and device policy
-	// (docs/AUTH.md#sign-in-policy).
+	// (docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy).
 	pathSessionPolicy = "/v1/namespace/session-policy"
 	signInMembers     = "members"
 	signInOpen        = "open"
 	// signInPolicyBudget is how long a gateway may judge a refresh by a policy
 	// it read before the change: the revocation list's bound plus the round
-	// trip (docs/AUTH.md#how-long-a-change-takes-to-land).
+	// trip (docs/whitepaper/technical-reference/vol1/14-authorization.md#consistency-and-caching).
 	signInPolicyBudget = revocationStaleness + stalenessSlack
 )
 
@@ -48,7 +48,7 @@ func setSignIn(t testing.TB, n *ns.Namespace, policy string) map[string]any {
 // a wallet with no grant is refused a members namespace (NAMESPACE_NOT_OWNED);
 // once the owner opens sign-in it gets a session and no key, is refused what a
 // grantless wallet may not do, and when the owner closes it again its refresh
-// and any new sign-in are refused (docs/AUTH.md#sign-in-policy).
+// and any new sign-in are refused (docs/whitepaper/technical-reference/vol1/13-identity.md#sign-in-policy).
 func TestSignInPolicy_openLetsAGrantlessWalletInAndClosingEndsIt(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

@@ -21,7 +21,7 @@ covers:
   routes:
     - /v1/internal/join
   claims:
-    - "docs/SECURITY.md#tls--transport: the joining node verifies the invite's certificate fingerprint before it sends the token"
-    - "docs/SECURITY.md#network-isolation: the invite travels on the install's stdin, never on a command line"
-    - "docs/SECURITY.md#supply-chain: an unexpected archive signer list is refused before the invite is spent"
-    - "docs/CLI_REFERENCE.md#orama-invite: an invite is single-use; a replay is refused as already used"
+    - "docs/whitepaper/technical-reference/vol1/06-the-wireguard-mesh.md#minting-an-invite: the joining node verifies the invite's certificate fingerprint before it sends the token"
+    - "docs/whitepaper/technical-reference/vol1/30-install-and-upgrade.md#setup-and-remote-install: the invite travels on the install's stdin, never on a command line"
+    - "docs/whitepaper/technical-reference/vol1/18-cache.md#supply-chain: an unexpected archive signer list is refused before the invite is spent"
+    - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-invite: an invite is single-use; a replay is refused as already used"

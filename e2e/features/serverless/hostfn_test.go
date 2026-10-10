@@ -17,7 +17,7 @@ import (
 const (
 	logBudget   = 2 * time.Minute
 	cacheBudget = 30 * time.Second
-	// Batch limits (docs/SERVERLESS.md#database-transactions).
+	// Batch limits (website/src/docs/developer/functions.mdx#database-transactions).
 	maxStatements = 100
 	maxRows       = 10000
 	codeTooMany   = "TOO_MANY_STATEMENTS"
@@ -26,7 +26,7 @@ const (
 )
 
 // waitLog polls `orama function logs` until it shows marker (the invocation
-// log is written asynchronously; docs/SERVERLESS.md#invocation-logging).
+// log is written asynchronously; website/src/docs/developer/functions.mdx#invocation-logging).
 func waitLog(t *testing.T, fx *fixture, fn, marker string) {
 	t.Helper()
 	eventually.Require(t, pollEvery, logBudget, "log line "+marker, func() (bool, error) {
@@ -44,7 +44,7 @@ func waitLog(t *testing.T, fx *fixture, fn, marker string) {
 // TestHostHTTPFetch_ssrfMatrix: http_fetch refuses loopback, RFC 1918,
 // link-local, CGNAT, unspecified and the IPv6 forms wrapping IPv4, names that
 // resolve to them, and redirects to them; a public destination works
-// (docs/SECURITY.md#tenant-isolation: WASM http_fetch).
+// (docs/whitepaper/technical-reference/vol1/18-cache.md#what-each-attacker-can-do: WASM http_fetch).
 func TestHostHTTPFetch_ssrfMatrix(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -80,7 +80,7 @@ func TestHostHTTPFetch_ssrfMatrix(t *testing.T) {
 
 // TestHostCache_atomicsAndTTL: cache_incr is atomic under concurrent
 // invocations; set/get/delete round-trip; a TTL expires; a negative TTL is
-// refused (docs/SERVERLESS.md#cache-olric-distributed-cache).
+// refused (website/src/docs/developer/functions.mdx#cache-olric-distributed-cache).
 func TestHostCache_atomicsAndTTL(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -122,7 +122,7 @@ func TestHostCache_atomicsAndTTL(t *testing.T) {
 
 // TestHostDB_guardRefusals: a function's SQL may not ATTACH, PRAGMA, VACUUM,
 // CREATE TRIGGER, read sqlite_dbpage/dbstat, run two statements, or name a
-// platform table in any quoting or role (docs/SERVERLESS.md#database-rqlite).
+// platform table in any quoting or role (website/src/docs/developer/functions.mdx#database-rqlite).
 func TestHostDB_guardRefusals(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

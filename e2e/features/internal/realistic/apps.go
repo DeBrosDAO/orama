@@ -74,7 +74,7 @@ func CopyApp(t testing.TB, name string, replace map[string]string, extra map[str
 
 // ClusterCA is the run's pinned CA bundle: what a server-side reference app
 // must trust to reach its gateway over TLS on a fleet whose certificates come
-// from Let's Encrypt staging (docs/SANDBOX.md).
+// from Let's Encrypt staging (website/src/docs/contributor/sandbox.mdx).
 func ClusterCA(t testing.TB, f *fleet.Fleet) []byte {
 	t.Helper()
 	raw, err := os.ReadFile(f.State.CAFile)

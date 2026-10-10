@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Routes (docs/API_SURFACE.md#storage) and limits
+// Routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage) and limits
 // (core/pkg/gateway/handlers/storage).
 const (
 	pathUpload = "/v1/storage/upload"

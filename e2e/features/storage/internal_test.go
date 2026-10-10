@@ -26,7 +26,7 @@ const (
 )
 
 // TestInternal_notReachableByClients: the node-to-node routes answer a client
-// on the public name with a refusal (docs/API_SURFACE.md: "Never reachable by
+// on the public name with a refusal (docs/whitepaper/technical-reference/appendices/i-api-surface.md: "Never reachable by
 // a client").
 func TestInternal_notReachableByClients(t *testing.T) {
 	t.Parallel()

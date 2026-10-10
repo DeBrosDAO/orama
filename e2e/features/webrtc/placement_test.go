@@ -18,7 +18,7 @@ import (
 )
 
 // waitPlaced waits until the SFU runs on every member and exactly two nodes'
-// shared TURN list the namespace (docs/WEBRTC.md#turn-topology), and returns
+// shared TURN list the namespace (website/src/docs/operator/webrtc-operations.mdx#turn-topology), and returns
 // the TURN holders.
 func waitPlaced(t *testing.T, fx *fixture) []fleet.Node {
 	t.Helper()
@@ -42,7 +42,7 @@ func waitPlaced(t *testing.T, fx *fixture) []fleet.Node {
 // the WireGuard address only (signalling 30000-30099), TURN on two, the shared
 // TURN unit active there with 3478 udp/tcp open, a 32-byte secret for the
 // namespace in a 0600 turn.yaml, and both TURN DNS names pointing at exactly
-// those two nodes (docs/WEBRTC.md).
+// those two nodes (website/src/docs/operator/webrtc-operations.mdx).
 func TestPlacement_sfuEverywhereWGOnlyTurnOnTwo(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)
@@ -132,7 +132,7 @@ func turnHostFacts(t *testing.T, fx *fixture, n fleet.Node) {
 
 // TestTURNS_wildcardCertOn5349: TURNS on 5349 presents the *.<base> wildcard
 // for the single-label host turn-<ns>.<base>, verified against the run's
-// pinned roots (docs/WEBRTC.md#turns-tls-certificate).
+// pinned roots (website/src/docs/developer/webrtc.mdx#turns-tls-certificate).
 func TestTURNS_wildcardCertOn5349(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

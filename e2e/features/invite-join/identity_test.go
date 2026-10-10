@@ -21,7 +21,7 @@ const nodePublicKeyCmd = "openssl pkey -in " + infra.NodeKeyPath + " -pubout -ou
 // TestNodeIdentity_enrolledPublicHalfOnly: every node signs with an Ed25519
 // key it generated itself, kept 0600 on the node; the cluster holds only its
 // public half in node_credentials, keyed by the node's peer id, unrevoked
-// (docs/SECURITY.md "A node signs with an Ed25519 key it generated itself").
+// (docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md "A node signs with an Ed25519 key it generated itself").
 func TestNodeIdentity_enrolledPublicHalfOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -60,7 +60,7 @@ func TestNodeIdentity_enrolledPublicHalfOnly(t *testing.T) {
 
 // TestJoin_signerMismatchRefusedTokenKept: a joiner that expects other
 // archive signers than the cluster's is refused with 409 naming the
-// cluster's signers, and the invite is not used (docs/SECURITY.md "Supply
+// cluster's signers, and the invite is not used (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md "Supply
 // Chain": the minting node refuses a mismatch with 409 before the invite is
 // spent or a peer row written).
 func TestJoin_signerMismatchRefusedTokenKept(t *testing.T) {

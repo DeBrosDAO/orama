@@ -26,7 +26,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Admission, identity, membership events, kick and mute (docs/WEBRTC.md#admission).
+// Admission, identity, membership events, kick and mute (website/src/docs/developer/webrtc.mdx#admission).
 const (
 	rtcFixtureDir = "testdata/rtcfn"
 	rtcFunction   = "e2e-rtcadmin"
@@ -306,7 +306,7 @@ func rtcJoin(t *testing.T, fx *fixture, u rtcUser, room string, publish bool) *s
 
 // TestAdmission_identityIsTheAuthenticatedUser: whatever userId the join frame
 // carries, the room knows the peer by the user the gateway authenticated
-// (docs/WEBRTC.md#identity), and a namespace that never turned admission on
+// (website/src/docs/developer/webrtc.mdx#identity), and a namespace that never turned admission on
 // admits everyone as before.
 func TestAdmission_identityIsTheAuthenticatedUser(t *testing.T) {
 	t.Parallel()
@@ -323,7 +323,7 @@ func TestAdmission_identityIsTheAuthenticatedUser(t *testing.T) {
 
 // TestAdmission_lifecycle follows one namespace through requiring admission,
 // admitting, the membership events, a kick, an expiry, the audio state and a
-// mute (docs/WEBRTC.md#admission, #membership-events, #kick-and-mute).
+// mute (website/src/docs/developer/webrtc.mdx#admission, #membership-events, #kick-and-mute).
 func TestAdmission_lifecycle(t *testing.T) {
 	t.Parallel()
 	fx := setup(t)

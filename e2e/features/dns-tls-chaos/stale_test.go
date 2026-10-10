@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/eventually"
 )
 
-// corednsUser is the account CoreDNS runs as (docs/SECURITY.md
+// corednsUser is the account CoreDNS runs as (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md
 // "Per-service accounts"): the cut-off matches its connections only.
 const corednsUser = "orama-coredns"
 

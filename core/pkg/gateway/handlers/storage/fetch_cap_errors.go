@@ -8,7 +8,7 @@ import (
 
 // The typed refusals of the fetch-capability routes (bugboard #266). Every one
 // carries {error, code, hint} like the rest of the credential refusals
-// (docs/AUTH.md "Error codes"); the code is the contract.
+// (docs/whitepaper/technical-reference/vol1/14-authorization.md "Error codes"); the code is the contract.
 const (
 	// CodeFetchCapMissing — a relayed download with no X-Orama-Fetch-Cap header.
 	CodeFetchCapMissing = "FETCH_CAP_MISSING"

@@ -22,7 +22,7 @@ import (
 )
 
 // unwired are the module names (proto package segment and genesis key) that
-// register no message, query or genesis state today (docs/CHAIN.md:
+// register no message, query or genesis state today (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md:
 // x/inclusion works through BaseApp handlers only; "chain/
 // x/confidential refuses every attestation report"; x/wasmbindings answers
 // NOT_LINKED; x/vpnlaunch is a pure gate).
@@ -167,7 +167,7 @@ func TestUnwired_noQueryServiceAndNoGenesisState(t *testing.T) {
 }
 
 // voteExtensionsEnableHeight is the abci.vote_extensions_enable_height each
-// deploy writes into genesis (docs/CHAIN.md "Inclusion lists (C13)"):
+// deploy writes into genesis (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Inclusion lists (C13)"):
 // e2e/scripts/chain-deploy.sh leaves it 0 (off) on a run chain,
 // chain/scripts/stagenet/deploy.sh sets 2.
 func voteExtensionsEnableHeight(c *chain.Chain) string {
@@ -198,7 +198,7 @@ func TestInclusion_voteExtensionsAreTheDeploysSwitch(t *testing.T) {
 }
 
 // TestUnwired_noPublicPaymentPath: with the norama send restriction a user
-// cannot pay another user in the public denom (docs/CHAIN.md "Denom and
+// cannot pay another user in the public denom (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md "Denom and
 // accounts"); the private path between users is x/shielded, tested by
 // chain-shielded.
 func TestUnwired_noPublicPaymentPath(t *testing.T) {

@@ -2,7 +2,7 @@
 //
 // The version used to exist only as a -ldflags value, so it was correct when
 // built through `make build` or GoReleaser and the string "dev" everywhere
-// else — `go build`, `go install`, `go run`, an IDE. NODE_REPLACEMENT.md makes
+// else — `go build`, `go install`, `go run`, an IDE. website/src/docs/operator/node-replacement.mdx makes
 // matching the CLI's version against the node's a mandatory gate before a
 // rolling upgrade, and a binary that cannot say what it is makes that gate
 // unenforceable.

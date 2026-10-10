@@ -51,7 +51,7 @@ const (
 	GlobalIndexerUnit  = "orama-global-indexer.service"
 	GlobalRepairUnit   = "orama-global-repair.service"
 
-	// The Orama Tor network's units (docs/TOR_NETWORK.md). A directory
+	// The Orama Tor network's units (website/src/docs/operator/tor-network.mdx). A directory
 	// authority is also a relay, so GlobalTorDirauthUnit and GlobalTorRelayUnit
 	// are never installed on one host.
 	GlobalTorDirauthUnit  = "orama-global-tor-dirauth.service"
@@ -134,7 +134,7 @@ func LocalGlobalIPFSAPIURL() string { return hostPortURL("127.0.0.1", GlobalIPFS
 // LocalGlobalIndexerURL is the chain indexer's read API on this node.
 func LocalGlobalIndexerURL() string { return hostPortURL("127.0.0.1", GlobalIndexerPort) }
 
-// The co-located layout's veth pair (docs/RUN_A_GLOBAL_NODE.md, "Sharing a
+// The co-located layout's veth pair (website/src/docs/blockchain/run-a-global-node.mdx, "Sharing a
 // machine with a cluster node"). It lives here so the namespace layout
 // (pkg/globalnetns) and the readers of the chain's listeners (the cluster
 // gateway, the node report) agree on one address and cannot drift.

@@ -1,7 +1,7 @@
 // Package inclusion is the C13 decision rule for vote-extension inclusion lists.
 // It is pure: it reads no state of its own and applies none. chain/app
 // connects it to CometBFT: ExtendVote, VerifyVoteExtension, PrepareProposal
-// and ProcessProposal call it (docs/CHAIN.md, "Inclusion lists (C13)").
+// and ProcessProposal call it (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, "Inclusion lists (C13)").
 //
 // A list is raw transaction bytes, capped by ListMaxBytes. SelectList picks
 // what a validator lists, EncodeList and DecodeList carry it in a vote

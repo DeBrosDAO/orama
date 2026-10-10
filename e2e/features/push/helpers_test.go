@@ -18,7 +18,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// Routes (docs/API_SURFACE.md#push) and limits (core/pkg/gateway/handlers/push).
+// Routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md#api-surface) and limits (core/pkg/gateway/handlers/push).
 const (
 	pathCreds      = "/v1/namespace/push-credentials"
 	pathCredsAPNs  = "/v1/namespace/push-credentials/apns"

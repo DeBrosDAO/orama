@@ -26,6 +26,15 @@ import {
   FlaskConical,
   Upload,
   MonitorPlay,
+  Bell,
+  Search,
+  RefreshCw,
+  ShieldCheck,
+  ScrollText,
+  EyeOff,
+  Network,
+  ShieldAlert,
+  Cloud,
 } from "lucide-react";
 
 export interface DocLink {
@@ -105,6 +114,18 @@ export const DEVELOPER_DOCS: DocLink[] = [
     description: "TypeScript SDK API surface",
   },
   {
+    title: "Go Client SDK",
+    slug: "developer/go-sdk",
+    icon: FileCode,
+    description: "Go client for the gateway: storage, SQL, PubSub",
+  },
+  {
+    title: "Push Notifications",
+    slug: "developer/push-notifications",
+    icon: Bell,
+    description: "APNs, ntfy and UnifiedPush from your namespace",
+  },
+  {
     title: "CLI Reference",
     slug: "developer/cli-reference",
     icon: Terminal,
@@ -132,10 +153,22 @@ export const OPERATOR_DOCS: DocLink[] = [
     description: "Install and configure a node",
   },
   {
+    title: "Run Your Own Cluster",
+    slug: "operator/run-your-own-cluster",
+    icon: Rocket,
+    description: "Three machines and a domain to a private cluster",
+  },
+  {
     title: "Node Management",
     slug: "operator/node-management",
     icon: LayoutDashboard,
     description: "Unified commands for managing your nodes",
+  },
+  {
+    title: "Node Replacement",
+    slug: "operator/node-replacement",
+    icon: RefreshCw,
+    description: "Swap a nameserver VPS without losing quorum",
   },
   {
     title: "Monitoring",
@@ -144,10 +177,28 @@ export const OPERATOR_DOCS: DocLink[] = [
     description: "Cluster health and alerts",
   },
   {
+    title: "Inspector",
+    slug: "operator/inspector",
+    icon: Search,
+    description: "SSH health checks across every node",
+  },
+  {
     title: "Upgrades",
     slug: "operator/upgrades",
     icon: ArrowUpCircle,
     description: "Rolling upgrade protocol",
+  },
+  {
+    title: "Upgrade Notes",
+    slug: "operator/upgrade-notes",
+    icon: ScrollText,
+    description: "What a release-crossing upgrade changes",
+  },
+  {
+    title: "Signed Archives",
+    slug: "operator/signed-archives",
+    icon: ShieldCheck,
+    description: "Build signing and the node trust anchor",
   },
   {
     title: "WireGuard",
@@ -166,6 +217,30 @@ export const OPERATOR_DOCS: DocLink[] = [
     slug: "operator/orama-os",
     icon: HardDrive,
     description: "Locked-down node operating system",
+  },
+  {
+    title: "Stealth TURN",
+    slug: "operator/stealth-turn",
+    icon: EyeOff,
+    description: "TURN over TLS on port 443 behind an SNI router",
+  },
+  {
+    title: "Tor Network",
+    slug: "operator/tor-network",
+    icon: Network,
+    description: "Run Tor directory authorities, relays, exits and onion services",
+  },
+  {
+    title: "Vault Guardians",
+    slug: "operator/vault-guardians",
+    icon: Lock,
+    description: "Run, monitor and recover the vault guardian on each node",
+  },
+  {
+    title: "WebRTC Operations",
+    slug: "operator/webrtc-operations",
+    icon: Video,
+    description: "Placement, ports, shared TURN and role reconciliation",
   },
   {
     title: "Troubleshooting",
@@ -212,6 +287,18 @@ export const BLOCKCHAIN_DOCS: DocLink[] = [
     icon: Server,
     description: "Ports, chain id, and how it is installed today",
   },
+  {
+    title: "Run a global node",
+    slug: "blockchain/run-a-global-node",
+    icon: Server,
+    description: "Install, bond, validate, move and remove a global node",
+  },
+  {
+    title: "Security disclosure",
+    slug: "blockchain/security-disclosure",
+    icon: ShieldAlert,
+    description: "Scope, severity and how to report a chain vulnerability",
+  },
 ];
 
 export const CONTRIBUTOR_DOCS: DocLink[] = [
@@ -220,7 +307,13 @@ export const CONTRIBUTOR_DOCS: DocLink[] = [
     slug: "contributor/architecture",
     icon: LayoutDashboard,
     description: "System design overview",
+  },  {
+    title: "Architecture Reference",
+    slug: "contributor/architecture-reference",
+    icon: LayoutDashboard,
+    description: "Node process model, components, data flow and security",
   },
+
   {
     title: "Dev Setup",
     slug: "contributor/dev-setup",
@@ -244,6 +337,12 @@ export const CONTRIBUTOR_DOCS: DocLink[] = [
     slug: "contributor/deployment",
     icon: Upload,
     description: "CI/CD and release process",
+  },
+  {
+    title: "Sandbox",
+    slug: "contributor/sandbox",
+    icon: Cloud,
+    description: "Ephemeral five-node clusters on Hetzner Cloud",
   },
 ];
 

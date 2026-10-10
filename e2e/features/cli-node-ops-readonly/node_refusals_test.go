@@ -143,7 +143,7 @@ func TestNodeEnrollRoute_refusesBadRequests(t *testing.T) {
 
 // TestNodeMigrateConf_refusedWithoutCredential: migrate-conf registers nodes
 // with the wallet through the gateway and needs `orama auth login` first
-// (docs/CLI_REFERENCE.md#orama-node-migrate-conf); an environment that is not
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-node-migrate-conf); an environment that is not
 // configured is refused. Neither registers anything.
 func TestNodeMigrateConf_refusedWithoutCredential(t *testing.T) {
 	t.Parallel()

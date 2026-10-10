@@ -14,7 +14,7 @@ import (
 // raft.db). rqlite orders snapshots by term first, so that snapshot stays
 // "newest": every later snapshot is reaped as older, a node that needs a
 // snapshot is sent the stale one and never catches up, and a restarted node
-// restores it and stalls the same way (docs/COMMON_PROBLEMS.md).
+// restores it and stalls the same way (website/src/docs/operator/troubleshooting.mdx).
 func checkSnapshotTermAhead(reports []*report.NodeReport) []Alert {
 	var alerts []Alert
 	for _, r := range reports {
@@ -23,7 +23,7 @@ func checkSnapshotTermAhead(reports []*report.NodeReport) []Alert {
 		}
 		if r.RQLite.LastSnapshotTerm > r.RQLite.Term {
 			alerts = append(alerts, Alert{AlertCritical, "rqlite", nodeHost(r),
-				fmt.Sprintf("Raft snapshot term %d is above the current term %d: a lagging or restarted node cannot catch up; do not restart rqlite (see COMMON_PROBLEMS.md)",
+				fmt.Sprintf("Raft snapshot term %d is above the current term %d: a lagging or restarted node cannot catch up; do not restart rqlite (see orama.network/docs/operator/troubleshooting)",
 					r.RQLite.LastSnapshotTerm, r.RQLite.Term)})
 		}
 	}

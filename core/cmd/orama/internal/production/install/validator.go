@@ -56,7 +56,7 @@ func (v *Validator) ValidateDNS() {
 	fmt.Printf("\n🌐 Pre-flight DNS validation...\n")
 	if v.flags.Nameserver {
 		fmt.Printf("  ℹ️  Certificates for %s are issued over DNS-01 by this cluster's nameservers;\n", v.flags.Domain)
-		fmt.Printf("     the parent zone must delegate %s to them (docs/NAMESERVER_SETUP.md)\n", v.flags.Domain)
+		fmt.Printf("     the parent zone must delegate %s to them (orama.network/docs/operator/nameserver)\n", v.flags.Domain)
 		return
 	}
 	utils.ValidateDNSRecord(v.flags.Domain, v.flags.VpsIP)

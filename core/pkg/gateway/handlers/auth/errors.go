@@ -29,7 +29,7 @@ const ErrCodeNoKeyForRole = "ROLE_HAS_NO_KEY"
 // writeCredentialError turns a credential-issuing failure into a response.
 //
 // A namespace owned by another wallet is the caller's answer, not a server
-// fault: 403 with a code and a hint, as every refusal carries (docs/AUTH.md),
+// fault: 403 with a code and a hint, as every refusal carries (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md),
 // and no credential of any kind in the body.
 func writeCredentialError(w http.ResponseWriter, namespace string, err error) {
 	var owned *authsvc.ErrNamespaceOwnedByAnother

@@ -9,6 +9,10 @@
 # The build prints the investor page to a PDF with Google Chrome or Chromium
 # (scripts/build-pdf.mjs); set CHROME_PATH if it is not in a standard place.
 #
+# The build also copies the whitepaper PDFs into the site
+# (scripts/build-whitepaper.mjs, needs pdfinfo); build them first with
+# `make whitepaper whitepaper-short` from the repo root.
+#
 # Authentication is by SSH key only. The nginx site config lives in
 # deploy/orama.network.nginx.conf and is installed once, not by this script.
 set -euo pipefail

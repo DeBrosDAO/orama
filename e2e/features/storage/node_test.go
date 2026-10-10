@@ -28,7 +28,7 @@ const (
 )
 
 // TestReplication_readableThroughEveryNode: once pinned on RF peers, the
-// object downloads through every node's gateway (docs/ARCHITECTURE.md).
+// object downloads through every node's gateway (website/src/docs/contributor/architecture-reference.mdx).
 func TestReplication_readableThroughEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -45,7 +45,7 @@ func TestReplication_readableThroughEveryNode(t *testing.T) {
 
 // TestSealing_privateBlobIsCiphertextOnNode: a storage upload is AES-GCM
 // sealed before Add, so every node's Kubo repo holds ORMAW1 ciphertext and
-// never the plaintext; a .tar.gz is not wrapped (docs/SECURITY.md, feat-270).
+// never the plaintext; a .tar.gz is not wrapped (docs/whitepaper/technical-reference/vol1/19-storage.md, feat-270).
 func TestSealing_privateBlobIsCiphertextOnNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -69,7 +69,7 @@ func TestSealing_privateBlobIsCiphertextOnNode(t *testing.T) {
 }
 
 // TestKubo_bearerRequired: the Kubo RPC on 127.0.0.1:10107 refuses a local
-// caller without the bearer and serves one with it (docs/SECURITY.md).
+// caller without the bearer and serves one with it (docs/whitepaper/technical-reference/vol1/28-vault.md).
 func TestKubo_bearerRequired(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -84,7 +84,7 @@ func TestKubo_bearerRequired(t *testing.T) {
 }
 
 // TestCluster_restBasicAuth: IPFS Cluster's REST API wants basic auth
-// (user orama, derived password) and service.json is 0600 (docs/SECURITY.md).
+// (user orama, derived password) and service.json is 0600 (docs/whitepaper/technical-reference/vol1/16-secrets-and-keys.md).
 func TestCluster_restBasicAuth(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -102,7 +102,7 @@ func TestCluster_restBasicAuth(t *testing.T) {
 }
 
 // TestCluster_kuboProxyAdmitsOnlyOrama: serve-ipfs-cluster on 10110 admits
-// only sockets the orama user owns (docs/ARCHITECTURE.md; sock_diag check).
+// only sockets the orama user owns (website/src/docs/contributor/architecture-reference.mdx; sock_diag check).
 func TestCluster_kuboProxyAdmitsOnlyOrama(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -119,7 +119,7 @@ func TestCluster_kuboProxyAdmitsOnlyOrama(t *testing.T) {
 }
 
 // TestIPFS_loopbackOnly: Kubo, the cluster REST API and the proxy listen on
-// loopback only (docs/SECURITY.md#network-isolation).
+// loopback only (docs/whitepaper/technical-reference/vol1/15-inter-node-trust.md#who-holds-the-cluster-secret).
 func TestIPFS_loopbackOnly(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -142,7 +142,7 @@ func TestIPFS_loopbackOnly(t *testing.T) {
 }
 
 // TestGC_timerAndBearer: the repo GC timer is active on every node and its
-// oneshot carries the Kubo bearer (docs/ARCHITECTURE.md; SECURITY.md).
+// oneshot carries the Kubo bearer (website/src/docs/contributor/architecture-reference.mdx; docs/whitepaper/technical-reference/vol1/19-storage.md).
 func TestGC_timerAndBearer(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -191,7 +191,7 @@ type ipfsReport struct {
 
 // TestMonitor_ipfsPlumbing: the operator's report reads Kubo and the cluster
 // with their credentials, and reads the pin-lock list that feeds the
-// "pin/add active" alert (docs/MONITORING.md#ipfs).
+// "pin/add active" alert (website/src/docs/operator/monitoring.mdx#per-node-checks).
 func TestMonitor_ipfsPlumbing(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

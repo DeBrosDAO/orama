@@ -22,7 +22,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Deployment routes (docs/API_SURFACE.md "Deployments").
+// Deployment routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Deployments").
 const (
 	pathGet      = "/v1/deployments/get"
 	pathList     = "/v1/deployments/list"
@@ -36,7 +36,7 @@ const (
 	pathEnvSet   = "/v1/deployments/env/set"
 	pathGrants   = "/v1/deployments/grants"
 	// startBudget: the platform polls a new app's health path every 30s
-	// (docs/DEPLOYMENT_GUIDE.md), and a server-side npm install may take 4 min.
+	// (website/src/docs/developer/deployments.mdx), and a server-side npm install may take 4 min.
 	startBudget = 6 * time.Minute
 	pollEvery   = 3 * time.Second
 	// cleanupBudget bounds one cleanup call.

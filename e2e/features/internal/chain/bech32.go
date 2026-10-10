@@ -13,7 +13,7 @@ const AccountPrefix = "orama"
 
 // UnreachableAuthorityName is the never-registered module name whose address
 // every authority-gated module is given (chain/app/app.go
-// UnreachableAuthority, docs/CHAIN.md "Modules wired").
+// UnreachableAuthority, docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "Modules wired").
 const UnreachableAuthorityName = "orama/no-authority"
 
 const bech32Charset = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"

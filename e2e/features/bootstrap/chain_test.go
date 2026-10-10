@@ -32,7 +32,7 @@ type chainView struct {
 }
 
 // TestBootstrap_chainValidatorsCoHosted: every core node runs the chain unit,
-// is a validator of the run's chain and is in sync (docs/CHAIN.md).
+// is a validator of the run's chain and is in sync (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md).
 func TestBootstrap_chainValidatorsCoHosted(t *testing.T) {
 	t.Parallel()
 	harness.RequireChain(t)

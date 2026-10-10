@@ -9,7 +9,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 )
 
-// minEligibleOperators is the operator-house size a tier needs (docs/CHAIN.md
+// minEligibleOperators is the operator-house size a tier needs (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md
 // "x/houses": 21 members).
 const minEligibleOperators = 21
 
@@ -29,7 +29,7 @@ func housesMsg(typ string, fields map[string]any) chain.Msg {
 // TestHouses_tiersClosedOnASmallNetwork: nobody governs during bootstrap. The
 // run has three validators, far below bootstrap_exit_stake (271,000 ORAMA)
 // and without a 21-member operator house (no operator has 90 days of
-// service), so both tiers are closed (docs/CHAIN.md "x/houses").
+// service), so both tiers are closed (docs/whitepaper/technical-reference/vol2/44-governance-and-contracts.md "x/houses").
 func TestHouses_tiersClosedOnASmallNetwork(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)

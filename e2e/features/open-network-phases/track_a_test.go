@@ -27,7 +27,7 @@ const (
 // cluster is on its operator list with no SQL by hand, and an operator route
 // refuses a wallet that is not (A1).
 func TestPhaseA1_genesisWalletOperatesTheCluster(t *testing.T) {
-	phase(t, "A1", "docs/CLI_REFERENCE.md", "### orama operator add", trackA+" A1")
+	phase(t, "A1", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama operator add", trackA+" A1")
 	f := harness.Fleet(t)
 	list := run(t, harness.CLI(t), "operator", "list")
 	if list.Exit != exitOK || !strings.Contains(strings.ToLower(out(list)), strings.ToLower(f.State.OperatorAddress)) {
@@ -42,7 +42,7 @@ func TestPhaseA1_genesisWalletOperatesTheCluster(t *testing.T) {
 // knows no environment (nobody's devnet or testnet) and says how to add
 // one (A2; core/cmd/orama/internal/environment.go noEnvironmentHelp).
 func TestPhaseA2_freshCLIPointsAtNoCluster(t *testing.T) {
-	phase(t, "A2", "docs/CLI_REFERENCE.md", "### orama env add", trackA+" A2")
+	phase(t, "A2", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama env add", trackA+" A2")
 	cli := freshCLI(t)
 	listed := strings.ToLower(out(run(t, cli, "env", "list")))
 	for _, fleetName := range []string{"devnet", "testnet", "mainnet", "stagenet"} {
@@ -63,7 +63,7 @@ func TestPhaseA2_freshCLIPointsAtNoCluster(t *testing.T) {
 // namespace a broken policy would let through, and an accepted one is
 // adopted so it is deleted.
 func TestPhaseA3_creationPolicyEnforced(t *testing.T) {
-	phase(t, "A3", "docs/CLI_REFERENCE.md", "### orama cluster settings set", trackA+" A3")
+	phase(t, "A3", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama cluster settings set", trackA+" A3")
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
 	tenancy.Reserve(t, f, 1)
@@ -108,9 +108,9 @@ func restoreOpen(t *testing.T, f *fleet.Fleet, cli *oramacli.Runner) {
 // against the TUF release root, stage-archive refuses an archive whose
 // metadata does not verify, even though the archive itself is the one the
 // node's wallet anchor trusts, and /opt/orama is untouched (A4;
-// docs/CLI_REFERENCE.md "orama node stage-archive").
+// docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node stage-archive").
 func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
-	phase(t, "A4", "docs/CLI_REFERENCE.md", "--release-metadata", trackA+" A4")
+	phase(t, "A4", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "--release-metadata", trackA+" A4")
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
 	archive := infra.RunningArchive(t, f)
@@ -133,10 +133,10 @@ func TestPhaseA4_releaseRootRefusesBeforeExtracting(t *testing.T) {
 // TestPhaseA5_notifyByDefaultValidatorNeverAuto: the update decision
 // reports a newer release without installing it unless the cluster chose
 // auto, and a validator cannot be auto (A5; the unattended agent that would
-// act on the decision is not in this release, docs/CLI_REFERENCE.md "orama
+// act on the decision is not in this release, docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama
 // node autoupdate": "The install itself ... is not performed by this command").
 func TestPhaseA5_notifyByDefaultValidatorNeverAuto(t *testing.T) {
-	phase(t, "A5", "docs/CLI_REFERENCE.md", "### orama node autoupdate", trackA+" A5")
+	phase(t, "A5", "docs/whitepaper/technical-reference/appendices/d-cli-reference.md", "## orama node autoupdate", trackA+" A5")
 	cli := harness.CLI(t)
 	def := run(t, cli, "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1")
 	if def.Exit != exitOK || strings.TrimSpace(out(def)) != "notify: newer release 1.0.1 (notify)" {

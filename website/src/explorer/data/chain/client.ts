@@ -1,4 +1,4 @@
-/** The gateway's read-only chain proxy (docs/CHAIN.md, "The gateway's chain proxy"). */
+/** The gateway's read-only chain proxy (docs/whitepaper/technical-reference/vol2/42-archive-and-indexer.md, "The gateway's chain proxy"). */
 export const CHAIN_BASE = "/v1/chain";
 
 /** How long one read may take before the reader is told the chain could not be reached. */

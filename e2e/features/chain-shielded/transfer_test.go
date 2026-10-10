@@ -9,7 +9,7 @@ import (
 )
 
 // transferGas is the gas a signer-less transfer of actions actions must
-// declare: exactly action_gas x actions (docs/CHAIN.md "x/shielded").
+// declare: exactly action_gas x actions (docs/whitepaper/technical-reference/vol2/43-the-shielded-pool.md "x/shielded").
 func transferGas(p shieldedParams, actions int) uint64 { return p.ActionGas * uint64(actions) }
 
 // duplicateNullifier is one nullifier used by two actions of a bundle.

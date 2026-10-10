@@ -96,7 +96,7 @@ func cliBackup(t testing.TB, cli *oramacli.Runner, k tenancy.BackupKey) string {
 // operator: the file is sealed (0600, ORBK) to the given key, and restoring it
 // puts the namespace's database back and leaves its keys, which are in the
 // cluster registry and not in the backup, as they are
-// (docs/CLI_REFERENCE.md "orama namespace backup", "orama namespace restore").
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace backup", "orama namespace restore").
 func TestBackupCLI_backupAndRestore(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{Via: ns.ViaOperator})

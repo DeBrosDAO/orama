@@ -14,7 +14,7 @@ import (
 
 // Membership events: an SFU reports every join and leave to a namespace
 // gateway (pkg/sfu/membership.go), which publishes it on the namespace's pubsub
-// where functions and clients can subscribe (docs/WEBRTC.md#membership-events).
+// where functions and clients can subscribe (website/src/docs/developer/webrtc.mdx#membership-events).
 
 const (
 	// EventTopicPrefix prefixes the topic a room's membership is published on.

@@ -26,7 +26,7 @@ var settingLine = regexp.MustCompile(`(?m)^(namespace-creation|max-namespaces-pe
 
 // TestBootstrap_namespaceCreationOpenForTheRun sets namespace creation to
 // open and does not restore it: every later stage creates namespaces as
-// fresh wallets (e2e/README.md "Bootstrap contract", docs/CLI_REFERENCE.md
+// fresh wallets (e2e/README.md "Bootstrap contract", docs/whitepaper/technical-reference/appendices/d-cli-reference.md
 // "orama cluster settings set"). It is not parallel, so it runs before this
 // package's parallel tests, and a fresh wallet then creates a namespace.
 func TestBootstrap_namespaceCreationOpenForTheRun(t *testing.T) {
@@ -108,7 +108,7 @@ func TestBootstrap_invalidModeRefusedKeepsOpen(t *testing.T) {
 
 // TestBootstrap_operatorIsTheTestWallet: the genesis operator is the run's
 // throwaway wallet (the agent signed the install), so every operator command
-// of the run acts as it (docs/AUTH.md "Operating the cluster").
+// of the run acts as it (docs/whitepaper/technical-reference/vol1/12-gateway-architecture.md "Operating the cluster").
 func TestBootstrap_operatorIsTheTestWallet(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -123,7 +123,7 @@ func TestBootstrap_operatorIsTheTestWallet(t *testing.T) {
 }
 
 // TestBootstrap_environmentIsActive: the CLI's active environment is the
-// run's, pointing at the run's gateway (docs/CLI_REFERENCE.md "orama env").
+// run's, pointing at the run's gateway (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama env").
 func TestBootstrap_environmentIsActive(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

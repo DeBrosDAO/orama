@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-server && node scripts/prerender.mjs && node scripts/build-og.mjs && node scripts/build-llms.mjs && node scripts/build-pdf.mjs",
+    "whitepaper": "node scripts/build-whitepaper.mjs",
+    "build": "node scripts/build-whitepaper.mjs && tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-server && node scripts/prerender.mjs && node scripts/build-og.mjs && node scripts/build-llms.mjs && node scripts/build-pdf.mjs",
     "preview": "vite preview",
-    "test": "vitest run",
-    "typecheck": "tsc -b"
+    "test": "node scripts/build-whitepaper.mjs && vitest run",
+    "typecheck": "node scripts/build-whitepaper.mjs && tsc -b"
   },
   "dependencies": {
     "@fontsource-variable/inter": "5.3.0",

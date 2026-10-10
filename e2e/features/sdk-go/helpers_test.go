@@ -58,7 +58,7 @@ type credential struct {
 }
 
 // newClient is an SDK client for n's gateway with cred, configured the way
-// docs/GO_CLIENT_SDK.md "Quick Start" does, connected, and disconnected at
+// website/src/docs/developer/go-sdk.mdx "Quick Start" does, connected, and disconnected at
 // cleanup. No bootstrap peers are dialled: none is reachable from outside.
 func newClient(t testing.TB, n *ns.Namespace, cred credential) client.NetworkClient {
 	t.Helper()

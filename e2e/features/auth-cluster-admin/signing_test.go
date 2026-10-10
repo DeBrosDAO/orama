@@ -23,7 +23,7 @@ const (
 	// gateway (core/pkg/gateway/auth/signing_keys.go) plus a round trip.
 	keyReloadBudget = 45 * time.Second
 	// overlapText is how long the outgoing key keeps verifying: one access
-	// token lifetime (docs/AUTH.md#which-key-signed-a-token).
+	// token lifetime (docs/whitepaper/technical-reference/vol1/13-identity.md#key-rotation).
 	overlapText = "15m0s"
 	// freshPollEvery paces the wait for a gateway to sign with the new key:
 	// each poll signs in once per gateway (two credential operations), so a
@@ -69,7 +69,7 @@ func publishedKids(t testing.TB, c *gw.Client) map[string]bool {
 
 // TestRotateSigningKey_oneLifetimeOverlap: rotating publishes a new key and
 // signs with it, while the outgoing key keeps verifying what it signed: two
-// kids in flight, nobody signed out (docs/AUTH.md#which-key-signed-a-token).
+// kids in flight, nobody signed out (docs/whitepaper/technical-reference/vol1/13-identity.md#upkeep).
 // A key cannot be un-rotated; the new key is simply the cluster's key from
 // here on, which is what an operator's rotation leaves too.
 func TestRotateSigningKey_oneLifetimeOverlap(t *testing.T) {

@@ -17,7 +17,7 @@ First, one fact often lives in two places that cannot import each other. The gat
 
 Second, documents are part of the interface. The CLI reference, the gateway route table and the authentication error codes are read by clients and by the coverage gate. A document that drifts is a wrong interface, so the tests generate or cross-check the documents instead of trusting authors.
 
-Third, most failures that matter cannot be seen on one machine. Raft quorum, WireGuard mesh formation, ACME issuance through a real delegation, rolling upgrades and node loss only exist on several servers with real DNS. The change-287 stability audit's findings "all had to be established by reading code: nothing could observe them", which is the reason the lifecycle harness and later the fleet suite exist (`docs/DEV_DEPLOY.md`, "Lifecycle harness"). Such a run costs money and tens of minutes, so it is a release gate the owner runs, not a check every push pays for. The cheap layers have to make that expensive layer trustworthy: the coverage gate fails the cheap build when a shipped command or route has no fleet test, so completeness of the fleet suite is checked without servers.
+Third, most failures that matter cannot be seen on one machine. Raft quorum, WireGuard mesh formation, ACME issuance through a real delegation, rolling upgrades and node loss only exist on several servers with real DNS. The change-287 stability audit's findings "all had to be established by reading code: nothing could observe them", which is the reason the lifecycle harness and later the fleet suite exist (`website/src/docs/contributor/testing.mdx`, "Lifecycle harness"). Such a run costs money and tens of minutes, so it is a release gate the owner runs, not a check every push pays for. The cheap layers have to make that expensive layer trustworthy: the coverage gate fails the cheap build when a shipped command or route has no fleet test, so completeness of the fleet suite is checked without servers.
 
 ## The model
 
@@ -122,14 +122,13 @@ The Caddy vectors exist because the Caddy module is its own Go module (`caddy/go
 
 | Document | Test | Mechanism |
 |---|---|---|
-| `docs/CLI_REFERENCE.md` | `core/cmd/orama/reference_test.go:TestCLIReferenceMatchesTheCommandTree` | renders the cobra tree and compares; `make -C core docs` rewrites it with `-update-cli-reference` |
-| Appendix D of this book | `core/cmd/orama/book_reference_test.go:TestBookCLIReferenceMatchesTheCommandTree` | renders the same cobra tree for the book (MDX-safe, long help fenced) and compares; `make -C core docs` rewrites it together with `docs/CLI_REFERENCE.md` |
-| `docs/API_SURFACE.md` | `core/pkg/gateway/api_surface_test.go` | `TestEveryRegisteredRouteIsDocumented`, `TestEveryDocumentedRouteExists`, `TestEveryDocumentedRouteHasAnOwner` (owner is one of SDK, CLI, internal, direct); routes are collected by parsing `core/pkg/gateway/routes.go`, the serverless `routes.go` and the rqlite gateway's own `Routes()` |
-| `docs/AUTH.md` error codes | `core/pkg/gateway/auth_codes_doc_test.go:TestAuthCodes_areAllInTheDocs` | every UPPER_SNAKE wire code constant in seven Go files must appear in backticks |
+| Appendix D of this book | `core/cmd/orama/book_reference_test.go:TestCLIReferenceMatchesTheCommandTree` | renders the cobra tree for the book (MDX-safe, long help fenced) and compares; `make -C core docs` rewrites it |
+| `docs/whitepaper/technical-reference/appendices/i-api-surface.md` | `core/pkg/gateway/api_surface_test.go` | `TestEveryRegisteredRouteIsDocumented`, `TestEveryDocumentedRouteExists`, `TestEveryDocumentedRouteHasAnOwner` (owner is one of SDK, CLI, internal, direct); routes are collected by parsing `core/pkg/gateway/routes.go`, the serverless `routes.go` and the rqlite gateway's own `Routes()` |
+| Auth error codes (`docs/whitepaper/technical-reference/vol1/14-authorization.md`) | `core/pkg/gateway/auth_codes_doc_test.go:TestAuthCodes_areAllInTheDocs` | every UPPER_SNAKE wire code constant in seven Go files must appear in backticks |
 | SDK error codes | `sdk/tests/unit/auth-codes-parity.test.ts` | reads three Go sources and requires the `AuthCode` list to name every code the gateway can send |
 | SDK scopes | `sdk/tests/unit/scopes-parity.test.ts` | reads `core/pkg/gateway/auth/scopes.go`; the constants and the `knownGrants` map a mint request is validated against must match |
-| SDK docs | `sdk/tests/unit/docs-parity.test.ts` | every method `docs/TS_SDK.md`, `sdk/README.md` and `sdk/QUICKSTART.md` name must exist on the client |
-| `docs/RUN_YOUR_OWN_CLUSTER.md` | `core/e2e/clusterguide/guide_test.go:TestPlanMatchesTheGuideOnDisk` | parses the page's command blocks and requires them to equal `Plan()` in `core/e2e/clusterguide/plan.go`, with flags and example values the fixture can bind |
+| SDK docs | `sdk/tests/unit/docs-parity.test.ts` | every method `website/src/docs/developer/sdk-reference.mdx`, `sdk/README.md` and `sdk/QUICKSTART.md` name must exist on the client |
+| `website/src/docs/operator/run-your-own-cluster.mdx` | `core/e2e/clusterguide/guide_test.go:TestPlanMatchesTheGuideOnDisk` | parses the page's command blocks and requires them to equal `Plan()` in `core/e2e/clusterguide/plan.go`, with flags and example values the fixture can bind |
 | claims in many documents | fleet features `docs-claims` and `docs-examples` (stage 9) | pure-file checks against the checkout and live checks against the fleet; every `orama` command line in a shell block is validated against the binary; whole Go programs are built against the checkout |
 
 The generated CLI reference and the route table have a second use: they are the sources of the fleet coverage universe, so a command or route cannot exist without first being in a document that a test already forces to be true.
@@ -235,7 +234,7 @@ Credential calls are paced. The gateway allows 30 credential operations a minute
 
 ![How the coverage universe is built and judged](../diagrams/ch34-coverage-gate.svg)
 
-`e2e/harness/coverage/enumerate.go:Universe` builds the list of everything that ships, from four sources: the `### orama ...` headings of `docs/CLI_REFERENCE.md` (group commands included, because `orama app` printing its subcommands is part of what ships), the route rows of `docs/API_SURFACE.md` (paths as written; the document has no method column), the `Msg` service of every `tx.proto` and the `Query` service of every `query.proto` under `chain/proto`, and the `.service` and `.timer` files in `core/systemd`. A missing source is an error and so is a source yielding nothing: an empty universe would pass by covering nothing.
+`e2e/harness/coverage/enumerate.go:Universe` builds the list of everything that ships, from four sources: the `## orama ...` headings of `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` (group commands included, because `orama app` printing its subcommands is part of what ships), the route rows of `docs/whitepaper/technical-reference/appendices/i-api-surface.md` (paths as written; the document has no method column), the `Msg` service of every `tx.proto` and the `Query` service of every `query.proto` under `chain/proto`, and the `.service` and `.timer` files in `core/systemd`. A missing source is an error and so is a source yielding nothing: an empty universe would pass by covering nothing.
 
 `coverage.Evaluate` matches the universe against the manifests' `covers` and `e2e/waivers.yaml`. The gate fails on:
 
@@ -265,6 +264,8 @@ Teardown of servers runs from a `defer` and after SIGINT, SIGTERM and SIGHUP; a 
 #### Scanners and the stagenet target
 
 The `scanners` feature (stage 9) runs `govulncheck`, `staticcheck` and `gosec` (high severity, high confidence) on the `core`, `chain` and `e2e` modules, the audit of the SDKs' production dependencies, a secret scan of the tree and of the built archive, a fuzz smoke, and the race detector over the packages that start the most goroutines (gateway, rqlite, namespace, node). `govulncheck` and `staticcheck` are pinned and run with `go run`, so the toolchain that builds the modules builds the scanner. Reachable vulnerabilities are compared with `e2e/features/scanners/govulncheck-accepted.yaml`: a reachable finding that is not listed fails, a listed entry no longer reported is stale and fails, and an entry whose `review_by` has passed or is more than 90 days away fails (`e2e/harness/vulnaccept/`). A scanner that is not installed is not covered, never a pass.
+
+The accepted list holds three `chain` advisories, each with a reason and `review_by: 2026-12-29`. GO-2026-6443 (`grpc` 1.84.0, server panic on a request with no authority): the database lists the fix only as a pre-release, so the range also covers the tagged 1.84.0, which already answers such a request with an HTTP 400 early abort; the panic needs xDS routing (`RouteAndProcess`), and the chain's only gRPC server is cosmos-sdk's plain `grpc.NewServer`, with the xDS packages linked only for the client-side `googledirectpath`. GO-2026-5932 (`x/crypto/openpgp`, unmaintained, no fixed version): reached through package init and interface dispatch, never through an armor reader, and the real armor use is the key import and export commands reading a file the operator names. GO-2026-4740 (`shamaton/msgpack/v2`, no fixed version): reached only through the package init of `x/wasmpolicy`, and the decoder is never called. Fixed instead of accepted: OpenTelemetry's OTLP trace and log exporters (GO-2026-6505, GO-2026-6508) were upgraded, and CoreDNS was moved to 1.14.7 for GO-2026-6506 and GO-2026-6507 (`core/pkg/constants/versions.go:CoreDNSVersion`).
 
 The same runner can test an existing cluster. `e2e-fleet target stagenet --out FILE` writes a state describing the five stagenet nodes from local files and `ssh-keyscan`; `test` then runs stages against it. On that target the runner only tests: it never creates, sweeps or destroys a server, holds no cloud credential, starts no broker, and tests that need an extra server, a probe, the DNS broker or a release archive skip with `SkipNotApplicable`. The state is accepted only if it matches the pins in `e2e/harness/config/stagenet.go` exactly (environment, base domain, chain id pattern, the five addresses, agent socket and paths). The live-namespace cap there defaults to 4 (`ns.StagenetMaxLive`), because sixteen starved the shared nodes on 2026-09-30. Stages 10 and 11 disturb a live cluster and run only on purpose.
 
@@ -321,7 +322,7 @@ CI triggers on pushes and pull requests to `main` and `nightly`, with the concur
 |---|---|---|---|
 | Contract fixtures | `contracts/*/*.json` | developers | Go contract tests, `sdk/tests/unit/contracts.test.ts`, `contracts-live` |
 | Vector files | `chain/piece/testdata/`, `chain/storagekey/testdata/`, `chain/client/tx/testdata/` | the chain tests that regenerate them | core and SDK tests |
-| Generated CLI reference | `docs/CLI_REFERENCE.md` | `make -C core docs` | the reference test, the coverage universe, Appendix D |
+| Generated CLI reference | `docs/whitepaper/technical-reference/appendices/d-cli-reference.md` | `make -C core docs` | the book reference test, the coverage universe |
 | Feature manifests | `e2e/features/*/feature.yaml` | developers | lint, the stage planner, the coverage gate, the report |
 | Stage plan | `e2e/stages/stages.yaml` | developers | the runner (ids must run 1 to 11) |
 | Waivers | `e2e/waivers.yaml` | developers | the coverage gate |
@@ -336,7 +337,7 @@ CI triggers on pushes and pull requests to `main` and `nightly`, with the concur
 
 ## Lifecycle
 
-**A change.** A developer edits code; the unit tests, rule tests, fixtures and doc bindings run with `go test ./...` in `core` (the pre-push hook does this). If a command, route, chain message or unit is added or removed, `docs/CLI_REFERENCE.md` or `docs/API_SURFACE.md` must change in the same commit or a doc-binding test fails, and `make test` additionally requires a covering fleet feature or a waiver. A change to a documented behaviour must update the matching chapter or the book gates fail.
+**A change.** A developer edits code; the unit tests, rule tests, fixtures and doc bindings run with `go test ./...` in `core` (the pre-push hook does this). If a command, route, chain message or unit is added or removed, the CLI reference (`docs/whitepaper/technical-reference/appendices/d-cli-reference.md`) or the API surface (`docs/whitepaper/technical-reference/appendices/i-api-surface.md`) must change in the same commit or a doc-binding test fails, and `make test` additionally requires a covering fleet feature or a waiver. A change to a documented behaviour must update the matching chapter or the book gates fail.
 
 **A pull request.** CI runs the module jobs in parallel on `ubuntu-latest`. Darwin and other non-Linux code paths (files tagged `!linux`) build and test only on the developer's machine.
 
@@ -354,7 +355,7 @@ CI triggers on pushes and pull requests to `main` and `nightly`, with the concur
 |---|---|---|
 | A CLI command, route, message or unit is added with no feature | the coverage gate lists it UNCOVERED | `make test` fails in `e2e-coverage`; fleet report verdict INCOMPLETE |
 | A covered command is removed | `covers` entry matches nothing | UNKNOWN COVERS; also STALE WAIVERS if it was waived |
-| `docs/CLI_REFERENCE.md` not regenerated | the reference test prints the first differing line | `go test ./cmd/orama` fails; fix with `make -C core docs` |
+| CLI reference not regenerated | the book reference test prints the first differing line | `go test ./cmd/orama` fails; fix with `make -C core docs` |
 | SDK sends a field the gateway drops | `DecodeStrict` rejects the fixture | Go contract test names the SDK method |
 | Fixture edited, test cached | out-of-module files are not cache inputs | a stale PASS unless `-count=1` (CI does this only for `Contract` tests and the CLI reference) |
 | Package started without fleet state | `harness.Main` exits 1 in strict mode | package failure, never a silent skip |
@@ -402,7 +403,7 @@ CI triggers on pushes and pull requests to `main` and `nightly`, with the concur
 
 ### Derive the coverage universe from generated documents
 
-**Chosen:** the universe is read from `docs/CLI_REFERENCE.md`, `docs/API_SURFACE.md`, the proto files and `core/systemd`. **Rejected:** a hand-kept list of what ships. **Why:** the documents are already forced equal to the code by tests, so the gate needs no second enumerator and cannot disagree with the product (package comment of `e2e/harness/coverage/enumerate.go`).
+**Chosen:** the universe is read from `docs/whitepaper/technical-reference/appendices/d-cli-reference.md`, `docs/whitepaper/technical-reference/appendices/i-api-surface.md`, the proto files and `core/systemd`. **Rejected:** a hand-kept list of what ships. **Why:** the documents are already forced equal to the code by tests, so the gate needs no second enumerator and cannot disagree with the product (package comment of `e2e/harness/coverage/enumerate.go`).
 
 ### A skip is not a pass, and a re-run is not a fix
 
@@ -410,7 +411,7 @@ CI triggers on pushes and pull requests to `main` and `nightly`, with the concur
 
 ### Real paths only
 
-**Chosen:** requests go to the public name through real DNS and TLS pinned to Let's Encrypt staging roots, logins are real signatures, operators use the CLI under test. **Rejected:** mocks for delegation, the CA or the wallet; setting up product state over SSH. **Why:** the surface under test includes the paths an operator uses, and a harness that reaches around the CLI "would test a path no operator runs" (`docs/DEV_DEPLOY.md`).
+**Chosen:** requests go to the public name through real DNS and TLS pinned to Let's Encrypt staging roots, logins are real signatures, operators use the CLI under test. **Rejected:** mocks for delegation, the CA or the wallet; setting up product state over SSH. **Why:** the surface under test includes the paths an operator uses, and a harness that reaches around the CLI "would test a path no operator runs" (`website/src/docs/contributor/testing.mdx`).
 
 ### Strict mode and fail-closed redaction
 

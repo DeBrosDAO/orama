@@ -82,7 +82,7 @@ denied by default, --ssh-port is allowed, and ufw is enabled; --ssh-port must
 be a port 'sshd -T' reports, or nothing is changed. Running the
 command again with the same flags changes nothing but the binaries' bytes.
 
-The roles of the Orama Tor network (docs/TOR_NETWORK.md) run the distro's tor,
+The roles of the Orama Tor network (orama.network/docs/operator/tor-network) run the distro's tor,
 installed from the Tor Project's repository, with a torrc this command writes
 from the network's tor-network.json, staged beside the binaries; the network file
 is checked before anything on the host changes.

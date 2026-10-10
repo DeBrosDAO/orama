@@ -68,8 +68,8 @@ func dialTLS(t *testing.T, ip, sni string, edit func(*tls.Config)) (*tls.Connect
 // for the base name and for a name under it, a certificate that chains to the
 // pinned roots, covers the name (the wildcard one as *.<base>), was issued by
 // the CA the cluster uses — staging on a fleet the run provisioned, production
-// on stagenet — and is far from expiry (docs/ARCHITECTURE.md "TLS/HTTPS":
-// ACME DNS-01 by the network's own DNS; docs/NAMESERVER_SETUP.md "delegation
+// on stagenet — and is far from expiry (website/src/docs/contributor/architecture-reference.mdx "TLS/HTTPS":
+// ACME DNS-01 by the network's own DNS; website/src/docs/operator/nameserver.mdx "delegation
 // before certificates").
 func TestTLS_everyNodeServesCertsForBaseAndWildcard(t *testing.T) {
 	t.Parallel()
@@ -103,7 +103,7 @@ func TestTLS_everyNodeServesCertsForBaseAndWildcard(t *testing.T) {
 }
 
 // TestTLS_versionsTwelveAndThirteen: TLS 1.2 and 1.3 both handshake
-// (docs/ARCHITECTURE.md "internet-facing TLS is 1.2+"; 1.0/1.1 refusal is in
+// (website/src/docs/contributor/architecture-reference.mdx "internet-facing TLS is 1.2+"; 1.0/1.1 refusal is in
 // the smoke feature).
 func TestTLS_versionsTwelveAndThirteen(t *testing.T) {
 	t.Parallel()
@@ -119,7 +119,7 @@ func TestTLS_versionsTwelveAndThirteen(t *testing.T) {
 }
 
 // TestTLS_onlyHTTP11ByALPN: offered h2 and http/1.1, Caddy picks http/1.1;
-// offered h2 alone it never agrees to h2 (docs/ARCHITECTURE.md "HTTP/1.1
+// offered h2 alone it never agrees to h2 (website/src/docs/contributor/architecture-reference.mdx "HTTP/1.1
 // only": HTTP/2 strips WebSocket upgrade headers, bug #249).
 func TestTLS_onlyHTTP11ByALPN(t *testing.T) {
 	t.Parallel()
@@ -149,7 +149,7 @@ const foreignDomain = "example.org"
 // TestTLS_foreignNamesGetNoCertificate: a name the cluster does not serve —
 // another domain, a random name under another domain, the base spelled as a
 // suffix of a longer label, no name at all — is never answered with a
-// certificate that verifies for it (docs/ARCHITECTURE.md "TLS/HTTPS":
+// certificate that verifies for it (website/src/docs/contributor/architecture-reference.mdx "TLS/HTTPS":
 // certificates cover the base domain and its subdomains only). A name any
 // depth below the base is served (on-demand TLS allows every *.<base>:
 // core/pkg/gateway/status_handlers.go tlsCheckHandler), so none is used here.

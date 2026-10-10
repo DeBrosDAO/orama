@@ -21,7 +21,7 @@ func revokeMsg(granter, grantee string) chain.Msg {
 
 // TestFeegrant_granterCannotPayFromEarnings: a fee granter sponsors only from
 // its public bank balance, never from anyone's earnings (x/fees/keeper
-// feepay.go SettleFee allowEarningsForBase=false, docs/CHAIN.md "Feegrant
+// feepay.go SettleFee allowEarningsForBase=false, docs/whitepaper/technical-reference/vol2/40-economics.md "Feegrant
 // sponsorship"). Validator A grants validator B an unlimited allowance; A's
 // bank balance is empty, so B's transaction naming A as granter is refused,
 // although both have ample earnings. The grant is revoked at cleanup.

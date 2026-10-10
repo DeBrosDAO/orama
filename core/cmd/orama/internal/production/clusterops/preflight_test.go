@@ -9,8 +9,8 @@ import (
 
 // A node holds a voter in the platform cluster and in every namespace it was
 // allocated to, and those are separate raft groups. Removal used to be checked
-// against the platform cluster alone, which is how NODE_REPLACEMENT.md's
-// postmortem records a namespace losing quorum.
+// against the platform cluster alone, which is how the postmortem in
+// website/src/docs/operator/node-replacement.mdx records a namespace losing quorum.
 
 func voter(id string, reachable bool) rqlite.RaftMember {
 	return rqlite.RaftMember{ID: id, Addr: id + ":7001", Voter: true, Reachable: reachable}

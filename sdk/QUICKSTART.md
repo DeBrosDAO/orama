@@ -171,7 +171,7 @@ const sub = await client.pubsub.subscribe("news", {
 ## Next Steps
 
 1. Read the full [README.md](./README.md)
-2. Read [docs/TS_SDK.md](../docs/TS_SDK.md) for the module-by-module reference
+2. Read [website/src/docs/developer/sdk-reference.mdx](../website/src/docs/developer/sdk-reference.mdx) for the module-by-module reference
 3. Explore [tests/e2e/](./tests/e2e/) for examples
 4. Explore [examples/](./examples/) for runnable code samples
 

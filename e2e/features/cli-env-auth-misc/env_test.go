@@ -18,7 +18,7 @@ const concurrentAdds = 8
 // TestEnvAdd_customEnvironmentSignsInThroughIt: an environment added with the
 // run's CA and made active is what the next command talks to, end to end: a
 // real wallet login through it and whoami answered by its gateway
-// (docs/CLI_REFERENCE.md#orama-env-add, #orama-env-use).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-env-add, #orama-env-use).
 func TestEnvAdd_customEnvironmentSignsInThroughIt(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -104,7 +104,7 @@ func TestEnvAdd_emptyNameOrUnusableURLRefused(t *testing.T) {
 }
 
 // TestEnvAdd_updatesInPlace: adding a name that exists updates its gateway
-// and description (docs/CLI_REFERENCE.md#orama-env-add "or update one already
+// and description (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-env-add "or update one already
 // configured"); the CA stays for the same host and is dropped when the
 // environment is pointed at another host (environment.go AddEnvironment).
 func TestEnvAdd_updatesInPlace(t *testing.T) {
@@ -153,7 +153,7 @@ func TestEnvUse_unknownIsNotFound(t *testing.T) {
 }
 
 // TestEnvUse_aliasesSwitch: `env switch` and `env enable` are aliases of
-// `env use` (docs/CLI_REFERENCE.md#orama-env-use).
+// `env use` (docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-env-use).
 func TestEnvUse_aliasesSwitch(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

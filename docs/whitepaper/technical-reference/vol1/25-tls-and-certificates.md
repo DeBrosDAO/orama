@@ -167,7 +167,7 @@ WHERE tls_locks.expires_unix_ms < ?
 
 Raft orders two nodes racing for a free lock, and only one changes the row (`RowsAffected` is 1). An expired lease is taken over by the same statement: its holder stopped renewing. A holder that is alive renews every `lockLease/3`, 20 s, with a 10 s timeout per renewal, by `renew`, which updates the row only where the holder matches. A renewal answered 409 is logged as a lost lock ("its lease ran out and another node took it") and the renewer stops. A renewal that fails for any other reason is logged and retried at the next tick. CertMagic can also ask for a longer lease through `RenewLockLease`; the request is clamped to between 60 s and 2 h. `Unlock` stops the renewer and deletes the row where holder matches.
 
-The expiry is set and compared with the clock of the gateway that handled the call, which is the local gateway of each node. Locks therefore assume the nodes' clocks agree within the 40 s between a renewal and the lease running out. A larger skew can let two nodes obtain the same certificate at once, which costs one extra issuance and no corruption (`docs/SECURITY.md`, "Certificates").
+The expiry is set and compared with the clock of the gateway that handled the call, which is the local gateway of each node. Locks therefore assume the nodes' clocks agree within the 40 s between a renewal and the lease running out. A larger skew can let two nodes obtain the same certificate at once, which costs one extra issuance and no corruption.
 
 ### DNS-01 through the gateway
 

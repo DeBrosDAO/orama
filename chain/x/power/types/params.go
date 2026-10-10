@@ -19,7 +19,7 @@ const MinCommitteeSizeFloor uint64 = 1
 // DefaultBootstrapDeadlineEpochs is the genesis default for Params.BootstrapDeadlineEpochs: 365
 // epochs, matching plans/open-network.md D16's "~12 months" with x/emission's default one-epoch-
 // per-day schedule. x/power measures every time-based rule in epochs, not calendar time (see
-// Params.BootstrapDeadlineEpochs's doc comment and docs/CHAIN.md), so a chain that configures a
+// Params.BootstrapDeadlineEpochs's doc comment and docs/whitepaper/technical-reference/vol2/39-chain-architecture.md), so a chain that configures a
 // different epoch length should set this (and RampEpochs/CapHysteresisEpochs) to match its own
 // intended calendar duration.
 const DefaultBootstrapDeadlineEpochs uint64 = 365

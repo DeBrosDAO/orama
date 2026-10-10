@@ -42,7 +42,7 @@ type validatorSet struct {
 // app hash at every height as the others, not catching up, and blocks keep
 // coming. While it is down the survivors commit blocks only if they hold more
 // than 2/3 of the voting power (CometBFT): with the run's three equal
-// bootstrap seats (docs/CHAIN.md "x/power": B_i = 1/3 each, and C_i falls
+// bootstrap seats (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md "x/power": B_i = 1/3 each, and C_i falls
 // back to equal shares because 5% x 3 < 1) they hold exactly 2/3, so the
 // chain must halt, not fork.
 func TestChainRestart_stoppedValidatorCatchesUp(t *testing.T) {

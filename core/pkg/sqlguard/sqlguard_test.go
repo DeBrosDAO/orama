@@ -547,21 +547,21 @@ func TestProtectedTables_nonPlatformEntriesAreDeliberate(t *testing.T) {
 	}
 }
 
-// docs/SERVERLESS.md lists the reserved names so a tenant can avoid them. The
+// website/src/docs/developer/functions.mdx lists the reserved names so a tenant can avoid them. The
 // list is copied by hand, so this fails when it and protectedTables differ.
 func TestProtectedTables_matchTheDocumentedList(t *testing.T) {
-	doc, err := os.ReadFile("../../../docs/SERVERLESS.md")
+	doc, err := os.ReadFile("../../../website/src/docs/developer/functions.mdx")
 	if err != nil {
-		t.Fatalf("read docs/SERVERLESS.md: %v", err)
+		t.Fatalf("read website/src/docs/developer/functions.mdx: %v", err)
 	}
 	text := string(doc)
 	start := strings.Index(text, "The reserved names are ")
 	if start < 0 {
-		t.Fatal("docs/SERVERLESS.md no longer lists the reserved names")
+		t.Fatal("website/src/docs/developer/functions.mdx no longer lists the reserved names")
 	}
 	end := strings.Index(text[start:], "(the list in")
 	if end < 0 {
-		t.Fatal("reserved-name list in docs/SERVERLESS.md has no end marker")
+		t.Fatal("reserved-name list in website/src/docs/developer/functions.mdx has no end marker")
 	}
 	documented := map[string]bool{}
 	for _, m := range regexp.MustCompile("`([a-z0-9_]+)`").FindAllStringSubmatch(text[start:start+end], -1) {
@@ -569,12 +569,12 @@ func TestProtectedTables_matchTheDocumentedList(t *testing.T) {
 	}
 	for name := range protectedTables {
 		if !documented[name] {
-			t.Errorf("%s is protected but not in docs/SERVERLESS.md's reserved list", name)
+			t.Errorf("%s is protected but not in website/src/docs/developer/functions.mdx's reserved list", name)
 		}
 	}
 	for name := range documented {
 		if _, ok := protectedTables[name]; !ok {
-			t.Errorf("docs/SERVERLESS.md lists %s as reserved, but it is not protected", name)
+			t.Errorf("website/src/docs/developer/functions.mdx lists %s as reserved, but it is not protected", name)
 		}
 	}
 }

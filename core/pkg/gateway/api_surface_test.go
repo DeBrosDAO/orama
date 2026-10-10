@@ -20,7 +20,7 @@ import (
 // owns which. The TypeScript SDK covered roughly a third of it and nobody could
 // say whether the rest was a gap or a decision.
 //
-// docs/API_SURFACE.md is that record. This test keeps it honest in both
+// docs/whitepaper/technical-reference/appendices/i-api-surface.md is that record. This test keeps it honest in both
 // directions: a route registered in the gateway and missing from the document
 // fails, and a route documented but no longer registered fails too.
 
@@ -97,13 +97,13 @@ func literalMuxPatterns(t *testing.T, path string) []string {
 }
 
 // documentedRoutes returns every route named in the first column of a table row
-// in docs/API_SURFACE.md.
+// in docs/whitepaper/technical-reference/appendices/i-api-surface.md.
 func documentedRoutes(t *testing.T) map[string]string {
 	t.Helper()
 
-	body, err := os.ReadFile(filepath.Join(repoRootFor(t), "docs/API_SURFACE.md"))
+	body, err := os.ReadFile(filepath.Join(repoRootFor(t), "docs/whitepaper/technical-reference/appendices/i-api-surface.md"))
 	if err != nil {
-		t.Fatalf("read API_SURFACE.md: %v", err)
+		t.Fatalf("read i-api-surface.md: %v", err)
 	}
 
 	// Only rows whose first cell is a route: the legend at the top of the
@@ -145,7 +145,7 @@ func TestEveryRegisteredRouteIsDocumented(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("routes registered but absent from docs/API_SURFACE.md — decide who owns each one:\n  %s",
+		t.Errorf("routes registered but absent from docs/whitepaper/technical-reference/appendices/i-api-surface.md — decide who owns each one:\n  %s",
 			strings.Join(missing, "\n  "))
 	}
 }
@@ -165,7 +165,7 @@ func TestEveryDocumentedRouteExists(t *testing.T) {
 	}
 	sort.Strings(stale)
 	if len(stale) > 0 {
-		t.Errorf("documented in docs/API_SURFACE.md but no longer registered:\n  %s",
+		t.Errorf("documented in docs/whitepaper/technical-reference/appendices/i-api-surface.md but no longer registered:\n  %s",
 			strings.Join(stale, "\n  "))
 	}
 }

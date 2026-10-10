@@ -19,7 +19,7 @@ const (
 
 // StartVideo is Start(false) plus a published VP8 track, and a reader of the
 // RTCP the SFU sends back for it: KeyframeRequests counts the PLI and FIR that
-// reach the publisher (docs/WEBRTC.md#keyframes-plifir).
+// reach the publisher (website/src/docs/developer/webrtc.mdx#keyframes-plifir).
 func (p *RTCPeer) StartVideo() error {
 	if err := p.Start(false); err != nil {
 		return err

@@ -1,4 +1,4 @@
-# Sandbox: Ephemeral Hetzner Cloud Clusters
+# Sandbox: ephemeral Hetzner Cloud clusters
 
 Spin up temporary 5-node Orama clusters on Hetzner Cloud for development and testing. Cost depends on the server type you pick during setup — a few euro cents per hour for a small shared-vCPU cluster.
 
@@ -121,6 +121,10 @@ Deploys code changes:
 
 A sandbox created before host keys were pinned has no `~/.orama/sandboxes/<name>.known_hosts` and is refused; destroy it and create a new one.
 
+### `orama sandbox reset`
+
+Deletes the floating IPs, the firewall and the SSH key from Hetzner Cloud, then removes the local config (`~/.orama/sandbox.yaml`) and SSH keys. Use it when you need to switch datacenter locations (floating IPs are location-bound) or to start over with `orama sandbox setup`.
+
 ### `orama sandbox ssh <node-number>`
 
 Opens an interactive SSH session to a sandbox node (1-5).
@@ -160,11 +164,11 @@ Sandbox nodes get their certificates from Let's Encrypt's staging CA (`--acme-ca
 
 ### Host keys
 
-The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. `orama push` uploads from this machine to each node and does not copy SSH keys onto a hub; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [SECURITY.md](SECURITY.md), "Build-archive signing and the trust anchor".
+The SSH host keys each server presents on first contact (trust on first use) are pinned in `~/.orama/sandboxes/<name>.known_hosts` — not in your `~/.ssh/known_hosts`, because Hetzner reuses addresses. They are read with `ssh-keyscan` right after the server is created, as soon as its sshd answers and before any command, archive or invite is sent to it; cloud-init writes the host keys before sshd starts. `create`'s floating-IP setup, archive uploads, staging, invites, installs and health waits, and `rollout`'s push to the first node, leader detection and upgrades check against them. `orama push` uploads from this machine to each node and does not copy SSH keys onto a hub; each node verifies the archive against its trust anchor regardless. `status`, `ssh` and create's final health report do not check host keys. See [Signed archives](/docs/operator/signed-archives) for the trust anchor.
 
 ## Running the cluster guide against a sandbox
 
-`orama sandbox create` installs the cluster itself, so it cannot run the install steps of [RUN_YOUR_OWN_CLUSTER.md](RUN_YOUR_OWN_CLUSTER.md) (those need bare machines). Its cluster does serve as the fixture for the guide's "Use it" and "Check it" sections: `E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster`. See [DEV_DEPLOY.md](DEV_DEPLOY.md), "Cluster guide e2e".
+`orama sandbox create` installs the cluster itself, so it cannot run the install steps of [Run your own cluster](/docs/operator/run-your-own-cluster) (those need bare machines). Its cluster does serve as the fixture for the guide's "Use it" and "Check it" sections: `E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster`. See [Testing](/docs/contributor/testing#cluster-guide-e2e), "Cluster guide e2e".
 
 ## Cost
 
@@ -208,7 +212,7 @@ Check:
 SSH into the node to debug:
 ```bash
 orama sandbox ssh 1
-sudo orama node logs node -f
+sudo orama node logs node --follow
 ```
 
 The sandbox will be left in "error" state. You can destroy and recreate it.

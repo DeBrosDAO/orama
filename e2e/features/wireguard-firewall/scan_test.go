@@ -77,7 +77,7 @@ func openFromOutside(ctx context.Context, ip string, ports []int) []int {
 // node's public address accepts TCP on SSH, HTTP and HTTPS, on 53 only when
 // it is a nameserver, on the TURN ports only while it relays, on the global
 // layer's ports only when the node is a global node, and on nothing else
-// scanned (docs/SECURITY.md "Network Isolation"). The run's cloud
+// scanned (docs/whitepaper/technical-reference/vol1/18-cache.md "Network Isolation"). The run's cloud
 // firewall also filters, so only ports it lets through can reveal a leak.
 func TestScan_onlyEdgePortsOpen(t *testing.T) {
 	t.Parallel()

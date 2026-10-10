@@ -23,7 +23,7 @@ func minDelegation(t *testing.T, c *chain.Chain) chain.Int {
 	var p powerParams
 	c.Query(t, c.Node(t, 0), &p, "power", "params")
 	if p.Params.MinDelegationForRewards.Cmp(chain.Orama(1)) != 0 {
-		t.Errorf("min_delegation_for_rewards %s, want the genesis default 1 ORAMA (docs/CHAIN.md)", p.Params.MinDelegationForRewards.String())
+		t.Errorf("min_delegation_for_rewards %s, want the genesis default 1 ORAMA (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md)", p.Params.MinDelegationForRewards.String())
 	}
 	return p.Params.MinDelegationForRewards
 }
@@ -43,7 +43,7 @@ func undelegateAtCleanup(t *testing.T, c *chain.Chain, k chain.Key, valoper stri
 
 // TestStaking_delegateFromEarnings: a validator delegates to another
 // validator with an empty bank balance; the bond is topped up from its own
-// earnings (x/fees/ante/bond_topup.go, docs/CHAIN.md "Outsiders can bond from
+// earnings (x/fees/ante/bond_topup.go, docs/whitepaper/technical-reference/vol2/40-economics.md "Outsiders can bond from
 // earnings"): earnings drop by exactly the bond plus the fee, the bank
 // balance is unchanged, and the delegation exists.
 func TestStaking_delegateFromEarnings(t *testing.T) {
@@ -98,7 +98,7 @@ func TestStaking_minDelegationRefused(t *testing.T) {
 
 // TestStaking_partialWithdrawalBelowMinRefused: withdrawing part of a
 // delegation so that less than the minimum stays is refused; withdrawing all
-// of it is a full exit and is allowed (docs/CHAIN.md, MinDelegationDecorator).
+// of it is a full exit and is allowed (docs/whitepaper/technical-reference/vol2/39-chain-architecture.md, MinDelegationDecorator).
 func TestStaking_partialWithdrawalBelowMinRefused(t *testing.T) {
 	t.Parallel()
 	c := chain.New(t)
@@ -119,7 +119,7 @@ func TestStaking_partialWithdrawalBelowMinRefused(t *testing.T) {
 // already has a validator record (x/power InitGenesis), so its
 // MsgCreateValidator is refused by x/staking. The bond it declared was
 // topped up from earnings in the ante chain; a refused bond must leave no
-// public bank balance behind (docs/CHAIN.md: the top-up "rolls back with"
+// public bank balance behind (docs/whitepaper/technical-reference/vol2/40-economics.md: the top-up "rolls back with"
 // the transaction; earnings may never become a public balance, M4/B8).
 func TestStaking_createValidatorForExistingOperatorRefused(t *testing.T) {
 	t.Parallel()

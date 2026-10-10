@@ -18,7 +18,7 @@ const stampWindowSec = 120
 // TestACME_badStampsRefusedOnTheNode: a process on the node itself — a
 // tenant's deployment is one — is refused without the right MAC: no header,
 // a key no node holds, a stamp outside the window either way, and a stamp
-// captured for one body replayed onto another (docs/SECURITY.md "ACME
+// captured for one body replayed onto another (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md "ACME
 // DNS-01": the MAC covers the body's hash). Loopback grants nothing.
 func TestACME_badStampsRefusedOnTheNode(t *testing.T) {
 	t.Parallel()
@@ -62,7 +62,7 @@ func TestACME_badStampsRefusedOverTheOverlay(t *testing.T) {
 // TestACME_signedButOutOfScopeRefused: even a correctly signed call writes
 // only an _acme-challenge record for the base domain or a name under it,
 // whose value is a DNS-01 answer; anything else is 400 and nothing is written
-// (docs/SECURITY.md "ACME DNS-01"; core/pkg/gateway/acme_auth.go).
+// (docs/whitepaper/technical-reference/vol1/25-tls-and-certificates.md "ACME DNS-01"; core/pkg/gateway/acme_auth.go).
 func TestACME_signedButOutOfScopeRefused(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)

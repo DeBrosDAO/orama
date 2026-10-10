@@ -114,6 +114,6 @@ func executeWipe(flags *WipeFlags) error {
 
 	fmt.Printf("✓ Wipe complete (%d nodes)\n", len(nodes))
 	fmt.Printf("  rm -rf is unlink, not cryptographic erase. Provider disks remain readable.\n")
-	fmt.Printf("  To reinstall: orama node setup --ip <ip> ... (see docs/DEVNET_INSTALL.md)\n")
+	fmt.Printf("  To reinstall: orama node setup --ip <ip> ... (see orama.network/docs/operator/node-setup)\n")
 	return nil
 }

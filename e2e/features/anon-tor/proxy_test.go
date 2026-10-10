@@ -17,7 +17,7 @@ import (
 
 // TestAnon_fetchesThroughTor: a signed-in user fetches a public page through
 // Tor; the answer carries the destination's status and body
-// (docs/ARCHITECTURE.md: POST /v1/proxy/anon).
+// (website/src/docs/contributor/architecture-reference.mdx: POST /v1/proxy/anon).
 func TestAnon_fetchesThroughTor(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
@@ -68,7 +68,7 @@ func TestAnon_destinationMatrix(t *testing.T) {
 
 // TestAnon_needsUserAndProxyGrant: a key alone (even app-runtime, which
 // holds proxy) is 401 USER_JWT_REQUIRED; a reader has no proxy grant (403);
-// nobody is 401 (docs/API_SURFACE.md; route_policy.go dataPlane proxy).
+// nobody is 401 (docs/whitepaper/technical-reference/appendices/i-api-surface.md; route_policy.go dataPlane proxy).
 func TestAnon_needsUserAndProxyGrant(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

@@ -15,7 +15,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/gw"
 )
 
-// pathPubsubWS is the subscription socket (docs/API_SURFACE.md "Pub/sub").
+// pathPubsubWS is the subscription socket (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Pub/sub").
 const pathPubsubWS = "/v1/pubsub/ws"
 
 // frameBuffer is how many frames a socket keeps that nobody has read yet.

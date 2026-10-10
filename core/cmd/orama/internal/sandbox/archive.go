@@ -17,7 +17,7 @@ import (
 )
 
 // A sandbox installs and rolls out builds exactly as a production cluster does
-// (docs/SECURITY.md, "Signed build archives"): create puts the archive on each
+// (docs/whitepaper/technical-reference/vol1/29-build-signing-and-release.md, "Signed build archives"): create puts the archive on each
 // fresh server with node setup's path — verified here against the operator's
 // wallet, uploaded as the canonical re-pack, staged by `node stage-archive`,
 // which creates the trust anchor — and rollout uses push's path, which each

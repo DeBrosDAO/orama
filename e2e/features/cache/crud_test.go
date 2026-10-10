@@ -17,7 +17,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// Cache routes (docs/API_SURFACE.md "Cache"); request and response shapes are
+// Cache routes (docs/whitepaper/technical-reference/appendices/i-api-surface.md "Cache"); request and response shapes are
 // core/pkg/gateway/handlers/cache.
 const (
 	pathGet    = "/v1/cache/get"

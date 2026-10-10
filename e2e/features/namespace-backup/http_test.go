@@ -34,7 +34,7 @@ const (
 // written after, and running the same restore again is safe. API keys are not
 // in that database (they are in the cluster registry), so a restore neither
 // brings back a revoked one nor removes one minted since the backup
-// (docs/CLI_REFERENCE.md "orama namespace restore"; handlers/backup).
+// (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama namespace restore"; handlers/backup).
 func TestBackup_roundTripRestoresDataAndLeavesKeys(t *testing.T) {
 	t.Parallel()
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})

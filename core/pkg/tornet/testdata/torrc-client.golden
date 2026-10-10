@@ -1,4 +1,4 @@
-# Client of the Orama Tor network orama-teststage (docs/TOR_NETWORK.md).
+# Client of the Orama Tor network orama-teststage (orama.network/docs/operator/tor-network).
 DataDirectory /var/lib/orama-tornet
 Log notice stdout
 SafeLogging 1

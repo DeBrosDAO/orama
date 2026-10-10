@@ -84,7 +84,7 @@ const (
 	// PollEvery paces every wait on the cluster.
 	PollEvery = 5 * time.Second
 	// ConvergeBudget: a node restart re-runs the boot readiness gate and the
-	// monitor telemetry is gathered every 10s (docs/MONITORING.md); the
+	// monitor telemetry is gathered every 10s (website/src/docs/operator/monitoring.mdx); the
 	// lifecycle harness gives a reconverge ten minutes.
 	ConvergeBudget = 10 * time.Minute
 	// ColdStartBudget: every node restarted at once elects a leader again.
@@ -100,7 +100,7 @@ const (
 )
 
 // OnNode runs `orama <args>` on n as root, the way an operator logged into the
-// node does for the local commands (docs/CLI_REFERENCE.md "orama node": install,
+// node does for the local commands (docs/whitepaper/technical-reference/appendices/d-cli-reference.md "orama node": install,
 // stop, start, restart, status, report, invite, schema, stage-archive run on
 // the node itself). Arguments are shell-quoted; the exit code is returned.
 func OnNode(t testing.TB, f *fleet.Fleet, n fleet.Node, args ...string) fleet.Output {

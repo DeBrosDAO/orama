@@ -27,7 +27,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/wallet"
 )
 
-// Routes, headers, codes and limits (docs/API_SURFACE.md#storage and
+// Routes, headers, codes and limits (docs/whitepaper/technical-reference/appendices/i-api-surface.md#storage and
 // #network-and-proxy; core/pkg/gateway/relay_tunnel_handler.go,
 // core/pkg/gateway/handlers/storage/fetch_caps_handler.go).
 const (
@@ -57,7 +57,7 @@ const (
 	pinPropagation = 3 * time.Minute
 	// torBudget covers a fresh Tor circuit (and a retry of a slow one).
 	torBudget = 3 * time.Minute
-	// revocationBound is the revocation list's staleness (docs/AUTH.md) plus slack.
+	// revocationBound is the revocation list's staleness (docs/whitepaper/technical-reference/vol1/14-authorization.md) plus slack.
 	revocationBound = 30 * time.Second
 	// logFlush is the request log batcher's interval plus slack.
 	logFlush = 60 * time.Second
@@ -230,7 +230,7 @@ func protect(t testing.TB, c *gw.Client, values ...string) {
 }
 
 // wsConn adapts the relay's WebSocket to a net.Conn carrying the raw TCP
-// stream in binary frames (docs/ARCHITECTURE.md: /v1/proxy/relay framing).
+// stream in binary frames (website/src/docs/contributor/architecture-reference.mdx: /v1/proxy/relay framing).
 type wsConn struct {
 	*websocket.Conn
 	pending []byte

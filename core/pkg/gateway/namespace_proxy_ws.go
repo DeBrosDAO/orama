@@ -14,7 +14,7 @@ import (
 // selected member fails was never sent anywhere, so the next member whose
 // circuit allows it is tried instead of answering 503 until the failing
 // member's circuit opens. For a room's signaling socket any member will do:
-// each routes the room to the SFU that owns it (docs/WEBRTC.md#room-placement).
+// each routes the room to the SFU that owns it (website/src/docs/operator/webrtc-operations.mdx#room-placement).
 //
 // targets is the ordered member list, selected the index of the member chosen
 // with cb its circuit breaker. A tunnel that was established and then ended is

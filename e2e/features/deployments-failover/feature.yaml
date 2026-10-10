@@ -16,5 +16,5 @@ covers:
   units:
     - orama-deploy-go@.service
   claims:
-    - "docs/DEPLOYMENT_GUIDE.md#cross-node-routing: an app is served by name from every node while one of its nodes is down"
-    - "docs/SECURITY.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"
+    - "website/src/docs/developer/domains.mdx#cross-node-routing: an app is served by name from every node while one of its nodes is down"
+    - "docs/whitepaper/technical-reference/vol1/11-app-deployments.md: MemoryMax comes from the deployment's recorded limits; an app over it is killed and restarted"

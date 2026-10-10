@@ -1,0 +1,594 @@
+# Node replacement runbook
+
+How to replace one Orama nameserver VPS with a new machine without losing the platform Raft quorum, and without breaking the tenant namespaces that run on it. The process was worked out in a real cutover on devnet and applies unchanged to any environment.
+
+Related pages: [Node Setup](/docs/operator/node-setup) for installing and joining, [Upgrades](/docs/operator/upgrades) for rolling restarts, [Nameserver](/docs/operator/nameserver) for NS and glue records, [Troubleshooting](/docs/operator/troubleshooting) for WireGuard, Olric and vault problems, and [Wiping a node](/docs/operator/node-management#wiping-a-node) for erasing a VPS that has left the cluster.
+
+The inventory file `core/scripts/nodes.conf` is gitignored and created from `core/scripts/nodes.conf.example`. It lists the hosts you operate, so it is not committed. The network API is the primary source for `orama nodes`; the file is the fallback.
+
+## Golden rules
+
+1. **Join the new node first. Never remove or wipe the old node first.**
+2. **Replace only one platform voter at a time.** Quorum on 3 voters is 2.
+3. **Prefer replacing a follower, not the Raft leader.**
+4. **Platform health is not namespace health.** Each namespace has its own RQLite, Olric and gateway.
+5. **Do not point namespace DNS at a node that is not running that namespace.**
+6. **Drive operations with the `orama` CLI.** Avoid parallel restarts.
+7. **Match the binary version** to the live cluster (`/opt/orama/manifest.json`).
+8. **Wait for the new node to fully catch up** (applied index, `voter: true` on both sides) before removing anyone.
+9. **Platform join is not serverless-ready.** A new node starts with an empty IPFS blob store. Function WASM CIDs live in IPFS, not only in RQLite. See "IPFS re-replication" below.
+
+## Mental model
+
+```
+                    +-------------------------------------+
+  Public clients -> |  Caddy :443  ->  platform gateway   |  (each nameserver)
+                    |  reverse_proxy -> localhost:10104   |
+                    +--------------+----------------------+
+                                   | proxies to
+                                   v
+                    +-------------------------------------+
+                    |  Namespace gateways (:10004, ...)   |
+                    |  Namespace RQLite / Olric / SFU     |  <- separate Raft/cluster
+                    +-------------------------------------+
+
+  Platform RQLite (HTTP 10100 / raft 10101) = cluster membership, DNS DB, routing
+  Namespace RQLite (e.g. 10000 / 10001)     = that namespace's application data
+```
+
+Replacing a nameserver VPS touches:
+
+| Layer | What changes |
+|-------|--------------|
+| Platform Raft | Add a new voter, remove the old voter |
+| WireGuard | New peer `10.0.0.x` |
+| Zone DNS (`ns1`, `ns2`, `ns3`, apex) | A records for the NS slot |
+| IPFS and IPFS Cluster | The new peer joins with an empty local Kubo repo; backfill function WASM |
+| Each namespace hosted on the old IP | Must rebalance or recover |
+| Registrar glue (optional) | Parent-zone glue for `nsN`, if you control it |
+
+## Preflight checklist
+
+### 1. Identify the nameservers and the Raft state
+
+```bash
+orama nodes --env <env>
+```
+
+On any healthy node, define the helpers once. `rqlited` listens only on the node's WireGuard IP and always requires basic auth; both come from the node's own config. Credentials go to `curl` on stdin (`-K -`), never on its command line where `ps` shows them.
+
+```bash
+RQ="http://$(sudo sed -n 's/^ *http_adv_address: *"\(.*\)"/\1/p' /opt/orama/.orama/configs/node.yaml)"
+rqcurl() { printf 'user = "orama:%s"\n' "$(sudo cat /opt/orama/.orama/secrets/rqlite-password)" | curl -K - "$@"; }
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
+rqcurl -sS "$RQ/status" | python3 -c \
+  "import sys,json; r=json.load(sys.stdin)['store']['raft']; print(r.get('state'), r.get('num_peers'))"
+```
+
+Pick:
+
+- **Victim**: a follower (not `leader: true`).
+- **Join hub**: the current leader, or any healthy nameserver's public IP.
+- **New VPS**: a fresh Ubuntu machine that passes the installer checks (2 vCPU, 2 GB RAM, 10 GB free disk at the least).
+
+### 2. Confirm the environment is healthy
+
+```bash
+curl -sS https://<base-domain>/v1/health           # expect status healthy
+curl -sS https://ns-<name>.<base-domain>/v1/health # for each critical namespace
+```
+
+### 3. List which namespaces run on the victim
+
+On each nameserver:
+
+```bash
+orama node status
+```
+
+In the platform RQLite:
+
+```sql
+SELECT ncn.role, ncn.status, dn.ip_address, dn.internal_ip, dn.status
+FROM namespace_cluster_nodes ncn
+JOIN namespace_clusters nc ON nc.id = ncn.namespace_cluster_id
+LEFT JOIN dns_nodes dn ON dn.id = ncn.node_id
+WHERE nc.namespace_name = '<namespace>';  -- repeat per namespace
+```
+
+If the victim is a namespace RQLite voter, removing it without recovery can leave the namespace at 1 of 3 voters with no leader. Plan the namespace recovery before the Raft removal. `orama node remove --dry-run` (below) reports exactly this.
+
+### 4. Match the binary version
+
+```bash
+cat /opt/orama/manifest.json   # on an existing node: the live version
+orama version                  # what your local CLI is
+orama build                    # prints the archive path to install
+```
+
+`orama version` is truthful in every build path: the version is compiled in, so a binary built with `go build` or installed with `go install` reports its real number instead of `dev`.
+
+### 5. Secrets and SSH
+
+`orama node setup` is the path: one command per node, no SSH by hand, and it needs an unlocked RootWallet. The manual path below does not. See [Node Setup](/docs/operator/node-setup).
+
+## Phase A: join the new node (the old node stays fully up)
+
+### A1. Install through `orama node setup`
+
+From your own machine, with RootWallet unlocked and the VPS login stored by `rw vault add <ip>`:
+
+```bash
+orama node setup --ip <NEW_PUBLIC_IP> --password --env <env> \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+  --base-domain <base-domain> --role nameserver
+```
+
+It mints the invite, uploads the archive, installs and joins the node. The sections below are the manual equivalent.
+
+### A2. Manual path: invite
+
+From your own machine:
+
+```bash
+orama invite                 # usable for 1 hour, the gateway's cap
+```
+
+Or on an existing installed node:
+
+```bash
+sudo /opt/orama/bin/orama node invite --expiry 2h
+```
+
+Either prints one string to save. It names one node of the cluster: its public address, the domain to present, and the fingerprint of the TLS certificate that node serves. There is no separate `--join` and no separate `--ca-fingerprint`; the joining node connects to exactly that node and pins exactly that certificate.
+
+Invites are single-use. Mint one per join. A retry after a failed install is told the invite was already used, rather than that it was invalid or expired.
+
+### A3. Manual path: bootstrap the VPS
+
+On the new VPS as root:
+
+```bash
+mkdir -p /opt/orama
+tar -xzf /tmp/orama-<version>-linux-amd64.tar.gz -C /opt/orama
+install -m 755 /opt/orama/bin/orama /usr/local/bin/orama
+```
+
+Stop Docker if it is present; its ports fight with IPFS.
+
+### A4. Manual path: install as a nameserver joining the cluster
+
+```bash
+sudo orama node install \
+  --token <INVITE> \
+  --vps-ip <NEW_PUBLIC_IP> \
+  --domain <base-domain> \
+  --base-domain <base-domain> \
+  --nameserver \
+  --environment <env> \
+  --ssh-user ubuntu
+```
+
+Or from your own machine, which drives the same install over SSH (the archive is verified against `--operator-wallet` before it is uploaded):
+
+```bash
+orama node install --remote \
+  --token <INVITE> \
+  --vps-ip <NEW_PUBLIC_IP> \
+  --base-domain <base-domain> \
+  --nameserver --environment <env> --ssh-user ubuntu \
+  --archive /tmp/orama-<version>-linux-amd64.tar.gz --operator-wallet <wallet>
+```
+
+`--remote` is required for a laptop-driven install: which machine gets installed is never inferred from whether you used sudo. A remote install forwards every flag, including `--ca-fingerprint`, `--environment`, `--ssh-user` and `--operator-wallet`.
+
+Notes:
+
+- The invite carries the join URL. To override it (for example `http://<hub-ip>` if DNS or TLS is unreliable during the cutover) pass `--join` as well; an explicit flag wins.
+- Never join through port `10104`: UFW blocks it.
+- The installer may warn that the base domain does not yet resolve to the new IP. That is expected until the DNS update.
+
+### A5. Wait until fully synced (mandatory gate)
+
+On the leader:
+
+```bash
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
+# the NEW WireGuard address must show: voter true, reachable true
+```
+
+On the new node:
+
+```bash
+rqcurl -sS "$RQ/status" | python3 -c "
+import sys,json
+r=json.load(sys.stdin)['store']['raft']
+print('state', r.get('state'), 'voter', r.get('voter'),
+      'peers', r.get('num_peers'), 'applied', r.get('applied_index'))
+"
+# need: voter True, peers >= 3, applied_index catching up with the leader
+```
+
+Also check the node itself, and the WireGuard path from the leader:
+
+```bash
+orama node status
+orama node doctor
+ping -c 2 10.0.0.<new>        # from the leader
+curl -sS http://127.0.0.1:10104/v1/health
+```
+
+**Do not continue until the new node is a healthy platform voter with a non-zero applied index.** The first minutes often show `voter: false` or an empty `/nodes` while the node snapshots; wait, it can take several minutes on a large database.
+
+The temporary topology is 4 platform voters. Quorum is 3. This is still safe.
+
+## Phase B: DNS (platform zone)
+
+Define `RQ` and `rqcurl` as in the preflight on the node you run these on.
+
+### B1. Inspect the current NS and apex records
+
+```bash
+rqcurl -sS -G "$RQ/db/query" \
+  --data-urlencode "q=SELECT id,fqdn,value,is_active FROM dns_records WHERE fqdn IN (
+    'ns1.<domain>.','ns2.<domain>.','ns3.<domain>.','<domain>.','*.<domain>.'
+  ) ORDER BY fqdn,value"
+
+rqcurl -sS -G "$RQ/db/query" --data-urlencode "q=SELECT * FROM dns_nameservers"
+```
+
+### B2. Point the replaced NS slot at the new public IP
+
+Example for the `ns3` slot:
+
+```sql
+-- ns3 A -> new IP
+UPDATE dns_records SET value='<NEW_PUBLIC_IP>', updated_at=CURRENT_TIMESTAMP
+  WHERE fqdn='ns3.<domain>.' AND record_type='A' AND value='<OLD_PUBLIC_IP>';
+
+-- remove accidental dual A records on ns3
+DELETE FROM dns_records WHERE fqdn='ns3.<domain>.' AND value NOT IN ('<NEW_PUBLIC_IP>');
+
+-- apex and wildcard: replace the old IP with the new
+UPDATE dns_records SET value='<NEW_PUBLIC_IP>', updated_at=CURRENT_TIMESTAMP
+  WHERE value='<OLD_PUBLIC_IP>'
+    AND fqdn IN ('<domain>.','*.<domain>.','push.<domain>.')
+    AND is_active=1;
+
+-- the nameserver table
+UPDATE dns_nameservers
+  SET ip_address='<NEW_PUBLIC_IP>',
+      node_id='<NEW_LIBP2P_NODE_ID>',
+      updated_at=CURRENT_TIMESTAMP
+  WHERE hostname='ns3';
+```
+
+Execute each statement through RQLite's execute endpoint:
+
+```bash
+rqcurl -sS -X POST "$RQ/db/execute?pretty" \
+  -H 'Content-Type: application/json' \
+  -d '["<SQL>"]'
+```
+
+Verify the authoritative answer, not only a public cache:
+
+```bash
+dig +short A ns3.<domain> @<ns1-public-ip>
+# expect the NEW public IP only
+```
+
+### B3. Registrar glue
+
+If the domain registry holds glue for `ns3.<domain>` pointing at the old IP, update it to the new IP. Zone DNS alone is not always enough for resolvers that only have glue. The record format is on the [Nameserver](/docs/operator/nameserver) page.
+
+## Phase C: namespace safety
+
+### The problem
+
+Namespace A records (`ns-<namespace>.<domain>`) must only list nodes that run that namespace. During the devnet cutover every row with `value=<old_ip>` was bulk-rewritten to the new IP. That sent clients to a platform nameserver that did not run the `orama-namespace-*@<ns>` units: TLS timeouts and platform circuit breakers (`all upstream circuits are open`). The namespace RQLite also still listed its dead voters; after removing the last peer, membership became 1 of 3 and the namespace had no leader.
+
+### What heals itself
+
+- **The tenant reconciler.** Every node converges its own namespace services on a 60 s loop, and one elected member per namespace prunes departed members, releases their ports and removes them from that namespace's raft. This phase is therefore verification, not a list of steps: the survivors' `memberlist.peers` and `olric_servers` drop a departed node on the next sweep, and the namespace raft loses it once it is past the staleness cutoff.
+- **Namespace DNS.** Each node probes the namespaces it hosts every 30 s and, after 3 consecutive unhealthy probes (about 90 s), withdraws its own `ns-<ns>` and `*.ns-<ns>` records. The probe is `GET /v1/health` on the node's WireGuard address; a tenant gateway does not listen on loopback. It restores them after 3 consecutive healthy probes. A withdrawal never removes the last active record for a name, and the guard is evaluated inside the UPDATE, so two nodes withdrawing at the same moment cannot both believe they are not the last.
+- **IPFS content.** A pin fixes its replication factor at pin time. One gateway per 15 minutes, elected through the `ipfs-pin-sweep` cluster lock, walks the pin inventory and re-issues the pin for anything short of its factor, which forces IPFS Cluster to re-allocate onto live peers. Content already at its factor is left alone.
+
+### The safe DNS rule
+
+**Only advertise IPs that currently run that namespace's gateway.** Manual SQL is the fallback for records that point at a node that is gone entirely, and therefore not probing:
+
+```sql
+-- after cutover: keep only the live gateway IP(s) for a namespace
+UPDATE dns_records SET is_active=0, updated_at=CURRENT_TIMESTAMP
+  WHERE fqdn LIKE '%<namespace>%' AND value != '<LIVE_GATEWAY_PUBLIC_IP>' AND is_active=1;
+
+UPDATE dns_records SET is_active=1, updated_at=CURRENT_TIMESTAMP
+  WHERE fqdn IN ('ns-<namespace>.<domain>.', '*.ns-<namespace>.<domain>.')
+    AND value='<LIVE_GATEWAY_PUBLIC_IP>';
+```
+
+Do not blindly map the old IP to the new IP for every namespace row unless the new node already hosts those services.
+
+### The ideal path (HA preserved)
+
+1. Join the new platform node (Phase A).
+2. Check what the removal costs every namespace:
+
+   ```bash
+   orama node remove --env <env> --node <OLD_PUBLIC_IP> --dry-run
+   ```
+
+   It prints the voters, quorum and reachable count for the platform cluster and for every namespace the node is a voter in.
+3. If a namespace would lose quorum, rebalance it first so the new node or another survivor hosts its gateway, RQLite and Olric (`orama namespace repair <namespace>`, run on a node, restores an under-provisioned namespace). `orama node remove` refuses to run until every cluster survives.
+4. Remove the old platform voter (Phase D).
+5. Confirm namespace DNS lists only live gateways.
+
+### Emergency: namespace RQLite lost quorum (single survivor)
+
+If automatic recovery does not reassign in time and one node is the only live host of a namespace, rebuild its RQLite as a one-voter cluster. Find the ports in `namespace_cluster_nodes` (the example uses `10000` HTTP and `10001` raft). The `orama` CLI has no command for a single tenant unit, so this is the one place a unit is addressed directly; do it on the survivor only.
+
+```bash
+NS=<namespace>
+NODE_ID=$(sudo grep ^NODE_ID= /var/lib/orama-unit-env/$NS/rqlite.env | tail -1 | cut -d= -f2)
+DATA=/opt/orama/.orama/data/namespaces/$NS/rqlite/$NODE_ID
+RAFT=$DATA/raft
+ADV=$(sudo grep RAFT_ADV_ADDR /var/lib/orama-unit-env/$NS/rqlite.env | cut -d= -f2)
+# e.g. ADV=10.0.0.2:10001
+
+sudo systemctl stop orama-namespace-gateway@$NS
+sudo systemctl stop orama-namespace-rqlite@$NS
+
+# back up first
+sudo cp -a "$RAFT/peers.info" "$RAFT/peers.info.bak-$(date +%Y%m%d)"
+
+# rqlite recovery: peers.json is consumed at startup and then renamed
+echo "[{\"id\":\"$ADV\",\"address\":\"$ADV\",\"non_voter\":false}]" | sudo tee "$RAFT/peers.json"
+sudo chown orama:orama "$RAFT/peers.json"
+
+sudo systemctl start orama-namespace-rqlite@$NS
+# wait until it reports Leader
+curl -sS http://127.0.0.1:10000/status | python3 -c \
+  "import sys,json; print(json.load(sys.stdin)['store']['raft'].get('state'))"
+```
+
+Then fix Olric and the gateway so they do not dial dead WireGuard IPs:
+
+```yaml
+# configs/olric-<node>.yaml: single node
+memberlist:
+  peers: []
+
+# configs/gateway-<node>.yaml
+olric_servers:
+  - 10.0.0.<live>:10002
+```
+
+```bash
+sudo systemctl restart orama-namespace-olric@$NS
+sudo systemctl restart orama-namespace-gateway@$NS
+curl -sS http://10.0.0.<this>:10004/v1/health   # a tenant gateway binds the WireGuard address, not loopback
+```
+
+Mark the old assignment rows stopped in the platform database:
+
+```sql
+UPDATE namespace_cluster_nodes
+  SET status='stopped', updated_at=CURRENT_TIMESTAMP,
+      error_message='node replaced <date>'
+  WHERE node_id='<OLD_LIBP2P_ID>' AND status='running';
+```
+
+Later, re-provision HA (second and third namespace peers) so the namespace is not single-node for ever.
+
+### IPFS re-replication and WASM backfill
+
+Namespace gateways load function code with `POST http://localhost:10107/api/v0/cat?arg=<wasm_cid>`. The metadata (function name to CID) is in the namespace RQLite and is fine after a replacement. The bytes are in Kubo. A replaced VPS has a nearly empty repo, so the first invoke of each function on that node (or on any cold peer after a restart) can hang until the IPFS deadline of about 15 s, and the function reports 100% errors. The same IPFS layer hanging on `add` surfaces as `orama function deploy` returning 504 (the proxy budget is 30 s) while other invokes still succeed.
+
+The gateway's `/v1/health` reporting `ipfs: ok` only means the daemon answers. It does not mean every registered WASM is local.
+
+The re-pin sweep above heals this on its own over time. When you need the new node warm before declaring the cutover done, or after any full IPFS repo wipe, backfill by hand, after the new node is a platform voter and IPFS and IPFS Cluster are up on all nameservers.
+
+```bash
+# 1) On a live namespace RQLite host, list the active function CIDs
+curl -sS -G 'http://127.0.0.1:10000/db/query?level=none' \
+  --data-urlencode "q=SELECT DISTINCT wasm_cid FROM functions WHERE status='active' AND wasm_cid IS NOT NULL AND wasm_cid != ''" \
+  | python3 -c 'import sys,json; v=json.load(sys.stdin)["results"][0].get("values")or[]; open("/tmp/cids.txt","w").write("\n".join(r[0] for r in v)+"\n"); print(len(v),"cids")'
+
+# 2) Copy /tmp/cids.txt to every nameserver and, on each node, pin locally.
+#    Kubo refuses these without Authorization: Bearer <token>. The token is
+#    ipfs.KuboAPIToken (purpose ipfs-kubo-api), the same value the inspector
+#    derives on the node. Export it as KUBO_BEARER. It is not the cluster
+#    secret and not the cluster REST password.
+while IFS= read -r cid; do
+  [ -z "$cid" ] && continue
+  curl -sS -m 180 -H "Authorization: Bearer ${KUBO_BEARER}" -X POST \
+    "http://127.0.0.1:10107/api/v0/pin/add?arg=${cid}&recursive=true" >/dev/null \
+    || echo "FAIL $cid"
+done < /tmp/cids.txt
+
+# 3) Verify on every node, the new one included
+curl -sS -H "Authorization: Bearer ${KUBO_BEARER}" -X POST http://127.0.0.1:10107/api/v0/repo/stat
+# the new node's repo size should jump (megabytes to hundreds of megabytes)
+curl -sS -m 20 -o /dev/null -w "%{http_code} %{size_download} %{time_total}\n" \
+  -H "Authorization: Bearer ${KUBO_BEARER}" \
+  -X POST "http://127.0.0.1:10107/api/v0/cat?arg=<HOT_WASM_CID>"
+# expect 200, a size of ~1 MB or more, and a time well under 1 s after the backfill
+
+# 4) Upload path smoke test, the size class of a real deploy
+dd if=/dev/urandom of=/tmp/big.bin bs=1024 count=1200 status=none
+curl -sS -m 60 -H "Authorization: Bearer ${KUBO_BEARER}" -X POST -F file=@/tmp/big.bin http://127.0.0.1:10107/api/v0/add
+```
+
+The cluster REST API on port 10108 requires basic auth. Asking the cluster to pin everywhere (replication factor -1) is useful but not sufficient on its own: a peer can stay "unpinned" in the peer map. Do the local `pin/add` above regardless.
+
+The IPFS part is done only when:
+
+1. Almost all active `wasm_cid`s return `Keys` on every nameserver. Investigate any remaining 500s: it is often a dead or orphan CID, and the fix is to redeploy that function.
+2. A hot function CID is fast to `cat` on the new node, not only on the survivors.
+3. A 1.2 MB `ipfs add` succeeds quickly on all peers.
+4. `https://ns-<namespace>.<domain>/v1/health` stays healthy and the namespace owner can `orama function deploy` and invoke a hot function.
+
+Do not mark a cutover complete because the platform Raft is 3 of 3 alone.
+
+### Circuit breakers
+
+The platform gateway tracks a breaker per namespace backend (`ns:<ip>`). Dead backends open the circuit, and clients see HTTP 503 `namespace gateway unavailable: all upstream circuits are open`.
+
+Breakers clear themselves. A breaker opens after 5 consecutive backend failures, admits one probe every 30 s, and closes on the first success. A probe that never reports an outcome falls back to open after 30 s instead of holding the single probe slot.
+
+The fix is to correct DNS so only live gateways are advertised, then wait: recovery takes at most one 30 s open-duration once the backend is healthy. If it does not recover, that is a bug worth filing rather than a restart. As a last resort, `orama node restart` on one follower at a time clears the in-memory breakers; never restart all voters at once.
+
+## Phase D: retire and erase the old node
+
+Only when:
+
+- the new node is a synced voter,
+- the zone NS DNS points at the new IP,
+- namespace DNS lists only live gateway IPs,
+- you accept the namespace HA state (rebalanced or recovered).
+
+One command does the cluster-side removal and the erase, from a survivor or your own machine:
+
+```bash
+orama node remove --env <env> --node <OLD_PUBLIC_IP>
+```
+
+First it prints what the removal costs every raft cluster the node is a voter in, the platform cluster and each namespace it serves, and refuses if any of them would lose quorum. Then it takes the node out of the platform raft configuration, writes an eviction tombstone so orphan recovery does not put it back within five minutes, releases its mesh address, its nameserver slot, its namespace memberships, its namespace port blocks and its TURN and SFU allocations, marks it retired so the cluster purges its DNS records, and erases the machine.
+
+- `--dry-run` shows the plan and changes nothing.
+- `--offline` is for a VPS that is already gone: the cluster-side removal happens and nothing is attempted against the target.
+- `--nuclear` also removes the shared binaries and the Tor package when wiping.
+- `--force` skips the confirmation.
+- `decommission` is accepted as an alias. Every step is keyed on the node and safe to repeat, so a removal that failed part way through is finished by running it again.
+
+**Raft identity.** A node whose raft id has been migrated to its libp2p peer id keeps that id across an address change, so replacing the machine's overlay address no longer mints a second raft member. On a cluster that has not run `orama node migrate-raft-id` yet, the id is still the raft advertise address, and a changed address creates a duplicate voter that the old entry never leaves. Check which you are on:
+
+```bash
+orama node migrate-raft-id --env <env> --dry-run
+```
+
+Verify afterwards on the platform leader:
+
+```bash
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
+# expect exactly the surviving voters, all reachable, and a leader still elected
+```
+
+### Manual equivalent, if the CLI cannot reach a survivor
+
+On the platform leader, confirm the voter set, then remove the old raft id (for example `10.0.0.6:10101`):
+
+```bash
+rqcurl -sS "$RQ/nodes" | python3 -m json.tool
+rqcurl -sS -X DELETE "$RQ/remove" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"10.0.0.6:10101"}'
+```
+
+Then write the tombstone, or orphan recovery re-adds the node within five minutes, and take the node out of every membership store:
+
+```sql
+INSERT INTO raft_evicted_nodes (node_id, raft_addr, peer_id, reason, evicted_by)
+  VALUES ('10.0.0.6:10101','10.0.0.6:10101','<OLD_LIBP2P_ID>','operator','<THIS_NODE>');
+
+-- By address too: an OramaOS node's row carries its enrolment placeholder id
+-- (node-<overlay address>), not its peer id. Run this before the UPDATE below.
+DELETE FROM wireguard_peers          WHERE node_id = '<OLD_LIBP2P_ID>'
+  OR (node_id = 'node-' || wg_ip AND wg_ip = (SELECT internal_ip FROM dns_nodes
+      WHERE id = '<OLD_LIBP2P_ID>' AND last_seen != '1970-01-01 00:00:00'));
+DELETE FROM dns_nameservers          WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM namespace_cluster_nodes  WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM namespace_port_allocations WHERE node_id = '<OLD_LIBP2P_ID>';
+DELETE FROM webrtc_port_allocations  WHERE node_id = '<OLD_LIBP2P_ID>';
+
+-- Mark, do not delete. Every DNS cleanup the cluster performs finds the IP
+-- through a dns_nodes row that is not active; deleting the row strands the
+-- node's A records, its NS glue and the namespace records pointing at it.
+UPDATE dns_nodes SET status = 'inactive', last_seen = '1970-01-01 00:00:00',
+  updated_at = datetime('now') WHERE id = '<OLD_LIBP2P_ID>';
+
+-- The 120 s system reaper only matches status='active'. A retired node is
+-- already inactive, so apex, wildcard and NS-glue A records would otherwise stay.
+DELETE FROM dns_records WHERE record_type = 'A' AND namespace = 'system'
+  AND value = (SELECT ip_address FROM dns_nodes WHERE id = '<OLD_LIBP2P_ID>');
+```
+
+Finally erase the box with `orama node wipe --env <env> --node <OLD_PUBLIC_IP>`. Wipe is target-side only and says nothing to the cluster, which is why it comes after the removal.
+
+Optionally repurpose the erased box, for example as a new operator host.
+
+## Phase E: inventory and SSH
+
+1. Update `core/scripts/nodes.conf`: the victim IP becomes the new IP for that role. This is the fallback inventory; the network API is what `orama nodes` reads first.
+2. Update your `~/.ssh/config` host aliases, and keep a break-glass alias for any leftover public workloads.
+3. Optional: store the SSH key for the new host in the RootWallet vault.
+
+## Verification matrix (all must pass)
+
+```bash
+# Platform Raft = 3 voters, all reachable
+rqcurl -sS "$RQ/nodes"
+
+# Platform public health
+curl -sS https://<base-domain>/v1/health
+# status healthy: rqlite, olric, ipfs, vault, wireguard ok
+
+# NS records and glue
+dig +short A ns1.<domain> @8.8.8.8
+dig +short A ns2.<domain> @8.8.8.8
+dig +short A ns3.<domain> @8.8.8.8
+dig +short A ns3.<domain> @<ns1-ip>   # authoritative truth
+
+# Each critical namespace
+curl -sS https://ns-<name>.<base-domain>/v1/health
+# 200 healthy; rqlite ok; olric ok preferred
+
+# A namespace must not resolve to a node without its gateway
+dig +short A ns-<name>.<base-domain> @<ns1-ip>
+```
+
+Optionally hit each A record with `curl --resolve` and confirm 200.
+
+## Anti-patterns
+
+| Do not | Why |
+|--------|-----|
+| Clean or remove the old node first | You can lose platform or namespace quorum |
+| Restart all `orama-node` at once | The platform Raft splits |
+| Map all DNS `old_ip` to `new_ip` blindly | Clients hit an empty Caddy or gateway |
+| Assume the install is complete when the process exits | The node may still be snapshotting |
+| Ignore `olric unavailable` on namespace health | Often dead peer lists after a topology change |
+| Skip the namespace RQLite leader check | App writes and auth can return 503 while `/v1/health` still looks ok under weak reads |
+| Skip the IPFS WASM backfill after a join | A cold node times out function invokes at 15 s and deploys return 504 while `ipfs: ok` |
+| Trust cluster replication factor -1 alone | The peer map can show `unpinned` on the new node while its Kubo repo stays empty |
+| Declare done when only the platform Raft is 3 of 3 | Serverless is still broken for cold CIDs |
+
+## Recovery quick reference
+
+| Symptom | Action |
+|---------|--------|
+| Platform has no leader, or is Candidate | `orama node recover-raft --env <env>`. It picks the node with the highest applied index and prints what each one reported. Every other node's data is DELETED, with no backup. See [Upgrades](/docs/operator/upgrades). |
+| The new node never becomes a voter | Check WireGuard ping and logs; mint a new invite and reinstall if the install was partial |
+| Namespace health 503, circuit open | Fix DNS to the live gateways; restart one platform gateway only as a last resort |
+| Namespace RQLite `leader not found` | Single-node `peers.json` recovery on the survivor (above) |
+| Dual A records on `nsN` | Delete the extra rows; `dig` the authoritative server |
+| Function WASM `cat` times out at 15 s after a replacement or restart | Export the active `wasm_cid`s; local `pin/add` on every node |
+| `function deploy` returns 504 while invokes work | Same IPFS layer: check `add` latency on each peer before blaming `function.yaml` |
+| The new node's `repo/stat` is still tiny after hours | The backfill never ran or bitswap is blocked; re-run `pin/add` and check WireGuard and swarm peers |
+
+## Done criteria
+
+You are done only when all of these are true:
+
+1. Exactly 3 platform voters, all reachable, with a stable leader.
+2. `ns1`, `ns2` and `ns3` resolve correctly (authoritative `dig`).
+3. Platform `/v1/health` reports healthy.
+4. Every critical namespace `/v1/health` returns 200 with RQLite ok (and Olric ok if required).
+5. No active DNS A records for decommissioned public IPs on those namespaces.
+6. IPFS: every nameserver has pinned, or can quickly `cat`, the active function WASM set, and the new node's repo is not empty.
+7. RootWallet: an `IP/ubuntu` SSH vault entry exists and is in `authorized_keys` on the new VPS.
+8. `nodes.conf` and your SSH config match reality.
+9. The old VPS is wiped, or intentionally repurposed.
+
+If item 4 fails, the swap is not finished. Fix the namespace layer before walking away.
