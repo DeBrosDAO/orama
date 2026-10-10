@@ -65,6 +65,13 @@ make build
 make test
 ```
 
+`make test` is the full local gate: the core Go tests, the Caddy module tests, the TypeScript SDK unit tests
+(`make sdk-test`), the fleet-e2e lint and coverage gate, and the whitepaper checks. The SDK tests need
+`sdk/node_modules`; when it is missing the target stops with a message, and
+`cd sdk && pnpm install --frozen-lockfile` fixes it. The SDK tests read the gateway's Go source (for example the
+auth error codes in `sdk/tests/unit/auth-codes-parity.test.ts`), so a gateway change that adds a code fails them
+until `sdk/src/errors.ts` names it.
+
 ### Lifecycle harness
 
 `make test` and `make test-e2e` never reboot a node, kill a voter, join one, or

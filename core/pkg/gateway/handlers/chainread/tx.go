@@ -54,8 +54,12 @@ const (
 	// SimulateRequest.tx_bytes, and the fields of SimulateResponse.gas_info and its GasInfo.
 	simulateTxBytesField = 2
 	simulateGasInfoField = 1
-	gasWantedField       = 1
 	gasUsedField         = 2
+
+	// The path to the gas limit a transaction declares: TxRaw.auth_info_bytes, AuthInfo.fee, Fee.gas_limit.
+	txRawAuthInfoField = 2
+	authInfoFeeField   = 2
+	feeGasLimitField   = 2
 
 	// sdkTxInCache is the SDK's code and codespace for a transaction the mempool has already seen.
 	// CometBFT answers a repeat with an RPC error rather than a result; the SDK's own mempool gives
@@ -93,9 +97,15 @@ type feeCoin struct {
 	Amount string `json:"amount"`
 }
 
+// simulateAnswer carries its 64-bit integers as decimal strings, as proto3 JSON does and as every
+// other 64-bit integer this proxy answers is: a JavaScript client reads a bare number above 2^53
+// as a different one.
 type simulateAnswer struct {
-	GasWanted uint64  `json:"gas_wanted"`
-	GasUsed   uint64  `json:"gas_used"`
+	// GasWanted is the gas limit the transaction declares (its fee's gas_limit), so a wallet can see
+	// that a limit is under GasUsed. The chain's simulation itself runs with no limit and reports
+	// the largest uint64.
+	GasWanted uint64  `json:"gas_wanted,string"`
+	GasUsed   uint64  `json:"gas_used,string"`
 	Fee       feeCoin `json:"fee"`
 	// BaseFee is the norama per unit of gas Fee is priced at, so a wallet that pads the gas limit
 	// can price the padded limit itself.
@@ -123,7 +133,12 @@ func (p *Proxy) serveSimulate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, refusal(res.Code, res.Codespace, res.Log, ""))
 		return
 	}
-	gasWanted, gasUsed, err := parseGasInfo(res.Value)
+	gasUsed, err := parseGasUsed(res.Value)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, msgChainFailure)
+		return
+	}
+	gasWanted, err := declaredGasLimit(raw)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, msgChainFailure)
 		return

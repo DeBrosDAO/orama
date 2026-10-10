@@ -677,7 +677,7 @@ names it.
 `stakingUnbondingDelegation`, `stakingDelegatorUnbondingDelegations`, `stakingValidator`, `stakingParams`,
 `distributionDelegationRewards`, `distributionDelegationTotalRewards`, `contractInfo` and `isContract`
 (`false` on the gateway's typed 404 for an address that is not a contract), then `simulateTx(txBytes)`
-(`{ gasWanted, gasUsed, fee, baseFee }`) and `broadcastTx(txBytes)` (`{ txHash }`), with `tx(hash)` to poll until the
+(`{ gasWanted, gasUsed, fee, baseFee }`; the gas figures are `bigint`s read from the gateway's decimal strings, and `gasWanted` is the limit the transaction declares; a gas figure the gateway sent as a bare number above 2^53 is a `CHAIN_BAD_RESPONSE` `SDKError`, not a rounded value) and `broadcastTx(txBytes)` (`{ txHash }`, resolved once the node's mempool has checked the transaction, not when it is in a block), with `tx(hash)` to poll until the
 transaction is in a block (a 404 `NotFoundError` until then). The listings take `{ limit, key }` (limit 1 to 100,
 key the previous page's `pagination.next_key`). A transaction the chain refuses, on either call, is a
 `ChainTxRefusedError` (an `SDKError` with `code` `CHAIN_TX_REJECTED`, `httpStatus` 422, and `chainCode`,

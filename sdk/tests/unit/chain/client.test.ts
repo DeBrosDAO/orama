@@ -288,7 +288,7 @@ describe("wallet reads and transactions through the gateway", () => {
 
   it("simulates a transaction through POST /v1/chain/simulate", async () => {
     const { fn, calls } = fakeFetch(() => ({
-      body: { gas_wanted: 200000, gas_used: 123456, fee: { denom: "norama", amount: "246912" }, base_fee: "2" },
+      body: { gas_wanted: "200000", gas_used: "123456", fee: { denom: "norama", amount: "246912" }, base_fee: "2" },
     }));
     const chain = new OramaChainClient({ gatewayURL: gw, fetch: fn });
     const result = await chain.simulateTx(new Uint8Array([1, 2, 3]));
@@ -296,6 +296,22 @@ describe("wallet reads and transactions through the gateway", () => {
     expect(calls[0]!.url).toBe("https://gw.example/v1/chain/simulate");
     expect(calls[0]!.init?.method).toBe("POST");
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ tx_bytes: "AQID" });
+  });
+
+  it("reads gas above 2^53 from its decimal string exactly, and refuses a bare number that already lost digits", async () => {
+    const exact = fakeFetch(() => ({
+      text: '{"gas_wanted":"18446744073709551615","gas_used":"9007199254740993","fee":{"denom":"norama","amount":"1"},"base_fee":"1"}',
+    }));
+    const result = await new OramaChainClient({ gatewayURL: gw, fetch: exact.fn }).simulateTx(new Uint8Array([1]));
+    expect(result.gasWanted).toBe(18446744073709551615n);
+    expect(result.gasUsed).toBe(9007199254740993n);
+
+    const rounded = fakeFetch(() => ({
+      text: '{"gas_wanted":18446744073709551615,"gas_used":1,"fee":{"denom":"norama","amount":"1"},"base_fee":"1"}',
+    }));
+    await expect(new OramaChainClient({ gatewayURL: gw, fetch: rounded.fn }).simulateTx(new Uint8Array([1]))).rejects.toMatchObject({
+      code: "CHAIN_BAD_RESPONSE",
+    });
   });
 
   it("broadcasts through POST /v1/chain/broadcast and returns the hash", async () => {

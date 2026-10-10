@@ -132,6 +132,16 @@ export const AuthCode = {
   OperatorRequired: "NOT_AN_OPERATOR",
   /** The destination is refused; a different credential will not help. */
   DestinationNotAllowed: "DESTINATION_NOT_ALLOWED",
+  /**
+   * The wallet already owns as many namespaces as one wallet may (403 on a namespace create). The
+   * message names the cap; deleting a namespace or handing one on makes room.
+   */
+  NamespaceQuota: "NAMESPACE_QUOTA",
+  /**
+   * A namespace transfer the recipient cannot take, for example a wallet at its namespace cap (403).
+   * Deliberately generic: it names neither the wallet nor the limit. The owner keeps the namespace.
+   */
+  TransferRefused: "TRANSFER_REFUSED",
 
   // --- Signing in with a wallet ------------------------------------------
   /** The sign-in message could not be read. Send the one `challenge()` returned, verbatim. */

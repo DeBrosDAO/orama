@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
 	"strings"
@@ -82,6 +83,10 @@ func TestWalletRoutes_balanceSimulateBroadcastAndSeenOnChain(t *testing.T) {
 	if sim.GasUsed == 0 || sim.GasWanted == 0 || sim.Fee.Denom != chain.Denom {
 		t.Fatalf("simulate answered %+v", sim)
 	}
+	// gas_wanted is the limit the transaction declares, not the unlimited simulation meter's.
+	if sim.GasWanted == math.MaxUint64 || sim.GasWanted < sim.GasUsed {
+		t.Errorf("simulate gas_wanted %d with gas_used %d, want the transaction's own gas limit", sim.GasWanted, sim.GasUsed)
+	}
 	baseFee, _ := new(big.Int).SetString(sim.BaseFee, 10)
 	want := new(big.Int).Mul(baseFee, new(big.Int).SetUint64(sim.GasUsed))
 	if baseFee == nil || baseFee.Sign() <= 0 || sim.Fee.Amount != want.String() {
@@ -144,8 +149,10 @@ func TestWalletRoutes_balanceSimulateBroadcastAndSeenOnChain(t *testing.T) {
 
 // simulateAnswer is the 200 body of POST /v1/chain/simulate.
 type simulateAnswer struct {
-	GasWanted uint64 `json:"gas_wanted"`
-	GasUsed   uint64 `json:"gas_used"`
+	// The gas figures are decimal strings: a bare JSON number above 2^53 is a different number to a
+	// JavaScript client (RootWallet read the SDK's unlimited-meter limit, 2^64-1, that way).
+	GasWanted uint64 `json:"gas_wanted,string"`
+	GasUsed   uint64 `json:"gas_used,string"`
 	Fee       struct {
 		Denom  string `json:"denom"`
 		Amount string `json:"amount"`

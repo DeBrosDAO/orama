@@ -1,11 +1,13 @@
 package chainread
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,10 +103,13 @@ func txBody(raw []byte) string {
 	return `{"tx_bytes":"` + base64.StdEncoding.EncodeToString(raw) + `"}`
 }
 
+// gasInfoWantedField is GasInfo.gas_wanted, which the proxy does not read.
+const gasInfoWantedField = 1
+
 // simulateResponse is SimulateResponse{gas_info: GasInfo{gas_wanted, gas_used}}.
 func simulateResponse(wanted, used uint64) []byte {
 	var info []byte
-	info = protowire.AppendTag(info, gasWantedField, protowire.VarintType)
+	info = protowire.AppendTag(info, gasInfoWantedField, protowire.VarintType)
 	info = protowire.AppendVarint(info, wanted)
 	info = protowire.AppendTag(info, gasUsedField, protowire.VarintType)
 	info = protowire.AppendVarint(info, used)
@@ -114,30 +119,118 @@ func simulateResponse(wanted, used uint64) []byte {
 
 var someTx = []byte{0x0a, 0x03, 'a', 'b', 'c'}
 
+// txWithGasLimit is a TxRaw{auth_info_bytes: AuthInfo{fee: Fee{gas_limit}}}.
+func txWithGasLimit(limit uint64) []byte {
+	fee := protowire.AppendTag(nil, feeGasLimitField, protowire.VarintType)
+	fee = protowire.AppendVarint(fee, limit)
+	authInfo := protowire.AppendTag(nil, authInfoFeeField, protowire.BytesType)
+	authInfo = protowire.AppendBytes(authInfo, fee)
+	raw := protowire.AppendTag(nil, txRawAuthInfoField, protowire.BytesType)
+	return protowire.AppendBytes(raw, authInfo)
+}
+
 func TestSimulate_answersGasAndFeeFromTheBaseFee(t *testing.T) {
-	s := &rpcStub{simulate: abciResult{Value: simulateResponse(200000, 123456)}, baseFee: "2"}
-	rr := postTx(txProxy(t, s), "simulate", "application/json", txBody(someTx))
+	// The SDK's simulation meters with no limit, so its gas_wanted is the largest uint64. The
+	// answer's gas_wanted is the limit the transaction declares.
+	s := &rpcStub{simulate: abciResult{Value: simulateResponse(math.MaxUint64, 123456)}, baseFee: "2"}
+	tx := txWithGasLimit(200000)
+	rr := postTx(txProxy(t, s), "simulate", "application/json", txBody(tx))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rr.Code, rr.Body)
 	}
 	var got struct {
-		GasWanted uint64 `json:"gas_wanted"`
-		GasUsed   uint64 `json:"gas_used"`
+		GasWanted string `json:"gas_wanted"`
+		GasUsed   string `json:"gas_used"`
 		Fee       struct{ Denom, Amount string }
 		BaseFee   string `json:"base_fee"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
-		t.Fatal(err)
+		t.Fatalf("gas figures are not JSON strings: %v: %s", err, rr.Body)
 	}
-	if got.GasWanted != 200000 || got.GasUsed != 123456 || got.Fee.Denom != "norama" || got.Fee.Amount != "246912" || got.BaseFee != "2" {
+	if got.GasWanted != "200000" || got.GasUsed != "123456" || got.Fee.Denom != "norama" || got.Fee.Amount != "246912" || got.BaseFee != "2" {
 		t.Fatalf("answer %+v", got)
 	}
-	want := hex.EncodeToString(simulateRequest(someTx))
+	want := hex.EncodeToString(simulateRequest(tx))
 	if s.params[0]["path"] != "/cosmos.tx.v1beta1.Service/Simulate" || s.params[0]["data"] != want || s.params[0]["prove"] != false {
 		t.Fatalf("simulate sent %v, want data %s", s.params[0], want)
 	}
 	if rr.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("simulate answer is cacheable")
+	}
+}
+
+func TestSimulate_gasAboveTwoToTheFiftyThreeIsAnExactDecimalString(t *testing.T) {
+	s := &rpcStub{simulate: abciResult{Value: simulateResponse(math.MaxUint64, 9007199254740993)}, baseFee: "1"}
+	rr := postTx(txProxy(t, s), "simulate", "application/json", txBody(txWithGasLimit(math.MaxUint64)))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+	for _, want := range []string{`"gas_wanted":"18446744073709551615"`, `"gas_used":"9007199254740993"`, `"amount":"9007199254740993"`} {
+		if !strings.Contains(rr.Body.String(), want) {
+			t.Errorf("answer lacks %s: %s", want, rr.Body)
+		}
+	}
+}
+
+func TestSimulate_aTransactionWithoutAGasLimitDeclaresZeroNotTheSDKsSentinel(t *testing.T) {
+	s := &rpcStub{simulate: abciResult{Value: simulateResponse(math.MaxUint64, 5)}, baseFee: "1"}
+	rr := postTx(txProxy(t, s), "simulate", "application/json", txBody(someTx))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"gas_wanted":"0"`) || strings.Contains(rr.Body.String(), "18446744073709551615") {
+		t.Fatalf("status %d: %s", rr.Code, rr.Body)
+	}
+}
+
+// numbersIn lists every bare JSON number in body by its path, so a test can say which members are
+// numbers at all.
+func numbersIn(t *testing.T, body []byte) map[string]string {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		t.Fatalf("not JSON: %v: %s", err, body)
+	}
+	out := map[string]string{}
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch x := v.(type) {
+		case json.Number:
+			out[path] = x.String()
+		case map[string]any:
+			for k, e := range x {
+				walk(path+"."+k, e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(path+"[]", e)
+			}
+		}
+	}
+	walk("", doc)
+	return out
+}
+
+func TestTxRoutes_noSixtyFourBitIntegerIsABareJSONNumber(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	s := &rpcStub{
+		simulate: abciResult{Value: simulateResponse(math.MaxUint64, math.MaxUint64)}, baseFee: "1",
+		broadcast: map[string]any{"code": 0, "hash": hash},
+	}
+	p := txProxy(t, s)
+	answers := map[string]*httptest.ResponseRecorder{
+		"simulate":  postTx(p, "simulate", "application/json", txBody(txWithGasLimit(math.MaxUint64))),
+		"broadcast": postTx(p, "broadcast", "application/json", txBody(someTx)),
+	}
+	s.broadcast = map[string]any{"code": 11, "codespace": "sdk", "log": "out of gas", "hash": hash}
+	answers["broadcast refused"] = postTx(p, "broadcast", "application/json", txBody(someTx))
+	s.simulate = abciResult{Code: 6, Codespace: "sdk", Log: "refused"}
+	answers["simulate refused"] = postTx(p, "simulate", "application/json", txBody(someTx))
+	for name, rr := range answers {
+		for path, value := range numbersIn(t, rr.Body.Bytes()) {
+			if path != ".code" {
+				t.Errorf("%s: %s is the bare number %s; only code (32-bit) may be one: %s", name, path, value, rr.Body)
+			}
+		}
 	}
 }
 
@@ -333,11 +426,11 @@ func TestTxRoutes_eachRouteHasItsOwnInFlightCap(t *testing.T) {
 	}
 }
 
-func TestParseGasInfo_edges(t *testing.T) {
-	if _, _, err := parseGasInfo(nil); err == nil {
+func TestParseGasUsed_edges(t *testing.T) {
+	if _, err := parseGasUsed(nil); err == nil {
 		t.Error("an empty response has gas")
 	}
-	if _, _, err := parseGasInfo([]byte{0x0a, 0x05, 0x08}); err == nil {
+	if _, err := parseGasUsed([]byte{0x0a, 0x05, 0x08}); err == nil {
 		t.Error("a truncated gas_info parsed")
 	}
 	// An unknown field before and inside gas_info is skipped.
@@ -349,9 +442,34 @@ func TestParseGasInfo_edges(t *testing.T) {
 	resp = protowire.AppendVarint(resp, 1)
 	resp = protowire.AppendTag(resp, simulateGasInfoField, protowire.BytesType)
 	resp = protowire.AppendBytes(resp, info)
-	wanted, used, err := parseGasInfo(resp)
-	if err != nil || wanted != 0 || used != 7 {
-		t.Fatalf("wanted %d used %d err %v", wanted, used, err)
+	used, err := parseGasUsed(resp)
+	if err != nil || used != 7 {
+		t.Fatalf("used %d err %v", used, err)
+	}
+}
+
+func TestDeclaredGasLimit_edges(t *testing.T) {
+	if got, err := declaredGasLimit(txWithGasLimit(250000)); err != nil || got != 250000 {
+		t.Fatalf("limit %d err %v", got, err)
+	}
+	for name, raw := range map[string][]byte{"no auth_info": someTx, "empty": nil} {
+		if got, err := declaredGasLimit(raw); err != nil || got != 0 {
+			t.Errorf("%s: limit %d err %v, want 0", name, got, err)
+		}
+	}
+	// An auth_info with no fee declares 0; a fee with no gas_limit declares 0.
+	noFee := protowire.AppendBytes(protowire.AppendTag(nil, txRawAuthInfoField, protowire.BytesType), []byte{0x08, 0x01})
+	if got, err := declaredGasLimit(noFee); err != nil || got != 0 {
+		t.Errorf("no fee: limit %d err %v", got, err)
+	}
+	noLimit := protowire.AppendBytes(protowire.AppendTag(nil, authInfoFeeField, protowire.BytesType), []byte("\x1a\x01x"))
+	noLimitTx := protowire.AppendBytes(protowire.AppendTag(nil, txRawAuthInfoField, protowire.BytesType), noLimit)
+	if got, err := declaredGasLimit(noLimitTx); err != nil || got != 0 {
+		t.Errorf("no gas_limit: limit %d err %v", got, err)
+	}
+	// Unknown fields around the limit are skipped; a truncated message is an error.
+	if _, err := declaredGasLimit([]byte{0x12, 0x05, 0x12}); err == nil {
+		t.Error("a truncated auth_info parsed")
 	}
 }
 
@@ -388,6 +506,36 @@ func TestSanitizeCodespace(t *testing.T) {
 	for in, want := range map[string]string{"sdk": "sdk", "wasm": "wasm", "": "", "a b": "", "/etc/passwd": "", strings.Repeat("a", 65): ""} {
 		if got := sanitizeCodespace(in); got != want {
 			t.Errorf("sanitizeCodespace(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A field that appears twice decodes as the chain decodes it: a repeated
+// gas_limit takes its last value, and a repeated fee (or auth_info) message is
+// merged, so a limit in the second copy wins. Taking the first occurrence showed
+// a wallet a limit the chain would not apply.
+func TestDeclaredGasLimit_duplicateFieldsDecodeAsTheChainDoes(t *testing.T) {
+	limit := func(v uint64) []byte {
+		return protowire.AppendVarint(protowire.AppendTag(nil, feeGasLimitField, protowire.VarintType), v)
+	}
+	feeMsg := func(b []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, authInfoFeeField, protowire.BytesType), b)
+	}
+	authInfo := func(b []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, txRawAuthInfoField, protowire.BytesType), b)
+	}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		want uint64
+	}{
+		"gas_limit twice in one fee":     {authInfo(feeMsg(append(limit(100), limit(200)...))), 200},
+		"fee twice, limit in the second": {authInfo(append(feeMsg(limit(100)), feeMsg(limit(300))...)), 300},
+		"fee twice, limit in the first":  {authInfo(append(feeMsg(limit(100)), feeMsg(nil)...)), 100},
+		"auth_info twice":                {append(authInfo(feeMsg(limit(100))), authInfo(feeMsg(limit(400)))...), 400},
+	} {
+		got, err := declaredGasLimit(tc.raw)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: limit %d err %v, want %d", name, got, err, tc.want)
 		}
 	}
 }
