@@ -182,23 +182,3 @@ func printFaucet(p *printer.Printer, r faucetReport, amount *big.Int) error {
 	p.Printf("balance: %s norama (%s ORAMA)\n", r.Balance, orama(bal))
 	return nil
 }
-
-// Fund sends amount of norama from the faucet to recipient, signed on a node of
-// the environment env over SSH (see the faucet command). It is what `orama setup`
-// calls for a new operator on a test network; the same checks apply: the chain
-// must be a test network and the node must hold the faucet signer's key.
-func Fund(env, recipient string, amount *big.Int) error {
-	if err := requireRecipient(recipient); err != nil {
-		return err
-	}
-	if amount == nil || amount.Sign() <= 0 {
-		return clierr.Usage("a faucet drip must be more than zero")
-	}
-	node, cleanup, err := faucetNode(env, "")
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	_, err = sendFaucet(node, recipient, amount)
-	return err
-}

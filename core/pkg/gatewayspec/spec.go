@@ -99,6 +99,10 @@ type InstanceConfig struct {
 	// spawner (node.EnsureGateway) sets it: /v1/proxy/relay is a MainGateway
 	// route, so a namespace gateway never serves it and is never given it.
 	RelayAllowedSuffixes []string
+	// FaucetKeyFile is the key file of the cluster gateway's test-network faucet (node.yaml
+	// chain.faucet). Like RelayAllowedSuffixes, only the index gateway's spawner sets it:
+	// /v1/chain/faucet is served by the gateway that sits beside the chain.
+	FaucetKeyFile string
 }
 
 // GatewayYAMLWebRTC is the webrtc section of the gateway YAML config.
@@ -138,6 +142,7 @@ type GatewayYAMLConfig struct {
 	APIKeyHMACSecret      string            `yaml:"api_key_hmac_secret,omitempty"`
 	StateDir              string            `yaml:"state_dir"`
 	RelayAllowedSuffixes  []string          `yaml:"relay_allowed_suffixes,omitempty"`
+	FaucetKeyFile         string            `yaml:"faucet_key_file,omitempty"`
 }
 
 // IsHealthy checks if the Gateway instance answers /v1/health.

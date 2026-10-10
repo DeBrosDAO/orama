@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
 )
@@ -294,7 +295,7 @@ func TestFaucet_sendsTheMessageTheNodeSigns(t *testing.T) {
 		t.Fatal(err)
 	}
 	msg := signedPayload(t, f.scripts[1])["body"].(map[string]any)["messages"].([]any)[0].(map[string]any)
-	if msg["@type"] != faucetTypeURL || msg["signer"] != testAddr || msg["recipient"] != faucetRecipient || msg["amount"] != "1" {
+	if msg["@type"] != clusterreg.FaucetTypeURL || msg["signer"] != testAddr || msg["recipient"] != faucetRecipient || msg["amount"] != "1" {
 		t.Errorf("the message the node signs is %v", msg)
 	}
 	if !strings.HasPrefix(f.scripts[0], "sudo bash -c ") {

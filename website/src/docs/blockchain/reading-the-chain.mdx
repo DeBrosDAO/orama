@@ -82,6 +82,16 @@ Three read paths exist and each command uses one: `--gateway` (default: the acti
 
 `orama chain faucet <recipient>` funds an account on a test network. It signs on a node over SSH with that node's test operator key and refuses any chain id that does not contain `-stagenet-`, `-devnet-` or `-localnet-`. Full flags: [`orama chain`](/docs/developer/cli/chain).
 
+Someone with no node of the network is funded through a gateway instead: `POST /v1/chain/faucet` on a gateway that was given a faucet key.
+
+```bash
+curl -sS -X POST https://<gateway>/v1/chain/faucet \
+  -H 'Content-Type: application/json' \
+  -d '{"recipient":"orama1…","amount":"100000000000"}'
+```
+
+The amount is norama, a decimal string, and optional (100 ORAMA). The answer is `{"tx_hash","amount","height"}` once the drip is in a block. A refusal is `{"error","message"}` with one of these errors: `bad_recipient` (400), `bad_amount` (400, over the network's maximum drip), `cooldown` (429, one drip per recipient per day by default), `epoch_cap` (503), `faucet_disabled` (403), `busy` and `unavailable` (503), `pending` (504, sent and not yet in a block). A gateway with no faucet key answers 404. `orama setup` uses this route on a network whose manifest says it has a faucet. Operators who run it: [Run a faucet](/docs/operator/global-nodes#run-a-faucet).
+
 ## The TypeScript SDK
 
 `@debros/orama/chain` builds `SIGN_MODE_DIRECT` transactions and reads module state. See [SDK reference](/docs/developer/sdk-reference#the-chain-module) and the relay queries (`relayParams`, `relayReporters`, `relay`, `relayEpochResult`).

@@ -11,8 +11,8 @@ import (
 )
 
 // NewDeps wires the real ports: SSH to the machines, the network registry, the
-// signed release repository, the seeds' light-client routes, the chain through
-// an SSH tunnel to a node, and the operator's RootWallet.
+// signed release repository, the seeds' light-client and faucet routes, the chain
+// through an SSH tunnel to a node, and the operator's RootWallet.
 func NewDeps(report Reporter) Deps {
 	wallet := newAgentWallet()
 	return Deps{
@@ -22,7 +22,7 @@ func NewDeps(report Reporter) Deps {
 		Wallet:   wallet,
 		Enroll:   sshEnroller{wallet: wallet, report: report},
 		Chain:    tunneledChain{signer: rwagent.New(os.Getenv("RW_AGENT_SOCK"))},
-		Funder:   newSSHFaucet(),
+		Funder:   newGatewayFaucet(),
 		Names:    ChainNames{},
 		ASN:      OriginASN,
 		Record:   cliRecorder{},

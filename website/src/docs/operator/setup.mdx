@@ -62,7 +62,7 @@ orama setup --network stagenet --name alice --yes \
 
 The operator account needs ORAMA for the bonds (the storage bond is the network's bond per GiB times the capacity you declare, the relay and exit bonds are the network's minimums), the validator's 1,000 ORAMA self-bond, and fees. Setup reads the network's parameters and tells you the exact amount.
 
-- On a network with a faucet, setup asks it for the shortfall. The faucet signs on a node of the network over SSH, so this works when your CLI has an environment named after the network with nodes in it; for anyone else there is no faucet yet.
+- On a network with a faucet (its manifest says so), setup asks the faucet of the network's seeds for the shortfall: `POST /v1/chain/faucet` on `https://<seed>`, in the order the manifest lists them, until one pays. A seed that serves no faucet, is busy or has no funds is passed over; what the chain itself refused (the recipient drew within the last day, the amount is over the network's maximum drip, the epoch's cap is spent) ends the asking at once, since no other seed could change it. If no seed pays, setup shows every seed's answer and then the usual amount and address to fund by hand. The network must allow one drip to cover the need: the validator's self-bond alone is 1,000 ORAMA. Operators of a network can still fund an account with `orama chain faucet`, which signs on a node of theirs over SSH.
 - Otherwise setup stops with the exact amount and your operator address. Send it and run the same command again: it resumes where it stopped and bonds only what is missing.
 - `--no-validator` skips the validator and its self-bond.
 
@@ -78,7 +78,6 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 
 ## Known gaps
 
-- **The faucet is SSH-signed.** There is no public faucet endpoint; see Funding.
 - **Earnings are not counted** when setup checks the account has enough. A bond can be paid from earnings, so an operator who holds only earnings is told to fund the account.
 - **A chain that has upgraded since its genesis.** A joiner starts on the genesis binary in the cosmovisor layout. If the snapshot it restores was taken after an upgrade, the chain stops asking for that upgrade's binary; setup ends the wait with the chain's log. The release metadata does not list upgrade heights, so setup cannot stage the right binary itself yet.
 - **Release signing on a fresh machine.** A machine with no trust anchor installs a build your RootWallet signed after your CLI verified it; staging with the release root alone (`stage-archive --release-only`) needs a machine that is already installed.

@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/pkg/config"
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/install/templates"
@@ -313,6 +314,12 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	}
 	data.NodeNamesZone = zone
 
+	faucetKeyFile, err := cg.ChainFaucetKeyFile()
+	if err != nil {
+		return "", err
+	}
+	data.ChainFaucetKeyFile = faucetKeyFile
+
 	publicIP, err := cg.PublicIP()
 	if err != nil {
 		return "", err
@@ -442,6 +449,33 @@ func (cg *ConfigGenerator) NodeNamesZone() (string, error) {
 		}
 	}
 	return zone, nil
+}
+
+// ChainFaucetKeyFile is the key file of the test-network faucet the existing node.yaml turns on
+// (chain.faucet), or "" when it does not. An operator writes the block into node.yaml and every
+// regeneration keeps it. An unreadable node.yaml is an error and not a silent default: dropping
+// the block on a regeneration would switch the faucet off at the next upgrade, for the newcomers
+// who were sent to this node's gateway. The block is checked again rather than trusted for having
+// been checked when it was written.
+func (cg *ConfigGenerator) ChainFaucetKeyFile() (string, error) {
+	raw, err := cg.readNodeConfig()
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read node.yaml for chain.faucet: %w", err)
+	}
+	var parsed struct {
+		Chain config.ChainConfig `yaml:"chain"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse node.yaml for chain.faucet: %w", err)
+	}
+	faucet := parsed.Chain.Faucet
+	if errs := validate.ValidateFaucet(validate.FaucetConfig{Enabled: faucet.Enabled, KeyFile: faucet.KeyFile}); len(errs) > 0 {
+		return "", fmt.Errorf("node.yaml: %w", errs[0])
+	}
+	return faucet.KeyFilePath(), nil
 }
 
 // acmeCACaddyfileChars are characters that would let an acme_ca value end its

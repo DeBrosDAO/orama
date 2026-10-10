@@ -568,6 +568,31 @@ mints nothing on a production chain.
 Any existing account may sign. The signer pays its own transaction fee through `x/fees`, for example
 a validator operator spending earnings, so the faucet needs no funded account of its own.
 
+**The public route.** A newcomer has no account and no node, so cannot sign this itself. A gateway whose
+node.yaml has `chain.faucet.enabled: true` serves `POST /v1/chain/faucet` and signs for it, with a secp256k1 key in
+`chain.faucet.key_file` (default `/opt/orama/.orama/secrets/chain-faucet.key`: owned by the gateway's account,
+mode 0600, refused otherwise). The route is off by default; without a key the path is a 404. The request is
+`{"recipient":"orama1…","amount":"<norama>"}`, the amount optional (a decimal string, 100 ORAMA by default). The
+gateway reads the chain id from the chain for every drip and signs only on a test network's. It signs one
+transaction at a time (the account's sequence is known only once a block holds the previous one), simulates it
+first, so a refusal the chain would give costs the faucet no fee, and answers
+`200 {"tx_hash","amount","height"}` once the drip is in a block. The refusals are JSON `{"error","message"}`:
+`bad_request` (400), `bad_recipient` (400: not a canonical lowercase address, the faucet's own account, or a
+module or blocked account, which the chain decides), `bad_amount` (400: not a whole number of norama, or over
+`faucet_max_drip`), `cooldown` (429), `epoch_cap` (503), `faucet_disabled` (403), `busy` (503 with
+`Retry-After`: 16 drips wait for the account's turn), `unavailable` (503: the faucet account does not exist or
+cannot pay a fee), `pending` (504: sent and not yet in a block, after 45 seconds) and `faucet_failed` (502, the
+details only in the gateway's log). The route has two rate-limit buckets of its own, 3 a minute with a burst of
+3 per client network and 20 a minute with a burst of 6 for the whole route, and at most 24 requests in flight.
+
+**Provisioning.** On the node, as root, `orama maint faucet init` makes the key (never replacing one) and prints
+the faucet account. The account pays one fee per drip and holds nothing else, so it needs a few ORAMA. It cannot
+be a genesis account: a genesis must start at zero supply (`checkPremineGate`). It is funded as any account is,
+by a drip signed by an operator: `orama chain faucet <account> --env <network> --amount <norama>`. Then set
+`chain.faucet.enabled: true` in node.yaml and run `orama node restart`; `orama node upgrade` keeps the block.
+The genesis `faucet_max_drip` must be at least what one `orama setup` needs, which is more than the validator's
+1,000 ORAMA self-bond: the stagenet deploy sets it to 10,000 ORAMA (`FAUCET_MAX_DRIP_NORAMA`).
+
 **Parameters** (genesis only, in `x/emission` params; `genesis set-emission-params` takes
 `--faucet-enabled`, `--faucet-max-drip`, `--faucet-epoch-cap` and `--faucet-cooldown`, and keeps the
 values already in genesis for any flag it is not given):
@@ -2414,6 +2439,7 @@ gateway answers; each asks its own node) has indexed it:
 | `GET /v1/chain/query/{package.Service}/{Method}` | CometBFT `GET /abci_query?path="/{package.Service}/{Method}"&prove=false` (see "Module queries") |
 | `POST /v1/chain/simulate` | CometBFT JSON-RPC `abci_query` of `/cosmos.tx.v1beta1.Service/Simulate`, and x/fees `BaseFee` (see "Simulate and broadcast") |
 | `POST /v1/chain/broadcast` | CometBFT JSON-RPC `broadcast_tx_sync` (see "Simulate and broadcast") |
+| `POST /v1/chain/faucet` | none: the gateway signs `MsgFaucet` itself, on a test network, when its node.yaml gives it a faucet key (see "Test-network faucet") |
 
 The validator list takes no query (`400`). On the index routes the gateway checks an address's shape (lowercase `orama1` plus bech32
 characters) and the indexer checks its checksum. A route that takes no query refuses one.

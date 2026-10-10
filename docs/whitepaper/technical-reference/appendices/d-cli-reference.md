@@ -110,6 +110,8 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
     - [`orama maint cluster settings`](#orama-maint-cluster-settings) - Show or change the cluster's settings
       - [`orama maint cluster settings set`](#orama-maint-cluster-settings-set) - Change namespace creation, the per-wallet cap or the update policy
       - [`orama maint cluster settings show`](#orama-maint-cluster-settings-show) - Show who may create namespaces, the per-wallet cap and the update policy
+  - [`orama maint faucet`](#orama-maint-faucet) - Set up the public faucet of a test network on this node
+    - [`orama maint faucet init`](#orama-maint-faucet-init) - Create this node's faucet key and print the account to fund
   - [`orama maint global`](#orama-maint-global) - Validator keys, chain binary staging, the Tor network's authorities and the transaction gate
     - [`orama maint global edit`](#orama-maint-global-edit) - Change this node's public storage size or exit role (run as root)
     - [`orama maint global refresh`](#orama-maint-global-refresh) - Bring the installed global services up to the staged release (run as root)
@@ -2178,9 +2180,10 @@ and they all work.
   node                       install and stage a node, auto-update, recovery, migration
   global                     validator keys, chain binary staging, the Tor network, tx gate
   network                    publish a network's manifest
+  faucet                     set up a test network's public faucet on this node
 ```
 
-Subcommands: `build`, `cluster`, `global`, `inspect`, `invite`, `network`, `node`, `operator`, `push`, `release`, `rollout`, `sandbox`, `vpn`
+Subcommands: `build`, `cluster`, `faucet`, `global`, `inspect`, `invite`, `network`, `node`, `operator`, `push`, `release`, `rollout`, `sandbox`, `vpn`
 
 ## orama maint build
 
@@ -2357,6 +2360,61 @@ Show who may create namespaces, the per-wallet cap and the update policy
 ```text
 orama maint cluster settings show
 ```
+
+
+## orama maint faucet
+
+Set up the public faucet of a test network on this node
+
+```text
+orama maint faucet
+```
+
+Subcommands: `init`
+
+## orama maint faucet init
+
+Create this node's faucet key and print the account to fund
+
+```text
+orama maint faucet init [flags]
+```
+
+```text
+Create the key a node's gateway signs faucet drips with, and print the account
+it belongs to. Run it on the node, as root.
+
+The faucet gives test ORAMA to whoever asks (POST /v1/chain/faucet): the gateway
+signs MsgFaucet for the recipient with this key and the chain mints the drip.
+It exists only on a test network (a chain id with -stagenet-, -devnet- or
+-localnet-; the gateway refuses to sign anywhere else), the chain keeps its own
+limits (a maximum drip, a cooldown per recipient, a cap per epoch), and it must
+be on in the genesis (faucet_enabled).
+
+The key file is created owned by the gateway's account with mode 0600, and an
+existing key is never replaced: running init again prints the same account. The
+faucet account pays the transaction fee of every drip and mints the drip itself,
+so it needs a small balance and nothing more: fund it from the genesis
+(chain/scripts/stagenet/deploy.sh does this on stagenet) or from another faucet.
+
+Then turn it on in node.yaml and restart the node:
+
+  chain:
+    faucet:
+      enabled: true
+
+  orama node restart
+
+orama node upgrade keeps the block. Check it with:
+
+  curl -sS -X POST https://<gateway>/v1/chain/faucet \
+    -H 'Content-Type: application/json' -d '{"recipient":"orama1..."}'
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--key-file` | `/opt/orama/.orama/secrets/chain-faucet.key` | Where the key goes (node.yaml chain.faucet.key_file, when it is not this default) |
+| `--owner` | `orama` | The account that owns the key file: the one the gateway runs as |
 
 
 ## orama maint global

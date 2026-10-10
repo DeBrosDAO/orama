@@ -39,6 +39,16 @@ dns:
   node_names_zone: "{{.NodeNamesZone}}"
 {{- end}}
 
+{{- if .ChainFaucetKeyFile}}
+
+# The test network faucet (POST /v1/chain/faucet), signed with the key in key_file
+# (orama maint faucet init). Carried forward across regenerations.
+chain:
+  faucet:
+    enabled: true
+    key_file: "{{.ChainFaucetKeyFile}}"
+{{- end}}
+
 database:
   data_dir: "{{.DataDir}}/rqlite"
   replication_factor: 3

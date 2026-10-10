@@ -113,6 +113,10 @@ The node's configuration, written by `orama maint node install` and read by `ora
 | `http_gateway.webrtc.turn_secret` | `string` | HMAC-SHA1 shared secret for TURN credential generation |
 | `dns` | `config.DNSConfig` |  |
 | `dns.node_names_zone` | `string` | NodeNamesZone is the zone this cluster publishes node identification names under, for example nodes.stagenet.orama.network. A node of the cluster whose nameservers answer the zone reads the chain's claimed names and serves &lt;name>.&lt;zone> as an A or AAAA record per literal IP of the named node. Empty publishes none. It must be a dedicated sub-zone strictly below the cluster's http_gateway.base_domain, never the base domain itself (a claimed name would sit next to the hostnames the cluster publishes there), and the node must have the chain reachable (a co-located global layer). |
+| `chain` | `config.ChainConfig` |  |
+| `chain.faucet` | `config.FaucetConfig` |  |
+| `chain.faucet.enabled` | `bool` | Enabled turns the faucet on. |
+| `chain.faucet.key_file` | `string` | KeyFile is the faucet key's file: owned by the gateway's account, mode 0600. Empty is constants.ChainFaucetKeyFile. |
 | `sni_router` | `config.SNIRouterConfig` | SNIRouter is the stealth TURN-over-443 SNI router toggle (feat-124). Phase 4 config generation always emits this block into node.yaml, so the field MUST exist here: node.yaml is decoded with KnownFields(true) and an unknown top-level key fails the whole parse and crash-loops orama-node at boot (same failure mode as the v0.122.42 secrets_encryption_key incident). |
 | `sni_router.enabled` | `bool` |  |
 | `tls` | `config.TLSConfig` | TLS is written only when the node was installed with --acme-ca, and must exist here for the same KnownFields reason. |
@@ -152,3 +156,4 @@ A namespace gateway's configuration, rendered by the namespace spawner and read 
 | `api_key_hmac_secret` | `string` |  |
 | `state_dir` | `string` |  |
 | `relay_allowed_suffixes` | `[]string` |  |
+| `faucet_key_file` | `string` |  |

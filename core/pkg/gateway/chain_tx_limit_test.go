@@ -103,19 +103,57 @@ func TestChainTxRoutes_areConfiguredAndTighterThanTheGeneralBucket(t *testing.T)
 	}
 }
 
-// The light-client route joining nodes state-sync through draws on buckets of its own, so a syncing
-// node cannot use up a wallet's simulate or broadcast allowance, nor the other way round.
-func TestChainTxRoutes_lightRouteHasBucketsOfItsOwn(t *testing.T) {
-	light := newChainTxLimiter(chainLightPerAddressPerMinute, chainLightPerAddressBurst, chainLightRoutePerMinute, chainLightRouteBurst)
-	g := &Gateway{chainSimulateLimiter: newChainTxLimiter(1, 1, 1, 1), chainBroadcastLimiter: newChainTxLimiter(1, 1, 1, 1), chainLightLimiter: light}
-	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodPost, chainLightPath, nil)); got != light {
-		t.Fatalf("POST %s draws on %p, want the light limiter %p", chainLightPath, got, light)
+// The faucet route has buckets of its own, the tightest of the chain routes: each drip is a
+// transaction the faucet account signs and pays for, one at a time.
+func TestChainTxRoutes_theFaucetHasTheTightestBucketsOfItsOwn(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{logger: logger}
+	configureRateLimiters(g)
+	if g.chainFaucetLimiter == nil {
+		t.Fatal("the faucet route has no limiter")
 	}
-	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodGet, chainLightPath, nil)); got != nil {
-		t.Fatalf("a GET of %s draws on a limiter", chainLightPath)
+	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodPost, chainFaucetPath, nil)); got != g.chainFaucetLimiter {
+		t.Fatalf("POST %s draws on %p, want the faucet limiter %p", chainFaucetPath, got, g.chainFaucetLimiter)
 	}
-	if chainLightPerAddressBurst <= chainSimulatePerAddressBurst {
-		t.Errorf("a syncing node makes several calls per header; the light burst %d must exceed simulate's %d",
-			chainLightPerAddressBurst, chainSimulatePerAddressBurst)
+	if got := g.chainTxLimiterFor(httptest.NewRequest(http.MethodGet, chainFaucetPath, nil)); got != nil {
+		t.Error("a GET of the faucet route draws on a limiter")
+	}
+	faucet, broadcast := g.chainFaucetLimiter, g.chainBroadcastLimiter
+	if faucet.perAddress.rate >= broadcast.perAddress.rate || faucet.perAddress.burst > broadcast.perAddress.burst {
+		t.Errorf("a client's faucet bucket (%.3f/s, burst %d) is not tighter than broadcast's (%.3f/s, burst %d)",
+			faucet.perAddress.rate, faucet.perAddress.burst, broadcast.perAddress.rate, broadcast.perAddress.burst)
+	}
+}
+
+func TestChainTxRoutes_oneClientCannotUseUpTheFaucetForOthers(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{
+		logger:             logger,
+		rateLimiter:        NewRateLimiter(100000, 100000),
+		chainFaucetLimiter: newChainTxLimiter(chainFaucetPerAddressPerMinute, chainFaucetPerAddressBurst, chainFaucetRoutePerMinute, chainFaucetRouteBurst),
+	}
+	served := 0
+	handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 10; i++ {
+		last = httptest.NewRecorder()
+		handler.ServeHTTP(last, fromClient(chainFaucetPath, 5))
+	}
+	if served != chainFaucetPerAddressBurst || last.Code != http.StatusTooManyRequests {
+		t.Fatalf("one client was served %d of 10 asks with last code %d; want its burst of %d and a 429", served, last.Code, chainFaucetPerAddressBurst)
+	}
+	// The first client's three asks took three tokens of the route's bucket; its seven refused
+	// asks took none, so the rest of the burst is left for other clients.
+	served = 0
+	for n := 6; n < 6+chainFaucetRouteBurst; n++ {
+		handler.ServeHTTP(httptest.NewRecorder(), fromClient(chainFaucetPath, n))
+	}
+	if want := chainFaucetRouteBurst - chainFaucetPerAddressBurst; served != want {
+		t.Errorf("other clients were served %d, want %d: a refused client must take nothing from the route's bucket", served, want)
+	}
+	handler.ServeHTTP(last, fromClient(chainFaucetPath, 200))
+	if last.Code != http.StatusTooManyRequests {
+		t.Errorf("a client past the route's burst got %d, want 429: many addresses must not lift the route's limit", last.Code)
 	}
 }

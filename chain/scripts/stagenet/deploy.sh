@@ -16,7 +16,7 @@
 # node and never copied off it: `register` pipes it, on the node, into a signing agent that speaks
 # the RootWallet agent protocol.
 #
-# Usage: deploy.sh reset | up | start | status | invariants | register | smoke | gen-shielded
+# Usage: deploy.sh reset | up | start | status | invariants | register | faucet | smoke | gen-shielded
 #
 #   reset        stop and remove the global install (and any legacy direct-unit chain install) and
 #                wipe chain, provider, archiver, indexer and IPFS state. Idempotent.
@@ -28,6 +28,10 @@
 #   register     once the chain has run 2 epochs: register an operator and a node per machine, bond
 #                STORAGE and ARCHIVER from earnings, fund the hot key, declare capacity, start the
 #                provider and archiver.
+#   faucet       once `register` has run: make the public faucet's key on every node (`orama maint
+#                faucet init`, which never replaces one) and, when ORAMA_ENV names the CLI environment of
+#                this network, fund each faucet account with an `orama chain faucet` drip. It then prints
+#                the two lines left to the operator of each node (see cmd_faucet).
 #   smoke        live checks, PASS/FAIL/SKIP each: blocks and inclusion lists, invariants, standard
 #                contracts and a CW20, a private storage deal, archive ranges, shielded, and the
 #                gateway's chain read.
@@ -45,6 +49,11 @@
 #   TX_GAS                   gas limit of each `orama global` transaction; its fee is gas x the base fee.
 #   EPOCH_DURATION EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT   as before (genesis).
 #   FAUCET_ENABLED           1 (default) sets emission.params.faucet_enabled in genesis, so `orama chain faucet` works; 0 leaves it off.
+#   FAUCET_MAX_DRIP_NORAMA   the largest single drip, in genesis (10,000 ORAMA): a newcomer's `orama setup` is funded by
+#                            one drip (the cooldown allows one a day), and needs the validator's 1,000 ORAMA self-bond,
+#                            its bonds and its fees.
+#   FAUCET_FUND_NORAMA       what `faucet` gives each node's faucet account for transaction fees (1,000 ORAMA).
+#   ORAMA_ENV                the CLI environment of this network, for `faucet` to fund the accounts with (optional).
 #   CA_FILE                  PEM bundle that signs the gateway certificate (smoke).
 #   GATEWAY_URL              the gateway smoke reads through (https://stagenet.dbrsteting.bid).
 #   SHIELDED_SCENARIO        scenario JSON from `gen-shielded` (smoke).
@@ -95,6 +104,12 @@ EPOCH_MIN_BLOCKS="${EPOCH_MIN_BLOCKS:-10}"
 VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-2}"
 # The test-network faucet (x/emission MsgFaucet): on by default on stagenet, patched into genesis (see build_genesis).
 FAUCET_ENABLED="${FAUCET_ENABLED:-1}"
+# The largest single faucet drip, 10,000 ORAMA: the chain's default of 1,000 ORAMA is less than what one newcomer's setup
+# needs (the validator's self-bond alone is 1,000 ORAMA). The epoch cap keeps its default, 100,000 ORAMA.
+FAUCET_MAX_DRIP_NORAMA="${FAUCET_MAX_DRIP_NORAMA:-10000000000000}"
+# What each node's faucet account is given for fees. A drip mints to the recipient and costs the faucet account one
+# transaction fee, so this lasts for as many drips as there will ever be.
+FAUCET_FUND_NORAMA="${FAUCET_FUND_NORAMA:-1000000000000}"
 
 PUBLIC_STORAGE_GB="${PUBLIC_STORAGE_GB:-10}"
 ARCHIVER_BOND_NORAMA="${ARCHIVER_BOND_NORAMA:-1000000000}"
@@ -128,7 +143,7 @@ if ! [[ "$EPOCH_DURATION" =~ ^[0-9]+(h|m|s)$ ]]; then
 	echo "invalid EPOCH_DURATION (expected e.g. 300s, 5m, 1h): $EPOCH_DURATION" >&2
 	exit 1
 fi
-for v in EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT PUBLIC_STORAGE_GB ARCHIVER_BOND_NORAMA HOT_KEY_FUND_NORAMA TX_GAS; do
+for v in EPOCH_MIN_BLOCKS VOTE_EXTENSIONS_ENABLE_HEIGHT PUBLIC_STORAGE_GB ARCHIVER_BOND_NORAMA HOT_KEY_FUND_NORAMA TX_GAS FAUCET_MAX_DRIP_NORAMA FAUCET_FUND_NORAMA; do
 	if ! [[ "${!v}" =~ ^[0-9]{1,15}$ ]]; then
 		echo "invalid $v (expected a plain integer): ${!v}" >&2
 		exit 1
@@ -497,7 +512,7 @@ build_genesis() {
 	# old devnet-only self-bonded-validator exception (see docs/CHAIN.md).
 	# The test-network faucet is a genesis-only switch (x/emission has no Msg that changes params).
 	local faucet_flag=()
-	if [ "$FAUCET_ENABLED" = 1 ]; then faucet_flag=(--faucet-enabled); fi
+	if [ "$FAUCET_ENABLED" = 1 ]; then faucet_flag=(--faucet-enabled --faucet-max-drip "$FAUCET_MAX_DRIP_NORAMA"); fi
 	as_chain_at "$first_alias" "$GENESIS_WORK" genesis set-emission-params \
 		--epoch-duration "$EPOCH_DURATION" --min-blocks-per-epoch "$EPOCH_MIN_BLOCKS" --allow-bootstrap-stake \
 		${faucet_flag[@]+"${faucet_flag[@]}"}
@@ -693,6 +708,35 @@ cmd_register() {
 	done
 }
 
+# cmd_faucet makes the public faucet's key on every node and funds its account. The gateway of a node
+# signs a drip with that key (core/pkg/chainfaucet), the faucet account pays the transaction fee, and the
+# chain mints the drip: the account needs a little norama and nothing else.
+#
+# The account cannot be a genesis account. A genesis must start at exactly zero supply (x/emission
+# checkPremineGate), so it is funded the way any account on the chain is: by a drip, signed here by the
+# node's operator key over SSH (`orama chain faucet`), which pays its fee from its earnings. That is why
+# this runs after `register`, once the operators have earned something.
+#
+# What it does not do is switch the faucet on: that is a node.yaml setting, written by the operator of the
+# node (`chain.faucet.enabled: true`) and read when the node restarts.
+cmd_faucet() {
+	local n alias name ip out addr
+	for n in "${NODES[@]}"; do
+		alias="$(field "$n" 2)"; name="$(field "$n" 1)"; ip="$(field "$n" 3)"
+		out="$(remote_run "$alias" sudo "$BIN_DIR/orama" maint faucet init --json </dev/null)"
+		addr="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["address"])' <<<"$out")"
+		validate "$addr" "$ADDR_RE" "faucet account of $name"
+		log "[$name] faucet account $addr"
+		if [ -n "${ORAMA_ENV:-}" ]; then
+			log "[$name] funding it with $FAUCET_FUND_NORAMA norama"
+			orama chain faucet "$addr" --env "$ORAMA_ENV" --node "$ip" --amount "$FAUCET_FUND_NORAMA"
+		else
+			echo "    fund it: orama chain faucet $addr --env <this network's environment> --node $ip --amount $FAUCET_FUND_NORAMA"
+		fi
+		echo "    then on $name: set chain.faucet.enabled: true in node.yaml and run: orama node restart"
+	done
+}
+
 # ------------------------------------------------------------------------------------------------
 # smoke
 
@@ -752,7 +796,8 @@ case "${1:-}" in
 	status) cmd_status ;;
 	invariants) cmd_invariants ;;
 	register) cmd_register ;;
+	faucet) cmd_faucet ;;
 	smoke) cmd_smoke ;;
 	gen-shielded) cmd_gen_shielded ;;
-	*) echo "usage: $0 reset|up|start|status|invariants|register|smoke|gen-shielded" >&2; exit 2 ;;
+	*) echo "usage: $0 reset|up|start|status|invariants|register|faucet|smoke|gen-shielded" >&2; exit 2 ;;
 esac

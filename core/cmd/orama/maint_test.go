@@ -34,7 +34,7 @@ var existingVisible = []string{
 // group of the same name nowhere else visible.
 var maintCommands = []string{
 	"build", "push", "rollout", "inspect", "sandbox", "invite", "operator", "cluster", "vpn",
-	"node", "global", "network", "release",
+	"node", "global", "network", "release", "faucet",
 }
 
 func visibleTopLevel(root *cobra.Command) []string {

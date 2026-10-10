@@ -18,6 +18,7 @@ type Config struct {
 	Logging     LoggingConfig     `yaml:"logging"`
 	HTTPGateway HTTPGatewayConfig `yaml:"http_gateway"`
 	DNS         DNSConfig         `yaml:"dns"`
+	Chain       ChainConfig       `yaml:"chain"`
 
 	// SNIRouter is the stealth TURN-over-443 SNI router toggle (feat-124).
 	// Phase 4 config generation always emits this block into node.yaml, so
@@ -104,6 +105,12 @@ func (c *Config) Validate() []error {
 	errs = append(errs, validate.ValidateDNS(validate.DNSConfig{
 		NodeNamesZone: c.DNS.NodeNamesZone,
 		BaseDomain:    c.HTTPGateway.BaseDomain,
+	})...)
+
+	// Validate the chain block
+	errs = append(errs, validate.ValidateFaucet(validate.FaucetConfig{
+		Enabled: c.Chain.Faucet.Enabled,
+		KeyFile: c.Chain.Faucet.KeyFile,
 	})...)
 
 	// Validate logging config

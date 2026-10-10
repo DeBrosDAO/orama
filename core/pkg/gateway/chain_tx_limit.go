@@ -21,6 +21,13 @@ const (
 	// answers, so it is bounded like the transaction routes; a syncing node makes a few calls per
 	// header it verifies, hence the looser buckets.
 	chainLightPath = "/v1/chain/light"
+	// chainFaucetPath is the test-network faucet (handlers/chainread/faucet.go), served only by a
+	// gateway that holds a faucet key. Every drip is a transaction the faucet account signs and
+	// pays for, one at a time, so its buckets are the tightest: a person asks once a day (the
+	// chain's per-recipient cooldown) and a script that asks again is refused by the chain after
+	// it has cost a request, never a fee. The route as a whole is sized to what one account can
+	// sign: a transaction per block.
+	chainFaucetPath = "/v1/chain/faucet"
 
 	chainSimulatePerAddressPerMinute = 30
 	chainSimulatePerAddressBurst     = 10
@@ -36,6 +43,11 @@ const (
 	chainLightPerAddressBurst     = 60
 	chainLightRoutePerMinute      = 6000
 	chainLightRouteBurst          = 600
+
+	chainFaucetPerAddressPerMinute = 3
+	chainFaucetPerAddressBurst     = 3
+	chainFaucetRoutePerMinute      = 20
+	chainFaucetRouteBurst          = 6
 
 	chainTxRetryAfterSeconds = 10
 
@@ -77,6 +89,8 @@ func (g *Gateway) chainTxLimiterFor(r *http.Request) *chainTxLimiter {
 		return g.chainBroadcastLimiter
 	case chainLightPath:
 		return g.chainLightLimiter
+	case chainFaucetPath:
+		return g.chainFaucetLimiter
 	}
 	return nil
 }

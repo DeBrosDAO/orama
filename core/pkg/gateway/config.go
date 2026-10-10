@@ -51,6 +51,13 @@ type Config struct {
 	// cluster's BaseDomain. Loaded from YAML relay_allowed_suffixes.
 	RelayAllowedSuffixes []string
 
+	// FaucetKeyFile is the secp256k1 key file of this gateway's faucet account
+	// (chainfaucet.LoadKey). Set, the gateway serves POST /v1/chain/faucet on a test
+	// network: it signs MsgFaucet with this key for whoever asks. Empty serves no
+	// faucet. Only the cluster (index) gateway is given one, from node.yaml
+	// chain.faucet.key_file. Loaded from YAML faucet_key_file.
+	FaucetKeyFile string
+
 	// DataDir is the node's orama directory (/opt/orama/.orama). The gateway
 	// only READS under it (secrets/, identity, node config) and writes the
 	// shared trees under data/ (SQLite databases, deployments): secrets/ and

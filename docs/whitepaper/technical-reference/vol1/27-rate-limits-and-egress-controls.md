@@ -71,7 +71,8 @@ For a non-exempt request the middleware computes the bucket key once and checks 
 | 3 | chain transaction, per client | `POST /v1/chain/simulate` | 30 | 10 | 10 s |
 | 3 | chain transaction, per client | `POST /v1/chain/broadcast` | 12 | 4 | 10 s |
 | 3 | chain light client, per client | `POST /v1/chain/light` | 240 | 60 | 10 s |
-| 3 | chain transaction, whole route | simulate / broadcast / light | 1,200 / 600 / 6,000 | 200 / 100 / 600 | 10 s |
+| 3 | chain faucet, per client | `POST /v1/chain/faucet` | 3 | 3 | 10 s |
+| 3 | chain transaction, whole route | simulate / broadcast / light / faucet | 1,200 / 600 / 6,000 / 20 | 200 / 100 / 600 / 6 | 10 s |
 | 4 | capability upgrade | a function WebSocket upgrade that carries a capability | 60 | 20 | 60 s |
 | 5 | relay stream | `/v1/proxy/relay` | 30 | 10 | 60 s |
 | 6 | general | everything else, and everything that passed the above | 10,000 | 5,000 | 5 s |
