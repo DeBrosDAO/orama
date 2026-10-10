@@ -80,7 +80,7 @@ func TestRotateSigningKey_oneLifetimeOverlap(t *testing.T) {
 		tok := lobbyToken(t, nc.Client, newWallet(t))
 		held[tok] = kidOf(t, tok)
 	}
-	out := harness.CLI(t).MustOK(t, "operator", "rotate-signing-key").Stdout
+	out := harness.CLI(t).MustOK(t, "maint", "operator", "rotate-signing-key").Stdout
 	nm, pm := newKeyLine.FindStringSubmatch(out), prevKeyLine.FindStringSubmatch(out)
 	if nm == nil || pm == nil || !strings.Contains(out, overlapText) {
 		t.Fatalf("rotate-signing-key output lacks the new key, the previous key or the %s overlap:\n%s", overlapText, out)

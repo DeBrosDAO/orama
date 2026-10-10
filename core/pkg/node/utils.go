@@ -79,7 +79,7 @@ func readNodePeerID(dataDir string) (string, error) {
 	identityFile := filepath.Join(expanded, "identity.key")
 	info, err := encryption.LoadIdentity(identityFile)
 	if err != nil {
-		return "", fmt.Errorf("read this node's identity %s (written by `orama node install`): %w", identityFile, err)
+		return "", fmt.Errorf("read this node's identity %s (written by `orama maint node install`): %w", identityFile, err)
 	}
 	return info.PeerID.String(), nil
 }

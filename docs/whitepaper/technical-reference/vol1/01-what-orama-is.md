@@ -62,7 +62,7 @@ Every request from either arrives the same way: at a name under the cluster's ba
 
 The book states limits as plainly as capabilities, and the first ones belong here.
 
-- **Not a chain in the request path.** Hosting, databases, functions and storage do not settle on the ledger. The chain is a separate layer, installed by `orama global install`, not by `orama node install`; a tenant's request never touches it, and the gateway only proxies reads and signed transactions to it ([Global nodes](../vol2/37-global-nodes.md), [Chain architecture](../vol2/39-chain-architecture.md)).
+- **Not a chain in the request path.** Hosting, databases, functions and storage do not settle on the ledger. The chain is a separate layer, installed by `orama global install`, not by `orama maint node install`; a tenant's request never touches it, and the gateway only proxies reads and signed transactions to it ([Global nodes](../vol2/37-global-nodes.md), [Chain architecture](../vol2/39-chain-architecture.md)).
 - **Not highly available at one or two nodes.** A one-node fleet provisions single-member namespaces for evaluation, and losing the disk loses the namespace. A two-node fleet refuses to provision, because a two-member Raft group survives the loss of neither member ([Namespaces](09-namespaces.md)).
 - **Not a defense against a hostile host.** Anyone who can read the memory of a running node can read what it processes. Secrets are sealed at rest and in transit, not in use ([Secrets and keys](16-secrets-and-keys.md)).
 - **Not bounded by the code alone at scale.** One cluster is capped by its overlay at 254 addresses, and its registry is a single Raft group; the chapters name the first bottleneck of each subsystem under Limits and scale.

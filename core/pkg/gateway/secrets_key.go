@@ -14,7 +14,7 @@ import (
 // class that kept get_secret broken for days (bugboard #837).
 //
 // This label is a domain separator, not a rotation handle. Rotating stored
-// secrets is `orama operator rotate-secrets --rotate`, which changes the IKM
+// secrets is `orama maint operator rotate-secrets --rotate`, which changes the IKM
 // and re-encrypts. Editing this string orphans every stored function secret.
 const secretsEncryptionDerivePurpose = "orama-secrets-encryption-v1"
 

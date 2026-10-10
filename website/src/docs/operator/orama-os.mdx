@@ -35,7 +35,7 @@ Known inconsistency: the GPT image genimage builds puts the ESP first, followed 
 
 ## Enrollment
 
-OramaOS nodes join through enrollment instead of `orama node install`.
+OramaOS nodes join through enrollment instead of `orama maint node install`.
 
 1. **Flash the image** to the VPS through your provider's custom-image upload (Hetzner, Vultr, OVH and others).
 2. **First boot.** The agent enters enrollment mode: it generates an 80-bit registration code (20 hex characters), prints it on the **console TTY** (not the journal), and opens a temporary HTTP server on port 9999 waiting for a payload sealed under that code. The code is not served over the network.
@@ -43,7 +43,7 @@ OramaOS nodes join through enrollment instead of `orama node install`.
 
 ```bash
 orama node invite --expiry 24h                      # on any existing node
-orama node enroll \
+orama maint node enroll \
   --node-ip <vps-public-ip> \
   --code <registration-code> \
   --token <invite-token> \
@@ -77,7 +77,7 @@ Do not rely on any of this:
 
 - **Genesis enrollment.** Enrollment always tries to distribute Shamir shares and fails with "no peers available for key distribution" when the cluster has zero peers. A genesis OramaOS node cannot currently complete enrollment.
 - **Key escrow.** The agent never creates or stores a RootWallet-encrypted copy of the LUKS key and serves no `genesis-key` endpoint.
-- **`orama node unlock --genesis`.** It needs `--key-file` holding a RootWallet-encrypted key, and nothing produces one. The `curl` call under "Genesis unlock mode" is the only unlock path that works today.
+- **`orama maint node unlock --genesis`.** It needs `--key-file` holding a RootWallet-encrypted key, and nothing produces one. The `curl` call under "Genesis unlock mode" is the only unlock path that works today.
 - **The 5-peer transition.** No code distributes Shamir shares once five or more peers join, or moves from escrow to normal unlock.
 - **dm-verity at boot.** The hashes can be built into the image but boot does not enforce them.
 - **Syscall filtering.** Seccomp runs in audit mode: disallowed syscalls are logged, not blocked.
@@ -128,7 +128,7 @@ Each service runs in its own mount namespace, UTS namespace and dedicated UID an
 
 ## Removing or resetting a node
 
-`orama node clean` and `wipe` cannot reach it (no SSH).
+`orama node wipe` cannot reach it (no SSH).
 
 - **Graceful departure:** `POST /v1/node/leave` (there is no `orama node leave` subcommand). It stops services and removes the WireGuard peer.
 - **Cluster-side removal:** `orama node remove --env <env> --node <ip> --offline` from a survivor. `--offline` is required: the command never tries to reach an OramaOS node.

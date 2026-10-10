@@ -27,7 +27,7 @@ import (
 // So the id a node runs under is recorded, in a marker beside its raft state,
 // and passed to rqlited explicitly on every start. It never follows the
 // address. A node predating stable ids keeps the address id it is registered
-// under (changing it is `orama node migrate-raft-id`); a fresh node starts on
+// under (changing it is `orama maint node migrate-raft-id`); a fresh node starts on
 // its libp2p peer id.
 //
 // The address is recorded too (raftAddrMarker): the one rqlited was last
@@ -205,7 +205,7 @@ func LiveIdentityFromStatus(st *RQLiteStatus) (LiveIdentity, error) {
 	}
 	if live.Addr == "" {
 		return LiveIdentity{}, fmt.Errorf("rqlite runs as %q but its raft configuration has no member by that id; "+
-			"this node is not a member of its own configuration — repair it (`orama node recover-raft`) before upgrading",
+			"this node is not a member of its own configuration — repair it (`orama maint node recover-raft`) before upgrading",
 			st.Store.NodeID)
 	}
 	return live, nil

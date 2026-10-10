@@ -49,7 +49,7 @@ for operator UX.
   server, config-file hot-reload (`FileRouteReloader`), and namespace
   auto-discovery (`TURNRouteDiscoverer`)
 - **Binary:** `cmd/sni-router/` (built as `bin/orama-sni-router` by
-  `orama build`, installed to `/opt/orama/bin/orama-sni-router`)
+  `orama maint build`, installed to `/opt/orama/bin/orama-sni-router`)
 - **Installer:** `pkg/install/installers/sni_router.go`
   — writes the config + systemd unit and drives the unit lifecycle
 - **Systemd unit:** `orama-namespace-sni-router@index` (template

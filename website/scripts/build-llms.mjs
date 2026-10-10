@@ -85,7 +85,7 @@ async function build() {
     ["supply.mdx", "blockchain-supply", "ORAMA supply", "norama, the epoch schedule, and which shares are actually minted."],
     ["fees.mdx", "blockchain-fees", "Chain fees", "Base fee burn, tips, state deposits, and earnings accounts."],
     ["validators.mdx", "blockchain-validators", "Validators and voting power", "x/power, the stake cap, rewards, and slashing."],
-    ["running.mdx", "blockchain-running", "Running a chain node", "Ports, chain id, and the stagenet installer. orama node install does not start the chain."],
+    ["running.mdx", "blockchain-running", "Running a chain node", "Ports, chain id, and the stagenet installer. orama maint node install does not start the chain."],
   ];
   lines.push("## Blockchain", "");
   for (const [srcName, slug, title, desc] of chainPages) {

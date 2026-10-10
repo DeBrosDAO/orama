@@ -47,7 +47,7 @@ func loadDotEnv(path string) {
 	}
 }
 
-// HandleInspectCommand handles the "orama inspect" command.
+// HandleInspectCommand handles the "orama maint inspect" command.
 // InspectOptions holds the flags for the inspect command.
 type InspectOptions struct {
 	ConfigPath string

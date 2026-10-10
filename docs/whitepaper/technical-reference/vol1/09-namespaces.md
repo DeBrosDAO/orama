@@ -361,7 +361,7 @@ Notable behaviours:
 
 - A pending recovery means no `-join`; the operator is reforming the cluster from this node's data.
 - A member whose recorded raft address equals the advertised one restarts into its own configuration with no `-join`, so a restart does not depend on one peer answering.
-- A member whose recorded address differs joins the other recorded members and its configured join address (which is how the leader learns the new address). With no one to join it refuses to start and prints `orama node recover-raft` with the new address.
+- A member whose recorded address differs joins the other recorded members and its configured join address (which is how the leader learns the new address). With no one to join it refuses to start and prints `orama maint node recover-raft` with the new address.
 - A node with no state and no record joins its configured address, or, with none, bootstraps a new cluster (a fresh genesis install).
 - A node with no state but a record lost its data. It joins the members it recorded; with none, it refuses to start and tells the operator to either reform from the live cluster or, if it was the only member, delete the record to bootstrap deliberately.
 

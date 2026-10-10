@@ -133,7 +133,7 @@ orama version
 
 # Locally you need the same archive, e.g.
 # /tmp/orama-0.122.99-linux-amd64.tar.gz
-# or: orama build  (then use the produced archive)
+# or: orama maint build  (then use the produced archive)
 ```
 
 `orama version` is truthful in every build path: the version is compiled in
@@ -154,7 +154,7 @@ installed with `go install` reports its real number instead of `dev`.
 From your own machine:
 
 ```bash
-orama invite                 # usable for 1h, the gateway's cap
+orama maint invite                 # usable for 1h, the gateway's cap
 ```
 
 Or on an existing installed node:
@@ -191,7 +191,7 @@ systemctl disable docker docker.socket 2>/dev/null || true
 ### A3. Install as nameserver joining the cluster
 
 ```bash
-sudo orama node install \
+sudo orama maint node install \
   --token <INVITE> \
   --vps-ip <NEW_PUBLIC_IP> \
   --domain <base-domain> \
@@ -204,7 +204,7 @@ sudo orama node install \
 Or from your own machine, which drives the same install over SSH:
 
 ```bash
-orama node install --remote \
+orama maint node install --remote \
   --token <INVITE> \
   --vps-ip <NEW_PUBLIC_IP> \
   --base-domain <base-domain> \
@@ -590,20 +590,20 @@ allocations, marks it retired so the cluster purges its DNS records, and erases
 the machine. Add `--offline` if the VPS is already gone, `--dry-run` to see the
 plan without changing anything.
 
-`decommission` is accepted as an alias. Every step is keyed on the node and safe
+Every step is keyed on the node and safe
 to repeat, so a removal that failed part way through is finished by running it
 again.
 
 **Raft identity.** A node whose raft id has been migrated to its libp2p peer id
 keeps that id across an address change, so replacing the machine's overlay
 address no longer mints a second raft member. On a cluster that has not run
-`orama node migrate-raft-id` yet, the id is still the raft advertise address and
+`orama maint node migrate-raft-id` yet, the id is still the raft advertise address and
 a changed address DOES create a duplicate voter that the old entry never leaves
 — which is what the manual `DELETE /remove` steps below exist to clean up. Check
 which you are on with:
 
 ```bash
-orama node migrate-raft-id --env <env> --dry-run
+orama maint node migrate-raft-id --env <env> --dry-run
 ```
 
 Verify afterwards on the platform leader:
@@ -785,7 +785,7 @@ testnet|ubuntu@51.38.130.69|nameserver-ns1     # hulk
 
 | Symptom | Action |
 |---------|--------|
-| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama node recover-raft --env …` — it picks the node with the highest applied index and prints what each one reported. Every other node's data is DELETED, with no backup |
+| Platform no leader / Candidate | [DEV_DEPLOY.md](DEV_DEPLOY.md) `orama maint node recover-raft --env …` — it picks the node with the highest applied index and prints what each one reported. Every other node's data is DELETED, with no backup |
 | New node never becomes voter | Check WG ping, logs, re-invite + reinstall if partial |
 | Namespace health 503 circuit open | Fix DNS to live gateways; restart one platform gateway |
 | Namespace rqlite `leader not found` | Single-node `peers.json` recovery on survivor |

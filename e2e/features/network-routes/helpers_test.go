@@ -80,7 +80,7 @@ func expectCode(t testing.TB, what string, resp *gw.Response, status int, code s
 }
 
 // operatorOwner is a fresh namespace whose owner is made an operator of the
-// cluster for t (`orama operator add`, removed at t's cleanup). Only
+// cluster for t (`orama maint operator add`, removed at t's cleanup). Only
 // TestNetworkRoutes_asOperator calls it, once, and shares the result with
 // its parallel subtests, so the package changes the operator list once: the
 // owner's grant holds the operator domain and the wallet is on the operator
@@ -91,11 +91,11 @@ func operatorOwner(t *testing.T) *ns.Namespace {
 	n := tenancy.Namespace(t, harness.Fleet(t), ns.Options{})
 	addr := n.Owner.Wallet.Address()
 	cli := harness.CLI(t)
-	infra.ExpectExit(t, infra.Run(t, cli, "operator", "add", addr), infra.ExitOK)
+	infra.ExpectExit(t, infra.Run(t, cli, "maint", "operator", "add", addr), infra.ExitOK)
 	t.Cleanup(func() {
 		ctx, cancel := fleet.CleanupContext(t)
 		defer cancel()
-		if res, err := cli.Run(ctx, "operator", "remove", addr); err != nil || res.Exit != 0 {
+		if res, err := cli.Run(ctx, "maint", "operator", "remove", addr); err != nil || res.Exit != 0 {
 			t.Errorf("cleanup: removing operator %s failed: %v %s", addr, err, res.Stderr)
 		}
 	})

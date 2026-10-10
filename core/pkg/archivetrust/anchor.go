@@ -3,7 +3,7 @@
 // A node trusts the EVM addresses in its trust anchor, /etc/orama/archive-signers.
 // An archive is installable only when its manifest.sig is an EIP-191
 // personal_sign signature of SigningMessage(manifest.json) by one of them and
-// every file it carries matches that manifest. `orama build` signs exactly
+// every file it carries matches that manifest. `orama maint build` signs exactly
 // that message, and a signed manifest may rotate the anchor (docs/SECURITY.md).
 //
 // It is a leaf package — rootfs and go-ethereum only — because the installer,
@@ -145,7 +145,7 @@ func errMissingAnchor(path string) error {
 	return fmt.Errorf("%w: %s does not exist, so this node cannot verify any build archive. "+
 		"A genesis install creates it from --operator-wallet and a joining node from the cluster it "+
 		"joins; a node installed before archives were signed gets it once from "+
-		"`orama push --trust-signers <address>` (docs/SECURITY.md)", ErrNoAnchor, path)
+		"`orama maint push --trust-signers <address>` (docs/SECURITY.md)", ErrNoAnchor, path)
 }
 
 // ReadAnchor reads the anchor at path. Its directory must be a real directory
@@ -268,7 +268,7 @@ func writeRootOwned(path string, data []byte, what string) error {
 // installed before archives were signed. It never changes an existing anchor:
 // asking for the list it already holds is a no-op, and asking for a different
 // one is refused, because changing who is trusted is what a signed rotation
-// (`orama build --signers`) is for.
+// (`orama maint build --signers`) is for.
 func CreateAnchorIfMissing(path string, signers []string) error {
 	want, err := NormalizeSigners(signers)
 	if err != nil {
@@ -290,7 +290,7 @@ func CreateAnchorIfMissing(path string, signers []string) error {
 		return nil
 	}
 	return fmt.Errorf("%s already trusts %s; --trust-signers only creates a missing anchor. "+
-		"To change who signs builds, install an archive built with `orama build --signers` and "+
+		"To change who signs builds, install an archive built with `orama maint build --signers` and "+
 		"signed by a signer this node already trusts", path, strings.Join(have, ", "))
 }
 

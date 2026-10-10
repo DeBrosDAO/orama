@@ -20,7 +20,7 @@ import (
 // Observation is the same: `orama monitor report --json`, `dig`, and the
 // gateway's own /health. The report comes from the gateway's operator
 // telemetry API, as it does for an operator, so the machine running the
-// harness needs an operator session for the environment (`orama env use`,
+// harness needs an operator session for the environment (`orama network use`,
 // then `orama auth login`). Reading a node's state over SSH would let a
 // scenario pass while the CLI an operator uses reports something different,
 // which is precisely the class of bug the stability train is about.

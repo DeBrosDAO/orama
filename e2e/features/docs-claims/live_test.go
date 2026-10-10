@@ -28,7 +28,7 @@ func TestNamespaceCap_liveDefaultIsTen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%s MaxNamespacesPerWalletCeiling is not a number: %v", operatorPolicy, err)
 	}
-	out := harness.CLI(t).MustOK(t, "cluster", "settings", "show").Stdout
+	out := harness.CLI(t).MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	m := capLine.FindStringSubmatch(out)
 	if m == nil {
 		t.Fatalf("cluster settings show has no max-namespaces-per-wallet line:\n%s", out)
@@ -38,7 +38,7 @@ func TestNamespaceCap_liveDefaultIsTen(t *testing.T) {
 	}
 }
 
-// capLine is the per-wallet cap line of `orama cluster settings show`.
+// capLine is the per-wallet cap line of `orama maint cluster settings show`.
 var capLine = regexp.MustCompile(`(?m)^max-namespaces-per-wallet: (\d+)$`)
 
 // emissionInvariants are the verdicts `query emission invariants` answers.

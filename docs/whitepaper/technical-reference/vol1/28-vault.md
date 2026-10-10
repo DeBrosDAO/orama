@@ -249,7 +249,7 @@ There is no liboqs binding, no call to any of this from the daemon, and no post-
 
 ### Deployment: how a guardian gets onto a node
 
-`orama build` cross-compiles the guardian with `zig build-exe src/main.zig -O ReleaseSafe` for the target (not `zig build`, whose host build-runner fails to link on current macOS SDKs) and copies it to the archive's `bin/vault-guardian` (`core/cmd/orama/internal/build/builder.go:buildVaultGuardian`). The build refuses any zig that is not the same minor release as the `minimum_zig_version` in `vault/build.zig.zon`, currently 0.15.2, because Zig changes its language and standard library between minors (`core/cmd/orama/internal/build/zig.go:resolveZig`; override with `ORAMA_ZIG`).
+`orama maint build` cross-compiles the guardian with `zig build-exe src/main.zig -O ReleaseSafe` for the target (not `zig build`, whose host build-runner fails to link on current macOS SDKs) and copies it to the archive's `bin/vault-guardian` (`core/cmd/orama/internal/build/builder.go:buildVaultGuardian`). The build refuses any zig that is not the same minor release as the `minimum_zig_version` in `vault/build.zig.zon`, currently 0.15.2, because Zig changes its language and standard library between minors (`core/cmd/orama/internal/build/zig.go:resolveZig`; override with `ORAMA_ZIG`).
 
 At install, `GenerateVaultConfig` writes `data/vault/vault.yaml` (key=value lines, despite the extension) with `listen_address` set to the node's WireGuard address (127.0.0.1 if none is known), `client_port = 10106`, `peer_port = 7501`, the data directory and an unused `rqlite_url` (`core/pkg/install/config.go:GenerateVaultConfig`, called from `core/pkg/install/orchestrator.go`). The guardian therefore listens only on the overlay.
 
@@ -437,7 +437,7 @@ The gateway's limiters are per gateway process. With G gateways the effective pe
 
 **Unit tests.**
 
-- Zig, 194 tests, including the integration lifecycle, tamper, reshare and cross-platform vector tests: `cd vault && zig build test` with a Zig 0.15 toolchain (`vault/src/tests.zig` is the entry point; `ORAMA_ZIG` selects the binary for `orama build`).
+- Zig, 194 tests, including the integration lifecycle, tamper, reshare and cross-platform vector tests: `cd vault && zig build test` with a Zig 0.15 toolchain (`vault/src/tests.zig` is the entry point; `ORAMA_ZIG` selects the binary for `orama maint build`).
 - Go: `cd core && go test ./pkg/shamir/ ./pkg/gateway/handlers/vault/`. The first holds the field, the round trips, `TestAdaptiveThreshold` and `TestWriteQuorum`; the second the local-key cases, ownership messages and both rate limiters. There is no handler-level push or pull test with fake guardians.
 - TypeScript: `cd sdk-vault && pnpm test`. 78 pass and 3 are skipped; `client.test.ts` fakes the guardians.
 

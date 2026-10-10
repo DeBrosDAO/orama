@@ -40,7 +40,7 @@ Requires: orama auth login (for API authentication)`,
 		// the node inventory says.
 		envConfig, err := cli.GetEnvironmentByName(env)
 		if err != nil {
-			return clierr.Usage("environment %q not configured (see 'orama env list'): %w", env, err)
+			return clierr.Usage("environment %q not configured (see 'orama network list'): %w", env, err)
 		}
 		token, err := shared.AuthToken(envConfig.GatewayURL)
 		if err != nil {

@@ -61,7 +61,7 @@ func TestPhaseB5_monitorReportsTheChain(t *testing.T) {
 // in the cosmovisor layout (B6; docs/CLI_REFERENCE.md "orama global
 // stage-oramad").
 func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
-	phase(t, "B6", "docs/CLI_REFERENCE.md", "### orama global stage-oramad", trackB+" B6")
+	phase(t, "B6", "docs/CLI_REFERENCE.md", "### orama maint global stage-oramad", trackB+" B6")
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
 	metaDir := "/var/tmp/e2e-b6-meta-" + f.State.RunID
@@ -69,7 +69,7 @@ func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
 	t.Cleanup(func() { cleanupPath(t, f, n, metaDir) })
 	t.Cleanup(func() { cleanupPath(t, f, n, staged) })
 	f.MustExec(t, n, "mkdir -m 0700 "+metaDir)
-	res := onNode(t, f, n, "global", "stage-oramad", "--binary", "/usr/lib/orama-global/bin/oramad",
+	res := onNode(t, f, n, "maint", "global", "stage-oramad", "--binary", "/usr/lib/orama-global/bin/oramad",
 		"--release-metadata", metaDir, "--release-target", "oramad-linux-amd64", "--upgrade", stageName)
 	expectVerifyRefusal(t, f, n, res)
 	if strings.Contains(res.Stdout, "staged ") {
@@ -81,15 +81,15 @@ func TestPhaseB6_unverifiedOramadIsNotStaged(t *testing.T) {
 }
 
 // TestPhaseB7_globalLifecycleCommands: the global role's install and
-// lifecycle commands exist and report the running chain in order (B7). Not
-// applicable until the checkout documents `orama global status`.
+// lifecycle commands exist and start the running chain without disturbing it
+// (B7). Not applicable until the checkout documents `orama global start`.
 func TestPhaseB7_globalLifecycleCommands(t *testing.T) {
-	phase(t, "B7", "docs/CLI_REFERENCE.md", "### orama global status", trackB+" B7")
+	phase(t, "B7", "docs/CLI_REFERENCE.md", "### orama global start", trackB+" B7")
 	f := harness.Fleet(t)
 	n := chainNodes(t, f)[0]
-	res := onNode(t, f, n, "global", "status")
-	if res.Exit != exitOK || !strings.Contains(res.Stdout, "chain") {
-		t.Errorf("%s: orama global status exited %d:\n%s%s", n.Name, res.Exit, res.Stdout, f.Redact(res.Stderr))
+	res := onNode(t, f, n, "global", "start", "chain")
+	if res.Exit != exitOK {
+		t.Errorf("%s: orama global start chain exited %d:\n%s%s", n.Name, res.Exit, res.Stdout, f.Redact(res.Stderr))
 	}
 }
 

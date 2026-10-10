@@ -39,6 +39,6 @@ func RecordDelegation(envName string, status DelegationStatus) error {
 			cfg.Environments[i].Delegations = append(list, status)
 			return nil
 		}
-		return fmt.Errorf("environment %q is not configured; add it with `orama env add` before recording its delegation", envName)
+		return fmt.Errorf("network %q is not configured; add it with `orama network add` before recording its delegation", envName)
 	})
 }

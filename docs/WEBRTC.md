@@ -779,7 +779,7 @@ orama namespace webrtc-status --namespace myapp
 orama monitor report --env devnet
 
 # Inspector checks WebRTC health
-orama inspect --env devnet
+orama maint inspect --env devnet
 ```
 
 The monitoring report includes per-namespace `sfu_up` and `turn_up` fields. The inspector runs cross-node checks to verify SFU coverage (3 nodes) and TURN redundancy (2 nodes).

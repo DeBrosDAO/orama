@@ -21,11 +21,11 @@ import (
 const (
 	// pathNamespaces creates a namespace.
 	pathNamespaces = "/v1/namespaces"
-	// Namespace-creation modes (docs/CLI_REFERENCE.md "orama cluster settings set").
+	// Namespace-creation modes (docs/CLI_REFERENCE.md "orama maint cluster settings set").
 	modeOperators = "operators"
 	modeAllowlist = "allowlist"
 	modeOpen      = "open"
-	// settingMode and settingCap are the `orama cluster settings set` names.
+	// settingMode and settingCap are the `orama maint cluster settings set` names.
 	settingMode = "namespace-creation"
 	settingCap  = "max-namespaces-per-wallet"
 	// pollEvery paces readiness waits.
@@ -35,7 +35,7 @@ const (
 // settingLine reads "namespace-creation: open" / "max-namespaces-per-wallet: 10".
 var settingLine = regexp.MustCompile(`(?m)^(namespace-creation|max-namespaces-per-wallet):\s*(\S+)\s*$`)
 
-// clusterSettings is what `orama cluster settings show` prints.
+// clusterSettings is what `orama maint cluster settings show` prints.
 type clusterSettings struct {
 	Mode string
 	Cap  int
@@ -43,7 +43,7 @@ type clusterSettings struct {
 
 func showSettings(t testing.TB, cli *oramacli.Runner) clusterSettings {
 	t.Helper()
-	out := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	out := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	var s clusterSettings
 	for _, m := range settingLine.FindAllStringSubmatch(out, -1) {
 		switch m[1] {
@@ -58,7 +58,7 @@ func showSettings(t testing.TB, cli *oramacli.Runner) clusterSettings {
 		}
 	}
 	if s.Mode == "" || s.Cap == 0 {
-		t.Fatalf("`orama cluster settings show` printed no mode or cap:\n%s", out)
+		t.Fatalf("`orama maint cluster settings show` printed no mode or cap:\n%s", out)
 	}
 	return s
 }
@@ -73,16 +73,16 @@ func setSetting(t testing.TB, cli *oramacli.Runner, name, value string) {
 	if name == settingCap {
 		prev = strconv.Itoa(before.Cap)
 	}
-	cli.MustOK(t, "cluster", "settings", "set", name, value)
+	cli.MustOK(t, "maint", "cluster", "settings", "set", name, value)
 	t.Cleanup(func() {
 		ctx, cancel := fleet.CleanupContext(t)
 		defer cancel()
-		res, err := cli.Run(ctx, "cluster", "settings", "set", name, prev)
+		res, err := cli.Run(ctx, "maint", "cluster", "settings", "set", name, prev)
 		if err != nil || res.Exit != 0 {
 			t.Errorf("cleanup: failed to restore %s to %s (exit %d): %v %s", name, prev, res.Exit, err, res.Stderr)
 			return
 		}
-		out, err := cli.Run(ctx, "cluster", "settings", "show")
+		out, err := cli.Run(ctx, "maint", "cluster", "settings", "show")
 		if err != nil || !strings.Contains(out.Stdout, name+": "+prev) {
 			t.Errorf("cleanup: %s was not restored to %s: %v\n%s", name, prev, err, out.Stdout)
 		}

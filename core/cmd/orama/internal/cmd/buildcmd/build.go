@@ -24,7 +24,7 @@ its wallet:sign capability). Nodes install only archives signed by an address in
 their trust anchor, /etc/orama/archive-signers, so signing is the default;
 --unsigned makes an archive without a wallet signature: the CI build that release
 signers sign. A node installs it only when its release root accepted it
-('orama node stage-archive --release-only'); otherwise it is for local inspection.
+('orama maint node stage-archive --release-only'); otherwise it is for local inspection.
 
 --signers rotates the trusted signers: nodes that install this build replace
 their list with the given addresses. The build must be signed by a signer the
@@ -34,18 +34,18 @@ two builds (the old key adds the new one, the new key then drops the old).
 --release-root <root.json> puts a TUF release root in the signed manifest. A node that
 installs the build adopts it (/etc/orama/release-root.json) the way it takes a signer
 rotation, and from then on accepts releases signed under that root
-('orama node stage-archive --release-only', the auto-update agent).
+('orama maint node stage-archive --release-only', the auto-update agent).
 
 The build is reproducible: with SOURCE_DATE_EPOCH set (a release build sets it to
 the commit's time) two builds of one commit produce the same archive, byte for
 byte. See docs/DEV_DEPLOY.md, "Reproducible builds".
 
-The resulting archive can be pushed to nodes with 'orama node push'.
+The resulting archive can be pushed to nodes with 'orama maint push'.
 
 Examples:
-  orama build
-  orama build --signers 0xYourWallet,0xNewOperator
-  orama build --unsigned --output /tmp/inspect.tar.gz`,
+  orama maint build
+  orama maint build --signers 0xYourWallet,0xNewOperator
+  orama maint build --unsigned --output /tmp/inspect.tar.gz`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return build.Run(&buildFlags)
 	},
@@ -62,9 +62,4 @@ func init() {
 
 	f.StringVar(&buildFlags.ReleaseRoot, "release-root", "",
 		"A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root")
-
-	// Signing is the default now; --sign is accepted so existing scripts keep
-	// working, and says so.
-	f.Bool("sign", true, "")
-	cobra.CheckErr(f.MarkDeprecated("sign", "archives are signed by default; pass --unsigned for a local-only archive"))
 }

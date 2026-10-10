@@ -159,7 +159,7 @@ func rejoinTargets(st indexStart) ([]string, error) {
 			"it now listens on %s, and there is no other member to join so that the leader re-registers it "+
 			"(membership record %s names none, and node.yaml has no rqlite_join_address). "+
 			"On a cluster of one, reform it at the new address with "+
-			"`orama node recover-raft --env <env> --leader-raft-addr %s`",
+			"`orama maint node recover-raft --env <env> --leader-raft-addr %s`",
 			st.previousAddr, st.selfRaftAddr, st.recordPath, st.selfRaftAddr)
 	}
 	return targets, nil
@@ -191,7 +191,7 @@ func lostDataWithNoPeersError(st indexStart) error {
 	return fmt.Errorf("refusing to bootstrap a new index rqlite cluster: this node has been a cluster member "+
 		"(recorded in %s since %s; members: %s) but has no raft state and no other member to join. "+
 		"Starting anyway would create a second, empty cluster alongside the live one. "+
-		"If the cluster is still running elsewhere, reform it with `orama node recover-raft --env <env>` from your machine, "+
+		"If the cluster is still running elsewhere, reform it with `orama maint node recover-raft --env <env>` from your machine, "+
 		"which re-joins this node from the node with the most data. "+
 		"If this node was the only member and its data is gone for good, delete %s to bootstrap a new, empty cluster deliberately",
 		st.recordPath, st.record.FirstSeen.UTC().Format(time.RFC3339), members, st.recordPath)

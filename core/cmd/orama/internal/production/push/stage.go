@@ -118,17 +118,17 @@ func nodeTarget() stageTarget {
 	}
 }
 
-// NewStageArchiveCmd is `orama node stage-archive`, the step `orama push` runs
+// NewStageArchiveCmd is `orama maint node stage-archive`, the step `orama maint push` runs
 // on each node with the node's installed CLI.
 func NewStageArchiveCmd() *cobra.Command {
 	var opts StageOptions
 	cmd := &cobra.Command{
 		Use:   "stage-archive",
-		Short: "Verify a pushed build archive and put it in place (run by 'orama push')",
+		Short: "Verify a pushed build archive and put it in place (run by 'orama maint push')",
 		Long: `Verify a build archive against this node's trust anchor, /etc/orama/archive-signers,
 and only then replace the archive files under /opt/orama with it.
 
-'orama push' runs this on every node with the node's installed orama. The
+'orama maint push' runs this on every node with the node's installed orama. The
 archive is extracted into a private directory, its manifest signature must
 recover to a trusted signer and every file must match the signed manifest;
 anything else leaves /opt/orama untouched. The replacement is undone if any
@@ -323,7 +323,7 @@ func verifyStaged(t stageTarget, opts StageOptions, dir string) (*archivetrust.V
 	} else {
 		if trust != nil && !archivetrust.SameSigners(existing, trust) {
 			return nil, fmt.Errorf("--trust-signers only creates a missing anchor, and this node already trusts %v; "+
-				"change who signs builds with `orama build --signers`", existing)
+				"change who signs builds with `orama maint build --signers`", existing)
 		}
 		if verified, err = t.verify(dir); err != nil {
 			return nil, err

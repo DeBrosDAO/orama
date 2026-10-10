@@ -418,9 +418,9 @@ orama monitor report --env <env> --node <ip>
 # journal of one namespace's Olric
 orama node logs orama-namespace-olric@<namespace>
 # fleet checks: service active, memberlist port, restarts, suspicions, flapping, memory, member consistency
-orama inspect --env <env> --subsystem olric
+orama maint inspect --env <env> --subsystem olric
 # the gateway's view of its client
 curl -s https://<namespace-gateway>/v1/cache/health -H 'Authorization: Bearer <runtime or wallet token>'
 ```
 
-The checks behind `orama inspect` are in `core/pkg/inspector/checks/olric.go:CheckOlric`.
+The checks behind `orama maint inspect` are in `core/pkg/inspector/checks/olric.go:CheckOlric`.

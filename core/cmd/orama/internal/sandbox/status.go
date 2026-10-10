@@ -19,7 +19,7 @@ func List() error {
 
 	if len(states) == 0 {
 		fmt.Println("No sandboxes found.")
-		fmt.Println("Create one: orama sandbox create")
+		fmt.Println("Create one: orama maint sandbox create")
 		return nil
 	}
 
@@ -93,7 +93,7 @@ func Status(name string) error {
 		fmt.Printf("%s (%s) — %s\n", srv.Name, srv.IP, srv.Role)
 
 		// Get node report
-		out, err := runSSHOutput(node, "orama node report --json 2>/dev/null")
+		out, err := runSSHOutput(node, "orama node report 2>/dev/null")
 		if err != nil {
 			fmt.Printf("  Status: UNREACHABLE (%v)\n", err)
 			fmt.Println()

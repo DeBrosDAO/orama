@@ -141,7 +141,7 @@ func TestAuthorities_archiveMatchesItsManifest(t *testing.T) {
 	for _, n := range r.dirauth {
 		archive := constants.GlobalTorDirauthHome + "/" + constants.GlobalTorArchiveDir
 		// Run the archive now rather than waiting for the timer.
-		infra.ExpectNodeExit(t, n.Name+" archive", infra.OnNode(t, f, n, "global", "tor", "archive", "--data-dir", constants.GlobalTorDirauthHome, "--archive-dir", archive), infra.ExitOK, "valid-after")
+		infra.ExpectNodeExit(t, n.Name+" archive", infra.OnNode(t, f, n, "maint", "global", "tor", "archive", "--data-dir", constants.GlobalTorDirauthHome, "--archive-dir", archive), infra.ExitOK, "valid-after")
 		latest := strings.TrimSpace(f.MustExec(t, n, "ls -1 "+archive+" | tail -n 1").Stdout)
 		if latest == "" {
 			t.Errorf("%s: the archive is empty", n.Name)

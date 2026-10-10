@@ -2,7 +2,7 @@
 // only root may write — the anchor, /opt/orama on a node — without following a
 // symlink.
 //
-// `orama node install` and `orama node upgrade` run as root, but most of what
+// `orama maint node install` and `orama node upgrade` run as root, but most of what
 // they write lives under /opt/orama/.orama, which belongs to the unprivileged
 // orama user that runs the node and every gateway. Before this package, root
 // wrote there with os.WriteFile and friends, which follow symlinks: a

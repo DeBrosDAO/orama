@@ -11,9 +11,8 @@ var (
 )
 
 var decommissionCmd = &cobra.Command{
-	Use:     "remove",
-	Aliases: []string{"decommission"},
-	Short:   "Remove one node from the cluster, then erase it",
+	Use:   "remove",
+	Short: "Remove one node from the cluster, then erase it",
 	Long: `Retire a node from every store the cluster keeps, then wipe it.
 
 Runs the cluster-side removal from a SURVIVOR. First it prints what the removal

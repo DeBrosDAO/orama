@@ -3,7 +3,6 @@
 package chainglobaldestructive
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
@@ -34,10 +33,8 @@ func TestGlobalLifecycle_stopStartRestartTheChain(t *testing.T) {
 	if got := unitState(t, c, n); got == stateActive {
 		t.Fatalf("%s: the chain unit is still %s after global stop", n.Name, got)
 	}
-	status := orama(t, c, n, "global", "status")
-	infra.ExpectNodeExit(t, "status of a stopped chain", status, infra.ExitOK, "chain")
-	if !strings.Contains(status.Stdout, infra.UnitInactive) {
-		t.Errorf("global status does not report the stopped chain as inactive:\n%s", status.Stdout)
+	if got := unitState(t, c, n); got != infra.UnitInactive {
+		t.Errorf("%s: the stopped chain unit is %s, want %s", n.Name, got, infra.UnitInactive)
 	}
 	infra.ExpectNodeExit(t, "a second stop", orama(t, c, n, "global", "stop", "chain"), infra.ExitOK)
 	infra.ExpectNodeExit(t, "start chain", orama(t, c, n, "global", "start", "chain"), infra.ExitOK, "waiting for the chain RPC")
@@ -52,8 +49,7 @@ func TestGlobalLifecycle_stopStartRestartTheChain(t *testing.T) {
 	if got := mainPID(t, c, n); got == pid {
 		t.Errorf("global restart left the chain in process %s", pid)
 	}
-	status = orama(t, c, n, "global", "status")
-	if !strings.Contains(status.Stdout, stateActive) {
-		t.Errorf("global status does not report the restarted chain as active:\n%s", status.Stdout)
+	if got := unitState(t, c, n); got != stateActive {
+		t.Errorf("%s: the restarted chain unit is %s, want %s", n.Name, got, stateActive)
 	}
 }

@@ -95,7 +95,7 @@ func Run(opts Options) error {
 
 	fmt.Printf("\nInvite created (expires in %s)\n\n", expiry)
 	fmt.Printf("Run this on the new node:\n\n")
-	fmt.Printf("  sudo orama node install --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", encoded)
+	fmt.Printf("  sudo orama maint node install --token %s --vps-ip <NEW_NODE_IP> --nameserver\n\n", encoded)
 	fmt.Printf("Replace <NEW_NODE_IP> with the new node's public IP address.\n")
 	fmt.Printf("The invite carries the gateway to join and the certificate to pin,\n")
 	fmt.Printf("so there is nothing else to copy across.\n")

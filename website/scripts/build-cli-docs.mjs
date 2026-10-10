@@ -24,19 +24,19 @@ const PAGES = [
   { slug: "app", title: "orama app", blurb: "Inspect and manage deployed applications.", commands: ["app"] },
   { slug: "auth", title: "orama auth", blurb: "Sign in, approve a login from another machine, and manage sessions.", commands: ["auth"] },
   { slug: "chain", title: "orama chain", blurb: "Read the Orama chain and fund test accounts.", commands: ["chain"] },
-  { slug: "cluster", title: "orama cluster and operator", blurb: "Cluster-wide settings, namespace creators, and the wallets that operate a cluster.", commands: ["cluster", "operator"] },
+  { slug: "cluster", title: "orama cluster and operator", blurb: "Cluster-wide settings, namespace creators, and the wallets that operate a cluster.", commands: ["cluster", "operator", "maint cluster", "maint operator"] },
   { slug: "db", title: "orama db", blurb: "Create and query SQLite databases.", commands: ["db"] },
   { slug: "deploy", title: "orama deploy and domain", blurb: "Deploy apps and attach custom domains.", commands: ["deploy", "domain"] },
-  { slug: "env", title: "orama env", blurb: "Choose which cluster the CLI talks to.", commands: ["env"] },
+  { slug: "network", title: "orama network", blurb: "Choose which network the CLI talks to: a cluster by its gateway, or a network of the registry by its manifest.", commands: ["network", "maint network"] },
   { slug: "function", title: "orama function", blurb: "Build, deploy and run serverless functions.", commands: ["function"] },
-  { slug: "global", title: "orama global", blurb: "Install and operate a global node, and build its chain messages.", commands: ["global"] },
+  { slug: "global", title: "orama global", blurb: "Install and operate a global node, and build its chain messages.", commands: ["global", "maint global"] },
   { slug: "members", title: "orama members and audit", blurb: "Who may work in a namespace, and the namespace's audit trail.", commands: ["members", "audit"] },
   { slug: "monitor", title: "orama monitor", blurb: "Watch cluster health from your own machine.", commands: ["monitor"] },
   { slug: "namespace", title: "orama namespace", blurb: "Create namespaces, mint API keys, back up and restore.", commands: ["namespace"] },
-  { slug: "node", title: "orama node", blurb: "Install, run, upgrade and remove nodes.", commands: ["node"] },
-  { slug: "sandbox", title: "orama sandbox", blurb: "Throwaway Hetzner clusters for testing.", commands: ["sandbox"] },
+  { slug: "node", title: "orama node", blurb: "Install, run, upgrade and remove nodes.", commands: ["node", "maint node"] },
+  { slug: "sandbox", title: "orama maint sandbox", blurb: "Throwaway Hetzner clusters for testing.", commands: ["maint sandbox"] },
   { slug: "storage", title: "orama storage", blurb: "Storage deals on the Orama chain.", commands: ["storage"] },
-  { slug: "other", title: "Other commands", blurb: "build, push, rollout, status, nodes, ssh, inspect, invite and version.", commands: [] },
+  { slug: "other", title: "Other commands", blurb: "status, nodes, ssh and version, and the maintainer commands under orama maint: build, push, rollout, inspect, invite and vpn.", commands: [] },
 ];
 
 /** Example addresses in command help that are real hosts become documentation-range ones. */
@@ -143,8 +143,15 @@ function renderBody(lines) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * The page a command lands on. A maintainer command (`orama maint node install`)
+ * is looked up as "maint node", so its group's page holds it beside the
+ * operator-facing commands of the same group; `orama maint` itself and the
+ * maintainer commands no page claims go to "other".
+ */
 function pageFor(commandName) {
-  const top = commandName.split(" ")[1];
+  const words = commandName.split(" ");
+  const top = words[1] === "maint" && words.length > 2 ? `maint ${words[2]}` : words[1];
   const page = PAGES.find((p) => p.commands.includes(top));
   return page ?? PAGES.find((p) => p.slug === "other");
 }

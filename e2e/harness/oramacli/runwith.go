@@ -39,7 +39,7 @@ type RunOpts struct {
 var goEnvNames = []string{"GOFLAGS", "GOCACHE", "GOMODCACHE", "GOPATH", "GOTOOLCHAIN", "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GONOPROXY", "GOSUMDB"}
 
 // GoEnv is the Go toolchain part of lookup's environment (os.LookupEnv),
-// for RunOpts.Env of a command that builds (`orama build`).
+// for RunOpts.Env of a command that builds (`orama maint build`).
 func GoEnv(lookup func(string) (string, bool)) []string {
 	var env []string
 	for _, name := range goEnvNames {

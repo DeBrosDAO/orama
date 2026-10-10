@@ -91,18 +91,18 @@ Clocks must agree: the certificate store's lease, MACs (one minute either side),
 ## Habits that keep a cluster safe
 
 - **Never fix a node by hand.** Fix in source, test, then roll out a signed archive. A hand edit is lost on the next deployment and invisible to the audit trail.
-- **Roll out signed archives only**, with `orama rollout`, one node at a time ([Upgrades](/docs/operator/upgrades)).
+- **Roll out signed archives only**, with `orama maint rollout`, one node at a time ([Upgrades](/docs/operator/upgrades)).
 - **Use the CLI, not `systemctl`**, on nodes. The CLI checks quorum and ordering.
 - **Keep the RootWallet account that signs archives offline-safe.** Its recovery phrase is the cluster's upgrade key. Rotate signers with two builds when a key may be exposed.
-- **Rotate the index gateway signing key** after upgrading from 0.122.x, and `orama operator rotate-secrets --rotate` after any suspicion that a node's disk was read ([Cluster administration](/docs/operator/cluster-admin#key-rotation)).
-- **Run `orama operator rotate-secrets` once every gateway is upgraded.** A deployment's environment is sealed to its namespace and deployment id (`enc:v2`), so a ciphertext copied onto another row does not open. A cluster created on this release has that from its first row; an upgraded cluster keeps writing the unbound form, because a gateway from before the change cannot open `enc:v2`, until `rotate-secrets` turns bound writes on.
+- **Rotate the index gateway signing key** after upgrading from 0.122.x, and `orama maint operator rotate-secrets --rotate` after any suspicion that a node's disk was read ([Cluster administration](/docs/operator/cluster-admin#key-rotation)).
+- **Run `orama maint operator rotate-secrets` once every gateway is upgraded.** A deployment's environment is sealed to its namespace and deployment id (`enc:v2`), so a ciphertext copied onto another row does not open. A cluster created on this release has that from its first row; an upgraded cluster keeps writing the unbound form, because a gateway from before the change cannot open `enc:v2`, until `rotate-secrets` turns bound writes on.
 - **Back up the registry** and test a restore ([Upgrades](/docs/operator/upgrades#back-up-the-registry-first)).
 - **Remove nodes properly.** `orama node remove` revokes the node's key at once; `wipe` does not tell the cluster anything.
 
 ## When a node is suspect
 
 1. `orama node remove --env <env> --node <ip>` from your computer (it checks quorum first).
-2. Rotate secrets: `orama operator rotate-secrets --rotate` and `orama operator rotate-signing-key`.
+2. Rotate secrets: `orama maint operator rotate-secrets --rotate` and `orama maint operator rotate-signing-key`.
 3. Wipe the machine, and treat its disk as compromised ([Wipe a node](/docs/operator/clean-node)).
 4. If the cluster secret itself may be known, plan a full rebuild: rotating the cluster secret and WireGuard keys has no tooling and needs a maintenance window.
 

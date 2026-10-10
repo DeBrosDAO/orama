@@ -19,7 +19,7 @@ func networkFS(t *testing.T, name string, m Manifest, root []byte) fstest.MapFS 
 }
 
 func TestLoadRegistry_loadsNetworksAndIgnoresFiles(t *testing.T) {
-	r, err := loadRegistry(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
+	r, err := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestLoadRegistry_refusesBrokenNetworks(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := loadRegistry(fsys, "embedded"); err == nil {
+			if _, err := LoadFS(fsys, "embedded"); err == nil {
 				t.Fatal("loadRegistry accepted a broken network")
 			}
 		})
@@ -54,7 +54,7 @@ func TestLoadRegistry_refusesBrokenNetworks(t *testing.T) {
 }
 
 func TestRegistryGet_unknownNameListsTheKnownOnes(t *testing.T) {
-	r, _ := loadRegistry(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
+	r, _ := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
 	_, err := r.Get("nope")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get(nope) = %v, want ErrNotFound", err)
@@ -69,8 +69,8 @@ func TestRegistryGet_unknownNameListsTheKnownOnes(t *testing.T) {
 }
 
 func TestRegistryMerge_refusesAShadowedName(t *testing.T) {
-	a, _ := loadRegistry(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
-	b, _ := loadRegistry(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
+	a, _ := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
+	b, _ := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
 	if _, err := a.Merge(b); err == nil {
 		t.Error("Merge let a custom network shadow a built-in one")
 	}

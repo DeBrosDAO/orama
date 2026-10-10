@@ -19,7 +19,7 @@ along with an invite token. The Gateway pushes cluster configuration
 The code is not served over the network. A GET on port 9999 used to return it.
 
 Usage:
-  orama node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
+  orama maint node enroll --node-ip <ip> --code <code> --token <invite-token> --gateway <url>
 
 --gateway must be an https:// URL: the invite token is a credential and is never
 sent in the clear.

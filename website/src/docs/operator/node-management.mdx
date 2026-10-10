@@ -6,7 +6,7 @@ These commands run from your computer and manage every node you operate. Your wa
 
 - The RootWallet desktop app running and **unlocked**
 - Signed in as an operator: `orama auth login`
-- The environment set: `orama env use mycluster`, or pass `--env mycluster` to each command
+- The environment set: `orama network use mycluster`, or pass `--env mycluster` to each command
 
 ## List your nodes
 
@@ -48,10 +48,10 @@ A node is healthy when its gateway answers and its RQLite has settled into `Lead
 ## Push and roll out new versions
 
 ```bash
-orama build                                          # signed archive, prints its path
-orama push --env mycluster --archive $ARCHIVE        # upload and verify on every node, restart nothing
-orama push --env mycluster --archive $ARCHIVE --node 203.0.113.11
-orama rollout --env mycluster --yes                  # build + push + rolling upgrade
+orama maint build                                          # signed archive, prints its path
+orama maint push --env mycluster --archive $ARCHIVE        # upload and verify on every node, restart nothing
+orama maint push --env mycluster --archive $ARCHIVE --node 203.0.113.11
+orama maint rollout --env mycluster --yes                  # build + push + rolling upgrade
 ```
 
 `--archive` is required for `push`. See [Upgrades](/docs/operator/upgrades) for the whole protocol.
@@ -87,9 +87,9 @@ These run on a node over SSH, with `sudo`. Use them instead of raw `systemctl`: 
 | `sudo orama node doctor` | Diagnose common problems: services, ports, connectivity, Raft state |
 | `sudo orama node logs <service> [-f] [-n 50] [--since -30min]` | Service logs. Aliases: `caddy`, `cluster`, `coredns`, `gateway`, `ipfs`, `ipfs-cluster`, `node`, `olric`, `rqlite`, `turn`; or a full unit name such as `orama-namespace-olric@myapp` |
 | `sudo orama node report` | All health data as JSON, the collector `orama monitor` reads |
-| `sudo orama node schema status` / `apply` | Gateway schema migrations against the local RQLite |
+| `sudo orama maint node schema status` / `apply` | Gateway schema migrations against the local RQLite |
 | `sudo orama node invite [--expiry 24h] [--raw]` | Mint an invite for a joining node |
-| `sudo orama node autoupdate run` | Run this node's auto-update agent once (its timer runs it every 15 minutes). See [Upgrades](/docs/operator/upgrades#automatic-updates) |
+| `sudo orama maint node autoupdate run` | Run this node's auto-update agent once (its timer runs it every 15 minutes). See [Upgrades](/docs/operator/upgrades#automatic-updates) |
 | `sudo orama node trust add-root root.json` | Adopt a TUF release root on this node, so it accepts releases signed under it |
 | `sudo orama node uninstall` | Remove the production services |
 
@@ -104,7 +104,7 @@ When you set up a node with `orama node setup`, the CLI authenticates with your 
 If you have older nodes listed in `scripts/nodes.conf`, register them with your wallet:
 
 ```bash
-orama node migrate-conf --env mycluster
+orama maint node migrate-conf --env mycluster
 ```
 
 `nodes.conf` keeps working as a fallback, so you can migrate at your own pace.

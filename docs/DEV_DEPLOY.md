@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Go 1.27.2+ (see `go.mod`)
-- [Zig](https://ziglang.org/download/) — `orama build` cross-compiles the vault
+- [Zig](https://ziglang.org/download/) — `orama maint build` cross-compiles the vault
   with it, and the gateway with cgo through `zig cc` (static musl): the gateway
   links `mattn/go-sqlite3` for namespace SQLite databases, which does not work
   in a `CGO_ENABLED=0` build
@@ -14,8 +14,8 @@
 
 ### RootWallet
 
-There are no SSH keys on disk. Every command that reaches a node — `orama push`,
-`orama rollout`, `orama node setup`, `orama monitor report`, `orama ssh` — asks
+There are no SSH keys on disk. Every command that reaches a node — `orama maint push`,
+`orama maint rollout`, `orama node setup`, `orama monitor report`, `orama ssh` — asks
 the RootWallet desktop app's agent for a wallet-derived key over a Unix socket
 at `~/.rootwallet/agent.sock`, writes it to a `0600` temp file for the length of
 the command, and wipes it afterwards. `RW_AGENT_SOCK` overrides the path.
@@ -90,7 +90,7 @@ ORAMA_LIFECYCLE_ENV=<disposable-env> make test-lifecycle
 
 `orama monitor report` reads the gateway's operator telemetry API, so the
 machine running the harness needs an operator session for that environment
-(`orama env use <env>`, then `orama auth login`). The reports it returns are a
+(`orama network use <env>`, then `orama auth login`). The reports it returns are a
 few seconds old (the gateway gathers each node's telemetry every 10s and caches
 a snapshot for 5s); `Converged` refuses a node whose report is older than 30s.
 
@@ -137,7 +137,7 @@ asserting nothing.
 machines to a working private cluster with no manual SQL. `core/e2e/clusterguide`
 keeps it by executing the page: it parses the page's command blocks and runs them
 in order (install the first node, print the delegation, join two more,
-`orama env use`, `orama auth login`, `orama namespace create`, sign in to the
+`orama network use`, `orama auth login`, `orama namespace create`, sign in to the
 namespace, `orama deploy static`, then `orama status --json` and `orama app
 list`), substituting the page's example addresses, domain, environment and
 release (version, repository and root) with the fixture's. A fixture given a build
@@ -166,7 +166,7 @@ make e2e-cluster
 ```
 
 To install a build of your own instead of a release, give
-`E2E_CLUSTER_ARCHIVE=<the path orama build printed>` and none of the three release
+`E2E_CLUSTER_ARCHIVE=<the path orama maint build printed>` and none of the three release
 variables; a fixture with both is refused. The release run is the path the page
 describes (no checkout on the machine that types it).
 
@@ -175,7 +175,7 @@ describes (no checkout on the machine that types it).
 | `E2E_CLUSTER_BASE_DOMAIN` | The domain the cluster is named under (required) |
 | `E2E_CLUSTER_IPS` | Three or more bare Linux machines, comma separated; the first is the genesis nameserver |
 | `E2E_CLUSTER_RELEASE`, `E2E_CLUSTER_RELEASE_REPO`, `E2E_CLUSTER_RELEASE_ROOT` | A published release, its repository and the TUF root to verify it against; all three together. `go run ./cmd/testtuf` (in `core/`) makes a test repository and root |
-| `E2E_CLUSTER_ARCHIVE` | Instead of a release: a build archive, signed by the RootWallet account that is unlocked (`orama build`) |
+| `E2E_CLUSTER_ARCHIVE` | Instead of a release: a build archive, signed by the RootWallet account that is unlocked (`orama maint build`) |
 | `E2E_CLUSTER_ENV` | Environment name to create (default `e2eguide`; the page's `mycluster` is replaced by it) |
 | `E2E_CLUSTER_CLOUDFLARE_TOKEN_FILE` | Optional. Runs the page's `--cloudflare-token-file` step; without it the delegation must already exist |
 | `E2E_CLUSTER_DELEGATION_WAIT` | How long to wait for the NS records and the genesis certificate (default `20m`) |
@@ -188,9 +188,9 @@ for each machine (`rw vault add <ip>`), because the page's `orama node setup`
 uses `--password`. The harness never types a secret and never runs `rw`. The page
 installs with `--acme-ca letsencrypt-staging`, so no production certificate quota
 is used. The run records the environment in `~/.orama` and makes it the active one
-(`orama env use`); switch back with `orama env use <previous>`.
+(`orama network use`); switch back with `orama network use <previous>`.
 
-**The sandbox and this test.** `orama sandbox create` (see [SANDBOX.md](SANDBOX.md))
+**The sandbox and this test.** `orama maint sandbox create` (see [SANDBOX.md](SANDBOX.md))
 provisions servers and installs the cluster itself, over an SSH key, from its own
 code path, so it cannot stand in for the page's install steps: those need machines
 that are still bare and that have a password login. It does fit the second half.
@@ -198,11 +198,11 @@ that are still bare and that have a password login. It does fit the second half.
 the page) and runs Use it and Check it against a cluster that already exists:
 
 ```bash
-orama sandbox create --name guide
+orama maint sandbox create --name guide
 E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox \
-E2E_CLUSTER_BASE_DOMAIN=<the sandbox domain from orama sandbox setup> \
+E2E_CLUSTER_BASE_DOMAIN=<the sandbox domain from orama maint sandbox setup> \
 make e2e-cluster
-orama sandbox destroy --name guide
+orama maint sandbox destroy --name guide
 ```
 
 `create` records the environment as `sandbox`. For the install half, use any
@@ -275,18 +275,18 @@ All binaries are pre-compiled locally and shipped as a binary archive. Zero comp
 
 ```bash
 # One-command: build + push + rolling upgrade
-orama node rollout --env testnet
+orama maint rollout --env testnet
 
 # Or step by step:
 
 # 1. Build binary archive (cross-compiles all binaries for linux/amd64) and
 #    sign its manifest with your RootWallet (unlock the desktop app first)
-orama build
+orama maint build
 # Creates: /tmp/orama-<version>-linux-amd64.tar.gz
 
 # 2. Push archive to all nodes, from this machine. --archive is required:
 #    the newest archive in /tmp may be another checkout's build.
-orama node push --env testnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
+orama maint push --env testnet --archive /tmp/orama-<version>-linux-amd64.tar.gz
 
 # 3. Rolling upgrade (one node at a time: followers first, the leader last).
 #    Without --yes it prints the plan; each node runs the staged build's CLI.
@@ -303,7 +303,7 @@ they used to. A build that signs only v1 (or signs the replica header) cannot
 coordinate spawns, teardowns or replica operations with an upgraded node, and an
 upgraded node cannot with it, until every node is upgraded: such requests are
 refused `401`/`403` (see SECURITY.md, "Coordination MAC v2"). The same goes for
-the secrets re-encrypt fan-out of `orama operator rotate-secrets`, and for
+the secrets re-encrypt fan-out of `orama maint operator rotate-secrets`, and for
 namespace repair. Network status, telemetry, network detail and storage evict
 still accept v1 during the upgrade, so `orama monitor` keeps working. After the last node is upgraded,
 check that `namespace_pending_cleanup` drains: a teardown refused in the window
@@ -316,7 +316,7 @@ calls them, so a mixed fleet needs no handling.
 
 ### Reproducible builds
 
-Two `orama build` runs of one commit produce the same archive, byte for byte, so
+Two `orama maint build` runs of one commit produce the same archive, byte for byte, so
 the people who sign a release can each rebuild it and compare hashes before they
 sign. What fixes that:
 
@@ -373,7 +373,7 @@ every node: root:root 0644 in a root-only directory, one lowercase `0x` address
 per line. There is no unsigned mode, no source-build mode and no built-in
 signer: a cluster trusts its operator's wallet, not a DeBros key.
 
-**Build.** `orama build` signs by default. It asks the RootWallet agent for its
+**Build.** `orama maint build` signs by default. It asks the RootWallet agent for its
 active account before compiling (a locked or absent wallet fails in seconds),
 then signs through the agent's `wallet:sign:orama-archive` capability (the
 request carries `purpose: "orama-archive"`) — the first time, RootWallet asks
@@ -399,10 +399,10 @@ same code every node runs before it writes the archive. The manifest lists the
 SHA-256 of every file the archive carries (binaries by name, templates as
 `systemd/<name>`, packages as `packages/<name>`), so nothing in the archive is
 outside the signature. `--unsigned` builds an archive for local inspection
-only; no node installs it. `orama node rollout` builds a signed archive the
+only; no node installs it. `orama maint rollout` builds a signed archive the
 same way.
 
-**Push.** `orama push` uploads into a fresh `mktemp -d` directory on each node
+**Push.** `orama maint push` uploads into a fresh `mktemp -d` directory on each node
 and runs the node's **installed** CLI, `/usr/local/bin/orama node
 stage-archive`. Under a lock on `/opt/orama` that install and upgrade share, it
 removes staging (and setup CLI) directories an interrupted run left, extracts the upload into a
@@ -417,7 +417,7 @@ step fails. A refused archive leaves `/opt/orama` exactly as it was; this
 matters because systemd runs `orama-node`, the gateway, SFU, TURN and vault
 straight from `/opt/orama/bin`. Because the verifier is the node's installed
 CLI, push reaches only installed nodes; a fresh machine gets its first archive
-from `orama node setup` (or `orama node install --remote`).
+from `orama node setup` (or `orama maint node install --remote`).
 
 **Release root (opt-in).** A cluster may also trust a TUF **release root**: the
 key set of a group of release signers, whose threshold signature on release
@@ -429,14 +429,14 @@ either of:
 - `sudo orama node trust add-root <root.json>`, on that node. The root is
   checked first (well-formed, signed by its own keys at its threshold, not
   expired); adopting a root other than the one already there needs `--replace`.
-- A signed archive that carries it: `orama build --release-root <root.json>` puts
+- A signed archive that carries it: `orama maint build --release-root <root.json>` puts
   the root in the signed manifest, and every node that installs that archive
   adopts it, with the signer rotation's replay rule (a build older than the last
   rotation cannot put an older root back). `orama node setup --release` builds
   such an archive for you (below).
 
 A node with a root can require it when it stages:
-`orama node stage-archive --archive <file> --release-metadata <dir>
+`orama maint node stage-archive --archive <file> --release-metadata <dir>
 --release-target <name>`. `<dir>` holds `timestamp.json`, `snapshot.json` and
 `targets.json`, and `<role>.json` for the channel when the target is
 `<channel>/orama-...`. The archive is first copied into the node's 0700 staging
@@ -505,7 +505,7 @@ or a new signed archive.
 
 **First install.** A new machine has no verified binary of its own: the one
 that runs the install comes out of the archive. So `orama node setup` and
-`orama node install --remote --archive <path>` verify the archive **on your
+`orama maint node install --remote --archive <path>` verify the archive **on your
 machine** — against your RootWallet account (setup) or `--operator-wallet`
 (`--remote`) — check that it is built for the node's architecture (`uname -m`),
 and upload not the file you named but a canonical archive written from the
@@ -544,7 +544,7 @@ response naming anything else. A cluster that trusts more than your wallet is
 joined with `--join-via`. A
 node without an anchor refuses to admit anyone, before the invite is spent.
 
-**Rotating signers.** `orama build --signers 0xA,0xB` writes that list into the
+**Rotating signers.** `orama maint build --signers 0xA,0xB` writes that list into the
 signed manifest. A node that verifies the archive against its current anchor
 rewrites the anchor to exactly that list in Phase 2b (atomically, root-owned).
 The list must include the account signing the build — so the archive still
@@ -568,12 +568,12 @@ refuses them until they get one. Create it with the push that carries the first
 signed build:
 
 ```bash
-orama push --env testnet --archive <path> --trust-signers 0xYourWallet
+orama maint push --env testnet --archive <path> --trust-signers 0xYourWallet
 ```
 
 A push with `--trust-signers` does not use the node's installed CLI at all, so
 it also reaches 0.122.x nodes, whose CLI has no `node stage-archive`. It stages
-the way `orama node install --remote` does: the archive is verified **on your
+the way `orama maint node install --remote` does: the archive is verified **on your
 machine** against `--trust-signers`, and what is uploaded is a canonical archive
 written from the verified files; on each node only `bin/orama` is extracted —
 into a root-only `mktemp -d` directory under `/opt/orama`, which must be root's
@@ -592,13 +592,13 @@ base64-encoded on a pipe into `bash -s`, so a shell that wraps the command canno
 The whole hop runs this release's code, from this checkout:
 
 ```bash
-orama build                                                   # signed with your RootWallet
-orama push --env testnet --archive <path> --trust-signers 0xYourWallet
+orama maint build                                                   # signed with your RootWallet
+orama maint push --env testnet --archive <path> --trust-signers 0xYourWallet
 orama node upgrade --env testnet                              # read the plan
 orama node upgrade --env testnet --yes
 ```
 
-1. `orama push --trust-signers` puts the verified archive in `/opt/orama` on
+1. `orama maint push --trust-signers` puts the verified archive in `/opt/orama` on
    every node, and creates each node's anchor, as above. The nodes keep running
    0.122.x; nothing is stopped.
 2. `orama node upgrade --env … --yes` reads every node's raft state — a 0.122.x
@@ -615,7 +615,7 @@ orama node upgrade --env testnet --yes
    the checks, the raft identity capture, the leadership hand-over and the stop
    included — and the post-swap re-exec has nothing to hand over to (the
    running binary already is the installed one).
-3. The same happens on every later upgrade: `orama push` stages the build,
+3. The same happens on every later upgrade: `orama maint push` stages the build,
    the rolling upgrade runs its CLI.
 
 What the 0.122.x CLI cannot do is why it is not used for this hop: its build
@@ -639,7 +639,7 @@ anchors before adding nodes.
 A cluster can keep itself on a release channel. Every node runs
 `orama-autoupdate.timer` (installed and enabled by install and upgrade; first run
 10 minutes after boot, then 15 minutes after each run ends). The service runs
-`orama node autoupdate run` as root, with no new privileges, a private /tmp,
+`orama maint node autoupdate run` as root, with no new privileges, a private /tmp,
 no /home, read-only control groups, no personality changes, no setuid or setgid
 files, and only the inet, unix and netlink socket families. It is not under
 `ProtectSystem` or `ProtectKernelTunables`: the upgrade it runs writes
@@ -648,7 +648,7 @@ the cluster stored a release repository and this node adopted a release root
 (`orama node trust add-root`, or an archive built with `--release-root`).
 
 **Policy** is four cluster settings, read from the index RQLite and set by an
-operator with `orama cluster settings set` (audited):
+operator with `orama maint cluster settings set` (audited):
 
 | Setting | Values | Default |
 |---|---|---|
@@ -667,7 +667,7 @@ role for `<channel>/*` only); take the newest `<channel>/orama-<version>-linux-<
 (versions are dotted numbers, so a nightly is `0.4.0.20261008`, not `0.4.0-nightly`);
 and decide. Anything that does not verify is refused, written to
 `/etc/orama/update-notice.json` and shown by `orama monitor` as a warning. The
-decision (`orama node autoupdate` prints the same table for values you give it):
+decision (`orama maint node autoupdate` prints the same table for values you give it):
 
 - a version not newer than the one installed is nothing to do; an older one is refused;
 - a release some node failed (a `failed` row in `release_installs`) is refused;
@@ -684,7 +684,7 @@ records a `skipped` row in `release_installs` for the release, and exits 0; the
 rollout plan counts a `skipped` node as done, so the nodes after it are not held
 up. On `notify` it reports like any node. Its chain binary is
 changed by hand: the unit `orama global install` writes runs `oramad` under
-cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
+cosmovisor, so a new binary goes in through `orama maint global stage-oramad --upgrade
 <plan>` (see [CHAIN.md](CHAIN.md#running-oramad-under-cosmovisor) and
 [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md)).
 
@@ -716,7 +716,7 @@ cosmovisor, so a new binary goes in through `orama global stage-oramad --upgrade
    hours from now (written by a clock that has since gone back) counts as over,
    and an install that succeeds removes the record. Each run starts by removing the `fetch-*` directories a
    killed run left in the work directory.
-4. `orama node stage-archive --release-only` places it under `/opt/orama` and
+4. `orama maint node stage-archive --release-only` places it under `/opt/orama` and
    keeps the release it replaced in `/opt/orama/.release-previous`. If the old
    release cannot be kept, the stage puts it back and fails.
 5. The new release's own `orama node upgrade --restart` runs: leadership is
@@ -813,10 +813,10 @@ nothing checks free space first.
 
 ```bash
 # Build the archive first (if not already built)
-orama build
+orama maint build
 
 # Install on a new VPS: verifies the archive here, uploads it, installs it
-orama node install --remote --vps-ip <ip> --archive /tmp/orama-<version>-linux-amd64.tar.gz \
+orama maint node install --remote --vps-ip <ip> --archive /tmp/orama-<version>-linux-amd64.tar.gz \
   --operator-wallet 0xYourWallet --nameserver --domain <domain> --base-domain <domain>
 ```
 
@@ -841,7 +841,7 @@ Two related orderings changed in the same commit:
 `chain/scripts/stagenet/deploy.sh` deploys the L1 chain and the global services (provider, archiver, indexer,
 public Kubo) to the five stagenet nodes (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`, ssh aliases from `~/.ssh/config`)
 through the product's own commands, so the stagenet deploy exercises the code operators run. It is separate from
-the cluster deploy above: `orama build`, `orama node push` and `orama node upgrade --env stagenet` deploy the
+the cluster deploy above: `orama maint build`, `orama maint push` and `orama node upgrade --env stagenet` deploy the
 private-cluster node, and the global services are installed beside it, co-located in the `orama-global` network
 namespace ([RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md), "Sharing a machine with a cluster node"). The cluster must
 already be installed on each node. The script never starts, stops or reconfigures a cluster service. What it
@@ -938,15 +938,15 @@ Use `orama node …` (start/stop/restart/upgrade). Install writes one host unit,
 
 The firewall reconcile (Phase 6b) adds and removes only rules tagged `comment orama`, plus one exception: it deletes the exact untagged rules that releases before the tag added and no longer want (`core/pkg/install/firewall_legacy.go`: 9001/tcp, 443/udp, `from 10.0.0.0/8`, the per-namespace TURN relay blocks, and the 2025 setup's Olric/IPFS/Cluster rules with their original comments). A rule on the SSH port is never removed. To keep one of those ports open on purpose, add the rule with a comment of your own.
 
-**Dynamic users resolve through nss-systemd.** Tenant deployments run as `DynamicUser=` units, which have no `/etc/passwd` line; the uid and name resolve only through the `systemd` source in `/etc/nsswitch.conf`'s `passwd` and `group` lines, supplied by `libnss-systemd`. Without it `getpwuid()` fails in the unit and npm exits 254 on `os.homedir()` before it installs anything, in `orama-deploy-build@` and in `npm start` alike. Ubuntu ships and configures the module; Debian 12 does neither. Phase 1 of `orama node install` and of `orama node upgrade` (before anything is stopped) installs `libnss-systemd` when `libnss_systemd.so.2` is missing, adds `systemd` after `files` (or `compat`) and after the `[STATUS=action]` group that follows it, on any of the two lines that lacks it (idempotent, other lines and comments untouched; an empty source list is refused with the line named, since glibc's default for it varies), edits a symlinked `nsswitch.conf` at its target through a synced temp file that keeps its mode and owner, and then verifies both; `apt-get` runs by absolute path with `DEBIAN_FRONTEND=noninteractive` and its output is in the error; if it cannot, the install or upgrade stops with the missing piece named (`pkg/install/nss_systemd.go`).
+**Dynamic users resolve through nss-systemd.** Tenant deployments run as `DynamicUser=` units, which have no `/etc/passwd` line; the uid and name resolve only through the `systemd` source in `/etc/nsswitch.conf`'s `passwd` and `group` lines, supplied by `libnss-systemd`. Without it `getpwuid()` fails in the unit and npm exits 254 on `os.homedir()` before it installs anything, in `orama-deploy-build@` and in `npm start` alike. Ubuntu ships and configures the module; Debian 12 does neither. Phase 1 of `orama maint node install` and of `orama node upgrade` (before anything is stopped) installs `libnss-systemd` when `libnss_systemd.so.2` is missing, adds `systemd` after `files` (or `compat`) and after the `[STATUS=action]` group that follows it, on any of the two lines that lacks it (idempotent, other lines and comments untouched; an empty source list is refused with the line named, since glibc's default for it varies), edits a symlinked `nsswitch.conf` at its target through a synced temp file that keeps its mode and owner, and then verifies both; `apt-get` runs by absolute path with `DEBIAN_FRONTEND=noninteractive` and its output is in the error; if it cannot, the install or upgrade stops with the missing piece named (`pkg/install/nss_systemd.go`).
 
 Every node also runs a client-only **Tor** daemon, `orama-namespace-tor@index`, whose SOCKS port `127.0.0.1:9050` serves `/v1/proxy/anon`, `/v1/proxy/tunnel` and the `anon_fetch` host function. Install and upgrade set it up in **Phase 2d**: remove the Anyone network if present, mask the package's own `tor.service`/`tor@default.service`, add the Tor Project's apt repository if it is not already in place for this OS release (`deb.torproject.org`, key pinned by fingerprint), `apt-get update` and `apt-get install tor deb.torproject.org-keyring` — which installs Tor or upgrades it to the repository's current release — and write `/etc/orama/tor/torrc`. apt is run with `DPkg::Lock::Timeout=300`, so installs and purges wait up to 300 s for a dpkg lock held by unattended-upgrades. Any error fails the install/upgrade.
 
-**Tor is upgraded on every Orama upgrade, before the node's services stop.** `orama node upgrade` runs Phase 2d right after Phase 2, while the node still serves; it needs outbound HTTPS to `deb.torproject.org`, and a failure aborts the upgrade with nothing stopped. The Orama unit keeps running the old Tor binary until the upgrade's stop step; the new one starts when `orama-node` brings `@index` back up. After the post-swap re-exec, Phase 2d runs again under the new binary in "ensure" form: with Tor installed and its repository current it only re-masks the distro units and rewrites the torrc, touching no network. Between Orama upgrades nothing updates Tor — default unattended-upgrades takes only the distribution's own origins. The OS must be one the Tor Project publishes packages for (`jammy`, `noble`, `resolute`, `bookworm`, `trixie`); on any other codename Phase 2d stops with an error naming them, before fetching anything. `IsSupportedOS` lists exactly those releases — Ubuntu 22.04/24.04/26.04 and Debian 12/13 — and Phase 1 of `orama node install` refuses any other release before touching the machine. Interim Ubuntu releases (24.10, 25.04, 25.10) are refused: they are past end of life and have no Tor Project suite; move such a VPS to 26.04 with `do-release-upgrade`, one release at a time.
+**Tor is upgraded on every Orama upgrade, before the node's services stop.** `orama node upgrade` runs Phase 2d right after Phase 2, while the node still serves; it needs outbound HTTPS to `deb.torproject.org`, and a failure aborts the upgrade with nothing stopped. The Orama unit keeps running the old Tor binary until the upgrade's stop step; the new one starts when `orama-node` brings `@index` back up. After the post-swap re-exec, Phase 2d runs again under the new binary in "ensure" form: with Tor installed and its repository current it only re-masks the distro units and rewrites the torrc, touching no network. Between Orama upgrades nothing updates Tor — default unattended-upgrades takes only the distribution's own origins. The OS must be one the Tor Project publishes packages for (`jammy`, `noble`, `resolute`, `bookworm`, `trixie`); on any other codename Phase 2d stops with an error naming them, before fetching anything. `IsSupportedOS` lists exactly those releases — Ubuntu 22.04/24.04/26.04 and Debian 12/13 — and Phase 1 of `orama maint node install` refuses any other release before touching the machine. Interim Ubuntu releases (24.10, 25.04, 25.10) are refused: they are past end of life and have no Tor Project suite; move such a VPS to 26.04 with `do-release-upgrade`, one release at a time.
 
 #### Tor replaces Anyone (first upgrade to this release)
 
-The first upgrade of a node that ran the Anyone network removes it for good: `orama-namespace-anyone-client@index`, `orama-anyone-client`, `orama-anyone-relay` and `anon.service` are stopped and disabled (unmasked first if `orama node stop` masked them), the `anon` package and `nyx` (installed only for the anon control port) are purged, and its apt source and key, `/etc/anon`, `/var/lib/anon` (relay keys included), `/var/log/anon` and the Orama-written unit/env/log files are deleted. The rolling upgrade runs the staged build's CLI (see [First upgrade from 0.122.x](#first-upgrade-from-0122x)), so this is the pre-stop Phase 2d: a failure to reach `deb.torproject.org` aborts the upgrade with the node still serving. Only an upgrade started by hand with a 0.122.x CLI runs Phase 2b under the old binary, which knows nothing of Tor and installs Anyone again; the post-swap Phase 2d under the new binary then removes it with the node's services stopped. Such an old binary may re-exec the new one with `--anyone-client` on its command line; the new `orama node upgrade` accepts that flag only together with the hidden re-exec marker and refuses it from an operator. Every step checks before it acts, so re-running the upgrade, or upgrading a node that never had Anyone, does nothing extra. Nothing opens a firewall port for Tor: a client needs no inbound port. Afterwards `orama monitor report` and `orama inspect --subsystem tor` flag any node where Anyone leftovers remain.
+The first upgrade of a node that ran the Anyone network removes it for good: `orama-namespace-anyone-client@index`, `orama-anyone-client`, `orama-anyone-relay` and `anon.service` are stopped and disabled (unmasked first if `orama node stop` masked them), the `anon` package and `nyx` (installed only for the anon control port) are purged, and its apt source and key, `/etc/anon`, `/var/lib/anon` (relay keys included), `/var/log/anon` and the Orama-written unit/env/log files are deleted. The rolling upgrade runs the staged build's CLI (see [First upgrade from 0.122.x](#first-upgrade-from-0122x)), so this is the pre-stop Phase 2d: a failure to reach `deb.torproject.org` aborts the upgrade with the node still serving. Only an upgrade started by hand with a 0.122.x CLI runs Phase 2b under the old binary, which knows nothing of Tor and installs Anyone again; the post-swap Phase 2d under the new binary then removes it with the node's services stopped. Such an old binary may re-exec the new one with `--anyone-client` on its command line; the new `orama node upgrade` accepts that flag only together with the hidden re-exec marker and refuses it from an operator. Every step checks before it acts, so re-running the upgrade, or upgrading a node that never had Anyone, does nothing extra. Nothing opens a firewall port for Tor: a client needs no inbound port. Afterwards `orama monitor report` and `orama maint inspect --subsystem tor` flag any node where Anyone leftovers remain.
 
 #### Privileged helper replaces the sudoers rules (first upgrade to this release)
 
@@ -996,7 +996,7 @@ Until the node has restarted on this release, the upgrade reads the old layout w
 
 #### `node.public_ip` is recorded on upgrade
 
-`orama node invite` builds the join URL from `node.public_ip` in `node.yaml`, which only `orama node install` (`--vps-ip`) used to write. Phase 4 of every upgrade records it: `--public-ip` if given, else the address `node.yaml` already records, else the source address of the default route — the address `orama-node` registers for itself in `dns_nodes`. Whichever it is must be a public IPv4 address — not private, carrier-grade NAT (`100.64.0.0/10`), loopback or link-local; the value read back from `node.yaml` is checked again, and so is the one `orama node invite` reads. It is resolved **before anything is stopped**, so a node that has none fails the upgrade still serving; a node behind NAT has a private route source address and must be told, with `/opt/orama/bin/orama node upgrade --restart --public-ip <ip>` on it. The value resolved there is the one Phase 4 records (after a re-exec it is handed to the new process as `--public-ip`). The rolling upgrade does not pass `--public-ip`: it is per node.
+`orama node invite` builds the join URL from `node.public_ip` in `node.yaml`, which only `orama maint node install` (`--vps-ip`) used to write. Phase 4 of every upgrade records it: `--public-ip` if given, else the address `node.yaml` already records, else the source address of the default route — the address `orama-node` registers for itself in `dns_nodes`. Whichever it is must be a public IPv4 address — not private, carrier-grade NAT (`100.64.0.0/10`), loopback or link-local; the value read back from `node.yaml` is checked again, and so is the one `orama node invite` reads. It is resolved **before anything is stopped**, so a node that has none fails the upgrade still serving; a node behind NAT has a private route source address and must be told, with `/opt/orama/bin/orama node upgrade --restart --public-ip <ip>` on it. The value resolved there is the one Phase 4 records (after a re-exec it is handed to the new process as `--public-ip`). The rolling upgrade does not pass `--public-ip`: it is per node.
 
 #### Local control planes move off loopback TCP (first upgrade to this release)
 
@@ -1018,11 +1018,11 @@ Each node's upgrade changes these together, so nothing on the node talks across 
 ```bash
 # Full rollout (build + push + rolling upgrade, one command; pushes exactly
 # the archive it built)
-orama node rollout --env testnet
-orama node rollout --env testnet --no-build --archive <path>   # an existing build
+orama maint rollout --env testnet
+orama maint rollout --env testnet --no-build --archive <path>   # an existing build
 
 # Or with more control:
-orama node push --env testnet --archive <path>    # Push archive to all nodes
+orama maint push --env testnet --archive <path>    # Push archive to all nodes
 orama node upgrade --env testnet                  # Print the rolling upgrade plan
 orama node upgrade --env testnet --node 1.2.3.4   # Upgrade one node (reads every node's state first)
 orama node upgrade --env testnet --yes            # Execute the plan
@@ -1049,7 +1049,7 @@ What the rolling upgrade does:
    refused with "the cluster has no quorum".
 4. **Requires `--yes`.** Without it the plan is printed and nothing is restarted.
 5. **Runs the staged build's CLI on each node**: `/opt/orama/bin/orama node
-   upgrade --restart`, which `orama push` verified and put in place — never the
+   upgrade --restart`, which `orama maint push` verified and put in place — never the
    node's `/usr/local/bin/orama`, the release being replaced — so every step
    below is the new release's code.
 6. **Hands over before it stops anything.** On each node, while it still
@@ -1109,7 +1109,7 @@ up** — a majority changing address at once leaves no leader to re-register any
 them, which is a `recover-raft`. The rolling upgrade's one-node-at-a-time gate
 is what guarantees it; do not upgrade 0.122.x voters in parallel by hand. A
 cluster of one cannot re-register itself: reform it at the new address with
-`orama node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`.
+`orama maint node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`.
 
 `--delay` is now the per-node budget for step 8 (how long a node has to rejoin
 before the rollout stops), not an unconditional sleep between nodes. A sleep
@@ -1156,7 +1156,7 @@ The archive bundles the versions in `core/pkg/constants/versions.go`: rqlite 10.
 The gateway binary embeds a set of SQL migrations. The highest-numbered migration is the schema version that binary REQUIRES — **the gateway will refuse to start if its required schema isn't applied** (the schema-version contract added after the 2026-05-06 incident).
 
 **Migrations take a cluster-wide lock.** Every runner — the node's rqlite, the
-index gateway, each namespace gateway, `orama node schema apply` — acquires
+index gateway, each namespace gateway, `orama maint node schema apply` — acquires
 `cluster_locks('schema-migrations')` before it reads which versions are applied,
 and holds it until it is done. rqlite serialises writes through raft, so a
 conditional UPDATE is a linearizable compare-and-swap and therefore a correct
@@ -1238,7 +1238,7 @@ three files — three hours of history, and only the hours that node was leader.
 To see what exists:
 
 ```bash
-sudo orama node schema status --env <env>
+sudo orama maint node schema status --env <env>
 ```
 
 ...and query the index for the newest:
@@ -1330,7 +1330,7 @@ re-mint with `orama node invite`. The maximum lifetime is also now one hour,
 down from seven days.
 
 It also creates the `operators` table and seeds it from
-`dns_nodes.operator_wallet` — what `orama node install --operator-wallet` wrote
+`dns_nodes.operator_wallet` — what `orama maint node install --operator-wallet` wrote
 at the moment the migration runs. On a cluster installed after that migration,
 the table is empty when the migration runs. The first node to register is the
 genesis node, and that registration inserts its wallet, and only its wallet.
@@ -1338,9 +1338,9 @@ A node that joins later does not become an operator. Add and remove wallets
 with the CLI, which refuses to remove the last one:
 
 ```bash
-orama operator list
-orama operator add 0x…
-orama operator remove 0x…
+orama maint operator list
+orama maint operator add 0x…
+orama maint operator remove 0x…
 ```
 
 `/v1/operator/*` refuses a wallet that is not on that list. A genesis install
@@ -1360,8 +1360,8 @@ SELECT wallet, added_by FROM operators;
 **Pattern B — pre-apply migrations explicitly via the CLI.**
 On any node:
 ```bash
-sudo orama node schema status      # show binary required vs applied
-sudo orama node schema apply --yes # apply pending migrations
+sudo orama maint node schema status      # show binary required vs applied
+sudo orama maint node schema apply --yes # apply pending migrations
 ```
 Then start the new gateway. Useful when you want explicit control during a high-risk upgrade or when the auto-apply path is failing for reasons you want to debug separately.
 
@@ -1394,7 +1394,7 @@ Both are **expand-only** in this release; the next one contracts them.
 
 #### Rotate the index gateway's signing key after upgrading (this release)
 
-The index gateway's signing keys are systemd credentials now (`/var/lib/orama-gateway-keys/index`, root `0400`). The key the upgrade carries over from `data/namespaces/index/gateway` was readable by every tenant gateway until then, and the index key signs for any namespace, so run `orama operator rotate-signing-key` once on each node's index gateway after the whole fleet is upgraded, one node at a time. Rotation writes the new key to the credential tree (never the state directory) and survives a restart; nobody is signed out. The same release stamps each gateway's key every 10 minutes (migration 071) and retires, at index gateway start, unbound keys nobody has stamped for 24 hours, which clears the keys earlier releases published on every restart. Complete the rolling upgrade within 24 hours of the migration: a peer still on the old build does not stamp its key, and its key is retired (published live again when it restarts).
+The index gateway's signing keys are systemd credentials now (`/var/lib/orama-gateway-keys/index`, root `0400`). The key the upgrade carries over from `data/namespaces/index/gateway` was readable by every tenant gateway until then, and the index key signs for any namespace, so run `orama maint operator rotate-signing-key` once on each node's index gateway after the whole fleet is upgraded, one node at a time. Rotation writes the new key to the credential tree (never the state directory) and survives a restart; nobody is signed out. The same release stamps each gateway's key every 10 minutes (migration 071) and retires, at index gateway start, unbound keys nobody has stamped for 24 hours, which clears the keys earlier releases published on every restart. Complete the rolling upgrade within 24 hours of the migration: a peer still on the old build does not stamp its key, and its key is retired (published live again when it restarts).
 
 #### Access tokens across the upgrade
 
@@ -1420,7 +1420,7 @@ Tenants can self-check schema drift without SSH access via:
 ```
 GET /v1/schema-status
 ```
-Returns `{ok, required_version, applied_version, in_sync, pending: [...]}`. The same data is available via `orama node schema status` for operators with shell access.
+Returns `{ok, required_version, applied_version, in_sync, pending: [...]}`. The same data is available via `orama maint node schema status` for operators with shell access.
 
 #### Build-time guard (CI)
 
@@ -1458,14 +1458,14 @@ If nodes get stuck in "Candidate" state or show "leader not found" errors:
 ```bash
 # Reads every node's applied index, keeps the furthest ahead, and prints what
 # each one reported before asking you to confirm.
-orama node recover-raft --env testnet
+orama maint node recover-raft --env testnet
 
 # Or name the node whose data to keep yourself.
-orama node recover-raft --env testnet --leader 1.2.3.4
+orama maint node recover-raft --env testnet --leader 1.2.3.4
 
 # When rqlite is not answering anywhere, so the leader's raft address cannot be
 # read from the cluster.
-orama node recover-raft --env testnet --leader-raft-addr 10.0.0.1:10101
+orama maint node recover-raft --env testnet --leader-raft-addr 10.0.0.1:10101
 ```
 
 **One node's data is kept. Every other node's raft log and database are
@@ -1533,7 +1533,7 @@ node out of the platform raft configuration; writes an eviction tombstone so
 nothing re-adds it automatically; releases its mesh address, nameserver slot,
 namespace memberships, namespace port blocks and its TURN and SFU allocations;
 and marks it retired so the cluster purges its DNS records. Then it wipes the
-target. `decommission` is accepted as an alias.
+target.
 
 ```bash
 # Show the quorum impact and the statements, change nothing.
@@ -1558,34 +1558,33 @@ orama node wipe --env testnet --node 1.2.3.4 --force        # one node
 orama node wipe --env testnet --nuclear --force             # also shared binaries
 ```
 
-`orama node clean` is deprecated and now runs `wipe`. It only ever erased the
-target, so a cleaned node stayed a configured raft voter, kept its
-`wireguard_peers` row re-applied to every survivor's interface, and kept its
-`dns_nodes` row. It also stopped only the legacy host unit names, leaving tenant
-`orama-namespace-*@*` units running under a data directory that had just been
-deleted — both fixed in `wipe`.
+`wipe` erases only the target. On a cluster member it leaves the node a
+configured raft voter, keeps its `wireguard_peers` row re-applied to every
+survivor's interface, and keeps its `dns_nodes` row; `remove` retires the node
+from the cluster first. `wipe` stops tenant `orama-namespace-*@*` units before it
+deletes their data directory.
 
 ### Push Options
 
-`orama push` and `orama node push` are the same command; so are `orama rollout`
-and `orama node rollout`, and `orama nodes` and `orama node list`.
+`orama nodes` and `orama node list` are the same command. `push` and `rollout`
+are maintainer commands, under `orama maint`.
 
 ```bash
-orama push --env devnet                     # Upload from this machine to each node
-orama push --env testnet --node 1.2.3.4     # A single node from the inventory
-orama push --env testnet --direct           # Same path; the flag is accepted and ignored
-orama push --host 1.2.3.4                   # An installed node not in the inventory yet
-orama push --env testnet --trust-signers 0xYourWallet  # Nodes installed before archive signing
+orama maint push --env devnet                     # Upload from this machine to each node
+orama maint push --env testnet --node 1.2.3.4     # A single node from the inventory
+orama maint push --env testnet --direct           # Same path; the flag is accepted and ignored
+orama maint push --host 1.2.3.4                   # An installed node not in the inventory yet
+orama maint push --env testnet --trust-signers 0xYourWallet  # Nodes installed before archive signing
 ```
 
 Every node verifies the archive before anything under `/opt/orama` changes
 (see [Signed archives](#signed-archives)).
 
-With no `--env`, push targets the active environment (`orama env current`).
+With no `--env`, push targets the active environment (`orama network current`).
 
 ### CLI Flags Reference
 
-#### `orama node install`
+#### `orama maint node install`
 
 | Flag | Description |
 |------|-------------|
@@ -1628,7 +1627,7 @@ With no `--env`, push targets the active environment (`orama env current`).
 
 With `--env`, each node runs the staged build's CLI (`/opt/orama/bin/orama node upgrade --restart`), not its installed one.
 
-#### `orama build`
+#### `orama maint build`
 
 | Flag | Description |
 |------|-------------|
@@ -1638,9 +1637,7 @@ With `--env`, each node runs the staged build's CLI (`/opt/orama/bin/orama node 
 | `--unsigned` | Do not sign the manifest: a local-only archive no node installs |
 | `--signers <addr,...>` | Rotate the trusted archive signers to these addresses (signed builds only) |
 
-Signing is the default; `--sign` is accepted and deprecated.
-
-#### `orama push` / `orama node push`
+#### `orama maint push`
 
 | Flag | Description |
 |------|-------------|
@@ -1651,10 +1648,9 @@ Signing is the default; `--sign` is accepted and deprecated.
 | `--direct` | Accepted and ignored. Every push uploads from this machine; node SSH keys are not copied to a hub |
 | `--trust-signers <addr,...>` | Verify the archive here against these addresses and stage it with its own verified CLI (reaches 0.122.x nodes); creates the trust anchor on nodes that have none, and requires an existing one to be exactly this list |
 
-`--ip` and `--fanout` are deprecated. `--ip` is now `--host`. `--fanout` and
-`--direct` are accepted and ignored: the upload always comes from this machine.
+`--direct` is accepted and ignored: the upload always comes from this machine.
 
-#### `orama rollout` / `orama node rollout`
+#### `orama maint rollout`
 
 | Flag | Description |
 |------|-------------|
@@ -1663,7 +1659,7 @@ Signing is the default; `--sign` is accepted and deprecated.
 | `--yes` | Skip confirmation |
 | `--delay <seconds>` | Delay between nodes (default: 30) |
 
-#### `orama node remove` (alias: `decommission`)
+#### `orama node remove`
 
 | Flag | Description |
 |------|-------------|
@@ -1683,11 +1679,7 @@ Signing is the default; `--sign` is accepted and deprecated.
 | `--nuclear` | Also remove shared binaries |
 | `--force` | Skip confirmation (DESTRUCTIVE) |
 
-#### `orama node clean`
-
-Deprecated; runs `wipe`. See "Removing a node".
-
-#### `orama node recover-raft`
+#### `orama maint node recover-raft`
 
 | Flag | Description |
 |------|-------------|
@@ -1806,21 +1798,21 @@ See [MONITORING.md](MONITORING.md) for all subcommands and flags.
 ```bash
 # 1. Genesis node (first node, creates cluster)
 # Nameserver nodes use the base domain as --domain
-sudo orama node install --vps-ip 1.2.3.4 --domain example.com \
+sudo orama maint node install --vps-ip 1.2.3.4 --domain example.com \
     --base-domain example.com --nameserver
 
 # 2. On genesis node, generate an invite
 orama node invite --expiry 24h
-# Prints: sudo orama node install --join https://example.com --token <TOKEN> \
+# Prints: sudo orama maint node install --join https://example.com --token <TOKEN> \
 #           [--ca-fingerprint <FP>] --vps-ip <NEW_NODE_IP> --nameserver
 # Drop --nameserver when joining as a regular node.
 
 # 3a. Join as nameserver (requires --domain set to base domain)
-sudo orama node install --join http://1.2.3.4 --token abc123... \
+sudo orama maint node install --join http://1.2.3.4 --token abc123... \
     --vps-ip 5.6.7.8 --domain example.com --base-domain example.com --nameserver
 
 # 3b. Join as regular node (domain auto-generated, no --domain needed)
-sudo orama node install --join http://1.2.3.4 --token abc123... \
+sudo orama maint node install --join http://1.2.3.4 --token abc123... \
     --vps-ip 5.6.7.8 --base-domain example.com
 ```
 
@@ -1837,7 +1829,7 @@ node's IP so that `node1.example.com` resolves publicly.
 **If DNS is not yet configured**, you can use the genesis node's public IP with HTTP as a fallback:
 
 ```bash
-sudo orama node install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
+sudo orama maint node install --join http://1.2.3.4 --vps-ip 5.6.7.8 --token abc123... --nameserver
 ```
 
 This works because Caddy's `:80` block proxies all HTTP traffic to the gateway. However, once DNS
@@ -1849,7 +1841,7 @@ which proxies to the gateway internally.
 
 ## OramaOS Enrollment
 
-For OramaOS nodes (mainnet, devnet, testnet), use the enrollment flow instead of `orama node install`:
+For OramaOS nodes (mainnet, devnet, testnet), use the enrollment flow instead of `orama maint node install`:
 
 ```bash
 # 1. Flash OramaOS image to VPS (via provider dashboard)
@@ -1857,10 +1849,10 @@ For OramaOS nodes (mainnet, devnet, testnet), use the enrollment flow instead of
 orama node invite --expiry 24h
 
 # 3. Enroll the OramaOS node — --code is printed on the node's console
-orama node enroll --node-ip <vps-public-ip> --code <registration-code> --token <invite-token> --gateway <gateway-url>
+orama maint node enroll --node-ip <vps-public-ip> --code <registration-code> --token <invite-token> --gateway <gateway-url>
 
 # 4. For genesis node reboots (before 5+ peers exist)
-orama node unlock --genesis --node-ip <wg-ip>
+orama maint node unlock --genesis --node-ip <wg-ip>
 ```
 
 OramaOS nodes have no SSH access. All management happens through the Gateway API:
@@ -1875,11 +1867,11 @@ curl "https://gateway.example.com/v1/node/logs?node_id=<id>&service=gateway" \
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full guide.
 
-**Note:** `orama node wipe` (and the deprecated `clean`) does not work on OramaOS nodes (no SSH). For graceful departure use the Gateway API (`POST /v1/node/leave`), or reflash the image for a factory reset. There is no `orama node leave` CLI command.
+**Note:** `orama node wipe` does not work on OramaOS nodes (no SSH). For graceful departure use the Gateway API (`POST /v1/node/leave`), or reflash the image for a factory reset. There is no `orama node leave` CLI command.
 
 ## Pre-Install Checklist (Ubuntu Only)
 
-Before running `orama node install` on a VPS, ensure:
+Before running `orama maint node install` on a VPS, ensure:
 
 1. **Stop Docker if running.** Docker commonly binds ports 4001 and 8080 which conflict with IPFS. The installer does not check for port conflicts, so a service that already holds one of them fails when its unit starts. Stop Docker first:
    ```bash

@@ -61,7 +61,7 @@ private key (mesh membership, not cluster secret). Documented hole.
 1. Node reboots. SSH on the public IP is up. `orama-node` stays down
    until `/opt/orama/.orama` is mounted (`RequiresMountsFor=`).
 2. Operator laptop: RootWallet unlocked (same as `orama node setup`).
-3. `orama node unlock` (Ubuntu path, distinct from OramaOS genesis HTTP)
+3. `orama maint node unlock` (Ubuntu path, distinct from OramaOS genesis HTTP)
    fetches the per-node volume key from RootWallet, SSHes with the
    existing vault key, `cryptsetup luksOpen` on stdin, mounts, starts
    the stack.

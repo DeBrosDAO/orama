@@ -161,7 +161,7 @@ func (s *IndexSupervisor) EnsureNtfy(nodeID string) error {
 // one means that phase did not run, and is reported rather than skipped.
 func (s *IndexSupervisor) EnsureTor(nodeID string) error {
 	if _, err := os.Stat(constants.TorConfigPath); err != nil {
-		return fmt.Errorf("tor: missing %s (written by `orama node install`/`upgrade`; re-run the upgrade on this node): %w", constants.TorConfigPath, err)
+		return fmt.Errorf("tor: missing %s (written by `orama maint node install`/`upgrade`; re-run the upgrade on this node): %w", constants.TorConfigPath, err)
 	}
 	return s.startWithoutEnv(systemd.ServiceTypeTor)
 }

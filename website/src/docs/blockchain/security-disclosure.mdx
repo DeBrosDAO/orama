@@ -24,7 +24,7 @@ This page makes no legal commitment.
 - `chain/`: every module (`x/emission`, `x/fees`, `x/power`, `x/houses`, `x/nodes`, `x/storage`, `x/relay`, `x/archive`, `x/token`, `x/cnft`, `x/market`, `x/wasmpolicy`, `x/inclusion`, `x/shielded`, `x/confidential`), the app wiring, the ante handlers and send restrictions in `chain/app`, and `oramad`.
 - The genesis parameter lock (`app.ValidateLockedGenesis`) and `oramad genesis validate`.
 - `piece/` (under `chain/`), and the global services `orama-global` (provider, repair delegate, archiver, indexer).
-- Release verification: `core/pkg/releaseverify`, `core/pkg/archivetrust`, and `orama global stage-oramad`.
+- Release verification: `core/pkg/releaseverify`, `core/pkg/archivetrust`, and `orama maint global stage-oramad`.
 - The confidential-node boundary: any path that treats a quote, report or blob as a valid attestation is in scope and is rated Critical.
 
 ## What is out of scope

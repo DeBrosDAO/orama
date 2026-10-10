@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/ns"
 )
 
-// What `orama cluster settings` prints (core/cmd/orama/internal/cmd/clustercmd/cluster.go).
+// What `orama maint cluster settings` prints (core/cmd/orama/internal/cmd/clustercmd/cluster.go).
 const (
 	settingMode = "namespace-creation"
 	settingCap  = "max-namespaces-per-wallet"
@@ -27,19 +27,19 @@ var settingLine = regexp.MustCompile(`(?m)^(namespace-creation|max-namespaces-pe
 // TestBootstrap_namespaceCreationOpenForTheRun sets namespace creation to
 // open and does not restore it: every later stage creates namespaces as
 // fresh wallets (e2e/README.md "Bootstrap contract", docs/CLI_REFERENCE.md
-// "orama cluster settings set"). It is not parallel, so it runs before this
+// "orama maint cluster settings set"). It is not parallel, so it runs before this
 // package's parallel tests, and a fresh wallet then creates a namespace.
 func TestBootstrap_namespaceCreationOpenForTheRun(t *testing.T) {
 	cli := harness.CLI(t)
-	res := cli.MustOK(t, "cluster", "settings", "set", settingMode, modeOpen)
+	res := cli.MustOK(t, "maint", "cluster", "settings", "set", settingMode, modeOpen)
 	if !strings.Contains(res.Stdout, openedLine) {
 		t.Errorf("set printed %q, want %q", res.Stdout, openedLine)
 	}
-	again := cli.MustOK(t, "cluster", "settings", "set", settingMode, modeOpen)
+	again := cli.MustOK(t, "maint", "cluster", "settings", "set", settingMode, modeOpen)
 	if !strings.Contains(again.Stdout, openedLine) {
 		t.Errorf("setting open twice is not idempotent: %q", again.Stdout)
 	}
-	show := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	show := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	got := map[string]string{}
 	for _, m := range settingLine.FindAllStringSubmatch(show, -1) {
 		got[m[1]] = m[2]
@@ -73,7 +73,7 @@ func TestBootstrap_operatorCapCoversTheRun(t *testing.T) {
 		}
 	}
 	need := live + owned
-	show := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	show := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	walletCap := 0
 	for _, m := range settingLine.FindAllStringSubmatch(show, -1) {
 		if m[1] == settingCap {
@@ -83,8 +83,8 @@ func TestBootstrap_operatorCapCoversTheRun(t *testing.T) {
 	if walletCap >= need {
 		return
 	}
-	cli.MustOK(t, "cluster", "settings", "set", settingCap, strconv.Itoa(need))
-	after := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	cli.MustOK(t, "maint", "cluster", "settings", "set", settingCap, strconv.Itoa(need))
+	after := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	if !strings.Contains(after, settingCap+": "+strconv.Itoa(need)) {
 		t.Fatalf("the per-wallet cap was not raised to %d:\n%s", need, after)
 	}
@@ -95,12 +95,12 @@ func TestBootstrap_operatorCapCoversTheRun(t *testing.T) {
 func TestBootstrap_invalidModeRefusedKeepsOpen(t *testing.T) {
 	cli := harness.CLI(t)
 	for _, bad := range []string{"", "OPEN", "open; DROP TABLE settings", "\u202enepo", strings.Repeat("o", 4096)} {
-		res := infra.Run(t, cli, "cluster", "settings", "set", settingMode, bad)
+		res := infra.Run(t, cli, "maint", "cluster", "settings", "set", settingMode, bad)
 		if res.Exit == infra.ExitOK {
 			t.Errorf("mode %.40q was accepted: %s", bad, res.Stdout)
 		}
 	}
-	show := cli.MustOK(t, "cluster", "settings", "show").Stdout
+	show := cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout
 	if !strings.Contains(show, settingMode+": "+modeOpen) {
 		t.Fatalf("a refused set changed the mode:\n%s", show)
 	}
@@ -112,7 +112,7 @@ func TestBootstrap_invalidModeRefusedKeepsOpen(t *testing.T) {
 func TestBootstrap_operatorIsTheTestWallet(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	out := harness.CLI(t).MustOK(t, "operator", "list").Stdout
+	out := harness.CLI(t).MustOK(t, "maint", "operator", "list").Stdout
 	want := strings.ToLower(f.State.OperatorAddress)
 	if want == "" {
 		t.Fatal("the run recorded no operator address")
@@ -123,16 +123,16 @@ func TestBootstrap_operatorIsTheTestWallet(t *testing.T) {
 }
 
 // TestBootstrap_environmentIsActive: the CLI's active environment is the
-// run's, pointing at the run's gateway (docs/CLI_REFERENCE.md "orama env").
+// run's, pointing at the run's gateway (docs/CLI_REFERENCE.md "orama network").
 func TestBootstrap_environmentIsActive(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	cur := cli.MustOK(t, "env", "current").Stdout
-	if !strings.Contains(cur, "Current environment: "+f.State.Env) || !strings.Contains(cur, f.State.GatewayURL) {
+	cur := cli.MustOK(t, "network", "current").Stdout
+	if !strings.Contains(cur, "Current network: "+f.State.Env) || !strings.Contains(cur, f.State.GatewayURL) {
 		t.Errorf("env current does not name %s at %s:\n%s", f.State.Env, f.State.GatewayURL, cur)
 	}
-	list := cli.MustOK(t, "env", "list").Stdout
+	list := cli.MustOK(t, "network", "list").Stdout
 	if !strings.Contains(list, f.State.Env) {
 		t.Errorf("env list lacks %s:\n%s", f.State.Env, list)
 	}

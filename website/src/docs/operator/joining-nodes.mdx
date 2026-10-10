@@ -7,14 +7,14 @@ Adding a node to a running cluster is one command from your computer, using a si
 An invite is one string. It names **one node** of the cluster: its public address, the domain to present to it, and the SHA-256 fingerprint of the TLS certificate it serves. The joining node connects to exactly that node and pins exactly that certificate. It does not resolve the cluster's domain (which reaches any nameserver, each with a certificate of its own) and it does not trust whatever certificate it is first shown.
 
 - **Single use.** Mint one per join.
-- **Short lived.** `orama invite` defaults to one hour, and the gateway caps it at one hour. `sudo orama node invite --expiry 24h` on a node can mint a longer one. The invite that `orama node setup` mints for its own run lives 15 minutes, since the install that uses it starts seconds later.
+- **Short lived.** `orama maint invite` defaults to one hour, and the gateway caps it at one hour. `sudo orama node invite --expiry 24h` on a node can mint a longer one. The invite that `orama node setup` mints for its own run lives 15 minutes, since the install that uses it starts seconds later.
 - **Needs the named node's certificate.** The certificate is issued only after the domain is delegated ([DNS and nameservers](/docs/operator/nameserver)). That is why you delegate before you join.
 
 `orama node setup` mints and uses the invite for you (below). To mint one yourself:
 
 ```bash
-orama invite --env mycluster                  # names the lowest address the domain resolves to
-orama invite --env mycluster --node 203.0.113.11   # name a specific node
+orama maint invite --env mycluster                  # names the lowest address the domain resolves to
+orama maint invite --env mycluster --node 203.0.113.11   # name a specific node
 sudo orama node invite --expiry 24h           # on a node already in the cluster
 sudo orama node invite --raw                  # print only the string, for scripts
 ```
@@ -43,7 +43,7 @@ If a node is already running this exact build, setup does not upload the archive
 | Flag | Meaning |
 |---|---|
 | `--ip` | Public IPv4 of the machine. Required |
-| `--archive` | Path `orama build` printed. Required, unless you install a published release with the three `--release` flags |
+| `--archive` | Path `orama maint build` printed. Required, unless you install a published release with the three `--release` flags |
 | `--release`, `--release-repo`, `--release-root` | Install a published release instead of an archive you built: the version, the https address of the release repository, and the `root.json` of the release signers you trust. Alternatives to `--archive`; `--channel` picks a channel other than `stable` |
 | `--env` | Environment to join. Default: the active one |
 | `--base-domain` | The cluster's base domain |
@@ -87,7 +87,7 @@ The bootstrap key is used once to install the RootWallet key and is never stored
 ## What a join does
 
 1. Pins the server's SSH host key and installs the RootWallet key.
-2. Verifies the archive on your computer (for `--release`, fetches and verifies the release first and has your RootWallet sign it), uploads it, and runs `orama node install` on the server, passing the invite on stdin (the hidden `--secrets-stdin` flag) so it never appears on a command line.
+2. Verifies the archive on your computer (for `--release`, fetches and verifies the release first and has your RootWallet sign it), uploads it, and runs `orama maint node install` on the server, passing the invite on stdin (the hidden `--secrets-stdin` flag) so it never appears on a command line.
 3. The node validates the invite and the pinned certificate, receives the cluster's join response over HTTPS (archive trust list, secrets, mesh peers, nameserver information), and sets up WireGuard to every peer.
 4. It starts RQLite as a voter, joins the Raft group, and starts the remaining services in dependency order.
 5. It registers itself with the cluster and claims a slot if it is a nameserver.

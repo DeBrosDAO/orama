@@ -1,4 +1,4 @@
-# Invites without spending one: what `orama invite` and `orama node invite`
+# Invites without spending one: what `orama maint invite` and `orama node invite`
 # mint (the node they name, the certificate they pin, the expiry and its
 # cap), that the registry stores only the token's hash, and every refusal
 # of the join route that happens before a token is consumed: malformed
@@ -17,7 +17,7 @@ requires:
   chain: false
 covers:
   cli:
-    - orama invite
+    - orama maint invite
     - orama node invite
   routes:
     - /v1/operator/invite
@@ -27,7 +27,7 @@ covers:
     - "docs/SECURITY.md#supply-chain: a joiner expecting other archive signers is refused with 409 before the invite is spent or a peer row written"
     - "docs/SECURITY.md#tls--transport: the invite carries the SHA-256 of the certificate the minting node serves"
     - "docs/SECURITY.md#supply-chain: invite tokens are stored as sha256 hashes, never the token"
-    - "docs/CLI_REFERENCE.md#orama-invite: the gateway caps an invite at 1h"
-    - "docs/CLI_REFERENCE.md#orama-invite: --expiry is how long the invite stays usable"
+    - "docs/CLI_REFERENCE.md#orama-maint-invite: the gateway caps an invite at 1h"
+    - "docs/CLI_REFERENCE.md#orama-maint-invite: --expiry is how long the invite stays usable"
     - "docs/CLI_REFERENCE.md#orama-node-invite: the default expiry is 1h and --raw prints only the invite"
     - "docs/AUTH.md#operating-the-cluster: the invite route refuses no credential (401) and a non-operator (403 NOT_AN_OPERATOR)"

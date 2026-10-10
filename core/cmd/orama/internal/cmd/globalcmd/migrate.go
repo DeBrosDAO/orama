@@ -19,10 +19,10 @@ var migrateCmd = &cobra.Command{
 	Long: `Move priv_validator_key.json and priv_validator_state.json from this host to
 another, in three steps, each run as root:
 
-  1. on the new host:  orama global validator migrate prepare
-  2. on the old host:  orama global validator migrate export --recipient <key> --to <file>
+  1. on the new host:  orama maint global validator migrate prepare
+  2. on the old host:  orama maint global validator migrate export --recipient <key> --to <file>
   3. copy <file> to the new host, then:
-                       orama global validator migrate import --from <file>
+                       orama maint global validator migrate import --from <file>
 
 export stops and disables the old host's chain (and stops the services that
 need it) before it reads anything. It seals the key and state in memory, records
@@ -34,7 +34,7 @@ records the old host's last sign state as the new host's floor, writes the
 state, and installs the key last; the chain unit then refuses to start from a
 state behind the floor. cancel removes a prepared migration key.
 
-A bundle from 'orama global validator reseal' (a restored backup) has no sign
+A bundle from 'orama maint global validator reseal' (a restored backup) has no sign
 state. Its import needs --old-host-destroyed and --floor-height with the
 network's latest committed height H. The floor and the state become height H+1,
 round 0, before any step: the restored key signs nothing at or below H, in any

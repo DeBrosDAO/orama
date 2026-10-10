@@ -103,7 +103,7 @@ func TestUpgradeScript_refusesANodeWithoutAnAnchor(t *testing.T) {
 	if err == nil || strings.Contains(out, "RAN") {
 		t.Fatalf("ran without an anchor: %q", out)
 	}
-	if !strings.Contains(out, "orama push") {
+	if !strings.Contains(out, "orama maint push") {
 		t.Errorf("the refusal does not say to push: %q", out)
 	}
 }

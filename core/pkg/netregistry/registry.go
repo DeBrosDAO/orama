@@ -47,10 +47,12 @@ type Registry struct {
 
 // Embedded returns the networks built into this binary.
 func Embedded() (*Registry, error) {
-	return loadRegistry(embeddedFS, embeddedDir)
+	return LoadFS(embeddedFS, embeddedDir)
 }
 
-func loadRegistry(fsys fs.FS, dir string) (*Registry, error) {
+// LoadFS reads a registry laid out like the embedded one (dir/<name>/manifest.json
+// and release-root.json) and marks its networks built in.
+func LoadFS(fsys fs.FS, dir string) (*Registry, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("read the embedded network registry: %w", err)

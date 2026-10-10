@@ -30,7 +30,7 @@ This page makes no legal commitment. There is no legal workstream in the plan.
 - The genesis parameter lock (`app.ValidateLockedGenesis`) and `oramad genesis validate`.
 - `piece/`, and the global services `orama-global` (provider, repair delegate, archiver, indexer).
 - Release verification: `core/pkg/releaseverify`, `core/pkg/archivetrust`, and
-  `orama global stage-oramad`.
+  `orama maint global stage-oramad`.
 - The confidential-node boundary: any path that treats a quote, report or blob as a valid
   attestation is in scope and is rated Critical (below).
 

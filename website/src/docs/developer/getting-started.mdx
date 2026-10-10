@@ -17,11 +17,11 @@ You also need a wallet that can sign. Install [RootWallet](/docs/rootwallet/inst
 A fresh CLI knows no cluster. Add yours:
 
 ```bash
-orama env add mycluster https://cluster.example.com
-orama env use mycluster
+orama network add mycluster https://cluster.example.com
+orama network use mycluster
 ```
 
-`orama env list` and `orama env current` show what is configured. If the cluster uses Let's Encrypt staging certificates, add `--ca-file le-staging.pem` ([TLS and certificates](/docs/operator/tls-certificates#trusting-a-staging-cluster-from-your-cli)).
+`orama network list` and `orama network current` show what is configured. If the cluster uses Let's Encrypt staging certificates, add `--ca-file le-staging.pem` ([TLS and certificates](/docs/operator/tls-certificates#trusting-a-staging-cluster-from-your-cli)).
 
 ## 3. Sign in
 

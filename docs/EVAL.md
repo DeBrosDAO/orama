@@ -40,13 +40,13 @@ over onto. Disk loss is namespace loss.
 Genesis on the VPS (nameserver so the node has DNS):
 
 ```bash
-sudo orama node install --vps-ip <ip> --domain <domain> --base-domain <domain> --nameserver
+sudo orama maint node install --vps-ip <ip> --domain <domain> --base-domain <domain> --nameserver
 ```
 
 Or from your machine, with RootWallet unlocked:
 
 ```bash
-orama build   # prints the archive path
+orama maint build   # prints the archive path
 orama node setup --ip <ip> --password --env <env> --archive <archive path> \
   --base-domain <domain> --role nameserver --genesis
 # --password reads the VPS login from your RootWallet vault (rw vault add <ip>)

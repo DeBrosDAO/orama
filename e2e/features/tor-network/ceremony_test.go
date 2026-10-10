@@ -34,9 +34,9 @@ func ceremonyDir(t *testing.T, f *fleet.Fleet, n fleet.Node) string {
 	return dir
 }
 
-// ceremonyArgs is `orama global tor ceremony` into out with the given authorities.
+// ceremonyArgs is `orama maint global tor ceremony` into out with the given authorities.
 func ceremonyArgs(out, passFile string, authorities ...string) []string {
-	args := []string{"global", "tor", "ceremony", "--name", "orama-e2e", "--out", out, "--passphrase-file", passFile}
+	args := []string{"maint", "global", "tor", "ceremony", "--name", "orama-e2e", "--out", out, "--passphrase-file", passFile}
 	for _, a := range authorities {
 		args = append(args, "--authority", a)
 	}
@@ -108,13 +108,13 @@ func TestCeremony_realTorMakesKeysTheNetworkFileNames(t *testing.T) {
 	// The validator onion addresses exist only after the ceremony; the operator
 	// adds them to the same file, which still loads, with nothing else changed.
 	file := dir + "/out/" + constants.TorNetworkFile
-	added := infra.OnNode(t, f, n, "global", "tor", "onions", "add", "--network-file", file, e2eOnion)
+	added := infra.OnNode(t, f, n, "maint", "global", "tor", "onions", "add", "--network-file", file, e2eOnion)
 	infra.ExpectNodeExit(t, "adding a validator onion to the network file", added, infra.ExitOK, "1 added")
 	withOnion, err := tornet.ParseNetwork(f.ReadFile(t, n, file))
 	if err != nil || len(withOnion.ValidatorOnions) != 1 || withOnion.ValidatorOnions[0] != e2eOnion || len(withOnion.Authorities) != len(network.Authorities) {
 		t.Fatalf("the network file after the add: %+v, %v", withOnion, err)
 	}
-	refused := infra.OnNode(t, f, n, "global", "tor", "onions", "add", "--network-file", file, "chain.example.com")
+	refused := infra.OnNode(t, f, n, "maint", "global", "tor", "onions", "add", "--network-file", file, "chain.example.com")
 	infra.ExpectNodeExit(t, "adding a clearnet host as a validator onion", refused, infra.ExitUsage, "onion")
 	// A second ceremony never writes over the first one's keys.
 	again := infra.OnNode(t, f, n, ceremonyArgs(dir+"/out", pass, threeAuthorities()...)...)

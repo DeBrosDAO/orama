@@ -103,5 +103,9 @@ func init() {
 	f.Float64Var(&txgateFlags.rate, "rate", txgate.DefaultRate, "Requests per second the gate forwards, in total")
 	f.IntVar(&txgateFlags.burst, "burst", txgate.DefaultBurst, "Requests that may arrive at once")
 	f.IntVar(&txgateFlags.inFlight, "max-in-flight", txgate.DefaultInFlight, "Most requests asked of the chain API at once")
-	Cmd.AddCommand(cmdmeta.MarkNodeLocal(txgateCmd))
+	MaintCmd.AddCommand(cmdmeta.MarkNodeLocal(txgateCmd))
+	// orama-global-txgate.service runs `orama maint global txgate`. The command moved
+	// to `orama maint global txgate`; the installed unit keeps its path until an
+	// upgrade rewrites it.
+	Cmd.AddCommand(cmdmeta.HiddenAlias(txgateCmd))
 }

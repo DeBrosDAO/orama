@@ -42,7 +42,7 @@ type State struct {
 	Target string `json:"target,omitempty"`
 	// RunID is unique per run and is the value of the Hetzner label e2e-run.
 	RunID string `json:"run_id"`
-	// Env is the name of the orama environment the CLI was pointed at (orama env add).
+	// Env is the name of the orama environment the CLI was pointed at (orama network add).
 	Env string `json:"env"`
 	// BaseDomain is the per-run subdomain, e.g. e2e-ab12cd.dbrsteting.bid.
 	BaseDomain string `json:"base_domain"`

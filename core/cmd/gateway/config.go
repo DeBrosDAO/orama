@@ -18,7 +18,7 @@ import (
 
 // missingConfigHint says who writes a gateway's YAML: the node, never an
 // operator command (there is no config subcommand).
-const missingConfigHint = "The node writes this file when it installs or starts the gateway ('orama node install'\n" +
+const missingConfigHint = "The node writes this file when it installs or starts the gateway ('orama maint node install'\n" +
 	"for the index gateway, the namespace provisioning for a namespace gateway);\n" +
 	"this gateway was started without it.\n"
 

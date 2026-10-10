@@ -16,12 +16,12 @@ requires:
   chain: false
 covers:
   cli:
-    - orama invite
-    - orama node install
+    - orama maint invite
+    - orama maint node install
   routes:
     - /v1/internal/join
   claims:
     - "docs/SECURITY.md#tls--transport: the joining node verifies the invite's certificate fingerprint before it sends the token"
     - "docs/SECURITY.md#network-isolation: the invite travels on the install's stdin, never on a command line"
     - "docs/SECURITY.md#supply-chain: an unexpected archive signer list is refused before the invite is spent"
-    - "docs/CLI_REFERENCE.md#orama-invite: an invite is single-use; a replay is refused as already used"
+    - "docs/CLI_REFERENCE.md#orama-maint-invite: an invite is single-use; a replay is refused as already used"

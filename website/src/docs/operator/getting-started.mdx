@@ -15,7 +15,7 @@ Three VPSes (or more). For each:
 | Requirement | Value | Where it is enforced |
 |---|---|---|
 | Operating system | Debian 12 or 13, Ubuntu 22.04, 24.04 or 26.04 | Installer refuses anything else |
-| Architecture | amd64 or arm64. The archive you install must match. (The installer itself also accepts arm, but `orama build` and `orama node setup` target only amd64 and arm64, so an arm machine cannot be installed through this path) | Installer |
+| Architecture | amd64 or arm64. The archive you install must match. (The installer itself also accepts arm, but `orama maint build` and `orama node setup` target only amd64 and arm64, so an arm machine cannot be installed through this path) | Installer |
 | CPU | at least 2 cores | Installer (`--skip-checks` bypasses the CPU, memory and free-disk checks; not recommended) |
 | Memory | at least 2 GB | Installer |
 | Free disk | at least 10 GB | Installer |
@@ -25,7 +25,7 @@ Those are floors. A comfortable node is 4 vCPUs, 8 GB of RAM and a 160 GB SSD, b
 
 Interim Ubuntu releases (24.10, 25.04, 25.10) are not supported, because the Tor Project does not publish packages for them and every node installs a Tor client.
 
-How you get the machines does not matter: any provider that gives you root over SSH or a sudo user with a key. `orama sandbox create` can rent five on Hetzner for tests ([Sandbox](/docs/contributor/sandbox)).
+How you get the machines does not matter: any provider that gives you root over SSH or a sudo user with a key. `orama maint sandbox create` can rent five on Hetzner for tests ([Sandbox](/docs/contributor/sandbox)).
 
 ### Ports
 
@@ -108,7 +108,7 @@ Before the installer runs on a server:
 
 ## 4. A plan for the first signer
 
-The first archive you install must be signed by the wallet that creates the cluster. That wallet becomes the cluster's **operator** and the only trusted archive signer. Use the same RootWallet account for `orama build`, `orama node setup` and `orama auth login`. Write down which account it is. Losing it is how people lock themselves out of upgrading their own cluster.
+The first archive you install must be signed by the wallet that creates the cluster. That wallet becomes the cluster's **operator** and the only trusted archive signer. Use the same RootWallet account for `orama maint build`, `orama node setup` and `orama auth login`. Write down which account it is. Losing it is how people lock themselves out of upgrading their own cluster.
 
 ## Checklist
 

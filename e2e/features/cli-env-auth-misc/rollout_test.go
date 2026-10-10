@@ -14,8 +14,8 @@ import (
 // refused at validation or at the environment lookup, before any file is read.
 const dummyArchive = "/nonexistent/e2e-orama.tar.gz"
 
-// TestRollout_refusesBadFlagsBeforeBuilding: `orama rollout` and `orama node
-// rollout` are the same command (docs/CLI_REFERENCE.md#orama-rollout) and
+// TestRollout_refusesBadFlagsBeforeBuilding: `orama maint rollout` and `orama node
+// rollout` are the same command (docs/CLI_REFERENCE.md#orama-maint-rollout) and
 // check their flags before building or pushing anything; a flag mistake is
 // the usage code (exit 2) with the reason (production/rollout Flags.validate).
 // Nothing here can roll out: every case is refused at validation.
@@ -32,7 +32,7 @@ func TestRollout_refusesBadFlagsBeforeBuilding(t *testing.T) {
 		{[]string{"--env", f.State.Env, "--archive", dummyArchive}, "--archive is only for --no-build"},
 		{[]string{"--env", f.State.Env, "--delay", "not-a-number"}, "delay"},
 	}
-	for _, cmd := range [][]string{{"rollout"}, {"node", "rollout"}} {
+	for _, cmd := range [][]string{{"maint", "rollout"}} {
 		for _, c := range cases {
 			res := run(t, cli, append(append([]string{}, cmd...), c.args...)...)
 			if res.Exit != exitUsage || !strings.Contains(output(res), c.want) {
@@ -51,7 +51,7 @@ func TestRollout_refusesBadFlagsBeforeBuilding(t *testing.T) {
 func TestRollout_unknownEnvironmentReachesNoNode(t *testing.T) {
 	t.Parallel()
 	harness.Fleet(t)
-	res := run(t, harness.CLI(t).NoWallet(t), "rollout", "--env", e2eEnvPrefix+"absent", "--no-build", "--archive", dummyArchive)
+	res := run(t, harness.CLI(t).NoWallet(t), "maint", "rollout", "--env", e2eEnvPrefix+"absent", "--no-build", "--archive", dummyArchive)
 	if res.Exit == exitOK {
 		t.Fatalf("rollout to an unconfigured environment succeeded:\n%s", output(res))
 	}

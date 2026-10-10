@@ -32,7 +32,7 @@ type RemoteOrchestrator struct {
 // Resolves SSH credentials via wallet-derived keys and checks prerequisites.
 func NewRemoteOrchestrator(flags *Flags) (*RemoteOrchestrator, error) {
 	if flags.VpsIP == "" {
-		return nil, fmt.Errorf("--vps-ip is required\nExample: orama node install --vps-ip 1.2.3.4 --nameserver --domain orama-testnet.network")
+		return nil, fmt.Errorf("--vps-ip is required\nExample: orama maint node install --vps-ip 1.2.3.4 --nameserver --domain orama-testnet.network")
 	}
 
 	node := resolveTarget(flags.VpsIP)
@@ -118,7 +118,7 @@ func (r *RemoteOrchestrator) Execute() error {
 // anchor and which the join tags the node with.
 func remoteArchiveSigners(flags *Flags) ([]string, error) {
 	if flags.Archive == "" {
-		return nil, clierr.Usage("--remote needs --archive <path>: the build to install, as `orama build` printed it")
+		return nil, clierr.Usage("--remote needs --archive <path>: the build to install, as `orama maint build` printed it")
 	}
 	if flags.OperatorWallet == "" {
 		return nil, clierr.Usage("--remote verifies the archive on this machine before uploading it, against " +

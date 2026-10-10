@@ -3,21 +3,21 @@
 Spin up a temporary five-node Orama cluster on Hetzner Cloud for development and testing. Cost depends on the server type you pick: a few euro cents per hour for a small shared-vCPU cluster.
 
 ```bash
-orama sandbox setup                       # one-time: API key, domain, floating IPs, SSH key
-orama sandbox create --name my-feature    # ~5 minutes
-orama sandbox status
-orama sandbox ssh 1
-orama sandbox rollout                     # deploy code changes
-orama sandbox destroy
+orama maint sandbox setup                       # one-time: API key, domain, floating IPs, SSH key
+orama maint sandbox create --name my-feature    # ~5 minutes
+orama maint sandbox status
+orama maint sandbox ssh 1
+orama maint sandbox rollout                     # deploy code changes
+orama maint sandbox destroy
 ```
 
 ## Prerequisites
 
 1. **A Hetzner Cloud project** with an API token that has read and write permission (Security, API Tokens).
-2. **A domain or subdomain whose nameservers are two Hetzner Floating IPs.** For `sbx.example.com`, create glue records `ns1.sbx.example.com` and `ns2.sbx.example.com` pointing at the floating IPs, and set those as the domain's nameservers. Propagation can take up to 48 hours. `orama sandbox setup` guides you through it and can verify the glue.
-3. **A signed archive and RootWallet.** `create` and `rollout` take `--archive <path>` (what `orama build` printed) or build this checkout. Either way the archive must be signed by the RootWallet account unlocked when you run them; that account is the only signer a sandbox trusts. An archive signed by anyone else, or unsigned, is refused before any server is created.
+2. **A domain or subdomain whose nameservers are two Hetzner Floating IPs.** For `sbx.example.com`, create glue records `ns1.sbx.example.com` and `ns2.sbx.example.com` pointing at the floating IPs, and set those as the domain's nameservers. Propagation can take up to 48 hours. `orama maint sandbox setup` guides you through it and can verify the glue.
+3. **A signed archive and RootWallet.** `create` and `rollout` take `--archive <path>` (what `orama maint build` printed) or build this checkout. Either way the archive must be signed by the RootWallet account unlocked when you run them; that account is the only signer a sandbox trusts. An archive signed by anyone else, or unsigned, is refused before any server is created.
 
-## `orama sandbox setup`
+## `orama maint sandbox setup`
 
 An interactive wizard: validates your Hetzner token; asks for the sandbox domain; lets you pick a datacenter (default `nbg1`) and a server type with prices (default the cheapest); creates or reuses two floating IPs (about EUR 0.005 an hour each); creates a firewall with sandbox rules; creates a RootWallet SSH entry (`sandbox/root`) and uploads its public key to Hetzner; and shows the DNS instructions. Config is saved to `~/.orama/sandbox.yaml`.
 
@@ -39,7 +39,7 @@ Layout: nodes 1 and 2 are nameservers (CoreDNS, Caddy and all services); nodes 3
 
 1. Provision five servers (parallel, about 90 s), pinning each server's SSH host key as soon as its sshd answers.
 2. Assign floating IPs to the nameserver nodes.
-3. Put the verified archive on every server the way `orama node setup` does: verified on your machine, uploaded as a canonical re-pack, staged by `orama node stage-archive`, which creates the server's trust anchor from your wallet.
+3. Put the verified archive on every server the way `orama node setup` does: verified on your machine, uploaded as a canonical re-pack, staged by `orama maint node stage-archive`, which creates the server's trust anchor from your wallet.
 4. Install the genesis node with `--operator-wallet <your wallet>` and `--acme-ca letsencrypt-staging`, and wait until it serves a TLS certificate for the sandbox domain (each invite pins it).
 5. Join the other four nodes one at a time with health checks, each with an invite minted on genesis just before use and `--expect-archive-signers <your wallet>`.
 6. Verify cluster health.
@@ -54,4 +54,4 @@ The cluster guide e2e ([Testing](/docs/contributor/testing#the-cluster-guide-e2e
 
 ## Cost and troubleshooting
 
-You pay for the servers while they exist and for the floating IPs while they are reserved. Always `destroy` when done. `orama sandbox list` shows orphans. If `create` stalls, a pending approval prompt in the RootWallet app is the usual cause; `orama sandbox` reports how many prompts are waiting.
+You pay for the servers while they exist and for the floating IPs while they are reserved. Always `destroy` when done. `orama maint sandbox list` shows orphans. If `create` stalls, a pending approval prompt in the RootWallet app is the usual cause; `orama maint sandbox` reports how many prompts are waiting.

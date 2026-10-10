@@ -54,7 +54,7 @@ func init() {
 	f.StringVar(&stageFlags.upgrade, "upgrade", "", "Upgrade plan name to stage for")
 	f.BoolVar(&stageFlags.genesis, "genesis", false, "Stage the genesis binary instead of an upgrade")
 	f.StringVar(&stageFlags.home, "home", constants.ChainHome, "cosmovisor DAEMON_HOME")
-	Cmd.AddCommand(stageOramadCmd)
+	MaintCmd.AddCommand(stageOramadCmd)
 }
 
 func runStageOramad(cmd *cobra.Command, _ []string) error {

@@ -3,7 +3,7 @@
 // Package tuf builds real, signed TUF release metadata for the release-root
 // features, with core's own generator (core/pkg/releaseverify/releasetest):
 // the same go-tuf library and the same file names the node's
-// `orama node stage-archive --release-metadata` and `orama global
+// `orama maint node stage-archive --release-metadata` and `orama global
 // stage-oramad` read. Every key is generated per test; nothing here is a
 // production root.
 package tuf

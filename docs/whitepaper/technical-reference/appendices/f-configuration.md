@@ -7,7 +7,7 @@
 
 ## node.yaml
 
-The node's configuration, written by `orama node install` and read by `orama-node`. Decoded by `core/pkg/config:Config`.
+The node's configuration, written by `orama maint node install` and read by `orama-node`. Decoded by `core/pkg/config:Config`.
 
 | Key | Type | Meaning |
 |---|---|---|

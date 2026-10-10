@@ -87,7 +87,7 @@ sudo orama global install \
   chain home must therefore already have a genesis: use `--init-chain` on the
   first install. A second install with the same `oramad` changes nothing; one
   with different `oramad` bytes is refused. To change the chain binary use
-  `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the
+  `orama maint global stage-oramad --upgrade <plan>` and let cosmovisor switch at the
   plan's height; a plan with no staged binary halts the chain until one is staged.
   A patch that does not change consensus has no installed update path yet (the
   updater is not built): stage it as an upgrade plan.
@@ -146,7 +146,6 @@ sudo orama global start            # chain, wait for its RPC, then the rest
 sudo orama global start provider   # needs the chain running
 sudo orama global stop chain       # stops the provider/archiver/repair first
 sudo orama global restart chain    # restarts everything installed, in order
-sudo orama global status
 ```
 
 The chain always starts first and stops last. Before it starts, the double-sign
@@ -218,8 +217,8 @@ consecutive proof misses accrue.
 ### Unjail and edit
 
 ```bash
-orama global validator unjail --chain-id <id> --operator orama1... --fee <n> --gas <n> [--node http://127.0.0.1:31003]
-orama global validator edit   --chain-id <id> --operator orama1... --moniker <name> --commission-rate 0.05 --fee <n> --gas <n>
+orama maint global validator unjail --chain-id <id> --operator orama1... --fee <n> --gas <n> [--node http://127.0.0.1:31003]
+orama maint global validator edit   --chain-id <id> --operator orama1... --moniker <name> --commission-rate 0.05 --fee <n> --gas <n>
 ```
 
 Both are signed by the operator account (its bytes are the `oramavaloper`
@@ -244,7 +243,7 @@ report` and the inspector read the provider's hot-key balance from its `monitor.
 ### Back up the consensus key
 
 ```bash
-sudo orama global validator export-key --recipient <operator X25519 public key, hex> --to /root/validator-key.orbk
+sudo orama maint global validator export-key --recipient <operator X25519 public key, hex> --to /root/validator-key.orbk
 ```
 
 This seals `priv_validator_key.json` to your public key with the same ORBK seal
@@ -258,7 +257,7 @@ root records per validator key in `/var/lib/orama-global/validator-sign-floor.js
 (`{"floors":{"<public key>":<priv_validator_state.json>}}`). The public key is
 the one CometBFT signs as, derived from `priv_key`; a key file whose `pub_key`
 does not match its `priv_key` is refused. The chain unit
-runs `orama global validator check-sign-floor` as root before every start
+runs `orama maint global validator check-sign-floor` as root before every start
 (`ExecStartPre`), so it applies at boot, on `Restart=always` and on any manual
 start, not only to `orama global start`. The check refuses while a migration
 export is in progress. With any floor recorded, the chain starts only when a
@@ -287,11 +286,11 @@ group or others; otherwise every one of these commands, and the check, refuses.
 `orama global install` and `orama global start` print a warning when this
 host's key was migrated away.
 
-1. New host: `sudo orama global validator migrate prepare` prints a one-time
+1. New host: `sudo orama maint global validator migrate prepare` prints a one-time
    key. The private half stays in `/var/lib/orama-global/migrate-recipient.key`,
    root's, 0600, until an import uses it or
-   `sudo orama global validator migrate cancel` removes it.
-2. Old host: `sudo orama global validator migrate export --recipient <key> --to /root/move.orbk`
+   `sudo orama maint global validator migrate cancel` removes it.
+2. Old host: `sudo orama maint global validator migrate export --recipient <key> --to /root/move.orbk`
    (`--to` must not exist). It stops the chain and the services that need it and
    disables the chain unit. It writes an export-in-progress marker
    (`/var/lib/orama-global/validator-export-in-progress`) that makes the check
@@ -303,7 +302,7 @@ host's key was migrated away.
    start: the floor is recorded and the key is gone, so oramad cannot generate a
    fresh key and a zero state in its place.
 3. Copy the bundle to the new host.
-4. New host: `sudo orama global validator migrate import --from /root/move.orbk`.
+4. New host: `sudo orama maint global validator migrate import --from /root/move.orbk`.
    It refuses while the chain runs. It records the old host's state as the floor
    first, then writes that state (unless the new host's is already ahead), and
    installs the key last; a different key already there is moved aside, never
@@ -332,9 +331,9 @@ in the chain home.
 
 Only when the old host is gone for good:
 
-1. New host: `sudo orama global validator migrate prepare`.
-2. Your machine: `orama global validator reseal --from validator-key.orbk --identity-file <private key file, 0600> --recipient <key> --to restore.orbk`.
-3. New host: `sudo orama global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's latest committed height>`.
+1. New host: `sudo orama maint global validator migrate prepare`.
+2. Your machine: `orama maint global validator reseal --from validator-key.orbk --identity-file <private key file, 0600> --recipient <key> --to restore.orbk`.
+3. New host: `sudo orama maint global validator migrate import --from restore.orbk --old-host-destroyed --floor-height <the network's latest committed height>`.
 
 A backup carries no sign state, so the import refuses it without both flags.
 Give the network's **latest committed height** H, read from a node you trust

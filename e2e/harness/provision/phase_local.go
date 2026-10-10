@@ -179,7 +179,7 @@ func (r *run) startTestAgent(ctx context.Context) error {
 func (r *run) buildArchives(ctx context.Context) error {
 	head := filepath.Join(r.cfg.WorkDir, archiveDir, headArchive)
 	coreDir := filepath.Join(r.cfg.RepoRoot, "core")
-	if _, err := r.runLogged(ctx, command{name: r.st.OramaBin, args: []string{"build", "--output", head}, dir: coreDir, env: r.cliEnv()}); err != nil {
+	if _, err := r.runLogged(ctx, command{name: r.st.OramaBin, args: []string{"maint", "build", "--output", head}, dir: coreDir, env: r.cliEnv()}); err != nil {
 		return fmt.Errorf("failed to build the HEAD archive: %w", err)
 	}
 	r.st.ArchivePath = head
@@ -188,6 +188,8 @@ func (r *run) buildArchives(ctx context.Context) error {
 	case isRef:
 		prev := filepath.Join(r.cfg.WorkDir, archiveDir, prevArchive)
 		dir := filepath.Join(r.cfg.WorkDir, prevSourceDir, "core")
+		// The previous release's own CLI builds it, at the path that release has:
+		// top-level `build`, before `orama maint` existed.
 		if _, err := r.runLogged(ctx, command{name: r.st.PreviousOramaBin, args: []string{"build", "--output", prev}, dir: dir, env: r.cliEnv()}); err != nil {
 			return fmt.Errorf("failed to build the archive of %s: %w", ref, err)
 		}

@@ -175,7 +175,7 @@ func TestGetActiveEnvironment_UnknownActiveIsAnErrorNotAFallback(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected an error, got environment %q", env.Name)
 	}
-	if !strings.Contains(err.Error(), "stagnet") || !strings.Contains(err.Error(), "orama env use") {
+	if !strings.Contains(err.Error(), "stagnet") || !strings.Contains(err.Error(), "orama network use") {
 		t.Errorf("error should name the missing environment and the fix: %v", err)
 	}
 }
@@ -192,7 +192,7 @@ func TestFreshConfigHasNoEnvironments(t *testing.T) {
 	if len(cfg.Environments) != 0 || cfg.ActiveEnvironment != "" {
 		t.Fatalf("fresh config = %+v, want no environments", cfg)
 	}
-	if _, err := GetActiveEnvironment(); err == nil || !strings.Contains(err.Error(), "orama env add") {
+	if _, err := GetActiveEnvironment(); err == nil || !strings.Contains(err.Error(), "orama network add") {
 		t.Fatalf("active environment error = %v, want the env add hint", err)
 	}
 }

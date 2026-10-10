@@ -199,7 +199,7 @@ func RunningArchive(t testing.TB, f *fleet.Fleet) string {
 	return ""
 }
 
-// SignManifest signs manifestJSON as `orama build` does, with w: the
+// SignManifest signs manifestJSON as `orama maint build` does, with w: the
 // signature is valid, the signer is whoever w is.
 func SignManifest(manifestJSON []byte, w *wallet.EVM) ([]byte, error) {
 	msg, err := archivetrust.SigningMessage(manifestJSON)

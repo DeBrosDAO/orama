@@ -35,12 +35,12 @@ func requireKeyGone(t *testing.T, c *chain.Chain, n fleet.Node, keyCopy, bundle 
 	}
 	infra.RequireStat(t, c.F, n, keyCopy, "root", "root", sealedMode)
 	infra.RequireStat(t, c.F, n, bundle, "root", "root", sealedMode)
-	infra.ExpectNodeExit(t, "check-sign-floor after the key left", orama(t, c, n, "global", "validator", "check-sign-floor"), infra.ExitConflict, "refusing to start the chain")
+	infra.ExpectNodeExit(t, "check-sign-floor after the key left", orama(t, c, n, "maint", "global", "validator", "check-sign-floor"), infra.ExitConflict, "refusing to start the chain")
 	infra.ExpectNodeExit(t, "start after the key left", orama(t, c, n, "global", "start"), infra.ExitFailure, "refusing to start the chain")
 	if got := unitState(t, c, n); got == stateActive {
 		t.Fatalf("%s: global start started a chain whose key moved away", n.Name)
 	}
-	infra.ExpectNodeExit(t, "an export onto an existing bundle", orama(t, c, n, "global", "validator", "migrate", "export",
+	infra.ExpectNodeExit(t, "an export onto an existing bundle", orama(t, c, n, "maint", "global", "validator", "migrate", "export",
 		"--recipient", strings.Repeat("0", hexKeyLen), "--to", bundle), infra.ExitUsage, "must not exist")
 }
 
@@ -65,24 +65,24 @@ func TestValidatorMigrate_sameHostRoundTripKeepsTheKeySafe(t *testing.T) {
 	t.Cleanup(func() { c.CleanupExec(t, n, "rm -f -- "+fleet.ShellQuote(bundle)) })
 	key := prepareMigration(t, c, n)
 	restoreAtCleanup(t, c, n, bundle)
-	exp := orama(t, c, n, "global", "validator", "migrate", "export", "--recipient", key, "--to", bundle)
+	exp := orama(t, c, n, "maint", "global", "validator", "migrate", "export", "--recipient", key, "--to", bundle)
 	infra.ExpectNodeExit(t, "migrate export", exp, infra.ExitOK, "chain stopped and disabled at", "copy "+bundle)
 	moved := keyMovedTo.FindStringSubmatch(exp.Stdout)
 	if moved == nil {
 		t.Fatalf("migrate export does not say where the key went:\n%s", exp.Stdout)
 	}
 	requireKeyGone(t, c, n, moved[1], bundle)
-	imp := orama(t, c, n, "global", "validator", "migrate", "import", "--from", bundle)
+	imp := orama(t, c, n, "maint", "global", "validator", "migrate", "import", "--from", bundle)
 	infra.ExpectNodeExit(t, "migrate import", imp, infra.ExitOK, "sign floor recorded at", "orama global start")
 	infra.RequireStat(t, c.F, n, keyFile, chain.ServiceUser, chain.ServiceUser, sealedMode)
 	if exists(t, c, n, migrationKey) {
 		t.Errorf("%s: the migration key is still there after the import used it", n.Name)
 	}
-	infra.ExpectNodeExit(t, "check-sign-floor after the import", orama(t, c, n, "global", "validator", "check-sign-floor"), infra.ExitOK)
-	infra.ExpectNodeExit(t, "a second import", orama(t, c, n, "global", "validator", "migrate", "import", "--from", bundle), infra.ExitFailure, "no migration key on this host")
+	infra.ExpectNodeExit(t, "check-sign-floor after the import", orama(t, c, n, "maint", "global", "validator", "check-sign-floor"), infra.ExitOK)
+	infra.ExpectNodeExit(t, "a second import", orama(t, c, n, "maint", "global", "validator", "migrate", "import", "--from", bundle), infra.ExitFailure, "no migration key on this host")
 	infra.ExpectNodeExit(t, "start after the import", orama(t, c, n, "global", "start"), infra.ExitOK)
 	requireChainBack(t, c, n, "a validator key migration round trip")
-	infra.ExpectNodeExit(t, "an import while the chain runs", orama(t, c, n, "global", "validator", "migrate", "import", "--from", bundle),
+	infra.ExpectNodeExit(t, "an import while the chain runs", orama(t, c, n, "maint", "global", "validator", "migrate", "import", "--from", bundle),
 		infra.ExitConflict, "stop it first")
 }
 
@@ -105,10 +105,10 @@ func TestValidatorMigrate_importFlagsAreChecked(t *testing.T) {
 		{"a negative floor", []string{"--from", from, "--old-host-destroyed", "--floor-height", "-3"}, "floor height"},
 	}
 	for _, tc := range cases {
-		out := orama(t, c, n, append([]string{"global", "validator", "migrate", "import"}, tc.args...)...)
+		out := orama(t, c, n, append([]string{"maint", "global", "validator", "migrate", "import"}, tc.args...)...)
 		infra.ExpectNodeExit(t, tc.name, out, infra.ExitUsage, tc.want)
 	}
-	infra.ExpectNodeExit(t, "an export with a short recipient", orama(t, c, n, "global", "validator", "migrate", "export", "--recipient", "abcd", "--to", infra.TmpKeyBackup+"none"),
+	infra.ExpectNodeExit(t, "an export with a short recipient", orama(t, c, n, "maint", "global", "validator", "migrate", "export", "--recipient", "abcd", "--to", infra.TmpKeyBackup+"none"),
 		infra.ExitUsage, "64 hex characters")
 	if got := unitState(t, c, n); got != stateActive {
 		t.Errorf("%s: the chain unit is %s after refused imports and exports", n.Name, got)

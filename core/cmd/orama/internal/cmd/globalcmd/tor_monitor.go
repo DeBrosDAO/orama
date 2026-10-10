@@ -41,5 +41,7 @@ DataDirectory and writes only monitor.json there.`,
 
 func init() {
 	monitorCmd.Flags().StringVar(&monitorFlags.home, "home", "", "The relay's or directory authority's tor DataDirectory [required]")
-	torCmd.AddCommand(cmdmeta.MarkNodeLocal(monitorCmd))
+	maintTorCmd.AddCommand(cmdmeta.MarkNodeLocal(monitorCmd))
+	// orama-global-tor-monitor.timer runs `orama maint global tor monitor`; see archive.
+	torCmd.AddCommand(cmdmeta.HiddenAlias(monitorCmd))
 }

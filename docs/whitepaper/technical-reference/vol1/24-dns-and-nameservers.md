@@ -125,7 +125,7 @@ The unit `core/systemd/orama-namespace-coredns@.service` runs `/usr/local/bin/co
 
 ### The build
 
-CoreDNS is not installed from a package. `orama build` clones `coredns/coredns` at the tag `v` plus `constants.CoreDNSVersion` (1.14.7), copies the `.go` files of `core/pkg/coredns/rqlite/` (not its `_test.go` files, whose SQLite driver the CoreDNS tree must not resolve) into the clone's `plugin/rqlite/`, refuses the checkout unless its HEAD is the pinned `constants.CoreDNSCommit`, writes a `plugin.cfg` that lists the standard plugins with `rqlite:rqlite` last, runs `go mod tidy` (which only completes the `go.sum` for the plugin's imports; CoreDNS already requires the `miekg/dns` and `go.uber.org/zap` versions the plugin uses), `go generate`, and cross-compiles a static binary (`CGO_ENABLED=0`, `-trimpath`) for the target architecture (`core/cmd/orama/internal/build/coredns.go:buildCoreDNS`). The binary ships in the release archive to `/usr/local/bin/coredns` ([build, signing and release](29-build-signing-and-release.md)). A node that is not a nameserver carries the binary and a Corefile but never starts the unit. On a nameserver the install switches off systemd-resolved's stub listener so port 53 is free, replaces `/etc/resolv.conf` with `nameserver 127.0.0.1` and `nameserver 8.8.8.8` so the node resolves through its own CoreDNS and the second block's forwarder (`core/pkg/install/prebuilt.go:freeResolverPort`, `core/pkg/install/installers/coredns.go:DisableResolvedStubListener`); every node also loses systemd-resolved's LLMNR and mDNS listeners. The Corefile is written on every node, nameserver or not.
+CoreDNS is not installed from a package. `orama maint build` clones `coredns/coredns` at the tag `v` plus `constants.CoreDNSVersion` (1.14.7), copies the `.go` files of `core/pkg/coredns/rqlite/` (not its `_test.go` files, whose SQLite driver the CoreDNS tree must not resolve) into the clone's `plugin/rqlite/`, refuses the checkout unless its HEAD is the pinned `constants.CoreDNSCommit`, writes a `plugin.cfg` that lists the standard plugins with `rqlite:rqlite` last, runs `go mod tidy` (which only completes the `go.sum` for the plugin's imports; CoreDNS already requires the `miekg/dns` and `go.uber.org/zap` versions the plugin uses), `go generate`, and cross-compiles a static binary (`CGO_ENABLED=0`, `-trimpath`) for the target architecture (`core/cmd/orama/internal/build/coredns.go:buildCoreDNS`). The binary ships in the release archive to `/usr/local/bin/coredns` ([build, signing and release](29-build-signing-and-release.md)). A node that is not a nameserver carries the binary and a Corefile but never starts the unit. On a nameserver the install switches off systemd-resolved's stub listener so port 53 is free, replaces `/etc/resolv.conf` with `nameserver 127.0.0.1` and `nameserver 8.8.8.8` so the node resolves through its own CoreDNS and the second block's forwarder (`core/pkg/install/prebuilt.go:freeResolverPort`, `core/pkg/install/installers/coredns.go:DisableResolvedStubListener`); every node also loses systemd-resolved's LLMNR and mDNS listeners. The Corefile is written on every node, nameserver or not.
 
 ### The writers
 
@@ -228,7 +228,7 @@ Nothing about DNS lives on disk besides the Corefile; the zone is the table.
 
 ## Lifecycle
 
-**Install.** `orama node install --nameserver` (or `orama node setup --role nameserver`) disables the systemd-resolved stub listener, writes the Corefile with the base domain as the zone, records `nameserver: true` and opens port 53. Install writes no zone records. Thirty seconds after `orama-node` registers, the first sweep claims a slot, writes glue, NS and SOA; the operator then runs the delegation command.
+**Install.** `orama maint node install --nameserver` (or `orama node setup --role nameserver`) disables the systemd-resolved stub listener, writes the Corefile with the base domain as the zone, records `nameserver: true` and opens port 53. Install writes no zone records. Thirty seconds after `orama-node` registers, the first sweep claims a slot, writes glue, NS and SOA; the operator then runs the delegation command.
 
 **Normal operation.** Every 30 s each node runs the heartbeat, the advertisement of its own records while its edge serves, and the maintenance purges. Every 30 s the index gateway probes the namespaces it hosts. Every 60 s the cluster manager re-asserts the node's active gateway and TURN rows. CoreDNS answers from a 30-second cache and reads the registry on a miss.
 
@@ -385,7 +385,7 @@ dig @<nameserver-ip> <base> NS +norecurse
 dig @<nameserver-ip> ns-<namespace>.<base> A +norecurse
 orama node dns delegation --env <env>
 orama node dns delegation --env <env> --json
-orama inspect --env <env> --subsystem dns
+orama maint inspect --env <env> --subsystem dns
 orama node logs coredns --since -1h
 orama node logs node --since -1h | grep -E 'namespace DNS round-robin'
 ```

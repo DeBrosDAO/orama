@@ -41,10 +41,10 @@ Run the `approve` command on a machine that has RootWallet. It costs the same wa
 |---|---|---|---|
 | SSH keys for your nodes | `orama node setup`, `ssh`, `push`, `rollout`, `monitor`, `inspect`, `sandbox` | `vault:ssh` | Once per binary |
 | VPS passwords | `orama node setup --password` | `vault:password` | Once per binary |
-| Signing a build archive | `orama build` | `wallet:sign:orama-archive` | Shows version, commit, date and signers |
+| Signing a build archive | `orama maint build` | `wallet:sign:orama-archive` | Shows version, commit, date and signers |
 | Signing release metadata (TUF) | The release process | `wallet:sign:orama-release` | Every signature, desktop app only |
 | Signing a chain transaction | `orama global`, `orama storage`, `orama cluster register-onchain` | `wallet:sign:orama-tx` | Every request, with the decoded transaction |
-| Keepalive during long jobs | `orama rollout` and similar | | |
+| Keepalive during long jobs | `orama maint rollout` and similar | | |
 
 The CLI never stores an SSH key or a password. It asks the agent, writes a key to a `0600` temp file for the length of one command, and wipes it. Approval is keyed on the hash of the calling binary, so every rebuilt `orama` asks once. The agent is described on [The agent](/docs/rootwallet/agent).
 

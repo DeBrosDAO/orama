@@ -40,7 +40,7 @@ Status: closed beta. The CLI and desktop are stable; mobile is in active develop
 
 - **It signs you in.** The `orama` CLI asks the RootWallet agent for your EVM address and has it sign the gateway's sign-in challenge. See [Signing in to Orama with RootWallet](/docs/rootwallet/orama-sign-in).
 - **It holds an operator's keys.** `orama node setup` creates an SSH key for each node in your vault, installs it, and later asks the agent for it. You never paste a key into a terminal. See [The agent](/docs/rootwallet/agent).
-- **It signs releases.** `orama build` signs the archive's manifest with your wallet, and nodes install only archives signed by an address they trust. See [Build and sign](/docs/operator/build-and-sign).
+- **It signs releases.** `orama maint build` signs the archive's manifest with your wallet, and nodes install only archives signed by an address they trust. See [Build and sign](/docs/operator/build-and-sign).
 - **It reaches blockchains through Orama.** Balance, history, NFT and swap-quote requests go through functions on a `rootwallet` namespace on an Orama network, so no provider API key ships in any build.
 
 ## What it is not

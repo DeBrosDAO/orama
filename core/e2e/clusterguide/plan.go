@@ -61,7 +61,7 @@ func Plan() []Step {
 		setup("join the second node", []string{"--join-via"}, []string{"--genesis"}),
 		setup("join the third node", []string{"--join-via"}, []string{"--genesis"}),
 		delegation,
-		{Name: "use the environment", Section: SectionUse, Words: []string{"orama", "env", "use"}},
+		{Name: "use the environment", Section: SectionUse, Words: []string{"orama", "network", "use"}},
 		{Name: "sign in", Section: SectionUse, Words: []string{"orama", "auth", "login"}, Deny: []string{"--namespace"}},
 		{Name: "create a namespace", Section: SectionUse, Words: []string{"orama", "namespace", "create"}},
 		{Name: "sign in to the namespace", Section: SectionUse, Words: []string{"orama", "auth", "login"}, Need: []string{"--namespace"}},

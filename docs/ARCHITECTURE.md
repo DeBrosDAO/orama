@@ -960,7 +960,7 @@ per tick.
 An eviction writes a tombstone to `raft_evicted_nodes`. Without one,
 `recoverOrphanedNodes` re-added the node within five minutes — it re-adds every
 discovery peer absent from the raft configuration, so the eviction was undone
-automatically. `orama node remove` and `orama node migrate-raft-id` both write one, so a
+automatically. `orama node remove` and `orama maint node migrate-raft-id` both write one, so a
 removal made by hand is no longer undone within five minutes.
 
 Tombstones expire after 24 hours, and that expiry is load-bearing rather than
@@ -1029,7 +1029,7 @@ it differs from the current advertise address, the index supervisor starts
 rqlited with `-join` to the other recorded members (and the configured join
 address); otherwise a member restarts without `-join`, as before. With nobody to
 join — a cluster of one — it refuses, and the single node is reformed at its new
-address with `orama node recover-raft --leader-raft-addr`. The leader's removal
+address with `orama maint node recover-raft --leader-raft-addr`. The leader's removal
 and re-addition shrink the configuration by one voter for a moment, so only one
 node's address may change at a time, and every other voter must be up while it
 does: a majority of members changing address at once leaves no leader to
@@ -1044,7 +1044,7 @@ passing the peer id as `-node-id` would make every node join as a NEW member and
 abandon its old id as an unreachable voter: the exact failure this prevents,
 applied fleet-wide at once.
 
-`orama node migrate-raft-id` performs the transition, one node at a time. It
+`orama maint node migrate-raft-id` performs the transition, one node at a time. It
 first refuses to start unless **every** node in the environment has booted on a
 binary that understands stable ids: an old-binary leader cannot see a migrated
 node's peer-id member, so it re-adds it as a duplicate every five minutes.
@@ -1076,7 +1076,7 @@ cluster, its first boot on this binary) and kept current by the
 the configuration the local rqlited holds (`/status`, read locally rather than
 through `/nodes`, which probes every member) whenever the set has changed.
 Nothing depends on that component, so a node that cannot write the record is
-degraded without its cluster tier going down. `orama node recover-raft` writes
+degraded without its cluster tier going down. `orama maint node recover-raft` writes
 the record on every node it wipes, naming the node it kept. At start, with no
 raft state:
 
@@ -1090,10 +1090,10 @@ raft state:
 A node that still holds raft state is a member by that state: a record that does
 not parse (a torn write) is replaced rather than keeping it down, and the record
 is written through a unique temporary file that is synced before the rename.
-The refusal names the record and `orama node recover-raft`; a node that was the
+The refusal names the record and `orama maint node recover-raft`; a node that was the
 cluster's only member and whose data is gone for good is bootstrapped again only
 by deleting the record, deliberately. A pending recovery `raft/peers.json`
-(written by `orama node recover-raft`) is neither joined nor refused: rqlited
+(written by `orama maint node recover-raft`) is neither joined nor refused: rqlited
 reforms the cluster from it. The other signals were rejected: the join address
 and `bootstrap_peers` are empty on exactly the genesis node, the enrolment and
 `dns_nodes` rows live in rqlite and are lost with it, the WireGuard peers are in
@@ -1392,7 +1392,7 @@ refuses internal addresses (including a redirect to one).
 **Health:** `/v1/health` reports the SOCKS port as `checks.anon_proxy`
 (`ok`, or `unavailable` when it does not accept connections — deliberately not
 `error`, so a stopped Tor client never degrades the node or removes it from
-DNS; `orama monitor` and `orama inspect --subsystem tor` alert on it). The key
+DNS; `orama monitor` and `orama maint inspect --subsystem tor` alert on it). The key
 was `anyone` before Tor replaced the Anyone network.
 
 **API Endpoints:**
@@ -1743,7 +1743,7 @@ app's requests there.
      namespace** — a token signed with it and claiming another is refused. The
      key used to be derived from the cluster secret, which every node holds, so
      every node could sign for every tenant
-   - `orama operator rotate-signing-key` publishes a successor and leaves the
+   - `orama maint operator rotate-signing-key` publishes a successor and leaves the
      outgoing key verifying what it already signed for one token lifetime
 
 5. **The audit trail**
@@ -1767,7 +1767,7 @@ All inter-node communication is encrypted via a WireGuard VPN mesh:
 - **Namespace and index RQLite bind the WireGuard advertise address**, not `0.0.0.0`. The namespace gateway DSN uses that same host. `-auth` is always passed; missing auth file refuses to start. See `docs/SECURITY.md`
 - **UFW is still the outer boundary** for everything on the node, but it is no longer the only one for the gateway
 - **Orama owns only the UFW rules it tagged.** Install and upgrade add every rule with the comment `orama` and remove only tagged rules the node no longer needs. Rules without the tag — an operator's `allow in on tailscale0`, a monitoring port, and the TURN rules `orama-node` opens at runtime through the privileged helper — are left alone. A node upgraded from a release before the tag keeps any rule that release opened and this one no longer wants; remove it by hand. A firewall that cannot be reconciled fails the install, as it fails an upgrade
-- **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama node install`
+- **Invite tokens:** Single-use and time-limited, and there is no standing cluster password. The token is still a secret passed as a command-line argument, so it is visible to `ps` and lands in shell history on the machine that runs `orama maint node install`
 - **Join flow:** New nodes authenticate via HTTPS (443), pinned to the certificate fingerprint the invite carries. The invite names the minting node by its public IP and names its site separately; the joiner presents the site as both the TLS server name and the HTTP `Host`, because Caddy routes by `Host` and answers a bare IP with an empty 200. New nodes then establish WireGuard tunnel, then join all services over the encrypted mesh. The joining node establishes its libp2p identity before it asks to join, so the request carries the peer id the cluster will key it by
 
 **Join ordering.** `/v1/internal/join` does everything that can fail without
@@ -1850,7 +1850,7 @@ internal-auth check both accept.
 
 - **Refresh tokens:** Stored as SHA-256 hashes (never plaintext)
 - **API keys:** Stored as HMAC-SHA256 hashes with a server-side secret
-- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM (a deployment's environment, once an operator has run `orama operator rotate-secrets`, is also sealed to its namespace and deployment id as `enc:v2:`; docs/SECURITY.md "Deployment environment variables"). The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
+- **TURN secrets, function secrets, push tokens, deployment env, agent tokens:** Encrypted at rest with AES-256-GCM (a deployment's environment, once an operator has run `orama maint operator rotate-secrets`, is also sealed to its namespace and deployment id as `enc:v2:`; docs/SECURITY.md "Deployment environment variables"). The key is HKDF of the encryption root (a cluster-wide IKM that starts as a copy of the cluster secret): the registry's `encryption_roots` is the source of truth, each gateway caches it in its state directory, and `secrets/encryption-root` (written at join) seeds an empty cache. `orama maint operator rotate-secrets --rotate` replaces the IKM and re-encrypts; the cluster secret (IPFS-Cluster PSK / mesh bearer) is not touched
 - **Namespace backups:** `/v1/namespace/backup` decrypts those secrets and seals them, with the RQLite snapshot and pin list, to the owner's X25519 public key (nacl sealed box, `ORBK`); the cluster never has the private key. The pin list is the namespace's stored objects (from its own database) and the content and builds of its deployments (from the cluster registry, where deployments live); the deployments themselves are cluster state and are not in the snapshot. A restore is opened on the owner's machine and its secrets re-sealed to the destination gateway's restore key for that namespace, `HKDF(encryption root, "orama-restore-v1:<namespace>")`, which the gateway derives and never stores; each sealed secret also names its namespace and row, checked on open
 - **Binary signing:** Build archives signed with rootwallet EVM signature, verified on install
 
@@ -1879,7 +1879,7 @@ their units; [RUN_A_GLOBAL_NODE.md](RUN_A_GLOBAL_NODE.md) is the operator guide.
 | repair (`orama-global repair`) | `orama-global-repair.service` | `orama-repair` | none |
 | Tor directory authority (`tor`, no chain needed) + archive timer | `orama-global-tor-dirauth.service`, `orama-global-tor-archive.timer` | `orama-tor-dirauth` | 31020 tcp, 31021 tcp |
 | Tor relay or exit (`tor`, no chain needed) | `orama-global-tor-relay.service` | `orama-tor-relay` | 31020 tcp |
-| validator onion service (`tor` + `orama global txgate`) | `orama-global-tor-onion.service`, `orama-global-txgate.service` | `orama-tor-onion`, `orama-txgate` | none |
+| validator onion service (`tor` + `orama maint global txgate`) | `orama-global-tor-onion.service`, `orama-global-txgate.service` | `orama-tor-onion`, `orama-txgate` | none |
 
 Binaries live in `/usr/lib/orama-global/bin` (root, 0755); state in
 `/var/lib/orama-global/<service>` (the unit's own account, 0700). Every unit
@@ -2011,7 +2011,7 @@ the mesh; see "Cluster telemetry on the gateway" in [MONITORING.md](MONITORING.m
 
 There is no Prometheus-compatible metrics endpoint yet. Observability today comes
 from the health/status endpoints above, structured logs, and the `orama monitor`
-and `orama inspect` CLI commands. Each gateway also keeps live request metrics
+and `orama maint inspect` CLI commands. Each gateway also keeps live request metrics
 in memory — requests, rps, 4xx/5xx and error rate, p50/p95/p99 latency, and the
 busiest namespaces over a rolling 60-second window (`pkg/telemetry/traffic`,
 read with `Gateway.TrafficSnapshot()`); see "Request metrics" in
@@ -2056,14 +2056,14 @@ make test-e2e  # Run E2E tests
 ```bash
 # First node (genesis — creates cluster)
 # Nameserver nodes use the base domain as --domain
-sudo orama node install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
+sudo orama maint node install --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 
 # On the genesis node, generate an invite for a new node
 orama node invite
 # Outputs the join command with the token for the new node
 
 # Additional nameserver nodes (join via invite token over HTTPS)
-sudo orama node install --join https://example.com --token <TOKEN> \
+sudo orama maint node install --join https://example.com --token <TOKEN> \
     --vps-ip <IP> --domain example.com --base-domain example.com --nameserver
 ```
 
@@ -2130,7 +2130,7 @@ These OramaOS properties do **not** apply to the production Ubuntu fleet (sandbo
 - Command reception from Gateway over WireGuard (port 9998)
 - OS updates (download, verify, A/B swap, reboot with rollback)
 
-**Node enrollment:** OramaOS nodes join via `orama node enroll` instead of `orama node install`. The operator reads an 80-bit registration code off the node's console and gives it to the CLI with an invite token; the gateway pushes cluster config sealed under that code. There is no WebSocket enrollment path.
+**Node enrollment:** OramaOS nodes join via `orama maint node enroll` instead of `orama maint node install`. The operator reads an 80-bit registration code off the node's console and gives it to the CLI with an invite token; the gateway pushes cluster config sealed under that code. There is no WebSocket enrollment path.
 
 See [ORAMAOS_DEPLOYMENT.md](ORAMAOS_DEPLOYMENT.md) for the full deployment guide.
 

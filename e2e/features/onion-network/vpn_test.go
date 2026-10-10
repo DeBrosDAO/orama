@@ -61,7 +61,7 @@ func liveNetwork(t *testing.T) string {
 
 func TestVPN_groupListsItsCommands(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, harness.CLI(t), "vpn")
+	res := infra.Run(t, harness.CLI(t), "maint", "vpn")
 	infra.ExpectExit(t, res, infra.ExitOK, "up", "check")
 }
 
@@ -69,33 +69,33 @@ func TestVPN_aPublicNetworkIsNotJoined(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)
 	for _, verb := range []string{"up", "check"} {
-		res := infra.Run(t, cli, "vpn", verb, "--network", networkFile(t, false))
+		res := infra.Run(t, cli, "maint", "vpn", verb, "--network", networkFile(t, false))
 		infra.ExpectExit(t, res, infra.ExitUsage, "not launched")
 	}
 }
 
 func TestVPN_aNetworkIsRequired(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, harness.CLI(t), "vpn", "up")
+	res := infra.Run(t, harness.CLI(t), "maint", "vpn", "up")
 	infra.ExpectExit(t, res, infra.ExitUsage, "--network")
 }
 
 func TestVPN_aMissingTorBinaryIsAnError(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, harness.CLI(t), "vpn", "up", "--network", networkFile(t, true), "--tor", "/nonexistent/tor", "--data-dir", t.TempDir()+"/tor")
+	res := infra.Run(t, harness.CLI(t), "maint", "vpn", "up", "--network", networkFile(t, true), "--tor", "/nonexistent/tor", "--data-dir", t.TempDir()+"/tor")
 	infra.ExpectExit(t, res, infra.ExitUnavailable, "start tor")
 }
 
 func TestVPN_theProxyStaysOnLoopback(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, harness.CLI(t), "vpn", "up", "--network", networkFile(t, true), "--socks", "0.0.0.0:9150", "--tor", "/nonexistent/tor", "--data-dir", t.TempDir()+"/tor")
+	res := infra.Run(t, harness.CLI(t), "maint", "vpn", "up", "--network", networkFile(t, true), "--socks", "0.0.0.0:9150", "--tor", "/nonexistent/tor", "--data-dir", t.TempDir()+"/tor")
 	infra.ExpectRefused(t, res, "loopback")
 }
 
 func TestVPN_checkReachesAValidatorThroughTheNetwork(t *testing.T) {
 	cli := harness.CLI(t)
 	cli.Env = []string{tornet.NetworkEnv + "=" + liveNetwork(t)}
-	res := infra.RunFor(t, cli, checkBudget, "vpn", "check")
+	res := infra.RunFor(t, cli, checkBudget, "maint", "vpn", "check")
 	infra.ExpectExit(t, res, infra.ExitOK, "Joined the", "answered through the network")
 }
 
@@ -107,7 +107,7 @@ func TestVPN_theNetworkFileCanComeFromTheEnvironment(t *testing.T) {
 	cli := harness.CLI(t)
 	cli.Env = []string{tornet.NetworkEnv + "=" + networkFile(t, false)}
 	for _, verb := range []string{"up", "check"} {
-		res := infra.Run(t, cli, "vpn", verb)
+		res := infra.Run(t, cli, "maint", "vpn", verb)
 		infra.ExpectExit(t, res, infra.ExitUsage, "not launched")
 	}
 }

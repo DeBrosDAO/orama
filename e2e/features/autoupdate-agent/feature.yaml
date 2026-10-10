@@ -19,9 +19,9 @@ requires:
   chain: false
 covers:
   cli:
-    - orama node autoupdate run
-    - orama cluster settings
-    - orama cluster settings set
+    - orama maint node autoupdate run
+    - orama maint cluster settings
+    - orama maint cluster settings set
   units:
     - orama-autoupdate.service
     - orama-autoupdate.timer

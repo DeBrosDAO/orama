@@ -115,7 +115,7 @@ a namespace and one belonged to whoever happened to sign in first. It answers
 One machine can hold credentials for several environments. `orama auth list`
 shows them, `orama auth switch` changes the active one, and `orama auth logout`
 clears it. Which gateway a command talks to is decided by the active
-environment — see `orama env` — not by a flag on each command.
+environment — see `orama network` — not by a flag on each command.
 
 Every command and flag is in the [CLI reference](CLI_REFERENCE.md), which is
 generated from the command tree rather than written by hand.
@@ -880,7 +880,7 @@ Values are held encrypted in the cluster database, with a key derived from the
 cluster secret, and sealed to the deployment's namespace and id, so a copy of
 the stored value in another deployment's row does not open (on a cluster
 upgraded from an earlier release this starts when an operator runs
-`orama operator rotate-secrets`; a new cluster has it from the start). On the node they are written to a file only the system can read,
+`orama maint operator rotate-secrets`; a new cluster has it from the start). On the node they are written to a file only the system can read,
 which systemd hands to your process — they are not written into the app's
 systemd unit, and they are removed from the node when the deployment stops.
 
@@ -908,7 +908,7 @@ ignore if you are running a node: the gateway runs as an unprivileged user with
 `ProtectSystem=strict` and `NoNewPrivileges=yes`, so it *cannot* write into
 `/etc`, and a node whose templates were not installed will refuse every deploy
 with "Unit orama-deploy-node@… not found". They are installed by
-`orama node install` and by every upgrade.
+`orama maint node install` and by every upgrade.
 
 ### What your app runs as
 
@@ -1589,7 +1589,7 @@ orama auth whoami
 - **Every command and flag**: [CLI reference](CLI_REFERENCE.md), generated from the command tree
 - **Every gateway route**: [API surface](API_SURFACE.md), with which client owns each one
 - **Custom domains**: `orama domain add|verify|list|remove`, and [How Domains Work](#how-domains-work)
-- **Production Deployment**: Install nodes with `orama node install` for production clusters
+- **Production Deployment**: Install nodes with `orama maint node install` for production clusters
 - **From code**: the [TypeScript SDK](TS_SDK.md) or the [Go client](GO_CLIENT_SDK.md)
 
 ---

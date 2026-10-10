@@ -43,7 +43,7 @@ func (f *Flags) validate() error {
 // resolveRaftID finds the target's id in the platform raft configuration.
 //
 // Members are keyed by id, which on a cluster that has run
-// `orama node migrate-raft-id` is a peer id and before it is the raft address.
+// `orama maint node migrate-raft-id` is a peer id and before it is the raft address.
 // Removing by address matched nothing on a migrated cluster and reported
 // success, leaving the retired machine a configured voter for ever.
 func resolveRaftID(survivor inspector.Node, raftAddr string) (string, error) {

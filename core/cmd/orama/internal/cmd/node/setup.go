@@ -20,7 +20,7 @@ Examples:
   # Genesis node (first node, creates new cluster).
   # Store the VPS login first: rw vault add 1.2.3.4 (username root).
   # --password is a switch; it reads that login. --archive is the path
-  # "orama build" printed.
+  # "orama maint build" printed.
   orama node setup --ip 1.2.3.4 --password --env devnet \
     --base-domain orama-devnet.network --role nameserver --genesis \
     --archive /tmp/orama-<version>-linux-amd64.tar.gz
@@ -62,7 +62,7 @@ func init() {
 	setupCmd.Flags().BoolVar(&setupOpts.Genesis, "genesis", false, "Create a new cluster (first node)")
 	setupCmd.Flags().StringVar(&setupOpts.HostKey, "host-key", "", "Expected SSH host-key fingerprint (SHA256:...) of the VPS; omit to confirm it interactively")
 	setupCmd.Flags().StringVar(&setupOpts.BootstrapKey, "bootstrap-key", "", "SSH private key that opens the VPS today (key-only images, e.g. --user ubuntu); used once to install the RootWallet key, never stored")
-	setupCmd.Flags().StringVar(&setupOpts.Archive, "archive", "", "Build archive to install — the path `orama build` printed [required]; a node already running this exact build is not re-uploaded")
+	setupCmd.Flags().StringVar(&setupOpts.Archive, "archive", "", "Build archive to install — the path `orama maint build` printed [required]; a node already running this exact build is not re-uploaded")
 	setupCmd.Flags().StringVar(&setupOpts.JoinVia, "join-via", "", "user@ip of a node already in the cluster; the invite is minted there over SSH (no 'orama auth login' needed)")
 	setupCmd.Flags().StringVar(&setupOpts.ACMECA, "acme-ca", "", "ACME directory for the node's TLS certificates (passed to node install): letsencrypt, letsencrypt-staging or an https URL")
 	setupCmd.Flags().StringVar(&setupOpts.Release, "release", "", "Install this published release version instead of an archive you built: it is fetched from --release-repo, verified against --release-root, then signed by your RootWallet")

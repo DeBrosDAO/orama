@@ -1,4 +1,4 @@
-// Package invitecmd provides `orama invite`, which mints an invite from the
+// Package invitecmd provides `orama maint invite`, which mints an invite from the
 // operator's own machine.
 //
 // Minting one used to mean SSHing to an existing node and running
@@ -49,10 +49,10 @@ connection whose certificate is pinned.
 
 This is the same token as 'orama node invite', which does the same thing from
 an existing node instead of from here.`,
-	Example: `  orama invite
-  orama invite --expiry 30m
-  orama invite --env testnet
-  orama invite --env testnet --node 203.0.113.7`,
+	Example: `  orama maint invite
+  orama maint invite --expiry 30m
+  orama maint invite --env testnet
+  orama maint invite --env testnet --node 203.0.113.7`,
 	Args: cobra.NoArgs,
 	RunE: run,
 }
@@ -104,9 +104,9 @@ func run(cmd *cobra.Command, args []string) error {
 
 	out.Printf("Invite created through %s (%s), usable until %s\n\n", m.NodeIP, m.SNI, m.ExpiresAt)
 	out.Printf("Run this on the new node:\n\n")
-	out.Printf("  sudo orama node install --token %s --vps-ip <NEW_NODE_IP>\n\n", m.Invite)
+	out.Printf("  sudo orama maint node install --token %s --vps-ip <NEW_NODE_IP>\n\n", m.Invite)
 	out.Printf("Or from here:\n\n")
-	out.Printf("  orama node install --remote --token %s --vps-ip <NEW_NODE_IP>\n", m.Invite)
+	out.Printf("  orama maint node install --remote --token %s --vps-ip <NEW_NODE_IP>\n", m.Invite)
 	return nil
 }
 

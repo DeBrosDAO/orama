@@ -30,7 +30,7 @@ func credentialCommands(env string) [][]string {
 		{"db", "list"},
 		{"function", "list"},
 		{"domain", "list"},
-		{"cluster", "settings", "show"},
+		{"maint", "cluster", "settings", "show"},
 		{"operator", "list"},
 		{"monitor", "alerts", "--env", env},
 	}
@@ -66,7 +66,7 @@ func tokenCommands(env string) [][]string {
 		{"db", "list"},
 		{"domain", "list"},
 		{"operator", "list"},
-		{"cluster", "settings", "show"},
+		{"maint", "cluster", "settings", "show"},
 		{"namespace", "list"},
 		{"namespace", "keys", "list"},
 		{"members", "list"},
@@ -124,7 +124,7 @@ func TestCredentials_operatorSessionWorks(t *testing.T) {
 	cli := harness.CLI(t)
 	for _, args := range [][]string{
 		{"auth", "whoami"},
-		{"cluster", "settings", "show"},
+		{"maint", "cluster", "settings", "show"},
 		{"operator", "list"},
 		{"monitor", "alerts", "--env", f.State.Env},
 	} {

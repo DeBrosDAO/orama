@@ -95,7 +95,7 @@ rqlited binds only the WireGuard address. `core/pkg/rqlite/bind.go:BindAddr` tak
 | no | no | A fresh node. If it has a libp2p peer id, that id is recorded and used. With no peer id, rqlite's default (the advertise address) applies. |
 | no | yes | Refused with an error naming both ways forward. The id is the address the node last ran under, and nothing on the node says what that was. |
 
-The refusal exists because the upgrade is supposed to capture the id from the running rqlited before it stops anything (`core/cmd/orama/internal/production/upgrade/raft_identity.go`), reading `/status` through `LiveIdentityFromStatus`. That function takes the node's own address from `store.nodes`, not from its flags, and fails if the node is not a member of its own configuration. A node that predates stable ids keeps the address id it is registered under; the move to peer ids is a deliberate, serial, quorum-checked operation (`orama node migrate-raft-id`, `core/cmd/orama/internal/production/raftid/migrate.go`), because rqlite cannot rename a member in place.
+The refusal exists because the upgrade is supposed to capture the id from the running rqlited before it stops anything (`core/cmd/orama/internal/production/upgrade/raft_identity.go`), reading `/status` through `LiveIdentityFromStatus`. That function takes the node's own address from `store.nodes`, not from its flags, and fails if the node is not a member of its own configuration. A node that predates stable ids keeps the address id it is registered under; the move to peer ids is a deliberate, serial, quorum-checked operation (`orama maint node migrate-raft-id`, `core/cmd/orama/internal/production/raftid/migrate.go`), because rqlite cannot rename a member in place.
 
 Two further markers make an address change survivable:
 
@@ -125,7 +125,7 @@ A node found with Raft state and no record is recorded as a member on the spot, 
 | Raft state, recorded address differs from advertise address | Join every recorded member except the old address, then the `node.yaml` join address. With no target, refuse. |
 | No state, no record, join address set | Join that address. |
 | No state, no record, no join address | Bootstrap a new cluster. This is a fresh genesis install, the only path that elects a leader of an empty registry. |
-| No state, record exists | The node lost its data. Join the recorded members and the join address. With none, refuse with `lostDataWithNoPeersError`; the operator either reforms the cluster with `orama node recover-raft` or deletes the record to bootstrap deliberately. |
+| No state, record exists | The node lost its data. Join the recorded members and the join address. With none, refuse with `lostDataWithNoPeersError`; the operator either reforms the cluster with `orama maint node recover-raft` or deletes the record to bootstrap deliberately. |
 
 The membership record is a small JSON file (`core/pkg/rqlite/membership_record.go:ClusterMembership`): `first_seen` and a sorted list of member Raft addresses. It lives in the parent of the rqlite directory (`~/.orama/data/cluster-membership.json` for the index) so that wiping the Raft state does not take the evidence with it. Other signals were considered and rejected in the code's design comment: the join address is empty on exactly the node being guarded; enrolment rows live in rqlite and are lost with it; WireGuard peers are in root's `/etc/wireguard`; libp2p peers carry public, not overlay, addresses. `MergeMembership` validates every address, refuses an empty set and keeps the first-seen time. A namespace rqlite uses the same record type and the same rules (`core/pkg/namespace/raft_restore.go:restoreJoinPlan`): a namespace node with a record and no state joins and never bootstraps, and a namespace with no record elects its lowest node id as the bootstrapper.
 
@@ -178,11 +178,11 @@ Two loops guard against a node that bootstrapped alone or lost its log.
 
 Discovery writes `discovery-peers.json` to `<data>/rqlite/` every 30 s tick when membership changes. It never writes `raft/peers.json` in the normal course, because rqlite treats a `peers.json` in the Raft directory as a command to reset the configuration. Only `writeRecoveryPeersJSON` writes there, after `RemoveRecoveryLeftovers` deletes the `recovery.db*` and `restore-wal-*.tmp` files an earlier recovery leaves behind (a leftover `recovery.db-wal` makes the next recovery fail permanently, and the unit crash-loops). The `non_voter` field of each entry comes from `computeVoterSet`.
 
-The operator's tool for a lost quorum is `orama node recover-raft`: keep one node's data (the highest applied index, or `--leader`), reset it to a single-member cluster preserving its log and term, delete every other node's Raft state, write the kept node into their membership records, and start them one at a time to pull a snapshot. It is destructive and does not back anything up (`core/cmd/orama/internal/production/recover/recover.go`).
+The operator's tool for a lost quorum is `orama maint node recover-raft`: keep one node's data (the highest applied index, or `--leader`), reset it to a single-member cluster preserving its log and term, delete every other node's Raft state, write the kept node into their membership records, and start them one at a time to pull a snapshot. It is destructive and does not back anything up (`core/cmd/orama/internal/production/recover/recover.go`).
 
 ### Migrations
 
-Three runners exist in `core/pkg/rqlite/migrations.go`: `ApplyMigrations` (a directory), `ApplyMigrationsDirs` (several, with duplicate-version detection) and `ApplyEmbeddedMigrations` (the embedded FS). Only the embedded runner has callers outside tests: `JoinCluster`, the index gateway's `prepareSchema` and `orama node schema apply`. All share one algorithm, so every gateway start and every node start can apply migrations; the lock decides who does.
+Three runners exist in `core/pkg/rqlite/migrations.go`: `ApplyMigrations` (a directory), `ApplyMigrationsDirs` (several, with duplicate-version detection) and `ApplyEmbeddedMigrations` (the embedded FS). Only the embedded runner has callers outside tests: `JoinCluster`, the index gateway's `prepareSchema` and `orama maint node schema apply`. All share one algorithm, so every gateway start and every node start can apply migrations; the lock decides who does.
 
 ![Migration apply: lock, re-read the applied set, one transaction per migration, release](../diagrams/ch07-migration-apply.svg)
 
@@ -388,7 +388,7 @@ Tenant rqlites are three-member groups. A namespace with N=3 loses write availab
 - **Dead code in the package.** `InstanceSpawner` (a process-based spawner, including its `-join-attempts` handling), `FindJoinTargets`, `GetNodeWithHighestLogIndex`, `HasRecentPeersJSON`, `WaitForDiscoverySettling`, `exponentialBackoff`, and the directory migration runners `ApplyMigrations` and `ApplyMigrationsDirs` have no caller outside tests.
 - **One shared, all-permission credential.** The index and every tenant rqlited use the same user and password with no rotation path (`core/pkg/install/config.go:EnsureRQLiteAuth`), and the DSN builder does not escape it.
 - **Migration lock identity and lifetime.** The holder is the host name, so the node process and the gateway on one machine cannot be told apart by `Release`, and the TTL is never renewed (`core/pkg/rqlite/migrations.go:acquireMigrationLock`). A migration that outlasts 10 minutes while a second runner on the same host takes over the expired lock can have its lock released by the first.
-- **Stale operator text.** `SchemaMismatchError` tells the operator to run `orama node migrate-apply`, which does not exist; the command is `orama node schema apply` (`core/migrations/contract.go`). The header comment of `core/pkg/rqlite/adminclient.go` still says rqlited runs without `-auth`, and `transferStepDownTimeout` calls the election timeout 1 s. The "Database Layer" section of `docs/ARCHITECTURE.md` describes `pkg/rqlite` as an ORM with a repository pattern; the package's main job is the cluster mechanics above.
+- **Stale operator text.** `SchemaMismatchError` tells the operator to run `orama node migrate-apply`, which does not exist; the command is `orama maint node schema apply` (`core/migrations/contract.go`). The header comment of `core/pkg/rqlite/adminclient.go` still says rqlited runs without `-auth`, and `transferStepDownTimeout` calls the election timeout 1 s. The "Database Layer" section of `docs/ARCHITECTURE.md` describes `pkg/rqlite` as an ORM with a repository pattern; the package's main job is the cluster mechanics above.
 - **No registry sharding and a fixed voter cap.** See Limits and scale.
 
 ## Verify it yourself
@@ -411,7 +411,7 @@ Run one package with `cd core && go test ./pkg/rqlite/...`.
 **Read-only commands on a node.**
 
 ```bash
-sudo orama node schema status
+sudo orama maint node schema status
 sudo orama node status
 ls -l /opt/orama/.orama/data/rqlite/ /opt/orama/.orama/data/cluster-membership.json
 cat /opt/orama/.orama/data/rqlite/raft-node-id /opt/orama/.orama/data/rqlite/raft-adv-addr

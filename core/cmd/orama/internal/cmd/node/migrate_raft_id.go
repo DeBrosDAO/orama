@@ -31,9 +31,9 @@ Safe to re-run: nodes already on a stable id are skipped, so an interrupted run
 continues where it stopped.
 
 Examples:
-  orama node migrate-raft-id --env testnet --dry-run
-  orama node migrate-raft-id --env testnet
-  orama node migrate-raft-id --env testnet --node 1.2.3.4`,
+  orama maint node migrate-raft-id --env testnet --dry-run
+  orama maint node migrate-raft-id --env testnet
+  orama maint node migrate-raft-id --env testnet --node 1.2.3.4`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return raftid.Run(&raftIDFlags)
 	},

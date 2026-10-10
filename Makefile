@@ -19,7 +19,7 @@ core-lint:
 core-clean:
 	$(MAKE) -C core clean
 
-# === Caddy modules (built into the node's Caddy by `orama build`) ===
+# === Caddy modules (built into the node's Caddy by `orama maint build`) ===
 .PHONY: caddy-test
 caddy-test:
 	cd caddy && go vet ./... && go test ./...

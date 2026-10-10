@@ -199,7 +199,7 @@ func (creds *Credentials) UpdateLastUsed() {
 }
 
 // ErrNoGateway means no gateway is configured for this shell.
-var ErrNoGateway = errors.New("no gateway configured: set ORAMA_API_URL, or run 'orama env add <name> <url>' and 'orama env use <name>'")
+var ErrNoGateway = errors.New("no gateway configured: set ORAMA_API_URL, or run 'orama network add <name> <url>' and 'orama network use <name>'")
 
 // gatewayEnvVars are the environment variables that name a gateway, in the
 // order they are consulted. All three exist for historical reasons; keeping

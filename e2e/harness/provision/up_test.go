@@ -58,7 +58,7 @@ func TestUp_drivesTheCLIInOrder(t *testing.T) {
 	if _, err := up(context.Background(), e.cfg, &testLogger{}, e.d); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"go env", "go build", "orama build --output", "orama env add e2e-testrun1", "orama env use",
+	want := []string{"go env", "go build", "orama maint build --output", "orama network add e2e-testrun1", "orama network use",
 		"--genesis --acme-ca letsencrypt-staging", "node dns delegation", "--join-via root@", "--join-via root@",
 		"orama auth login", "monitor report", "chain-deploy.sh up"}
 	lines := e.cmd.lines()

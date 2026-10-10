@@ -39,7 +39,7 @@ const stageHint = "without --trust-signers each node verifies the archive with i
 
 // errArchiveRequired names the archive to push explicitly: /tmp is shared, and
 // "the newest archive there" was a build from another checkout often enough.
-var errArchiveRequired = clierr.Usage("--archive is required: the path `orama build` printed")
+var errArchiveRequired = clierr.Usage("--archive is required: the path `orama maint build` printed")
 
 // Run is the entry point for the push command.
 func Run(flags *Flags) error {

@@ -3,7 +3,7 @@
 # moves on all three validators): `orama global stop`, `start` and `restart`
 # on the last validator (the chain unit is the one installed global service on
 # a fleet node; with three equal bootstrap seats the chain halts while one
-# validator is down); `orama global validator migrate export` and `import` as
+# validator is down); `orama maint global validator migrate export` and `import` as
 # a same-host round trip (the key leaves the chain home, the chain is stopped
 # and disabled, every start is refused by the sign-floor guard, the import
 # puts the key back and the migration key is used up); and a resealed
@@ -25,13 +25,13 @@ covers:
     - orama global restart
     - orama global start
     - orama global stop
-    - orama global validator migrate export
-    - orama global validator migrate import
+    - orama maint global validator migrate export
+    - orama maint global validator migrate import
   claims:
     - "docs/CLI_REFERENCE.md#orama-global-stop: stopping the chain stops every installed service that needs it, chain last"
     - "docs/CLI_REFERENCE.md#orama-global-start: the chain starts first and only after the sign-floor check; the other services start once its loopback RPC answers"
     - "docs/CLI_REFERENCE.md#orama-global-restart: restarting the chain restarts every installed service, chain first"
-    - "docs/CLI_REFERENCE.md#orama-global-validator-migrate: export stops and disables the old host's chain, records the sign floor and moves the key out of the chain home, so the chain no longer starts there"
-    - "docs/CLI_REFERENCE.md#orama-global-validator-migrate: import refuses while the chain runs, records the old host's last sign state as the floor and installs the key last"
-    - "docs/CLI_REFERENCE.md#orama-global-validator-migrate: a reseal bundle has no sign state; its import needs --old-host-destroyed and --floor-height, and the floor becomes height H+1"
+    - "docs/CLI_REFERENCE.md#orama-maint-global-validator-migrate: export stops and disables the old host's chain, records the sign floor and moves the key out of the chain home, so the chain no longer starts there"
+    - "docs/CLI_REFERENCE.md#orama-maint-global-validator-migrate: import refuses while the chain runs, records the old host's last sign state as the floor and installs the key last"
+    - "docs/CLI_REFERENCE.md#orama-maint-global-validator-migrate: a reseal bundle has no sign state; its import needs --old-host-destroyed and --floor-height, and the floor becomes height H+1"
     - "docs/CHAIN.md#x-power: three equal bootstrap seats: the chain halts rather than commits without one of them"

@@ -8,62 +8,17 @@ Global conventions are on the [CLI overview](/docs/developer/cli-overview).
 
 ## orama cluster
 
-Choose who may create namespaces on this cluster
+Register this cluster on the chain, and remove a tenant namespace
 
 ```
 orama cluster
 ```
 
-Who may create a namespace on this cluster, and how many one wallet may own.
+Register the cluster's public name on the chain, retire it, and remove a tenant's
+namespace as an operator. Who may create namespaces and the cluster's update
+policy are maintainer commands: see 'orama maint cluster'.
 
-A new cluster allows only its operators. A cluster that already had a
-namespace besides the seeded default, a node, or an operator when this was
-upgraded stays open — any signed-in wallet — until an operator changes it.
-The per-wallet cap stays 10 until an operator raises or lowers it.
-
-Changing a setting or the creator list needs the operator grant and a wallet
-on the operator list, and is written to the audit trail.
-
-Subcommands: `creators`, `namespace`, `register-onchain`, `retire-onchain`, `settings`
-
-## orama cluster creators
-
-Wallets that may create namespaces when creation is allowlist
-
-```
-orama cluster creators
-```
-
-The allowlist consulted when namespace creation is allowlist.
-
-An operator is not on it unless added. An empty list lets nobody create a
-namespace, and removing the last wallet does not lock operators out.
-
-Subcommands: `add`, `list`, `remove`
-
-## orama cluster creators add
-
-Let a wallet create namespaces when creation is allowlist
-
-```
-orama cluster creators add <wallet>
-```
-
-## orama cluster creators list
-
-List wallets allowed to create namespaces
-
-```
-orama cluster creators list
-```
-
-## orama cluster creators remove
-
-Take a wallet off the namespace-creator list
-
-```
-orama cluster creators remove <wallet>
-```
+Subcommands: `namespace`, `register-onchain`, `retire-onchain`
 
 ## orama cluster namespace
 
@@ -173,29 +128,88 @@ the sign document and does not submit it.
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
-## orama cluster settings
+## orama maint cluster
+
+Choose who may create namespaces on this cluster, and its update policy
+
+```
+orama maint cluster
+```
+
+Who may create a namespace on this cluster, and how many one wallet may own.
+
+A new cluster allows only its operators. A cluster that already had a
+namespace besides the seeded default, a node, or an operator when this was
+upgraded stays open — any signed-in wallet — until an operator changes it.
+The per-wallet cap stays 10 until an operator raises or lowers it.
+
+Changing a setting or the creator list needs the operator grant and a wallet
+on the operator list, and is written to the audit trail.
+
+Subcommands: `creators`, `settings`
+
+## orama maint cluster creators
+
+Wallets that may create namespaces when creation is allowlist
+
+```
+orama maint cluster creators
+```
+
+The allowlist consulted when namespace creation is allowlist.
+
+An operator is not on it unless added. An empty list lets nobody create a
+namespace, and removing the last wallet does not lock operators out.
+
+Subcommands: `add`, `list`, `remove`
+
+## orama maint cluster creators add
+
+Let a wallet create namespaces when creation is allowlist
+
+```
+orama maint cluster creators add <wallet>
+```
+
+## orama maint cluster creators list
+
+List wallets allowed to create namespaces
+
+```
+orama maint cluster creators list
+```
+
+## orama maint cluster creators remove
+
+Take a wallet off the namespace-creator list
+
+```
+orama maint cluster creators remove <wallet>
+```
+
+## orama maint cluster settings
 
 Show or change the cluster's settings
 
 ```
-orama cluster settings
+orama maint cluster settings
 ```
 
 Subcommands: `set`, `show`
 
-## orama cluster settings set
+## orama maint cluster settings set
 
 Change namespace creation, the per-wallet cap or the update policy
 
 ```
-orama cluster settings set <setting> <value>
+orama maint cluster settings set <setting> <value>
 ```
 
 namespace-creation is operators, allowlist or open.
 
 ```
 operators   only wallets on the operator list
-allowlist   only wallets added with orama cluster creators add
+allowlist   only wallets added with orama maint cluster creators add
 open        any signed-in wallet
 ```
 
@@ -214,20 +228,20 @@ release-repo     the https URL of the release repository; empty (the default)
                  means no updates are looked up
 ```
 
-## orama cluster settings show
+## orama maint cluster settings show
 
 Show who may create namespaces, the per-wallet cap and the update policy
 
 ```
-orama cluster settings show
+orama maint cluster settings show
 ```
 
-## orama operator
+## orama maint operator
 
 Operate the cluster
 
 ```
-orama operator
+orama maint operator
 ```
 
 Commands for the wallets on the cluster's operator list.
@@ -237,36 +251,36 @@ own admin key is not enough.
 
 Subcommands: `add`, `list`, `remove`, `rotate-secrets`, `rotate-signing-key`
 
-## orama operator add
+## orama maint operator add
 
 Let another wallet operate this cluster
 
 ```
-orama operator add <wallet>
+orama maint operator add <wallet>
 ```
 
-## orama operator list
+## orama maint operator list
 
 List the wallets that operate this cluster
 
 ```
-orama operator list
+orama maint operator list
 ```
 
-## orama operator remove
+## orama maint operator remove
 
 Take a wallet off this cluster's operator list
 
 ```
-orama operator remove <wallet>
+orama maint operator remove <wallet>
 ```
 
-## orama operator rotate-secrets
+## orama maint operator rotate-secrets
 
 Re-encrypt stored secrets, optionally under a new encryption root
 
 ```
-orama operator rotate-secrets [flags]
+orama maint operator rotate-secrets [flags]
 ```
 
 Rewrite function secrets, push tokens, TURN secrets, deployment
@@ -291,12 +305,12 @@ The walker is idempotent; if it is interrupted, run it again.
 |------|---------|-------------|
 | `--rotate` | `false` | Generate a new encryption root and re-encrypt under it |
 
-## orama operator rotate-signing-key
+## orama maint operator rotate-signing-key
 
 Replace the key this gateway signs tokens with
 
 ```
-orama operator rotate-signing-key
+orama maint operator rotate-signing-key
 ```
 
 Generate a new signing key for the gateway, publish it, and start signing

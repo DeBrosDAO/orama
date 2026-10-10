@@ -26,7 +26,7 @@ type AddRootOptions struct {
 
 // AddRoot adopts the TUF root in opts.File as this node's release root
 // (releaseverify.RootPath). From then on the node accepts releases signed
-// under it, for `orama node stage-archive --release-only`, and the cluster's
+// under it, for `orama maint node stage-archive --release-only`, and the cluster's
 // auto-update agent follows its channel.
 func AddRoot(opts AddRootOptions, out io.Writer) error {
 	if err := clierr.RequireRoot("adopting a release root"); err != nil {
@@ -62,7 +62,7 @@ func addRoot(opts AddRootOptions, rootPath string, now time.Time, out io.Writer)
 		return nil
 	}
 	fmt.Fprintf(out, "Adopted release root %s (%s).\n", digest, rootPath)
-	fmt.Fprintln(out, "Releases signed under it are now accepted by 'orama node stage-archive --release-only' on this node.")
+	fmt.Fprintln(out, "Releases signed under it are now accepted by 'orama maint node stage-archive --release-only' on this node.")
 	fmt.Fprintln(out, "To give every node of the cluster the same root, build with --release-root and push the archive.")
 	return nil
 }

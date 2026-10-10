@@ -26,7 +26,7 @@ The order matters for one reason: a joining node pins the genesis node's TLS cer
 | `mycluster` | The name the CLI gives your cluster (an *environment*). Any name you like |
 | `cluster.example.com` | Your base domain |
 | `203.0.113.10`, `.11`, `.12` | Public IPs of your three servers |
-| `$ARCHIVE` | The path `orama build` prints. If you install a published release instead, there is no `$ARCHIVE`; see step 2 |
+| `$ARCHIVE` | The path `orama maint build` prints. If you install a published release instead, there is no `$ARCHIVE`; see step 2 |
 
 ## 1. Prepare your computer
 
@@ -46,7 +46,7 @@ rw vault add 203.0.113.12
 
 ```bash
 cd orama/core
-orama build
+orama maint build
 ARCHIVE=/tmp/orama-0.3.0-linux-amd64.tar.gz     # the path it printed
 ```
 
@@ -54,7 +54,7 @@ RootWallet may ask you to approve `orama` for archive signing. Approve it. The s
 
 **Check.** The output has a `Signed.` line and ends with `Archive: <path>`, and the file exists. If it printed "Unsigned archive", you passed `--unsigned`; rebuild without it.
 
-**If it fails.** `zig not found` or `could not find project root` mean a missing tool or the wrong directory; see the table in Build and sign. `orama build` asks RootWallet for the active account before it compiles anything, so a locked or missing wallet fails in seconds. A hang at the signing step is an approval prompt in RootWallet, which waits up to two and a half minutes.
+**If it fails.** `zig not found` or `could not find project root` mean a missing tool or the wrong directory; see the table in Build and sign. `orama maint build` asks RootWallet for the active account before it compiles anything, so a locked or missing wallet fails in seconds. A hang at the signing step is an approval prompt in RootWallet, which waits up to two and a half minutes.
 
 **Or install a published release.** If you do not want to build, skip this step. A release is fetched, verified and signed by `orama node setup` itself, so step 3 takes three flags in place of `--archive`:
 
@@ -102,14 +102,14 @@ One command does all of this for you:
 2. Pins the server's SSH host key (it shows the fingerprint; confirm it against your provider's console, or pass `--host-key`). Nothing secret is sent before this.
 3. Installs the key on the server, using the vault password once.
 4. Verifies the archive against your wallet **on your machine**, then uploads it.
-5. Runs `orama node install --nameserver --genesis` on the server. In order: checks the machine (root, a supported OS and architecture, tools, at least 2 CPU cores, 2 GB of RAM and 10 GB of free disk); creates the `orama` user and directories; installs the Tor client; writes the archive trust anchor from your wallet and installs the binaries from the verified archive; generates the cluster secrets; sets up WireGuard; configures the firewall; writes the configuration; initialises IPFS and IPFS Cluster; installs the systemd templates; and writes and starts the units (RQLite, Olric, IPFS and IPFS Cluster, the vault guardian, the gateway, CoreDNS, Caddy and the Tor client).
+5. Runs `orama maint node install --nameserver --genesis` on the server. In order: checks the machine (root, a supported OS and architecture, tools, at least 2 CPU cores, 2 GB of RAM and 10 GB of free disk); creates the `orama` user and directories; installs the Tor client; writes the archive trust anchor from your wallet and installs the binaries from the verified archive; generates the cluster secrets; sets up WireGuard; configures the firewall; writes the configuration; initialises IPFS and IPFS Cluster; installs the systemd templates; and writes and starts the units (RQLite, Olric, IPFS and IPFS Cluster, the vault guardian, the gateway, CoreDNS, Caddy and the Tor client).
 6. Verifies the node before printing success: supervisor active and not crash-looping, RQLite `Leader` or `Follower`, `wg0` up, gateway `/health` returns 200. It exits non-zero and names the first thing that did not come up.
 7. Records the cluster as environment `mycluster` in `~/.orama/environments.json` with gateway `https://cluster.example.com`. It does **not** make it your active environment.
 
 **Check.** The command finishes without an error. Then:
 
 ```bash
-orama env list
+orama network list
 ```
 
 shows `mycluster`. You can also look at the node directly (the first time you SSH, RootWallet supplies the key):
@@ -224,7 +224,7 @@ You should see `ns1`, `ns2` and `ns3`. A nameserver slot stays with its machine 
 Make the new cluster your active environment, then sign in. This uses the same RootWallet account that signed the archive, which the cluster recognises as its operator.
 
 ```bash
-orama env use mycluster
+orama network use mycluster
 orama auth login
 orama status
 ```
@@ -234,7 +234,7 @@ If you used `letsencrypt-staging`, your CLI does not trust the certificates. Tel
 ```bash
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem  > le-staging.pem
 curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le-staging.pem
-orama env add mycluster https://cluster.example.com --ca-file le-staging.pem
+orama network add mycluster https://cluster.example.com --ca-file le-staging.pem
 ```
 
 **Check.** `orama status` lists three nodes, all healthy. `orama monitor cluster --env mycluster` gives the verdict with the numbers behind it. `orama monitor report --env mycluster` prints the full JSON report; use it as the baseline of what healthy looks like on your cluster. (`orama monitor` always needs `--env`; it does not fall back to the active environment.)
@@ -271,4 +271,4 @@ orama node setup --ip 203.0.113.13 --password --env mycluster --archive $ARCHIVE
 - **No delegation.** The genesis node cannot get a certificate. Joiners cannot pin it. The cluster name does not resolve for anyone else.
 - **Different signing accounts.** The node refuses the archive.
 - **Fewer than three nameservers.** The cluster works, but with one it is not highly available, and with two Orama refuses to create namespaces (an even-sized Raft group cannot survive losing either member).
-- **A locked wallet.** `orama build` and `orama node setup` refuse to start and say so. Unlock the app and run the command again.
+- **A locked wallet.** `orama maint build` and `orama node setup` refuse to start and say so. Unlock the app and run the command again.

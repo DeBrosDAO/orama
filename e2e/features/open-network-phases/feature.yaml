@@ -21,14 +21,14 @@ requires:
   chain: true
 covers:
   cli:
-    - orama operator list
-    - orama env list
-    - orama env current
-    - orama env use
-    - orama cluster settings set
-    - orama cluster settings show
-    - orama node stage-archive
-    - orama node autoupdate
+    - orama maint operator list
+    - orama network list
+    - orama network current
+    - orama network use
+    - orama maint cluster settings set
+    - orama maint cluster settings show
+    - orama maint node stage-archive
+    - orama maint node autoupdate
     - orama node dns delegation
     - orama auth login
     - orama namespace create
@@ -39,7 +39,7 @@ covers:
     - orama namespace restore
     - orama namespace restore-key
     - orama global bind
-    - orama global stage-oramad
+    - orama maint global stage-oramad
     - orama storage seal
     - orama storage open
     - orama monitor report
@@ -60,5 +60,5 @@ covers:
     - "docs/RUN_YOUR_OWN_CLUSTER.md#a-sealed-backup: a sealed backup restores the namespace database"
     - "docs/SECURITY.md#process-isolation: CoreDNS runs as orama-coredns and its Corefile is root:orama-coredns 0640"
     - "docs/MONITORING.md: a node running the chain reports its chain section"
-    - "docs/CLI_REFERENCE.md#orama-global-stage-oramad: an oramad that does not verify is not staged"
+    - "docs/CLI_REFERENCE.md#orama-maint-global-stage-oramad: an oramad that does not verify is not staged"
     - "docs/CHAIN.md#client-side: a sealed slot opens only with the right seeds"

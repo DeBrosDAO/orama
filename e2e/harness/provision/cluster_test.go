@@ -30,13 +30,13 @@ func TestAddEvalCluster_installsDelegatesAndRecords(t *testing.T) {
 		t.Fatalf("delegation missing: %+v", e.dns.records)
 	}
 	calls := strings.Join(e.cmd.lines(), "\n")
-	for _, want := range []string{"env add " + cl.Env + " https://" + evalSub, "--ca-file " + cl.CAFile,
+	for _, want := range []string{"network add " + cl.Env + " https://" + evalSub, "--ca-file " + cl.CAFile,
 		"node setup --ip " + cl.Node.PublicIP, "--genesis", "--role nameserver", "--base-domain " + evalSub} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("no %q in\n%s", want, calls)
 		}
 	}
-	if strings.Contains(calls, "env use "+cl.Env) {
+	if strings.Contains(calls, "network use "+cl.Env) {
 		t.Error("the eval environment was made the current one of the shared HOME")
 	}
 }
@@ -71,7 +71,7 @@ func TestAddEvalCluster_failedGenesisRemovesEverything(t *testing.T) {
 	if left, _ := e.dns.ListUnder(context.Background(), evalSub); len(left) != 0 {
 		t.Fatalf("records left: %+v", left)
 	}
-	if !strings.Contains(strings.Join(e.cmd.lines(), "\n"), "env remove "+namePrefix+"testrun1-evalx") {
+	if !strings.Contains(strings.Join(e.cmd.lines(), "\n"), "network remove "+namePrefix+"testrun1-evalx") {
 		t.Fatal("the environment was not removed")
 	}
 }

@@ -29,13 +29,13 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 	r := infra.RequireHealthy(t)
 	leader := infra.Leader(t, r)
 	cli := harness.CLI(t)
-	infra.ExpectRefused(t, infra.Run(t, cli, "node", "recover-raft"), "--env is required")
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "node", "recover-raft"), "--env is required")
 	// No --force on the refusals: should the validation regress, the empty
 	// stdin declines at the prompt instead of running a recovery.
-	infra.ExpectRefused(t, infra.Run(t, cli, "node", "recover-raft", "--env", f.State.Env, "--leader", "192.0.2.1"), "192.0.2.1")
-	infra.ExpectRefused(t, infra.Run(t, cli, "node", "recover-raft", "--env", f.State.Env, "--leader", leader.PublicIP,
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "node", "recover-raft", "--env", f.State.Env, "--leader", "192.0.2.1"), "192.0.2.1")
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "node", "recover-raft", "--env", f.State.Env, "--leader", leader.PublicIP,
 		"--leader-raft-addr", "not-an-address"), "--leader-raft-addr")
-	res := infra.Run(t, cli, "node", "recover-raft", "--env", f.State.Env, "--leader", leader.PublicIP)
+	res := infra.Run(t, cli, "maint", "node", "recover-raft", "--env", f.State.Env, "--leader", leader.PublicIP)
 	if !strings.Contains(res.Stdout, "Aborted.") || !strings.Contains(res.Stdout, "DATA PRESERVED") {
 		t.Errorf("an unconfirmed recover-raft did not print its plan and abort:\n%s", res.Stdout)
 	}
@@ -53,7 +53,7 @@ func TestRecoverRaft_refusalsChangeNothing(t *testing.T) {
 // surviving leader with --leader-raft-addr: the followers are wiped and
 // re-sync from it, every node keeps its raft id, all of them converge again,
 // and data written before the loss (an invite, a namespace) is still there
-// (docs/CLI_REFERENCE.md "orama node recover-raft": use --leader-raft-addr
+// (docs/CLI_REFERENCE.md "orama maint node recover-raft": use --leader-raft-addr
 // when quorum is already lost).
 func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	f := harness.Fleet(t)
@@ -72,7 +72,7 @@ func TestRecoverRaft_afterQuorumLossKeepsTheLeadersData(t *testing.T) {
 	token := mintInvite(t, leader)
 	loseQuorum(t, r)
 	addr := fmt.Sprintf("%s:%d", leaderEntry.Report.WGIP, infra.IndexRQLiteRaft)
-	res := infra.RunFor(t, harness.CLI(t), infra.UpgradeBudget, "node", "recover-raft", "--env", f.State.Env,
+	res := infra.RunFor(t, harness.CLI(t), infra.UpgradeBudget, "maint", "node", "recover-raft", "--env", f.State.Env,
 		"--leader", leader.PublicIP, "--leader-raft-addr", addr, "--force")
 	infra.ExpectExit(t, res, infra.ExitOK)
 	after := infra.WaitConverged(t, len(f.State.Nodes), infra.ColdStartBudget, "the cluster reformed around "+leader.Name)
@@ -108,7 +108,7 @@ func mintInvite(t testing.TB, leader fleet.Node) string {
 		Invite string `json:"invite"`
 	}
 	f := harness.Fleet(t)
-	if err := oramacli.DecodeJSON(harness.CLI(t).MustOK(t, "invite", "--env", f.State.Env, "--node", leader.PublicIP, "--json"), &m); err != nil {
+	if err := oramacli.DecodeJSON(harness.CLI(t).MustOK(t, "maint", "invite", "--env", f.State.Env, "--node", leader.PublicIP, "--json"), &m); err != nil {
 		t.Fatal(err)
 	}
 	return infra.DecodeInvite(t, m.Invite).Token

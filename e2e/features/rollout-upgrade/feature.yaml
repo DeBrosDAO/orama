@@ -18,7 +18,7 @@ requires:
 covers:
   cli:
     - orama node upgrade
-    - orama node push
+    - orama maint push
   claims:
     - "docs/CLI_REFERENCE.md#orama-node-upgrade: without --yes the plan is printed and nothing is restarted"
     - "docs/DEV_DEPLOY.md: a rolling upgrade restarts followers first and the raft leader last"

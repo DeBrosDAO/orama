@@ -1,5 +1,5 @@
 // Package invitemint mints, from the operator's machine, an invite that names
-// one node of a cluster. `orama invite` and `orama node setup` both use it.
+// one node of a cluster. `orama maint invite` and `orama node setup` both use it.
 //
 // The environment's gateway URL is the cluster's base domain, which DNS
 // spreads across every nameserver, each serving a certificate of its own. An
@@ -66,7 +66,7 @@ func GatewayHost(gatewayURL string) (string, error) {
 	}
 	if net.ParseIP(u.Hostname()) != nil {
 		return "", fmt.Errorf("gateway URL %q is an address; an invite needs the cluster's domain, "+
-			"which its nodes serve their certificates under (`orama env add <name> https://<base-domain>`)", gatewayURL)
+			"which its nodes serve their certificates under (`orama network add <name> https://<base-domain>`)", gatewayURL)
 	}
 	return u.Hostname(), nil
 }

@@ -41,7 +41,7 @@ const (
 	// NetworkFileLimit bounds a network file read from disk.
 	NetworkFileLimit = 1 << 20
 	// NetworkEnv is the variable that names the network file for every client
-	// of a network: orama vpn (--network), onion transaction submission
+	// of a network: orama maint vpn (--network), onion transaction submission
 	// (--onion-network) and the relay reporter (--network).
 	NetworkEnv = "ORAMA_ONION_NETWORK"
 	// maxValidatorOnions bounds the validator onion services one file lists.
@@ -115,7 +115,7 @@ var ErrNoValidatorOnion = errors.New("the Tor network file lists no validator on
 // Network is the description every relay and client of the Orama Tor network
 // is given: its name, voting schedule, directory authorities and validator
 // onion services. It is the one network file (tor-network.json): the ceremony
-// writes it, the roles install from it and the clients (orama vpn, onion
+// writes it, the roles install from it and the clients (orama maint vpn, onion
 // transaction submission, the relay reporter) join with it. Every authority
 // must be configured with the same schedule or they cannot agree on a
 // consensus.
@@ -149,7 +149,7 @@ type Network struct {
 	// ValidatorOnions are the validator onion services that accept transaction
 	// submissions, as "addr.onion[:port]". A submission picks one at random.
 	// A validator's onion address exists only once its onion role has started,
-	// after the ceremony, so `orama global tor onions add` puts them here.
+	// after the ceremony, so `orama maint global tor onions add` puts them here.
 	ValidatorOnions []string `json:"validator_onions,omitempty"`
 }
 

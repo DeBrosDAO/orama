@@ -2,14 +2,14 @@
 
 **There is no public Orama VPN today.** There is a command-line client for a private Orama Tor network, and a launch gate that keeps anything public closed. There is no app, no system-wide tunnel and no price. This page says which is which.
 
-## What exists: `orama vpn`
+## What exists: `orama maint vpn`
 
-`orama vpn` joins an Orama Tor network from your machine ([Tor](/docs/privacy/tor#orama-s-own-tor-network)). It reads the network's `tor-network.json` file.
+`orama maint vpn` joins an Orama Tor network from your machine ([Tor](/docs/privacy/tor#orama-s-own-tor-network)). It reads the network's `tor-network.json` file.
 
 | Command | What it does |
 |---|---|
-| `orama vpn up --network tor-network.json` | Starts an unmodified upstream `tor` configured with the file's directory authorities and no others, and offers a SOCKS5 proxy on loopback (default `127.0.0.1:9150`). Runs until interrupted |
-| `orama vpn check --network tor-network.json` | Joins the network and reads the all-zero account through each validator onion service in the file, each over its own circuit. Passes when at least one answers |
+| `orama maint vpn up --network tor-network.json` | Starts an unmodified upstream `tor` configured with the file's directory authorities and no others, and offers a SOCKS5 proxy on loopback (default `127.0.0.1:9150`). Runs until interrupted |
+| `orama maint vpn check --network tor-network.json` | Joins the network and reads the all-zero account through each validator onion service in the file, each over its own circuit. Passes when at least one answers |
 
 `ORAMA_ONION_NETWORK` supplies `--network`; a flag wins.
 

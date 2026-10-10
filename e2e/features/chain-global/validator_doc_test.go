@@ -62,7 +62,7 @@ func findMember(v any, key string) (string, bool) {
 }
 
 // TestValidatorUnjail_documentExecutesAndIsRefusedForABondedValidator:
-// `orama global validator unjail` prints the sign document of x/slashing's
+// `orama maint global validator unjail` prints the sign document of x/slashing's
 // MsgUnjail for the validator whose operator account is --operator (its
 // oramavaloper address); the chain decodes and runs exactly that document and
 // x/slashing refuses it: the validator is not jailed (or, checked before that,
@@ -72,19 +72,19 @@ func TestValidatorUnjail_documentExecutesAndIsRefusedForABondedValidator(t *test
 	t.Parallel()
 	c := chain.New(t)
 	s := newSigner(t, c, chain.NonOperatorNode)
-	d := doc(t, c, s, "global", "validator", "unjail", "--operator", s.k.Address)
+	d := doc(t, c, s, "maint", "global", "validator", "unjail", "--operator", s.k.Address)
 	requireDoc(t, "unjail", d, c.ID, s.account, s.sequence, unjailType)
 	if got, want := d.msg.Str(unjailValidator), c.Valoper(t, s.k); got != want {
 		t.Errorf("the unjail document names validator %q, want %q", got, want)
 	}
 	chain.RequireRefused(t, "unjail of a validator that is not jailed", execute(t, c, s, d), "cannot be unjailed")
-	res := infra.Run(t, harness.CLI(t), append([]string{"global", "validator", "unjail"}, s.flags(c)...)...)
+	res := infra.Run(t, harness.CLI(t), append([]string{"maint", "global", "validator", "unjail"}, s.flags(c)...)...)
 	infra.ExpectExit(t, res, infra.ExitUsage, "operator")
-	bad := infra.Run(t, harness.CLI(t), append([]string{"global", "validator", "unjail", "--operator", "not-an-address"}, s.flags(c)...)...)
+	bad := infra.Run(t, harness.CLI(t), append([]string{"maint", "global", "validator", "unjail", "--operator", "not-an-address"}, s.flags(c)...)...)
 	infra.ExpectExit(t, bad, infra.ExitUsage)
 }
 
-// TestValidatorEdit_documentExecutesAndRestores: `orama global validator
+// TestValidatorEdit_documentExecutesAndRestores: `orama maint global validator
 // edit` builds x/staking's MsgEditValidator changing only the flags given
 // (every other description field is [do-not-modify]); the chain runs the
 // document and the validator's details change, and a second document restores
@@ -99,7 +99,7 @@ func TestValidatorEdit_documentExecutesAndRestores(t *testing.T) {
 	before := validatorDetails(t, c, s)
 	t.Cleanup(func() { restoreDetails(t, c, s, before) })
 	changed := "e2e " + chain.UniqueID(t, "edit-")
-	d := doc(t, c, s, "global", "validator", "edit", "--operator", s.k.Address, "--details", changed)
+	d := doc(t, c, s, "maint", "global", "validator", "edit", "--operator", s.k.Address, "--details", changed)
 	requireDoc(t, "edit", d, c.ID, s.account, s.sequence, editType)
 	desc, _ := d.msg.Msg(editDescription)
 	if desc.Str(descDetails) != changed || desc.Str(descMoniker) != doNotModify || desc.Str(descIdentity) != doNotModify ||
@@ -113,12 +113,12 @@ func TestValidatorEdit_documentExecutesAndRestores(t *testing.T) {
 	if got := validatorDetails(t, c, s); got != changed {
 		t.Errorf("the validator's details are %q after the edit, want %q", got, changed)
 	}
-	back := doc(t, c, s, "global", "validator", "edit", "--operator", s.k.Address, "--details", before)
+	back := doc(t, c, s, "maint", "global", "validator", "edit", "--operator", s.k.Address, "--details", before)
 	chain.RequireOK(t, "the CLI's edit restoring the details", execute(t, c, s, back))
 	if got := validatorDetails(t, c, s); got != before {
 		t.Errorf("the validator's details are %q after the restore, want %q", got, before)
 	}
-	rate := doc(t, c, s, "global", "validator", "edit", "--operator", s.k.Address, "--commission-rate", "0.05")
+	rate := doc(t, c, s, "maint", "global", "validator", "edit", "--operator", s.k.Address, "--commission-rate", "0.05")
 	if got := rate.msg.Str(editCommission); got != "50000000000000000" {
 		t.Errorf("a commission rate of 0.05 is encoded %q, want 50000000000000000", got)
 	}
@@ -139,7 +139,7 @@ func TestValidatorEdit_usageErrors(t *testing.T) {
 		"no operator":              {"--moniker", "e2e"},
 	}
 	for name, args := range cases {
-		res := infra.Run(t, harness.CLI(t), append(append([]string{"global", "validator", "edit"}, args...), s.flags(c)...)...)
+		res := infra.Run(t, harness.CLI(t), append(append([]string{"maint", "global", "validator", "edit"}, args...), s.flags(c)...)...)
 		infra.ExpectExit(t, res, infra.ExitUsage)
 		if strings.Contains(res.Stdout, signDocMarker) {
 			t.Errorf("%s: a sign document was printed for a refused edit", name)

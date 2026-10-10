@@ -15,7 +15,7 @@ import (
 )
 
 // shippedBinaries are what every build must carry (docs/CLI_REFERENCE.md
-// "orama build": the Orama binaries, Olric, IPFS Kubo, IPFS Cluster, RQLite,
+// "orama maint build": the Orama binaries, Olric, IPFS Kubo, IPFS Cluster, RQLite,
 // CoreDNS, Caddy).
 var shippedBinaries = []string{"orama", "orama-node", "gateway", "olric-server", "ipfs", "ipfs-cluster-service", "rqlited", "coredns", "caddy"}
 

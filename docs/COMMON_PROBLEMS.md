@@ -311,14 +311,14 @@ Every Go client resolves the same address: the node from its config (`rqlite.Ind
 **Fix:** Ensure enough cluster nodes are online and reachable over WireGuard. The agent retries with exponential backoff. For genesis nodes before 5+ peers exist, use:
 
 ```bash
-orama node unlock --genesis --node-ip <wg-ip>
+orama maint node unlock --genesis --node-ip <wg-ip>
 ```
 
 ---
 
 ## 9. OramaOS: Enrollment timeout
 
-**Symptom:** `orama node enroll` hangs or times out.
+**Symptom:** `orama maint node enroll` hangs or times out.
 
 **Cause:** The OramaOS node's port 9999 isn't reachable from the gateway, `--code` is missing or wrong, or `--node-ip` is not the node's public IPv4.
 
@@ -328,12 +328,12 @@ orama node unlock --genesis --node-ip <wg-ip>
 
 ## 10. Binary signature verification fails
 
-**Symptom:** `orama push`, `orama node install` or `orama node upgrade` refuses the build archive; the error names the cause.
+**Symptom:** `orama maint push`, `orama maint node install` or `orama node upgrade` refuses the build archive; the error names the cause.
 
 **Causes and fixes:**
 
-- *"is unsigned"* — built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama build` (signs by default).
-- *"signed by 0x…, which this node does not trust"* — the RootWallet account that signed is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate signers with a build signed by a trusted one (`orama build --signers`, [DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
+- *"is unsigned"* — built with `--unsigned`, or `manifest.sig` is missing. Rebuild with `orama maint build` (signs by default).
+- *"signed by 0x…, which this node does not trust"* — the RootWallet account that signed is not in `/etc/orama/archive-signers`. Build with a trusted account active, or rotate signers with a build signed by a trusted one (`orama maint build --signers`, [DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
 - *"does not match the signed manifest"* / *"not in its signed manifest"* — the archive was changed after signing. Rebuild it; if it happens only on fanned-out nodes, suspect the hub.
 - *"no archive trust anchor"* — the node was installed before archives were signed. Push once with `--trust-signers <your address>`.
 - *`unknown command "stage-archive"`* — the node's installed CLI predates archive signing; roll out that one upgrade with the previous release's CLI ([DEV_DEPLOY.md](DEV_DEPLOY.md#signed-archives)).
@@ -398,7 +398,7 @@ the node holds no ipfs-cluster identity, i.e. it has never joined a cluster.
 ## 13. RootWallet agent: locked, waiting, or unreachable
 
 Commands that need an SSH key or a wallet signature — `orama node setup`,
-`orama push`, `orama auth approve` — talk to the RootWallet desktop app's agent
+`orama maint push`, `orama auth approve` — talk to the RootWallet desktop app's agent
 over a Unix socket at `~/.rootwallet/agent.sock`. Override the path with
 `RW_AGENT_SOCK`.
 
@@ -423,7 +423,7 @@ The agent answers with a code, and the CLI turns each one into an instruction:
 up to two minutes for approval, then up to two more for the unlock, and the CLI
 waits longer than both so the agent's own answer arrives instead of a timeout
 from this side. If `orama node setup` seems to hang, look at the desktop app:
-there is probably a prompt on it. `orama sandbox` reports how many prompts are
+there is probably a prompt on it. `orama maint sandbox` reports how many prompts are
 waiting.
 
 **"rootwallet agent is not reachable"** means the socket is not there: the
@@ -447,7 +447,7 @@ desktop app is closed. Open it.
 
 **Cause:** the node's address changed and rqlite only moves a member to a new address when the node joins the leader again. This node has nobody recorded to join: it is a cluster of one, or its membership record was lost.
 
-**Fix:** on a cluster of one, reform it at the new address: `orama node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`. On a larger cluster, set `database.rqlite_join_address` in `node.yaml` to a live member's raft address and let `orama-node` retry.
+**Fix:** on a cluster of one, reform it at the new address: `orama maint node recover-raft --env <env> --leader-raft-addr <wg-ip>:10101`. On a larger cluster, set `database.rqlite_join_address` in `node.yaml` to a live member's raft address and let `orama-node` retry.
 
 ---
 
@@ -538,7 +538,7 @@ replicas from the other two.
 
 **Symptom:** the monitor raises "Raft snapshot term N is above the current term M" (critical), and one node's applied index stays put while the cluster's grows (its raft snapshot is the tell; the cluster-wide applied index is not compared across nodes by the monitor). On that node, `orama-namespace-rqlite@index` logs `failed to take snapshot: ... no WAL data available for snapshot` every few seconds and `node restored` every few minutes. The leader logs `failed to get log: index=<the node's index> error="log not found"` at the same moments. Every node's `wsnapshots/` holds a full snapshot named `<N>-<index>-…` whose term N is above the cluster's term in `/status` (`store.raft.term`).
 
-**Cause:** the cluster was recovered with `orama node recover-raft` before 2026-10-03, which deleted the leader's `raft.db`. That file is also raft's stable store, so the recovered cluster restarted at term 1, while rqlited's recovery snapshot kept the old term N. rqlite orders snapshots by term first, so that snapshot stays "newest". Every later snapshot is reaped as older while raft truncates its log as if it had been kept. A node that needs a snapshot is sent the stale one and is then missing the log after it, so it loops and never catches up. **Restarting any node's rqlite puts it in the same loop**: it restores the stale snapshot on start. `recover-raft` now keeps `raft.db`, so a recovery cannot leave this state.
+**Cause:** the cluster was recovered with `orama maint node recover-raft` before 2026-10-03, which deleted the leader's `raft.db`. That file is also raft's stable store, so the recovered cluster restarted at term 1, while rqlited's recovery snapshot kept the old term N. rqlite orders snapshots by term first, so that snapshot stays "newest". Every later snapshot is reaped as older while raft truncates its log as if it had been kept. A node that needs a snapshot is sent the stale one and is then missing the log after it, so it loops and never catches up. **Restarting any node's rqlite puts it in the same loop**: it restores the stale snapshot on start. `recover-raft` now keeps `raft.db`, so a recovery cannot leave this state.
 
 **Do not restart rqlite or roll an upgrade until it is repaired.** The repair needs no restart. It uses rqlite's HTTP API, run over SSH on a node against overlay addresses (`10.0.0.x:<http port>`) only, never against a public address. Stepdown, load and backup are forwarded to the leader. Pass the credentials from `rqlite-auth.json` in a config read from stdin or a mode-0600 file (`curl -K -`), never as `-u user:pass` on the command line, where `ps` and shell history keep them. The backups hold the whole registry: write them mode 0600 on the node, never copy them off it, and delete them once the cluster is healthy.
 

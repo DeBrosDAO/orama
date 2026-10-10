@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** the code that turns a machine plus a signed build archive into a node, and a running node into a node on a newer release. Install is a fixed sequence of phases run as root by `orama node install`; upgrade is a stop, swap, re-exec and restart sequence run by `orama node upgrade`. Both read the archive extracted at `/opt/orama`, verify it against the node's trust anchor first, and finish by checking that the node serves. A separate path, `orama global install`, installs the global-layer services. Around them sit the operator-side commands that put an archive on a node (`push`, `setup`, `install --remote`), the lifecycle commands, the one-time move off the pre-0.200 on-disk layout, and the auto-update agent, which a timer runs on every node.
+> - **What:** the code that turns a machine plus a signed build archive into a node, and a running node into a node on a newer release. Install is a fixed sequence of phases run as root by `orama maint node install`; upgrade is a stop, swap, re-exec and restart sequence run by `orama node upgrade`. Both read the archive extracted at `/opt/orama`, verify it against the node's trust anchor first, and finish by checking that the node serves. A separate path, `orama global install`, installs the global-layer services. Around them sit the operator-side commands that put an archive on a node (`push`, `setup`, `install --remote`), the lifecycle commands, the one-time move off the pre-0.200 on-disk layout, and the auto-update agent, which a timer runs on every node.
 > - **Key numbers:** minimum 10 GiB free disk, 2 GiB RAM, 2 CPUs; supported OS Ubuntu 22.04, 24.04, 26.04 and Debian 12, 13; install verification budgets 60 s (supervisor), 3 min (rqlite), 60 s (`wg0`), 2 min (gateway); join POST timeout 30 s; WireGuard ping check 30 s; upgrade health gate 5 min per node; leadership hand-over waits 60 s for another leader; invite from `orama node setup` 15 min, from `orama node invite` 1 h by default; archive lock `/opt/orama/.archive.lock`.
 > - **Code:** `core/pkg/install/`, `core/cmd/orama/internal/production/` (install, setup, enroll, upgrade, lifecycle, push, invite, dnsdelegation, status, logs, uninstall, unlock, clusterops), `core/pkg/legacylayout/`, `core/pkg/autoupdate/`, `core/pkg/updatepolicy/`, `core/pkg/updatenotice/`.
 > - **Depends on:** [the node as a supervisor](04-the-node-as-a-supervisor.md) for what starts after install, [privilege and filesystem trust](05-privilege-and-filesystem-trust.md) for the helper and the rules for root below an untrusted tree, [the WireGuard mesh](06-the-wireguard-mesh.md) for the join handshake, [cluster state](07-cluster-state.md) for raft identity, and [build, signing and release](29-build-signing-and-release.md) for the archive. [Rolling upgrades](31-rolling-upgrades.md) orders upgrades across nodes; [recovery](33-recovery.md) covers `recover-raft`, raft id migration and decommissioning.
@@ -21,9 +21,9 @@ Third, an upgrade runs on a live distributed system. It must not stop the raft l
 
 ## The model
 
-**Build archive.** A tarball from `orama build`, extracted at `/opt/orama` so `manifest.json`, its signature, `bin/`, `systemd/` and `packages/` sit side by side. The manifest lists a SHA-256 per file and the architecture. Format and signing are [chapter 29](29-build-signing-and-release.md); here only the five *owned paths* a stage replaces together matter (`core/pkg/archivetrust/verify.go:OwnedPaths`).
+**Build archive.** A tarball from `orama maint build`, extracted at `/opt/orama` so `manifest.json`, its signature, `bin/`, `systemd/` and `packages/` sit side by side. The manifest lists a SHA-256 per file and the architecture. Format and signing are [chapter 29](29-build-signing-and-release.md); here only the five *owned paths* a stage replaces together matter (`core/pkg/archivetrust/verify.go:OwnedPaths`).
 
-**Trust anchor.** `/etc/orama/archive-signers`, one lowercase `0x` address per line, root-owned (`core/pkg/archivetrust/anchor.go:AnchorPath`). A genesis node creates it from `--operator-wallet`; a joining node takes it from the cluster; `orama push --trust-signers` creates it on a node that has none.
+**Trust anchor.** `/etc/orama/archive-signers`, one lowercase `0x` address per line, root-owned (`core/pkg/archivetrust/anchor.go:AnchorPath`). A genesis node creates it from `--operator-wallet`; a joining node takes it from the cluster; `orama maint push --trust-signers` creates it on a node that has none.
 
 **`ProductionSetup`.** The type holding the install phases as methods (`core/pkg/install/orchestrator.go:ProductionSetup`). Install calls them in one order, upgrade calls the same methods in another.
 
@@ -35,7 +35,7 @@ Third, an upgrade runs on a live distributed system. It must not stop the raft l
 
 **Preferences.** `.orama/preferences.yaml`: the saved `nameserver` flag, the `role` (`cluster` when empty, `global`, `both`) and the co-located network namespace name (`core/pkg/install/preferences.go:NodePreferences`). Upgrade reads the flag back so `--nameserver` need not be repeated.
 
-**Staging.** Putting a verified archive under `/opt/orama` without installing from it. `orama node stage-archive` does it on a node; `push`, `setup` and `install --remote` drive it over SSH.
+**Staging.** Putting a verified archive under `/opt/orama` without installing from it. `orama maint node stage-archive` does it on a node; `push`, `setup` and `install --remote` drive it over SSH.
 
 **Re-exec.** The upgrade's hand-over from the CLI that started it to the CLI it just installed, by `syscall.Exec` with a marker flag, so the second half runs the new release's code.
 
@@ -50,13 +50,13 @@ Third, an upgrade runs on a live distributed system. It must not stop the raft l
 | Command | Runs on | What it does | Code |
 |---|---|---|---|
 | `orama node setup` | operator machine | bootstrap a fresh VPS over SSH: key, archive, install | `core/cmd/orama/internal/production/setup/command.go:Run` |
-| `orama node install` | the node, root | the install phases | `core/cmd/orama/internal/production/install/command.go:Run` |
-| `orama node install --remote` | operator machine | the same over SSH against `--vps-ip` | `core/cmd/orama/internal/production/install/remote.go:RemoteOrchestrator` |
-| `orama node push` | operator machine | stage a verified archive on nodes | `core/cmd/orama/internal/production/push/push.go:Run` |
-| `orama node stage-archive` | the node, root | verify and swap in an archive | `core/cmd/orama/internal/production/push/stage.go:Stage` |
+| `orama maint node install` | the node, root | the install phases | `core/cmd/orama/internal/production/install/command.go:Run` |
+| `orama maint node install --remote` | operator machine | the same over SSH against `--vps-ip` | `core/cmd/orama/internal/production/install/remote.go:RemoteOrchestrator` |
+| `orama maint push` | operator machine | stage a verified archive on nodes | `core/cmd/orama/internal/production/push/push.go:Run` |
+| `orama maint node stage-archive` | the node, root | verify and swap in an archive | `core/cmd/orama/internal/production/push/stage.go:Stage` |
 | `orama node upgrade` | the node, root | upgrade this node | `core/cmd/orama/internal/production/upgrade/orchestrator.go:Orchestrator` |
 | `orama node upgrade --env` | operator machine | plan and run a rolling upgrade ([chapter 31](31-rolling-upgrades.md)) | `core/cmd/orama/internal/production/upgrade/remote.go:RemoteUpgrader` |
-| `orama node rollout` | operator machine | build, push, rolling upgrade | `core/cmd/orama/internal/production/rollout/rollout.go:Run` |
+| `orama maint rollout` | operator machine | build, push, rolling upgrade | `core/cmd/orama/internal/production/rollout/rollout.go:Run` |
 | `orama node invite` | the node, root | mint a join invite | `core/cmd/orama/internal/production/invite/command.go:Run` |
 | `start`, `stop`, `restart` | the node, root | lifecycle with a quorum guard | `core/cmd/orama/internal/production/lifecycle/` |
 | `uninstall`, `status`, `logs` | the node | remove services; list units; read a journal | `core/cmd/orama/internal/production/uninstall/command.go:Handle` |
@@ -64,7 +64,7 @@ Third, an upgrade runs on a live distributed system. It must not stop the raft l
 | `enroll`, `unlock` | operator machine | the experimental OramaOS image, not covered in this book | `core/cmd/orama/internal/production/enroll/command.go:Run` |
 | `orama global install` | the node, root | install global-layer services | `core/pkg/install/global_install_apply.go:InstallGlobal` |
 
-`recover-raft`, `migrate-raft-id`, `remove`, `wipe` and `clean` are [chapter 33](33-recovery.md). Commands are registered in `core/cmd/orama/internal/cmd/node/node.go`.
+`recover-raft`, `migrate-raft-id`, `remove` and `wipe` are [chapter 33](33-recovery.md). Commands are registered in `core/cmd/orama/internal/cmd/node/node.go`.
 
 ### Requirements checks (phase 1)
 
@@ -240,7 +240,7 @@ Probes retry every 2 s and report the last diagnostic, not "timed out". The old 
 4. Installs the public key with `--password` (vault password handed to `sshpass` in the `SSHPASS` environment variable, never argv) or `--bootstrap-key`, with `-F /dev/null`, `StrictHostKeyChecking=yes` and the pinned file. This credential can hand over the machine, so the key is pinned before it is sent.
 5. Tests SSH and, for a non-root user, `sudo -n`.
 6. **Puts exactly this build on the node** (`EnsureArchive`).
-7. Mints the invite (join only) and runs `sudo /opt/orama/bin/orama node install ...` over SSH with the invite on stdin.
+7. Mints the invite (join only) and runs `sudo /opt/orama/bin/orama maint node install ...` over SSH with the invite on stdin.
 8. Records the node in the environment; after genesis, the environment with gateway `https://<base domain>`, leaving the active environment unchanged (switching it redirected every later command on a machine that operates several clusters).
 
 ![Remote setup: pin the host, verify the archive here, stage it, then install](../diagrams/ch30-remote-setup.svg)
@@ -261,7 +261,7 @@ Every route ends in the same node-side routine (`core/cmd/orama/internal/product
 
 ![stage-archive: verify in a private directory, then swap with rollback](../diagrams/ch30-stage-archive.svg)
 
-`orama push` runs this on each node with the node's own installed `orama`, so nothing from the archive runs before the node's binary checked it. A node with no such command or anchor (0.122.x) needs `--trust-signers`, which selects another route (`core/cmd/orama/internal/production/push/archive_cli.go:archiveCLIStage`): a script extracts only `bin/orama` into a fresh root-only `.archive-cli-XXXXXXXX` under `/opt/orama` (not `/tmp`, which may be `noexec`), refuses it unless it is a regular non-symlink file with the SHA-256 the verified manifest lists, and runs that CLI's `stage-archive`, which verifies again. The script travels base64-encoded into `bash -s`. Pushes go to one node at a time; a hub fan-out that copied each node's SSH key onto the hub was removed.
+`orama maint push` runs this on each node with the node's own installed `orama`, so nothing from the archive runs before the node's binary checked it. A node with no such command or anchor (0.122.x) needs `--trust-signers`, which selects another route (`core/cmd/orama/internal/production/push/archive_cli.go:archiveCLIStage`): a script extracts only `bin/orama` into a fresh root-only `.archive-cli-XXXXXXXX` under `/opt/orama` (not `/tmp`, which may be `noexec`), refuses it unless it is a regular non-symlink file with the SHA-256 the verified manifest lists, and runs that CLI's `stage-archive`, which verifies again. The script travels base64-encoded into `bash -s`. Pushes go to one node at a time; a hub fan-out that copied each node's SSH key onto the hub was removed.
 
 ### The upgrade, step by step
 
@@ -364,7 +364,7 @@ Rolling back to 0.122.x after a node has moved is unsupported: the old binary lo
 
 ### The auto-update agent
 
-`orama-autoupdate.timer` runs `orama node autoupdate run` on every node (first run 10 minutes after boot, then 15 minutes after each run ends, with a randomised delay), which runs `autoupdate.Agent.Run` as root through `core/cmd/orama/internal/production/updateagent/run.go:Run` (`core/pkg/autoupdate/agent.go:Run`). Install enables the timer (`core/pkg/install/orchestrator.go`). One agent runs per machine, and its working directory is `/var/lib/orama-autoupdate`.
+`orama-autoupdate.timer` runs `orama maint node autoupdate run` on every node (first run 10 minutes after boot, then 15 minutes after each run ends, with a randomised delay), which runs `autoupdate.Agent.Run` as root through `core/cmd/orama/internal/production/updateagent/run.go:Run` (`core/pkg/autoupdate/agent.go:Run`). Install enables the timer (`core/pkg/install/orchestrator.go`). One agent runs per machine, and its working directory is `/var/lib/orama-autoupdate`.
 
 The policy is four `cluster_settings` rows whose keys, defaults and validation live in `core/pkg/updatepolicy/policy.go` (`auto_update` off, notify or auto; `update_channel`; `update_window`; `release_repo`), so the gateway that accepts a setting and the agent that reads it agree. `autoupdate.SettingsFrom` reads them; a stored value the policy refuses fails the run and is not read as the default. The default is `notify` on channel `stable`, with no repository, and the agent does nothing, and says why, until the cluster stored a repository and the node adopted a release root (`orama node trust add-root`). What a run found is kept in `/etc/orama/update-notice.json` (`core/pkg/updatenotice/notice.go`, states `available`, `refused` and `failed`), which the node report and `orama monitor` read.
 
@@ -374,7 +374,7 @@ The policy is four `cluster_settings` rows whose keys, defaults and validation l
 2. Refuse on a verification failure (rollback, freeze, below-threshold signatures, hash mismatch).
 3. Refuse a candidate marked bad, on another channel, or older than the current version.
 4. `none` for an equal version or mode `off`.
-5. `skip` for a validator on mode `auto`: the release is not installed here, upgrade it by hand with `orama global stage-oramad`. The command exits 0 and the agent records the release as skipped, which the rollout counts as done.
+5. `skip` for a validator on mode `auto`: the release is not installed here, upgrade it by hand with `orama maint global stage-oramad`. The command exits 0 and the agent records the release as skipped, which the rollout counts as done.
 6. Refuse when the cluster is degraded or healthy voters are not a strict majority.
 7. `notify` for mode `notify`; for `auto`, `upgrade` inside the window (hours, wrapping midnight, equal hours meaning always), else `notify`.
 
@@ -384,7 +384,7 @@ The policy is four `cluster_settings` rows whose keys, defaults and validation l
 
 A run fetches the channel's metadata and verifies it against the adopted root and the node's rollback record (`core/pkg/autoupdate/source.go:Newest`), then asks `Decide` with the cluster's real state: the registry's members, the raft view from the node's RQLite and the `release_installs` rows (`core/pkg/autoupdate/cluster.go:ClusterHealth`; any `failed` row makes the release bad for every node). When `Decide` says `upgrade`, `NextNode` applies the rollout plan of `pkg/rollout` (followers before the leader, nameservers spaced) and names the first member without an `installed` row; any other node waits. The node then takes the cluster-wide `autoupdate` lock (`core/pkg/rqlite/clusterlock.go:AcquireOwnClusterLock`, held in the node's id with a 45-minute lease, `core/pkg/autoupdate/sqlstore.go:LockTTL`), judges again, downloads and verifies the archive, and writes an install intent to its journal before it changes anything.
 
-The install (`core/pkg/autoupdate/install.go:Install`) is `Stage` (`orama node stage-archive --release-only`, keeping the release it replaces), `Upgrade` (the new release's own `orama node upgrade --restart`, within `UpgradeBudget`) and the health gate (`pkg/nodehealth`). A failure puts the previous release back, upgrades onto it, and gates again; the intent records that the rollback has begun first. A release that ran and failed is recorded as a `failed` row and reported; one that was refused before any service stopped (`ErrNotStarted`) is not blamed. A run killed in the middle is finished by the next run before it looks at the policy (`Agent.resume`). The time budgets are fitted inside the lease and the unit's `TimeoutStartSec` of one hour (`core/pkg/autoupdate/budgets.go`). A validator (a machine that runs the chain) is never installed automatically. `orama node autoupdate` without `run` prints the `Decide` result for values given as flags (`--mode`, `--current`, `--candidate`, `--degraded`, `--voters`, `--healthy-voters`, `--bad`, `--verify`, `--window`, `--role`) and installs nothing.
+The install (`core/pkg/autoupdate/install.go:Install`) is `Stage` (`orama maint node stage-archive --release-only`, keeping the release it replaces), `Upgrade` (the new release's own `orama node upgrade --restart`, within `UpgradeBudget`) and the health gate (`pkg/nodehealth`). A failure puts the previous release back, upgrades onto it, and gates again; the intent records that the rollback has begun first. A release that ran and failed is recorded as a `failed` row and reported; one that was refused before any service stopped (`ErrNotStarted`) is not blamed. A run killed in the middle is finished by the next run before it looks at the policy (`Agent.resume`). The time budgets are fitted inside the lease and the unit's `TimeoutStartSec` of one hour (`core/pkg/autoupdate/budgets.go`). A validator (a machine that runs the chain) is never installed automatically. `orama maint node autoupdate` without `run` prints the `Decide` result for values given as flags (`--mode`, `--current`, `--candidate`, `--degraded`, `--voters`, `--healthy-voters`, `--bad`, `--verify`, `--window`, `--role`) and installs nothing.
 
 ### DNS delegation
 
@@ -394,13 +394,13 @@ After genesis the parent zone must delegate to the cluster's nameservers, and wh
 
 `orama global install` serves machines running the global layer ([global nodes](../vol2/37-global-nodes.md), [anonymity and Tor](../vol2/38-anonymity-and-tor.md)). It enables units and does not start them (`orama global start` does, in order), and never restarts a cluster service. `InstallGlobal` is idempotent (`core/pkg/install/global_install_apply.go:InstallGlobal`).
 
-Services: `chain`, `ipfs` (the public Kubo), `provider`, `archiver`, `indexer`, `repair`, and the Tor roles `dirauth`, `relay` (with `exit` as a policy) and `onion`; each is one main unit and one system account, and some run with companion units that start after it and stop before it: the public Kubo's garbage-collection oneshot and timer, a directory authority's archive timer, a relay's monitor timer (`orama global tor monitor`, which writes `monitor.json` with whether the consensus lists the relay, for the node report), and the onion service's tx gate, which has an account of its own (`globalServiceSpecs`). `ParseGlobalServices` enforces dependencies: anything reaching the chain needs `chain` in the same list (the relay and the directory authority are standalone and need no chain; the onion service may join a machine whose chain is installed); the provider needs `ipfs`; a repair delegate never runs beside a provider; a directory authority is already a relay, so the two never combine. Start order is chain, Kubo, provider, archiver, indexer, repair, then the Tor roles; stop reverses it.
+Services: `chain`, `ipfs` (the public Kubo), `provider`, `archiver`, `indexer`, `repair`, and the Tor roles `dirauth`, `relay` (with `exit` as a policy) and `onion`; each is one main unit and one system account, and some run with companion units that start after it and stop before it: the public Kubo's garbage-collection oneshot and timer, a directory authority's archive timer, a relay's monitor timer (`orama maint global tor monitor`, which writes `monitor.json` with whether the consensus lists the relay, for the node report), and the onion service's tx gate, which has an account of its own (`globalServiceSpecs`). `ParseGlobalServices` enforces dependencies: anything reaching the chain needs `chain` in the same list (the relay and the directory authority are standalone and need no chain; the onion service may join a machine whose chain is installed); the provider needs `ipfs`; a repair delegate never runs beside a provider; a directory authority is already a relay, so the two never combine. Start order is chain, Kubo, provider, archiver, indexer, repair, then the Tor roles; stop reverses it.
 
 ![orama global install: validate and plan everything first, then apply](../diagrams/ch30-global-install.svg)
 
 Planning runs before the host changes: options (staged directory, `id@host:port` persistent peers, the public Kubo's storage budget, SSH port), the Tor plan (network file, torrc, the authority's key bundle, whose certificate must carry the published identity), the onion service's chain, the co-location layout, the firewall (ufw must be active, or `--enable-firewall` given with `sshd -T` confirming the SSH port, or enabling it would cut the session) and `preflightChain`: the staged cosmovisor tarball must match the SHA-256 pinned in code, and the staged `oramad` must match any genesis binary already in the layout.
 
-Apply creates accounts, copies each staged binary to `GlobalBinDir` as root 0755 (the staged directory must be root's and not others'-writable; no symlink is followed), installs cosmovisor, and with `--init-chain` runs `oramad init` as the chain account and installs the *network's* genesis after checking its `chain_id` equals `--chain-id`. It never re-initialises a home that has a genesis (that discards a node's keys) and never overwrites a staged genesis binary with different bytes; that is `orama global stage-oramad --upgrade`. The public Kubo repo is initialised as its own account, version-checked as that account, with no swarm key, private ranges filtered and its RPC behind a bearer token one group can read.
+Apply creates accounts, copies each staged binary to `GlobalBinDir` as root 0755 (the staged directory must be root's and not others'-writable; no symlink is followed), installs cosmovisor, and with `--init-chain` runs `oramad init` as the chain account and installs the *network's* genesis after checking its `chain_id` equals `--chain-id`. It never re-initialises a home that has a genesis (that discards a node's keys) and never overwrites a staged genesis binary with different bytes; that is `orama maint global stage-oramad --upgrade`. The public Kubo repo is initialised as its own account, version-checked as that account, with no swarm key, private ranges filtered and its RPC behind a bearer token one group can read.
 
 With `--colocated` the services run in the `orama-global` network namespace so the machine can also be a cluster node (role `both`): the installer writes the namespace rulesets, the clients allowed to reach the chain's host-only ports (`--chain-client-user`), and the role and namespace name into `preferences.yaml`; its firewall rules become `ufw route` rules, since DNAT traffic is forwarded. Global rules carry the comment `orama-global`, so the cluster reconcile neither adds nor deletes them. On a machine with no cluster node it writes `role: global`, so `orama-node` boots the global graph only ([roles](04-the-node-as-a-supervisor.md#roles-cluster-global-and-both)).
 
@@ -569,9 +569,9 @@ With `--colocated` the services run in the `orama-global` network namespace so t
 
 **Read-only commands:**
 
-- `orama node install --dry-run --vps-ip <ip> --operator-wallet <addr> --base-domain <domain>` prints the plan and changes nothing.
+- `orama maint node install --dry-run --vps-ip <ip> --operator-wallet <addr> --base-domain <domain>` prints the plan and changes nothing.
 - `orama node upgrade --env <env>` without `--yes` prints the rolling plan and restarts nothing.
 - `orama node status`, `orama node doctor`, `orama node report` show units and health.
 - `orama node dns delegation --env <env>` prints the NS and glue records and what DNS answers.
-- `orama node autoupdate --current 0.3.0 --candidate 0.3.1 --mode auto --window 1-5` prints the policy decision.
+- `orama maint node autoupdate --current 0.3.0 --candidate 0.3.1 --mode auto --window 1-5` prints the policy decision.
 - On a node: `cat /etc/orama/archive-signers`, `ls -ld /opt/orama /opt/orama/bin`, `cat /opt/orama/manifest.json`, `ufw status` (tagged rules and the `wg0` overlay rule).

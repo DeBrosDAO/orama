@@ -107,15 +107,16 @@ func removeRetiresAndWipes(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 }
 
 // removedNodeIsNoTarget: a removed node is gone from the environment, so
-// remove and wipe refuse it by name, and the deprecated `clean` (which now
-// runs wipe) says it is deprecated (docs/CLI_REFERENCE.md "orama node clean").
+// remove and wipe refuse it by name. `clean` (the old name of wipe) and
+// `decommission` (the old name of remove) are gone: unknown subcommands.
 func removedNodeIsNoTarget(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	cli := harness.CLI(t)
 	notFound := "not found in the " + f.State.Env + " environment"
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "remove", "--env", f.State.Env, "--node", extra.PublicIP, "--force"), notFound)
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "wipe", "--env", f.State.Env, "--node", extra.PublicIP, "--force"), notFound)
-	clean := infra.Run(t, cli, "node", "clean", "--env", f.State.Env, "--node", extra.PublicIP, "--force")
-	infra.ExpectRefused(t, clean, "deprecated", notFound)
+	for _, gone := range []string{"clean", "decommission"} {
+		infra.ExpectExit(t, infra.Run(t, cli, "node", gone, "--env", f.State.Env, "--node", extra.PublicIP, "--force"), infra.ExitUsage, "unknown node subcommand")
+	}
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "remove", "--env", f.State.Env), "--node is required")
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "remove", "--node", extra.PublicIP), "--env is required")
 	infra.ExpectRefused(t, infra.Run(t, cli, "node", "wipe", "--node", extra.PublicIP), "--env is required")

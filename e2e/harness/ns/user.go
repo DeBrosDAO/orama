@@ -73,16 +73,16 @@ func newViaUser(t testing.TB, f *fleet.Fleet, name string, opts Options) *Namesp
 // current namespace-creation mode, undoing any change afterwards.
 func allowCreator(t testing.TB, cli *oramacli.Runner, walletAddr string) {
 	t.Helper()
-	mode, err := creationMode(cli.MustOK(t, "cluster", "settings", "show").Stdout)
+	mode, err := creationMode(cli.MustOK(t, "maint", "cluster", "settings", "show").Stdout)
 	if err != nil {
 		t.Fatal(err)
 	}
 	switch mode {
 	case modeOpen:
 	case modeAllowlist:
-		cli.MustOK(t, "cluster", "creators", "add", walletAddr)
+		cli.MustOK(t, "maint", "cluster", "creators", "add", walletAddr)
 		t.Cleanup(func() {
-			res, err := cli.Run(context.Background(), "cluster", "creators", "remove", walletAddr)
+			res, err := cli.Run(context.Background(), "maint", "cluster", "creators", "remove", walletAddr)
 			if err != nil || res.Exit != 0 {
 				t.Errorf("cleanup: failed to remove creator %s (exit %d): %v %s", walletAddr, res.Exit, err, res.Stderr)
 			}

@@ -50,7 +50,7 @@ func Rollout(name, archive string) error {
 	}
 	fmt.Printf("Archive: %s (%s)\n\n", filepath.Base(archivePath), printer.FormatBytes(info.Size()))
 
-	// Step 2: Push the archive the way `orama push` does: to a hub that fans
+	// Step 2: Push the archive the way `orama maint push` does: to a hub that fans
 	// it out, and staged on each node by its installed orama, which verifies
 	// it against the node's trust anchor before anything changes.
 	fmt.Println("Pushing archive to all nodes...")

@@ -308,7 +308,7 @@ func (s peersJSONSource) String() string {
 // rebooting at once — so each would have made itself a cluster of one and
 // split every namespace. A node that keeps its configuration waits for its
 // peers, which is what raft is for; forcing a smaller cluster is an operator's
-// decision (`orama node recover-raft`).
+// decision (`orama maint node recover-raft`).
 func choosePeersJSONSource(dbOK bool) peersJSONSource {
 	if dbOK {
 		return peersFromDB

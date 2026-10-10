@@ -148,7 +148,7 @@ var nodeStagedPaths = stagedPaths{
 }
 
 // upgradeCommand is `node upgrade --restart`, run as root with the CLI of the
-// staged build (/opt/orama/bin/orama, which `orama push` verified and put in
+// staged build (/opt/orama/bin/orama, which `orama maint push` verified and put in
 // place), forwarding the per-node flags the operator passed locally
 // (--nameserver, --force, --skip-checks) so the remote orchestrator sees the
 // same intent.
@@ -205,7 +205,7 @@ func upgradeArgs(flags *Flags) string {
 
 // pushHint is what a node whose staged build cannot be trusted tells the
 // operator.
-const pushHint = "stage this release on it first: orama push --env <env> --archive <path> --trust-signers <0xWallet>"
+const pushHint = "stage this release on it first: orama maint push --env <env> --archive <path> --trust-signers <0xWallet>"
 
 // upgradeScript is the node-side guard, then the staged CLI with args.
 func upgradeScript(p stagedPaths, args string) string {

@@ -12,7 +12,7 @@ import (
 
 // errNotAdmitted refuses a node that no join admitted.
 var errNotAdmitted = errors.New("this node was never admitted to the cluster: " +
-	"join it with an operator-minted invite (orama node install --join), which records its peer before it registers")
+	"join it with an operator-minted invite (orama maint node install --join), which records its peer before it registers")
 
 // admissionRow is what admitted reads about a node in one query.
 type admissionRow struct {

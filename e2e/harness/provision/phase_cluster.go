@@ -34,10 +34,10 @@ func (r *run) addEnvironment(ctx context.Context) error {
 		return err
 	}
 	desc := "e2e run " + r.cfg.RunID
-	if _, err := r.oramaCmd(ctx, "env", "add", r.st.Env, r.st.GatewayURL, desc, "--ca-file", r.st.CAFile); err != nil {
+	if _, err := r.oramaCmd(ctx, "network", "add", r.st.Env, r.st.GatewayURL, desc, "--ca-file", r.st.CAFile); err != nil {
 		return err
 	}
-	_, err := r.oramaCmd(ctx, "env", "use", r.st.Env)
+	_, err := r.oramaCmd(ctx, "network", "use", r.st.Env)
 	return err
 }
 

@@ -57,7 +57,7 @@ func copyEnvironments(fromHome, toHome string) error {
 	src := filepath.Join(fromHome, ConfigDirName, EnvironmentsFile)
 	raw, err := os.ReadFile(src)
 	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("the run's CLI HOME has no %s: was `orama env add` run during provisioning?", src)
+		return fmt.Errorf("the run's CLI HOME has no %s: was `orama network add` run during provisioning?", src)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", src, err)

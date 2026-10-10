@@ -16,7 +16,7 @@ For example, deploying an app named `myapp` on a cluster whose base domain is `c
 myapp-f3o4if.cluster.example.com
 ```
 
-The random suffix ensures uniqueness across all namespaces. You can also specify a custom subdomain with `--subdomain`. The base domain belongs to the cluster: its operator chose it and delegated it to the cluster's nameservers ([DNS and nameservers](/docs/operator/nameserver)). `orama env list` shows the gateway URL, whose host is the base domain.
+The random suffix ensures uniqueness across all namespaces. You can also specify a custom subdomain with `--subdomain`. The base domain belongs to the cluster: its operator chose it and delegated it to the cluster's nameservers ([DNS and nameservers](/docs/operator/nameserver)). `orama network list` shows the gateway URL, whose host is the base domain.
 
 A deployment name is 1 to 56 characters of letters, digits, `-` and `_`, starting with a letter or digit. It becomes one DNS label and part of the unit that runs it, so anything else is refused with `400`. See [Deployments](/docs/developer/deployments#names-and-limits).
 

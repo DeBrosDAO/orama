@@ -2,7 +2,7 @@
 //
 // On first boot the agent prints a registration code on the console and listens
 // on port 9999. The operator reads the code off the console and gives it to the
-// gateway (`orama node enroll`). The gateway proves it holds that code by
+// gateway (`orama maint node enroll`). The gateway proves it holds that code by
 // sending a payload that decrypts under it.
 //
 // The code is never served over the network. It used to be: a GET on / handed

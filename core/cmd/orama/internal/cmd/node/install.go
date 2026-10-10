@@ -45,7 +45,7 @@ func init() {
 	f.StringVar(&installFlags.JoinAddress, "join", "",
 		"Gateway to join; the invite carries this, so it is only needed to override it")
 	f.StringVar(&installFlags.Token, "token", "",
-		"Invite from 'orama invite'; it carries the gateway to join and the certificate to pin")
+		"Invite from 'orama maint invite'; it carries the gateway to join and the certificate to pin")
 	f.StringVar(&installFlags.CAFingerprint, "ca-fingerprint", "",
 		"SHA-256 fingerprint of the gateway's TLS cert; the invite carries this, so it is only needed to override it")
 	f.BoolVar(&installFlags.SkipFirewall, "skip-firewall", false, "Skip UFW firewall setup (for users who manage their own firewall)")
@@ -67,14 +67,8 @@ func init() {
 	f.StringVar(&installFlags.IPFSClusterPeerID, "ipfs-cluster-peer", "", "Peer ID of existing IPFS Cluster node")
 	f.StringVar(&installFlags.IPFSClusterAddrs, "ipfs-cluster-addrs", "", "Comma-separated multiaddrs of existing IPFS Cluster node")
 
-	// Superseded by --token; kept so an in-flight upgrade does not break.
-	f.StringVar(&installFlags.ClusterSecret, "cluster-secret", "", "Deprecated: use --token instead")
-	f.StringVar(&installFlags.SwarmKey, "swarm-key", "", "Deprecated: use --token instead")
-	_ = f.MarkDeprecated("cluster-secret", "use --token instead")
-	_ = f.MarkDeprecated("swarm-key", "use --token instead")
-
 	// Set by --remote on the node's command line: the secrets arrive on stdin
 	// so they never appear in the node's argv. Not for operators.
-	f.BoolVar(&installFlags.SecretsFromStdin, "secrets-stdin", false, "Read --token, --cluster-secret and --swarm-key from stdin as JSON (used by --remote)")
+	f.BoolVar(&installFlags.SecretsFromStdin, "secrets-stdin", false, "Read the invite token and the cluster secrets from stdin as JSON (used by --remote)")
 	_ = f.MarkHidden("secrets-stdin")
 }

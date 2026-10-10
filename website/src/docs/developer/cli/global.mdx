@@ -17,16 +17,14 @@ orama global
 Operate the global role.
 
 On the node, as root: install puts the global services on this machine;
-start, stop, restart and status run their units in order, chain first;
-validator backs up and migrates the consensus key and builds unjail and edit
-messages; stage-oramad places a verified chain binary for cosmovisor.
+start, stop and restart run their units in order, chain first.
 
 bind signs the binding that proves a service key belongs to an operator. The
 private key stays in its file; the command writes the public key and the
 signature. register, bond, unbond, capacity and retire build the node's chain
 messages.
 
-Subcommands: `bind`, `bond`, `capacity`, `install`, `register`, `restart`, `retire`, `stage-oramad`, `start`, `status`, `stop`, `tor`, `txgate`, `unbond`, `validator`
+Subcommands: `bind`, `bond`, `capacity`, `install`, `register`, `restart`, `retire`, `start`, `stop`, `tor`, `unbond`
 
 ## orama global bind
 
@@ -118,11 +116,11 @@ orama global install [flags]
 
 Install global services on this machine: chain, and optionally ipfs,
 provider, archiver, indexer, repair, and the roles of the Orama Tor network
-(dirauth, relay, relay,exit, onion). The chain is required unless the machine
-only runs dirauth or relay: the other services reach it only on this host's
-loopback RPC. provider needs ipfs beside
-it (it pins public deals through the public Kubo). provider and repair are
-never installed together. indexer is optional: it serves the chain read API on
+(dirauth, relay, relay,exit, onion) and a directory authority's bandwidth
+reporter (reporter). The chain is required unless the machine only runs dirauth
+or relay: the other services reach it only on this host's loopback RPC. provider
+needs ipfs beside it (it pins public deals through the public Kubo). provider
+and repair are never installed together. indexer is optional: it serves the chain read API on
 loopback for a node that runs an RPC or index endpoint.
 
 For each service it creates the service's system account, copies its binaries
@@ -142,7 +140,7 @@ SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
 installed. oramad itself is placed in the chain home's cosmovisor layout as the
 genesis binary, so the chain home must already have a genesis (--init-chain, or
 an existing home). A binary already staged there with different bytes is
-refused: change the chain binary with 'orama global stage-oramad --upgrade'.
+refused: change the chain binary with 'orama maint global stage-oramad --upgrade'.
 
 The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
 /var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 (198.18.0.2:31011 with --colocated) behind a
@@ -176,10 +174,21 @@ dirauth         a directory authority (ORPort 31020/tcp, DirPort 31021/tcp). It
                 --tor-address to be one of the network's authorities and
                 --tor-authority-keys, its bundle from 'orama global tor
                 ceremony'; a bundle that is not this authority's is refused.
-                A dirauth or relay host needs no chain.
+                A dirauth or relay host needs no chain, unless it also runs
+                the reporter.
 onion           the validator's onion service, forwarding to a tx gate on
                 loopback that serves only account read, broadcast and tx lookup.
                 It publishes no port and needs the chain.
+reporter        the authority's bandwidth reporter, 'orama-global reporter': it
+                reports each closed epoch's relay bandwidth and uptime to x/relay
+                from the authority's votes. It goes beside dirauth and chain, with
+                --tor-reporter-operator. The install writes the reporter's home
+                (/var/lib/orama-global/reporter) with its operator, the
+                authority-id (the v3_ident the network file lists for
+                --tor-address) and the vote-interval (the network file's
+                voting_interval_minutes); the hot key is created when the reporter first
+                starts, and its address still has to be added to x/relay's
+                reporter set and funded.
 ```
 
 --colocated installs the services on a machine that already runs a cluster node
@@ -210,15 +219,16 @@ refuses the install, and the set is kept by later installs.
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
 | `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
-| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion] [required] |
+| `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
 | `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
-| `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/&lt;nickname>) |
+| `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama maint global tor ceremony' (deploy/&lt;nickname>) |
 | `--tor-bandwidth-mbit` | `0` | dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited) |
 | `--tor-contact` | — | dirauth, relay: ContactInfo published in the descriptor (the operator, and where an abuse complaint goes) |
 | `--tor-family` | — | dirauth, relay: the RSA fingerprints of the operator's other relays |
 | `--tor-node-id` | — | relay: the on-chain node id the relay's nickname is derived from |
+| `--tor-reporter-operator` | — | reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report |
 
 ## orama global register
 
@@ -271,11 +281,18 @@ this --chain-id and --operator.
 Restart the installed global services in order (run as root)
 
 ```
-orama global restart [service...]
+orama global restart [service...] [flags]
 ```
 
 Stop then start the named global services (all installed ones when none is
 named). Restarting the chain restarts every installed service, chain first.
+
+A directory authority is restarted one at a time, at least 30 minutes apart:
+see "orama global stop". --force overrides the check.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Stop or restart a directory authority although another has started less than 30 minutes ago (the network may lose its consensus) or its state cannot be read |
 
 ## orama global retire
 
@@ -305,12 +322,120 @@ not submit it.
 | `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
 | `--sequence` | `0` | Account sequence, when not read from --node |
 
-## orama global stage-oramad
+## orama global start
+
+Start the installed global services, chain first (run as root)
+
+```
+orama global start [service...]
+```
+
+Start the installed orama-global-* units, or only the named ones.
+
+The chain starts first. Before it starts, a validator key migrated to this host
+is checked against the sign state it last had on its old host; a state behind
+it is refused, since it could sign a step the old host already signed. The other
+services start once the chain's loopback RPC answers. Starting ipfs, provider,
+archiver, indexer or repair alone needs the chain already running. The public
+Kubo's GC timer starts and stops with it.
+
+## orama global stop
+
+Stop the installed global services, chain last (run as root)
+
+```
+orama global stop [service...] [flags]
+```
+
+Stop the installed orama-global-* units, or only the named ones, in reverse
+start order. Stopping the chain stops every installed service that needs it
+first.
+
+A directory authority is not stopped while another has started less than 30
+minutes ago: a fresh authority casts no Running vote for that long and a
+consensus needs two of the three (docs/TOR_NETWORK.md, "Directory authorities").
+--force overrides it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | `false` | Stop or restart a directory authority although another has started less than 30 minutes ago (the network may lose its consensus) or its state cannot be read |
+
+## orama global tor
+
+This node's Tor identities and the consensus it holds
+
+```
+orama global tor
+```
+
+Show the Tor roles installed on this node. The authority key ceremony, the vote
+archive, the relay monitor and the onion list are maintainer commands: see
+'orama maint global tor'.
+
+Subcommands: `info`
+
+## orama global tor info
+
+Show this node's Tor identities and the consensus it holds (run as root)
+
+```
+orama global tor info
+```
+
+For each Tor role installed on this node (directory authority, relay or exit,
+validator onion service), print the nickname and fingerprints tor made (what
+'MsgRegisterRelay' and a node's onion endpoint need), the onion address, and a
+summary of the consensus the process holds: when it is valid, how many relays
+it lists, and whether it lists this relay. A role that has not started yet shows
+no identity. The root's --json prints the same as a JSON array.
+
+## orama global unbond
+
+Start unbonding norama from one role
+
+```
+orama global unbond [flags]
+```
+
+Start unbonding norama from one role on a registered global node.
+
+The amount has to be covered by that role's bond. Without --node the command
+prints the sign document and does not submit it.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-number` | `0` | Account number, when not read from --node |
+| `--amount` | — | Amount of norama [required] |
+| `--chain-id` | — | Chain id [required] |
+| `--fee` | — | Fee in norama [required] |
+| `--gas` | `0` | Gas limit [required] |
+| `--id` | — | Node id [required] |
+| `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
+| `--onion-network` | — | Start a Tor client for this Orama Tor network file (tor-network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
+| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
+| `--onion-tor` | `tor` | The tor binary --onion-network starts |
+| `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
+| `--operator` | — | Operator account (orama1...) [required] |
+| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
+| `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
+| `--sequence` | `0` | Account sequence, when not read from --node |
+
+## orama maint global
+
+Validator keys, chain binary staging, the Tor network's authorities and the transaction gate
+
+```
+orama maint global
+```
+
+Subcommands: `stage-oramad`, `tor`, `txgate`, `validator`
+
+## orama maint global stage-oramad
 
 Place a TUF-verified oramad in the cosmovisor layout
 
 ```
-orama global stage-oramad [flags]
+orama maint global stage-oramad [flags]
 ```
 
 Place an oramad binary where cosmovisor runs it, after it verifies against
@@ -341,63 +466,26 @@ layout; install places the first oramad here as the genesis binary.
 | `--release-target` | — | Name the binary has in the release targets metadata [required] |
 | `--upgrade` | — | Upgrade plan name to stage for |
 
-## orama global start
+## orama maint global tor
 
-Start the installed global services, chain first (run as root)
-
-```
-orama global start [service...]
-```
-
-Start the installed orama-global-* units, or only the named ones.
-
-The chain starts first. Before it starts, a validator key migrated to this host
-is checked against the sign state it last had on its old host; a state behind
-it is refused, since it could sign a step the old host already signed. The other
-services start once the chain's loopback RPC answers. Starting ipfs, provider,
-archiver, indexer or repair alone needs the chain already running. The public
-Kubo's GC timer starts and stops with it.
-
-## orama global status
-
-Show the state of each installed global service (run as root)
+The Orama Tor network: authority key ceremony, vote archive, relay monitor, onion list
 
 ```
-orama global status
-```
-
-## orama global stop
-
-Stop the installed global services, chain last (run as root)
-
-```
-orama global stop [service...]
-```
-
-Stop the installed orama-global-* units, or only the named ones, in reverse
-start order. Stopping the chain stops every installed service that needs it
-first.
-
-## orama global tor
-
-The Orama Tor network: authority key ceremony, node identity, vote archive
-
-```
-orama global tor
+orama maint global tor
 ```
 
 The Orama Tor network is a separate anonymity network built from unmodified
 upstream Tor code, run by Orama's own directory authorities (docs/TOR_NETWORK.md).
 The roles are installed by 'orama global install --services dirauth|relay|relay,exit|onion'.
 
-Subcommands: `archive`, `ceremony`, `info`, `monitor`, `onions`
+Subcommands: `archive`, `ceremony`, `monitor`, `onions`
 
-## orama global tor archive
+## orama maint global tor archive
 
 Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
 
 ```
-orama global tor archive [flags]
+orama maint global tor archive [flags]
 ```
 
 Copy the consensus the authority holds, the votes that made it and, with
@@ -407,19 +495,27 @@ consensus and bandwidth file of the network is then recomputable by anyone who
 holds the archive. Running it again changes nothing for a period that is
 archived; a consensus is replaced only by the same consensus with more
 signatures.
+Before the authority's first consensus (up to one voting interval after the
+authorities start) there is nothing to archive, and the run succeeds saying so.
+
+With --export-votes-dir it also copies the authority's own vote of that period
+to &lt;dir>/&lt;valid-after>.vote, the files the bandwidth reporter reads. The
+directory must exist (the install makes it, shared read-only with the
+reporter's group); nothing else of the data directory is copied there.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--archive-dir` | — | Where the archive is written [required] |
 | `--bandwidth-file` | — | The bandwidth file the authority votes with |
 | `--data-dir` | — | The authority's tor DataDirectory [required] |
+| `--export-votes-dir` | — | Also copy the authority's own vote to &lt;dir>/&lt;valid-after>.vote for the bandwidth reporter (the directory must exist) |
 
-## orama global tor ceremony
+## orama maint global tor ceremony
 
 Generate the directory authorities' keys and the network file (run on an offline machine)
 
 ```
-orama global tor ceremony [flags]
+orama maint global tor ceremony [flags]
 ```
 
 Generate the keys of a set of directory authorities with the upstream tor and
@@ -465,62 +561,47 @@ in the file: only a network whose owner runs exits sets it.
 | `--vote-delay-seconds` | `300` | Seconds authorities wait for votes |
 | `--voting-interval-minutes` | `60` | Minutes between consensuses; must divide 24 hours |
 
-## orama global tor info
+## orama maint global tor monitor
 
-Show this node's Tor identities and the consensus it holds (run as root)
-
-```
-orama global tor info
-```
-
-For each Tor role installed on this node (directory authority, relay or exit,
-validator onion service), print the nickname and fingerprints tor made (what
-'MsgRegisterRelay' and a node's onion endpoint need), the onion address, and a
-summary of the consensus the process holds: when it is valid, how many relays
-it lists, and whether it lists this relay. A role that has not started yet shows
-no identity. The root's --json prints the same as a JSON array.
-
-## orama global tor monitor
-
-Write this relay's monitor.json for the node report (run by orama-global-tor-monitor.timer)
+Write this relay's or directory authority's monitor.json for the node report (run by orama-global-tor-monitor.timer)
 
 ```
-orama global tor monitor [flags]
+orama maint global tor monitor [flags]
 ```
 
-Write &lt;home>/monitor.json with whether the consensus the relay holds lists it:
-&#123;"in_consensus": true|false&#125;. 'orama monitor node' shows it on the Global line and the
-node report raises a warning when the relay is not listed. The field is left out
-(the file is "&#123;&#125;") while the relay has no consensus yet or the one it holds has
-expired, so an unknown state is never reported as a no. It reads only the relay's
-own DataDirectory and writes only monitor.json there.
+Write &lt;home>/monitor.json with whether the consensus the relay or directory authority
+holds lists it: &#123;"in_consensus": true|false&#125;. 'orama monitor node' shows it on the Global
+line and the node report raises a warning when the node is not listed. The field is left
+out (the file is "&#123;&#125;") while the node has no consensus yet or the one it holds has
+expired, so an unknown state is never reported as a no. It reads only the role's own
+DataDirectory and writes only monitor.json there.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--home` | — | The relay's tor DataDirectory [required] |
+| `--home` | — | The relay's or directory authority's tor DataDirectory [required] |
 
-## orama global tor onions
+## orama maint global tor onions
 
 The validator onion services the network file lists
 
 ```
-orama global tor onions
+orama maint global tor onions
 ```
 
 Subcommands: `add`
 
-## orama global tor onions add
+## orama maint global tor onions add
 
 Add validator onion services to the network file clients join with
 
 ```
-orama global tor onions add ADDR.onion[:PORT]... [flags]
+orama maint global tor onions add ADDR.onion[:PORT]... [flags]
 ```
 
 A validator's onion address exists only once its onion role has started, which
 is after the ceremony wrote tor-network.json. Read it on the validator with
 'orama global tor info' (as root), then add it to the network file here and
-republish the file to clients: orama vpn, --onion-network and the relay reporter
+republish the file to clients: orama maint vpn, --onion-network and the relay reporter
 all read validator_onions from it.
 
 Each address is checked as a v3 onion address with an optional port (default 80,
@@ -533,12 +614,12 @@ validator_onions, so adding an onion never needs a node restart.
 |------|---------|-------------|
 | `--network-file` | — | The tor-network.json to update [required] |
 
-## orama global txgate
+## orama maint global txgate
 
 Serve the validator's transaction gate on loopback (run by orama-global-txgate.service)
 
 ```
-orama global txgate [flags]
+orama maint global txgate [flags]
 ```
 
 Serve the three calls a wallet needs to submit one transaction (read the signer's
@@ -556,53 +637,22 @@ local Tor process, so the limits are on the whole gate and no request is logged.
 | `--rate` | `20` | Requests per second the gate forwards, in total |
 | `--upstream` | — | The chain REST API, http://host:port [required] |
 
-## orama global unbond
-
-Start unbonding norama from one role
-
-```
-orama global unbond [flags]
-```
-
-Start unbonding norama from one role on a registered global node.
-
-The amount has to be covered by that role's bond. Without --node the command
-prints the sign document and does not submit it.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--account-number` | `0` | Account number, when not read from --node |
-| `--amount` | — | Amount of norama [required] |
-| `--chain-id` | — | Chain id [required] |
-| `--fee` | — | Fee in norama [required] |
-| `--gas` | `0` | Gas limit [required] |
-| `--id` | — | Node id [required] |
-| `--node` | — | Chain REST API, for example http://127.0.0.1:31003; the command returns once the transaction is in a block, and fails if the block refuses it |
-| `--onion-network` | — | Start a Tor client for this Orama Tor network file (tor-network.json) and submit through it; without --onion a validator onion from the file is picked at random ($ORAMA_ONION_NETWORK) |
-| `--onion-socks` | — | Tor SOCKS5 address for --onion, a loopback host:port (default 127.0.0.1:9050, $ORAMA_ONION_SOCKS) |
-| `--onion-tor` | `tor` | The tor binary --onion-network starts |
-| `--onion` | — | Submit through this validator onion service (addr.onion[:port]) over Tor instead of --node; never falls back to the clearnet ($ORAMA_CHAIN_ONION) |
-| `--operator` | — | Operator account (orama1...) [required] |
-| `--pubkey` | — | Compressed secp256k1 pubkey hex of the signing account |
-| `--role` | — | Role: validator, storage, relay, exit, dirauth, archiver [required] |
-| `--sequence` | `0` | Account sequence, when not read from --node |
-
-## orama global validator
+## orama maint global validator
 
 Back up, move and manage this node's validator key
 
 ```
-orama global validator
+orama maint global validator
 ```
 
 Subcommands: `check-sign-floor`, `edit`, `export-key`, `migrate`, `reseal`, `unjail`
 
-## orama global validator check-sign-floor
+## orama maint global validator check-sign-floor
 
 Fail when the chain must not start: key moved away or state behind its floor
 
 ```
-orama global validator check-sign-floor
+orama maint global validator check-sign-floor
 ```
 
 The double-sign guard. orama-global-chain.service runs it as root before every
@@ -611,12 +661,12 @@ install' puts this CLI. With no sign floor recorded it passes. With one, it
 fails when priv_validator_key.json is missing (the key moved to another host)
 or priv_validator_state.json is behind the floor.
 
-## orama global validator edit
+## orama maint global validator edit
 
 Build or send MsgEditValidator (description, commission)
 
 ```
-orama global validator edit [flags]
+orama maint global validator edit [flags]
 ```
 
 Build x/staking MsgEditValidator for the operator's validator. Only the flags
@@ -646,12 +696,12 @@ max-change-rate. Without --node the command prints the sign document.
 | `--sequence` | `0` | Account sequence, when not read from --node |
 | `--website` | — | New website |
 
-## orama global validator export-key
+## orama maint global validator export-key
 
 Write priv_validator_key.json sealed to the operator's public key (run as root)
 
 ```
-orama global validator export-key [flags]
+orama maint global validator export-key [flags]
 ```
 
 Seal priv_validator_key.json to --recipient, an X25519 public key (64 hex
@@ -659,9 +709,9 @@ characters), with the same ORBK seal as a namespace backup, and write it to --to
 The node never holds the private half, so it cannot open the file. --to must
 not exist.
 
-To restore the key on a new host, run 'orama global validator migrate prepare'
-there, then 'orama global validator reseal' on the machine holding the private
-key, then 'orama global validator migrate import' on the new host. Restore only
+To restore the key on a new host, run 'orama maint global validator migrate prepare'
+there, then 'orama maint global validator reseal' on the machine holding the private
+key, then 'orama maint global validator migrate import' on the new host. Restore only
 when the old host is gone: two hosts signing with one key is a double sign.
 
 | Flag | Default | Description |
@@ -669,22 +719,22 @@ when the old host is gone: two hosts signing with one key is a double sign.
 | `--recipient` | — | Operator X25519 public key, hex [required] |
 | `--to` | — | File to write; must not exist [required] |
 
-## orama global validator migrate
+## orama maint global validator migrate
 
 Move the validator key to another host without a double sign
 
 ```
-orama global validator migrate
+orama maint global validator migrate
 ```
 
 Move priv_validator_key.json and priv_validator_state.json from this host to
 another, in three steps, each run as root:
 
 ```bash
-1. on the new host:  orama global validator migrate prepare
-2. on the old host:  orama global validator migrate export --recipient <key> --to <file>
+1. on the new host:  orama maint global validator migrate prepare
+2. on the old host:  orama maint global validator migrate export --recipient <key> --to <file>
 3. copy <file> to the new host, then:
-                     orama global validator migrate import --from <file>
+                     orama maint global validator migrate import --from <file>
 ```
 
 &#101;xport stops and disables the old host's chain (and stops the services that
@@ -697,7 +747,7 @@ records the old host's last sign state as the new host's floor, writes the
 state, and installs the key last; the chain unit then refuses to start from a
 state behind the floor. cancel removes a prepared migration key.
 
-A bundle from 'orama global validator reseal' (a restored backup) has no sign
+A bundle from 'orama maint global validator reseal' (a restored backup) has no sign
 state. Its import needs --old-host-destroyed and --floor-height with the
 network's latest committed height H. The floor and the state become height H+1,
 round 0, before any step: the restored key signs nothing at or below H, in any
@@ -706,20 +756,20 @@ if that host stopped before H+1 began.
 
 Subcommands: `cancel`, `export`, `import`, `prepare`
 
-## orama global validator migrate cancel
+## orama maint global validator migrate cancel
 
 Remove this host's prepared migration key (run on the new host)
 
 ```
-orama global validator migrate cancel
+orama maint global validator migrate cancel
 ```
 
-## orama global validator migrate export
+## orama maint global validator migrate export
 
 Stop the chain and seal the key and its sign state (run on the old host)
 
 ```
-orama global validator migrate export [flags]
+orama maint global validator migrate export [flags]
 ```
 
 | Flag | Default | Description |
@@ -727,12 +777,12 @@ orama global validator migrate export [flags]
 | `--recipient` | — | The new host's migration key, from prepare [required] |
 | `--to` | — | Bundle file to write; must not exist [required] |
 
-## orama global validator migrate import
+## orama maint global validator migrate import
 
 Install a migrated key and record its sign floor (run on the new host)
 
 ```
-orama global validator migrate import [flags]
+orama maint global validator migrate import [flags]
 ```
 
 | Flag | Default | Description |
@@ -741,25 +791,25 @@ orama global validator migrate import [flags]
 | `--from` | — | Bundle file from export or reseal [required] |
 | `--old-host-destroyed` | `false` | For a reseal bundle: confirm the old host can never start again |
 
-## orama global validator migrate prepare
+## orama maint global validator migrate prepare
 
 Print this host's migration key (run on the new host)
 
 ```
-orama global validator migrate prepare
+orama maint global validator migrate prepare
 ```
 
-## orama global validator reseal
+## orama maint global validator reseal
 
 Turn a key backup into a migration bundle for a new host
 
 ```
-orama global validator reseal [flags]
+orama maint global validator reseal [flags]
 ```
 
-Open a key backup from 'orama global validator export-key' with the operator's
+Open a key backup from 'orama maint global validator export-key' with the operator's
 X25519 private key (--identity-file, hex, mode 0600) and seal the key to the new
-host's migration key (--recipient, printed by 'orama global validator migrate
+host's migration key (--recipient, printed by 'orama maint global validator migrate
 prepare'). Run it on the machine that holds the private key, not on a node. The
 bundle carries no sign state: nobody knows what a lost host last signed. Its
 &#105;mport therefore needs --old-host-destroyed and --floor-height &lt;the network's
@@ -772,12 +822,12 @@ latest committed height>; the key then signs only above that height.
 | `--recipient` | — | The new host's migration key, hex [required] |
 | `--to` | — | Bundle file to write; must not exist [required] |
 
-## orama global validator unjail
+## orama maint global validator unjail
 
 Build or send MsgUnjail for the operator's validator
 
 ```
-orama global validator unjail [flags]
+orama maint global validator unjail [flags]
 ```
 
 Build x/slashing MsgUnjail for the validator whose operator account is

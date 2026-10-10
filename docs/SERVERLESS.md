@@ -140,8 +140,8 @@ tinygo build -o function.wasm -target wasi function.go
 > the namespace of the credential that deploys it, and stored in and run by that
 > namespace's own gateway, `https://ns-<ns>.<domain>`, against the namespace's own
 > RQLite. `orama function deploy` targets the gateway of your **active CLI
-> environment** (`orama env`); point it at the namespace gateway (`orama env add
-> <name> https://ns-<ns>.<domain>` then `orama env use <name>`), or set
+> environment** (`orama network`); point it at the namespace gateway (`orama network add
+> <name> https://ns-<ns>.<domain>` then `orama network use <name>`), or set
 > `ORAMA_API_URL`.
 >
 > A gateway runs only its own namespace's functions, whichever path asks — an

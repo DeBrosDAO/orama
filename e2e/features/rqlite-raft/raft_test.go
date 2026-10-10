@@ -32,7 +32,7 @@ type raftStatus struct {
 // TestRQLite_raftIdentityMarkers: beside raft.db each node records the raft
 // id it started with (its peer id), the raft address it was last confirmed a
 // member at (its WireGuard address on 10101) and its suffrage
-// (core/pkg/rqlite/identity.go; docs/CLI_REFERENCE.md "orama node migrate-raft-id").
+// (core/pkg/rqlite/identity.go; docs/CLI_REFERENCE.md "orama maint node migrate-raft-id").
 func TestRQLite_raftIdentityMarkers(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
@@ -111,18 +111,18 @@ func TestRQLite_readConsistencyLevels(t *testing.T) {
 }
 
 // TestSchema_inSyncEverywhere: every node's local schema is at the version
-// its binary requires (`orama node schema status`), `schema apply` on an
+// its binary requires (`orama maint node schema status`), `schema apply` on an
 // up-to-date database has nothing to do, and /v1/schema-status says so to any
 // credential and refuses none (docs/API_SURFACE.md "/v1/schema-status").
 func TestSchema_inSyncEverywhere(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	for _, n := range f.State.Nodes {
-		st := infra.OnNode(t, f, n, "node", "schema", "status")
+		st := infra.OnNode(t, f, n, "maint", "node", "schema", "status")
 		if st.Exit != 0 || !strings.Contains(st.Stdout, "up to date") {
 			t.Errorf("%s: schema status exit %d:\n%s%s", n.Name, st.Exit, f.Redact(st.Stdout), f.Redact(st.Stderr))
 		}
-		ap := infra.OnNode(t, f, n, "node", "schema", "apply", "--yes")
+		ap := infra.OnNode(t, f, n, "maint", "node", "schema", "apply", "--yes")
 		if ap.Exit != 0 || !strings.Contains(ap.Stdout, "No pending migrations") {
 			t.Errorf("%s: schema apply on an up-to-date database: exit %d:\n%s", n.Name, ap.Exit, f.Redact(ap.Stdout))
 		}

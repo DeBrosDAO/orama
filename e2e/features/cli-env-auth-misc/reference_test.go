@@ -18,7 +18,7 @@ import (
 func TestCLIReference_liveTreeMatchesReference(t *testing.T) {
 	t.Parallel()
 	ref := cliconf.LoadReference(t)
-	live := cliconf.WalkLive(t, harness.CLI(t))
+	live := cliconf.WalkLive(t, harness.CLI(t), ref.TopLevel()...)
 	if len(live) == 0 {
 		t.Fatal("orama --help lists no command")
 	}
@@ -78,5 +78,6 @@ func TestConformance_envAuthMiscCommands(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)
 	cliconf.Conformance(t, cli, cli.NoWallet(t), cliconf.LoadReference(t),
-		"orama env", "orama auth", "orama inspect", "orama ssh", "orama rollout", "orama version")
+		"orama network", "orama auth", "orama maint inspect", "orama ssh", "orama maint rollout", "orama version",
+		"orama maint", "orama maint cluster", "orama maint global", "orama maint global tor", "orama maint network", "orama maint node")
 }

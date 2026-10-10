@@ -14,12 +14,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Cmd is who may create a namespace on this cluster, and how many one wallet
-// may own. Both are operator acts: the operator grant and a wallet on the
-// operator list.
+// Cmd is the cluster's registration on the chain and the operator removal of a
+// tenant namespace.
 var Cmd = &cobra.Command{
 	Use:   "cluster",
-	Short: "Choose who may create namespaces on this cluster",
+	Short: "Register this cluster on the chain, and remove a tenant namespace",
+	Long: `Register the cluster's public name on the chain, retire it, and remove a tenant's
+namespace as an operator. Who may create namespaces and the cluster's update
+policy are maintainer commands: see 'orama maint cluster'.`,
+}
+
+// MaintCmd is `orama maint cluster`: who may create a namespace on this
+// cluster, how many one wallet may own, and the cluster's automatic updates.
+// Both are operator acts: the operator grant and a wallet on the operator list.
+var MaintCmd = &cobra.Command{
+	Use:   "cluster",
+	Short: "Choose who may create namespaces on this cluster, and its update policy",
 	Long: `Who may create a namespace on this cluster, and how many one wallet may own.
 
 A new cluster allows only its operators. A cluster that already had a
@@ -84,7 +94,7 @@ func init() {
 	settingsSetCmd.Long = fmt.Sprintf(`namespace-creation is operators, allowlist or open.
 
   operators   only wallets on the operator list
-  allowlist   only wallets added with orama cluster creators add
+  allowlist   only wallets added with orama maint cluster creators add
   open        any signed-in wallet
 
 max-namespaces-per-wallet is an integer from 1 to %d. The default is %d.
@@ -105,8 +115,8 @@ The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
 	creatorsCmd.AddCommand(creatorsListCmd)
 	creatorsCmd.AddCommand(creatorsAddCmd)
 	creatorsCmd.AddCommand(creatorsRemoveCmd)
-	Cmd.AddCommand(settingsCmd)
-	Cmd.AddCommand(creatorsCmd)
+	MaintCmd.AddCommand(settingsCmd)
+	MaintCmd.AddCommand(creatorsCmd)
 }
 
 func showSettings(cmd *cobra.Command, args []string) error {

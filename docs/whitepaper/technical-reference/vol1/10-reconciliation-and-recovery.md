@@ -261,7 +261,7 @@ The sweep only claims, because a teardown of unreachable nodes takes minutes. A 
 1. an address that is not `host:port`;
 2. a host outside the WireGuard overlay (`constants.WireGuardOverlay()`, 10.0.0.0/24);
 3. an address equal to a surviving member's raft address, since removing it would remove a live member;
-4. a removal after which `voters` would be fewer than `(voters+1)/2 + 1`, where `voters` counts survivors with a raft port. Without a leader the removal cannot commit; the error names the procedure "Emergency: namespace RQLite lost quorum" in `docs/NODE_REPLACEMENT.md`. `orama node recover-raft` recovers the platform cluster, not a namespace.
+4. a removal after which `voters` would be fewer than `(voters+1)/2 + 1`, where `voters` counts survivors with a raft port. Without a leader the removal cannot commit; the error names the procedure "Emergency: namespace RQLite lost quorum" in `docs/NODE_REPLACEMENT.md`. `orama maint node recover-raft` recovers the platform cluster, not a namespace.
 
 `removeDeadNodeFromRaft` then tries each surviving member's RQLite admin endpoint in turn (`AdminClient.Remove`, HTTP `DELETE /remove`, 30 s timeout) until one accepts. RQLite accepts removal of an id that is not in the configuration, so concurrent prunes of one member on several nodes do not fail each other. Survivors are members whose node is still `active`, so a second dead member is not counted as a voter that could commit the removal.
 

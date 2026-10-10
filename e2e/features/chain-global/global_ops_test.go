@@ -28,34 +28,6 @@ func asRoot(t *testing.T, f *fleet.Fleet, n fleet.Node, args ...string) fleet.Ou
 	return infra.OnNode(t, f, n, args...)
 }
 
-// TestGlobalStatus_showsTheInstalledUnitsAndNeedsRoot: `orama global status`
-// (run as root on the node) prints a SERVICE / UNIT / STATE row for every
-// installed orama-global-* unit: the run's chain unit is installed and
-// active on every node; an account with no privileges is refused with the
-// usage code before anything is read.
-func TestGlobalStatus_showsTheInstalledUnitsAndNeedsRoot(t *testing.T) {
-	t.Parallel()
-	c := chain.New(t)
-	for _, n := range c.Nodes() {
-		out := asRoot(t, c.F, n, "global", "status")
-		infra.ExpectNodeExit(t, n.Name+" global status", out, infra.ExitOK, "SERVICE", "UNIT", "STATE")
-		found := false
-		for _, line := range strings.Split(out.Stdout, "\n") {
-			f := strings.Fields(line)
-			if len(f) == 3 && f[0] == "chain" {
-				found = true
-				if f[1] != chain.Unit || f[2] != infra.UnitActive {
-					t.Errorf("%s: the chain row is %v, want %s active", n.Name, f, chain.Unit)
-				}
-			}
-		}
-		if !found {
-			t.Errorf("%s: global status lists no chain service:\n%s", n.Name, out.Stdout)
-		}
-	}
-	infra.ExpectNodeExit(t, "global status as an unprivileged account", infra.OnNodeUnprivileged(t, c.F, c.Node(t, 0), "global", "status"), infra.ExitUsage, infra.MustBeRoot)
-}
-
 // TestValidatorGuard_checkSignFloorPassesWithNoFloorAndNeedsRoot: the
 // double-sign guard passes on a validator whose key was never migrated (no
 // sign floor is recorded and the key is in the chain home), prints nothing,
@@ -64,11 +36,11 @@ func TestValidatorGuard_checkSignFloorPassesWithNoFloorAndNeedsRoot(t *testing.T
 	t.Parallel()
 	c := chain.New(t)
 	for _, n := range c.Nodes() {
-		out := asRoot(t, c.F, n, "global", "validator", "check-sign-floor")
+		out := asRoot(t, c.F, n, "maint", "global", "validator", "check-sign-floor")
 		infra.ExpectNodeExit(t, n.Name+" check-sign-floor", out, infra.ExitOK)
 	}
 	infra.ExpectNodeExit(t, "check-sign-floor as an unprivileged account",
-		infra.OnNodeUnprivileged(t, c.F, c.Node(t, 0), "global", "validator", "check-sign-floor"), infra.ExitUsage, infra.MustBeRoot)
+		infra.OnNodeUnprivileged(t, c.F, c.Node(t, 0), "maint", "global", "validator", "check-sign-floor"), infra.ExitUsage, infra.MustBeRoot)
 }
 
 // installFingerprint is what a refused install must leave alone: the global
@@ -177,8 +149,8 @@ func TestGlobalLifecycle_usageErrors(t *testing.T) {
 	}
 }
 
-// TestGlobalGroups_listTheirSubcommands: `orama global validator` and
-// `orama global validator migrate` print their help with every subcommand
+// TestGlobalGroups_listTheirSubcommands: `orama maint global validator` and
+// `orama maint global validator migrate` print their help with every subcommand
 // (exit 0) and refuse an unknown subcommand with the usage code.
 func TestGlobalGroups_listTheirSubcommands(t *testing.T) {
 	t.Parallel()

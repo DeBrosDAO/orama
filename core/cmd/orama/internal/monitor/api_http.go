@@ -62,7 +62,7 @@ type apiClient struct {
 func newAPIClientForEnv(env string) (*apiClient, error) {
 	gw, err := noderesolver.GatewayURLForEnv(env)
 	if err != nil {
-		return nil, clierr.Usage("cannot find the gateway for environment %q: %v (see `orama env list`; or read the nodes directly with --ssh)", env, err)
+		return nil, clierr.Usage("cannot find the gateway for environment %q: %v (see `orama network list`; or read the nodes directly with --ssh)", env, err)
 	}
 	return &apiClient{
 		env:        env,
@@ -140,7 +140,7 @@ func statusError(env, gatewayURL string, code int, body []byte) error {
 	msg := serverMessage(code, body)
 	switch code {
 	case http.StatusUnauthorized:
-		return clierr.Auth("the %s gateway at %s did not accept the credential (%s); sign in with `orama env use %s` then `orama auth login`",
+		return clierr.Auth("the %s gateway at %s did not accept the credential (%s); sign in with `orama network use %s` then `orama auth login`",
 			env, gatewayURL, msg, env)
 	case http.StatusForbidden:
 		return clierr.Auth("the %s gateway at %s refused telemetry to this wallet (%s): cluster telemetry is for the cluster's operators",

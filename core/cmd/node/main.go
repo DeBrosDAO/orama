@@ -18,7 +18,7 @@ import (
 
 // missingConfigHint tells an operator how node.yaml comes to exist. Install is
 // the only thing that writes it; there is no separate config command.
-const missingConfigHint = "\nnode.yaml is written by 'orama node install' (with --join and --token on a node\n" +
+const missingConfigHint = "\nnode.yaml is written by 'orama maint node install' (with --join and --token on a node\n" +
 	"that joins an existing cluster); this machine has not been installed.\n"
 
 // setup_logger initializes a logger for the given component.

@@ -13,7 +13,7 @@ import (
 
 // The CLI prints copy-pasteable commands in success output, error hints and
 // flag help. Several of them named commands that were never registered —
-// `orama install` when the command is `orama node install`, `orama invite` on
+// `orama install` when the command is `orama maint node install`, `orama maint invite` on
 // the critical path of every node join — so an operator following the output
 // hit "unknown command" at the worst moment.
 //
@@ -28,6 +28,10 @@ var commandPathRe = regexp.MustCompile(`orama ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0
 func TestPrintedCommandsExist(t *testing.T) {
 	root := newRootCmd()
 	valid, names := commandPaths(root)
+	module, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("resolve module root: %v", err)
+	}
 
 	var problems []string
 	for _, dir := range linkedPackageDirs(t) {
@@ -53,7 +57,8 @@ func TestPrintedCommandsExist(t *testing.T) {
 				}
 				for _, mention := range commandPathRe.FindAllStringSubmatch(line, -1) {
 					if cmd, ok := unreachableCommand(mention[1], valid, names); ok {
-						problems = append(problems, filepath.Base(dir)+"/"+e.Name()+": \"orama "+cmd+"\" is not a registered command")
+						rel, _ := filepath.Rel(module, path)
+						problems = append(problems, rel+": \"orama "+cmd+"\" is not a registered command")
 					}
 				}
 			}
@@ -101,7 +106,7 @@ func linkedPackageDirs(t *testing.T) []string {
 // somewhere in the tree — that filters out English ("orama binary", "orama
 // directory") while keeping the defect class that matters: a subcommand
 // printed as if it were top-level, like "orama install" when the command is
-// "orama node install".
+// "orama maint node install".
 //
 // The longest run of words that forms a registered path is taken as the
 // command, so trailing arguments and flags are ignored.

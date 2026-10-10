@@ -101,7 +101,7 @@ The topic table is built to carry as little as possible. It has no user, subject
    - **apns** and **apns_voip**, both, when an `apns` credentials row parses and its p8 key loads. There is no YAML fallback for APNs.
 4. A factory that returns no provider yields `ErrPushNotConfigured`. A config-store failure is returned as an error and is not cached. A credential-store failure inside the factory is not: the factory reads `credManager.Get` with an `err == nil` guard, so an unreadable `ntfy` or `apns` row simply yields no override or no APNs provider, with no log line, and that dispatcher is cached for 30 s.
 
-On a node installed by `orama node install`, the default `ntfy_base_url` is always set, so every namespace gets the platform ntfy provider and `ErrPushNotConfigured` appears only on a gateway started without that key.
+On a node installed by `orama maint node install`, the default `ntfy_base_url` is always set, so every namespace gets the platform ntfy provider and `ErrPushNotConfigured` appears only on a gateway started without that key.
 
 ![Resolving a namespace's providers when a dispatcher is built](../diagrams/ch22-dispatcher-build.svg)
 
@@ -233,7 +233,7 @@ A provider's transport error is a `*url.Error` whose text contains the request U
 
 ### Operator install
 
-`orama node install` and `upgrade` install ntfy on every node with no flag to turn it off (`core/pkg/install/installers/ntfy.go`). The release is pinned to 2.28.0 with a SHA-256 for each architecture recorded in the source, not read from the release's own checksum file, so a release altered after upload is refused. The installer writes `/etc/ntfy/server.yml` (`generateServerYAML`):
+`orama maint node install` and `upgrade` install ntfy on every node with no flag to turn it off (`core/pkg/install/installers/ntfy.go`). The release is pinned to 2.28.0 with a SHA-256 for each architecture recorded in the source, not read from the release's own checksum file, so a release altered after upload is refused. The installer writes `/etc/ntfy/server.yml` (`generateServerYAML`):
 
 | Key | Value | Reason in the file |
 |---|---|---|
@@ -267,7 +267,7 @@ The unit (`core/systemd/orama-namespace-ntfy@.service`) runs as the `ntfy` user 
 | `orama-namespace-ntfy@index` | the ntfy process on `127.0.0.1:10109` | index supervisor | relay, Caddy | each node |
 | `push.<zone>` A record | the designated node's address, TTL 60 s | `pinPushDesignated` on each nameserver node | CoreDNS, subscribers | `dns_records` in the index registry ([DNS and nameservers](24-dns-and-nameservers.md)) |
 
-The token columns are on the secrets walk (`core/pkg/secrets/walk.go`), so `orama operator rotate-secrets` re-encrypts `push_devices`, `push_topics`, `namespace_push_config` and `namespace_push_credentials`. The device store's fingerprint key derives from the encryption root's IKM. The topic store takes the cluster secret for its fingerprint and the IKM for its encryption: the walk cannot recompute fingerprints, so a fingerprint that changed with the rotating key would stop matching, and a rotated topic would no longer replace the device's previous one.
+The token columns are on the secrets walk (`core/pkg/secrets/walk.go`), so `orama maint operator rotate-secrets` re-encrypts `push_devices`, `push_topics`, `namespace_push_config` and `namespace_push_credentials`. The device store's fingerprint key derives from the encryption root's IKM. The topic store takes the cluster secret for its fingerprint and the IKM for its encryption: the walk cannot recompute fingerprints, so a fingerprint that changed with the rotating key would stop matching, and a rotated topic would no longer replace the device's previous one.
 
 ## Lifecycle
 

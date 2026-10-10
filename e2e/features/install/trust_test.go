@@ -20,11 +20,11 @@ func TestArchiveTrust_pushUsageRefusals(t *testing.T) {
 	f := harness.Fleet(t)
 	harness.RequireArchive(t, f.State.ArchivePath)
 	cli := harness.CLI(t)
-	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env), "--archive is required")
-	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env, "--archive", "/nonexistent/orama.tar.gz"),
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "push", "--env", f.State.Env), "--archive is required")
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "push", "--env", f.State.Env, "--archive", "/nonexistent/orama.tar.gz"),
 		"/nonexistent/orama.tar.gz")
-	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env, "--archive", f.State.ArchivePath,
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "push", "--env", f.State.Env, "--archive", f.State.ArchivePath,
 		"--trust-signers", "not-an-address"), "not-an-address")
-	infra.ExpectRefused(t, infra.Run(t, cli, "push", "--env", f.State.Env, "--node", "192.0.2.1",
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "push", "--env", f.State.Env, "--node", "192.0.2.1",
 		"--archive", f.State.ArchivePath), "192.0.2.1")
 }

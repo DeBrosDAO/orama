@@ -17,7 +17,7 @@ type configRoot struct {
 }
 
 var configRoots = []configRoot{
-	{"./pkg/config", "Config", "node.yaml", "The node's configuration, written by `orama node install` and read by `orama-node`."},
+	{"./pkg/config", "Config", "node.yaml", "The node's configuration, written by `orama maint node install` and read by `orama-node`."},
 	{"./pkg/gatewayspec", "GatewayYAMLConfig", "gateway.yaml (namespace gateway)", "A namespace gateway's configuration, rendered by the namespace spawner and read by `orama-gateway`."},
 }
 

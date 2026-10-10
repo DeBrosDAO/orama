@@ -6,7 +6,7 @@ How to completely remove all Orama Network state from a VPS so it can be reinsta
 > `orama node remove --env <env> --node <ip>`: from a *survivor* it checks that
 > no cluster loses quorum, retires the node from raft, the mesh, every namespace
 > it served and the node registry, and only then erases it. Doing only the erase
-> — which is all this guide, and the deprecated `orama node clean`, ever did —
+> — which is all this guide, and the old `orama node clean`, ever did —
 > leaves the node a configured raft voter counted toward quorum, with its
 > `wireguard_peers` row still applied to every survivor's interface. Use
 > `orama node wipe` when the node is already retired, and the manual steps below
@@ -219,7 +219,7 @@ not be able to walk back in on its own.
 node:
 
 ```bash
-orama operator invite --env testnet
+orama maint operator invite --env testnet
 ```
 
 The join clears the revoked row, and the machine records a fresh key on its next

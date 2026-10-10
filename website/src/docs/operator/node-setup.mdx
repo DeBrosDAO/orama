@@ -1,8 +1,8 @@
 # Installing by hand
 
-`orama node setup` ([Install a cluster from scratch](/docs/operator/install-from-scratch)) is the normal way. It runs `orama node install` for you over SSH. This page is for when you cannot use it: no RootWallet, or a server you reach some other way. It does the same thing with more steps.
+`orama node setup` ([Install a cluster from scratch](/docs/operator/install-from-scratch)) is the normal way. It runs `orama maint node install` for you over SSH. This page is for when you cannot use it: no RootWallet, or a server you reach some other way. It does the same thing with more steps.
 
-## What `orama node install` does
+## What `orama maint node install` does
 
 On the machine itself (or from your computer with `--remote`), it does these in order:
 
@@ -19,12 +19,12 @@ On the machine itself (or from your computer with `--remote`), it does these in 
 
 ## Prerequisites
 
-The signed archive from [Build and sign](/docs/operator/build-and-sign) extracted at `/opt/orama` on the server, or passed with `--archive` together with `--remote`. A genesis install also needs `--operator-wallet`, the address that signed the archive. It becomes the only signer in `/etc/orama/archive-signers`, written **before** the archive is verified. `orama node install` takes an archive; the published-release path (`--release`, `--release-repo`, `--release-root`) belongs to `orama node setup`, which turns the release into a signed archive first, and a node that installed one has adopted the release root (`orama node trust add-root` adopts one on a single node).
+The signed archive from [Build and sign](/docs/operator/build-and-sign) extracted at `/opt/orama` on the server, or passed with `--archive` together with `--remote`. A genesis install also needs `--operator-wallet`, the address that signed the archive. It becomes the only signer in `/etc/orama/archive-signers`, written **before** the archive is verified. `orama maint node install` takes an archive; the published-release path (`--release`, `--release-repo`, `--release-root`) belongs to `orama node setup`, which turns the release into a signed archive first, and a node that installed one has adopted the release root (`orama node trust add-root` adopts one on a single node).
 
 ## Genesis node
 
 ```bash
-sudo orama node install \
+sudo orama maint node install \
   --vps-ip 203.0.113.10 \
   --domain cluster.example.com \
   --base-domain cluster.example.com \
@@ -39,14 +39,14 @@ Then follow [DNS and nameservers](/docs/operator/nameserver) to delegate the dom
 Mint an invite first, from your computer or from a node already in the cluster:
 
 ```bash
-orama invite --env mycluster                 # from your computer
+orama maint invite --env mycluster                 # from your computer
 sudo orama node invite --expiry 24h          # on an existing node
 ```
 
 Then on the new server:
 
 ```bash
-sudo orama node install \
+sudo orama maint node install \
   --token <INVITE> \
   --vps-ip 203.0.113.11 \
   --domain cluster.example.com \
@@ -59,7 +59,7 @@ A worker is the same without `--nameserver` and without `--domain`; the domain i
 To drive it from your own machine over SSH instead:
 
 ```bash
-orama node install --remote --token <INVITE> \
+orama maint node install --remote --token <INVITE> \
   --vps-ip 203.0.113.11 --base-domain cluster.example.com \
   --archive $ARCHIVE --operator-wallet 0xYourWallet \
   --ssh-user root --host-key SHA256:…

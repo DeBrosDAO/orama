@@ -66,7 +66,7 @@ SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
 installed. oramad itself is placed in the chain home's cosmovisor layout as the
 genesis binary, so the chain home must already have a genesis (--init-chain, or
 an existing home). A binary already staged there with different bytes is
-refused: change the chain binary with 'orama global stage-oramad --upgrade'.
+refused: change the chain binary with 'orama maint global stage-oramad --upgrade'.
 
 The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
 /var/lib/orama-global/ipfs, swarm on 31010, RPC on 127.0.0.1:31011 (198.18.0.2:31011 with --colocated) behind a
@@ -154,7 +154,7 @@ func init() {
 	f.UintVar(&installFlags.torBandwidthMbit, "tor-bandwidth-mbit", 0, "dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited)")
 	f.StringSliceVar(&installFlags.torFamily, "tor-family", nil, "dirauth, relay: the RSA fingerprints of the operator's other relays")
 	f.StringVar(&installFlags.torReporterOp, "tor-reporter-operator", "", "reporter: the operator account address (orama1...) the reporter runs for; its relays are left out of a report")
-	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>)")
+	f.StringVar(&installFlags.torAuthorityKeys, "tor-authority-keys", "", "dirauth: the authority's key bundle from 'orama maint global tor ceremony' (deploy/<nickname>)")
 	f.BoolVar(&installFlags.colocated, "colocated", false, "Run the services in their own network namespace on a machine that also runs a cluster node")
 	Cmd.AddCommand(installCmd)
 }

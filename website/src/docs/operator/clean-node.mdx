@@ -24,8 +24,6 @@ orama node wipe   --env mycluster --node 203.0.113.12 --nuclear   # also remove 
 
 `--force` skips the confirmation. Both are destructive. A wipe uses the node's RootWallet SSH key; afterwards that key is deleted from your vault, because a retired node's key opens nothing. If the vault cannot be reached the command says so and fails: run it again once RootWallet is unlocked.
 
-`orama node clean` is deprecated; use `wipe` or `remove`.
-
 ## What a wipe removes
 
 | Category | What |

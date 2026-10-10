@@ -98,7 +98,7 @@ func TestParseAnchor(t *testing.T) {
 		{"core/pkg/rqlite/eviction.go:SafeToRemoveVoter", "core/pkg/rqlite/eviction.go", "SafeToRemoveVoter", true},
 		{"core/pkg/x.go:Type.Method()", "core/pkg/x.go", "Type.Method", true},
 		{"core/pkg/<ns>/x.go", "", "", false},
-		{"orama node install", "", "", false},
+		{"orama maint node install", "", "", false},
 		{"/etc/orama/archive-signers", "", "", false},
 		{"core/pkg/x.go:10", "", "", false},
 		{"", "", "", false},

@@ -49,7 +49,7 @@ func gateSpaceOf(f *fleet.Fleet) gateSpace {
 	return gateSpace{upstream: constants.LocalChainAPIURL()}
 }
 
-// startGate runs `orama global txgate` on n in a transient unit in space and
+// startGate runs `orama maint global txgate` on n in a transient unit in space and
 // returns its base URL on the space's loopback. upstream is the chain REST API
 // to forward to.
 func startGate(t *testing.T, f *fleet.Fleet, n fleet.Node, space gateSpace, upstream string) string {
@@ -145,10 +145,10 @@ func TestTxgate_listenMustBeLoopback(t *testing.T) {
 	f := harness.Fleet(t)
 	n := f.State.Nodes[0]
 	for _, listen := range []string{"0.0.0.0:31091", ":31091", n.PublicIP + ":31091"} {
-		out := infra.OnNode(t, f, n, "global", "txgate", "--listen", listen, "--upstream", "http://127.0.0.1:1")
+		out := infra.OnNode(t, f, n, "maint", "global", "txgate", "--listen", listen, "--upstream", "http://127.0.0.1:1")
 		infra.ExpectNodeExit(t, "txgate --listen "+listen, out, infra.ExitUsage, "loopback")
 	}
-	out := infra.OnNode(t, f, n, "global", "txgate", "--listen", "127.0.0.1:31091", "--upstream", "https://127.0.0.1:1")
+	out := infra.OnNode(t, f, n, "maint", "global", "txgate", "--listen", "127.0.0.1:31091", "--upstream", "https://127.0.0.1:1")
 	infra.ExpectNodeExit(t, "an https upstream", out, infra.ExitUsage, "http://host:port")
 }
 

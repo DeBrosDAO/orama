@@ -43,7 +43,7 @@ This page is the honest inventory. It is written against the code on the `nightl
 
 ## The chain
 
-The chain is implemented and tested in the repository. It is not what `orama node install` starts, it is not on the request path of any app, and nothing about it has run on a public network.
+The chain is implemented and tested in the repository. It is not what `orama maint node install` starts, it is not on the request path of any app, and nothing about it has run on a public network.
 
 | Part | State |
 |---|---|
@@ -69,7 +69,7 @@ Details are in the [Blockchain](/docs/blockchain/what-it-is) section.
 | Relayed fetch over Tor | Live (Node.js clients) |
 | Submitting chain transactions to a validator over an onion address | Client and server side built (`--onion`, `--onion-network`, `orama global install --services onion`). Never run against a real Tor network |
 | A private Orama Tor network (directory authorities, relays, opt-in exits) | Code and installer built, one `tor-network.json`. Never run on a real network; Orama runs every authority |
-| `orama vpn up` and `orama vpn check` | A loopback SOCKS5 proxy client for a private network. Not a system-wide tunnel |
+| `orama maint vpn up` and `orama maint vpn check` | A loopback SOCKS5 proxy client for a private network. Not a system-wide tunnel |
 | Public VPN | Not built. The launch gate (`chain/x/vpnlaunch`) is off in every build |
 
 ## RootWallet

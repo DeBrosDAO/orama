@@ -19,14 +19,22 @@ var Cmd = &cobra.Command{
 	Long: `Operate the global role.
 
 On the node, as root: install puts the global services on this machine;
-start, stop, restart and status run their units in order, chain first;
-validator backs up and migrates the consensus key and builds unjail and edit
-messages; stage-oramad places a verified chain binary for cosmovisor.
+start, stop and restart run their units in order, chain first.
 
 bind signs the binding that proves a service key belongs to an operator. The
 private key stays in its file; the command writes the public key and the
 signature. register, bond, unbond, capacity and retire build the node's chain
 messages.`,
+}
+
+// MaintCmd is `orama maint global`: the global-layer commands a maintainer or a
+// unit runs. validator backs up and migrates the consensus key and builds
+// unjail and edit messages; stage-oramad places a verified chain binary for
+// cosmovisor; tor holds the Tor network's authority ceremony, archive, monitor
+// and onion list; txgate serves the validator's transaction gate.
+var MaintCmd = &cobra.Command{
+	Use:   "global",
+	Short: "Validator keys, chain binary staging, the Tor network's authorities and the transaction gate",
 }
 
 var bindFlags struct {

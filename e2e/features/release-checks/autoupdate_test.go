@@ -10,10 +10,10 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness"
 )
 
-// autoupdate runs `orama node autoupdate` with the version pair and flags.
+// autoupdate runs `orama maint node autoupdate` with the version pair and flags.
 func autoupdate(t testing.TB, current, candidate string, flags ...string) (int, string) {
 	t.Helper()
-	args := append([]string{"node", "autoupdate", "--current", current, "--candidate", candidate}, flags...)
+	args := append([]string{"maint", "node", "autoupdate", "--current", current, "--candidate", candidate}, flags...)
 	res := infra.Run(t, harness.CLI(t), args...)
 	return res.Exit, strings.TrimSpace(res.Stdout + res.Stderr)
 }
@@ -48,7 +48,7 @@ func TestAutoupdate_decisions(t *testing.T) {
 		{"validator notify", "1.2.3", "1.2.4", []string{"--role", "validator"}, "notify: newer release 1.2.4 (notify)"},
 		// A validator never installs a release by itself: on auto it skips, with the
 		// way to upgrade it, and the rollout counts it as done (docs/DEV_DEPLOY.md, "Auto-update").
-		{"validator auto", "1.2.3", "1.2.4", []string{"--mode", "auto", "--role", "validator"}, "skip: release 1.2.4 is not installed here: this machine is a validator, upgrade it by hand ('orama global stage-oramad')"},
+		{"validator auto", "1.2.3", "1.2.4", []string{"--mode", "auto", "--role", "validator"}, "skip: release 1.2.4 is not installed here: this machine is a validator, upgrade it by hand ('orama maint global stage-oramad')"},
 	}
 	for _, c := range cases {
 		exit, out := autoupdate(t, c.cur, c.cand, c.flags...)
@@ -91,17 +91,17 @@ func TestAutoupdate_windowDecides(t *testing.T) {
 func TestAutoupdate_refusals(t *testing.T) {
 	t.Parallel()
 	cases := [][]string{
-		{"node", "autoupdate", "--candidate", "1.0.1"},
-		{"node", "autoupdate", "--current", "1.0.0"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.x"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.01.0"},
-		{"node", "autoupdate", "--current", "", "--candidate", "1.0.1"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "yolo"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--role", "god"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--verify", "maybe"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "night"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "1-24"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "\u202e1.0.1"},
+		{"maint", "node", "autoupdate", "--candidate", "1.0.1"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.x"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.01.0"},
+		{"maint", "node", "autoupdate", "--current", "", "--candidate", "1.0.1"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "yolo"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--role", "god"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--verify", "maybe"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "night"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "1-24"},
+		{"maint", "node", "autoupdate", "--current", "1.0.0", "--candidate", "\u202e1.0.1"},
 	}
 	for _, args := range cases {
 		res := infra.Run(t, harness.CLI(t), args...)

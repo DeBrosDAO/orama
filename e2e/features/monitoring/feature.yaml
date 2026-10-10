@@ -7,7 +7,7 @@
 # --node by public or overlay address, the exit codes (2 usage, 3 no
 # session, 4 unknown node), the operator telemetry API over HTTP (401, 403
 # NOT_AN_OPERATOR, 200 for an operator, the 5s cache, the SSE stream and its
-# interval bounds), reports refreshed every 10s, `orama inspect` over SSH
+# interval bounds), reports refreshed every 10s, `orama maint inspect` over SSH
 # (summary consistent with the checks and the exit code, subsystem filter,
 # refusals, JSON on stdout), `orama status` and `orama nodes`, and the public
 # status JSON's uptime history. Alert injection is in monitoring-chaos.
@@ -37,7 +37,7 @@ covers:
     - orama monitor report
     - orama monitor service
     - orama monitor traffic
-    - orama inspect
+    - orama maint inspect
     - orama status
     - orama nodes
   routes:

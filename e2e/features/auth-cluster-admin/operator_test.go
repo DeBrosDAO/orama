@@ -31,7 +31,7 @@ const (
 	lastOperatorText = "last operator"
 )
 
-// rewroteLine is `orama operator rotate-secrets`' index summary.
+// rewroteLine is `orama maint operator rotate-secrets`' index summary.
 var rewroteLine = regexp.MustCompile(`Index:\s+scanned (\d+), rewrote (\d+), skipped (\d+)`)
 
 // TestWalletCap_namespaceQuota: with the per-wallet cap at 1, a wallet that
@@ -81,20 +81,20 @@ func deleteLeaked(t testing.TB, c *gw.Client, w *wallet.EVM, name string) {
 func TestOperator_addListRemove(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	if out := cli.MustOK(t, "operator", "list").Stdout; !containsFold(out, f.State.OperatorAddress) {
+	if out := cli.MustOK(t, "maint", "operator", "list").Stdout; !containsFold(out, f.State.OperatorAddress) {
 		t.Fatalf("operator list does not show the run's operator %s:\n%s", f.State.OperatorAddress, out)
 	}
 	w := newWallet(t).Address()
-	cli.MustOK(t, "operator", "add", w)
+	cli.MustOK(t, "maint", "operator", "add", w)
 	t.Cleanup(func() { removeOperator(t, cli, w) })
-	cli.MustOK(t, "operator", "add", w) // idempotent
-	if out := cli.MustOK(t, "operator", "list").Stdout; strings.Count(strings.ToLower(out), strings.ToLower(w)) != 1 {
+	cli.MustOK(t, "maint", "operator", "add", w) // idempotent
+	if out := cli.MustOK(t, "maint", "operator", "list").Stdout; strings.Count(strings.ToLower(out), strings.ToLower(w)) != 1 {
 		t.Errorf("after adding %s twice the list shows it %d times:\n%s", w, strings.Count(strings.ToLower(out), strings.ToLower(w)), out)
 	}
-	cli.MustOK(t, "operator", "remove", w)
+	cli.MustOK(t, "maint", "operator", "remove", w)
 	for _, args := range [][]string{{"remove", w}, {"add", "not-a-wallet"}, {"add"}, {"remove"}} {
 		if res := runCLI(t, cli, append([]string{"operator"}, args...)...); res.Exit == 0 {
-			t.Errorf("orama operator %v succeeded", args)
+			t.Errorf("orama maint operator %v succeeded", args)
 		}
 	}
 }
@@ -108,20 +108,20 @@ func TestOperator_addListRemove(t *testing.T) {
 func TestOperator_neverRemovesTheLast(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	out := cli.MustOK(t, "operator", "list").Stdout
+	out := cli.MustOK(t, "maint", "operator", "list").Stdout
 	if lines := nonEmptyLines(out); len(lines) != 1 {
 		harness.SkipNotApplicable(t, fmt.Sprintf("the cluster lists %d operators, so removing the run's operator %s "+
 			"would not remove the last one; the refusal is only observable on a cluster with exactly one operator, "+
 			"and this test does not remove other operators to get there:\n%s", len(lines), f.State.OperatorAddress, out))
 	}
-	res := runCLI(t, cli, "operator", "remove", f.State.OperatorAddress)
+	res := runCLI(t, cli, "maint", "operator", "remove", f.State.OperatorAddress)
 	if res.Exit == 0 {
 		t.Fatalf("THE LAST OPERATOR WAS REMOVED: the cluster has no operator left and later stages cannot operate it")
 	}
 	if !strings.Contains(res.Stdout+res.Stderr, lastOperatorText) {
 		t.Errorf("the refusal does not say why:\n%s%s", res.Stdout, res.Stderr)
 	}
-	if out := cli.MustOK(t, "operator", "list").Stdout; !containsFold(out, f.State.OperatorAddress) {
+	if out := cli.MustOK(t, "maint", "operator", "list").Stdout; !containsFold(out, f.State.OperatorAddress) {
 		t.Fatal("the run's operator is no longer listed")
 	}
 }
@@ -144,7 +144,7 @@ func TestOperatorRoutes_ownerIsNotAnOperator(t *testing.T) {
 			t.Errorf("%s %s as an owner: want 403 NOT_AN_OPERATOR, got %d %s", r.Method, r.Path, resp.Status, resp.Body)
 		}
 	}
-	if out := harness.CLI(t).MustOK(t, "operator", "list").Stdout; containsFold(out, n.Owner.Wallet.Address()) {
+	if out := harness.CLI(t).MustOK(t, "maint", "operator", "list").Stdout; containsFold(out, n.Owner.Wallet.Address()) {
 		t.Fatal("a namespace owner added itself to the operator list")
 	}
 }
@@ -155,8 +155,8 @@ func TestOperatorRoutes_ownerIsNotAnOperator(t *testing.T) {
 // undone, and the upgrade stage still has to read this cluster's rows.
 func TestRotateSecrets_idempotent(t *testing.T) {
 	cli := harness.CLI(t)
-	first := rewroteCount(t, cli.MustOK(t, "operator", "rotate-secrets").Stdout)
-	second := rewroteCount(t, cli.MustOK(t, "operator", "rotate-secrets").Stdout)
+	first := rewroteCount(t, cli.MustOK(t, "maint", "operator", "rotate-secrets").Stdout)
+	second := rewroteCount(t, cli.MustOK(t, "maint", "operator", "rotate-secrets").Stdout)
 	if second != 0 {
 		t.Fatalf("the second rewrite rewrote %d rows (first rewrote %d): the walk is not idempotent", second, first)
 	}
@@ -182,11 +182,11 @@ func removeOperator(t testing.TB, cli *oramacli.Runner, w string) {
 	t.Helper()
 	ctx, cancel := fleet.CleanupContext(t)
 	defer cancel()
-	res, err := cli.Run(ctx, "operator", "list")
+	res, err := cli.Run(ctx, "maint", "operator", "list")
 	if err != nil || !containsFold(res.Stdout, w) {
 		return
 	}
-	if res, err := cli.Run(ctx, "operator", "remove", w); err != nil || res.Exit != 0 {
+	if res, err := cli.Run(ctx, "maint", "operator", "remove", w); err != nil || res.Exit != 0 {
 		t.Errorf("cleanup: failed to remove operator %s: %v %s", w, err, res.Stderr)
 	}
 }

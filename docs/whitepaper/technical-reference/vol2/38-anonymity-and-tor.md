@@ -2,8 +2,8 @@
 
 > **At a glance.**
 >
-> - **What:** two separate uses of Tor. Every cluster node runs a client-only Tor on the public Tor network, and the gateway uses it for three anonymising routes (`/v1/proxy/anon`, `/v1/proxy/tunnel`, `/v1/proxy/relay`) and the `anon_fetch` serverless host function; there is no direct path. Separately, the global layer runs the Orama Tor network: unmodified upstream Tor under Orama's own directory authorities, relays, opt-in exits and per-validator onion services, so a wallet can submit a chain transaction without its address reaching the validator. Clients of that network (`orama vpn`, transaction commands) bootstrap from one strict network file and never fall back to the clearnet or the public Tor network.
-> - **Key numbers:** node Tor SOCKS `127.0.0.1:9050`; client of the Orama network `9052` by convention, `orama vpn up` offers `127.0.0.1:9150`; ORPort 31020 and DirPort 31021 (`core/pkg/constants/global.go`); tx gate `127.0.0.1:31022`, 3 calls, 512 KiB broadcast body, 20 requests per second with a burst of 40, 16 in flight, no logging; at least 3 authorities, 12-month signing certificates; client bootstrap timeout 3 min; tunnel 24 per user and 512 per node, 256 MiB each way, 30 min, 2 min idle; relay 128 streams, 4 per address, 64 MiB each way, 5 min.
+> - **What:** two separate uses of Tor. Every cluster node runs a client-only Tor on the public Tor network, and the gateway uses it for three anonymising routes (`/v1/proxy/anon`, `/v1/proxy/tunnel`, `/v1/proxy/relay`) and the `anon_fetch` serverless host function; there is no direct path. Separately, the global layer runs the Orama Tor network: unmodified upstream Tor under Orama's own directory authorities, relays, opt-in exits and per-validator onion services, so a wallet can submit a chain transaction without its address reaching the validator. Clients of that network (`orama maint vpn`, transaction commands) bootstrap from one strict network file and never fall back to the clearnet or the public Tor network.
+> - **Key numbers:** node Tor SOCKS `127.0.0.1:9050`; client of the Orama network `9052` by convention, `orama maint vpn up` offers `127.0.0.1:9150`; ORPort 31020 and DirPort 31021 (`core/pkg/constants/global.go`); tx gate `127.0.0.1:31022`, 3 calls, 512 KiB broadcast body, 20 requests per second with a burst of 40, 16 in flight, no logging; at least 3 authorities, 12-month signing certificates; client bootstrap timeout 3 min; tunnel 24 per user and 512 per node, 256 MiB each way, 30 min, 2 min idle; relay 128 streams, 4 per address, 64 MiB each way, 5 min.
 > - **Code:** `core/pkg/anonproxy/`, `core/pkg/tornet/`, `core/pkg/onionnet/`, `core/pkg/chainonion/`, `core/pkg/txgate/`, `chain/x/vpnlaunch/`; the gateway handlers `core/pkg/gateway/anon_proxy_handler.go`, `core/pkg/gateway/anon_tunnel_handler.go`, `core/pkg/gateway/relay_tunnel_handler.go`; the installers `core/pkg/install/global_install_tor.go` and `core/pkg/install/installers/tor.go`; the CLI under `core/cmd/orama/internal/cmd/globalcmd/` and `core/cmd/orama/internal/cmd/vpncmd/`.
 > - **Depends on:** [the node as a supervisor](../vol1/04-the-node-as-a-supervisor.md) for the unit that runs the node's Tor client, [authorization](../vol1/14-authorization.md) for the `proxy` grant, [rate limits and egress controls](../vol1/27-rate-limits-and-egress-controls.md) for the shared reserved-range list, [global nodes](37-global-nodes.md) for the global role, the co-located namespace and the chain that the tx gate fronts, and [relay rewards](46-relay-rewards.md) for the reporter that pays relays.
 
@@ -50,7 +50,7 @@ Four constraints shape everything below.
 | `relay` | `orama-global-tor-relay.service`, `orama-global-tor-monitor.timer` | `orama-tor-relay` | 31020/tcp |
 | `relay,exit` | the relay's unit with an exit policy | `orama-tor-relay` | 31020/tcp |
 | `onion` | `orama-global-tor-onion.service`, `orama-global-txgate.service` | `orama-tor-onion`, `orama-txgate` | none |
-| client | not a node role: `orama vpn`, `--onion-network`, or a wallet's own tor | the user | none (loopback SOCKS) |
+| client | not a node role: `orama maint vpn`, `--onion-network`, or a wallet's own tor | the user | none (loopback SOCKS) |
 
 (`core/pkg/install/global_units.go`, `core/pkg/install/global_install_tor.go`, `core/pkg/constants/global.go`.) A directory authority is a relay, so a host runs `dirauth` or `relay`, never both: `requireOneTorPublisher` refuses the second whichever came first. Each role has an account of its own, not the Tor package's `debian-tor`, because an onion service that anyone on the network can reach must not share a uid with an authority's signing key on the same machine.
 
@@ -135,9 +135,9 @@ One file, one parser. Every role and every client calls `tornet.ParseNetwork` (`
 | Reader | How it names the file |
 |---|---|
 | `orama global install` (every Tor role) | `tor-network.json` in `--staged-dir`; installed as `/var/lib/orama-global/tor-network.json` |
-| `orama vpn up`, `orama vpn check` | `--network`, or `ORAMA_ONION_NETWORK` |
+| `orama maint vpn up`, `orama maint vpn check` | `--network`, or `ORAMA_ONION_NETWORK` |
 | every chain transaction command | `--onion-network`, or `ORAMA_ONION_NETWORK` |
-| `orama global tor onions add` | `--network-file` |
+| `orama maint global tor onions add` | `--network-file` |
 | the relay reporter | does not read it (the `chain` module cannot import `core`); its `authority-id` file holds the authority's `v3_ident` and its `vote-interval` file the `voting_interval_minutes` from this file |
 
 The parser is strict. Unknown JSON fields are an error, because a misspelt key must not leave a default in place; data after the object is an error; the file is at most 1 MiB. `Validate` then enforces:
@@ -154,7 +154,7 @@ The file is public and unsigned. Its integrity is the release's. Ports 31020 and
 
 Every torrc this package renders starts with `UseDefaultFallbackDirs 0` and the file's `DirAuthority` lines (`address:dirport`, `orport=`, `v3ident=`, RSA fingerprint), so a node of this network never asks the public network's directories for anything. There is no fallback list: clients bootstrap from the authorities in the file.
 
-`tornet.AddValidatorOnionsToFile` is the one writer after the ceremony. A validator's onion address exists only once its onion role has started, which is after the ceremony wrote the file, so `orama global tor onions add --network-file F addr.onion...` validates every address, deduplicates, keeps the file's mode, and replaces it atomically. A file that does not already load is left untouched. Relays and authorities ignore `validator_onions`, so adding one needs no node restart.
+`tornet.AddValidatorOnionsToFile` is the one writer after the ceremony. A validator's onion address exists only once its onion role has started, which is after the ceremony wrote the file, so `orama maint global tor onions add --network-file F addr.onion...` validates every address, deduplicates, keeps the file's mode, and replaces it atomically. A file that does not already load is left untouched. Relays and authorities ignore `validator_onions`, so adding one needs no node restart.
 
 ### Torrc rendering
 
@@ -172,7 +172,7 @@ Every torrc this package renders starts with `UseDefaultFallbackDirs 0` and the 
 
 ![The key ceremony and the install checks](../diagrams/ch38-ceremony-install.svg)
 
-`orama global tor ceremony` (`core/pkg/tornet/ceremony.go:RunCeremony`) runs on an air-gapped machine that has `tor` and `tor-gencert`. Inputs: three or more `--authority NICKNAME=IPv4` pairs (ports are fixed at 31020 and 31021), the network switches, and `--passphrase-file`, a regular file owned by the caller with mode 0600 or stricter, at most 4,096 bytes, one line, at least 16 characters. The passphrase reaches `tor-gencert` on stdin (`--passphrase-fd 0`), never on a command line. `--out` must not exist or be empty: a ceremony never writes over keys. Defaults are a 60-minute voting interval and 300 s vote and distribution delays, with `bootstrap` true.
+`orama maint global tor ceremony` (`core/pkg/tornet/ceremony.go:RunCeremony`) runs on an air-gapped machine that has `tor` and `tor-gencert`. Inputs: three or more `--authority NICKNAME=IPv4` pairs (ports are fixed at 31020 and 31021), the network switches, and `--passphrase-file`, a regular file owned by the caller with mode 0600 or stricter, at most 4,096 bytes, one line, at least 16 characters. The passphrase reaches `tor-gencert` on stdin (`--passphrase-fd 0`), never on a command line. `--out` must not exist or be empty: a ceremony never writes over keys. Defaults are a 60-minute voting interval and 300 s vote and distribution delays, with `bootstrap` true.
 
 For each authority it runs `tor --list-fingerprint` against a throwaway DataDirectory (making the relay RSA and ed25519 identities), and `tor-gencert --create-identity-key -m 12` (the identity key, the signing key, and a 12-month certificate; `CertMonths`). It then cross-checks Tor's output rather than trusting it:
 
@@ -204,7 +204,7 @@ A directory authority publishes its relay identity on ORPort 31020 and serves di
 
 ![The archive of one voting period](../diagrams/ch38-archive.svg)
 
-`orama-global-tor-archive.timer` runs `orama global tor archive` every minute (the shortest legal voting interval is five, and a period must not pass unseen), as the authority's account, with no network (`IPAddressDeny=any`, `AF_UNIX` only). `ArchiveVotingPeriod` copies, into `archive/STAMP/` under the authority's DataDirectory where STAMP is the consensus's `valid-after` as `20060102T150405Z`:
+`orama-global-tor-archive.timer` runs `orama maint global tor archive` every minute (the shortest legal voting interval is five, and a period must not pass unseen), as the authority's account, with no network (`IPAddressDeny=any`, `AF_UNIX` only). `ArchiveVotingPeriod` copies, into `archive/STAMP/` under the authority's DataDirectory where STAMP is the consensus's `valid-after` as `20060102T150405Z`:
 
 | File | Content |
 |---|---|
@@ -221,13 +221,13 @@ The archive is local to the authority host. Nothing publishes it and nothing pru
 
 ### Relay health
 
-`orama-global-tor-monitor.timer` (every five minutes, 2 minutes after boot) runs the oneshot `orama-global-tor-monitor.service`: `orama global tor monitor --home /var/lib/orama-global/tor-relay`, as the relay's account, no network. `WriteRelayMonitor` writes `monitor.json` (mode 0640) into the relay's DataDirectory. The body is `{"in_consensus": true|false}`, written only when the answer is known: the relay has an identity and holds a consensus that is still valid. Otherwise the file is `{}` and the node report shows the state as unknown. `report.ParseMonitor` reads it (`core/pkg/telemetry/report/global.go`): `orama monitor node` prints `relay active (in the relay set)` or `(not in the relay set)` on the Global line, and the global health rule `global.relay.consensus` warns when a relay says it is not listed (`core/pkg/telemetry/globalhealth/eval.go`).
+`orama-global-tor-monitor.timer` (every five minutes, 2 minutes after boot) runs the oneshot `orama-global-tor-monitor.service`: `orama maint global tor monitor --home /var/lib/orama-global/tor-relay`, as the relay's account, no network. `WriteRelayMonitor` writes `monitor.json` (mode 0640) into the relay's DataDirectory. The body is `{"in_consensus": true|false}`, written only when the answer is known: the relay has an identity and holds a consensus that is still valid. Otherwise the file is `{}` and the node report shows the state as unknown. `report.ParseMonitor` reads it (`core/pkg/telemetry/report/global.go`): `orama monitor node` prints `relay active (in the relay set)` or `(not in the relay set)` on the Global line, and the global health rule `global.relay.consensus` warns when a relay says it is not listed (`core/pkg/telemetry/globalhealth/eval.go`).
 
 ### The validator onion service and the tx gate
 
 ![Transaction submission over the Orama Tor network](../diagrams/ch38-tx-submission.svg)
 
-`--services onion` (with the chain installed on the host or in the same install) writes `orama-global-tor-onion.service`, ordered after the gate, and `orama-global-txgate.service`: `orama global txgate --listen 127.0.0.1:31022 --upstream http://127.0.0.1:31003`. The gate runs as `orama-txgate`, with no key and no access to the chain home. Co-located in the `orama-global` namespace, the upstream becomes the chain REST API on the namespace address (`colocatedListeners`). The gate refuses to start on a non-loopback `--listen`, because it has no authentication of its own.
+`--services onion` (with the chain installed on the host or in the same install) writes `orama-global-tor-onion.service`, ordered after the gate, and `orama-global-txgate.service`: `orama maint global txgate --listen 127.0.0.1:31022 --upstream http://127.0.0.1:31003`. The gate runs as `orama-txgate`, with no key and no access to the chain home. Co-located in the `orama-global` namespace, the upstream becomes the chain REST API on the namespace address (`colocatedListeners`). The gate refuses to start on a non-loopback `--listen`, because it has no authentication of its own.
 
 `core/pkg/txgate/txgate.go:Gate` serves three calls and nothing else of the chain's REST API:
 
@@ -256,13 +256,13 @@ The CLI wiring is `core/cmd/orama/internal/cmd/globalcmd/onion.go:chainTarget`. 
 
 The account read and the broadcast both go over the onion service, each command on a circuit of its own. A network that cannot be joined returns "the transaction was not sent"; nothing is retried another way.
 
-### The client: onionnet and orama vpn
+### The client: onionnet and orama maint vpn
 
 `core/pkg/onionnet/run.go:Start` renders `tornet.ClientTorrc` into `DATADIR/torrc`, writes an empty `torrc-defaults` (replacing the one the distribution's tor reads, so nothing but this torrc configures the client), runs `tor -f ... --defaults-torrc ...`, and returns when the log shows `Bootstrapped 100%`. It gives up after `BootstrapTimeout` = 3 minutes with the last 12 log lines in the error, or earlier if tor exits. Stopping is SIGTERM with a 10 s grace before kill (kill on Windows). `StartOnFreePort` finds a loopback port for the run and, by default, keeps tor's state per network under the user cache directory (`orama/onion/NAME`) so the consensus and guards survive between runs.
 
-`orama vpn up --network F` runs that client until interrupted and offers the SOCKS5 proxy on `--socks` (default `127.0.0.1:9150`, Tor Browser's port, not the node's 9050), optionally a DNS resolver (`--dns`) that answers through the network. It is a proxy, not a system tunnel: only applications pointed at the port use the network, and they must use `socks5h` so the proxy resolves names; the client never resolves a name locally. When tor stops, the port closes and `up` exits with an error, so nothing is routed around the network. Both addresses must be loopback IP literals. Tor locks its state directory, so one client runs per network and data directory at a time: `orama vpn up` and an `--onion-network` submission on the same network cannot run together.
+`orama maint vpn up --network F` runs that client until interrupted and offers the SOCKS5 proxy on `--socks` (default `127.0.0.1:9150`, Tor Browser's port, not the node's 9050), optionally a DNS resolver (`--dns`) that answers through the network. It is a proxy, not a system tunnel: only applications pointed at the port use the network, and they must use `socks5h` so the proxy resolves names; the client never resolves a name locally. When tor stops, the port closes and `up` exits with an error, so nothing is routed around the network. Both addresses must be loopback IP literals. Tor locks its state directory, so one client runs per network and data directory at a time: `orama maint vpn up` and an `--onion-network` submission on the same network cannot run together.
 
-`orama vpn check` joins the network (tor stops when the check ends) and reads an account through each validator onion service in the file, or the one given by `--onion`, each over its own circuit. It asks only what the gate serves: the account read for the all-zero address, which no key controls. The probe passes on 200, or on the chain's own 404 "account not found", recognised by a JSON error with a numeric `code`. The gate's own refusal is also 404 but carries no code, so it fails, as do 429, 502 and anything else. The check passes when at least one onion service answers and fails when tor cannot bootstrap on the authorities, when none answers, or when there is nothing to try. Each probe has a 2-minute timeout.
+`orama maint vpn check` joins the network (tor stops when the check ends) and reads an account through each validator onion service in the file, or the one given by `--onion`, each over its own circuit. It asks only what the gate serves: the account read for the all-zero address, which no key controls. The probe passes on 200, or on the chain's own 404 "account not found", recognised by a JSON error with a numeric `code`. The gate's own refusal is also 404 but carries no code, so it fails, as do 429, 502 and anything else. The check passes when at least one onion service answers and fails when tor cannot bootstrap on the authorities, when none answers, or when there is nothing to try. Each probe has a 2-minute timeout.
 
 ### The public-launch gate
 
@@ -288,8 +288,8 @@ The reporter that turns authority votes into `MsgReportEpoch` for `x/relay` belo
 | `/var/lib/orama-global/tor-dirauth`, `tor-relay`, `tor-onion` | each role's DataDirectory, keys and held consensus | tor, as the role account (mode 0700) | `tornet.ReadNodeInfo` (root) | the role host |
 | `/var/lib/orama-global/tor-ROLE.torrc` | the rendered torrc | `orama global install` (root, mode 0644) | tor | the role host |
 | `tor-dirauth/keys/` | signing key, certificate, relay identity keys | install from the bundle (0600) | tor | authority host |
-| `tor-dirauth/archive/STAMP/` | consensus, votes, bandwidth, `MANIFEST.json` | `orama global tor archive` | the reporter, operators | authority host |
-| `tor-relay/monitor.json` | `in_consensus` | `orama global tor monitor` | node report | relay host |
+| `tor-dirauth/archive/STAMP/` | consensus, votes, bandwidth, `MANIFEST.json` | `orama maint global tor archive` | the reporter, operators | authority host |
+| `tor-relay/monitor.json` | `in_consensus` | `orama maint global tor monitor` | node report | relay host |
 | `tor-onion/onion/` | the onion service's keys and `hostname` | tor | `tor info`, the operator | onion host |
 | `/var/lib/orama-global/tor-exit-reject` | the exit operator's refusal list | the operator | the install (exits only) | exit host |
 | user cache `orama/onion/NAME` | a client's DataDirectory and rendered torrc | `onionnet.Start` | tor | the client's machine |
@@ -332,10 +332,10 @@ The txgate keeps no persistent state at all: its token bucket and semaphore are 
 | Network file wrong (public, unknown field, bad schedule, fewer than 3 authorities) | every role and client refuses; no install write happens | the parse error names the field |
 | Authority bundle belongs to another authority, or the certificate expired | install refused before any write | the error names the expected and found fingerprint, or the expiry date |
 | Authority certificate expires on a running authority | the authority stops voting; with three authorities and one silent the consensus still forms | `tor info` shows a stale consensus on that host; nothing warns before expiry (see Known gaps) |
-| Two of three authorities down, or restarted together | no consensus can be signed; clients keep using the last valid consensus until `valid-until`, then cannot bootstrap | `tor info` shows `valid false`; `orama vpn` fails with the bootstrap timeout |
+| Two of three authorities down, or restarted together | no consensus can be signed; clients keep using the last valid consensus until `valid-until`, then cannot bootstrap | `tor info` shows `valid false`; `orama maint vpn` fails with the bootstrap timeout |
 | Fresh client, authorities unreachable | `onionnet.Start` gives up after 3 minutes with the last 12 log lines | "tor did not bootstrap in 3m0s; are the network's authorities reachable?" |
 | Onion service unreachable or all gates busy | the transaction is not sent; nothing is retried on the clearnet | `ErrUnreachable` text; gate 429 "busy, try another validator" |
-| Chain API down behind the gate | gate answers 502 with a fixed sentence (the upstream call has a 20 s timeout) | `orama vpn check` reports "answered HTTP 502" |
+| Chain API down behind the gate | gate answers 502 with a fixed sentence (the upstream call has a 20 s timeout) | `orama maint vpn check` reports "answered HTTP 502" |
 | Disk full on an authority | the archive write fails and the oneshot exits non-zero; tor itself may fail separately | the archive timer's unit shows failed; the period is archived by a later run only if the votes of that round are still held |
 | Clock skew on an authority | Tor's own consensus-timing checks apply; the archive stamps use the consensus's `valid-after`, not the local clock | a consensus whose `valid-after` is wrong in `tor info` |
 | Relay not listed by the consensus | the relay keeps running; `monitor.json` says `in_consensus` false | `global.relay.consensus` warning, "not in the relay set" on the Global line |
@@ -370,7 +370,7 @@ The txgate keeps no persistent state at all: its token bucket and semaphore are 
 | Limit | Value | Source |
 |---|---|---|
 | Node Tor SOCKS | 127.0.0.1:9050 | `core/pkg/constants/tor.go:TorSOCKSPort` |
-| Network client SOCKS | 9052 by convention; `orama vpn up` default 9150; free loopback port for `--onion-network` | `constants.TorNetSOCKSPort`, `vpncmd.DefaultSOCKS` |
+| Network client SOCKS | 9052 by convention; `orama maint vpn up` default 9150; free loopback port for `--onion-network` | `constants.TorNetSOCKSPort`, `vpncmd.DefaultSOCKS` |
 | Anon request body and response | 10 MiB each, 60 s | `anon_proxy_handler.go` |
 | Tunnel | 24 per user, 512 per node, 256 MiB each way, 30 min, 2 min idle, 30 s dial | `anon_tunnel_handler.go` |
 | Relay | 128 streams, 4 per address, 30 per minute (burst 10), 64 MiB each way, 5 min | `relay_tunnel_handler.go` |
@@ -408,7 +408,7 @@ At the 30-day launch thresholds (100 relays, 40 operators, 15 exits, 5 authoriti
 
 **Chosen:** no direct dial, no environment proxy, no redirects, no retry on another route, no fallback to the public network.
 **Rejected:** degrade to a direct request when Tor fails.
-**Why:** each client in this chapter exists to keep an address from a peer; a direct request is the opposite of the request. `chainonion`, `onionnet`, `anonproxy`, the relay and `orama vpn` each state it in their package comment.
+**Why:** each client in this chapter exists to keep an address from a peer; a direct request is the opposite of the request. `chainonion`, `onionnet`, `anonproxy`, the relay and `orama maint vpn` each state it in their package comment.
 
 ### One network file, one parser
 
@@ -474,7 +474,7 @@ At the 30-day launch thresholds (100 relays, 40 operators, 15 exits, 5 authoriti
 - **`/v1/proxy/anon` accepts any port**, where the tunnel and relay accept only 80/443 or 443. Only the exit's policy limits the destination port. Code: `core/pkg/gateway/anon_proxy_handler.go`.
 - **The tunnel secret has a shared floor.** With no cluster secret and no peer id configured, `tunnelSecretFrom` returns the constant `orama-tunnel`, and every user of the node gets a credential derived from a publicly known key. Consequence: circuits are still separated per subject on the node, but the credential is predictable to anyone who knows the subject. Code: `core/pkg/gateway/anon_tunnel_handler.go:tunnelSecretFrom`.
 - **The gate reads the body before it applies its limits.** A client can make the gate read up to 512 KiB before it is told 429. The limits are whole-gate, so one client can occupy the budget. Code: `core/pkg/txgate/txgate.go:ServeHTTP`.
-- **`checkHome` rejects data directories that onionnet itself picks on some platforms.** A path that does not start with `/`, or holds a space, is refused. `DefaultDataDir` is the user's cache directory, so `orama vpn up` and `--onion-network` fail on Windows paths and on a macOS account whose home has a space, although `terminate` has a Windows branch. Consequence: those clients must pass `--data-dir` (for `vpn`) and cannot use `--onion-network` at all. Code: `core/pkg/tornet/torrc.go:checkHome`, `core/pkg/onionnet/run.go:DefaultDataDir`.
+- **`checkHome` rejects data directories that onionnet itself picks on some platforms.** A path that does not start with `/`, or holds a space, is refused. `DefaultDataDir` is the user's cache directory, so `orama maint vpn up` and `--onion-network` fail on Windows paths and on a macOS account whose home has a space, although `terminate` has a Windows branch. Consequence: those clients must pass `--data-dir` (for `vpn`) and cannot use `--onion-network` at all. Code: `core/pkg/tornet/torrc.go:checkHome`, `core/pkg/onionnet/run.go:DefaultDataDir`.
 - **`docs/RUN_A_GLOBAL_NODE.md` lists "The relay and Tor units" under "Not built yet".** The Tor roles are installed by `orama global install`. The document is stale. Code: `core/pkg/install/global_install_tor.go`.
 - **`--onion` defaults to 127.0.0.1:9050**, which on a cluster node is the node's public-Tor client. Such a client cannot resolve an address of the Orama network, so the submission fails closed; it does not leak. Code: `core/pkg/chainonion/chainonion.go:DefaultSOCKS`.
 - **One Tor process per node** serves every anonymity route. There is no second SOCKS port to shed load to.
@@ -488,11 +488,11 @@ At the 30-day launch thresholds (100 relays, 40 operators, 15 exits, 5 authoriti
 - `cd core && go test ./pkg/install/ -run 'Tor|Dirauth|Authority'` covers the installer (`TestInstallGlobal_anotherAuthoritysBundleIsRefused`, `TestInstallGlobal_installedIdentityKeyIsNeverReplaced`, `TestInstallGlobal_aRefusedBundleLeavesTheInstalledKeysAsTheyWere`, `TestInstallGlobal_anExpiredAuthorityCertificateIsRefused`).
 - `cd chain && go test ./x/vpnlaunch/` includes `TestLaunchStaysSwitchedOff`.
 
-**Fleet e2e features** (the owner runs `make e2e-fleet`): `e2e/features/anon-tor/` (the three routes, the unit's hardening, `checks.anon_proxy`), `e2e/features/anon-tor-chaos/` (Tor stopped on one node, fail-closed), `e2e/features/tor-network/` (ceremony, gate, and where the roles are installed: authorities signing a consensus that lists every relay, archive manifest, exit policy, circuits and onion services through the Orama authorities), `e2e/features/onion-network/` (`orama vpn`, `--onion-network`, refusals), `e2e/features/relay-reporter/` and `e2e/features/relayed-fetch/` (the relay route).
+**Fleet e2e features** (the owner runs `make e2e-fleet`): `e2e/features/anon-tor/` (the three routes, the unit's hardening, `checks.anon_proxy`), `e2e/features/anon-tor-chaos/` (Tor stopped on one node, fail-closed), `e2e/features/tor-network/` (ceremony, gate, and where the roles are installed: authorities signing a consensus that lists every relay, archive manifest, exit policy, circuits and onion services through the Orama authorities), `e2e/features/onion-network/` (`orama maint vpn`, `--onion-network`, refusals), `e2e/features/relay-reporter/` and `e2e/features/relayed-fetch/` (the relay route).
 
 **Read-only commands.**
 
-- On a cluster node: read `checks.anon_proxy` in the node's `/v1/health` answer, and run `orama inspect --subsystem tor`, which runs the checks in `core/pkg/inspector/checks/tor.go`.
+- On a cluster node: read `checks.anon_proxy` in the node's `/v1/health` answer, and run `orama maint inspect --subsystem tor`, which runs the checks in `core/pkg/inspector/checks/tor.go`.
 - On a Tor role host, as root: `orama global tor info` (and `--json`), then `ls /var/lib/orama-global/tor-dirauth/archive/` and `cat` a `MANIFEST.json` to see a period's digests.
-- On a client machine: `orama vpn check --network tor-network.json` joins the network and probes every listed validator onion service.
-- On the offline machine: `orama global tor ceremony --help` for the flags; the ceremony writes only to a new directory.
+- On a client machine: `orama maint vpn check --network tor-network.json` joins the network and probes every listed validator onion service.
+- On the offline machine: `orama maint global tor ceremony --help` for the flags; the ceremony writes only to a new directory.

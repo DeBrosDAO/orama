@@ -63,7 +63,7 @@ type Flags struct {
 	DryRun bool
 }
 
-// Run is the `orama node migrate-raft-id` entry point.
+// Run is the `orama maint node migrate-raft-id` entry point.
 func Run(flags *Flags) error {
 	if flags.Env == "" {
 		return clierr.Usage("--env is required")

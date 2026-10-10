@@ -21,7 +21,7 @@ func TestBuild_outsideCheckoutBuildsNothing(t *testing.T) {
 	t.Parallel()
 	cli := bareHome(t)
 	out := filepath.Join(cli.Home, "archive.tar.gz")
-	infra.ExpectRefused(t, infra.Run(t, cli, "build", "--unsigned", "--output", out), "project root")
+	infra.ExpectRefused(t, infra.Run(t, cli, "maint", "build", "--unsigned", "--output", out), "project root")
 	if _, err := os.Stat(out); err == nil {
 		t.Errorf("a refused build wrote %s", out)
 	}
@@ -32,7 +32,7 @@ func TestBuild_outsideCheckoutBuildsNothing(t *testing.T) {
 // build looks for anything.
 func TestBuild_badArchIsUsage(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, bareHome(t), "build", "--unsigned", "--arch", "sparc")
+	res := infra.Run(t, bareHome(t), "maint", "build", "--unsigned", "--arch", "sparc")
 	infra.ExpectExit(t, res, infra.ExitUsage, "arch")
 }
 
@@ -40,6 +40,6 @@ func TestBuild_badArchIsUsage(t *testing.T) {
 // run, and says signing is now the default.
 func TestBuild_deprecatedSignFlagSaysSo(t *testing.T) {
 	t.Parallel()
-	res := infra.Run(t, bareHome(t), "build", "--sign", "--unsigned")
+	res := infra.Run(t, bareHome(t), "maint", "build", "--sign", "--unsigned")
 	infra.ExpectRefused(t, res, deprecatedSign)
 }

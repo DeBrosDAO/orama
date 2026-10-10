@@ -1,14 +1,18 @@
 # CLI conformance for the environment, auth and miscellaneous commands, and
 # the whole command tree against docs/CLI_REFERENCE.md: the binary under test
 # shows exactly the documented commands, flags, aliases and usage lines;
-# unknown commands, flags and subcommands are usage errors; `orama env`
+# unknown commands, flags and subcommands are usage errors; `orama network`
 # add/use/remove/list/current in isolated HOMEs (custom environment signing
 # in end to end, CA scoping and a lost CA file, invalid values, concurrent
 # adds); every credential-needing command without a credential is an auth
 # error naming `orama auth login`; ORAMA_TOKEN garbage and hostile values;
-# `orama inspect` over SSH (JSON, --output, bad arguments); `orama ssh` with
-# pinned, missing and forged host keys; `orama rollout` refusing bad flags
-# before it builds. Nothing here changes the fleet.
+# `orama maint inspect` over SSH (JSON, --output, bad arguments); `orama ssh` with
+# pinned, missing and forged host keys; `orama maint rollout` refusing bad flags
+# before it builds; `orama network add` refuses a manifest URL that is not https
+# or does not end in /manifest.json; `orama maint network publish` writes a
+# network directory in a temp dir and refuses to change a published genesis;
+# the hidden `orama maint` groups answer --help like the rest of the tree.
+# Nothing here changes the fleet.
 id: cli-env-auth-misc
 title: CLI conformance - command tree, environments, credentials, inspect, ssh
 area: cli
@@ -21,19 +25,28 @@ requires:
   chain: false
 covers:
   cli:
-    - orama env
-    - orama env add
-    - orama env current
-    - orama env list
-    - orama env remove
-    - orama env use
-    - orama inspect
+    - orama network
+    - orama network add
+    - orama network current
+    - orama network list
+    - orama network remove
+    - orama network use
+    - orama maint
+    - orama maint cluster
+    - orama maint global
+    - orama maint global tor
+    - orama maint inspect
+    - orama maint network
+    - orama maint network publish
+    - orama maint node
     - orama ssh
-    - orama rollout
+    - orama maint rollout
   claims:
     - "docs/CLI_REFERENCE.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
-    - "docs/CLI_REFERENCE.md#orama-env-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
+    - "docs/CLI_REFERENCE.md#orama-network-add: a manifest URL must be https and end in /manifest.json; nothing is stored before the digest of the release root is confirmed"
+    - "docs/CLI_REFERENCE.md#orama-maint-network-publish: a chain id that is already published keeps its genesis; a reset needs a new chain id"
+    - "docs/CLI_REFERENCE.md#orama-network-use: switch and enable are not subcommands"
+    - "docs/CLI_REFERENCE.md#orama-network-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
     - "docs/DEVNET_INSTALL.md: a missing CA file is an error naming the environment"
     - "docs/AUTH.md: ORAMA_TOKEN is the CI credential; a garbage one is refused"
     - "docs/DEVNET_INSTALL.md: node host keys are pinned in ~/.orama/known_hosts; orama ssh must not trust on first use"
-    - "docs/CLI_REFERENCE.md#orama-rollout: orama rollout and orama node rollout are the same command"

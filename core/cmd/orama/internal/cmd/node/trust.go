@@ -25,7 +25,7 @@ and can drop it by deleting the file.
 
 The root is checked before it is written: well-formed, signed by its own keys at
 its threshold, not expired. Adopting a root other than the one already adopted
-needs --replace. This command changes this node only; 'orama build
+needs --replace. This command changes this node only; 'orama maint build
 --release-root' puts the root in a signed archive, and every node that installs
 that archive adopts it.
 

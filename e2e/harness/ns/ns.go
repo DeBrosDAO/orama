@@ -142,14 +142,14 @@ func ValidName(name string) error {
 	return nil
 }
 
-// creationMode reads `orama cluster settings show` ("namespace-creation: <mode>").
+// creationMode reads `orama maint cluster settings show` ("namespace-creation: <mode>").
 func creationMode(out string) (string, error) {
 	for _, line := range strings.Split(out, "\n") {
 		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "namespace-creation:"); ok {
 			return strings.TrimSpace(v), nil
 		}
 	}
-	return "", fmt.Errorf("`orama cluster settings show` printed no namespace-creation line: %q", out)
+	return "", fmt.Errorf("`orama maint cluster settings show` printed no namespace-creation line: %q", out)
 }
 
 // Placeable is how many more namespaces fit on nodes whose free tenant blocks

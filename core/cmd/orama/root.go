@@ -15,29 +15,21 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/app"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/auditcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/authcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/buildcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/chaincmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/envcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/inspectcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/invitecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/memberscmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/monitorcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/namespacecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/networkcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/operatorcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/pushcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/rolloutcmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sandboxcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
-	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/vpncmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/domain"
 )
 
@@ -53,10 +45,11 @@ func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "orama",
 		Short: "Orama CLI — operate nodes and manage a namespace",
-		Long: `The human interface to the Orama network. One binary, two audiences:
+		Long: `The human interface to the Orama network. One binary, three audiences:
 
-  Operators  orama node, inspect, rollout, invite, monitor, …
+  Operators  orama status, ssh, network, …
   Tenants    orama deploy, app, function, db, namespace, …
+  Maintainers  orama maint …  (hidden from this help; every command in it works)
 
 Programs use the SDK and the gateway HTTP API. There is no Orama dashboard
 and no Orama MCP.`,
@@ -81,9 +74,6 @@ and no Orama MCP.`,
 	// Node operator commands (was "prod")
 	rootCmd.AddCommand(node.Cmd)
 
-	// Mint an invite for a new node, from here rather than from a node
-	rootCmd.AddCommand(invitecmd.Cmd)
-
 	// Deploy command (top-level, upsert)
 	rootCmd.AddCommand(deploycmd.Cmd)
 
@@ -100,8 +90,9 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(namespacecmd.Cmd)
 	rootCmd.AddCommand(memberscmd.Cmd)
 
-	// Environment commands
-	rootCmd.AddCommand(envcmd.Cmd)
+	// The networks the CLI knows; `orama network` is its hidden, deprecated old name
+	rootCmd.AddCommand(networkcmd.Cmd)
+	rootCmd.AddCommand(networkcmd.EnvCmd)
 
 	// Auth commands
 	rootCmd.AddCommand(authcmd.Cmd)
@@ -110,17 +101,12 @@ and no Orama MCP.`,
 	rootCmd.AddCommand(auditcmd.Cmd)
 
 	// Cluster operations
-	rootCmd.AddCommand(operatorcmd.Cmd)
 	rootCmd.AddCommand(clustercmd.Cmd)
 	rootCmd.AddCommand(globalcmd.Cmd)
 	rootCmd.AddCommand(storagecmd.Cmd)
-	rootCmd.AddCommand(vpncmd.Cmd)
 
 	// Read the chain
 	rootCmd.AddCommand(chaincmd.Cmd)
-
-	// Inspect command
-	rootCmd.AddCommand(inspectcmd.Cmd)
 
 	// Monitor command
 	rootCmd.AddCommand(monitorcmd.Cmd)
@@ -128,18 +114,13 @@ and no Orama MCP.`,
 	// Serverless function commands
 	rootCmd.AddCommand(functioncmd.Cmd)
 
-	// Build command (cross-compile binary archive)
-	rootCmd.AddCommand(buildcmd.Cmd)
-
-	// Sandbox command (ephemeral Hetzner Cloud clusters)
-	rootCmd.AddCommand(sandboxcmd.Cmd)
-
 	// Unified node management commands
 	rootCmd.AddCommand(nodescmd.Cmd)
-	rootCmd.AddCommand(pushcmd.Cmd)
-	rootCmd.AddCommand(rolloutcmd.Cmd)
 	rootCmd.AddCommand(statuscmd.Cmd)
 	rootCmd.AddCommand(sshcmd.Cmd)
+
+	hideReplacedGroups()
+	rootCmd.AddCommand(newMaintCmd())
 
 	classifyUsageErrors(rootCmd)
 
@@ -217,8 +198,8 @@ func classifyRequiredFlags(cmd *cobra.Command) {
 // themselves, which meant deferred cleanup never ran — a push left staged
 // private keys behind — and every failure was code 1, so a script could not
 // tell a mistyped flag from a cluster that had lost quorum.
-// needsEnvironmentCAs reports whether cmd may talk to a gateway. `orama env`
-// manages the CA files themselves, so a missing one must not lock it out of
+// needsEnvironmentCAs reports whether cmd may talk to a gateway. `orama network`
+// (and its old name `orama network`) manages the CA files themselves, so a missing one must not lock it out of
 // the command that fixes it; `version` talks to nobody; a node-local command
 // (cmdmeta) runs from a systemd unit with no home and no operator environment.
 func needsEnvironmentCAs(cmd *cobra.Command) bool {
@@ -227,7 +208,7 @@ func needsEnvironmentCAs(cmd *cobra.Command) bool {
 	}
 	for c := cmd; c != nil; c = c.Parent() {
 		switch c.Name() {
-		case "env", "version", "serve-ipfs-cluster":
+		case "network", "env", "version", "serve-ipfs-cluster":
 			if c.Parent() != nil && c.Parent().Parent() == nil {
 				return false
 			}

@@ -26,7 +26,7 @@ Tests, not review, enforce conventions. Cobra owns all flag parsing, because nin
 
 ### Environments and credentials
 
-There are no built-in environments, so a fresh machine cannot quietly talk to someone's network. `orama env add` accepts only an `https://` gateway (or loopback), and an environment's CA is trusted for that domain only. One function resolves the gateway URL and the credential together, because they once resolved separately and the key stored for one gateway was sent to another. The CLI sends a short-lived access token renewed from a session stored 0600, never an API key as the standing credential. Fleet commands find machines through the network API, then those recorded at setup, then a legacy `nodes.conf`.
+There are no built-in environments, so a fresh machine cannot quietly talk to someone's network. `orama network add` accepts only an `https://` gateway (or loopback), and an environment's CA is trusted for that domain only. One function resolves the gateway URL and the credential together, because they once resolved separately and the key stored for one gateway was sent to another. The CLI sends a short-lived access token renewed from a session stored 0600, never an API key as the standing credential. Fleet commands find machines through the network API, then those recorded at setup, then a legacy `nodes.conf`.
 
 ### The wallet agent and SSH
 

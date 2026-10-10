@@ -21,6 +21,7 @@ const (
 	exitUsage    = infra.ExitUsage
 	exitAuth     = infra.ExitAuth
 	exitNotFound = infra.ExitNotFound
+	exitConflict = infra.ExitConflict
 )
 
 // Messages the CLI prints (core/cmd/orama/internal).
@@ -28,8 +29,8 @@ const (
 	// loginHint ends every "no credential" refusal.
 	loginHint = "orama auth login"
 	// noEnvHelp is environment.go noEnvironmentHelp's fix.
-	noEnvHelp = "orama env add"
-	// caRefused is env_commands.go EnvAdd's refusal of a CA file.
+	noEnvHelp = "orama network add"
+	// caRefused is network_commands.go NetworkAddCluster's refusal of a CA file.
 	caRefused = "CA file was refused"
 )
 
@@ -43,7 +44,7 @@ func run(t testing.TB, cli *oramacli.Runner, args ...string) oramacli.Result {
 }
 
 // isolated is the operator's CLI in a HOME of its own that holds the run's
-// environment list and no credential: every `orama env` change stays in it.
+// environment list and no credential: every `orama network` change stays in it.
 func isolated(t testing.TB) *oramacli.Runner {
 	t.Helper()
 	return harness.CLI(t).Isolated(t)

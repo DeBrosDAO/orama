@@ -98,7 +98,7 @@ func TestExecute_runsTheGuideWithTheFixturesValues(t *testing.T) {
 		"orama node setup --ip 198.51.100.2",
 		"orama node setup --ip 198.51.100.3",
 		"--cloudflare-token-file /secrets/cf-token",
-		"orama env use e2eguide",
+		"orama network use e2eguide",
 		"orama deploy static /tmp/site --name www",
 		"orama status --env e2eguide --json",
 	} {
@@ -111,7 +111,7 @@ func TestExecute_runsTheGuideWithTheFixturesValues(t *testing.T) {
 			t.Errorf("an example value %q reached the executor:\n%s", leftover, all)
 		}
 	}
-	if strings.Contains(all, "rw vault") || strings.Contains(all, "orama build") {
+	if strings.Contains(all, "rw vault") || strings.Contains(all, "orama maint build") {
 		t.Errorf("a step the fixture provides was executed:\n%s", all)
 	}
 }

@@ -68,7 +68,7 @@ func Run(flags *Flags) error {
 
 func (f *Flags) validate() error {
 	if f.Env == "" {
-		return clierr.Usage("--env is required\nUsage: orama node recover-raft --env <devnet|testnet>")
+		return clierr.Usage("--env is required\nUsage: orama maint node recover-raft --env <devnet|testnet>")
 	}
 	// --leader is optional: without it the command reads every node's applied
 	// index and keeps the furthest-ahead one, printing what it found so the

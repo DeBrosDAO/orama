@@ -44,7 +44,7 @@ type inspectReport struct {
 	Checks []inspectCheck `json:"checks"`
 }
 
-// inspect runs `orama inspect --format json` and decodes the report. The
+// inspect runs `orama maint inspect --format json` and decodes the report. The
 // JSON is read from its first '{': the command prints an "Inspecting N
 // nodes..." line to stdout ahead of it (TestInspect_jsonStdoutIsOnlyJSON).
 func inspect(t *testing.T, extra ...string) (inspectReport, oramacli.Result) {
@@ -54,10 +54,10 @@ func inspect(t *testing.T, extra ...string) (inspectReport, oramacli.Result) {
 	var r inspectReport
 	i := strings.Index(res.Stdout, "{")
 	if i < 0 {
-		t.Fatalf("orama inspect printed no JSON (exit %d):\n%s%s", res.Exit, res.Stdout, res.Stderr)
+		t.Fatalf("orama maint inspect printed no JSON (exit %d):\n%s%s", res.Exit, res.Stdout, res.Stderr)
 	}
 	if err := json.Unmarshal([]byte(res.Stdout[i:]), &r); err != nil {
-		t.Fatalf("orama inspect JSON: %v\n%s", err, res.Stdout)
+		t.Fatalf("orama maint inspect JSON: %v\n%s", err, res.Stdout)
 	}
 	return r, res
 }
@@ -128,15 +128,15 @@ func TestInspect_subsystemFilter(t *testing.T) {
 func TestInspect_refusals(t *testing.T) {
 	t.Parallel()
 	cli := harness.CLI(t)
-	infra.ExpectExit(t, infra.RunFor(t, cli, inspectBudget, "inspect", "--config", "/nonexistent/nodes.conf"), infra.ExitUsage, "--env is required")
-	res := infra.RunFor(t, cli, inspectBudget, "inspect", "--env", harness.Fleet(t).State.Env, "--subsystem", "nosuch", "--format", "json")
+	infra.ExpectExit(t, infra.RunFor(t, cli, inspectBudget, "maint", "inspect", "--config", "/nonexistent/nodes.conf"), infra.ExitUsage, "--env is required")
+	res := infra.RunFor(t, cli, inspectBudget, "maint", "inspect", "--env", harness.Fleet(t).State.Env, "--subsystem", "nosuch", "--format", "json")
 	if res.Exit == infra.ExitOK {
 		t.Errorf("an unknown subsystem inspected nothing and exited 0:\n%s", res.Stdout)
 	}
 }
 
 // TestInspect_jsonStdoutIsOnlyJSON: `--format json` is for piping
-// (docs/INSPECTOR.md: `orama inspect --format json | jq ...`), so stdout must
+// (docs/INSPECTOR.md: `orama maint inspect --format json | jq ...`), so stdout must
 // be the JSON document alone. Today a progress line precedes it on stdout
 // (core/cmd/orama/internal/inspect_command.go fmt.Printf("Inspecting ...")):
 // this test fails until it moves to stderr.
@@ -152,7 +152,7 @@ func TestInspect_jsonStdoutIsOnlyJSON(t *testing.T) {
 // TestInspect_tableFormat: the default table ends with the summary line.
 func TestInspect_tableFormat(t *testing.T) {
 	t.Parallel()
-	res := infra.RunFor(t, harness.CLI(t), inspectBudget, "inspect", "--env", harness.Fleet(t).State.Env, "--subsystem", "wireguard")
+	res := infra.RunFor(t, harness.CLI(t), inspectBudget, "maint", "inspect", "--env", harness.Fleet(t).State.Env, "--subsystem", "wireguard")
 	if !strings.Contains(res.Stdout, "Summary: ") || !strings.Contains(res.Stdout, "## WIREGUARD") {
 		t.Errorf("table output lacks the section or the summary:\n%s", res.Stdout)
 	}

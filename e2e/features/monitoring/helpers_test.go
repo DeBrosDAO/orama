@@ -52,7 +52,7 @@ func startsWithVerdict(out string) bool {
 }
 
 // operator makes a fresh namespace owner an operator of the cluster for t
-// (`orama operator add`, removed at t's cleanup), so the telemetry tests can
+// (`orama maint operator add`, removed at t's cleanup), so the telemetry tests can
 // call the operator API over HTTP with a session of their own. The owner's
 // session carries the namespace's admin grant, the other half of the
 // requirement (docs/API_SURFACE.md "/v1/operator/telemetry"). Only
@@ -64,11 +64,11 @@ func operator(t *testing.T) *ns.Namespace {
 	n := tenancy.Namespace(t, f, ns.Options{})
 	addr := n.Owner.Wallet.Address()
 	cli := harness.CLI(t)
-	infra.ExpectExit(t, infra.Run(t, cli, "operator", "add", addr), infra.ExitOK)
+	infra.ExpectExit(t, infra.Run(t, cli, "maint", "operator", "add", addr), infra.ExitOK)
 	t.Cleanup(func() {
 		ctx, cancel := fleet.CleanupContext(t)
 		defer cancel()
-		if res, err := cli.Run(ctx, "operator", "remove", addr); err != nil || res.Exit != 0 {
+		if res, err := cli.Run(ctx, "maint", "operator", "remove", addr); err != nil || res.Exit != 0 {
 			t.Errorf("cleanup: removing operator %s failed: %v %s", addr, err, res.Stderr)
 		}
 	})

@@ -131,7 +131,7 @@ func Setup() error {
 	fmt.Println()
 	fmt.Println("Setup complete! Config saved to ~/.orama/sandbox.yaml")
 	fmt.Println()
-	fmt.Println("Next: orama sandbox create")
+	fmt.Println("Next: orama maint sandbox create")
 	return nil
 }
 
@@ -574,7 +574,7 @@ func verifyDNS(domain string, floatingIPs []FloatIP, reader *bufio.Reader) {
 		matched, _ = check()
 		if matched {
 			fmt.Printf("\n  ✓ Glue records propagated after %d checks\n", i)
-			fmt.Println("  You can now create a sandbox: orama sandbox create")
+			fmt.Println("  You can now create a sandbox: orama maint sandbox create")
 			return
 		}
 		fmt.Printf("  [%d] Not yet... checking again in 30s\n", i)

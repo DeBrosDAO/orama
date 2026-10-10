@@ -122,7 +122,7 @@ build-linux: deps
 build-archive: deps
 	@echo "Building binary archive (version=$(VERSION))..."
 	go build -ldflags "$(LDFLAGS)" -o bin/orama ./cmd/orama/
-	./bin/orama build --output /tmp/orama-$(VERSION)-linux-amd64.tar.gz
+	./bin/orama maint build --output /tmp/orama-$(VERSION)-linux-amd64.tar.gz
 
 # Install git hooks
 install-hooks:
@@ -142,19 +142,19 @@ clean:
 
 # Push binary archive to devnet nodes (fanout distribution)
 push-devnet:
-	./bin/orama node push --env devnet
+	./bin/orama maint push --env devnet
 
 # Push binary archive to testnet nodes (fanout distribution)
 push-testnet:
-	./bin/orama node push --env testnet
+	./bin/orama maint push --env testnet
 
 # Full rollout to devnet (build + push + rolling upgrade)
 rollout-devnet:
-	./bin/orama node rollout --env devnet --yes
+	./bin/orama maint rollout --env devnet --yes
 
 # Full rollout to testnet (build + push + rolling upgrade)
 rollout-testnet:
-	./bin/orama node rollout --env testnet --yes
+	./bin/orama maint rollout --env testnet --yes
 
 # Bump the repo-root VERSION file and sync sdk/package.json.
 # Regenerate ../docs/CLI_REFERENCE.md from the cobra command tree.
@@ -185,7 +185,7 @@ sync-networks:
 e2e-cluster:
 	@if [ -z "$$E2E_CLUSTER_BASE_DOMAIN" ]; then \
 		echo "E2E_CLUSTER_BASE_DOMAIN is not set."; \
-		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_RELEASE=<version> E2E_CLUSTER_RELEASE_REPO=<url> E2E_CLUSTER_RELEASE_ROOT=<root.json> make e2e-cluster   (or E2E_CLUSTER_ARCHIVE=<orama build archive> instead of the three RELEASE ones)"; \
+		echo "  full run:  E2E_CLUSTER_IPS=ip1,ip2,ip3 E2E_CLUSTER_BASE_DOMAIN=<domain> E2E_CLUSTER_RELEASE=<version> E2E_CLUSTER_RELEASE_REPO=<url> E2E_CLUSTER_RELEASE_ROOT=<root.json> make e2e-cluster   (or E2E_CLUSTER_ARCHIVE=<orama maint build archive> instead of the three RELEASE ones)"; \
 		echo "  use-only:  E2E_CLUSTER_MODE=use-only E2E_CLUSTER_ENV=sandbox E2E_CLUSTER_BASE_DOMAIN=<sandbox domain> make e2e-cluster"; \
 		echo "  see docs/DEV_DEPLOY.md, Cluster guide e2e"; \
 		exit 2; \

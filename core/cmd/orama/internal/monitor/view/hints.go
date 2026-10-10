@@ -10,7 +10,7 @@ import (
 // commonProblemsDoc is where the runbooks for recurring failures live.
 const commonProblemsDoc = "docs/COMMON_PROBLEMS.md"
 
-// inspectSubsystems maps an alert subsystem to the `orama inspect
+// inspectSubsystems maps an alert subsystem to the `orama maint inspect
 // --subsystem` value that checks it in depth.
 var inspectSubsystems = map[string]string{
 	"rqlite":    "rqlite",
@@ -57,7 +57,7 @@ func hintCommand(a cluster.Alert, env string) string {
 		host = ""
 	}
 	if sub, ok := inspectSubsystems[a.Subsystem]; ok {
-		return fmt.Sprintf("orama inspect --env %s --subsystem %s", env, sub)
+		return fmt.Sprintf("orama maint inspect --env %s --subsystem %s", env, sub)
 	}
 	switch a.Subsystem {
 	case cluster.SubsystemCollection:

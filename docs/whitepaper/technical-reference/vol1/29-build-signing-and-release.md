@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** how one version number becomes software on a node, and how a node decides to run it. `/VERSION` is the only version. `orama build` cross-compiles 16 binaries and the systemd templates into one archive, lists the SHA-256 of every file in `manifest.json`, and has the operator's RootWallet sign that manifest with EIP-191. Every node holds a root-owned trust anchor (`/etc/orama/archive-signers`) and installs only an archive whose signature recovers to an address in it. A second, public channel (git tag, GoReleaser, apt, Homebrew, npm) ships the CLI and SDKs and is separate from the fleet. An optional TUF release root adds a second check on top of the wallet. The book you are reading has its own release gate, tied to the same `/VERSION`.
+> - **What:** how one version number becomes software on a node, and how a node decides to run it. `/VERSION` is the only version. `orama maint build` cross-compiles 16 binaries and the systemd templates into one archive, lists the SHA-256 of every file in `manifest.json`, and has the operator's RootWallet sign that manifest with EIP-191. Every node holds a root-owned trust anchor (`/etc/orama/archive-signers`) and installs only an archive whose signature recovers to an address in it. A second, public channel (git tag, GoReleaser, apt, Homebrew, npm) ships the CLI and SDKs and is separate from the fleet. An optional TUF release root adds a second check on top of the wallet. The book you are reading has its own release gate, tied to the same `/VERSION`.
 > - **Key numbers:** 16 binaries per archive; signing waits up to 150 s (120 s approval plus 30 s); at most 32 signers; extraction caps of 1,024 entries, 512 MiB per file and 4 GiB per archive; a rotation may be dated at most 1 h ahead of the node clock; 2 of 6 bundled third-party components are pinned by SHA-256; Go 1.27.2, zig 0.15.2.
 > - **Code:** `core/pkg/archivetrust/`, `core/pkg/releasesign/`, `core/pkg/releaseverify/`, `core/pkg/version/`, `core/cmd/orama/internal/build/`, `core/cmd/testtuf/`, `core/thirdparty/`, `core/scripts/`, `core/Makefile`, `.github/`, `.goreleaser.yaml`, `core/tools/whitepaper/`.
 > - **Depends on:** [privilege and filesystem trust](05-privilege-and-filesystem-trust.md) for the `rootfs` writes the anchor uses, [secrets and keys](16-secrets-and-keys.md) for where the anchor sits among the node's keys, and [install and upgrade](30-install-and-upgrade.md) and [rolling upgrades](31-rolling-upgrades.md) for what happens after an archive is accepted.
@@ -39,7 +39,7 @@ Two audiences need different things from a release. A fleet operator needs a sig
 
 **Release root.** An opt-in TUF root, `/etc/orama/release-root.json`, plus the rollback record `/etc/orama/release-seen.json`. It is checked in addition to the anchor, never instead of it.
 
-**Channel.** The fleet channel is `orama build` then `orama push`, `orama node setup` or `orama node rollout`. The public channel is `core/scripts/release.sh`, the tag-triggered workflows and GoReleaser.
+**Channel.** The fleet channel is `orama maint build` then `orama maint push`, `orama node setup` or `orama maint rollout`. The public channel is `core/scripts/release.sh`, the tag-triggered workflows and GoReleaser.
 
 **Book gate.** `core/tools/whitepaper check`, run by `make test`: it fails when `book.yaml` is not stamped with `/VERSION`, or when an anchor, link, diagram or section of this book is wrong.
 
@@ -69,11 +69,11 @@ Binaries learn the version in two ways, and a build uses both:
 
 #### How versions are ordered
 
-`autoupdate.Compare` orders two dotted numeric versions. A leading `v` is ignored, a shorter version is padded with zeros (`0.3` equals `0.3.0`), and a segment must be a non-negative integer without leading zeros. Anything else is an error, so a version the code cannot order is never treated as newer (`core/pkg/autoupdate/decide.go:Compare`). A prerelease suffix is such a segment: `orama node autoupdate --current 0.3.0 --candidate 0.3.0-nightly` exits with `version "0.3.0-nightly" has a non-numeric segment "0-nightly"`. `Decide` is the only caller. Chapter 30 covers the policy around it (off, notify, auto, the maintenance window, validators never auto); what matters here is that `Upgrade` and `Apply` have no caller outside tests and `orama node autoupdate` only simulates a decision from flags, so nothing in the product installs a release by itself. The archive verifier does not compare versions at all (see Trust and security).
+`autoupdate.Compare` orders two dotted numeric versions. A leading `v` is ignored, a shorter version is padded with zeros (`0.3` equals `0.3.0`), and a segment must be a non-negative integer without leading zeros. Anything else is an error, so a version the code cannot order is never treated as newer (`core/pkg/autoupdate/decide.go:Compare`). A prerelease suffix is such a segment: `orama maint node autoupdate --current 0.3.0 --candidate 0.3.0-nightly` exits with `version "0.3.0-nightly" has a non-numeric segment "0-nightly"`. `Decide` is the only caller. Chapter 30 covers the policy around it (off, notify, auto, the maintenance window, validators never auto); what matters here is that `Upgrade` and `Apply` have no caller outside tests and `orama maint node autoupdate` only simulates a decision from flags, so nothing in the product installs a release by itself. The archive verifier does not compare versions at all (see Trust and security).
 
 ### Building the archive
 
-`orama build` (`core/cmd/orama/internal/cmd/buildcmd/build.go`) runs `Builder.Build`. The order is chosen so that every cheap failure comes before the first compile:
+`orama maint build` (`core/cmd/orama/internal/cmd/buildcmd/build.go`) runs `Builder.Build`. The order is chosen so that every cheap failure comes before the first compile:
 
 1. `validateArch`: only `amd64` and `arm64`, a usage error otherwise.
 2. `findProjectRoot`: walk up for a `go.mod` beside `cmd/orama`.
@@ -126,7 +126,7 @@ A field with a character that is not printable (controls, line and paragraph sep
 
 Before the archive is written the build checks its own work with the node's verifier. `archivetrust.RecoverSigner` must return a valid address, and that address must equal the account the agent reported at step 3. A signature that nodes could not verify, or one made by a different account than the one that will be named in the log, fails the build instead of failing every install (`sign.go:sealManifest`).
 
-`--unsigned` writes a manifest with no `manifest.sig`, prints that no node will install it, and exists for local inspection. `--signers 0xA,0xB` puts the list in the signed manifest. `--sign` is accepted and deprecated. `orama node rollout` and `orama sandbox` build with `Flags{Arch: "amd64"}`, so they always sign with the default account and never rotate; rotating is `orama build --signers` followed by `orama node rollout --no-build --archive <file>`.
+`--unsigned` writes a manifest with no `manifest.sig`, prints that no node will install it, and exists for local inspection. `--signers 0xA,0xB` puts the list in the signed manifest. `--sign` is accepted and deprecated. `orama maint rollout` and `orama maint sandbox` build with `Flags{Arch: "amd64"}`, so they always sign with the default account and never rotate; rotating is `orama maint build --signers` followed by `orama maint rollout --no-build --archive <file>`.
 
 ![The build: toolchain, manifest, signature, archive](../diagrams/ch29-build-pipeline.svg)
 
@@ -146,7 +146,7 @@ Nothing extracted is trusted until `VerifyTree` says so.
 `VerifyTree(dir, trusted)` is the single decision function. Every caller (the build's own check, the operator-side upload preparation, `stage-archive`, install, upgrade, the sandbox) ends here. It runs, in order:
 
 1. `trusted` must not be empty (`ErrNoAnchor`).
-2. Read `manifest.json` (at most 1 MiB) and `manifest.sig` (at most 1 KiB). A missing signature says the archive is unsigned and names `orama build`.
+2. Read `manifest.json` (at most 1 MiB) and `manifest.sig` (at most 1 KiB). A missing signature says the archive is unsigned and names `orama maint build`.
 3. `RecoverSigner`: Keccak-256 over the EIP-191 prefix, the message length and the message; a 65-byte signature whose `v` is 0/1 or the legacy 27/28; recover the public key; lowercase address. It must be in `trusted`, and the error names both the signer and the trusted list.
 4. `manifestRotation`: if the manifest carries `signers`, they must normalise (distinct, valid, at most 32) and include the manifest's own signer.
 5. `verifyContents`: the manifest must list at least one file; each key maps to a path in `bin/`, `systemd/` or `packages/` with a plain file name; two keys that alias one path are refused; every entry of the three content directories must be a regular file and must be listed (no extra file, no link, no symlinked content directory); then every listed file is opened without following links, must be at most 512 MiB, and must match its SHA-256.
@@ -161,7 +161,7 @@ The order matters: the signature is checked before the contents, and the content
 
 ### Staging on a node
 
-`orama push` and `orama node rollout` upload the archive into a fresh `mktemp -d` directory on each node and run the node's installed CLI, `/usr/local/bin/orama node stage-archive`, never anything from the archive being pushed (`core/cmd/orama/internal/production/push/stage.go`). The steps:
+`orama maint push` and `orama maint rollout` upload the archive into a fresh `mktemp -d` directory on each node and run the node's installed CLI, `/usr/local/bin/orama maint node stage-archive`, never anything from the archive being pushed (`core/cmd/orama/internal/production/push/stage.go`). The steps:
 
 1. `/opt/orama` must be a directory owned by root and not writable by others.
 2. Take the exclusive `flock` on `/opt/orama/.archive.lock` (`archivetrust.LockArchiveDir`). Install and upgrade take the same lock, so neither sees the other's half-finished work.
@@ -173,9 +173,9 @@ The order matters: the signature is checked before the contents, and the content
 
 A refused archive leaves `/opt/orama` exactly as it was. The directory also holds the node's data (`.orama/`), which is never part of `OwnedPaths`.
 
-A first install has no installed CLI to verify with, so `orama node setup` and `orama node install --remote` verify on the operator's machine instead. `PrepareUpload` extracts to a private directory, verifies, and writes a canonical archive from the verified tree only: USTAR headers, a fixed order, regular files and directories, owned by nobody in particular. That file is what is uploaded, never the one the operator named, because `/tmp` is shared and another `tar` might read the original differently from the one that verified it. On the node a script extracts only `bin/orama` from the upload into a root-only directory, checks it against the SHA-256 the verified manifest lists, and runs that CLI's `stage-archive`.
+A first install has no installed CLI to verify with, so `orama node setup` and `orama maint node install --remote` verify on the operator's machine instead. `PrepareUpload` extracts to a private directory, verifies, and writes a canonical archive from the verified tree only: USTAR headers, a fixed order, regular files and directories, owned by nobody in particular. That file is what is uploaded, never the one the operator named, because `/tmp` is shared and another `tar` might read the original differently from the one that verified it. On the node a script extracts only `bin/orama` from the upload into a root-only directory, checks it against the SHA-256 the verified manifest lists, and runs that CLI's `stage-archive`.
 
-`orama push --trust-signers 0xA` is the same path for a node installed before archives were signed, whose CLI has no `stage-archive`. It verifies on the operator's machine against the given addresses and creates a missing anchor on the node only after the archive has passed there.
+`orama maint push --trust-signers 0xA` is the same path for a node installed before archives were signed, whose CLI has no `stage-archive`. It verifies on the operator's machine against the given addresses and creates a missing anchor on the node only after the archive has passed there.
 
 ### The trust anchor
 
@@ -191,12 +191,12 @@ The anchor is the one file whose integrity decides every other. `ReadAnchor` the
 
 #### Where the first list comes from
 
-- **Genesis.** `orama node install` requires `--operator-wallet` (`orama node setup` passes the RootWallet address). `SeedGenesisArchiveSigners` verifies the archive in `/opt/orama` against that single wallet first, then removes any rotation mark an earlier cluster left, then writes the anchor. A mistyped wallet fails with nothing to undo. An existing anchor is kept only if it trusts exactly this wallet; any other is refused, because it belongs to an earlier cluster or was rotated (`core/pkg/install/archive_signers.go:SeedGenesisArchiveSigners`).
+- **Genesis.** `orama maint node install` requires `--operator-wallet` (`orama node setup` passes the RootWallet address). `SeedGenesisArchiveSigners` verifies the archive in `/opt/orama` against that single wallet first, then removes any rotation mark an earlier cluster left, then writes the anchor. A mistyped wallet fails with nothing to undo. An existing anchor is kept only if it trusts exactly this wallet; any other is refused, because it belongs to an earlier cluster or was rotated (`core/pkg/install/archive_signers.go:SeedGenesisArchiveSigners`).
 - **Join.** The joiner's request may carry `expected_archive_signers`; the minting node's gateway refuses a mismatch with 409 before the invite is spent or a peer row is written (`core/pkg/gateway/handlers/join/handler.go`). The response carries the minting node's list and its rotation mark. `TrustJoinedArchiveSigners` refuses an empty list, normalises it, compares it with `--expect-archive-signers` when given, refuses a mark dated more than 1 h ahead of the joiner's clock, then writes the mark first and the anchor second. Before the join spends the invite, `PreflightJoinArchive` has already checked the archive's presence, architecture and integrity.
-- **Late creation.** `orama push --trust-signers` creates a missing anchor and never changes an existing one (`archivetrust.CreateAnchorIfMissing`).
+- **Late creation.** `orama maint push --trust-signers` creates a missing anchor and never changes an existing one (`archivetrust.CreateAnchorIfMissing`).
 - **Removal.** `orama node wipe` deletes the anchor and the mark.
 
-The list the joiner receives is only as trustworthy as the minting node's gateway, which runs as `orama`, not root. `--expect-archive-signers` (which `setup` fills from the `--join-via` node's anchor read over SSH, or from the operator's wallet) is what closes that. A manual `orama node install --token` without it trusts what the minting node sends.
+The list the joiner receives is only as trustworthy as the minting node's gateway, which runs as `orama`, not root. `--expect-archive-signers` (which `setup` fills from the `--join-via` node's anchor read over SSH, or from the operator's wallet) is what closes that. A manual `orama maint node install --token` without it trusts what the minting node sends.
 
 #### Rotation
 
@@ -230,7 +230,7 @@ The mark is written before the anchor, so a crash between the two is finished by
 4. Hash the open file descriptor, once from its start and never past the target's length, against the target's length and `sha256` or `sha512` digests; any other algorithm is refused. `ErrTargetHash` otherwise. The caller opens the file where nobody else can replace it, so the bytes checked are the bytes then used.
 5. Only after all of that, raise the rollback record to the accepted snapshot, atomically (temporary file, fsync, rename). An unreadable record is an error, never zero, because zero would accept any replay.
 
-Two commands use it: `orama node stage-archive --release-metadata --release-target` (an archive must be that target, and then also pass the wallet check) and `orama global stage-oramad` (a chain binary is placed in the cosmovisor layout only after it verifies as a target; see [global nodes](../vol2/37-global-nodes.md)). `orama node autoupdate` maps the same sentinel errors to refusals.
+Two commands use it: `orama maint node stage-archive --release-metadata --release-target` (an archive must be that target, and then also pass the wallet check) and `orama maint global stage-oramad` (a chain binary is placed in the cosmovisor layout only after it verifies as a target; see [global nodes](../vol2/37-global-nodes.md)). `orama maint node autoupdate` maps the same sentinel errors to refusals.
 
 `pkg/releasesign` is the signing half: it builds the canonical-JSON `signed` section of TUF metadata, asks the agent to sign it under the purpose `orama-release` with a dedicated ed25519 key that only the agent holds (the grant `wallet:sign:orama-release` is per signature and never given to the headless agent), verifies the answer against the root's public key before attaching it, and replaces a signature under the same key id rather than adding a second. The payload opens with the `_type` key, so no plain signing request and no archive message can yield a release signature, and no release payload can yield an archive one. No production code calls it: only its tests do. No command signs metadata with a RootWallet or rotates the root. `orama node trust add-root` writes `release-root.json`, and a node installs through this path when the auto-update agent ([install and upgrade](30-install-and-upgrade.md#the-auto-update-agent)) finds a release in the cluster's repository, or when an operator runs `stage-archive` or `stage-oramad` with metadata they obtained themselves. `core/cmd/testtuf` makes and updates a repository signed by software keys for the stagenet test root and for local tries of the agent; its roots must never be adopted by a production cluster. The fleet e2e feature `release-tuf` generates its metadata with `core/pkg/releaseverify/releasetest`.
 
@@ -268,7 +268,7 @@ None of this is signed by the wallet or the release root. A GitHub release carri
 
 The root `make test` is wider than CI: it adds the Caddy modules' tests, the fleet e2e lint, the e2e coverage gate and the harness unit tests, and the book gate (below). The scanners that cover the rest of the release (`govulncheck`, `staticcheck`, `gosec`, a secret scan of the tree and of the built archive, fuzz targets, the race detector on the busiest packages) belong to the fleet e2e feature `scanners`, which the owner runs with `make e2e-fleet`.
 
-The repository also carries `core/.githooks/` (a pre-commit that would regenerate a changelog and a pre-push that runs `go test ./...` in `core/`), `core/scripts/install.sh` (builds the CLI with `make build`, copies it to `~/.local/bin` and adds that directory to the shell's PATH), `core/scripts/nodes.conf.example` (a local fallback inventory; `nodes.conf` is gitignored) and two operator scripts under `core/scripts/` (`monitor-webrtc.sh`, `patches/disable-caddy-http3.sh`). `core/.env.example` names two optional keys: `OPENROUTER_API_KEY` for `orama inspect --ai` and `ZEROSSL_API_KEY`. The hooks are inactive (see Known gaps).
+The repository also carries `core/.githooks/` (a pre-commit that would regenerate a changelog and a pre-push that runs `go test ./...` in `core/`), `core/scripts/install.sh` (builds the CLI with `make build`, copies it to `~/.local/bin` and adds that directory to the shell's PATH), `core/scripts/nodes.conf.example` (a local fallback inventory; `nodes.conf` is gitignored) and two operator scripts under `core/scripts/` (`monitor-webrtc.sh`, `patches/disable-caddy-http3.sh`). `core/.env.example` names two optional keys: `OPENROUTER_API_KEY` for `orama maint inspect --ai` and `ZEROSSL_API_KEY`. The hooks are inactive (see Known gaps).
 
 ### The book's release gate
 
@@ -305,7 +305,7 @@ The gate needs only Go and git; the PDF build needs `d2`, `pandoc` and `typst`. 
 | Third-party versions | `core/pkg/constants/versions.go` | developers | the builder, installers |
 | Pinned digests | `core/pkg/constants/release_digests.go` | developers | `fetchPinned`, `verifyPinnedSHA256` |
 | Pinned tarball cache | `<user cache dir>/orama-build-pinned/<sha256>` | the builder | the builder |
-| The archive | `/tmp/orama-<version>-linux-<arch>.tar.gz` by default | `orama build` | push, setup, rollout, sandbox |
+| The archive | `/tmp/orama-<version>-linux-<arch>.tar.gz` by default | `orama maint build` | push, setup, rollout, sandbox |
 | Trust anchor | `/etc/orama/archive-signers`, `root:root` 0644 | genesis install, join, `push --trust-signers`, a signed rotation | stage-archive, install, upgrade, the join handler |
 | Rotation mark | `/etc/orama/archive-signers.rotated`, `root:root` 0644 | a rotation, a join | the same |
 | Release root | `/etc/orama/release-root.json` | the operator (`orama node trust add-root`) | `releaseverify.CheckFile` |
@@ -319,7 +319,7 @@ The gate needs only Go and git; the PDF build needs `d2`, `pandoc` and `typst`. 
 
 ## Lifecycle
 
-**Build time.** `bump`, commit, `orama build`. The operator unlocks the RootWallet desktop app first. The first build after a rebuild of `orama` waits for an approval prompt; later builds with the same binary do not.
+**Build time.** `bump`, commit, `orama maint build`. The operator unlocks the RootWallet desktop app first. The first build after a rebuild of `orama` waits for an approval prompt; later builds with the same binary do not.
 
 **First install.** Setup verifies the archive on the operator's machine against their wallet, uploads the canonical re-pack, and the node creates its anchor from the wallet at genesis or copies it on join. The archive's signer must already be that wallet.
 
@@ -335,7 +335,7 @@ The gate needs only Go and git; the PDF build needs `d2`, `pandoc` and `typst`. 
 
 | Trigger | What the system does | What you observe |
 |---|---|---|
-| RootWallet locked or not running during `orama build` | fails at the account lookup, before compiling | an error naming the agent and suggesting unlock or `--unsigned` |
+| RootWallet locked or not running during `orama maint build` | fails at the account lookup, before compiling | an error naming the agent and suggesting unlock or `--unsigned` |
 | Approval not given within 150 s | the sign call fails; no archive is written | "sign the manifest with your RootWallet" |
 | Wrong `zig` minor | the build refuses before compiling | the error names the vault's needed minor and `ORAMA_ZIG` |
 | Pinned tarball digest differs | the download is refused and not cached | "is not the release the version pin names" |
@@ -448,12 +448,12 @@ The book gate scales with the number of chapters and tracked files: it runs `git
 - **`-X main.version` is a no-op for most binaries.** `orama-node`, `orama-privhelper`, `identity`, `pubsub` and `gateway` define no `main.version`, and `gateway.BuildVersion` is `dev` unless set by ldflags, so `/v1/version` of a gateway built with plain `go build` reports `dev`.
 - **The TUF path is verify-only.** `core/pkg/releasesign` has no caller outside its tests; no command signs release metadata with a RootWallet, rotates the root, or resets `release-seen.json`. `orama node trust add-root` adopts a root and the auto-update agent fetches and verifies metadata against it ([install and upgrade](30-install-and-upgrade.md#the-auto-update-agent)); a node that never adopts a root never uses it.
 - **The public channel is unsigned and inconsistent.** GoReleaser publishes a `checksums.txt` with no signature. `release-apt.yml` imports `GPG_PRIVATE_KEY` but never signs the repository's `Release` file, so the apt repository is unsigned. GoReleaser's `orama` package (CLI only, `/usr/bin`) and `release-apt.yml`'s `orama` package (CLI, node and gateway, `/usr/local/bin`) share a package name at the same version with different contents and paths, and `orama-node` is in both. `release-apt.yml` builds the gateway with `CGO_ENABLED=0`, which links the SQLite stub.
-- **`core/debian/` is dead and wrong.** No workflow or target uses it; `control` says `Version: 0.69.20` and the `postinst`, like the one in `release-apt.yml`, tells users to run `orama install`, which does not exist (`orama node install`).
+- **`core/debian/` is dead and wrong.** No workflow or target uses it; `control` says `Version: 0.69.20` and the `postinst`, like the one in `release-apt.yml`, tells users to run `orama install`, which does not exist (`orama maint node install`).
 - **`core/Makefile` advertises targets that do nothing.** `deps`, `tidy`, `fmt`, `vet` and `lint` are declared `.PHONY` and listed in `make help` but have no recipe, so `make lint` prints "Nothing to be done". `install-hooks` runs `scripts/install-hooks.sh`, which does not exist. `core/.githooks/pre-commit` needs `scripts/update_changelog.sh` and a `CHANGELOG.md`, neither of which exists, and nothing sets `core.hooksPath`. The comment above `docs:` is the stale tail of the `bump` comment.
 - **Workflow actions are pinned inconsistently.** `release.yaml`, `release-apt.yml` and `publish-sdk.yml` pin actions by commit SHA; `ci.yml` and `security.yml` use mutable major tags (`actions/checkout@v7`).
-- **The archive layout has an unused slot.** `packages/` is verified and installed if present, but no code writes one; `docs/DEV_DEPLOY.md` and `orama build --help` list fewer binaries than the archive carries (the guide's output list omits `orama-privhelper` and `pubsub`; the help omits those and `orama-sni-router` and `vault-guardian`).
+- **The archive layout has an unused slot.** `packages/` is verified and installed if present, but no code writes one; `docs/DEV_DEPLOY.md` and `orama maint build --help` list fewer binaries than the archive carries (the guide's output list omits `orama-privhelper` and `pubsub`; the help omits those and `orama-sni-router` and `vault-guardian`).
 - **A signed archive does not prove freshness.** A trusted signer's older build installs (a rollback); only a rotation is replay-protected. Code: `core/pkg/archivetrust/verify.go:VerifyTree`.
-- **`orama node rollout` and `orama sandbox` cannot build for `arm64` or rotate signers.** They construct `Flags{Arch: "amd64"}` and nothing else. Code: `core/cmd/orama/internal/production/rollout/rollout.go:execute`.
+- **`orama maint rollout` and `orama maint sandbox` cannot build for `arm64` or rotate signers.** They construct `Flags{Arch: "amd64"}` and nothing else. Code: `core/cmd/orama/internal/production/rollout/rollout.go:execute`.
 - **The `verified:` stamp is manual.** The book gate proves anchors, structure and links; whether the prose still matches the code is a person's attestation.
 
 ## Verify it yourself
@@ -466,17 +466,17 @@ go test ./pkg/archivetrust/ ./pkg/releasesign/ ./pkg/releaseverify/ ./pkg/versio
 
 Useful names: `TestVerifyTree_tamperedFileIsRefused`, `TestVerifyTree_unlistedFileIsRefused`, `TestVerifyTree_symlinkedContentDirIsRefused`, `TestExtract_refusesEntriesAnArchiveMustNotHave`, `TestVerifyAndRotate_twoBuildRetirementAndNoReplay`, `TestVerifyAndRotate_resumesARotationInterruptedAfterTheMark`, `TestReadAnchor_refusesAGroupOrWorldWritableAnchor`, `TestBuild_signedArchiveVerifiesOnANode`, `TestBuild_agentSigningAsAnotherAccountFailsTheBuild`, `TestReadVersionAndCommit_failClosed`, `TestFetchPinned_aDownloadThatIsNotThePinnedReleaseIsRefusedAndNotCached`, `TestOramaBinaries_EverySQLiteBinaryIsBuiltWithCGO`, `TestCheckFile_rollbackAcrossRunsIsRefused`, `TestCheckFile_concurrentChecksKeepTheHighestSnapshot`, `TestSign_realClientRefusesTheArchivePurposeForReleases`, `TestEmbeddedVersionMatchesTheRepository`. The book gate has its own tests in `core/tools/whitepaper/gates_test.go`.
 
-**Fleet e2e features** (run by the owner with `make e2e-fleet`): `release-checks` (the HEAD archive verifies, every node runs the binaries its signed manifest lists, the version agrees everywhere, the auto-update decision table), `release-tuf` (the release root refuses rollback, freeze, threshold, hash and unknown-target on both `stage-archive` and `stage-oramad`), `install` (archive trust on live nodes), `cli-sandbox-build` (`orama build` usage and refusals) and `scanners` (vulnerability, static analysis and secret scans of the tree and the archive). The coverage gate for them is `make e2e-coverage`.
+**Fleet e2e features** (run by the owner with `make e2e-fleet`): `release-checks` (the HEAD archive verifies, every node runs the binaries its signed manifest lists, the version agrees everywhere, the auto-update decision table), `release-tuf` (the release root refuses rollback, freeze, threshold, hash and unknown-target on both `stage-archive` and `stage-oramad`), `install` (archive trust on live nodes), `cli-sandbox-build` (`orama maint build` usage and refusals) and `scanners` (vulnerability, static analysis and secret scans of the tree and the archive). The coverage gate for them is `make e2e-coverage`.
 
 **Read-only checks.**
 
 ```
 cat VERSION core/pkg/version/version.txt
 orama version
-orama node autoupdate --current 0.3.0 --candidate v0.3.1
-orama node autoupdate --current 0.3.0 --candidate 0.3.0-nightly
+orama maint node autoupdate --current 0.3.0 --candidate v0.3.1
+orama maint node autoupdate --current 0.3.0 --candidate 0.3.0-nightly
 git tag --list 'v*' --sort=-version:refname | head -1
 make whitepaper-check
 ```
 
-The `autoupdate` command only prints a decision; the second form exits with the non-numeric-segment error. On a node, `cat /etc/orama/archive-signers`, `cat /etc/orama/archive-signers.rotated`, `ls -l /etc/orama` and `cat /opt/orama/manifest.json` show the anchor, its mark, their owners and modes, and the manifest that is installed. To inspect an archive without a node: `orama build --unsigned --output /tmp/inspect.tar.gz`, then `tar -xzOf /tmp/inspect.tar.gz manifest.json` (the checksums, the version and the commit); an unsigned archive has no `manifest.sig` and no node will install it.
+The `autoupdate` command only prints a decision; the second form exits with the non-numeric-segment error. On a node, `cat /etc/orama/archive-signers`, `cat /etc/orama/archive-signers.rotated`, `ls -l /etc/orama` and `cat /opt/orama/manifest.json` show the anchor, its mark, their owners and modes, and the manifest that is installed. To inspect an archive without a node: `orama maint build --unsigned --output /tmp/inspect.tar.gz`, then `tar -xzOf /tmp/inspect.tar.gz manifest.json` (the checksums, the version and the commit); an unsigned archive has no `manifest.sig` and no node will install it.

@@ -20,7 +20,7 @@ type Command struct {
 	// Line is the heading's line number in the reference, for failure messages.
 	Line  int
 	Short string
-	// Usage is the usage line, e.g. "orama env add <name> <gateway_url> [description] [flags]".
+	// Usage is the usage line, e.g. "orama network add <name> <gateway_url> [description] [flags]".
 	Usage       string
 	Aliases     []string
 	Flags       []string
@@ -55,6 +55,17 @@ func (r *Reference) Under(path string) []Command {
 	var out []Command
 	for _, c := range r.Commands {
 		if c.Path == path || strings.HasPrefix(c.Path, path+" ") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// TopLevel returns the documented commands directly under the root.
+func (r *Reference) TopLevel() []Command {
+	var out []Command
+	for _, c := range r.Commands {
+		if len(strings.Fields(c.Path)) == 2 {
 			out = append(out, c)
 		}
 	}

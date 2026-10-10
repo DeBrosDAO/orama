@@ -510,9 +510,9 @@ func isTokenRefusal(err error) bool {
 func tokenRefusal(err error) string {
 	switch {
 	case errors.Is(err, errTokenUsed):
-		return "unauthorized: this invite has already been used. Invites are single-use — mint another with 'orama invite'"
+		return "unauthorized: this invite has already been used. Invites are single-use — mint another with 'orama maint invite'"
 	case errors.Is(err, errTokenExpired):
-		return "unauthorized: this invite has expired. Mint another with 'orama invite'"
+		return "unauthorized: this invite has expired. Mint another with 'orama maint invite'"
 	default:
 		return "unauthorized: no invite matches this token"
 	}

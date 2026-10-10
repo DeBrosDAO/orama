@@ -48,7 +48,7 @@ func TestTokenRefusal_messagesAreDistinct(t *testing.T) {
 // say so.
 func TestTokenRefusal_pointsAtTheFix(t *testing.T) {
 	for _, err := range []error{errTokenUsed, errTokenExpired} {
-		if got := tokenRefusal(err); !strings.Contains(got, "orama invite") {
+		if got := tokenRefusal(err); !strings.Contains(got, "orama maint invite") {
 			t.Errorf("%q does not say how to get a new invite", got)
 		}
 	}
