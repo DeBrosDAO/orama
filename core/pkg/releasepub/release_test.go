@@ -101,7 +101,8 @@ func TestCut_aFirstReleaseIsThreeApprovalsAndAClientAcceptsIt(t *testing.T) {
 	repo := newRepo(t, agent)
 	before := agent.approvals()
 	var progress bytes.Buffer
-	p := cutParams(repo, agent, mustChannel(t, "nightly"), archive(t, "0.3.1", "amd64", "amd64 bytes"), archive(t, "0.3.1", "arm64", "arm64 bytes"))
+	arm := archive(t, "0.3.1", "arm64", "arm64 bytes")
+	p := cutParams(repo, agent, mustChannel(t, "nightly"), archive(t, "0.3.1", "amd64", "amd64 bytes"), arm)
 	p.Progress = &progress
 
 	plan, err := Cut(t.Context(), p)
@@ -127,7 +128,7 @@ func TestCut_aFirstReleaseIsThreeApprovalsAndAClientAcceptsIt(t *testing.T) {
 	if err != nil || !ok || ref.Version != "0.3.1" {
 		t.Fatalf("newest = %+v ok=%v err=%v", ref, ok, err)
 	}
-	if err := target.Match([]byte("arm64 bytes")); err != nil {
+	if err := target.Match(mustRead(t, arm)); err != nil {
 		t.Fatal(err)
 	}
 	if string(target.Custom) != `{"version":"0.3.1","arch":"arm64","channel":"nightly"}` {
@@ -262,7 +263,8 @@ func TestCut_replaceChangesTheBytesOfAListedPath(t *testing.T) {
 	if _, err := Cut(t.Context(), cutParams(repo, agent, ch, archive(t, "0.3.5", "amd64", "one"))); err != nil {
 		t.Fatal(err)
 	}
-	p := cutParams(repo, agent, ch, archive(t, "0.3.5", "amd64", "two"))
+	two := archive(t, "0.3.5", "amd64", "two")
+	p := cutParams(repo, agent, ch, two)
 	p.Replace = true
 	plan, err := Cut(t.Context(), p)
 	if err != nil || len(plan.Replaced) != 1 {
@@ -272,7 +274,7 @@ func TestCut_replaceChangesTheBytesOfAListedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verified.Targets["dev/my-branch/orama-0.3.5-linux-amd64.tar.gz"].Match([]byte("two")); err != nil {
+	if err := verified.Targets["dev/my-branch/orama-0.3.5-linux-amd64.tar.gz"].Match(mustRead(t, two)); err != nil {
 		t.Fatal(err)
 	}
 }

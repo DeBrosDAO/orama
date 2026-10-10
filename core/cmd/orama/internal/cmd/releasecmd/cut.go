@@ -15,6 +15,7 @@ func newCutCmd(d deps) *cobra.Command {
 		archives     []string
 		retention    int
 		replace      bool
+		clusterOnly  bool
 		dryRun       bool
 	}
 	cmd := &cobra.Command{
@@ -26,6 +27,8 @@ approvals in the RootWallet desktop app. Each is announced first. The command
 checks that a client would accept the metadata before it writes anything, and
 writes only to --dir; it uploads nothing. Run publish to upload.
 
+An archive must be one built with "orama build --unsigned" (a release is trusted
+through the release root, not a wallet), and an amd64 one carries the global layer.
 A version must be dotted numeric (0.3.1) and newer than the channel's newest;
 a release is immutable (--replace is for a dev build that reuses a version).
 Only the newest --retention versions of the channel stay listed. The timestamp
@@ -47,7 +50,7 @@ and the RootWallet is not contacted.`,
 				return err
 			}
 			p := releasepub.CutParams{
-				Repo: repo, Channel: channel, Archives: f.archives, Retention: f.retention, Replace: f.replace,
+				Repo: repo, Channel: channel, Archives: f.archives, Retention: f.retention, Replace: f.replace, AllowClusterOnly: f.clusterOnly,
 				DryRun: f.dryRun, Now: d.now(), Progress: cmd.OutOrStdout(),
 			}
 			if !f.dryRun {
@@ -67,6 +70,7 @@ and the RootWallet is not contacted.`,
 	fl.StringArrayVar(&f.archives, "archive", nil, "An orama-<version>-linux-<arch>.tar.gz to release; repeatable [required]")
 	fl.IntVar(&f.retention, "retention", releasepub.DefaultRetention, "How many versions of the channel stay listed")
 	fl.BoolVar(&f.replace, "replace", false, "Let a listed path change its bytes (dev builds only)")
+	fl.BoolVar(&f.clusterOnly, "allow-cluster-only", false, "Release an amd64 archive built with --skip-global-layer (nodes cannot orama global install from it)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "Plan the release; sign, write and upload nothing")
 	_ = cmd.MarkFlagRequired("channel")
 	return cmd

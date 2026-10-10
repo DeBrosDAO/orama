@@ -28,6 +28,9 @@ type CutParams struct {
 	// Replace lets a path that is already listed change its bytes (a dev build
 	// that reuses a version).
 	Replace bool
+	// AllowClusterOnly lets an amd64 archive without the global layer be
+	// released. A node cannot `orama global install` from it.
+	AllowClusterOnly bool
 	// DryRun plans the release and stops: nothing is signed or written, and
 	// Agent may be nil.
 	DryRun   bool
@@ -89,7 +92,7 @@ func planCut(p CutParams) (*CutPlan, error) {
 	if _, err := releaseverify.ValidateRoot(rootBytes, p.Now); err != nil {
 		return nil, fmt.Errorf("the repository's root: %w; renew it (orama maint release renew-root)", err)
 	}
-	version, assets, entries, err := readArchives(p.Channel, p.Archives)
+	version, assets, entries, err := readArchives(p.Channel, p.Archives, p.AllowClusterOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +110,7 @@ func planCut(p CutParams) (*CutPlan, error) {
 // readArchives checks the archive files' names against the channel and each
 // other and describes them as targets. They are one version, one per
 // architecture.
-func readArchives(channel Channel, paths []string) (version string, assets []Asset, entries map[string]*metadata.TargetFiles, err error) {
+func readArchives(channel Channel, paths []string, clusterOnly bool) (version string, assets []Asset, entries map[string]*metadata.TargetFiles, err error) {
 	if len(paths) == 0 {
 		return "", nil, nil, fmt.Errorf("no archive to release: pass --archive orama-<version>-linux-<arch>.tar.gz")
 	}
@@ -122,6 +125,9 @@ func readArchives(channel Channel, paths []string) (version string, assets []Ass
 		}
 		version = ref.Version
 		if err := checkReleasable(ref); err != nil {
+			return "", nil, nil, err
+		}
+		if err := checkArchive(path, ref, clusterOnly); err != nil {
 			return "", nil, nil, err
 		}
 		target := releaseverify.ArchiveTarget(channel.Name, ref.Version, ref.Arch)

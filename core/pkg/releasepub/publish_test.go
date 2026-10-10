@@ -223,8 +223,8 @@ func TestPublish_dryRunPrintsAndRunsNothing(t *testing.T) {
 func TestRelease_whatIsPublishedIsWhatAClientFetchesAndVerifies(t *testing.T) {
 	agent := newFakeAgent(t)
 	repo := newRepo(t, agent)
-	content := "the nightly archive"
-	cutOne(t, repo, agent, "nightly", "0.3.1", content)
+	archivePath := cutOne(t, repo, agent, "nightly", "0.3.1", "the nightly archive")
+	content := string(mustRead(t, archivePath))
 	if _, err := RenewRoot(t.Context(), agent, repo, testNow.Add(24*time.Hour), nil); err != nil {
 		t.Fatal(err)
 	}
@@ -232,11 +232,11 @@ func TestRelease_whatIsPublishedIsWhatAClientFetchesAndVerifies(t *testing.T) {
 
 	served := t.TempDir()
 	copyDir(t, repo.Dir, served, TargetsFile, SnapshotFile, TimestampFile, RootFile, "1.root.json", "2.root.json")
-	archivePath := filepath.Join(served, "targets", "nightly", "orama-0.3.1-linux-amd64.tar.gz")
-	if err := os.MkdirAll(filepath.Dir(archivePath), 0o755); err != nil {
+	servedArchive := filepath.Join(served, "targets", "nightly", "orama-0.3.1-linux-amd64.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(servedArchive), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(archivePath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(servedArchive, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	releaseverify.AllowLocalRepositories(t)

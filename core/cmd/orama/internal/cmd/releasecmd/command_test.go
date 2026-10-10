@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/releasepub"
+	"github.com/DeBrosOfficial/network/pkg/releasepub/pubtest"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
@@ -62,11 +63,7 @@ func exec(t *testing.T, a releasepub.Agent, run releasepub.Runner, args ...strin
 
 func archiveFile(t *testing.T, version, arch string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "orama-"+version+"-linux-"+arch+".tar.gz")
-	if err := os.WriteFile(path, []byte("bytes of "+version+arch), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return pubtest.Archive(t, version, arch, "bytes of "+version+arch)
 }
 
 func TestRelease_theWholeFlowFromRootToPublish(t *testing.T) {

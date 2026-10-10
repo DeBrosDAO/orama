@@ -13,6 +13,7 @@ import (
 
 	"github.com/secure-systems-lab/go-securesystemslib/cjson"
 
+	"github.com/DeBrosOfficial/network/pkg/releasepub/pubtest"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
@@ -68,14 +69,10 @@ func newRepo(t *testing.T, agent *fakeAgent) Repo {
 	return repo
 }
 
-// archive writes a file named for a release archive and returns its path.
+// archive writes a release archive for version and arch whose bytes depend on content.
 func archive(t *testing.T, version, arch, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "orama-"+version+"-linux-"+arch+".tar.gz")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return pubtest.Archive(t, version, arch, content)
 }
 
 func mustChannel(t *testing.T, name string) Channel {
