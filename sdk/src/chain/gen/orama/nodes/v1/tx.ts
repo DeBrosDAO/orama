@@ -10,6 +10,49 @@ import { Binding, Role, roleFromJSON, roleToJSON } from "./nodes.js";
 
 export const protobufPackage = "orama.nodes.v1";
 
+/**
+ * FundSource says where MsgFundHotKey takes the amount from. The zero value is
+ * the original behaviour, so a message encoded before the field existed, or by a
+ * caller that never sets it, still funds from earnings.
+ */
+export enum FundSource {
+  /** FUND_SOURCE_EARNINGS - FUND_SOURCE_EARNINGS moves the amount out of the operator's earnings. */
+  FUND_SOURCE_EARNINGS = 0,
+  /**
+   * FUND_SOURCE_BANK - FUND_SOURCE_BANK moves the amount out of the operator's bank balance, for an
+   * operator that holds ORAMA but has earned nothing yet.
+   */
+  FUND_SOURCE_BANK = 1,
+  UNRECOGNIZED = -1,
+}
+
+export function fundSourceFromJSON(object: any): FundSource {
+  switch (object) {
+    case 0:
+    case "FUND_SOURCE_EARNINGS":
+      return FundSource.FUND_SOURCE_EARNINGS;
+    case 1:
+    case "FUND_SOURCE_BANK":
+      return FundSource.FUND_SOURCE_BANK;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return FundSource.UNRECOGNIZED;
+  }
+}
+
+export function fundSourceToJSON(object: FundSource): string {
+  switch (object) {
+    case FundSource.FUND_SOURCE_EARNINGS:
+      return "FUND_SOURCE_EARNINGS";
+    case FundSource.FUND_SOURCE_BANK:
+      return "FUND_SOURCE_BANK";
+    case FundSource.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 export interface MsgRegisterOperator {
   operator: string;
 }
@@ -106,14 +149,16 @@ export interface MsgDeclareCapacityResponse {
 }
 
 /**
- * MsgFundHotKey moves amount from the operator's own earnings account to the
- * earnings (fee) balance of the hot key registered on the operator's own node
- * (C2 item 5). The target is never a field: it is always the node's hot key.
+ * MsgFundHotKey moves amount from the operator's own earnings account (or, with
+ * source FUND_SOURCE_BANK, its bank balance) to the fee-only balance of the hot
+ * key registered on the operator's own node (C2 item 5). The target is never a
+ * field: it is always the node's hot key.
  */
 export interface MsgFundHotKey {
   operator: string;
   nodeId: string;
   amount: string;
+  source: FundSource;
 }
 
 export interface MsgFundHotKeyResponse {
@@ -1514,7 +1559,7 @@ export const MsgDeclareCapacityResponse: MessageFns<MsgDeclareCapacityResponse> 
 };
 
 function createBaseMsgFundHotKey(): MsgFundHotKey {
-  return { operator: "", nodeId: "", amount: "" };
+  return { operator: "", nodeId: "", amount: "", source: 0 };
 }
 
 export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
@@ -1527,6 +1572,9 @@ export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
     }
     if (message.amount !== "") {
       writer.uint32(26).string(message.amount);
+    }
+    if (message.source !== 0) {
+      writer.uint32(32).int32(message.source);
     }
     return writer;
   },
@@ -1568,6 +1616,14 @@ export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
             message.amount = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.source = reader.int32() as any;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -1589,6 +1645,7 @@ export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
         ? globalThis.String(object.node_id)
         : "",
       amount: isSet(object.amount) ? globalThis.String(object.amount) : "",
+      source: isSet(object.source) ? fundSourceFromJSON(object.source) : 0,
     };
   },
 
@@ -1603,6 +1660,9 @@ export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
     if (message.amount !== "") {
       obj.amount = message.amount;
     }
+    if (message.source !== 0) {
+      obj.source = fundSourceToJSON(message.source);
+    }
     return obj;
   },
 
@@ -1614,6 +1674,7 @@ export const MsgFundHotKey: MessageFns<MsgFundHotKey> = {
     message.operator = object.operator ?? "";
     message.nodeId = object.nodeId ?? "";
     message.amount = object.amount ?? "";
+    message.source = object.source ?? 0;
     return message;
   },
 };
