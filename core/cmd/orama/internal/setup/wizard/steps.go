@@ -153,8 +153,18 @@ func (m *Model) takeLogin(method loginMethod) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) takeNetwork(n NetworkChoice) (tea.Model, tea.Cmd) {
-	m.opts.Network = n.Name
+	m.chooseNetwork(n)
 	return m.goTo(stepOptions)
+}
+
+// chooseNetwork records the network. One that pins its Tor network file runs a relay unless the
+// person says otherwise, so the relay row starts on.
+func (m *Model) chooseNetwork(n NetworkChoice) {
+	m.opts.Network = n.Name
+	m.torPinned = n.TorNetwork
+	if n.TorNetwork {
+		m.toggles[optRelay] = m.toggles[optGlobal] && !m.opts.NoRelay
+	}
 }
 
 func (m *Model) onNetworks(msg networksMsg) (tea.Model, tea.Cmd) {
@@ -170,7 +180,7 @@ func (m *Model) onNetworks(msg networksMsg) (tea.Model, tea.Cmd) {
 	if len(msg.choices) == 1 {
 		// One network is no question: go on without leaving the step in the history,
 		// or going back from the next question would land here and come straight back.
-		m.opts.Network = msg.choices[0].Name
+		m.chooseNetwork(msg.choices[0])
 		return m.enter(stepOptions)
 	}
 	return m, nil

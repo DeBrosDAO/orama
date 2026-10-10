@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
 
 const (
@@ -68,6 +71,59 @@ func TestRun_threeFullNodesFromScratch(t *testing.T) {
 	}
 	if res.Operator != testOperator || h.rec.oper[res.Env] != testOperator {
 		t.Errorf("the operator %q was not recorded on %q", res.Operator, res.Env)
+	}
+}
+
+func TestRun_aPinnedTorNetworkIsGivenToTheRelay(t *testing.T) {
+	pinned := []byte(`{"name":"pinned"}`)
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: pinned}
+	mustRun(t, h, h.opts(ip1))
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; string(got) != string(pinned) {
+		t.Errorf("the relay was given %q, want the network's pinned file", got)
+	}
+	if !strings.Contains(strings.Join(h.w.entries(), "\n"), "global "+ip1+" chain,ipfs,provider,relay") {
+		t.Errorf("a network that pins a Tor network gets a relay with no flag:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_theTorNetworkFlagOverridesThePin(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "mine.json")
+	if err := os.WriteFile(file, []byte(`{"name":"mine"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: []byte(`{"name":"pinned"}`)}
+	opts := h.opts(ip1)
+	opts.TorNetwork = file
+	mustRun(t, h, opts)
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; string(got) != `{"name":"mine"}` {
+		t.Errorf("the relay was given %q, want the operator's own file", got)
+	}
+}
+
+func TestRun_noRelayInstallsNoRelayOnAPinningNetwork(t *testing.T) {
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: []byte(`{"name":"pinned"}`)}
+	opts := h.opts(ip1)
+	opts.NoRelay = true
+	mustRun(t, h, opts)
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; got != nil {
+		t.Errorf("a relay-less node was given a Tor network: %q", got)
+	}
+	if h.w.index("global "+ip1+" chain,ipfs,provider") < 0 || strings.Contains(strings.Join(h.w.entries(), "\n"), "provider,relay") {
+		t.Errorf("services:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aRelayWithNeitherAPinNorAFileIsAnErrorNotAnEmptyNetwork(t *testing.T) {
+	// The plan decided on a relay from the pin; a network that pins a file but did not load its
+	// bytes is a registry fault that must stop the run, not install a relay that joins nothing.
+	h := newHarness()
+	h.deps.Networks = pinnedWithoutBytes{fakeNetworks{w: h.w}}
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "Tor network") {
+		t.Fatalf("got %v", err)
 	}
 }
 
@@ -793,4 +849,13 @@ func TestQuoteLog_noLineOfARemoteLogPassesForOurs(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+}
+
+// pinnedWithoutBytes is a registry whose network pins a Tor network file but carries none.
+type pinnedWithoutBytes struct{ fakeNetworks }
+
+func (p pinnedWithoutBytes) Resolve(ctx context.Context, name string) (*netregistry.Network, error) {
+	n, _ := p.fakeNetworks.Resolve(ctx, name)
+	n.Manifest.TorNetworkSHA256 = strings.Repeat("ab", 32)
+	return n, nil
 }

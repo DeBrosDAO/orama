@@ -90,7 +90,14 @@ func choicesFrom(reg *netregistry.Registry, active string) ([]wizard.NetworkChoi
 		if err != nil {
 			return nil, fmt.Errorf("read network %s: %w", name, err)
 		}
-		out = append(out, wizard.NetworkChoice{Name: name, ChainID: n.Manifest.ChainID, Default: name == active})
+		out = append(out, choiceOf(n, active))
 	}
 	return out, nil
+}
+
+// choiceOf is the wizard's view of a network: whether it is the active one, and whether its
+// manifest pins the Tor network file its relays join.
+func choiceOf(n *netregistry.Network, active string) wizard.NetworkChoice {
+	m := n.Manifest
+	return wizard.NetworkChoice{Name: m.Name, ChainID: m.ChainID, Default: m.Name == active, TorNetwork: m.TorNetworkSHA256 != ""}
 }

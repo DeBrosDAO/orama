@@ -25,6 +25,9 @@ type NetworkChoice struct {
 	ChainID string
 	// Default marks the one chosen when the person just presses enter.
 	Default bool
+	// TorNetwork says the network pins the Tor network file its relays join, so a relay
+	// needs no file from the person.
+	TorNetwork bool
 }
 
 // Services is what the wizard needs from the outside. Each is called from a

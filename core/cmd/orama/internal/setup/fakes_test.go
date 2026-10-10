@@ -230,13 +230,19 @@ type fakeNetworks struct {
 	w          *world
 	faucet     bool
 	genesisErr error
+	// torNetwork is the Tor network file the network pins; nil pins none.
+	torNetwork []byte
 }
 
 func (n fakeNetworks) Resolve(context.Context, string) (*netregistry.Network, error) {
-	return &netregistry.Network{Manifest: &netregistry.Manifest{
+	m := &netregistry.Manifest{
 		Name: "stagenet", ChainID: testChainID, Seeds: []string{"seed1.stagenet.example", "seed2.stagenet.example"},
 		Channel: "nightly", MinVersion: "0.3.0", ReleaseRepo: "https://releases.example", ReleaseRootSHA256: testRootSHA, Faucet: n.faucet,
-	}}, nil
+	}
+	if n.torNetwork != nil {
+		m.TorNetworkSHA256 = netregistry.Digest(n.torNetwork)
+	}
+	return &netregistry.Network{Manifest: m, TorNetwork: n.torNetwork}, nil
 }
 func (n fakeNetworks) Genesis(context.Context, *netregistry.Network) ([]byte, error) {
 	return []byte(`{"chain_id":"` + testChainID + `"}`), n.genesisErr

@@ -3,6 +3,8 @@ package netregistry
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/tornet/tornettest"
 )
 
 // testRoot and testGenesis stand in for release-root.json and genesis.json;
@@ -34,4 +36,14 @@ func marshalManifest(t *testing.T, m Manifest) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// testTorNetwork is a valid private Tor network file.
+func testTorNetwork(t *testing.T) []byte { return tornettest.NetworkFile(t) }
+
+// withTorNetwork is validManifest pinning file.
+func withTorNetwork(file []byte) Manifest {
+	m := validManifest()
+	m.TorNetworkSHA256 = Digest(file)
+	return m
 }

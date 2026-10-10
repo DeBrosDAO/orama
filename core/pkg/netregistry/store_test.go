@@ -85,3 +85,28 @@ func TestStore_saveRefusesAnUnsafeName(t *testing.T) {
 		t.Errorf("Remove(../..) = %v, %v", removed, err)
 	}
 }
+
+func TestStore_aTorNetworkSurvivesTheStoreAndIsVerifiedOnLoad(t *testing.T) {
+	file := testTorNetwork(t)
+	n := testNetwork(t)
+	m := withTorNetwork(file)
+	n.Manifest, n.TorNetwork = &m, file
+	s := Store{Dir: t.TempDir()}
+	if err := s.Save(n); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := r.Get("teststage")
+	if string(got.TorNetwork) != string(file) {
+		t.Errorf("stored Tor network = %q", got.TorNetwork)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "teststage", TorNetworkFile), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(); err == nil {
+		t.Error("a stored Tor network file that no longer matches its pin was loaded")
+	}
+}

@@ -108,6 +108,9 @@ func (m *Model) takeOptions() (tea.Model, tea.Cmd) {
 	if !m.toggles[optRelay] {
 		m.opts.TorNetwork = ""
 	}
+	// Leaving the relay out of a network that pins its Tor network file has to be said: the plan
+	// would otherwise give the nodes the relay the pin makes the default.
+	m.opts.NoRelay = !m.opts.ClusterOnly && !m.toggles[optRelay] && m.torPinned
 	if m.opts.ClusterOnly {
 		m.opts.StorageGB = 0
 		return m.goTo(stepName)
@@ -116,7 +119,7 @@ func (m *Model) takeOptions() (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) afterStorage() (tea.Model, tea.Cmd) {
-	if m.toggles[optRelay] {
+	if m.toggles[optRelay] && !m.torPinned {
 		return m.goTo(stepTor)
 	}
 	return m.goTo(stepName)

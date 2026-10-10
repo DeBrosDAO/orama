@@ -17,7 +17,7 @@ const PublishedBaseURL = "https://orama.network/networks/"
 
 // embeddedDir is the build copy of the repository's networks/ directory. Go
 // cannot embed a directory outside the module, so `make -C core sync-networks`
-// copies each network's manifest and release root here, and
+// copies each network's manifest, release root and Tor network file here, and
 // TestEmbedded_matchesPublishedNetworks fails when the copy and networks/ differ.
 // Genesis files are not embedded: a genesis is large, and it is fetched and
 // checked against the manifest's digest.
@@ -26,11 +26,14 @@ const embeddedDir = "embedded"
 //go:embed all:embedded
 var embeddedFS embed.FS
 
-// Network is a manifest together with the release root it pins.
+// Network is a manifest together with the release root and the Tor network file it pins.
 type Network struct {
 	Manifest *Manifest
 	// Root is release-root.json, already verified against the manifest.
 	Root []byte
+	// TorNetwork is tor-network.json, verified against the manifest; nil when the manifest
+	// pins none.
+	TorNetwork []byte
 	// Source is the URL of the manifest.
 	Source string
 	// Builtin is true for a network built into this binary.
@@ -74,7 +77,8 @@ func LoadFS(fsys fs.FS, dir string) (*Registry, error) {
 }
 
 // loadNetworkDir reads dir/manifest.json and dir/release-root.json, parses the
-// manifest and checks that it names wantName and that the root is the pinned one.
+// manifest and checks that it names wantName and that the root is the pinned one. A manifest
+// that pins a Tor network file needs dir/tor-network.json, checked the same way.
 func loadNetworkDir(fsys fs.FS, dir, wantName string) (*Network, error) {
 	manifestData, err := fs.ReadFile(fsys, path.Join(dir, ManifestFile))
 	if err != nil {
@@ -94,7 +98,17 @@ func loadNetworkDir(fsys fs.FS, dir, wantName string) (*Network, error) {
 	if err := m.VerifyRoot(root); err != nil {
 		return nil, err
 	}
-	return &Network{Manifest: m, Root: root}, nil
+	n := &Network{Manifest: m, Root: root}
+	if m.TorNetworkSHA256 == "" {
+		return n, nil
+	}
+	if n.TorNetwork, err = fs.ReadFile(fsys, path.Join(dir, TorNetworkFile)); err != nil {
+		return nil, fmt.Errorf("the manifest pins a Tor network file and reading it failed: %w", err)
+	}
+	if err := m.VerifyTorNetwork(n.TorNetwork); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // Get returns the network called name.

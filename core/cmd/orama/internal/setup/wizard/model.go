@@ -95,13 +95,15 @@ type Model struct {
 	// err is shown under the question; it clears on the next key.
 	err string
 
-	login       loginMethod
-	cursor      int
-	hostIPs     []string
-	hostKeyIdx  int
-	hostKeys    []HostKey
-	networks    []NetworkChoice
-	toggles     [optCount]bool
+	login      loginMethod
+	cursor     int
+	hostIPs    []string
+	hostKeyIdx int
+	hostKeys   []HostKey
+	networks   []NetworkChoice
+	toggles    [optCount]bool
+	// torPinned says the chosen network pins its Tor network file.
+	torPinned   bool
 	exitAsked   bool
 	inspections []setup.Inspection
 	plan        *setup.Plan

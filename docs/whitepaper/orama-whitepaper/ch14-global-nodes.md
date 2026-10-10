@@ -12,7 +12,7 @@
 
 A private cluster is owned by one operator, carries tenant data and talks to itself over WireGuard. The global layer is public: a chain anyone can read, storage deals anyone can buy, a Tor network anyone can use. Its machines accept connections from strangers and hold a consensus key whose duplication is slashed. They must never become a path into a cluster's overlay.
 
-Three constraints shape the code. Global services must not share a trust domain with a cluster. A validator key is not an ordinary secret, because two processes signing with it at one height is an equivocation. And the chain must know who the operators are, since storage slots, relay rewards and governance weight hang off one registry.
+Three constraints shape the code: global services must not share a trust domain with a cluster; a validator key is not an ordinary secret, because two processes signing at one height is an equivocation; and the chain must know who the operators are.
 
 ## What runs on the machine
 
@@ -20,11 +20,11 @@ There are nine installable roles, each one systemd unit and one system account: 
 
 None of these units is `PartOf` the node supervisor, so restarting `orama-node` never restarts a validator. They share a sandbox: strict filesystem protection, an empty capability set, `/opt/orama` hidden, and an `IPAddressDeny=` covering every private range, WireGuard's `10.0.0.0/8` included. A compromised global service has no route into a cluster.
 
-Ordering is done by the CLI, not by systemd, which uses `Wants=` rather than `Requires=`. `orama global start` runs the sign-floor check, starts the chain, polls its RPC for at most five minutes, and only then starts the rest.
+The CLI orders the units; systemd only uses `Wants=`. `orama global start` runs the sign-floor check, starts the chain, polls its RPC for at most five minutes, and only then starts the rest.
 
 `orama global install` validates everything that can refuse before the first change: option shapes, firewall state, the cosmovisor tarball against its pinned SHA-256, every staged binary and the shielded verifier against the release manifest, `oramad` against the verifier it pins, and a staged `oramad` against the genesis binary already installed. It starts nothing. The verifier is placed in the cosmovisor layout beside `oramad`, so each version of the chain runs the verifier it was built with.
 
-`orama setup` runs this install over SSH on every machine it is given, beside the cluster node, and then registers the operator, the nodes, their bonds and the validator on the chain, signing with the RootWallet. It passes `--external-address`, which makes the installer write the chain's configuration (the announced address, no peer exchange, custom pruning, a snapshot every 1,000 blocks) and, from two seeds' light-client routes and a block both returned, the state-sync block, so a joiner restores a snapshot instead of replaying the chain. `core/pkg/install/chainconfig.go:RenderChainConfig`, `core/pkg/statesync/trust.go:Resolve`.
+`orama setup` runs this install over SSH on every machine, beside the cluster node, then registers the operator, nodes, bonds and validator on the chain, signing with the RootWallet. It passes `--external-address`, so the installer writes the chain's configuration and, from a block two seeds' light-client routes both returned, the state-sync block: a joiner restores a snapshot instead of replaying the chain. `core/pkg/install/chainconfig.go:RenderChainConfig`, `core/pkg/statesync/trust.go:Resolve`.
 
 ## Upgrading the chain
 
@@ -56,7 +56,7 @@ Two nftables tables, each replaced atomically, define the boundary. Published po
 
 **Endpoints.** Hosts must be public, and no two live nodes may claim one literal IP.
 
-**Names.** An operator can claim one identification name per node, a DNS label in a dedicated sub-zone of the network's domain that points at the node's literal IPs and delegates nothing. The chain enforces the label rules, a reserved list, first come first served and a refundable deposit that comes back when the name is released or the node retires. The cluster that answers the network's zone reads the claimed names from the chain once a minute and serves them, so what the zone answers cannot drift from the chain.
+**Names.** An operator can claim one identification name per node, a DNS label in a dedicated sub-zone that points at the node's literal IPs. The chain enforces the label rules, a reserved list, first come first served and a refundable deposit. The zone's cluster serves them from the chain.
 
 **Bonds.** A bond is norama escrowed in the `nodes` module account, per role. A role is active only while the node is active and that role's bond meets the minimum. Unbonding queues the amount for 21 days, still slashable.
 

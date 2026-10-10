@@ -166,7 +166,7 @@ docs:
 
 # Rewrite the embedded network registry (pkg/netregistry/embedded) from the
 # repository's networks/ directory. Go cannot embed a file outside the module, so
-# the binary carries a build copy of each network's manifest and release root;
+# the binary carries a build copy of each network's manifest, release root and Tor network file;
 # `go test ./pkg/netregistry` fails when the copy and networks/ differ.
 .PHONY: sync-networks
 sync-networks:
@@ -176,6 +176,7 @@ sync-networks:
 		name=$$(basename "$$dir"); \
 		mkdir -p "pkg/netregistry/embedded/$$name"; \
 		cp "$$dir/manifest.json" "$$dir/release-root.json" "pkg/netregistry/embedded/$$name/"; \
+		[ ! -f "$$dir/tor-network.json" ] || cp "$$dir/tor-network.json" "pkg/netregistry/embedded/$$name/"; \
 	done
 
 # The run-your-own-cluster guide (docs/RUN_YOUR_OWN_CLUSTER.md) executed step by

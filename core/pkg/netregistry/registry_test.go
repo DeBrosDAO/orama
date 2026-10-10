@@ -53,6 +53,42 @@ func TestLoadRegistry_refusesBrokenNetworks(t *testing.T) {
 	}
 }
 
+func TestLoadRegistry_aPinnedTorNetworkIsLoadedAndVerified(t *testing.T) {
+	file := testTorNetwork(t)
+	fsys := networkFS(t, "teststage", withTorNetwork(file), testRoot)
+	fsys["embedded/teststage/"+TorNetworkFile] = &fstest.MapFile{Data: file}
+	r, err := LoadFS(fsys, "embedded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := r.Get("teststage")
+	if !bytes.Equal(n.TorNetwork, file) {
+		t.Errorf("the network carries %d bytes of Tor network, want the pinned file", len(n.TorNetwork))
+	}
+	plain, err := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := plain.Get("teststage"); n.TorNetwork != nil {
+		t.Errorf("a network that pins none carries %d bytes", len(n.TorNetwork))
+	}
+}
+
+func TestLoadRegistry_aBrokenTorNetworkRefusesTheNetwork(t *testing.T) {
+	file := testTorNetwork(t)
+	pinned := withTorNetwork(file)
+	missing := networkFS(t, "teststage", pinned, testRoot)
+	tampered := networkFS(t, "teststage", pinned, testRoot)
+	tampered["embedded/teststage/"+TorNetworkFile] = &fstest.MapFile{Data: append(file[:len(file):len(file)], ' ')}
+	for name, fsys := range map[string]fstest.MapFS{"the pinned file is missing": missing, "the file is not the pinned one": tampered} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadFS(fsys, "embedded"); err == nil {
+				t.Fatal("a network whose Tor network file fails its pin was loaded")
+			}
+		})
+	}
+}
+
 func TestRegistryGet_unknownNameListsTheKnownOnes(t *testing.T) {
 	r, _ := LoadFS(networkFS(t, "teststage", validManifest(), testRoot), "embedded")
 	_, err := r.Get("nope")
@@ -115,7 +151,7 @@ func assertNetworkFilesMatch(t *testing.T, from, to string) {
 		if !e.IsDir() {
 			continue
 		}
-		for _, file := range []string{ManifestFile, ReleaseRootFile} {
+		for _, file := range publishedNetworkFiles(t, filepath.Join(from, e.Name())) {
 			want, err := os.ReadFile(filepath.Join(from, e.Name(), file))
 			if err != nil {
 				t.Errorf("%s/%s: %v", from, e.Name(), err)
@@ -127,4 +163,23 @@ func assertNetworkFilesMatch(t *testing.T, from, to string) {
 			}
 		}
 	}
+}
+
+// publishedNetworkFiles are the files a network directory carries into the binary: the manifest,
+// the release root and, when the manifest pins one, the Tor network file.
+func publishedNetworkFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	files := []string{ManifestFile, ReleaseRootFile}
+	data, err := os.ReadFile(filepath.Join(dir, ManifestFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := ParseManifest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.TorNetworkSHA256 != "" {
+		files = append(files, TorNetworkFile)
+	}
+	return files
 }

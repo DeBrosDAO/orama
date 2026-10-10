@@ -15,7 +15,7 @@ This page describes what the command does today. The flags are in the [`orama se
 
 | | Cluster node only (`--cluster-only`) | Full (the default) |
 |---|---|---|
-| Installs | the cluster node | the cluster node, the chain, public IPFS and its provider, and, with `--tor-network`, a Tor relay |
+| Installs | the cluster node | the cluster node, the chain, public IPFS and its provider, and a Tor relay (the network's pinned Tor network file, or `--tor-network`; `--no-relay` leaves it out) |
 | vCPU | 2 | 4 |
 | RAM | 2 GiB | 8 GiB |
 | Free disk | 10 GiB | 80 GiB plus `--storage-gb` (default 50 GB) |
@@ -46,7 +46,7 @@ orama setup --network stagenet --name alice --yes \
 5. **The global layer** (full profile), on several machines at once: as many as the cluster could lose and still hold its Raft quorum (one on a cluster of three, two on five), never more than four:
    - the trust point is read through two of the network's seeds: the newest block both serve less 100 blocks, which must have the same hash on both (seeds that disagree stop the run);
    - `orama global install --colocated` installs the services; the chain home is created from the network's genesis, and the chain's configuration is written by the installer: the address it announces (your public IP, port 31000), no peer exchange, Prometheus on loopback, custom pruning, a snapshot every 1,000 blocks (two kept), and the state-sync block with the two seeds, the trusted block and a 7-day trust period;
-   - the chain, the public IPFS and the relay (if any) are started;
+   - the chain, the public IPFS and the relay (if any) are started. The relay joins the Tor network file the network's manifest pins (its SHA-256 is in the manifest, the file is built into your CLI like the release root, and a network added by URL has it fetched and checked the same way); `--tor-network` gives a different file, and a network that pins none installs a relay only with that flag;
    - setup waits, with a deadline, until the chain has restored a snapshot and caught up. If the chain unit stays down, or the machine cannot be polled five times running, the wait ends, with the end of the chain's log or the last error.
 6. **Restart, one machine at a time.** The cluster gateway reads the chain's listeners when it starts, so each cluster node whose gateway started before its chain unit was installed (this run's installs, and a machine an earlier run left that way) is restarted, and setup waits until it carries its share of the cluster again before it touches the next. Each restart goes through the node's own quorum check. A cluster of fewer than three voters cannot keep a quorum through any restart, so if (and only if) the node's refusal says it counts fewer than three voters, setup says so and restarts it with `--force`. Any other refusal, such as a check that could not read the cluster or a cluster of three or more, is the answer and stops the run.
 7. **On the chain**, one transaction at a time, signed by your RootWallet with the account number, sequence, gas and fee derived:
@@ -74,11 +74,10 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 
 ## The exit relay
 
-`--exit` makes the relay an exit: other people's traffic leaves from your address, abuse complaints reach your hosting provider and the `--contact` you give, and some providers forbid it. Setup prints this and needs `--yes` or your confirmation. An exit needs `--tor-network` because it is a relay.
+`--exit` makes the relay an exit: other people's traffic leaves from your address, abuse complaints reach your hosting provider and the `--contact` you give, and some providers forbid it. Setup prints this and needs `--yes` or your confirmation. An exit is a relay, so it needs the Tor network file: the one the network pins, or `--tor-network`.
 
 ## Known gaps
 
-- **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.
 - **The faucet is SSH-signed.** There is no public faucet endpoint; see Funding.
 - **Earnings are not counted** when setup checks the account has enough. A bond can be paid from earnings, so an operator who holds only earnings is told to fund the account.
 - **A chain that has upgraded since its genesis.** A joiner starts on the genesis binary in the cosmovisor layout. If the snapshot it restores was taken after an upgrade, the chain stops asking for that upgrade's binary; setup ends the wait with the chain's log. The release metadata does not list upgrade heights, so setup cannot stage the right binary itself yet.

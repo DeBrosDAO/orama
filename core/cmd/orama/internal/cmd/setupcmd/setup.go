@@ -32,8 +32,8 @@ For each machine setup gives your RootWallet an SSH key (and pins the machine's 
 checks the hardware against what the machine will run, installs the signed release of the
 network's channel (verified against the release root the network pins), installs the cluster
 node and, beside it, the global layer: the chain (it joins by state sync from two seeds that
-must agree), public storage and its provider, and a Tor relay when you give the network's Tor
-file. Then it registers your operator, each node, its bonds and its storage capacity on the
+must agree), public storage and its provider, and a Tor relay (the network pins the Tor network file its
+relays join; --tor-network gives another, --no-relay leaves the relay out). Then it registers your operator, each node, its bonds and its storage capacity on the
 chain and creates your validator, signing every transaction with your RootWallet. Nodes are
 restarted one at a time, each waiting until it carries its share of the cluster again.
 
@@ -69,7 +69,7 @@ machine until every machine passes.`,
 var flags struct {
 	network, name, user, bootstrapKey, domain, acmeCA, env, contact, torNetwork string
 	ips, hostKeys                                                               []string
-	clusterOnly, exit, yes, password, noValidator                               bool
+	clusterOnly, exit, yes, password, noValidator, noRelay                      bool
 	storageGB                                                                   uint64
 	asn                                                                         uint32
 }
@@ -80,7 +80,7 @@ func init() {
 	f.StringSliceVar(&flags.ips, "ip", nil, "Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments)")
 	f.StringVar(&flags.name, "name", "", "Node name, the node's id on the chain; several machines are named <name>, <name>-2, ... (required unless --cluster-only)")
 	f.BoolVar(&flags.clusterOnly, "cluster-only", false, "Install the cluster node only, without the chain, storage or relay")
-	f.BoolVar(&flags.exit, "exit", false, "Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes")
+	f.BoolVar(&flags.exit, "exit", false, "Make the relay an exit relay: other people's traffic leaves from your IP address. Needs the network's Tor network file and --yes")
 	f.Uint64Var(&flags.storageGB, "storage-gb", 0, fmt.Sprintf("Public storage each node offers, in GB (default %d); counts towards the disk floor", setup.DefaultStorageGB))
 	f.BoolVarP(&flags.yes, "yes", "y", false, "Ask nothing: use the answers given as flags (every machine needs a --host-key)")
 	f.StringVar(&flags.user, "user", setup.DefaultSSHUser, "SSH login on the machines")
@@ -92,7 +92,8 @@ func init() {
 	f.StringVar(&flags.env, "env", "", "CLI environment to record the cluster under (default: the active one on this network, else <network>-<name>)")
 	f.StringVar(&flags.contact, "contact", "", "Where an abuse complaint about the relay goes (default: your operator account)")
 	f.Uint32Var(&flags.asn, "asn", 0, "Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared)")
-	f.StringVar(&flags.torNetwork, "tor-network", "", "The Orama Tor network's tor-network.json: with it each node also runs a relay")
+	f.StringVar(&flags.torNetwork, "tor-network", "", "A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it)")
+	f.BoolVar(&flags.noRelay, "no-relay", false, "Run no relay though the network pins a Tor network file")
 	f.BoolVar(&flags.noValidator, "no-validator", false, "Do not create a validator (and do not bond the 1,000 ORAMA self-bond)")
 }
 

@@ -64,6 +64,8 @@ func TestManifestValidate_fields(t *testing.T) {
 		{"release repo with a password", func(m *Manifest) { m.ReleaseRepo = "https://u:p@releases.example.org/" }, "user"},
 		{"release repo with a query", func(m *Manifest) { m.ReleaseRepo = "https://releases.example.org/?x=1" }, "query"},
 		{"root digest missing", func(m *Manifest) { m.ReleaseRootSHA256 = "" }, "release_root_sha256"},
+		{"tor network digest uppercase", func(m *Manifest) { m.TorNetworkSHA256 = strings.ToUpper(Digest(testRoot)) }, "tor_network_sha256"},
+		{"tor network digest short", func(m *Manifest) { m.TorNetworkSHA256 = "abcd" }, "tor_network_sha256"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := validManifest()
@@ -129,5 +131,42 @@ func TestManifestMarshal_roundTripsAndRefusesInvalid(t *testing.T) {
 	m.Seeds = nil
 	if _, err := m.Marshal(); err == nil {
 		t.Error("Marshal wrote an invalid manifest")
+	}
+}
+
+func TestParseManifest_aTorNetworkDigestIsOptionalAndRoundTrips(t *testing.T) {
+	plain, err := ParseManifest(marshalManifest(t, validManifest()))
+	if err != nil || plain.TorNetworkSHA256 != "" {
+		t.Fatalf("a manifest without a Tor network = %+v, %v", plain, err)
+	}
+	out, err := plain.Marshal()
+	if err != nil || strings.Contains(string(out), "tor_network_sha256") {
+		t.Errorf("a manifest that pins none must not print the key (existing manifests stay byte-identical): %s %v", out, err)
+	}
+	pinned := withTorNetwork(testTorNetwork(t))
+	got, err := ParseManifest(marshalManifest(t, pinned))
+	if err != nil || got.TorNetworkSHA256 != pinned.TorNetworkSHA256 {
+		t.Fatalf("a pinned manifest = %+v, %v", got, err)
+	}
+}
+
+func TestVerifyTorNetwork(t *testing.T) {
+	file := testTorNetwork(t)
+	m := withTorNetwork(file)
+	if err := m.VerifyTorNetwork(file); err != nil {
+		t.Fatalf("the pinned file was refused: %v", err)
+	}
+	if err := m.VerifyTorNetwork(append([]byte(nil), append(file, ' ')...)); !errors.Is(err, ErrTorNetworkMismatch) {
+		t.Errorf("a changed file = %v, want ErrTorNetworkMismatch", err)
+	}
+	none := validManifest()
+	if err := none.VerifyTorNetwork(file); err == nil || !strings.Contains(err.Error(), "pins no Tor network") {
+		t.Errorf("a manifest that pins none = %v", err)
+	}
+	notNetwork := []byte(`{"name":"x"}`)
+	bad := validManifest()
+	bad.TorNetworkSHA256 = Digest(notNetwork)
+	if err := bad.VerifyTorNetwork(notNetwork); err == nil || strings.Contains(err.Error(), "does not match") {
+		t.Errorf("a pinned file that is not a Tor network must be refused as one: %v", err)
 	}
 }

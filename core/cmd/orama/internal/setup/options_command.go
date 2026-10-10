@@ -66,6 +66,7 @@ func (o Options) CommandLine() string {
 		flag("asn", fmt.Sprint(o.ASN))
 	}
 	flag("tor-network", o.TorNetwork)
+	on("no-relay", o.NoRelay)
 	on("no-validator", o.NoValidator)
 	parts = append(parts, "--yes")
 	return strings.Join(parts, " ")

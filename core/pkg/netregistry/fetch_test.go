@@ -166,3 +166,49 @@ func TestGet_stopsRedirectLoops(t *testing.T) {
 		t.Fatal("a redirect loop was followed forever")
 	}
 }
+
+func TestFetchNetwork_aPinnedTorNetworkIsFetchedAndVerified(t *testing.T) {
+	file := testTorNetwork(t)
+	files := publishedFiles(t)
+	files[ManifestFile] = marshalManifest(t, withTorNetwork(file))
+	files[TorNetworkFile] = file
+	srv, client := networkServer(t, files)
+	n, err := FetchNetwork(context.Background(), client, srv.URL+"/nets/teststage/manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(n.TorNetwork) != string(file) {
+		t.Errorf("fetched Tor network %q", n.TorNetwork)
+	}
+	plain, client := networkServer(t, publishedFiles(t))
+	n, err = FetchNetwork(context.Background(), client, plain.URL+"/nets/teststage/manifest.json")
+	if err != nil || n.TorNetwork != nil {
+		t.Errorf("a network that pins none = %+v, %v", n, err)
+	}
+}
+
+func TestFetchNetwork_aTorNetworkFileThatFailsItsPinIsRefused(t *testing.T) {
+	file := testTorNetwork(t)
+	for name, served := range map[string][]byte{
+		"missing":     nil,
+		"not pinned":  append(file[:len(file):len(file)], '\n', ' '),
+		"oversized":   []byte(strings.Repeat(" ", maxTorNetworkBytes+1)),
+		"not network": []byte(`{"name":"x"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := publishedFiles(t)
+			m := withTorNetwork(file)
+			if name == "not network" {
+				m.TorNetworkSHA256 = Digest(served)
+			}
+			files[ManifestFile] = marshalManifest(t, m)
+			if served != nil {
+				files[TorNetworkFile] = served
+			}
+			srv, client := networkServer(t, files)
+			if _, err := FetchNetwork(context.Background(), client, srv.URL+"/nets/teststage/manifest.json"); err == nil {
+				t.Fatal("FetchNetwork accepted it")
+			}
+		})
+	}
+}

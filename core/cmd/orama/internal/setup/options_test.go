@@ -24,24 +24,26 @@ func TestNormalize_refusals(t *testing.T) {
 		mutate func(*Options)
 		want   string
 	}{
-		"no ip":                   {func(o *Options) { o.IPs = nil }, "--ip"},
-		"a private ip":            {func(o *Options) { o.IPs = []string{"10.0.0.5"} }, "public"},
-		"an ipv6 address":         {func(o *Options) { o.IPs = []string{"2001:db8::1"} }, "IPv4"},
-		"a hostname":              {func(o *Options) { o.IPs = []string{"vps.example.org"} }, "not an IP"},
-		"a duplicate ip":          {func(o *Options) { o.IPs = []string{"203.0.113.10", "203.0.113.10"} }, "twice"},
-		"too many machines":       {func(o *Options) { o.IPs = manyIPs(MaxNodes + 1) }, "most is"},
-		"password and key":        {func(o *Options) { o.UsePassword, o.BootstrapKey = true, "/k" }, "alternatives"},
-		"no name for a full node": {func(o *Options) { o.Name = "" }, "--name"},
-		"a name with a dot":       {func(o *Options) { o.Name = "a.b" }, "--name"},
-		"a one-letter name":       {func(o *Options) { o.Name = "a" }, "--name"},
-		"a trailing hyphen":       {func(o *Options) { o.Name = "alice-" }, "--name"},
-		"a two-letter name":       {func(o *Options) { o.Name = "ab" }, "3 to 32"},
-		"a reserved name":         {func(o *Options) { o.Name = "gateway" }, "reserved"},
-		"a seed label":            {func(o *Options) { o.Name = "seed1" }, "--name"},
-		"exit without consent":    {func(o *Options) { o.Exit, o.TorNetwork = true, "t.json" }, "exit relay"},
-		"exit without tor file":   {func(o *Options) { o.Exit, o.Yes = true, true }, "--tor-network"},
-		"exit on cluster-only":    {func(o *Options) { o.ClusterOnly, o.Exit, o.Yes = true, true, true }, "--cluster-only"},
-		"storage on cluster-only": {func(o *Options) { o.ClusterOnly, o.StorageGB = true, 10 }, "--cluster-only"},
+		"no ip":                    {func(o *Options) { o.IPs = nil }, "--ip"},
+		"a private ip":             {func(o *Options) { o.IPs = []string{"10.0.0.5"} }, "public"},
+		"an ipv6 address":          {func(o *Options) { o.IPs = []string{"2001:db8::1"} }, "IPv4"},
+		"a hostname":               {func(o *Options) { o.IPs = []string{"vps.example.org"} }, "not an IP"},
+		"a duplicate ip":           {func(o *Options) { o.IPs = []string{"203.0.113.10", "203.0.113.10"} }, "twice"},
+		"too many machines":        {func(o *Options) { o.IPs = manyIPs(MaxNodes + 1) }, "most is"},
+		"password and key":         {func(o *Options) { o.UsePassword, o.BootstrapKey = true, "/k" }, "alternatives"},
+		"no name for a full node":  {func(o *Options) { o.Name = "" }, "--name"},
+		"a name with a dot":        {func(o *Options) { o.Name = "a.b" }, "--name"},
+		"a one-letter name":        {func(o *Options) { o.Name = "a" }, "--name"},
+		"a trailing hyphen":        {func(o *Options) { o.Name = "alice-" }, "--name"},
+		"a two-letter name":        {func(o *Options) { o.Name = "ab" }, "3 to 32"},
+		"a reserved name":          {func(o *Options) { o.Name = "gateway" }, "reserved"},
+		"a seed label":             {func(o *Options) { o.Name = "seed1" }, "--name"},
+		"exit without consent":     {func(o *Options) { o.Exit, o.TorNetwork = true, "t.json" }, "exit relay"},
+		"no relay with a tor file": {func(o *Options) { o.NoRelay, o.TorNetwork = true, "t.json" }, "alternatives"},
+		"no relay with an exit":    {func(o *Options) { o.NoRelay, o.Exit, o.Yes, o.TorNetwork = true, true, true, "" }, "--no-relay"},
+		"no relay on cluster-only": {func(o *Options) { o.ClusterOnly, o.NoRelay = true, true }, "--cluster-only"},
+		"exit on cluster-only":     {func(o *Options) { o.ClusterOnly, o.Exit, o.Yes = true, true, true }, "--cluster-only"},
+		"storage on cluster-only":  {func(o *Options) { o.ClusterOnly, o.StorageGB = true, 10 }, "--cluster-only"},
 		"a bare host key for two": {func(o *Options) {
 			o.IPs = []string{"203.0.113.10", "203.0.113.11"}
 			o.HostKeys = map[string]string{"": "SHA256:abc"}
@@ -202,6 +204,17 @@ func TestCommandLine_clusterOnlyAndSecrets(t *testing.T) {
 	vault := Options{IPs: []string{"203.0.113.10"}, UsePassword: true, StorageGB: DefaultStorageGB}
 	if got := vault.CommandLine(); !strings.Contains(got, "--password") || strings.Contains(got, "--storage-gb") {
 		t.Errorf("the vault login is a switch and the default storage is not repeated: %s", got)
+	}
+}
+
+func TestCommandLine_keepsTheTorChoicesOfTheRun(t *testing.T) {
+	override := Options{IPs: []string{"203.0.113.10"}, Name: "alice", TorNetwork: "/etc/mine/tor-network.json", User: DefaultSSHUser, StorageGB: DefaultStorageGB}
+	if got := override.CommandLine(); !strings.Contains(got, "--tor-network /etc/mine/tor-network.json") {
+		t.Errorf("the override is lost: %s", got)
+	}
+	none := Options{IPs: []string{"203.0.113.10"}, Name: "alice", NoRelay: true, User: DefaultSSHUser, StorageGB: DefaultStorageGB}
+	if got := none.CommandLine(); !strings.Contains(got, "--no-relay") {
+		t.Errorf("a declined relay is lost, so the run again would install one: %s", got)
 	}
 }
 

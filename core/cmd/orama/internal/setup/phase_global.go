@@ -121,7 +121,7 @@ func (r *runner) installGlobal(ctx context.Context, n *nodeRun, trust *statesync
 		Trust: trust, Contact: r.contact(),
 	}
 	if n.plan.HasService(install.GlobalServiceRelay) {
-		tor, err := readTorNetwork(r.opts.TorNetwork)
+		tor, err := r.torNetwork()
 		if err != nil {
 			return err
 		}
@@ -134,6 +134,19 @@ func (r *runner) installGlobal(ctx context.Context, n *nodeRun, trust *statesync
 	n.globalNew = true
 	r.emit(ip, StepGlobal, StateDone, "")
 	return nil
+}
+
+// torNetwork is the Tor network file the relays join: --tor-network when given, else the one
+// the network's manifest pins, already checked against its digest. A relay in the plan has one
+// or the other (relayWanted).
+func (r *runner) torNetwork() ([]byte, error) {
+	if r.opts.TorNetwork != "" {
+		return readTorNetwork(r.opts.TorNetwork)
+	}
+	if len(r.net.TorNetwork) == 0 {
+		return nil, fmt.Errorf("network %s pins no Tor network file and --tor-network is not given: the relay has nothing to join", r.net.Manifest.Name)
+	}
+	return r.net.TorNetwork, nil
 }
 
 // readTorNetwork reads the Tor network file, at most tornet.NetworkFileLimit bytes.

@@ -113,9 +113,12 @@ type Options struct {
 	// ASNSet leaves it undeclared.
 	ASN    uint32
 	ASNSet bool
-	// TorNetwork is the Orama Tor network's tor-network.json. Without it no
-	// relay is installed (see the known gaps).
+	// TorNetwork is the path of a tor-network.json to give the relays instead of the
+	// one the network's manifest pins. A network that pins none installs a relay
+	// only with it.
 	TorNetwork string
+	// NoRelay leaves the relay out though the network pins a Tor network.
+	NoRelay bool
 	// NoValidator skips creating the validator (and the 1,000 ORAMA self-bond).
 	NoValidator bool
 }
@@ -210,6 +213,8 @@ func (o *Options) checkProfile() error {
 			return clierr.Usage("--storage-gb is the public storage of the global layer; it cannot go with --cluster-only")
 		case o.TorNetwork != "":
 			return clierr.Usage("--tor-network is for the relay of the global layer; it cannot go with --cluster-only")
+		case o.NoRelay:
+			return clierr.Usage("--no-relay is for the global layer; --cluster-only has no relay")
 		}
 	} else {
 		if o.StorageGB == 0 {
@@ -230,8 +235,11 @@ func (o *Options) checkProfile() error {
 	if o.Exit && !o.Yes && !o.ExitConfirmed {
 		return clierr.Usage("--exit makes this machine an exit relay.\n%s\nPass --yes to accept this, or leave --exit out", ExitWarning)
 	}
-	if o.Exit && o.TorNetwork == "" {
-		return clierr.Usage("--exit needs --tor-network: the exit is a relay, and a relay needs the Tor network file")
+	switch {
+	case o.NoRelay && o.TorNetwork != "":
+		return clierr.Usage("--no-relay and --tor-network are alternatives")
+	case o.NoRelay && o.Exit:
+		return clierr.Usage("--exit is a relay; it cannot go with --no-relay")
 	}
 	return nil
 }

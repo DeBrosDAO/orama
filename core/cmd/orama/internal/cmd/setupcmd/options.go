@@ -22,7 +22,7 @@ func optionsFromFlags(cmd *cobra.Command, args []string) (setup.Options, error) 
 		ClusterOnly: flags.clusterOnly, Exit: flags.exit, StorageGB: flags.storageGB, Yes: flags.yes,
 		User: flags.user, UsePassword: flags.password, BootstrapKey: flags.bootstrapKey, HostKeys: hostKeys,
 		Domain: flags.domain, ACMECA: flags.acmeCA, Env: flags.env, Contact: flags.contact,
-		ASN: flags.asn, ASNSet: cmd.Flags().Changed("asn"), TorNetwork: flags.torNetwork, NoValidator: flags.noValidator,
+		ASN: flags.asn, ASNSet: cmd.Flags().Changed("asn"), TorNetwork: flags.torNetwork, NoRelay: flags.noRelay, NoValidator: flags.noValidator,
 	}
 	return opts, nil
 }

@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 // File names of a published network, the same in networks/<name>/, in the
@@ -30,6 +32,9 @@ const (
 	ManifestFile    = "manifest.json"
 	GenesisFile     = "genesis.json"
 	ReleaseRootFile = "release-root.json"
+	// TorNetworkFile is the network's Tor network file (pkg/tornet), published beside the
+	// manifest only when the manifest pins it.
+	TorNetworkFile = "tor-network.json"
 )
 
 // Channels a manifest may name: the nightly feed, the main line, and a dev
@@ -58,6 +63,8 @@ var (
 var (
 	ErrGenesisMismatch = errors.New("genesis does not match the manifest")
 	ErrRootMismatch    = errors.New("release root does not match the manifest")
+	// ErrTorNetworkMismatch says a Tor network file is not the one the manifest pins.
+	ErrTorNetworkMismatch = errors.New("Tor network file does not match the manifest")
 )
 
 // Manifest is one network's published description.
@@ -81,8 +88,13 @@ type Manifest struct {
 	// ReleaseRootSHA256 is the SHA-256 of release-root.json, the TUF root the
 	// network's releases are verified against, in lowercase hex.
 	ReleaseRootSHA256 string `json:"release_root_sha256"`
-	// Faucet says the network funds new operators from a faucet.
+	// Faucet says the network funds new operators from a faucet: a gateway of the network that
+	// holds a faucet signer answers POST /v1/chain/faucet on the seeds.
 	Faucet bool `json:"faucet"`
+	// TorNetworkSHA256 is the SHA-256 of tor-network.json, the private Orama Tor network a
+	// relay of this network joins, in lowercase hex. Empty when the network pins none: its
+	// relays are then given the file by hand (orama setup --tor-network).
+	TorNetworkSHA256 string `json:"tor_network_sha256,omitempty"`
 }
 
 // ParseManifest reads a manifest strictly: a field it does not know, a second
@@ -131,6 +143,9 @@ func (m *Manifest) Validate() error {
 	}
 	if !sha256HexRE.MatchString(m.ReleaseRootSHA256) {
 		return fmt.Errorf("manifest release_root_sha256 %q is not 64 lowercase hex characters", m.ReleaseRootSHA256)
+	}
+	if m.TorNetworkSHA256 != "" && !sha256HexRE.MatchString(m.TorNetworkSHA256) {
+		return fmt.Errorf("manifest tor_network_sha256 %q is not 64 lowercase hex characters (or leave it out)", m.TorNetworkSHA256)
 	}
 	return nil
 }
@@ -216,6 +231,22 @@ func (m *Manifest) VerifyRoot(root []byte) error {
 	if got := Digest(root); got != m.ReleaseRootSHA256 {
 		return fmt.Errorf("%w: network %s pins sha256 %s, the file is %s",
 			ErrRootMismatch, m.Name, m.ReleaseRootSHA256, got)
+	}
+	return nil
+}
+
+// VerifyTorNetwork checks the Tor network file against the manifest's tor_network_sha256, and
+// that it is a network file a relay can join (pkg/tornet).
+func (m *Manifest) VerifyTorNetwork(file []byte) error {
+	if m.TorNetworkSHA256 == "" {
+		return fmt.Errorf("network %s pins no Tor network file", m.Name)
+	}
+	if got := Digest(file); got != m.TorNetworkSHA256 {
+		return fmt.Errorf("%w: network %s pins sha256 %s, the file is %s",
+			ErrTorNetworkMismatch, m.Name, m.TorNetworkSHA256, got)
+	}
+	if _, err := tornet.ParseNetwork(file); err != nil {
+		return fmt.Errorf("network %s pins a Tor network file a relay cannot use: %w", m.Name, err)
 	}
 	return nil
 }

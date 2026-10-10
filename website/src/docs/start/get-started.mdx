@@ -39,7 +39,7 @@ Check each box before you start. Setup checks the hardware on every machine firs
 
 - [RootWallet](/docs/rootwallet/install), installed, with a wallet created and **unlocked**. It holds your SSH keys and signs every chain transaction; there is no key on disk and no password flag.
 - The `orama` CLI (next section).
-- A Tor network file (`--tor-network`) if you want each node to run a relay. Without it nodes run no relay.
+- Nothing for a relay on a network whose manifest pins its Tor network file: every node runs one (`--no-relay` leaves it out, `--tor-network <file>` gives it another file). On a network that pins none, a node runs a relay only when you give the file with `--tor-network`.
 
 **On the chain**
 

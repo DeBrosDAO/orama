@@ -365,6 +365,9 @@ func NetworkAddManifest(ctx context.Context, p *printer.Printer, client *http.Cl
 	p.Printf("Chain id:      %s\n", m.ChainID)
 	p.Printf("Release root:  sha256 %s\n", m.ReleaseRootSHA256)
 	p.Printf("Release repo:  %s (channel %s)\n", m.ReleaseRepo, m.Channel)
+	if m.TorNetworkSHA256 != "" {
+		p.Printf("Tor network:   sha256 %s (the relays of this network join it)\n", m.TorNetworkSHA256)
+	}
 	p.Printf("Source:        %s\n", rawURL)
 	if replaced := replacedBy(store, m.Name); replaced != "" {
 		p.Printf("Replaces:      %s\n", replaced)

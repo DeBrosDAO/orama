@@ -116,9 +116,13 @@ func (m *Model) currentHost() string {
 }
 
 func (m *Model) optionsBody() string {
+	relay := "Run a Tor relay (needs the Tor network file)"
+	if m.torPinned {
+		relay = "Run a Tor relay (this network pins the Tor network file it joins)"
+	}
 	rows := [optCount]string{
 		"Run the global layer: the chain, public storage and a validator",
-		"Run a Tor relay (needs the Tor network file)",
+		relay,
 		"Make the relay an EXIT relay",
 	}
 	var b strings.Builder

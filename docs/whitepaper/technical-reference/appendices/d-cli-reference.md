@@ -2986,10 +2986,14 @@ orama maint network publish [flags]
 ```
 
 ```text
-Write networks/<name>/ (genesis.json, release-root.json and, last, manifest.json)
-from the genesis a deploy built, for the chain id it was built under. The
-manifest carries the SHA-256 of the genesis and of the release root, so what a
-joining operator fetches can be checked.
+Write networks/<name>/ (genesis.json, release-root.json, tor-network.json when the
+network has one and, last, manifest.json) from the genesis a deploy built, for
+the chain id it was built under. The manifest carries the SHA-256 of the genesis,
+of the release root and of the Tor network file, so what a joining operator
+fetches can be checked. --tor-network pins the network's Tor network file
+(tor-network.json, the private Orama Tor network its relays join), which
+'orama setup' then gives to every relay it installs; the Tor network is a
+different thing from the chain, so a reset of the chain keeps the file.
 
 An unset field keeps its value from the manifest already published; the first
 publish of a network sets --seeds, --channel, --min-version, --release-repo and
@@ -3013,6 +3017,7 @@ and commit networks/ and core/pkg/netregistry/embedded/ together.
 | `--release-repo` | — | https base URL of the release repository (default: the published one) |
 | `--release-root` | — | The release-root.json file (default: the published one) |
 | `--seeds` | — | Seed DNS names, comma-separated (default: the published ones) |
+| `--tor-network` | — | The Tor network's tor-network.json (default: the published one, if any) |
 
 
 ## orama maint node
@@ -5233,8 +5238,8 @@ For each machine setup gives your RootWallet an SSH key (and pins the machine's 
 checks the hardware against what the machine will run, installs the signed release of the
 network's channel (verified against the release root the network pins), installs the cluster
 node and, beside it, the global layer: the chain (it joins by state sync from two seeds that
-must agree), public storage and its provider, and a Tor relay when you give the network's Tor
-file. Then it registers your operator, each node, its bonds and its storage capacity on the
+must agree), public storage and its provider, and a Tor relay (the network pins the Tor network file its
+relays join; --tor-network gives another, --no-relay leaves the relay out). Then it registers your operator, each node, its bonds and its storage capacity on the
 chain and creates your validator, signing every transaction with your RootWallet. Nodes are
 restarted one at a time, each waiting until it carries its share of the cluster again.
 
@@ -5264,15 +5269,16 @@ machine until every machine passes.
 | `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
 | `--domain` | — | Base domain of a cluster of your own: setup prints the NS and glue records to create, then waits until they resolve and the cluster has a certificate |
 | `--env` | — | CLI environment to record the cluster under (default: the active one on this network, else &lt;network>-&lt;name>) |
-| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes |
+| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs the network's Tor network file and --yes |
 | `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or &lt;ip>=SHA256:... for each (repeatable) |
 | `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
 | `--name` | — | Node name, the node's id on the chain; several machines are named &lt;name>, &lt;name>-2, ... (required unless --cluster-only) |
 | `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |
+| `--no-relay` | `false` | Run no relay though the network pins a Tor network file |
 | `--no-validator` | `false` | Do not create a validator (and do not bond the 1,000 ORAMA self-bond) |
 | `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add &lt;ip>), never from the command line |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
-| `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |
+| `--tor-network` | — | A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it) |
 | `--user` | `root` | SSH login on the machines |
 | `-y`, `--yes` | `false` | Ask nothing: use the answers given as flags (every machine needs a --host-key) |
 
