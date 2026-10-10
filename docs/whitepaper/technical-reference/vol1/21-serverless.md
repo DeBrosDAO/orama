@@ -531,6 +531,8 @@ At 10 times the invocation rate the first limit reached is the five command-mode
 
 **Fleet end to end.** The `serverless` feature (`e2e/features/serverless/`) deploys TinyGo fixtures through the CLI and covers the access matrix, `name@N`, the timeout-to-429 mapping, memory, per-namespace concurrency, nested invokes, the SSRF matrix, cache atomics, the SQL guard, batch limits, ephemeral state, cron once per slot and the depth limit. `cli-function` covers the command surface. The owner runs the fleet suite.
 
+**A whole app.** `core/examples/demo/` is three public functions (`hello`, `visits`, `guestbook`) that call the caller, cache and database host functions, a static page that invokes them through `/v1/invoke/<namespace>/<name>`, and a README with the CLI commands that put it on a network. Each function keeps its logic apart from the host (`host.Host`), so `core/examples/demo/test.sh` runs it under `go test` against an in-memory host, and the same code builds to WASM with TinyGo (`core/examples/demo/build.sh`).
+
 **Read-only against a live namespace.**
 
 ```sh

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orama demo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Orama demo</h1>
+    <p>Three serverless functions running on the network, called from this page.</p>
+  </header>
+
+  <main>
+    <section id="setup" hidden>
+      <h2>Where are the functions?</h2>
+      <p>The namespace gateway you deployed them to, and the namespace. <code>orama app get</code> and <code>orama namespace list</code> show them.</p>
+      <form id="setup-form">
+        <label>Gateway <input id="gateway" placeholder="https://ns-myapp.example.network" required></label>
+        <label>Namespace <input id="namespace" placeholder="myapp" required pattern="[a-z0-9][a-z0-9-]*"></label>
+        <button type="submit">Use these</button>
+      </form>
+      <p id="setup-error" class="error" role="alert"></p>
+    </section>
+
+    <section class="card" id="hello">
+      <h2>hello</h2>
+      <p>Greets you and says who the network thinks you are (<code>get_caller_wallet</code>).</p>
+      <form id="hello-form">
+        <input id="hello-name" placeholder="Your name" maxlength="64" autocomplete="off">
+        <button type="submit">Say hello</button>
+      </form>
+      <pre id="hello-out" aria-live="polite"></pre>
+    </section>
+
+    <section class="card" id="visits">
+      <h2>visits</h2>
+      <p>An atomic counter in the namespace's cache (<code>cache_incr_by</code>). Every page load counts once.</p>
+      <p class="big"><span id="visits-count">&hellip;</span> visits</p>
+      <button id="visits-peek" type="button">Read without counting</button>
+      <p id="visits-error" class="error" role="alert"></p>
+    </section>
+
+    <section class="card" id="guestbook">
+      <h2>guestbook</h2>
+      <p>Entries in the namespace's database (<code>db_execute_v2</code>, <code>db_query_v2</code>).</p>
+      <form id="guestbook-form">
+        <input id="gb-name" placeholder="Name" maxlength="40" required autocomplete="off">
+        <input id="gb-message" placeholder="Message" maxlength="280" required autocomplete="off">
+        <button type="submit">Sign</button>
+      </form>
+      <p id="gb-error" class="error" role="alert"></p>
+      <ul id="gb-entries"></ul>
+    </section>
+  </main>
+
+  <footer><button id="reset" type="button">Change gateway</button></footer>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

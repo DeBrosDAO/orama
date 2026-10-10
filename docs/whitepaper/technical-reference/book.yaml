@@ -242,6 +242,7 @@ volumes:
               - core/pkg/gateway/handlers/serverless/
               - core/sdk/
               - core/examples/functions/
+              - core/examples/demo/
           - file: vol1/22-push-notifications.md
             title: Push notifications
             template: subsystem
