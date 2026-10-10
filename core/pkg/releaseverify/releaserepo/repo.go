@@ -13,6 +13,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -60,6 +61,9 @@ type Spec struct {
 	// archive's path begins with its channel), mapping a path to the file's
 	// bytes.
 	Targets map[string][]byte
+	// Custom, by path, is the custom field a target carries (a release archive's
+	// is releaseverify.ArchiveCustom); a target not listed has none.
+	Custom map[string]json.RawMessage
 }
 
 // NewRoot returns the signed root.json naming the four top-level keys.
@@ -122,7 +126,7 @@ func Build(keys Keys, spec Spec) (map[string][]byte, error) {
 	}
 	tgt := metadata.Targets(spec.RootValidUntil)
 	tgt.Signed.Version = spec.Version
-	if err := addTargets(tgt, spec.Targets); err != nil {
+	if err := addTargets(tgt, spec.Targets, spec.Custom); err != nil {
 		return nil, err
 	}
 	if err := sign(tgt, keys[metadata.TARGETS]); err != nil {
@@ -143,11 +147,14 @@ func Build(keys Keys, spec Spec) (map[string][]byte, error) {
 	return map[string][]byte{TargetsFile: targets, SnapshotFile: snapshot, TimestampFile: timestamp}, nil
 }
 
-func addTargets(tgt *metadata.Metadata[metadata.TargetsType], targets map[string][]byte) error {
+func addTargets(tgt *metadata.Metadata[metadata.TargetsType], targets map[string][]byte, custom map[string]json.RawMessage) error {
 	for name, content := range targets {
 		info, err := metadata.TargetFile().FromBytes(name, content, "sha256")
 		if err != nil {
 			return fmt.Errorf("describe target %s: %w", name, err)
+		}
+		if c, ok := custom[name]; ok {
+			info.Custom = &c
 		}
 		tgt.Signed.Targets[name] = info
 	}

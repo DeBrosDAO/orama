@@ -24,6 +24,10 @@ type ReleaseRef struct {
 	// targets metadata.
 	SHA256 string
 	Length int64
+	// ManifestSHA256 is the digest of the archive's manifest.json that the signed
+	// metadata names. What a machine reports as the manifest must hash to it
+	// before the operator's wallet is asked to sign.
+	ManifestSHA256 string
 	// Root is the release root the metadata verified under; the endorsement
 	// carries it so the cluster adopts it.
 	Root []byte
@@ -75,16 +79,31 @@ func (f releaseFetcher) Resolve(ctx context.Context, n *netregistry.Network, arc
 	}
 	remove := func() error { return errors.Join(res.Remove(), os.RemoveAll(work)) }
 	return &ReleaseRef{
-		Version: res.Version, Arch: arch, URL: res.URL, SHA256: res.SHA256, Length: res.Length, Root: res.Root,
-		Accept: res.Accept, Remove: remove,
+		Version: res.Version, Arch: arch, URL: res.URL, SHA256: res.SHA256, Length: res.Length, ManifestSHA256: res.ManifestSHA256,
+		Root: res.Root, Accept: res.Accept, Remove: remove,
 	}, nil
 }
 
+// checkManifestDigest holds a manifest a machine reported to the digest the signed
+// metadata names for the archive. This is what ties what the operator's wallet
+// signs to the verified release: the digest the machine reports for the archive
+// is the machine's word, and this one is not.
+func checkManifestDigest(ref *ReleaseRef, manifest []byte) error {
+	if got := archivetrust.ManifestDigest(manifest); got != ref.ManifestSHA256 {
+		return fmt.Errorf("the manifest the machine reports has sha256 %s, and the signed metadata names %s for release %s",
+			got, ref.ManifestSHA256, ref.Version)
+	}
+	return nil
+}
+
 // Endorse has the operator's RootWallet sign the manifest that a machine, which
-// downloaded the archive and found it to be the signed target, reports. The
-// manifest must be the one of the release that was resolved: another version or
-// architecture is a machine reporting something else than it was asked to fetch.
+// downloaded the archive, reports. The wallet is asked only if the manifest hashes
+// to the digest the signed metadata names (checkManifestDigest), and is of the
+// release that was resolved, whatever the machine says.
 func (f releaseFetcher) Endorse(_ context.Context, ref *ReleaseRef, manifest []byte) (*Endorsement, error) {
+	if err := checkManifestDigest(ref, manifest); err != nil {
+		return nil, err
+	}
 	declared, err := archivetrust.ParseManifest(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("the manifest of the downloaded release: %w", err)

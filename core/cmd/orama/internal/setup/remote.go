@@ -142,7 +142,9 @@ type sshMachine struct {
 	report Reporter
 	close  func()
 
-	// Seams for tests.
+	// Seams for tests. newDir names the archive directory of a download; nil
+	// chooses one at random.
+	newDir        func() (string, error)
 	ensureArchive func(ctx context.Context, node inspector.Node, archive string, trusted []string) error
 	waitReady     func(ctx context.Context, node inspector.Node, budget time.Duration) error
 	startTunnel   func(ctx context.Context, node inspector.Node, remote string) (string, func(), error)

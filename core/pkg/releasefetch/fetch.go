@@ -29,11 +29,13 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -133,6 +135,11 @@ type Resolution struct {
 	// targets metadata.
 	Length int64
 	SHA256 string
+	// ManifestSHA256 (hex) is the digest of the archive's manifest.json that the
+	// signed targets metadata names (releaseverify.ArchiveCustom). A machine that
+	// downloaded the archive reports the manifest, and what the operator's wallet
+	// signs must hash to this.
+	ManifestSHA256 string
 	// Root is the root the metadata verified under: the embedded root, or the
 	// newest the repository's rotations led to.
 	Root  []byte
@@ -185,6 +192,10 @@ func (f found) resolution(p Params) (*Resolution, error) {
 	if len(sum) != sha256.Size {
 		return nil, fmt.Errorf("the signed targets metadata gives no SHA-256 for %s, which a machine downloading it needs to check it", target.Path)
 	}
+	manifest, err := manifestDigest(target)
+	if err != nil {
+		return nil, err
+	}
 	url, err := (releaseverify.Repository{BaseURL: p.RepoURL}).TargetURL(target)
 	if err != nil {
 		return nil, err
@@ -196,8 +207,29 @@ func (f found) resolution(p Params) (*Resolution, error) {
 	check := releaseverify.FileCheck{RootPath: f.rootPath, SeenPath: p.SeenPath, MetadataDir: f.rel.MetadataDir(), Target: target.Path, Now: p.Now}
 	return &Resolution{
 		Version: f.rel.Version, Target: target.Path, URL: url, Length: target.Length, SHA256: hex.EncodeToString(sum),
-		Root: root, rel: f.rel, check: check,
+		ManifestSHA256: manifest, Root: root, rel: f.rel, check: check,
 	}, nil
+}
+
+// sha256Pattern is a SHA-256 in lower case hex.
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// manifestDigest is the manifest digest the signed metadata names for target. A
+// target without one is refused, never taken on the word of the machines that
+// download it: the operator's wallet would sign whatever manifest one of them
+// reported.
+func manifestDigest(target releaseverify.Target) (string, error) {
+	var custom releaseverify.ArchiveCustom
+	if len(target.Custom) > 0 {
+		if err := json.Unmarshal(target.Custom, &custom); err != nil {
+			return "", fmt.Errorf("the custom field of %s in the signed targets metadata: %w", target.Path, err)
+		}
+	}
+	if !sha256Pattern.MatchString(custom.ManifestSHA256) {
+		return "", fmt.Errorf("the release metadata for %s names no manifest digest, so a machine's report of the manifest cannot be checked before your wallet signs it; "+
+			"cut a new release with a current `orama maint release cut` (a published version cannot be changed), or run with --upload-release", target.Path)
+	}
+	return custom.ManifestSHA256, nil
 }
 
 // newest holds the parameters to their pins, brings the root up to the

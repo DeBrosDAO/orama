@@ -194,7 +194,7 @@ func requireDownloadedByTheMachine(t *testing.T, f *fleet.Fleet, stdout string, 
 	if strings.Contains(stdout, "["+ip+"] release running: uploading") {
 		t.Errorf("the release was uploaded to %s from this computer, not downloaded by the machine:\n%s", ip, stdout)
 	}
-	if out := f.Exec(t, extra.Node, "ls -d /tmp/orama-archive.* 2>/dev/null | wc -l"); strings.TrimSpace(out.Stdout) != "0" {
+	if out := f.Exec(t, extra.Node, "ls -d /var/tmp/orama-archive.* /tmp/orama-archive.* 2>/dev/null | wc -l"); strings.TrimSpace(out.Stdout) != "0" {
 		t.Errorf("the archive directory of the download is still on %s:\n%s", ip, out.Stdout)
 	}
 }

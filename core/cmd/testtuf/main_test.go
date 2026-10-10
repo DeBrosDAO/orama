@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
+	"github.com/DeBrosOfficial/network/pkg/releasefetch"
+	"github.com/DeBrosOfficial/network/pkg/releasepub/pubtest"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 )
 
@@ -37,10 +41,7 @@ func TestTesttuf_aPublishedArchiveIsOneAClientVerifies(t *testing.T) {
 	if err := run([]string{"init", "-dir", dir}); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(t.TempDir(), "orama-0.3.1-linux-amd64.tar.gz")
-	if err := os.WriteFile(archive, []byte("archive bytes"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	archive := pubtest.Archive(t, "0.3.1", "amd64", "archive bytes")
 	if err := run([]string{"publish", "-dir", dir, "-channel", "stable", "-archive", archive}); err != nil {
 		t.Fatal(err)
 	}
@@ -50,11 +51,58 @@ func TestTesttuf_aPublishedArchiveIsOneAClientVerifies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a published archive does not verify: %v", err)
 	}
-	if err := target.Match([]byte("archive bytes")); err != nil {
+	data, err := os.ReadFile(archive)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := target.Match(data); err != nil {
+		t.Fatal(err)
+	}
+	// The metadata names the digest of the archive's manifest.
+	manifest, _, err := archivetrust.ReadArchiveManifest(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var custom releaseverify.ArchiveCustom
+	if err := json.Unmarshal(target.Custom, &custom); err != nil || custom.ManifestSHA256 != archivetrust.ManifestDigest(manifest) {
+		t.Fatalf("custom = %s (%v), want manifest_sha256 %s", target.Custom, err, archivetrust.ManifestDigest(manifest))
 	}
 	if _, err := verifyTarget(t, repo, dir, releaseverify.ArchiveTarget("nightly", "0.3.1", "amd64")); err == nil {
 		t.Fatal("an archive that was not published on a channel is listed there")
+	}
+}
+
+// What setup reads back from a repository this tool made is the digest of the
+// archive's manifest: publish, then Resolve, gives the archive's own.
+func TestTesttuf_resolveGivesTheDigestOfThePublishedManifest(t *testing.T) {
+	dir := t.TempDir()
+	if err := run([]string{"init", "-dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	archive := pubtest.Archive(t, "0.3.1", "amd64", "archive bytes")
+	if err := run([]string{"publish", "-dir", dir, "-channel", "stable", "-archive", archive}); err != nil {
+		t.Fatal(err)
+	}
+	repo := serve(t, dir)
+	root, err := os.ReadFile(filepath.Join(dir, repoSubdir, "root.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	res, err := releasefetch.Resolve(t.Context(), releasefetch.Params{
+		RepoURL: repo.BaseURL, Channel: "stable", Arch: "amd64", Root: root, RootSHA256: releaseverify.RootDigest(root),
+		WorkDir: filepath.Join(home, "work"), SeenPath: filepath.Join(home, "seen.json"), AdoptedRoot: filepath.Join(home, "adopted.json"),
+		Now: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("a client cannot resolve the release this tool published: %v", err)
+	}
+	manifest, _, err := archivetrust.ReadArchiveManifest(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ManifestSHA256 != archivetrust.ManifestDigest(manifest) {
+		t.Errorf("Resolve gives manifest digest %s, the archive's is %s", res.ManifestSHA256, archivetrust.ManifestDigest(manifest))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // releaseIPs are n machines, 203.0.113.101 and up.
@@ -151,15 +152,134 @@ func TestRelease_aMachineThatEndsUpWithAnotherBuildIsRefused(t *testing.T) {
 	}
 }
 
-func TestRelease_machinesThatDownloadedTheSameFileMustReportTheSameManifest(t *testing.T) {
+// liarManifest is a manifest that is for the right release and lists checksums of
+// the machine's own choosing.
+var liarManifest = []byte(`{"version":"0.3.1","arch":"amd64","checksums":{"orama":"` + strings.Repeat("0", 64) + `"}}`)
+
+func TestRelease_aMachineThatReportsAManifestOtherThanTheSignedOneNeverGetsASignature(t *testing.T) {
 	h := newHarness()
-	h.enroll.releases = map[string]fakeRelease{ip2: {manifest: []byte(`{"version":"0.3.1","arch":"amd64","commit":"other"}`)}}
-	_, err := run(t, h, clusterOnly(h, ip1, ip2))
-	if err == nil || !strings.Contains(err.Error(), "different manifest") {
+	h.enroll.releases = map[string]fakeRelease{ip1: {manifest: liarManifest}}
+	_, err := run(t, h, clusterOnly(h, ip1))
+	if err == nil || !strings.Contains(err.Error(), ip1) || !strings.Contains(err.Error(), "signed metadata names") {
+		t.Fatalf("got %v, want the machine named with the digest the metadata gives", err)
+	}
+	if h.w.count("endorse ") != 0 {
+		t.Errorf("the operator's wallet was asked to sign a manifest the signed metadata does not name:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+	if h.w.index("stage ") >= 0 || h.w.index("accept release") >= 0 {
+		t.Error("the run went on with a manifest the signed metadata does not name")
+	}
+	if h.w.index("discard "+ip1) < 0 {
+		t.Error("the download of the refused machine stays on it")
+	}
+}
+
+// Every machine is held to the digest, not only the first one to ask: whichever
+// order they arrive in, the liar is the one refused and named.
+func TestRelease_everyMachineIsHeldToTheSignedManifestDigest(t *testing.T) {
+	for _, liar := range []string{ip1, ip2, ip3} {
+		h := newHarness()
+		h.enroll.gate = newFetchGate(3)
+		h.enroll.releases = map[string]fakeRelease{liar: {manifest: liarManifest}}
+		_, err := run(t, h, clusterOnly(h, ip1, ip2, ip3))
+		if err == nil || !strings.Contains(err.Error(), "machine "+liar+":") || !strings.Contains(err.Error(), "signed metadata names") {
+			t.Fatalf("liar %s: got %v", liar, err)
+		}
+		if h.w.index("stage "+liar) >= 0 {
+			t.Errorf("liar %s was given the release", liar)
+		}
+		if h.w.count("endorse ") > 1 {
+			t.Errorf("liar %s: the wallet was asked %d times", liar, h.w.count("endorse "))
+		}
+	}
+}
+
+func TestRelease_aRefusedSignatureIsAskedOnlyOnce(t *testing.T) {
+	h := newHarness()
+	h.deps.Releases = fakeReleases{w: h.w, endorseErr: errors.New("the RootWallet agent refused")}
+	h.enroll.gate = newFetchGate(3)
+	_, err := run(t, h, clusterOnly(h, ip1, ip2, ip3))
+	if err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("got %v", err)
 	}
-	if h.w.count("endorse ") != 1 {
-		t.Errorf("the wallet signed %d times; a second signature is never given for a disagreeing machine", h.w.count("endorse "))
+	if got := h.w.count("endorse "); got != 1 {
+		t.Errorf("the wallet was asked %d times; a refusal is remembered", got)
+	}
+}
+
+func TestRelease_aStageThatHasBegunFinishesWhenAnotherMachineFails(t *testing.T) {
+	h := newHarness()
+	entered, hold := make(chan struct{}), make(chan struct{})
+	h.enroll.releases = map[string]fakeRelease{
+		ip1: {stageEntered: entered, stageHold: hold},
+		ip2: {fetchWaitFor: entered, fetchErr: errors.New("curl: (22) The requested URL returned error: 404")},
+	}
+	go func() {
+		// Release the stage once the other machine's failure has been reported.
+		for !h.report.has(ip2, StepRelease, StateFailed) {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(20 * time.Millisecond)
+		close(hold)
+	}()
+	_, err := run(t, h, clusterOnly(h, ip1, ip2))
+	if err == nil || !strings.Contains(err.Error(), ip2) {
+		t.Fatalf("got %v, want the machine that failed", err)
+	}
+	if h.w.index("stage-finished "+ip1+" ctx-ended=false") < 0 {
+		t.Errorf("the stage in progress was cut short or never finished:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+	if h.w.index("discard "+ip1) >= 0 {
+		t.Errorf("the directory of a stage that had begun was removed from under it:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+	if !h.report.has(ip1, StepRelease, StateDone) {
+		t.Error("the machine that was staging did not finish")
+	}
+	if h.w.index("accept release") >= 0 {
+		t.Error("the rollback record was raised although a machine failed")
+	}
+}
+
+func TestRelease_aMachineStoppedByAnotherFailureIsReportedAsCancelled(t *testing.T) {
+	h := newHarness()
+	h.enroll.gate = newFetchGate(2)
+	h.enroll.releases = map[string]fakeRelease{ip1: {downloadSHA: strings.Repeat("0", 64)}, ip2: {fetchUntilStopped: true}}
+	_, err := run(t, h, clusterOnly(h, ip1, ip2))
+	if err == nil || !strings.Contains(err.Error(), "machine "+ip1+":") || strings.Contains(err.Error(), ip2) {
+		t.Fatalf("got %v, want only the machine that failed", err)
+	}
+	if got := h.report.detail(ip2, StepRelease, StateFailed); got != "cancelled: "+ip1+" failed" {
+		t.Errorf("the stopped machine reports %q", got)
+	}
+}
+
+func TestRelease_theUploadHintIsForARepositoryTheMachineCannotReachOnly(t *testing.T) {
+	cases := map[string]struct {
+		release fakeRelease
+		hint    bool
+	}{
+		"a name that does not resolve":   {fakeRelease{fetchErr: errors.New("curl: (6) Could not resolve host: releases.example")}, true},
+		"a refused connection":           {fakeRelease{fetchErr: errors.New("curl: (7) Failed to connect to releases.example port 443")}, true},
+		"a certificate that fails":       {fakeRelease{fetchErr: errors.New("curl: (60) SSL certificate problem")}, true},
+		"a 404":                          {fakeRelease{fetchErr: errors.New("curl: (22) The requested URL returned error: 404")}, false},
+		"a download of the wrong size":   {fakeRelease{fetchErr: errors.New("the download is 7 bytes, the signed metadata says 13")}, false},
+		"a download of another digest":   {fakeRelease{fetchErr: errors.New("the download has sha256 00, the signed metadata says 11")}, false},
+		"a filesystem without room":      {fakeRelease{fetchErr: errors.New("the filesystem of /var/tmp/orama-archive.AbC12345 has 100 MiB free")}, false},
+		"a machine without curl":         {fakeRelease{fetchErr: errors.New("this machine has no curl; install it (apt-get install curl) and run setup again")}, false},
+		"a digest the machine reports":   {fakeRelease{downloadSHA: strings.Repeat("0", 64)}, false},
+		"a manifest the machine invents": {fakeRelease{manifest: liarManifest}, false},
+	}
+	for name, c := range cases {
+		h := newHarness()
+		h.enroll.releases = map[string]fakeRelease{ip1: c.release}
+		_, err := run(t, h, clusterOnly(h, ip1))
+		if err == nil {
+			t.Errorf("%s: no error", name)
+			continue
+		}
+		if got := strings.Contains(err.Error(), "--upload-release"); got != c.hint {
+			t.Errorf("%s: hint = %v, want %v: %v", name, got, c.hint, err)
+		}
 	}
 }
 
@@ -180,15 +300,15 @@ func TestRelease_aRefusedSignatureStagesNothingAndRemovesTheDownloads(t *testing
 	}
 }
 
-func TestRelease_aStageThatFailsOnTheMachineIsReportedAndItsDownloadRemoved(t *testing.T) {
+func TestRelease_aStageThatFailsOnTheMachineIsReportedAndItsDirectoryLeftToTheStage(t *testing.T) {
 	h := newHarness()
 	h.enroll.releases = map[string]fakeRelease{ip1: {stageErr: errors.New("manifest.sig does not recover to a trusted signer")}}
 	_, err := run(t, h, clusterOnly(h, ip1))
 	if err == nil || !strings.Contains(err.Error(), ip1) || !strings.Contains(err.Error(), "trusted signer") {
 		t.Fatalf("got %v", err)
 	}
-	if h.w.index("discard "+ip1) < 0 {
-		t.Error("the download stays on the machine")
+	if h.w.index("discard "+ip1) >= 0 {
+		t.Error("the directory of a stage that began was removed from outside: the stage command removes it")
 	}
 }
 

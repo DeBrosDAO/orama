@@ -134,15 +134,13 @@ func ntfyReportsVersion(help, version string) bool {
 	return strings.Contains(help, "ntfy "+version+" ")
 }
 
-// Install creates the `ntfy` user, downloads the ntfy binary unless the pinned
-// version is already in place, and lays out the data and config directories.
-// The binary being in place says nothing about the account: a nuclear wipe
-// deletes the account and a machine can keep the binary, so the account and the
-// directories are ensured on every run and only the download is skipped.
+// Install downloads the ntfy binary unless the pinned version is already in
+// place, and lays out the data and config directories, which ensures the `ntfy`
+// account that owns them (ensureDirs). The binary being in place says nothing
+// about the account: a nuclear wipe deletes the account and a machine can keep
+// the binary, so the account and the directories are ensured on every run and
+// only the download is skipped.
 func (ni *NtfyInstaller) Install() error {
-	if err := ni.ensureUser(); err != nil {
-		return fmt.Errorf("ntfy: create user: %w", err)
-	}
 	if ni.installed() {
 		fmt.Fprintf(ni.logWriter, "  ✓ ntfy %s already installed\n", ntfyVersion)
 	} else {

@@ -50,6 +50,53 @@ func TestResolve_namesTheArchiveWithoutDownloadingIt(t *testing.T) {
 	}
 }
 
+func TestResolve_carriesTheManifestDigestTheSignedMetadataNames(t *testing.T) {
+	r := newRepo(t)
+	res, err := Resolve(t.Context(), r.params(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ManifestSHA256 != testManifestDigest {
+		t.Errorf("ManifestSHA256 = %q, want the %q the signed metadata names", res.ManifestSHA256, testManifestDigest)
+	}
+}
+
+func TestResolve_metadataThatNamesNoManifestDigestIsRefused(t *testing.T) {
+	for name, digest := range map[string]string{
+		"no digest":               "",
+		"a digest that is short":  "abcd",
+		"an upper case digest":    strings.ToUpper(testManifestDigest),
+		"a digest that is no hex": strings.Repeat("z", 64),
+	} {
+		r := newRepo(t)
+		r.manifestDigest = digest
+		r.publish(t, 4, "0.3.1", r.archive, r.archive)
+		_, err := Resolve(t.Context(), r.params(t))
+		if err == nil || !strings.Contains(err.Error(), "names no manifest digest") || !strings.Contains(err.Error(), "--upload-release") {
+			t.Errorf("%s: err = %v, want the missing digest named with the way out", name, err)
+		}
+	}
+}
+
+func TestResolve_aTargetWithNoCustomFieldAtAllIsRefused(t *testing.T) {
+	r := newRepo(t)
+	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
+		Version: 5, RootValidUntil: now.Add(24 * time.Hour),
+		Targets: map[string][]byte{releaseverify.ArchiveTarget("nightly", "0.3.1", "amd64"): r.archive},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(r.dir, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Resolve(t.Context(), r.params(t)); err == nil || !strings.Contains(err.Error(), "names no manifest digest") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestResolve_theRollbackRecordIsRaisedOnlyByAccept(t *testing.T) {
 	r := newRepo(t)
 	p := r.params(t)

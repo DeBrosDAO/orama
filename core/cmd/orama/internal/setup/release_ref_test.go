@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 	"github.com/DeBrosOfficial/network/pkg/releasefetch"
 )
@@ -110,8 +111,9 @@ func testEndorser(sealed string, sealErr error, rootSeen *[]byte) releaseFetcher
 func TestReleaseFetcher_endorseSignsTheManifestUnderTheRootTheReleaseVerifiedUnder(t *testing.T) {
 	var root []byte
 	f := testEndorser(sealedManifest, nil, &root)
-	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("rotated-root")}
-	got, err := f.Endorse(context.Background(), ref, []byte(`{"version":"0.3.1","arch":"amd64"}`))
+	manifest := []byte(`{"version":"0.3.1","arch":"amd64"}`)
+	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("rotated-root"), ManifestSHA256: archivetrust.ManifestDigest(manifest)}
+	got, err := f.Endorse(context.Background(), ref, manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,13 +127,14 @@ func TestReleaseFetcher_endorseSignsTheManifestUnderTheRootTheReleaseVerifiedUnd
 }
 
 func TestReleaseFetcher_endorseSignsNothingForAnotherReleaseThanTheOneResolved(t *testing.T) {
-	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("root")}
 	for name, manifest := range map[string]string{
 		"another version":      `{"version":"0.3.0","arch":"amd64"}`,
 		"another architecture": `{"version":"0.3.1","arch":"arm64"}`,
 		"no JSON":              `not a manifest`,
 		"nothing":              ``,
 	} {
+		// The digest is the manifest's own, so that it is the release that is judged.
+		ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("root"), ManifestSHA256: archivetrust.ManifestDigest([]byte(manifest))}
 		signed := false
 		f := releaseFetcher{seal: func(_, _ []byte) ([]byte, string, error) { signed = true; return nil, "", nil }}
 		if _, err := f.Endorse(context.Background(), ref, []byte(manifest)); err == nil {
@@ -144,8 +147,8 @@ func TestReleaseFetcher_endorseSignsNothingForAnotherReleaseThanTheOneResolved(t
 }
 
 func TestReleaseFetcher_endorseFailuresAreTheOperatorsToFix(t *testing.T) {
-	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("root")}
 	manifest := []byte(`{"version":"0.3.1","arch":"amd64"}`)
+	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("root"), ManifestSHA256: archivetrust.ManifestDigest(manifest)}
 	if _, err := testEndorser("", errors.New("the RootWallet agent is locked"), nil).Endorse(context.Background(), ref, manifest); err == nil ||
 		!strings.Contains(err.Error(), "RootWallet") || !strings.Contains(err.Error(), "locked") {
 		t.Errorf("a locked wallet: %v", err)
@@ -153,5 +156,45 @@ func TestReleaseFetcher_endorseFailuresAreTheOperatorsToFix(t *testing.T) {
 	noCLI := `{"version":"0.3.1","arch":"amd64","checksums":{}}`
 	if _, err := testEndorser(noCLI, nil, nil).Endorse(context.Background(), ref, manifest); err == nil || !strings.Contains(err.Error(), "bin/orama") {
 		t.Errorf("a manifest that lists no CLI: %v", err)
+	}
+}
+
+// The manifest the wallet signs is the one the signed metadata names, whatever a
+// machine reports: a manifest with another digest never reaches the wallet.
+func TestReleaseFetcher_endorseSignsNothingThatIsNotTheManifestTheSignedMetadataNames(t *testing.T) {
+	named := []byte(`{"version":"0.3.1","arch":"amd64","checksums":{"orama":"` + testCLISHA + `"}}`)
+	ref := &ReleaseRef{Version: "0.3.1", Arch: "amd64", Root: []byte("root"), ManifestSHA256: archivetrust.ManifestDigest(named)}
+	for name, manifest := range map[string][]byte{
+		"a manifest with other checksums": []byte(`{"version":"0.3.1","arch":"amd64","checksums":{"orama":"` + strings.Repeat("0", 64) + `"}}`),
+		"the same manifest with a space":  append(append([]byte(nil), named...), ' '),
+		"nothing":                         nil,
+	} {
+		signed := false
+		f := releaseFetcher{seal: func(_, _ []byte) ([]byte, string, error) { signed = true; return []byte(sealedManifest), "0xsig", nil }}
+		_, err := f.Endorse(context.Background(), ref, manifest)
+		if err == nil || !strings.Contains(err.Error(), "signed metadata names") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+		if signed {
+			t.Errorf("%s reached the wallet", name)
+		}
+	}
+	f := releaseFetcher{seal: func(_, _ []byte) ([]byte, string, error) { return []byte(sealedManifest), "0xsig", nil }}
+	if _, err := f.Endorse(context.Background(), ref, named); err != nil {
+		t.Errorf("the named manifest was refused: %v", err)
+	}
+}
+
+func TestReleaseFetcher_resolveCarriesTheManifestDigest(t *testing.T) {
+	f := releaseFetcher{
+		resolve: func(context.Context, releasefetch.Params) (*releasefetch.Resolution, error) {
+			return &releasefetch.Resolution{Version: "0.3.1", URL: testReleaseURL, SHA256: testArchiveSHA, Length: 1, ManifestSHA256: strings.Repeat("ab", 32)}, nil
+		},
+		now:  time.Now,
+		home: func() (string, error) { return t.TempDir(), nil },
+	}
+	ref, err := f.Resolve(context.Background(), releaseNetwork(), "amd64")
+	if err != nil || ref.ManifestSHA256 != strings.Repeat("ab", 32) {
+		t.Fatalf("%+v, %v", ref, err)
 	}
 }

@@ -16,6 +16,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify/releaserepo"
 	"github.com/theupdateframework/go-tuf/v2/metadata"
@@ -144,6 +146,7 @@ func refresh(dir string, tsValid time.Duration) error {
 // (<channel>/<file>, a channel being one or two directories) and writes it.
 func write(repo string, keys releaserepo.Keys, version int64, until time.Time, tsValid time.Duration) error {
 	targets := map[string][]byte{}
+	custom := map[string]json.RawMessage{}
 	root := filepath.Join(repo, targetsSubdir)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".tar.gz") {
@@ -153,21 +156,26 @@ func write(repo string, keys releaserepo.Keys, version int64, until time.Time, t
 		if err != nil {
 			return err
 		}
-		if _, err := releaseverify.ParseArchiveTarget(filepath.ToSlash(rel)); err != nil {
+		name := filepath.ToSlash(rel)
+		ref, err := releaseverify.ParseArchiveTarget(name)
+		if err != nil {
 			return err
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		targets[filepath.ToSlash(rel)] = data
+		if custom[name], err = archiveCustom(path, ref); err != nil {
+			return err
+		}
+		targets[name] = data
 		return nil
 	})
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	files, err := releaserepo.Build(keys, releaserepo.Spec{
-		Version: version, RootValidUntil: until, TimestampExpires: time.Now().Add(tsValid), Targets: targets,
+		Version: version, RootValidUntil: until, TimestampExpires: time.Now().Add(tsValid), Targets: targets, Custom: custom,
 	})
 	if err != nil {
 		return err
@@ -179,6 +187,19 @@ func write(repo string, keys releaserepo.Keys, version int64, until time.Time, t
 	}
 	fmt.Printf("wrote metadata version %d\n", version)
 	return nil
+}
+
+// archiveCustom is the custom field of an archive's target, as `orama maint
+// release cut` writes it: the archive's name and the digest of its manifest,
+// which setup holds a machine's report to before the operator's wallet signs.
+func archiveCustom(path string, ref releaseverify.ArchiveRef) (json.RawMessage, error) {
+	manifest, _, err := archivetrust.ReadArchiveManifest(path)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(releaseverify.ArchiveCustom{
+		Version: ref.Version, Arch: ref.Arch, Channel: ref.Channel, ManifestSHA256: archivetrust.ManifestDigest(manifest),
+	})
 }
 
 // nextVersion is one above the repository's current timestamp version, and the

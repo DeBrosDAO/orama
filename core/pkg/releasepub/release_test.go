@@ -12,6 +12,7 @@ import (
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/autoupdate"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 )
@@ -131,8 +132,15 @@ func TestCut_aFirstReleaseIsThreeApprovalsAndAClientAcceptsIt(t *testing.T) {
 	if err := target.Match(mustRead(t, arm)); err != nil {
 		t.Fatal(err)
 	}
-	if string(target.Custom) != `{"version":"0.3.1","arch":"arm64","channel":"nightly"}` {
-		t.Fatalf("custom = %s", target.Custom)
+	manifest, _, err := archivetrust.ReadArchiveManifest(arm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The signed targets name the hash of the archive's manifest, which setup holds
+	// a machine's report to before the operator's wallet signs it.
+	want := `{"version":"0.3.1","arch":"arm64","channel":"nightly","manifest_sha256":"` + archivetrust.ManifestDigest(manifest) + `"}`
+	if string(target.Custom) != want {
+		t.Fatalf("custom = %s, want %s", target.Custom, want)
 	}
 	pending, err := repo.ReadPending()
 	if err != nil || pending == nil || pending.Tag != plan.Tag || len(pending.Assets) != 2 {

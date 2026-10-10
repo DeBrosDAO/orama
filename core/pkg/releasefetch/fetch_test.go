@@ -1,6 +1,9 @@
 package releasefetch
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,6 +25,24 @@ type repo struct {
 	dir     string
 	url     string
 	archive []byte
+	// manifestDigest is the manifest_sha256 the listed archives carry; "" lists
+	// them as a release published before the field existed.
+	manifestDigest string
+}
+
+// testManifestDigest is the digest the test repository names for every manifest.
+var testManifestDigest = func() string {
+	sum := sha256.Sum256([]byte("the manifest of the release"))
+	return hex.EncodeToString(sum[:])
+}()
+
+// archiveCustom is the custom field of the nightly amd64 archive of version.
+func archiveCustom(version, manifestDigest string) map[string]json.RawMessage {
+	custom, err := json.Marshal(releaseverify.ArchiveCustom{Version: version, Arch: "amd64", Channel: "nightly", ManifestSHA256: manifestDigest})
+	if err != nil {
+		panic(err)
+	}
+	return map[string]json.RawMessage{releaseverify.ArchiveTarget("nightly", version, "amd64"): custom}
 }
 
 func newRepo(t *testing.T) *repo {
@@ -34,7 +55,7 @@ func newRepo(t *testing.T) *repo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &repo{keys: keys, root: root, dir: t.TempDir(), archive: []byte("nightly archive bytes")}
+	r := &repo{keys: keys, root: root, dir: t.TempDir(), archive: []byte("nightly archive bytes"), manifestDigest: testManifestDigest}
 	releaseverify.AllowLocalRepositories(t)
 	srv := httptest.NewServer(http.FileServer(http.Dir(r.dir)))
 	t.Cleanup(srv.Close)
@@ -49,6 +70,7 @@ func (r *repo) publish(t *testing.T, snapshot int64, version string, listed, ser
 	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
 		Version: snapshot, RootValidUntil: now.Add(24 * time.Hour),
 		Targets: map[string][]byte{releaseverify.ArchiveTarget("nightly", version, "amd64"): listed},
+		Custom:  archiveCustom(version, r.manifestDigest),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +194,7 @@ func TestFetch_anExpiredEmbeddedRootIsRenewedByTheRepository(t *testing.T) {
 	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
 		Version: 5, RootValidUntil: now.Add(72 * time.Hour),
 		Targets: map[string][]byte{releaseverify.ArchiveTarget("nightly", "0.3.1", "amd64"): r.archive},
+		Custom:  archiveCustom("0.3.1", r.manifestDigest),
 	})
 	if err != nil {
 		t.Fatal(err)

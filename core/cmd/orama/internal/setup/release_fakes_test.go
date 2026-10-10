@@ -8,8 +8,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
+
+// detail is the detail of the first event of a machine's step in a state.
+func (b *bufReporter) detail(ip string, step Step, state State) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, e := range b.events {
+		if e.Node == ip && e.Step == step && e.State == state {
+			return e.Detail
+		}
+	}
+	return ""
+}
 
 const (
 	testReleaseVersion = "0.3.1"
@@ -40,8 +53,9 @@ func (f fakeReleases) Resolve(_ context.Context, _ *netregistry.Network, arch st
 	}
 	return &ReleaseRef{
 		Version: testReleaseVersion, Arch: arch, URL: testReleaseURL, SHA256: testArchiveSHA, Length: 312 << 20, Root: []byte("release-root"),
-		Accept: func() error { f.w.add("accept release %s", arch); return nil },
-		Remove: func() error { f.w.add("remove release metadata %s", arch); return nil },
+		ManifestSHA256: archivetrust.ManifestDigest(testReleaseManifest),
+		Accept:         func() error { f.w.add("accept release %s", arch); return nil },
+		Remove:         func() error { f.w.add("remove release metadata %s", arch); return nil },
 	}, nil
 }
 
@@ -65,6 +79,14 @@ type fakeRelease struct {
 	// up running when it is not the endorsed one.
 	stageErr       error
 	stagedManifest string
+	// stageEntered is closed when the machine's stage begins, and stageHold, when
+	// set, keeps the stage running until it is closed.
+	stageEntered chan struct{}
+	stageHold    chan struct{}
+	// fetchWaitFor, when set, holds the download until it is closed; fetchUntilStopped
+	// holds it until the run's context ends, as an SSH session that is cut does.
+	fetchWaitFor      chan struct{}
+	fetchUntilStopped bool
 }
 
 // fetchGate holds every machine's download until want of them are downloading at
@@ -109,8 +131,15 @@ func (g *fetchGate) maxSeen() int {
 	return g.max
 }
 
-func (m *fakeMachine) FetchRelease(_ context.Context, ref *ReleaseRef) (*FetchedRelease, error) {
+func (m *fakeMachine) FetchRelease(ctx context.Context, ref *ReleaseRef) (*FetchedRelease, error) {
 	m.w.add("download %s %s", m.ip, ref.URL)
+	if m.release.fetchWaitFor != nil {
+		<-m.release.fetchWaitFor
+	}
+	if m.release.fetchUntilStopped {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if m.release.fetchErr != nil {
 		return nil, m.release.fetchErr
 	}
@@ -129,8 +158,15 @@ func (m *fakeMachine) FetchRelease(_ context.Context, ref *ReleaseRef) (*Fetched
 	return f, nil
 }
 
-func (m *fakeMachine) StageFetched(_ context.Context, f *FetchedRelease, e *Endorsement) error {
+func (m *fakeMachine) StageFetched(ctx context.Context, f *FetchedRelease, e *Endorsement) error {
 	m.w.add("stage %s %s", m.ip, strings.TrimPrefix(string(e.Manifest), "sealed:"))
+	if m.release.stageEntered != nil {
+		close(m.release.stageEntered)
+	}
+	if m.release.stageHold != nil {
+		<-m.release.stageHold
+		m.w.add("stage-finished %s ctx-ended=%v", m.ip, ctx.Err() != nil)
+	}
 	if m.release.stageErr != nil {
 		return m.release.stageErr
 	}

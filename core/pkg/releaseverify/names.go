@@ -57,10 +57,16 @@ type ArchiveRef struct {
 // (and shown to the person approving the signature) without parsing a file
 // name. A client holds it to the name: a target whose two disagree is not a
 // candidate.
+//
+// ManifestSHA256 is the SHA-256 (hex) of the archive's manifest.json, so a
+// client that never holds the archive (a machine downloads it and reports the
+// manifest for the operator to sign) can bind the manifest it signs to the
+// signed metadata. A release published before the field existed has none.
 type ArchiveCustom struct {
-	Version string `json:"version"`
-	Arch    string `json:"arch"`
-	Channel string `json:"channel"`
+	Version        string `json:"version"`
+	Arch           string `json:"arch"`
+	Channel        string `json:"channel"`
+	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
 }
 
 // ArchiveTarget is the target name of an archive.
@@ -88,5 +94,5 @@ func customMatches(custom json.RawMessage, ref ArchiveRef) bool {
 	if err := json.Unmarshal(custom, &c); err != nil {
 		return false
 	}
-	return c == ArchiveCustom{Version: ref.Version, Arch: ref.Arch, Channel: ref.Channel}
+	return c.Version == ref.Version && c.Arch == ref.Arch && c.Channel == ref.Channel
 }

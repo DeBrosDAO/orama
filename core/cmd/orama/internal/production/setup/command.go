@@ -12,15 +12,18 @@ package setup
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/build"
 	"github.com/DeBrosOfficial/network/pkg/httputil"
 	"github.com/DeBrosOfficial/network/pkg/invite"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -898,18 +901,39 @@ func uploadAndStage(ctx context.Context, node inspector.Node, archive, cliSum st
 	return nil
 }
 
-// uploadDirPattern is what `mktemp -d /tmp/orama-archive.XXXXXXXX` returns; the
-// directory is interpolated into a root shell command, so nothing else passes.
-var uploadDirPattern = regexp.MustCompile(`^/tmp/orama-archive\.[A-Za-z0-9]{8}$`)
+// uploadDirPattern is what `mktemp -d /tmp/orama-archive.XXXXXXXX` returns, or
+// the directory NewArchiveDir names under /var/tmp; the directory is
+// interpolated into a root shell command, so nothing else passes.
+var uploadDirPattern = regexp.MustCompile(`^(/tmp|/var/tmp)/orama-archive\.[A-Za-z0-9]{8}$`)
 
-// ArchiveDirTemplate is the mktemp template of an archive's private directory on
-// a node, the only kind StageArchiveCommand takes.
-const ArchiveDirTemplate = "/tmp/orama-archive.XXXXXXXX"
+const (
+	// ArchiveDirPrefix is where a release a machine downloads itself is kept: /var/tmp
+	// is on the persistent disk, and /tmp is memory on some images (Debian 13), where
+	// a download that is unpacked and packed again again would not fit.
+	ArchiveDirPrefix = "/var/tmp/orama-archive."
+	archiveDirChars  = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	archiveDirSuffix = 8
+)
+
+// NewArchiveDir names a new private directory for an archive on a node, at
+// random. The caller creates it with mkdir -m 700, which refuses a name that
+// exists, so the name is not one that anyone could have prepared.
+func NewArchiveDir() (string, error) {
+	suffix := make([]byte, archiveDirSuffix)
+	for i := range suffix {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(archiveDirChars))))
+		if err != nil {
+			return "", fmt.Errorf("choose a name for the archive directory: %w", err)
+		}
+		suffix[i] = archiveDirChars[n.Int64()]
+	}
+	return ArchiveDirPrefix + string(suffix), nil
+}
 
 var cliSumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// ValidArchiveDir reports whether dir is a directory ArchiveDirTemplate made:
-// the only kind a root shell command of a caller's may name.
+// ValidArchiveDir reports whether dir is a directory an upload (mktemp) or
+// NewArchiveDir names: the only kind a root shell command of a caller's may name.
 func ValidArchiveDir(dir string) bool { return uploadDirPattern.MatchString(dir) }
 
 // StageArchiveCommand is the command that stages the archive a caller put at
@@ -917,12 +941,12 @@ func ValidArchiveDir(dir string) bool { return uploadDirPattern.MatchString(dir)
 // does (see stageArchiveCommand): the CLI alone is extracted, checked against
 // cliSum, and run to verify and stage the archive against the node's trust
 // anchor, or, on a node without one, against trusted. dir is removed however it
-// ends. It refuses a dir that is not an ArchiveDirTemplate directory, a cliSum
+// ends. It refuses a dir that is not an archive directory (ValidArchiveDir), a cliSum
 // that is not a lowercase SHA-256 and a trusted list that is not EVM addresses,
 // because all three go into a root shell command.
 func StageArchiveCommand(dir, cliSum string, trusted []string) (string, error) {
 	if !uploadDirPattern.MatchString(dir) {
-		return "", fmt.Errorf("%q is not a directory made from %s", dir, ArchiveDirTemplate)
+		return "", fmt.Errorf("%q is not an archive directory (%sXXXXXXXX)", dir, ArchiveDirPrefix)
 	}
 	if !cliSumPattern.MatchString(cliSum) {
 		return "", fmt.Errorf("the CLI checksum %q is not a lowercase SHA-256", cliSum)
@@ -949,7 +973,7 @@ func StageArchiveCommand(dir, cliSum string, trusted []string) (string, error) {
 // normalized addresses.
 func stageArchiveCommand(dir, cliSum string, trusted []string) string {
 	archive := dir + "/archive.tar.gz"
-	cli := "/opt/orama/" + push.SetupCLIPrefix + strings.TrimPrefix(dir, "/tmp/orama-archive.")
+	cli := "/opt/orama/" + push.SetupCLIPrefix + strings.TrimPrefix(path.Base(dir), "orama-archive.")
 	stage := cli + "/bin/orama node stage-archive --archive " + archive
 	// /opt/orama must be root's alone before a binary is run from under it:
 	// anyone else who could write it could swap the checked CLI.

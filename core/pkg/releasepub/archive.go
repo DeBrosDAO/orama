@@ -1,21 +1,13 @@
 package releasepub
 
 import (
-	"archive/tar"
-	"compress/gzip"
-	"errors"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 )
-
-// manifestLimit bounds the manifest read from an archive.
-const manifestLimit = 1 << 20
 
 // globalLayerFiles are the files an amd64 release carries for `orama global
 // install` (orama maint build, without --skip-global-layer).
@@ -34,7 +26,7 @@ func globalLayerFiles(arch string) []string {
 // one without the global layer. It reads the manifest; the build that made the
 // archive hashed every file.
 func checkArchive(path string, ref releaseverify.ArchiveRef, clusterOnly bool) error {
-	manifestJSON, signed, err := readArchiveManifest(path)
+	manifestJSON, signed, err := archivetrust.ReadArchiveManifest(path)
 	if err != nil {
 		return err
 	}
@@ -63,41 +55,4 @@ func checkArchive(path string, ref releaseverify.ArchiveRef, clusterOnly bool) e
 		return fmt.Errorf("%s lacks the global layer (%s): build it without --skip-global-layer, or pass --allow-cluster-only to release a cluster-only archive", path, strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-// readArchiveManifest returns manifest.json from the archive at path and
-// whether the archive holds a manifest.sig.
-func readArchiveManifest(path string) (manifestJSON []byte, signed bool, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("open the archive: %w", err)
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return nil, false, fmt.Errorf("%s is not a gzip archive: %w", path, err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, false, fmt.Errorf("read the archive %s: %w", path, err)
-		}
-		switch strings.TrimPrefix(hdr.Name, "./") {
-		case archivetrust.SignatureName:
-			signed = true
-		case archivetrust.ManifestName:
-			if manifestJSON, err = io.ReadAll(io.LimitReader(tr, manifestLimit)); err != nil {
-				return nil, false, fmt.Errorf("read %s from %s: %w", archivetrust.ManifestName, path, err)
-			}
-		}
-	}
-	if manifestJSON == nil {
-		return nil, false, fmt.Errorf("%s has no %s: it is not an orama maint build archive", path, archivetrust.ManifestName)
-	}
-	return manifestJSON, signed, nil
 }

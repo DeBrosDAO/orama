@@ -13,6 +13,7 @@ import (
 
 	"github.com/theupdateframework/go-tuf/v2/metadata"
 
+	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/autoupdate"
 	"github.com/DeBrosOfficial/network/pkg/releaseverify"
 )
@@ -170,13 +171,22 @@ func checkReleasable(ref releaseverify.ArchiveRef) error {
 }
 
 // describe is the targets entry of an archive: length, sha256, and the custom
-// field the person approving the signature reads.
+// field the person approving the signature reads. The custom field names the
+// SHA-256 of the archive's manifest.json too: a machine that downloads the
+// archive reports the manifest for the operator to sign, and setup holds the
+// manifest to this digest before the wallet is asked.
 func describe(path string, ref releaseverify.ArchiveRef) (*metadata.TargetFiles, error) {
 	info, err := metadata.TargetFile().FromFile(path, "sha256")
 	if err != nil {
 		return nil, fmt.Errorf("describe %s: %w", path, err)
 	}
-	custom, err := json.Marshal(releaseverify.ArchiveCustom{Version: ref.Version, Arch: ref.Arch, Channel: ref.Channel})
+	manifestJSON, _, err := archivetrust.ReadArchiveManifest(path)
+	if err != nil {
+		return nil, err
+	}
+	custom, err := json.Marshal(releaseverify.ArchiveCustom{
+		Version: ref.Version, Arch: ref.Arch, Channel: ref.Channel, ManifestSHA256: archivetrust.ManifestDigest(manifestJSON),
+	})
 	if err != nil {
 		return nil, err
 	}
