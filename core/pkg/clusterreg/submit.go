@@ -139,8 +139,13 @@ func WithHTTPClient(ctx context.Context, client *http.Client) context.Context {
 	return context.WithValue(ctx, httpClientKey{}, client)
 }
 
-// StatusError is an HTTP error status from the chain API.
-type StatusError struct{ Code int }
+// StatusError is an HTTP error status from the chain API. Message is what the
+// node said, control characters removed and cut short, empty when it said
+// nothing readable.
+type StatusError struct {
+	Code    int
+	Message string
+}
 
 func (e *StatusError) Error() string { return fmt.Sprintf("chain API returned HTTP %d", e.Code) }
 
@@ -168,7 +173,27 @@ func doLimited(req *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("response from the chain is over %d bytes", submitLimit)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, &StatusError{Code: resp.StatusCode}
+		return nil, &StatusError{Code: resp.StatusCode, Message: errorMessage(body)}
 	}
 	return body, nil
+}
+
+// maxErrorMessage bounds how much of a node's error a StatusError keeps.
+const maxErrorMessage = 300
+
+// errorMessage reads the "message" of the gRPC-gateway error a node answers
+// with, or the start of the body when it is not one.
+func errorMessage(body []byte) string {
+	var doc struct {
+		Message string `json:"message"`
+	}
+	text := string(body)
+	if json.Unmarshal(body, &doc) == nil && doc.Message != "" {
+		text = doc.Message
+	}
+	runes := []rune(printable(text))
+	if len(runes) > maxErrorMessage {
+		runes = runes[:maxErrorMessage]
+	}
+	return string(runes)
 }

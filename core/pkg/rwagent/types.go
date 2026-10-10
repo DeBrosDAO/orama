@@ -72,6 +72,21 @@ type oramaTxSignData struct {
 	Address   string `json:"address"`
 }
 
+// OramaAccount is GET /v1/orama/account's answer, decoded from base64: the
+// ORAMA account the agent signs transactions for.
+type OramaAccount struct {
+	// Address is the account's ORAMA address (orama1…).
+	Address string
+	// PubKey is the 33-byte compressed secp256k1 key of the account.
+	PubKey []byte
+}
+
+// oramaAccountData is OramaAccount on the wire.
+type oramaAccountData struct {
+	Address   string `json:"address"`
+	PublicKey string `json:"publicKey"`
+}
+
 // AppPermission represents an approved app in the permission database.
 type AppPermission struct {
 	BinaryHash   string                `json:"binaryHash"`
