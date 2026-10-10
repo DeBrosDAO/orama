@@ -213,7 +213,7 @@ func TestRenderRules_areIPv4Only(t *testing.T) {
 func TestRenderRules_replaceTheirTableAtomically(t *testing.T) {
 	l := testLayout()
 	for name, tc := range map[string]struct{ rules, table string }{
-		"host":      {l.RenderHostRules(), hostTable},
+		"host":      {l.RenderHostRules(), HostTable},
 		"namespace": {l.RenderNSRules(), nsTable},
 	} {
 		want := "table ip " + tc.table + " {}\ndelete table ip " + tc.table + "\ntable ip " + tc.table + " {\n"

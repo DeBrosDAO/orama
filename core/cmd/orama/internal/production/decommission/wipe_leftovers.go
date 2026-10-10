@@ -7,6 +7,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/install/installers"
 	"github.com/DeBrosOfficial/network/pkg/privhelper"
@@ -27,6 +28,19 @@ func wipedPaths() []string {
 		filepath.Dir(constants.TorConfigPath), installers.TorDataDir,
 		filepath.Join(systemdUnitDir, "coredns.service"), filepath.Join(systemdUnitDir, "caddy.service"),
 		archivetrust.AnchorPath, privhelper.Path,
+	}
+}
+
+// globalPaths are what `orama global install` writes outside the unit directory: its
+// own binaries (the CLI the chain unit runs, oramad, cosmovisor, Kubo), the state of
+// the chain (its keys among it), public storage and the relay, and the configuration
+// and sysctl file of its network namespace. Every wipe removes them: a machine that
+// kept them was set up again on the old chain's binaries and keys, and orama global
+// install refused it (live stagenet create run, 2026-10-10).
+func globalPaths() []string {
+	return []string{
+		constants.GlobalStateRoot, filepath.Dir(constants.GlobalBinDir),
+		globalnetns.ConfigDir, globalnetns.SysctlFile,
 	}
 }
 
@@ -71,7 +85,7 @@ func purgeAccountsBlock() string {
 // machine and fails when anything is, so a wipe never reports success over state it could
 // not remove. What --nuclear alone removes is checked only with --nuclear.
 func leftoverCheck(nuclear bool) string {
-	paths := wipedPaths()
+	paths := append(wipedPaths(), globalPaths()...)
 	if nuclear {
 		paths = append(paths, nuclearPaths()...)
 	}
@@ -87,6 +101,9 @@ for unit in $(systemctl list-units --all --plain --no-legend "orama-*" | while r
     left "systemd unit $unit"
 done
 if ip link show wg0 >/dev/null 2>&1; then left "network interface wg0"; fi
+if ip netns list 2>/dev/null | grep -qw ` + globalnetns.Name + `; then left "network namespace ` + globalnetns.Name + `"; fi
+if ip link show ` + globalnetns.HostIface + ` >/dev/null 2>&1; then left "network interface ` + globalnetns.HostIface + `"; fi
+if nft list table ip ` + globalnetns.HostTable + ` >/dev/null 2>&1; then left "nft table ip ` + globalnetns.HostTable + `"; fi
 if iptables -C INPUT -i wg0 -s ` + constants.WireGuardSubnet + ` -j ACCEPT 2>/dev/null; then left "iptables INPUT rule for wg0"; fi
 if [ -z "${ssh_ports// /}" ]; then
     if ufw status 2>/dev/null | grep -q "# orama"; then left "ufw rules tagged orama (the ports sshd listens on are unknown, so none were removed)"; fi

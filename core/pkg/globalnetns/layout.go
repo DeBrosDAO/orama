@@ -53,7 +53,7 @@ const (
 	// interface. Forwarding is confined by the rulesets, not by leaving it off.
 	SysctlFile = "/etc/sysctl.d/60-orama-global-netns.conf"
 
-	hostTable = "orama_global"
+	HostTable = "orama_global"
 	nsTable   = "orama_global_ns"
 )
 
@@ -219,7 +219,7 @@ func writeReplaceHeader(b *strings.Builder, table string) {
 // namespace address: any other local process would otherwise reach them through the veth.
 func (l Layout) RenderHostRules() string {
 	var b strings.Builder
-	writeReplaceHeader(&b, hostTable)
+	writeReplaceHeader(&b, HostTable)
 	b.WriteString("\tchain prerouting {\n\t\ttype nat hook prerouting priority dstnat; policy accept;\n")
 	for _, proto := range []string{"tcp", "udp"} {
 		if set := l.portSet(proto); set != "" {
@@ -287,7 +287,7 @@ func (l Layout) RenderUnit() string {
 	pre := []string{
 		ip + " netns del " + Name,
 		ip + " link del " + HostIface,
-		nft + " delete table ip " + hostTable,
+		nft + " delete table ip " + HostTable,
 	}
 	for _, c := range pre {
 		b.WriteString("ExecStartPre=-" + c + "\n")
@@ -314,7 +314,7 @@ func (l Layout) RenderUnit() string {
 	b.WriteString("ExecStartPost=" + ip + " netns exec " + Name + " " +
 		ipv6OffCheck("the namespace "+Name, ipv6DisableFile("all"), ipv6DisableFile("default"), ipv6DisableFile(NSIface)) + "\n")
 	stop := []string{
-		nft + " delete table ip " + hostTable,
+		nft + " delete table ip " + HostTable,
 		ip + " link del " + HostIface,
 		ip + " netns del " + Name,
 	}

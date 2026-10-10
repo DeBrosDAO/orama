@@ -193,7 +193,7 @@ func TestLayout_rulesetsReloadOverARunningLayout(t *testing.T) {
 	}
 	run(t, l.Tools.Nft, "-f", hostFile)
 	run(t, l.Tools.IP, "netns", "exec", Name, l.Tools.Nft, "-f", nsFile)
-	run(t, l.Tools.Nft, "list", "table", "ip", hostTable)
+	run(t, l.Tools.Nft, "list", "table", "ip", HostTable)
 	run(t, l.Tools.IP, "netns", "exec", Name, l.Tools.Nft, "list", "table", "ip", nsTable)
 }
 

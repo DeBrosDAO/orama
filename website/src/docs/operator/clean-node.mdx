@@ -38,6 +38,7 @@ orama node wipe   --env mycluster --node 203.0.113.12 --nuclear   # also remove 
 | Configuration directory | `/etc/orama` itself, not only the files in it |
 | CoreDNS and Caddy | `/etc/coredns/Corefile`, `/etc/caddy/`, `/var/lib/caddy/` (certificates live in the cluster's shared store, not here) |
 | ntfy | `/etc/ntfy/` and `/var/lib/ntfy/`; the `ntfy` binary and account go with `--nuclear` |
+| Global layer | `/var/lib/orama-global` (the chain with its keys, public storage, the relay), `/usr/lib/orama-global` (its binaries), `/etc/orama-global` and `/etc/sysctl.d/60-orama-global-netns.conf`, on every wipe. Stopping its units removes the `orama-global` network namespace, its `ogl-host` veth and its `orama_global` nft table, and the check below looks for each |
 | Tor | The unit, `/etc/orama/tor/torrc`, `/var/lib/orama-tor/` (the `tor` package stays unless `--nuclear`) |
 | Anyone network leftovers | On a node never upgraded past it |
 | Trust and update state | The archive trust anchor `/etc/orama/archive-signers` and its rotation mark, so a machine set up again trusts the cluster it next joins or creates, not this one. The auto-update timer is stopped first, then `/var/lib/orama-autoupdate` (fetched releases and the install intent), `/etc/orama/update-notice.json` and the adopted release root with its state (`release-root.json`, `release-seen.json`, `release-staged.json` in `/etc/orama`) are removed |
@@ -63,7 +64,7 @@ Only for a node whose SSH key is lost or that was never enrolled. Over your own 
 2. Delete everything named `orama-*` under `/etc/systemd/system` (units, timers, `.service.d` drop-in directories), `coredns.service`, `caddy.service`, and `systemctl daemon-reload`; then `systemctl stop` and `systemctl reset-failed` any `orama-*` unit still listed, and reload again.
 3. Take WireGuard down (`wg-quick@wg0` is a oneshot that stays "active (exited)" until you stop the unit) and delete `/etc/wireguard/wg0.conf`.
 4. Delete the `ufw` rules tagged `orama` or `orama-global`, highest number first. Leave your own and the SSH rule.
-5. Delete `/opt/orama`, the Orama environment files, `/etc/orama`, `/etc/coredns`, `/etc/caddy`, `/var/lib/caddy`, `/etc/ntfy`, `/var/lib/ntfy`, `/var/lib/orama-tor`, `/var/lib/orama-autoupdate`.
+5. Delete `/opt/orama`, the Orama environment files, `/etc/orama`, `/etc/coredns`, `/etc/caddy`, `/var/lib/caddy`, `/etc/ntfy`, `/var/lib/ntfy`, `/var/lib/orama-global`, `/usr/lib/orama-global`, `/etc/orama-global`, `/etc/sysctl.d/60-orama-global-netns.conf`, `/var/lib/orama-tor`, `/var/lib/orama-autoupdate`.
 6. Delete the `orama` user and the other `orama-*` system accounts and their groups (services must be stopped first or `userdel` fails).
 
 Then the machine is ready for `orama node setup`.

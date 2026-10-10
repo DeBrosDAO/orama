@@ -332,3 +332,28 @@ func TestWipeScript_nuclearRemovesNtfyWithItsAccount(t *testing.T) {
 		t.Error("a plain wipe keeps the shared binaries, so its check must not look at the ntfy binary")
 	}
 }
+
+// The live stagenet create run of 2026-10-10: a nuclear wipe left /var/lib/orama-global
+// and /usr/lib/orama-global, and orama global install refused the machine because the old
+// chain's oramad was still staged. Every wipe removes the global layer, and the check
+// looks for each of its paths and for the namespace it ran in.
+func TestWipeScript_everyWipeRemovesTheGlobalLayerAndChecksForIt(t *testing.T) {
+	for _, nuclear := range []bool{false, true} {
+		removal := removalPart(wipeScript(nuclear))
+		checked := checkedPaths(leftoverCheck(nuclear))
+		for _, path := range []string{"/var/lib/orama-global", "/usr/lib/orama-global", "/etc/orama-global", "/etc/sysctl.d/60-orama-global-netns.conf"} {
+			if !strings.Contains(removal, path) {
+				t.Errorf("nuclear=%v: the wipe does not remove %s", nuclear, path)
+			}
+			if !slices.Contains(checked, path) {
+				t.Errorf("nuclear=%v: the leftover check does not look at %s", nuclear, path)
+			}
+		}
+		check := leftoverCheck(nuclear)
+		for _, probe := range []string{"ip netns list", "grep -qw orama-global", "ip link show ogl-host", "nft list table ip orama_global"} {
+			if !strings.Contains(check, probe) {
+				t.Errorf("nuclear=%v: the leftover check lacks %q", nuclear, probe)
+			}
+		}
+	}
+}

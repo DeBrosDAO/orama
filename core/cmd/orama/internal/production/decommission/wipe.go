@@ -161,6 +161,12 @@ swapoff -a 2>/dev/null || true
 # The privileged helper binary: root-owned, and useless without its units.
 rm -f %[11]s
 
+# The global layer (orama global install): its binaries, the chain with its keys,
+# public storage, the relay, and the configuration and sysctl file of its namespace.
+# The units went above; stopping the namespace unit deleted the namespace, its
+# veth and its nft table (its ExecStop), and the check below looks for each.
+rm -rf %[16]s
+
 # Clean configs
 rm -rf /etc/coredns
 rm -rf /etc/caddy
@@ -208,6 +214,7 @@ fi
 		purgeAccountsBlock(),
 		leftoverCheck(nuclear),
 		constants.WireGuardSubnet,
+		strings.Join(globalPaths(), " "),
 	)
 }
 
