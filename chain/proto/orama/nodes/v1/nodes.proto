@@ -97,6 +97,13 @@ message Params {
   // unchanged before protocol-deal slots and the operator house count it. A
   // new node and any later change start the clock again. 0 turns the lock off.
   int64 network_identity_lock_seconds = 9;
+  // name_deposit is the norama an operator locks in the nodes module account
+  // to claim a node's identification name. It is returned in full when the
+  // name is released or the node retires.
+  string name_deposit = 10 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }
 
 // RoleBond is one role's norama amount (a minimum, or a node's current bond).
@@ -207,4 +214,19 @@ message ServiceDay {
   uint64 day_index = 2;
   uint64 volume_bytes = 3;
   bool relay = 4;
+}
+
+// NodeName is the identification name an operator claimed for one node. The
+// name is one DNS label under the network's domain, <name>.<network>.orama.network,
+// and an A or AAAA record for each literal IP among the node's endpoints. It
+// identifies the node and delegates nothing: there is no NS record or glue.
+message NodeName {
+  string name = 1;
+  string node_id = 2;
+  string operator = 3;
+  // deposit is the norama locked for the claim: name_deposit when it was claimed.
+  string deposit = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }

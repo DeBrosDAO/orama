@@ -341,6 +341,9 @@ func (k Keeper) retireNode(ctx sdk.Context, node *types.Node, status types.NodeS
 	if err := k.releaseIdentity(ctx, *node); err != nil {
 		return err
 	}
+	if _, err := k.releaseNodeName(ctx, node.NodeId, retireReason(status)); err != nil {
+		return err
+	}
 	node.Bindings = nil
 	for _, role := range node.Roles {
 		amount := bondOf(*node, role)
@@ -711,4 +714,12 @@ func (k Keeper) chargeCluster(ctx sdk.Context, cluster *types.Cluster) error {
 	cluster.DepositBytes = got
 	cluster.DepositParts = parts
 	return nil
+}
+
+// retireReason names why a closing node releases its name.
+func retireReason(status types.NodeStatus) string {
+	if status == types.NodeStatusTombstoned {
+		return releaseReasonTombstone
+	}
+	return releaseReasonRetire
 }

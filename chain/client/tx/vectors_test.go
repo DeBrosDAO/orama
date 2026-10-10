@@ -149,6 +149,8 @@ func vectorMessages(signer string) []struct {
 		}, ""},
 		{"fees_withdraw_earnings", &feestypes.MsgWithdrawEarnings{Signer: signer, Amount: math.NewInt(1500)}, ""},
 		{"nodes_fund_hot_key", &nodestypes.MsgFundHotKey{Operator: signer, NodeId: "node-1", Amount: math.NewInt(2500)}, ""},
+		{"nodes_claim_node_name", &nodestypes.MsgClaimNodeName{Operator: signer, NodeId: "node-1", Name: "my-node"}, ""},
+		{"nodes_release_node_name", &nodestypes.MsgReleaseNodeName{Operator: signer, NodeId: "node-1"}, ""},
 		{"nodes_register_cluster", &nodestypes.MsgRegisterCluster{Operator: signer, ClusterId: "c1", BaseDomain: "example.org", PublicEndpoints: []string{"https://c1.example.org"}, MetadataUri: "https://example.org/meta.json"}, ""},
 		{"storage_create_deal", &storagetypes.MsgCreateDeal{
 			Signer: signer, Granter: other, Class: storagetypes.DealClass_DEAL_CLASS_PRIVATE, DealNonce: bytesOf(7, 16),

@@ -22,7 +22,7 @@ type NodeInvariants struct {
 // CheckInvariants checks the three x/nodes invariants from
 // plans/open-network/track-c-chain.md C6:
 //
-//   - module balance == bonds + unbonding
+//   - module balance == bonds + unbonding + name deposits
 //   - active roles are bonded >= min_bond (and a registered node is not)
 //   - declared capacity <= backed capacity, and the free-capacity index matches
 func (k Keeper) CheckInvariants(ctx sdk.Context) (NodeInvariants, error) {
@@ -34,8 +34,12 @@ func (k Keeper) CheckInvariants(ctx sdk.Context) (NodeInvariants, error) {
 	if err != nil {
 		return NodeInvariants{}, err
 	}
+	names, err := k.sumNameDeposits(ctx)
+	if err != nil {
+		return NodeInvariants{}, err
+	}
 	balance := k.moduleBalance(ctx)
-	ledger := bonds.Add(unbonding)
+	ledger := bonds.Add(unbonding).Add(names)
 	balanceOK := balance.Equal(ledger)
 
 	activeOK := true
@@ -97,8 +101,8 @@ func (k Keeper) CheckInvariants(ctx sdk.Context) (NodeInvariants, error) {
 	}
 
 	detail := fmt.Sprintf(
-		"balance match: %t (module=%s ledger=%s bonds=%s unbonding=%s)\nactive roles bonded: %t\ncapacity backed: %t\n",
-		balanceOK, balance, ledger, bonds, unbonding, activeOK, capacityOK,
+		"balance match: %t (module=%s ledger=%s bonds=%s unbonding=%s name deposits=%s)\nactive roles bonded: %t\ncapacity backed: %t\n",
+		balanceOK, balance, ledger, bonds, unbonding, names, activeOK, capacityOK,
 	)
 	for _, problem := range problems {
 		detail += problem + "\n"

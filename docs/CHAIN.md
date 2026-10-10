@@ -1236,7 +1236,7 @@ There is no authority address, no pause, and no message that changes parameters 
 (plans/open-network.md D18).
 
 Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis must already hold
-`bonds + unbonding` norama there; `InitGenesis` checks that and does not mint.
+`bonds + unbonding + name deposits` norama there; `InitGenesis` checks that and does not mint.
 
 ### Records
 
@@ -1254,6 +1254,13 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
   document. With `--node` it asks the RootWallet agent to sign the document and
   broadcasts the transaction to that REST API. Without `--node` it prints the
   sign document and does not submit it.
+- **Node name.** A node holds at most one identification name, a DNS label under the network's
+  domain (`MsgClaimNodeName`, `MsgReleaseNodeName`): lowercase `a-z`, `0-9` and `-`, 3 to 32
+  characters, no leading or trailing `-`, not reserved (`types.ReservedNames`, `seed`, `seedN`,
+  `nsN`, `www`, `api`, ...). A name belongs to one node (first come, first served); the claimant locks
+  `name_deposit` in the `nodes` account, returned on release, retire or tombstone. The queries are
+  `NodeByName` (with the literal IPs of the node's endpoints), `NameOfNode` and a paginated
+  `NodeNames`.
 - **Unbonding queue, revoked pubkeys, service days, and a STORAGE free-capacity index.** The
   index key is `(class, operator, node id)`. Class `0` is unused; any free byte count uses
   `bits.Len64(free)`. Jailed, retired, and tombstoned nodes are not indexed.

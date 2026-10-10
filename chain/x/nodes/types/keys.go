@@ -35,4 +35,6 @@ var (
 	StorageDirtyPrefix  = collections.NewPrefix(12)
 	HotKeyPrefix        = collections.NewPrefix(13)
 	LiveIPPrefix        = collections.NewPrefix(14)
+	NameOwnerPrefix     = collections.NewPrefix(15)
+	NodeNamePrefix      = collections.NewPrefix(16)
 )

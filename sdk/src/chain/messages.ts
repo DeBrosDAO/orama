@@ -196,6 +196,14 @@ export const MSG = {
   nodesFundHotKey: defineMsg("/orama.nodes.v1.MsgFundHotKey", nodes.MsgFundHotKey, (m) =>
     desc("Fund node hot key", `Send ${norama(m.amount)} from ${m.operator} to node ${m.nodeId}'s hot key`),
   ),
+  nodesClaimNodeName: defineMsg("/orama.nodes.v1.MsgClaimNodeName", nodes.MsgClaimNodeName, (m) =>
+    desc("Claim node name", `Claim the name "${m.name}" for node ${m.nodeId}`, [
+      "The name is a public DNS label for the node's IP. A deposit is locked and returned when the name is released or the node retires.",
+    ]),
+  ),
+  nodesReleaseNodeName: defineMsg("/orama.nodes.v1.MsgReleaseNodeName", nodes.MsgReleaseNodeName, (m) =>
+    desc("Release node name", `Release the name of node ${m.nodeId} and take the deposit back`),
+  ),
   nodesRegisterCluster: defineMsg("/orama.nodes.v1.MsgRegisterCluster", nodes.MsgRegisterCluster, (m) =>
     desc("Register cluster", `Register public cluster ${m.clusterId} at ${m.baseDomain}`, [
       `Public endpoints: ${list(m.publicEndpoints)}`,

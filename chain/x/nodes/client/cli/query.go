@@ -27,6 +27,9 @@ func GetQueryCmd() *cobra.Command {
 		GetCmdQueryNode(),
 		GetCmdQueryCluster(),
 		GetCmdQueryUnbondings(),
+		GetCmdQueryNodeByName(),
+		GetCmdQueryNameOfNode(),
+		GetCmdQueryNodeNames(),
 		GetCmdQueryInvariants(),
 	)
 	return cmd
@@ -161,5 +164,76 @@ func GetCmdQueryInvariants() *cobra.Command {
 		},
 	}
 	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryNodeByName implements `oramad query nodes node-by-name [name]`.
+func GetCmdQueryNodeByName() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "node-by-name [name]",
+		Short: "Query the node that holds an identification name, with its endpoint IPs",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			res, err := types.NewQueryClient(clientCtx).NodeByName(cmd.Context(), &types.QueryNodeByNameRequest{Name: args[0]})
+			if err != nil {
+				return fmt.Errorf("failed to query node by name: %w", err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryNameOfNode implements `oramad query nodes name-of-node [node-id]`.
+func GetCmdQueryNameOfNode() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "name-of-node [node-id]",
+		Short: "Query the identification name a node holds",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			res, err := types.NewQueryClient(clientCtx).NameOfNode(cmd.Context(), &types.QueryNameOfNodeRequest{NodeId: args[0]})
+			if err != nil {
+				return fmt.Errorf("failed to query the name of a node: %w", err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+// GetCmdQueryNodeNames implements `oramad query nodes node-names`.
+func GetCmdQueryNodeNames() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "node-names",
+		Short: "List every claimed node name, paginated",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return fmt.Errorf("failed to get client context: %w", err)
+			}
+			pageReq, err := client.ReadPageRequest(cmd.Flags())
+			if err != nil {
+				return fmt.Errorf("failed to read the page request: %w", err)
+			}
+			res, err := types.NewQueryClient(clientCtx).NodeNames(cmd.Context(), &types.QueryNodeNamesRequest{Pagination: pageReq})
+			if err != nil {
+				return fmt.Errorf("failed to list node names: %w", err)
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	flags.AddPaginationFlagsToCmd(cmd, "node names")
 	return cmd
 }

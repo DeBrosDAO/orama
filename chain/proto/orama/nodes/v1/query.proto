@@ -3,6 +3,7 @@ package orama.nodes.v1;
 
 option go_package = "github.com/DeBrosOfficial/network/chain/x/nodes/types";
 
+import "cosmos/base/query/v1beta1/pagination.proto";
 import "google/api/annotations.proto";
 import "gogoproto/gogo.proto";
 import "orama/nodes/v1/nodes.proto";
@@ -26,6 +27,15 @@ service Query {
   }
   rpc Invariants(QueryInvariantsRequest) returns (QueryInvariantsResponse) {
     option (google.api.http).get = "/orama/nodes/v1/invariants";
+  }
+  rpc NodeByName(QueryNodeByNameRequest) returns (QueryNodeByNameResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/node-by-name/{name}";
+  }
+  rpc NameOfNode(QueryNameOfNodeRequest) returns (QueryNameOfNodeResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/name-of-node/{node_id}";
+  }
+  rpc NodeNames(QueryNodeNamesRequest) returns (QueryNodeNamesResponse) {
+    option (google.api.http).get = "/orama/nodes/v1/node-names";
   }
 }
 
@@ -74,4 +84,40 @@ message QueryInvariantsResponse {
   bool active_roles_bonded = 2;
   bool capacity_backed = 3;
   string detail = 4;
+}
+
+// NamedNode is a claimed name with the node it identifies and the literal IPs
+// among that node's endpoints: the addresses the name's A and AAAA records
+// point at. ips is empty while the node has no literal IP endpoint.
+message NamedNode {
+  string name = 1;
+  string node_id = 2;
+  string operator = 3;
+  repeated string ips = 4;
+}
+
+message QueryNodeByNameRequest {
+  string name = 1;
+}
+
+message QueryNodeByNameResponse {
+  NamedNode node = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryNameOfNodeRequest {
+  string node_id = 1;
+}
+
+message QueryNameOfNodeResponse {
+  NodeName name = 1 [(gogoproto.nullable) = false];
+}
+
+// QueryNodeNamesRequest pages through every claimed name in name order.
+message QueryNodeNamesRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryNodeNamesResponse {
+  repeated NamedNode nodes = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
 }
