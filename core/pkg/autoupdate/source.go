@@ -66,8 +66,9 @@ func (s Source) SweepStale() error {
 	return nil
 }
 
-// Newest fetches the channel's metadata from repoURL, verifies it against the
-// adopted root and the rollback record, and returns the newest release for
+// Newest brings the adopted root up to the newest version repoURL publishes
+// (a rotation, releaseverify.Repository.UpdateRoot), fetches the channel's
+// metadata from repoURL, verifies it against that root and the rollback record, and returns the newest release for
 // this machine's architecture. ok is false when the channel lists none. The
 // directory it makes holds the metadata; Remove deletes it.
 func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Release, ok bool, err error) {
@@ -89,7 +90,8 @@ func (s Source) Newest(ctx context.Context, repoURL, channel string) (rel Releas
 	}
 	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
 	defer cancel()
-	if err := (releaseverify.Repository{BaseURL: repoURL}).FetchMetadata(ctx, rel.MetadataDir(), rel.Roles); err != nil {
+	update := releaseverify.RootUpdate{RootPath: s.RootPath, SeenPath: s.SeenPath, Now: s.Now()}
+	if err := (releaseverify.Repository{BaseURL: repoURL}).Sync(ctx, rel.MetadataDir(), rel.Roles, update); err != nil {
 		return Release{}, false, fmt.Errorf("fetch the %s channel: %w", channel, err)
 	}
 	verified, err := releaseverify.Load(s.check(rel, ""))

@@ -100,6 +100,11 @@ func prepareRelease(ctx context.Context, opts Options, arch string) (archive str
 	if err != nil {
 		return "", nil, err
 	}
+	// The repository may have rotated its root while the metadata was fetched; the
+	// manifest carries the root the release verified under.
+	if root, err = os.ReadFile(rootPath); err != nil {
+		return "", nil, fmt.Errorf("read the release root after the update: %w", err)
+	}
 	endorsed := filepath.Join(work, "endorsed.tar.gz")
 	fmt.Printf("  Release %s verified; signing it with your RootWallet as the build your cluster runs...\n", opts.Release)
 	if err := build.EndorseRelease(fetched, endorsed, root); err != nil {
@@ -116,7 +121,8 @@ func fetchVerifiedRelease(ctx context.Context, work string, opts Options, channe
 	if err := os.Mkdir(metaDir, 0o700); err != nil {
 		return "", err
 	}
-	if err := repo.FetchMetadata(ctx, metaDir, []string{channel}); err != nil {
+	update := releaseverify.RootUpdate{RootPath: opts.ReleaseRoot, SeenPath: seen, Now: time.Now()}
+	if err := repo.Sync(ctx, metaDir, []string{channel}, update); err != nil {
 		return "", fmt.Errorf("fetch the release metadata: %w", err)
 	}
 	check := releaseverify.FileCheck{

@@ -89,6 +89,39 @@ func NewRoot(keys Keys, validUntil time.Time) ([]byte, error) {
 	return toBytes(root)
 }
 
+// NextRoot returns the root that follows prev: the next version, naming next's
+// four top-level keys, signed by prevKeys' root key, which is what a client
+// holding prev checks, and by next's root key, which is what the new root says
+// it is signed by. When both are one key it signs once.
+func NextRoot(prev []byte, prevKeys, next Keys, validUntil time.Time) ([]byte, error) {
+	old, err := metadata.Root().FromBytes(prev)
+	if err != nil {
+		return nil, fmt.Errorf("read the root to follow: %w", err)
+	}
+	root := metadata.Root(validUntil)
+	root.Signed.Version = old.Signed.Version + 1
+	root.Signed.ConsistentSnapshot = false
+	for _, role := range topRoles {
+		pub, err := publicKey(next, role)
+		if err != nil {
+			return nil, err
+		}
+		if err := root.Signed.AddKey(pub, role); err != nil {
+			return nil, fmt.Errorf("add the %s key to the root: %w", role, err)
+		}
+	}
+	signers := []ed25519.PrivateKey{prevKeys[metadata.ROOT]}
+	if newRootKey := next[metadata.ROOT]; !newRootKey.Equal(signers[0]) {
+		signers = append(signers, newRootKey)
+	}
+	for _, key := range signers {
+		if err := sign(root, key); err != nil {
+			return nil, err
+		}
+	}
+	return toBytes(root)
+}
+
 // Build returns the timestamp, snapshot, top-level targets and delegated
 // metadata files for spec, signed with keys.
 func Build(keys Keys, spec Spec) (map[string][]byte, error) {

@@ -45,6 +45,10 @@ const (
 	dialKeepAlive = 30 * time.Second
 )
 
+// ErrNotFound is a file the release repository answered 404 for. A root
+// update reads it as "there is no newer root".
+var ErrNotFound = errors.New("not found in the release repository")
+
 // Repository is a release repository at BaseURL.
 type Repository struct {
 	BaseURL string
@@ -218,6 +222,10 @@ func (r Repository) get(ctx context.Context, rel string) (*http.Response, error)
 	resp, err := r.client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
+		return nil, fmt.Errorf("fetch %s: the release repository answered %s: %w", u, resp.Status, ErrNotFound)
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
