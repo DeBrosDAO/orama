@@ -91,7 +91,7 @@ For each machine setup then does these in order, and a machine that already has 
 4. Installs the global layer beside it (unless `--cluster-only`): the chain, which joins by state sync, public storage with its provider, and the Tor relay.
 5. Registers your operator, each node, its bonds and its storage capacity on the chain and creates your validator, each transaction signed by your RootWallet. You approve them in the app.
 6. Restarts the nodes one at a time, waiting until each carries its share of the cluster again.
-7. Handles DNS (next section), then opens `orama status`.
+7. Handles DNS (next section), then prints what to do next.
 
 Re-run `orama setup` with more addresses later to add nodes to the same cluster.
 
@@ -111,10 +111,17 @@ There are two ways to be found by name.
 
 ## 6. Verify
 
+`orama status` reads the cluster's health from the gateway, which shows it only to a session that holds the cluster's operator permission: your wallet, signed in to a namespace you own. The first time, create one (it is also where your apps will live) and sign in to it:
+
 ```bash
+orama auth login                          # sign in with your RootWallet
+orama namespace create <name>             # a namespace of your own, e.g. ops
+orama auth login --namespace <name>       # once `orama namespace list` shows it ready
 orama status
 orama status --json      # for scripts: healthy only if every node and the chain are caught up
 ```
+
+Without a session, `orama status --ssh` reads every node over SSH with your RootWallet key instead.
 
 You should see each node healthy, the chain height rising and not syncing, your validator, and your operator's earnings and bond. If something is wrong, the alert says what and how to fix it. [Troubleshooting](/docs/operator/troubleshooting) lists the named failures.
 
