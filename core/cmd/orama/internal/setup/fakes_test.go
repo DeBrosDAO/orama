@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
@@ -149,6 +150,10 @@ func (m *fakeMachine) Identity(_ context.Context, in IdentityRequest) (NodeIdent
 func (m *fakeMachine) StartServices(_ context.Context, id string) error {
 	m.w.add("start %s %s", m.ip, id)
 	return nil
+}
+func (m *fakeMachine) Nameservers(context.Context) ([]dnsdelegation.Delegation, error) {
+	m.w.add("nameservers on %s", m.ip)
+	return []dnsdelegation.Delegation{{Domain: "cluster.example.org", Nameservers: []dnsdelegation.Nameserver{{Hostname: "ns1", IP: m.ip}}}}, nil
 }
 func (m *fakeMachine) OpenChain(context.Context) (string, func(), error) {
 	return "http://127.0.0.1:1", func() {}, nil
@@ -403,12 +408,12 @@ type fakeDomain struct {
 	waitErr error
 }
 
-func (f fakeDomain) Records(context.Context, string, string) ([]string, error) {
-	f.w.add("domain records")
+func (f fakeDomain) Records(_ context.Context, via Machine, _ string) ([]string, error) {
+	f.w.add("domain records via %s", via.Host())
 	return []string{"cluster.example.org.\tIN\tNS\tns1.cluster.example.org.", "ns1.cluster.example.org.\tIN\tA\t203.0.113.10"}, nil
 }
-func (f fakeDomain) Wait(context.Context, string, string, time.Duration, time.Duration) error {
-	f.w.add("domain wait")
+func (f fakeDomain) Wait(_ context.Context, via Machine, _ string, _, _ time.Duration) error {
+	f.w.add("domain wait via %s", via.Host())
 	return f.waitErr
 }
 

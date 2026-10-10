@@ -75,3 +75,24 @@ func TestBaseSSHOptions_neverPromptAndNeverForwardAnAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestOneLine_serverTextIsOnOneLineWithoutControls(t *testing.T) {
+	got := oneLine("  banner\n[203.0.113.9] forged\x1b[2J\r\n")
+	if strings.ContainsAny(got, "\n\r\x1b") {
+		t.Errorf("got %q", got)
+	}
+	if !strings.Contains(got, "banner") || !strings.Contains(got, "forged") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestLastBytes_keepsOnlyTheEnd(t *testing.T) {
+	l := &lastBytes{max: 8}
+	for range 100 {
+		_, _ = l.Write([]byte("abcdefghij"))
+	}
+	_, _ = l.Write([]byte("END"))
+	if got := l.String(); len(got) != 8 || !strings.HasSuffix(got, "END") {
+		t.Errorf("got %q", got)
+	}
+}

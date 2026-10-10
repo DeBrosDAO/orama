@@ -336,6 +336,40 @@ func TestTail(t *testing.T) {
 	}
 }
 
+func TestSSHMachine_nameserversAreReadOnTheMachine(t *testing.T) {
+	m, _ := testMachine(&recShell{})
+	var asked inspector.Node
+	var stmt string
+	m.query = func(node inspector.Node, s string) ([]byte, error) {
+		asked, stmt = node, s
+		return []byte(`{"results":[{"columns":["domain","hostname","ip_address"],"values":[["cluster.example.org","ns1","203.0.113.10"],["cluster.example.org","ns2","203.0.113.11"]]}]}`), nil
+	}
+	got, err := m.Nameservers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked.Host != ip1 || !strings.Contains(stmt, "dns_nameservers") {
+		t.Errorf("asked %s with %q", asked.Host, stmt)
+	}
+	if len(got) != 1 || got[0].Domain != "cluster.example.org" || len(got[0].Nameservers) != 2 || got[0].Nameservers[1].IP != "203.0.113.11" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestSSHMachine_nameserversRefuseWhatTheClusterCouldNotHaveWritten(t *testing.T) {
+	m, _ := testMachine(&recShell{})
+	m.query = func(inspector.Node, string) ([]byte, error) {
+		return []byte(`{"results":[{"values":[["cluster.example.org","ns1","10.0.0.5"]]}]}`), nil
+	}
+	if _, err := m.Nameservers(context.Background()); err == nil {
+		t.Error("a private address is not a glue record")
+	}
+	m.query = func(inspector.Node, string) ([]byte, error) { return nil, errors.New("ssh: connection reset") }
+	if _, err := m.Nameservers(context.Background()); err == nil || !strings.Contains(err.Error(), "connection reset") {
+		t.Errorf("got %v", err)
+	}
+}
+
 func TestLineWriter_aMachineCannotDriveTheTerminal(t *testing.T) {
 	r := &bufReporter{}
 	w := &lineWriter{prefix: ip1, report: r}

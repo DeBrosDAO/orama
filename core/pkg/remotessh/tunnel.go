@@ -1,7 +1,6 @@
 package remotessh
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 )
@@ -51,8 +51,8 @@ func StartTunnel(ctx context.Context, node inspector.Node, remote string) (local
 		return "", nil, fmt.Errorf("find a free local port for the tunnel: %w", err)
 	}
 	cmd := exec.Command("ssh", tunnelArgs(node, port, remote)...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := &lastBytes{max: tunnelStderrKept}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return "", nil, fmt.Errorf("start the SSH tunnel to %s: %w", node.Host, err)
 	}
@@ -78,13 +78,44 @@ func StartTunnel(ctx context.Context, node inspector.Node, remote string) (local
 		}
 		select {
 		case waitErr := <-exited:
-			return "", nil, fmt.Errorf("the SSH tunnel to %s ended before it was ready: %v: %s", node.Host, waitErr, strings.TrimSpace(stderr.String()))
+			return "", nil, fmt.Errorf("the SSH tunnel to %s ended before it was ready: %v: %s", node.Host, waitErr, oneLine(stderr.String()))
 		case <-ctx.Done():
 			stop()
 			return "", nil, fmt.Errorf("the SSH tunnel to %s (%s) did not accept connections within %s", node.Host, remote, tunnelReadyBudget)
 		case <-ticker.C:
 		}
 	}
+}
+
+// tunnelStderrKept is how much of the tunnel's stderr an error repeats.
+const tunnelStderrKept = 1024
+
+// lastBytes keeps the end of what is written to it, at most max bytes: what an
+// error shows of a session whose server can print without end.
+type lastBytes struct {
+	max int
+	buf []byte
+}
+
+func (l *lastBytes) Write(p []byte) (int, error) {
+	l.buf = append(l.buf, p...)
+	if len(l.buf) > l.max {
+		l.buf = append([]byte(nil), l.buf[len(l.buf)-l.max:]...)
+	}
+	return len(p), nil
+}
+
+func (l *lastBytes) String() string { return string(l.buf) }
+
+// oneLine is s on one line with its control characters replaced: it is text a
+// server wrote, and it ends up in an error printed on the operator's terminal.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.TrimSpace(s))
 }
 
 // freePort asks the kernel for an unused loopback port.

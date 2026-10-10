@@ -128,7 +128,7 @@ func SudoPrefix(node inspector.Node) string {
 func RunSSHOutput(node inspector.Node, command string, opts ...SSHOption) (string, error) {
 	res := inspector.RunSSH(context.Background(), node, command)
 	if !res.OK() {
-		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, res.Stderr)
+		return "", fmt.Errorf("run on %s: %v (stderr: %s)", node.Host, res.Err, oneLine(res.Stderr))
 	}
 	return res.Stdout, nil
 }

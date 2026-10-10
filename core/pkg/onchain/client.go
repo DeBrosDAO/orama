@@ -29,6 +29,17 @@ const (
 	FeeMarginNumerator   = 3
 	FeeMarginDenominator = 2
 
+	// MaxGas bounds the gas limit a transaction declares, and MaxFeeNorama the fee it
+	// pays (100 ORAMA). Both figures come from the chain node the client talks to: a
+	// node that lies about its base fee or the gas a simulation used could otherwise
+	// have the operator's wallet sign a fee that takes the account's balance. A real
+	// transaction of this client uses a few hundred thousand gas at a fee of a few
+	// norama, so neither bound is near an honest figure.
+	MaxGas       = 200_000_000
+	MaxFeeNorama = 100_000_000_000
+	// maxBaseFeeDigits bounds the base fee text before it is parsed.
+	maxBaseFeeDigits = 40
+
 	// simulationGasLimit and simulationFee fill the gas and fee fields of the
 	// transaction that is simulated: the chain does not check either in a
 	// simulation, and the builder needs both positive.
@@ -147,7 +158,11 @@ func (c *Client) gasFor(ctx context.Context, tx clusterreg.Direct) (uint64, erro
 	if err != nil {
 		return 0, fmt.Errorf("simulate the transaction: %w", err)
 	}
-	return scaleUp(used, GasSafetyNumerator, GasSafetyDenominator), nil
+	gas := scaleUpBig(used, GasSafetyNumerator, GasSafetyDenominator)
+	if !gas.IsUint64() || gas.Uint64() > MaxGas {
+		return 0, fmt.Errorf("the simulation reports %d gas used, and %s with the safety margin is over the %d this client signs: the node it asked may be wrong", used, gas, MaxGas)
+	}
+	return gas.Uint64(), nil
 }
 
 // feeFor is the fee for a transaction of gas: the base fee now, times gas, times
@@ -157,8 +172,8 @@ func (c *Client) feeFor(ctx context.Context, gas uint64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read the base fee: %w", err)
 	}
-	perGas, ok := new(big.Int).SetString(baseFee, 10)
-	if !ok || perGas.Sign() < 0 {
+	perGas, ok := parseNonNegative(baseFee)
+	if !ok {
 		return "", fmt.Errorf("the chain's base fee %q is not an integer", baseFee)
 	}
 	fee := new(big.Int).Mul(perGas, new(big.Int).SetUint64(gas))
@@ -166,7 +181,18 @@ func (c *Client) feeFor(ctx context.Context, gas uint64) (string, error) {
 	if fee.Sign() == 0 {
 		return "1", nil
 	}
+	if fee.Cmp(big.NewInt(MaxFeeNorama)) > 0 {
+		return "", fmt.Errorf("the chain asks %s norama for one transaction (base fee %s for %d gas), over the %d this client signs: the node it asked may be wrong", fee, baseFee, gas, int64(MaxFeeNorama))
+	}
 	return fee.String(), nil
+}
+
+// parseNonNegative reads a decimal integer of at most maxBaseFeeDigits digits.
+func parseNonNegative(s string) (*big.Int, bool) {
+	if s == "" || len(s) > maxBaseFeeDigits || s[0] == '-' || s[0] == '+' {
+		return nil, false
+	}
+	return new(big.Int).SetString(s, 10)
 }
 
 func (c *Client) signAndBroadcast(ctx context.Context, tx clusterreg.Direct, id *rwagent.OramaAccount) (*Receipt, error) {
@@ -194,6 +220,12 @@ func (c *Client) signAndBroadcast(ctx context.Context, tx clusterreg.Direct, id 
 		return nil, fmt.Errorf("transaction %s: %w", hash, err)
 	}
 	return &Receipt{Hash: hash, Height: height, Gas: tx.Gas, Fee: tx.FeeAmount}, nil
+}
+
+// scaleUpBig is scaleUp without the overflow: the result can exceed a uint64.
+func scaleUpBig(v uint64, num, den uint64) *big.Int {
+	scaled := new(big.Int).Mul(new(big.Int).SetUint64(v), new(big.Int).SetUint64(num))
+	return ceilDiv(scaled, new(big.Int).SetUint64(den))
 }
 
 // scaleUp returns ceil(v * num / den).

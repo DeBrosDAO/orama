@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 	"github.com/DeBrosOfficial/network/pkg/onchain"
@@ -42,6 +43,9 @@ type Machine interface {
 	Identity(ctx context.Context, in IdentityRequest) (NodeIdentity, error)
 	// StartServices starts the services that need the node registered.
 	StartServices(ctx context.Context, nodeID string) error
+	// Nameservers are the nameserver slots the cluster holds, read on this machine
+	// (it is in the cluster and its host key is pinned).
+	Nameservers(ctx context.Context) ([]dnsdelegation.Delegation, error)
 	// OpenChain makes the node's chain REST API reachable from here.
 	OpenChain(ctx context.Context) (rest string, stop func(), err error)
 	// WaitNode waits until the cluster node is carrying its share of the
@@ -251,9 +255,10 @@ type RecordedNode struct{ Host, User, Role string }
 // parent zone needs, and waiting until DNS returns them and the cluster serves
 // a certificate for the domain.
 type DomainWaiter interface {
-	// Records are the NS and glue records to create, read from the cluster.
-	Records(ctx context.Context, env, domain string) ([]string, error)
+	// Records are the NS and glue records to create, read from the cluster through
+	// via, a machine in it.
+	Records(ctx context.Context, via Machine, domain string) ([]string, error)
 	// Wait polls until the parent zone returns the records and the cluster's
 	// certificate for the domain is issued, or the deadline passes.
-	Wait(ctx context.Context, env, domain string, poll, deadline time.Duration) error
+	Wait(ctx context.Context, via Machine, domain string, poll, deadline time.Duration) error
 }

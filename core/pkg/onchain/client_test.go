@@ -168,3 +168,38 @@ func TestNew_validatesItsInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestSend_aFeeBeyondTheCapIsNotSigned(t *testing.T) {
+	for name, edit := range map[string]func(*fakeChain){
+		"a huge base fee":         func(c *fakeChain) { c.baseFee = "9999999999999" },
+		"a base fee of 41 digits": func(c *fakeChain) { c.baseFee = strings.Repeat("9", 41) },
+		"a negative base fee":     func(c *fakeChain) { c.baseFee = "-1" },
+		"a signed base fee":       func(c *fakeChain) { c.baseFee = "+5" },
+		"gas that overflows":      func(c *fakeChain) { c.gasUsed = ^uint64(0) },
+		"gas over the cap":        func(c *fakeChain) { c.gasUsed = MaxGas },
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain, signer := newFakeChain(), newSigner()
+			edit(chain)
+			if _, err := newClient(t, chain, signer).RegisterOperator(context.Background()); err == nil {
+				t.Fatal("a transaction the chain node priced out of reason was signed")
+			}
+			if len(signer.signed) != 0 || len(chain.sent) != 0 {
+				t.Errorf("signed %d, sent %d: nothing is signed when the figures are not believable", len(signer.signed), len(chain.sent))
+			}
+		})
+	}
+}
+
+func TestSend_aFeeAtTheCapIsSigned(t *testing.T) {
+	chain := newFakeChain()
+	chain.gasUsed = 1_000_000
+	chain.baseFee = "1000" // 1.5 * 1.5M gas * 1000 = 2.25e9 norama, under the 1e11 cap
+	receipt, err := newClient(t, chain, newSigner()).RegisterOperator(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Fee != "2250000000" {
+		t.Errorf("fee = %s", receipt.Fee)
+	}
+}

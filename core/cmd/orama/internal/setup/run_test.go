@@ -454,6 +454,9 @@ func TestRun_domainPrintsRecordsThenWaits(t *testing.T) {
 	if h.w.index("domain records") > h.w.index("domain wait") || h.w.index("domain wait") < 0 {
 		t.Error("records first, wait last")
 	}
+	if h.w.index("domain records via "+ip1) < 0 || h.w.index("domain wait via "+ip1) < 0 {
+		t.Errorf("the nameservers are read on a cluster machine whose host key is pinned, not on a node resolved afresh:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
 	if got := h.rec.gateway["stagenet-alice"]; got != "https://cluster.example.org" {
 		t.Errorf("gateway %q, want the domain", got)
 	}

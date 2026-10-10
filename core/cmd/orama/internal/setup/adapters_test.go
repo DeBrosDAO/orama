@@ -243,17 +243,32 @@ func TestSSHFaucet_noAccessToANodeOfTheNetwork(t *testing.T) {
 
 // ---- domain
 
+// nsMachine is a cluster machine that answers the nameserver query as asked.
+type nsMachine struct {
+	*fakeMachine
+	delegations []dnsdelegation.Delegation
+	err         error
+}
+
+func (m nsMachine) Nameservers(context.Context) ([]dnsdelegation.Delegation, error) {
+	return m.delegations, m.err
+}
+
+func clusterWith(ds ...dnsdelegation.Delegation) nsMachine {
+	return nsMachine{fakeMachine: &fakeMachine{w: newWorld(), ip: ip1}, delegations: ds}
+}
+
 func delegation() dnsdelegation.Delegation {
 	return dnsdelegation.Delegation{Domain: "cluster.example.org", Nameservers: []dnsdelegation.Nameserver{{Hostname: "ns1", IP: "203.0.113.10"}}}
 }
 
 func TestClusterDomain_recordsAreTheClustersNSAndGlue(t *testing.T) {
-	c := clusterDomain{read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil }}
-	records, err := c.Records(context.Background(), "env", "cluster.example.org")
+	c := clusterDomain{}
+	records, err := c.Records(context.Background(), clusterWith(delegation()), "cluster.example.org")
 	if err != nil || len(records) != 2 || !strings.Contains(records[0], "NS\tns1.cluster.example.org.") || !strings.Contains(records[1], "A\t203.0.113.10") {
 		t.Fatalf("%v, %v", records, err)
 	}
-	if _, err := c.Records(context.Background(), "env", "other.example.org"); err == nil {
+	if _, err := c.Records(context.Background(), clusterWith(delegation()), "other.example.org"); err == nil {
 		t.Error("a domain the cluster does not serve has no records")
 	}
 }
@@ -292,7 +307,6 @@ func TestClusterDomain_waitEndsWhenDelegatedAndCertified(t *testing.T) {
 	findings := []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingNS}}
 	calls := 0
 	c := clusterDomain{
-		read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 		check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 			calls++
 			if calls < 3 {
@@ -304,19 +318,18 @@ func TestClusterDomain_waitEndsWhenDelegatedAndCertified(t *testing.T) {
 			return leafState(t, pkix.Name{CommonName: "cluster.example.org"}, pkix.Name{CommonName: "CA"}, []string{"cluster.example.org"}, time.Now().Add(time.Hour)), nil
 		},
 	}
-	if err := c.Wait(context.Background(), "env", "cluster.example.org", time.Millisecond, time.Second); err != nil || calls != 3 {
+	if err := c.Wait(context.Background(), clusterWith(delegation()), "cluster.example.org", time.Millisecond, time.Second); err != nil || calls != 3 {
 		t.Fatalf("%d checks, %v", calls, err)
 	}
 }
 
 func TestClusterDomain_waitGivesUpWithWhatItWaitedFor(t *testing.T) {
 	c := clusterDomain{
-		read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 		check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 			return []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingGlue}}, nil
 		},
 	}
-	err := c.Wait(context.Background(), "env", "cluster.example.org", time.Millisecond, 20*time.Millisecond)
+	err := c.Wait(context.Background(), clusterWith(delegation()), "cluster.example.org", time.Millisecond, 20*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "cluster.example.org to be delegated") {
 		t.Fatalf("got %v", err)
 	}
@@ -400,12 +413,11 @@ func TestCLIRecorder_activeFor(t *testing.T) {
 
 func TestClusterDomain_findingsCannotDriveTheTerminal(t *testing.T) {
 	c := clusterDomain{
-		read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 		check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 			return []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingNS, Record: "x\x1b[2J.example.org", Want: "ns1"}}, nil
 		},
 	}
-	_, err := c.ready(context.Background(), "env", "cluster.example.org")
+	_, err := c.ready(context.Background(), clusterWith(delegation()), "cluster.example.org")
 	if err == nil || strings.ContainsRune(err.Error(), '\x1b') {
 		t.Fatalf("got %q: what the parent zone answered is text someone else wrote", err)
 	}
@@ -430,16 +442,18 @@ func TestCliChecksum(t *testing.T) {
 
 func TestClusterDomain_theFinalErrorSaysWhichQuestionWasUnanswered(t *testing.T) {
 	cases := map[string]struct {
+		via  Machine
 		c    clusterDomain
 		want string
 	}{
 		"the cluster has no nameserver": {
-			clusterDomain{read: func(string) ([]dnsdelegation.Delegation, error) { return nil, errors.New("ssh: connection refused") }},
+			nsMachine{fakeMachine: &fakeMachine{w: newWorld(), ip: ip1}, err: errors.New("ssh: connection refused")},
+			clusterDomain{},
 			"the cluster's nameservers: ssh: connection refused",
 		},
 		"DNS cannot be asked": {
+			clusterWith(delegation()),
 			clusterDomain{
-				read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 					return nil, errors.New("SERVFAIL")
 				},
@@ -447,8 +461,8 @@ func TestClusterDomain_theFinalErrorSaysWhichQuestionWasUnanswered(t *testing.T)
 			"asking DNS: SERVFAIL",
 		},
 		"the records are missing": {
+			clusterWith(delegation()),
 			clusterDomain{
-				read: func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 					return []dnsdelegation.Finding{{Kind: dnsdelegation.FindingMissingNS, Record: "cluster.example.org", Want: "ns1.cluster.example.org"}}, nil
 				},
@@ -456,8 +470,8 @@ func TestClusterDomain_theFinalErrorSaysWhichQuestionWasUnanswered(t *testing.T)
 			"the parent zone does not return the records yet",
 		},
 		"no certificate yet": {
+			clusterWith(delegation()),
 			clusterDomain{
-				read:  func(string) ([]dnsdelegation.Delegation, error) { return []dnsdelegation.Delegation{delegation()}, nil },
 				check: func(context.Context, dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) { return nil, nil },
 				dialCert: func(context.Context, string) (*tls.ConnectionState, error) {
 					return nil, errors.New("connection refused")
@@ -467,7 +481,7 @@ func TestClusterDomain_theFinalErrorSaysWhichQuestionWasUnanswered(t *testing.T)
 		},
 	}
 	for name, tc := range cases {
-		err := tc.c.Wait(context.Background(), "env", "cluster.example.org", time.Millisecond, 15*time.Millisecond)
+		err := tc.c.Wait(context.Background(), tc.via, "cluster.example.org", time.Millisecond, 15*time.Millisecond)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want it to contain %q", name, err, tc.want)
 		}

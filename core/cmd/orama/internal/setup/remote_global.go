@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 )
 
@@ -64,6 +66,21 @@ func (m *sshMachine) Identity(ctx context.Context, in IdentityRequest) (NodeIden
 // StartServices writes the node id the provider reads and starts it.
 func (m *sshMachine) StartServices(ctx context.Context, nodeID string) error {
 	return m.stream(ctx, bash(m.sudo(), startServicesScript()), strings.NewReader(nodeID))
+}
+
+// Nameservers reads the cluster's nameserver slots on this machine, over its
+// pinned SSH session: what is typed into a registrar comes from a machine setup
+// has the host key of.
+func (m *sshMachine) Nameservers(_ context.Context) ([]dnsdelegation.Delegation, error) {
+	body, err := m.query(m.node, dnsdelegation.Query)
+	if err != nil {
+		return nil, fmt.Errorf("read the nameserver slots on %s: %w", m.node.Host, err)
+	}
+	rows, err := clusterops.Rows(body)
+	if err != nil {
+		return nil, fmt.Errorf("read the nameserver slots on %s: %w", m.node.Host, err)
+	}
+	return dnsdelegation.FromRows(rows)
 }
 
 // OpenChain forwards a local port to the chain's REST API in the node's

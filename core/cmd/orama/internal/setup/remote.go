@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	psetup "github.com/DeBrosOfficial/network/cmd/orama/internal/production/setup"
 	"github.com/DeBrosOfficial/network/pkg/archivetrust"
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -145,6 +146,7 @@ type sshMachine struct {
 	ensureArchive func(node inspector.Node, archive string, trusted []string) error
 	waitReady     func(node inspector.Node, budget time.Duration) error
 	startTunnel   func(ctx context.Context, node inspector.Node, remote string) (string, func(), error)
+	query         func(node inspector.Node, stmt string) ([]byte, error)
 }
 
 func newSSHMachine(e *psetup.Enrolled, wallet string, report Reporter) *sshMachine {
@@ -155,6 +157,7 @@ func newSSHMachine(e *psetup.Enrolled, wallet string, report Reporter) *sshMachi
 			return rollout.WaitReady(node, rollout.DefaultRunner, budget)
 		},
 		startTunnel: remotessh.StartTunnel,
+		query:       clusterops.QuerySQL,
 	}
 }
 

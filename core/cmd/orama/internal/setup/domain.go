@@ -25,14 +25,12 @@ const (
 // them and the cluster serves a certificate for the domain.
 type clusterDomain struct {
 	// Test seams.
-	read     func(env string) ([]dnsdelegation.Delegation, error)
 	check    func(ctx context.Context, d dnsdelegation.Delegation) ([]dnsdelegation.Finding, error)
 	dialCert func(ctx context.Context, domain string) (*tls.ConnectionState, error)
 }
 
 func newClusterDomain() clusterDomain {
 	return clusterDomain{
-		read: dnsdelegation.Read,
 		check: func(ctx context.Context, d dnsdelegation.Delegation) ([]dnsdelegation.Finding, error) {
 			return dnsdelegation.Check(ctx, d, dnsdelegation.Lookups{})
 		},
@@ -42,9 +40,9 @@ func newClusterDomain() clusterDomain {
 	}
 }
 
-// delegationFor is the cluster's delegation of domain.
-func (c clusterDomain) delegationFor(env, domain string) (dnsdelegation.Delegation, error) {
-	all, err := c.read(env)
+// delegationFor is the cluster's delegation of domain, read on via.
+func (c clusterDomain) delegationFor(ctx context.Context, via Machine, domain string) (dnsdelegation.Delegation, error) {
+	all, err := via.Nameservers(ctx)
 	if err != nil {
 		return dnsdelegation.Delegation{}, err
 	}
@@ -53,12 +51,12 @@ func (c clusterDomain) delegationFor(env, domain string) (dnsdelegation.Delegati
 			return d, nil
 		}
 	}
-	return dnsdelegation.Delegation{}, fmt.Errorf("the cluster %q has no nameserver for %s yet", env, domain)
+	return dnsdelegation.Delegation{}, fmt.Errorf("the cluster has no nameserver for %s yet", domain)
 }
 
 // Records are the NS and glue records to create in the parent zone.
-func (c clusterDomain) Records(_ context.Context, env, domain string) ([]string, error) {
-	d, err := c.delegationFor(env, domain)
+func (c clusterDomain) Records(ctx context.Context, via Machine, domain string) ([]string, error) {
+	d, err := c.delegationFor(ctx, via, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -66,10 +64,10 @@ func (c clusterDomain) Records(_ context.Context, env, domain string) ([]string,
 }
 
 // Wait polls until the records resolve and the certificate is the cluster's.
-func (c clusterDomain) Wait(ctx context.Context, env, domain string, poll, deadline time.Duration) error {
+func (c clusterDomain) Wait(ctx context.Context, via Machine, domain string, poll, deadline time.Duration) error {
 	var why error
 	err := pollUntil(ctx, poll, deadline, domain+" to be delegated and to serve a certificate", func(ctx context.Context) (bool, error) {
-		done, reason := c.ready(ctx, env, domain)
+		done, reason := c.ready(ctx, via, domain)
 		why = reason
 		return done, nil
 	})
@@ -83,8 +81,8 @@ func (c clusterDomain) Wait(ctx context.Context, env, domain string, poll, deadl
 // nameservers, does the parent zone return them, does the cluster serve a
 // certificate for the name. When it is not ready, reason says which question
 // is the one unanswered.
-func (c clusterDomain) ready(ctx context.Context, env, domain string) (bool, error) {
-	d, err := c.delegationFor(env, domain)
+func (c clusterDomain) ready(ctx context.Context, via Machine, domain string) (bool, error) {
+	d, err := c.delegationFor(ctx, via, domain)
 	if err != nil {
 		return false, fmt.Errorf("the cluster's nameservers: %w", err)
 	}
