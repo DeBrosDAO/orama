@@ -142,7 +142,7 @@ func readFaucetRequest(w http.ResponseWriter, r *http.Request) (faucetRequest, *
 	var req faucetRequest
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || dec.More() {
+	if err := dec.Decode(&req); err != nil || dec.Decode(&struct{}{}) != io.EOF {
 		writeFaucetError(w, http.StatusBadRequest, errBadRequest, `send {"recipient":"orama1...","amount":"<norama>"}; amount is optional and a string`)
 		return faucetRequest{}, nil, false
 	}

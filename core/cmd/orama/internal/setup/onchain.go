@@ -79,15 +79,38 @@ func (r *runner) fund(ctx context.Context, sess ChainSession) (*Budget, error) {
 		notFunded.FaucetTried = err.Error()
 		return nil, notFunded
 	}
-	if have, err = sess.Balance(ctx, r.oper); err != nil {
-		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, err)
+	if have, err = r.awaitFunds(ctx, sess, need); err != nil {
+		return nil, err
 	}
 	if have.Cmp(need) < 0 {
 		notFunded.Have = have
-		notFunded.FaucetTried = "it paid less than the setup needs"
+		notFunded.FaucetTried = "it paid less than the setup needs, or the node setup reads the chain through has not seen the drip"
 		return nil, notFunded
 	}
 	return budget, nil
+}
+
+// awaitFunds reads the operator's balance through the session until it holds need, and returns what it
+// last read. The seed that paid answered when the drip was in a block it had seen, and this node can
+// be a block behind it, so a balance that is short at the first read is not a drip that was too small.
+// A balance still short at the deadline is returned for the caller to report; only a read that fails
+// or a cancelled run is an error.
+func (r *runner) awaitFunds(ctx context.Context, sess ChainSession, need *big.Int) (*big.Int, error) {
+	var have *big.Int
+	var readErr error
+	_ = pollUntil(ctx, r.d.Timing.BalancePoll, r.d.Timing.BalanceDeadline, "the faucet's drip to reach "+r.oper, func(ctx context.Context) (bool, error) {
+		if have, readErr = sess.Balance(ctx, r.oper); readErr != nil {
+			return false, readErr
+		}
+		return have.Cmp(need) >= 0, nil
+	})
+	if readErr != nil {
+		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, readErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return have, nil
 }
 
 func (r *runner) registerOperator(ctx context.Context, sess ChainSession) error {

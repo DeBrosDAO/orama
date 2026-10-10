@@ -361,6 +361,37 @@ func TestRun_faucetFundsAUnfundedOperator(t *testing.T) {
 	}
 }
 
+// The seed that paid saw the drip in a block; the node setup reads the chain through can be a block
+// behind it. A balance that is short at the first read is waited on, not reported as a drip too small.
+func TestRun_aDripThatTheSessionSeesLateIsWaitedFor(t *testing.T) {
+	h := newHarness()
+	h.networks.faucet = true
+	h.deps.Networks = h.networks
+	h.deps.Funder = fakeFunder{h.w}
+	h.w.balance = new(big.Int)
+	h.w.faucetPays = new(big.Int).Mul(big.NewInt(2000), big.NewInt(noramaPerOrama))
+	h.w.faucetLag = 3
+	mustRun(t, h, h.opts(ip1))
+	if h.w.faucetCalls != 1 {
+		t.Errorf("the faucet was asked %d times: a drip that is on its way must not be asked for again", h.w.faucetCalls)
+	}
+}
+
+func TestRun_aDripThatNeverShowsIsReportedAsNotFunded(t *testing.T) {
+	h := newHarness()
+	h.networks.faucet = true
+	h.deps.Networks = h.networks
+	h.deps.Funder = fakeFunder{h.w}
+	h.w.balance = new(big.Int)
+	h.w.faucetPays = new(big.Int).Mul(big.NewInt(2000), big.NewInt(noramaPerOrama))
+	h.w.faucetLag = 1 << 20
+	_, err := run(t, h, h.opts(ip1))
+	var nf *NotFundedError
+	if !errors.As(err, &nf) || !strings.Contains(err.Error(), "has not seen the drip") {
+		t.Fatalf("got %v, want a NotFundedError that says the drip is not visible", err)
+	}
+}
+
 func TestRun_faucetThatRefusesIsReportedWithTheShortfall(t *testing.T) {
 	h := newHarness()
 	h.networks.faucet = true

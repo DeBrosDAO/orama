@@ -3,6 +3,7 @@ package chainfaucet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync"
@@ -162,10 +163,20 @@ func (s *switchingIDs) ChainID(context.Context) (string, error) {
 	return s.id, nil
 }
 
+// A drip that was broadcast and is not in a block by the deadline may still land, so it is pending
+// and not a fault: the requester is told to look at the balance, and the allowance stays charged.
+func TestDrip_aDripThatIsNotInABlockByTheDeadlineIsPending(t *testing.T) {
+	chain := &fakeChain{t: t, waitErr: fmt.Errorf("transaction ABCD: %w", clusterreg.ErrNotIncluded)}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+
+	_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+
+	requireRefusal(t, err, KindPending)
+}
+
 func TestDrip_aFaultIsHiddenFromTheRequesterAndNotAKnownRefusal(t *testing.T) {
 	for name, chain := range map[string]*fakeChain{
 		"the chain cannot be reached": {simErr: errors.New("dial tcp 198.18.0.2:31003: connect: connection refused")},
-		"the block never comes":       {waitErr: clusterreg.ErrNotIncluded},
 		"the block failed":            {waitErr: errors.New("the transaction failed in block 7 (code 9): out of gas")},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -196,11 +207,15 @@ func TestDrip_concurrentDripsSignOneAtATimeWithConsecutiveSequences(t *testing.T
 	const n = 12
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
+	var to []string
+	for i := 0; i < n; i++ {
+		to = append(to, recipientN(t, byte(10+i)))
+	}
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := svc.Drip(context.Background(), recipientN(t, byte(10+i)), norama(9))
+			_, err := svc.Drip(context.Background(), to[i], norama(9))
 			errs <- err
 		}()
 	}
@@ -226,36 +241,46 @@ func TestDrip_concurrentDripsSignOneAtATimeWithConsecutiveSequences(t *testing.T
 func TestDrip_aFullQueueIsToldToComeBack(t *testing.T) {
 	chain := &fakeChain{t: t, hold: make(chan struct{})}
 	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
-	started := make(chan struct{}, QueueDepth+2)
-	results := make(chan error, QueueDepth+2)
-	for i := 0; i < QueueDepth+1; i++ {
+	// The addresses are made here: a test fails from its own goroutine only.
+	var to []string
+	for i := 0; i < QueueDepth+2; i++ {
+		to = append(to, recipientN(t, byte(20+i)))
+	}
+	results := make(chan error, QueueDepth+1)
+	ask := func(recipient string) {
 		go func() {
-			started <- struct{}{}
-			_, err := svc.Drip(context.Background(), recipientN(t, byte(20+i)), norama(9))
+			_, err := svc.Drip(context.Background(), recipient, norama(9))
 			results <- err
 		}()
 	}
-	for i := 0; i < QueueDepth+1; i++ {
-		<-started
+	// One drip in flight with the worker, then exactly QueueDepth waiting for their turn.
+	ask(to[0])
+	waitFor(t, func() bool { chain.mu.Lock(); defer chain.mu.Unlock(); return len(chain.hashes) == 1 })
+	for i := 1; i <= QueueDepth; i++ {
+		ask(to[i])
+		waitFor(t, func() bool { return len(svc.queue) == i })
 	}
-	waitFor(t, func() bool { return len(svc.queue) == QueueDepth })
-	_, err := svc.Drip(context.Background(), recipientN(t, 99), norama(9))
+
+	_, err := svc.Drip(context.Background(), to[QueueDepth+1], norama(9))
+
 	requireRefusal(t, err, KindBusy)
 	close(chain.hold)
-	for i := 0; i < QueueDepth+1; i++ {
+	for i := 0; i <= QueueDepth; i++ {
 		if err := <-results; err != nil {
 			t.Errorf("a queued drip failed: %v", err)
 		}
 	}
 }
 
-// A requester who leaves while its drip waits costs the faucet nothing: the drip is not sent.
-func TestDrip_aRequesterWhoLeavesBeforeItsTurnIsNeverSent(t *testing.T) {
+// A requester who gives up while its drip is still queued is told nothing was sent, and nothing is:
+// "pending" would have it wait for a drip that never comes, and keep its allowance charged for it.
+func TestDrip_aRequesterWhoLeavesWhileQueuedIsToldNothingWasSent(t *testing.T) {
 	chain := &fakeChain{t: t, hold: make(chan struct{})}
 	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+	to := []string{recipientN(t, 2), recipientN(t, 3), recipientN(t, 4)}
 	first := make(chan error, 1)
 	go func() {
-		_, err := svc.Drip(context.Background(), recipientN(t, 2), norama(9))
+		_, err := svc.Drip(context.Background(), to[0], norama(9))
 		first <- err
 	}()
 	waitFor(t, func() bool { chain.mu.Lock(); defer chain.mu.Unlock(); return len(chain.hashes) == 1 })
@@ -263,19 +288,19 @@ func TestDrip_aRequesterWhoLeavesBeforeItsTurnIsNeverSent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	second := make(chan error, 1)
 	go func() {
-		_, err := svc.Drip(ctx, recipientN(t, 3), norama(9))
+		_, err := svc.Drip(ctx, to[1], norama(9))
 		second <- err
 	}()
 	waitFor(t, func() bool { return len(svc.queue) == 1 })
 	cancel()
-	requireRefusal(t, <-second, KindPending)
+	requireRefusal(t, <-second, KindBusy)
 
 	close(chain.hold)
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
 	// Drips are taken in order, so once a third has been made the abandoned one has been passed.
-	if _, err := svc.Drip(context.Background(), recipientN(t, 4), norama(9)); err != nil {
+	if _, err := svc.Drip(context.Background(), to[2], norama(9)); err != nil {
 		t.Fatal(err)
 	}
 	chain.mu.Lock()
@@ -283,6 +308,23 @@ func TestDrip_aRequesterWhoLeavesBeforeItsTurnIsNeverSent(t *testing.T) {
 	if len(chain.hashes) != 2 {
 		t.Errorf("%d transactions were sent; the first and the third, not the abandoned one", len(chain.hashes))
 	}
+}
+
+// A drip that is on its way when its requester gives up is reported pending, never as not made.
+func TestDrip_aRequesterWhoLeavesWhileTheDripIsInFlightIsToldItIsPending(t *testing.T) {
+	chain := &fakeChain{t: t, hold: make(chan struct{})}
+	svc, _ := newTestService(t, chain, fakeIDs{id: testChainID})
+	ctx, cancel := context.WithCancel(context.Background())
+	res := make(chan error, 1)
+	to := recipientN(t, 2)
+	go func() {
+		_, err := svc.Drip(ctx, to, norama(9))
+		res <- err
+	}()
+	waitFor(t, func() bool { chain.mu.Lock(); defer chain.mu.Unlock(); return len(chain.hashes) == 1 })
+	cancel()
+	requireRefusal(t, <-res, KindPending)
+	close(chain.hold)
 }
 
 func TestDrip_aStoppedServiceAnswersAFault(t *testing.T) {
@@ -295,8 +337,8 @@ func TestDrip_aStoppedServiceAnswersAFault(t *testing.T) {
 	cancel()
 	// The worker stops; a drip that is queued after that is answered when the service's context ends.
 	_, err = svc.Drip(context.Background(), recipientN(t, 2), norama(9))
-	if err == nil {
-		t.Fatal("a stopped faucet made a drip")
+	if !errors.Is(err, ErrFault) {
+		t.Fatalf("a stopped faucet = %v, want ErrFault", err)
 	}
 }
 

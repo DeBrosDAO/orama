@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -64,7 +65,17 @@ type job struct {
 	recipient string
 	amount    *big.Int
 	done      chan result
+	// state is who gets the job: the worker when it takes it (jobRunning), or the requester when it
+	// gives up first (jobAbandoned). Whichever changes it from jobQueued first decides, so a drip
+	// is never both reported as not made and sent.
+	state atomic.Int32
 }
+
+const (
+	jobQueued int32 = iota
+	jobRunning
+	jobAbandoned
+)
 
 type result struct {
 	dripped *Dripped
@@ -106,7 +117,16 @@ func (s *Service) Drip(ctx context.Context, recipient string, amount *big.Int) (
 	case res := <-j.done:
 		return res.dripped, res.err
 	case <-ctx.Done():
-		return nil, refuse(KindPending, "the drip is still waiting for its turn or for a block; look at the balance of %s shortly", recipient)
+		if j.state.CompareAndSwap(jobQueued, jobAbandoned) || j.state.Load() == jobAbandoned {
+			return nil, refuse(KindBusy, "the faucet did not reach your drip in time and sent nothing; try again shortly")
+		}
+		select {
+		case res := <-j.done:
+			// It finished as the requester gave up: the answer is the better one to give.
+			return res.dripped, res.err
+		default:
+		}
+		return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", recipient)
 	case <-s.ctx.Done():
 		return nil, fmt.Errorf("%w: the gateway is shutting down", ErrFault)
 	}
@@ -143,9 +163,11 @@ func (s *Service) run() {
 }
 
 func (s *Service) process(j *job) {
-	if err := j.ctx.Err(); err != nil {
+	if j.ctx.Err() != nil {
 		// The requester left while the drip waited: sending it would spend a fee for nobody.
-		j.done <- result{err: err}
+		j.state.CompareAndSwap(jobQueued, jobAbandoned)
+	}
+	if !j.state.CompareAndSwap(jobQueued, jobRunning) {
 		return
 	}
 	dripped, err := s.drip(j)
@@ -175,6 +197,10 @@ func (s *Service) drip(j *job) (*Dripped, error) {
 	}
 	receipt, err := client.Faucet(ctx, j.recipient, j.amount)
 	if err != nil {
+		if errors.Is(err, clusterreg.ErrNotIncluded) {
+			// Broadcast and not in a block by the deadline: it may still land.
+			return nil, refuse(KindPending, "the drip was sent and is not in a block yet; look at the balance of %s shortly", j.recipient)
+		}
 		if refusal := classify(err, s.key.Address()); refusal != nil {
 			return nil, refusal
 		}

@@ -18,6 +18,9 @@ type Timing struct {
 	ReadyBudget time.Duration
 	// DNSPoll and DNSDeadline: the parent zone returning the NS and glue records.
 	DNSPoll, DNSDeadline time.Duration
+	// BalancePoll and BalanceDeadline: the node setup reads the chain through seeing the faucet's
+	// drip, which the seed that made it saw in a block a moment before.
+	BalancePoll, BalanceDeadline time.Duration
 }
 
 // DefaultTiming is what a run on real machines waits.
@@ -26,6 +29,7 @@ func DefaultTiming() Timing {
 		SyncPoll: 10 * time.Second, SyncDeadline: 45 * time.Minute,
 		RestartBudget: 10 * time.Minute, ReadyBudget: 10 * time.Minute,
 		DNSPoll: 30 * time.Second, DNSDeadline: 60 * time.Minute,
+		BalancePoll: 2 * time.Second, BalanceDeadline: 2 * time.Minute,
 	}
 }
 

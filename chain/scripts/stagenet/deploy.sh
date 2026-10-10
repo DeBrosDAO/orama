@@ -720,14 +720,18 @@ cmd_register() {
 # What it does not do is switch the faucet on: that is a node.yaml setting, written by the operator of the
 # node (`chain.faucet.enabled: true`) and read when the node restarts.
 cmd_faucet() {
-	local n alias name ip out addr
+	local n alias name ip out addr held
 	for n in "${NODES[@]}"; do
 		alias="$(field "$n" 2)"; name="$(field "$n" 1)"; ip="$(field "$n" 3)"
 		out="$(remote_run "$alias" sudo "$BIN_DIR/orama" maint faucet init --json </dev/null)"
 		addr="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["address"])' <<<"$out")"
 		validate "$addr" "$ADDR_RE" "faucet account of $name"
 		log "[$name] faucet account $addr"
-		if [ -n "${ORAMA_ENV:-}" ]; then
+		held="$(remote_run "$alias" curl -fsS --max-time 10 "http://$NS_ADDR:31003/cosmos/bank/v1beta1/balances/$addr/by_denom?denom=$DENOM" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("balance", {}).get("amount", "0"))')"
+		validate "$held" '^[0-9]{1,15}$' "balance of the faucet account of $name"
+		if [ "$held" -ge "$FAUCET_FUND_NORAMA" ]; then
+			log "[$name] it holds $held norama already; not funding it again (a second drip to it would be refused by the recipient cooldown)"
+		elif [ -n "${ORAMA_ENV:-}" ]; then
 			log "[$name] funding it with $FAUCET_FUND_NORAMA norama"
 			orama chain faucet "$addr" --env "$ORAMA_ENV" --node "$ip" --amount "$FAUCET_FUND_NORAMA"
 		else

@@ -42,6 +42,11 @@ type world struct {
 	balance     *big.Int
 	faucetPays  *big.Int
 	faucetCalls int
+	// faucetLag is how many balance reads pass before a drip is visible through the session, as a
+	// node that is a block behind the seed that paid shows it.
+	faucetLag int
+	// arriving is the drip waiting to become visible.
+	arriving *big.Int
 
 	// concurrency probe for restarts
 	restarting, maxRestarting int
@@ -303,6 +308,12 @@ func (s *fakeSession) Params(context.Context) (ChainParams, error) { return s.pa
 func (s *fakeSession) Balance(context.Context, string) (*big.Int, error) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
+	if s.w.arriving != nil {
+		if s.w.faucetLag--; s.w.faucetLag <= 0 {
+			s.w.balance.Add(s.w.balance, s.w.arriving)
+			s.w.arriving = nil
+		}
+	}
 	return new(big.Int).Set(s.w.balance), nil
 }
 func (s *fakeSession) OperatorRegistered(context.Context, string) (bool, error) {
@@ -378,6 +389,10 @@ func (f fakeFunder) Fund(_ context.Context, _ *netregistry.Manifest, address str
 	f.w.faucetCalls++
 	if f.w.faucetPays == nil {
 		return errors.New("the faucet refused: cooldown")
+	}
+	if f.w.faucetLag > 0 {
+		f.w.arriving = new(big.Int).Set(f.w.faucetPays)
+		return nil
 	}
 	f.w.balance.Add(f.w.balance, f.w.faucetPays)
 	return nil
@@ -486,7 +501,7 @@ func newHarness() *harness {
 	h.deps = Deps{
 		Networks: h.networks, Releases: fakeReleases{w}, Trust: fakeTrust{w}, Wallet: fakeWallet{}, Enroll: h.enroll, Chain: h.chain,
 		Names: fakeNames{w: w}, ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
-		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second},
+		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second, BalancePoll: time.Millisecond, BalanceDeadline: 50 * time.Millisecond},
 	}
 	return h
 }
