@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -20,18 +22,26 @@ import (
 // dns_records under their own tag (nodenames.RecordNamespace). Every node of the cluster that sets
 // the zone runs the same idempotent sync, so the zone survives the loss of any one of them.
 func (n *Node) startNodeNamesSync(ctx context.Context) {
-	zone := n.config.DNS.NodeNamesZone
-	if zone == "" {
+	syncer := n.nodeNamesSyncer()
+	if syncer == nil {
 		return
 	}
-	syncer := &nodenames.Syncer{
+	go syncer.Run(ctx, n.reportNodeNamesPass(syncer.Zone))
+	n.logger.ComponentInfo(logging.ComponentNode, "Started node names sync",
+		zap.String("zone", syncer.Zone), zap.Duration("interval", nodenames.SyncInterval))
+}
+
+// nodeNamesSyncer is the sync this node runs, or nil when dns.node_names_zone is empty.
+func (n *Node) nodeNamesSyncer() *nodenames.Syncer {
+	zone := n.config.DNS.NodeNamesZone
+	if zone == "" {
+		return nil
+	}
+	return &nodenames.Syncer{
 		Zone:     zone,
 		Registry: n.nodeNamesRegistry,
 		Chain:    nodenames.ReaderChain{Reader: &chainread.Reader{RPC: gwchainread.ConfigFromEnv().RPCURL}},
 	}
-	go syncer.Run(ctx, n.reportNodeNamesPass(zone))
-	n.logger.ComponentInfo(logging.ComponentNode, "Started node names sync",
-		zap.String("zone", zone), zap.Duration("interval", nodenames.SyncInterval))
 }
 
 // nodeNamesRegistry is the cluster registry's database handle, or why there is none yet.
@@ -46,7 +56,7 @@ func (n *Node) nodeNamesRegistry() (*sql.DB, error) {
 // reportNodeNamesPass logs what a pass did: a failure every time, a change when it happens, and the
 // names it refused whenever that set changes, so a bad claim is seen once and not every minute.
 func (n *Node) reportNodeNamesPass(zone string) func(nodenames.Stats, error) {
-	lastRefused := 0
+	lastRefused := ""
 	return func(stats nodenames.Stats, err error) {
 		if err != nil {
 			n.logger.ComponentWarn(logging.ComponentNode, "Node names sync failed",
@@ -59,12 +69,26 @@ func (n *Node) reportNodeNamesPass(zone string) func(nodenames.Stats, error) {
 				zap.Int("added", stats.Added), zap.Int("reactivated", stats.Reactivated),
 				zap.Int("removed", stats.Removed), zap.Int("remaining", stats.Remaining))
 		}
-		if len(stats.Refused) != lastRefused {
+		if refused := refusedKey(stats.Refused); refused != lastRefused {
 			for _, r := range stats.Refused {
 				n.logger.ComponentWarn(logging.ComponentNode, "Node name not published",
 					zap.String("zone", zone), zap.String("reason", r.String()))
 			}
+			lastRefused = refused
 		}
-		lastRefused = len(stats.Refused)
+		if stats.RemovalsHeld > 0 {
+			n.logger.ComponentWarn(logging.ComponentNode, "Node name removals held back",
+				zap.String("zone", zone), zap.Int("held", stats.RemovalsHeld), zap.Bool("chain_catching_up", stats.CatchingUp))
+		}
 	}
+}
+
+// refusedKey identifies a set of refusals, so a different set of the same size is logged too.
+func refusedKey(refused []nodenames.Refusal) string {
+	keys := make([]string, len(refused))
+	for i, r := range refused {
+		keys[i] = r.String()
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "\n")
 }

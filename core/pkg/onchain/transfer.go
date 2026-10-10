@@ -43,6 +43,17 @@ func (c *Client) Send(ctx context.Context, to, amount string, privacy Privacy) (
 }
 
 func (c *Client) sendPublic(ctx context.Context, to, amount string) (*Receipt, error) {
+	p, err := c.PreparePublicSend(ctx, to, amount)
+	if err != nil {
+		return nil, err
+	}
+	return p.Submit(ctx)
+}
+
+// PreparePublicSend builds a public payment of amount norama to the account to, priced and not yet
+// signed: the caller shows Gas and Fee for approval, then calls Submit. Public is in the name on
+// purpose; there is no prepared private send.
+func (c *Client) PreparePublicSend(ctx context.Context, to, amount string) (*Prepared, error) {
 	from, err := c.Operator(ctx)
 	if err != nil {
 		return nil, err
@@ -51,7 +62,13 @@ func (c *Client) sendPublic(ctx context.Context, to, amount string) (*Receipt, e
 	if err != nil {
 		return nil, fmt.Errorf("send %s norama to %s: %w", amount, to, err)
 	}
-	return c.sendMsg(ctx, "send "+amount+" norama to "+to, clusterreg.SendTypeURL, msg)
+	what := "send " + amount + " norama to " + to
+	p, err := c.prepare(ctx, clusterreg.SendTypeURL, msg)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	p.what = what
+	return p, nil
 }
 
 // WithdrawEarnings moves amount norama of the signing account's earnings to its own bank balance

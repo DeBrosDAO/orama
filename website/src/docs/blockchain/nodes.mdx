@@ -56,7 +56,7 @@ A node with no literal-IP endpoint or no declared ASN cannot take a protocol-dea
 
 ## Identification names
 
-An operator can claim a name for one of its nodes with `MsgClaimNodeName`. The name is the DNS label of `<name>.<network>.orama.network`: an address record (A or AAAA) for each literal IP among the node's endpoints. It identifies the node and nothing more. There is no NS record and no glue, so a name delegates nothing; a private cluster keeps using its developer's own domain.
+An operator can claim a name for one of its nodes with `MsgClaimNodeName`. The name is the DNS label of `<name>.<zone>`, where the zone is a dedicated sub-zone the network publishes below its domain (for example `nodes.stagenet.orama.network`): an address record (A or AAAA) for each literal IP among the node's endpoints. It identifies the node and nothing more. There is no NS record and no glue, so a name delegates nothing; a private cluster keeps using its developer's own domain.
 
 The chain enforces:
 

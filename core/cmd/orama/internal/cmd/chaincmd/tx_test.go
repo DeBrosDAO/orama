@@ -29,19 +29,25 @@ const (
 )
 
 type fakeChain struct {
-	broadcastErr error
-	waitErr      error
-	sent         int
+	baseFeeNorama string
+	broadcastErr  error
+	waitErr       error
+	sent          int
 }
 
 func (f *fakeChain) Account(context.Context, string) (clusterreg.Account, error) {
 	return clusterreg.Account{Number: 1, Sequence: 2}, nil
 }
-func (f *fakeChain) BaseFee(context.Context) (string, error)             { return "1", nil }
+func (f *fakeChain) BaseFee(context.Context) (string, error) {
+	if f.baseFeeNorama != "" {
+		return f.baseFeeNorama, nil
+	}
+	return "1", nil
+}
 func (f *fakeChain) SimulateGas(context.Context, []byte) (uint64, error) { return 50_000, nil }
-func (f *fakeChain) Broadcast(context.Context, []byte) (string, error) {
+func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	f.sent++
-	return strings.Repeat("AB", 32), f.broadcastErr
+	return onchain.TxHash(tx), f.broadcastErr
 }
 func (f *fakeChain) WaitIncluded(context.Context, string) (int64, error) { return 77, f.waitErr }
 
@@ -134,7 +140,8 @@ func TestSend_publicWithYesSendsAndWarns(t *testing.T) {
 	if rig.wallet.signed != 1 || rig.chain.sent != 1 {
 		t.Fatalf("signed %d, sent %d", rig.wallet.signed, rig.chain.sent)
 	}
-	for _, want := range []string{"Public transfer on " + txChainID, "12.5 ORAMA (12500000000 norama)", txRecipient, onchain.PublicWarning} {
+	for _, want := range []string{"Public transfer on " + txChainID, "12.5 ORAMA (12500000000 norama)", txRecipient, onchain.PublicWarning,
+		"fee     0.000", " norama)"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("the confirmation lacks %q:\n%s", want, errOut)
 		}
@@ -275,5 +282,144 @@ func TestChainID_refusesAStatusWithoutOne(t *testing.T) {
 	_, err := chainID(context.Background(), &chainread.Reader{Gateway: down})
 	if err == nil || clierr.CodeOf(err) != clierr.CodeUnavailable {
 		t.Fatalf("err = %v, want unavailable", err)
+	}
+}
+
+// The confirmation shows the fee that will be signed, before anything is signed.
+func TestSend_publicConfirmationShowsTheFeeBeforeAnythingIsSigned(t *testing.T) {
+	rig := newTxRig(t)
+	_, errOut, err := runTx(t, "no\n", "send", txRecipient, "1", "--public")
+	if err == nil {
+		t.Fatal("a declined send succeeded")
+	}
+	// gas 50,000 x 1.5 = 75,000 at a base fee of 1 x 1.5 = 112,500 norama.
+	if !strings.Contains(errOut, "112500 norama") || !strings.Contains(errOut, "0.0001125 ORAMA") {
+		t.Errorf("the confirmation does not show the fee:\n%s", errOut)
+	}
+	if rig.wallet.signed != 0 || rig.chain.sent != 0 {
+		t.Fatalf("a declined send signed %d and sent %d", rig.wallet.signed, rig.chain.sent)
+	}
+}
+
+func TestSend_publicWithAFeeOverTheLimitSignsNothing(t *testing.T) {
+	rig := newTxRig(t)
+	rig.chain.baseFeeNorama = "100000000000"
+	_, _, err := runTx(t, "", "send", txRecipient, "1", "--public", "--yes")
+	if err == nil || !strings.Contains(err.Error(), "over the limit") {
+		t.Fatalf("err = %v", err)
+	}
+	if rig.wallet.signed != 0 || rig.chain.sent != 0 {
+		t.Fatalf("signed %d, sent %d", rig.wallet.signed, rig.chain.sent)
+	}
+}
+
+func TestPinnedChainID(t *testing.T) {
+	previous := expectedChainID
+	t.Cleanup(func() { expectedChainID = previous })
+	for name, tc := range map[string]struct {
+		pinned, network, explicit string
+		want                      string
+		code                      int
+	}{
+		"the network names it": {"orama-stagenet-5", "stagenet", "", "orama-stagenet-5", 0},
+		"the flag agrees":      {"orama-stagenet-5", "stagenet", "orama-stagenet-5", "orama-stagenet-5", 0},
+		"the flag disagrees":   {"orama-stagenet-5", "stagenet", "orama-stagenet-6", "", clierr.CodeUsage},
+		"the flag names it":    {"", "", "my-chain-1", "my-chain-1", 0},
+		"nothing names it":     {"", "", "", "", clierr.CodeUsage},
+	} {
+		expectedChainID = func() (string, string, error) { return tc.pinned, tc.network, nil }
+		got, err := pinnedChainID(tc.explicit)
+		if got != tc.want || clierr.CodeOf(err) != tc.code {
+			t.Errorf("%s: %q, %v (code %d)", name, got, err, clierr.CodeOf(err))
+		}
+	}
+	expectedChainID = func() (string, string, error) { return "", "", errors.New("registry unreadable") }
+	if _, err := pinnedChainID("x"); err == nil {
+		t.Error("an unreadable registry was ignored")
+	}
+}
+
+func TestRequireSecureEndpoint(t *testing.T) {
+	for _, ok := range []string{"https://gw.example.com", "https://203.0.113.9:8443", "http://127.0.0.1:31003", "http://localhost:6001", "http://[::1]:8080"} {
+		if err := requireSecureEndpoint(ok); err != nil {
+			t.Errorf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"http://gw.example.com", "http://203.0.113.9:31003", "http://127.0.0.1.evil.example", "ftp://gw.example.com", "gw.example.com", "", "http://", "https://"} {
+		if err := requireSecureEndpoint(bad); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+			t.Errorf("%q accepted: %v", bad, err)
+		}
+	}
+}
+
+// realOpen runs the real openClient against a gateway that reports chain id served, with the network
+// pinned to pinned, and counts the times the wallet was asked for.
+func realOpen(t *testing.T, served, pinned, explicit, maxFee string) (txClient, error, int) {
+	t.Helper()
+	gw := server(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"result":{"node_info":{"network":"`+served+`"}}}`)
+	})
+	prevPin, prevSigner := expectedChainID, newSigner
+	prevFlags, prevRead := txFlags, readFlags
+	t.Cleanup(func() { expectedChainID, newSigner, txFlags, readFlags = prevPin, prevSigner, prevFlags, prevRead })
+	expectedChainID = func() (string, string, error) {
+		if pinned == "" {
+			return "", "", nil
+		}
+		return pinned, "stagenet", nil
+	}
+	wallets := 0
+	newSigner = func() onchain.Signer { wallets++; return &fakeWallet{} }
+	readFlags.gateway, readFlags.node, readFlags.rpc = gw, "", ""
+	txFlags.chainID, txFlags.maxFee = explicit, maxFee
+	sendCmd.SetContext(context.Background())
+	c, err := openClient(sendCmd)
+	return c, err, wallets
+}
+
+func TestOpenClient_signsOnlyForTheChainTheNetworkNames(t *testing.T) {
+	c, err, _ := realOpen(t, "orama-stagenet-5", "orama-stagenet-5", "", "")
+	if err != nil || c.chainID != "orama-stagenet-5" {
+		t.Fatalf("matching chain: %v, %v", c.chainID, err)
+	}
+	_, err, wallets := realOpen(t, "orama-evil-1", "orama-stagenet-5", "", "")
+	if err == nil || !strings.Contains(err.Error(), "refusing to sign") {
+		t.Fatalf("an endpoint on another chain: err = %v", err)
+	}
+	if wallets != 0 {
+		t.Error("the wallet was opened for the wrong chain")
+	}
+	if _, err, _ = realOpen(t, "orama-stagenet-5", "", "", ""); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+		t.Fatalf("a network that names no chain and no --chain-id: err = %v", err)
+	}
+	if _, err, _ = realOpen(t, "orama-x-1", "", "orama-x-1", ""); err != nil {
+		t.Fatalf("an explicit --chain-id that matches: %v", err)
+	}
+	if _, err, _ = realOpen(t, "orama-x-1", "", "orama-y-1", ""); err == nil {
+		t.Fatal("an explicit --chain-id that the endpoint contradicts was accepted")
+	}
+}
+
+func TestOpenClient_aChainIDWithControlCharactersIsRefused(t *testing.T) {
+	for _, served := range []string{"orama-1\u001b[2J", "orama 1", "orama-1\u202e", ""} {
+		_, err, _ := realOpen(t, served, "orama-1", "", "")
+		if err == nil {
+			t.Errorf("chain id %q accepted", served)
+			continue
+		}
+		if strings.ContainsAny(err.Error(), "\x1b\u202e") {
+			t.Errorf("the error carries a control character: %q", err.Error())
+		}
+	}
+}
+
+func TestOpenClient_maxFeeIsInORAMAAndMustBePositive(t *testing.T) {
+	if _, err, _ := realOpen(t, "orama-1", "orama-1", "", "0.5"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"0", "-1", "abc", "1e3"} {
+		if _, err, _ := realOpen(t, "orama-1", "orama-1", "", bad); err == nil || clierr.CodeOf(err) != clierr.CodeUsage {
+			t.Errorf("--max-fee %q: err = %v", bad, err)
+		}
 	}
 }

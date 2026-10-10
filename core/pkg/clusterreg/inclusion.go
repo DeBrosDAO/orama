@@ -10,7 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
+
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 const (
@@ -26,16 +27,8 @@ const (
 
 var txHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
 
-// printable drops control characters (terminal escapes among them) from text the chain sent, which
-// is printed to the operator's terminal.
-func printable(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		return r
-	}, s)
-}
+// printable is httputil.Printable: text the chain sent is printed to the operator's terminal.
+func printable(s string) string { return httputil.Printable(s) }
 
 // ErrNotIncluded is returned when a broadcast transaction is not in a block by the deadline.
 var ErrNotIncluded = errors.New("the transaction is not in a block")

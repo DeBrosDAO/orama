@@ -820,7 +820,12 @@ transaction and asks you to approve it.
 first ('orama chain withdraw-earnings'); earnings cannot be sent directly.
 
 Transactions go through the gateway of the selected network, or --node (a chain
-REST API, for example one reached over an SSH tunnel).
+REST API, for example one reached over an SSH tunnel). Either must be https, or on
+this machine. The wallet signs only for the chain the selected network names (from
+its registry manifest): an endpoint that answers another chain id is refused, and a
+network that names none needs --chain-id. The fee is worked out from the chain and
+shown before you confirm; one over --max-fee (1 ORAMA unless you raise it) is
+refused before it is signed.
 
   orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 12.5 --public
   orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 0.5 --public --yes
@@ -828,6 +833,8 @@ REST API, for example one reached over an SSH tunnel).
 
 | Flag | Default | Description |
 |---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that does not name one (a network from the registry already does); refused if the endpoint runs another |
+| `--max-fee` | — | Most the transaction may pay in fee, in ORAMA (default 1): a higher fee is refused before it is signed |
 | `--public` | `false` | Send publicly: the sender, recipient and amount are visible on the chain |
 | `--yes` | `false` | Do not ask before a public send |
 
@@ -866,7 +873,7 @@ show that validator's staking record from --node's REST API.
 Move earnings to your own balance, where they can be sent
 
 ```text
-orama chain withdraw-earnings <amount>
+orama chain withdraw-earnings <amount> [flags]
 ```
 
 ```text
@@ -884,10 +891,17 @@ RootWallet that builds shielded bundles). Withdrawing is itself visible on the
 chain: it shows that this account withdrew this amount.
 
 The RootWallet shows the transaction and asks you to approve it. Transactions go
-through the gateway of the selected network, or --node.
+through the gateway of the selected network, or --node, over https or on this
+machine, and the wallet signs only for the chain the selected network names (see
+'orama chain send' for --chain-id and --max-fee).
 
   orama chain withdraw-earnings 25
 ```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--chain-id` | — | The chain id you expect, for a network that does not name one (a network from the registry already does); refused if the endpoint runs another |
+| `--max-fee` | — | Most the transaction may pay in fee, in ORAMA (default 1): a higher fee is refused before it is signed |
 
 
 ## orama cluster

@@ -38,7 +38,12 @@ transaction and asks you to approve it.
 first ('orama chain withdraw-earnings'); earnings cannot be sent directly.
 
 Transactions go through the gateway of the selected network, or --node (a chain
-REST API, for example one reached over an SSH tunnel).
+REST API, for example one reached over an SSH tunnel). Either must be https, or on
+this machine. The wallet signs only for the chain the selected network names (from
+its registry manifest): an endpoint that answers another chain id is refused, and a
+network that names none needs --chain-id. The fee is worked out from the chain and
+shown before you confirm; one over --max-fee (1 ORAMA unless you raise it) is
+refused before it is signed.
 
   orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 12.5 --public
   orama chain send orama1fvfzzvqv2ara2crn3z352zjhnfl0tw4rk82j53 0.5 --public --yes`,
@@ -50,6 +55,7 @@ func init() {
 	f := sendCmd.Flags()
 	f.BoolVar(&sendFlags.public, "public", false, "Send publicly: the sender, recipient and amount are visible on the chain")
 	f.BoolVar(&sendFlags.yes, "yes", false, "Do not ask before a public send")
+	addTxFlags(sendCmd)
 	Cmd.AddCommand(sendCmd)
 }
 
@@ -83,11 +89,15 @@ func runSend(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return txFailure(err)
 	}
+	prepared, err := client.PreparePublicSend(cmd.Context(), to, amount.String())
+	if err != nil {
+		return txFailure(err)
+	}
 	p := printer.For(cmd)
-	if err := confirmPublic(cmd, client.chainID, from, to, amount); err != nil {
+	if err := confirmPublic(cmd, client.chainID, from, to, amount, prepared.Fee); err != nil {
 		return err
 	}
-	receipt, err := client.Send(cmd.Context(), to, amount.String(), onchain.Public)
+	receipt, err := prepared.Submit(cmd.Context())
 	if err != nil {
 		return txFailure(err)
 	}
@@ -98,10 +108,11 @@ func runSend(cmd *cobra.Command, args []string) error {
 }
 
 // confirmPublic shows the public payment and its warning, and unless --yes asks for the word.
-func confirmPublic(cmd *cobra.Command, chainID, from, to string, amount *big.Int) error {
+func confirmPublic(cmd *cobra.Command, chainID, from, to string, amount *big.Int, fee string) error {
 	w := cmd.ErrOrStderr()
-	fmt.Fprintf(w, "Public transfer on %s\n  from    %s\n  to      %s\n  amount  %s ORAMA (%s norama)\n%s\n",
-		chainID, from, to, orama(amount), amount, onchain.PublicWarning)
+	feeNorama, _ := new(big.Int).SetString(fee, 10)
+	fmt.Fprintf(w, "Public transfer on %s\n  from    %s\n  to      %s\n  amount  %s ORAMA (%s norama)\n  fee     %s ORAMA (%s norama)\n%s\n",
+		chainID, from, to, orama(amount), amount, orama(feeNorama), fee, onchain.PublicWarning)
 	if sendFlags.yes {
 		return nil
 	}

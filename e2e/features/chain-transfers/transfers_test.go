@@ -82,8 +82,8 @@ func TestSend_publicStopsAtAnAccountTheChainHasNotSeen(t *testing.T) {
 	n := c.Node(t, chain.OperatorNode)
 	payee := c.NewKey(t, n, "e2e-transfers-public")
 	for _, args := range [][]string{
-		{"chain", "send", payee.Address, "1", "--public", "--yes"},
-		{"chain", "withdraw-earnings", "1"},
+		{"chain", "send", payee.Address, "1", "--public", "--yes", "--chain-id", c.ID},
+		{"chain", "withdraw-earnings", "1", "--chain-id", c.ID},
 	} {
 		res := run(t, args...)
 		out := res.Stdout + res.Stderr
@@ -96,5 +96,25 @@ func TestSend_publicStopsAtAnAccountTheChainHasNotSeen(t *testing.T) {
 	}
 	if got := c.Bank(t, n, payee.Address); !got.IsZero() {
 		t.Errorf("a send that could not be signed paid %s norama", got.String())
+	}
+}
+
+// TestSend_refusesToSignForAChainTheEndpointIsNot: the wallet signs only for the chain the user
+// expects. An expectation the endpoint contradicts is refused before the wallet is opened, and a
+// network that names no chain needs one to be given.
+func TestSend_refusesToSignForAChainTheEndpointIsNot(t *testing.T) {
+	t.Parallel()
+	c := chain.New(t)
+	n := c.Node(t, chain.OperatorNode)
+	payee := c.NewKey(t, n, "e2e-transfers-wrongchain")
+	// A run whose network names its chain refuses the flag as contradicting it; a run whose network
+	// names none refuses the endpoint as running another chain. Either way nothing is signed.
+	res := run(t, "chain", "send", payee.Address, "1", "--public", "--yes", "--chain-id", c.ID+"-other")
+	infra.ExpectRefused(t, res)
+	if out := res.Stdout + res.Stderr; !strings.Contains(out, "refusing to sign") && !strings.Contains(out, "is not the chain of network") {
+		t.Errorf("the refusal does not name the chain mismatch:\n%s", out)
+	}
+	if got := c.Bank(t, n, payee.Address); !got.IsZero() {
+		t.Errorf("a send for the wrong chain paid %s norama", got.String())
 	}
 }

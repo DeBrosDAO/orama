@@ -1,41 +1,49 @@
 package node
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/nodenames"
 )
 
-// A node with no dns.node_names_zone publishes no names: nothing starts, so a cluster that does not
-// answer the zone never reads the chain for it.
-func TestStartNodeNamesSync_withoutAZoneStartsNothing(t *testing.T) {
+// A node with no dns.node_names_zone publishes no names: there is no sync, so a cluster that does
+// not answer the zone never reads the chain for it.
+func TestNodeNamesSyncer_withoutAZoneIsNil(t *testing.T) {
 	n := testNodeForDNS(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	n.startNodeNamesSync(ctx)
-	if _, err := n.nodeNamesRegistry(); err == nil {
-		t.Fatal("a node with no rqlite adapter returned a registry")
+	if s := n.nodeNamesSyncer(); s != nil {
+		t.Fatalf("a node with no zone has a sync: %+v", s)
 	}
 }
 
-// The registry may not exist yet when the loop starts; the pass reports that instead of
-// dereferencing a nil adapter.
-func TestNodeNamesRegistry_withoutAnAdapterSaysSo(t *testing.T) {
+func TestNodeNamesSyncer_withAZoneReadsTheChainAndTheRegistry(t *testing.T) {
 	n := testNodeForDNS(t)
-	_, err := n.nodeNamesRegistry()
-	if err == nil || !strings.Contains(err.Error(), "rqlite adapter") {
-		t.Fatalf("err = %v", err)
+	n.config.DNS.NodeNamesZone = "nodes.stagenet.orama.network"
+	s := n.nodeNamesSyncer()
+	if s == nil || s.Zone != "nodes.stagenet.orama.network" {
+		t.Fatalf("sync = %+v", s)
+	}
+	if _, ok := s.Chain.(nodenames.ReaderChain); !ok {
+		t.Fatalf("the chain is %T, want the node's RPC reader", s.Chain)
+	}
+	// With no rqlite adapter yet the pass says so instead of dereferencing nil.
+	if _, err := s.Registry(); err == nil || !strings.Contains(err.Error(), "rqlite adapter") {
+		t.Fatalf("registry err = %v", err)
 	}
 }
 
-// With a zone set and no chain or registry, the loop runs, reports its failures, and stops with the
-// node.
-func TestStartNodeNamesSync_withAZoneRunsAndStopsWithItsContext(t *testing.T) {
-	n := testNodeForDNS(t)
-	n.config.DNS.NodeNamesZone = "stagenet.orama.network"
-	ctx, cancel := context.WithCancel(context.Background())
-	n.startNodeNamesSync(ctx)
-	time.Sleep(50 * time.Millisecond)
-	cancel()
+func TestRefusedKey_differsForADifferentSetOfTheSameSize(t *testing.T) {
+	a := []nodenames.Refusal{{Name: "alice", Reason: "x"}}
+	b := []nodenames.Refusal{{Name: "bob", Reason: "x"}}
+	if refusedKey(a) == refusedKey(b) {
+		t.Fatal("two different refusals have one key")
+	}
+	if refusedKey(nil) != "" {
+		t.Fatal("no refusals must have the empty key")
+	}
+	two := []nodenames.Refusal{{Name: "b", Reason: "x"}, {Name: "a", Reason: "x"}}
+	rev := []nodenames.Refusal{two[1], two[0]}
+	if refusedKey(two) != refusedKey(rev) {
+		t.Fatal("the order of the refusals changed the key")
+	}
 }

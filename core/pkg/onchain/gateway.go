@@ -14,6 +14,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/pkg/chainread"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 const (
@@ -90,13 +91,16 @@ func statusAsClusterreg(err error) error {
 func (g Gateway) BaseFee(ctx context.Context) (string, error) {
 	raw, err := g.Reader.GatewayQuery(ctx, queryBaseFee, "{}")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read the base fee from the gateway: %w", err)
 	}
 	var resp struct {
 		BaseFee string `json:"base_fee"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return "", fmt.Errorf("the gateway answered a base fee that is not JSON: %w", err)
+	}
+	if _, err := ParseBaseFee(resp.BaseFee); err != nil {
+		return "", fmt.Errorf("the gateway answered a base fee that cannot be used: %w", err)
 	}
 	return resp.BaseFee, nil
 }
@@ -117,6 +121,12 @@ func (g Gateway) Broadcast(ctx context.Context, tx []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if res.Code != 0 {
+		return "", &chainread.TxRefusedError{Code: res.Code, Codespace: res.Codespace, Log: res.Log, TxHash: res.TxHash}
+	}
+	if res.TxHash == "" {
+		return "", errors.New("the gateway accepted the transaction and returned no hash")
+	}
 	return res.TxHash, nil
 }
 
@@ -124,7 +134,7 @@ func (g Gateway) Broadcast(ctx context.Context, tx []byte) (string, error) {
 // block's height. A transaction the block refused is returned with the chain's log.
 func (g Gateway) WaitIncluded(ctx context.Context, hash string) (int64, error) {
 	if raw, err := hex.DecodeString(hash); err != nil || len(raw) != txHashBytes {
-		return 0, fmt.Errorf("the chain returned %q as the transaction hash, which is not a 64-digit hex hash", hash)
+		return 0, fmt.Errorf("the chain returned %q as the transaction hash, which is not a 64-digit hex hash", httputil.Printable(hash))
 	}
 	ctx, cancel := context.WithTimeout(ctx, clusterreg.InclusionTimeout)
 	defer cancel()
@@ -186,17 +196,5 @@ func (g Gateway) txResult(ctx context.Context, hash string) (height int64, found
 	return height, true, nil
 }
 
-// quoteLog bounds the chain's log and drops control characters, which would reach a terminal.
-func quoteLog(log string) string {
-	out := make([]rune, 0, maxResultLog)
-	for _, r := range log {
-		if r < ' ' || r == 0x7f {
-			continue
-		}
-		if len(out) == maxResultLog {
-			break
-		}
-		out = append(out, r)
-	}
-	return string(out)
-}
+// quoteLog bounds the chain's log and drops what would act on a terminal.
+func quoteLog(log string) string { return httputil.PrintableMax(log, maxResultLog) }

@@ -24,7 +24,7 @@ func TestValidateZone(t *testing.T) {
 
 func TestZoneServedBy(t *testing.T) {
 	for zone, want := range map[string]bool{
-		"stagenet.orama.network":       true,
+		"stagenet.orama.network":       false,
 		"names.stagenet.orama.network": true,
 		"orama.network":                false,
 		"xstagenet.orama.network":      false,
@@ -44,14 +44,14 @@ func TestValidateDNS(t *testing.T) {
 	for name, c := range map[string]DNSConfig{
 		"disabled":          {BaseDomain: base},
 		"disabled, no base": {},
-		"the base domain":   {NodeNamesZone: base, BaseDomain: base},
-		"below the base":    {NodeNamesZone: "names." + base, BaseDomain: base},
+		"below the base":    {NodeNamesZone: "nodes." + base, BaseDomain: base},
 	} {
 		if errs := ValidateDNS(c); len(errs) != 0 {
 			t.Errorf("%s: %v", name, errs)
 		}
 	}
 	for name, c := range map[string]DNSConfig{
+		"the base domain itself": {NodeNamesZone: base, BaseDomain: base},
 		"a malformed zone":       {NodeNamesZone: "Stagenet.Orama.Network", BaseDomain: base},
 		"another cluster zone":   {NodeNamesZone: "testnet.orama.network", BaseDomain: base},
 		"the parent of the base": {NodeNamesZone: "orama.network", BaseDomain: base},

@@ -11,7 +11,9 @@
 # through the gateway's public routes (status, the AccountInfo wallet query),
 # and stop at the run agent's account, which the chain has never seen: the
 # failure names the account that must be funded first, and nothing is signed
-# or broadcast. The success paths need a funded RootWallet account that
+# or broadcast. The wallet signs only for the chain the user expects (the network's
+# manifest, or --chain-id): an endpoint on another chain id is refused before the
+# wallet is opened. The success paths need a funded RootWallet account that
 # signs orama-tx; the run's headless agent refuses to (RootWallet task 2857),
 # so the on-chain effect of MsgWithdrawEarnings and of a public MsgSend is
 # proven by chain-core (withdraw_test.go, send tests) and the CLI's own
@@ -35,3 +37,4 @@ covers:
     - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-send: refuses an address that is not orama1... and an amount that is not a positive number of ORAMA with at most nine decimals before it opens the wallet or the chain"
     - "docs/whitepaper/technical-reference/appendices/d-cli-reference.md#orama-chain-withdraw-earnings: refuses an amount that is not a positive number of ORAMA with at most nine decimals before it opens the wallet or the chain"
     - "docs/whitepaper/technical-reference/vol1/35-the-cli.md: a public send prints the payment and the visibility warning and asks for yes; the private path never becomes a public payment; the chain id is read from the chain the transaction is sent to"
+    - "docs/whitepaper/technical-reference/vol1/35-the-cli.md: the wallet signs only for the chain the active network's manifest or --chain-id names, over https or on this machine; an endpoint on another chain id is refused before the wallet is opened"

@@ -2,7 +2,8 @@
 //
 // An operator claims a name for one of its nodes on the chain (x/nodes MsgClaimNodeName). The name
 // is a DNS label, and <name>.<zone> is one A or AAAA record per literal IP among the node's
-// endpoints: identification only, with no NS and no glue. The cluster whose nameservers answer
+// endpoints: identification only, with no NS and no glue. The zone is a dedicated sub-zone below the
+// cluster's base domain, so a claimed name can never sit next to a hostname the cluster publishes. The cluster whose nameservers answer
 // <zone> pages the chain's NodeNames query and keeps its dns_records in step (Syncer), so what the
 // zone answers is always what the chain holds and can never drift from it.
 package nodenames
@@ -83,6 +84,8 @@ func ValidateName(name string) error {
 		return fmt.Errorf("must not start with %q", punycode)
 	case zoneInfra.MatchString(name):
 		return fmt.Errorf("is a nameserver or seed label the zone publishes itself")
+	case reservedNames[name]:
+		return fmt.Errorf("is a reserved name")
 	}
 	return nil
 }

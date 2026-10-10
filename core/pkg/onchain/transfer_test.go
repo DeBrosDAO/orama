@@ -121,3 +121,34 @@ func TestWithdrawEarnings_aChainRefusalIsReported(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// The fee a caller shows for approval is the fee that is signed, and nothing is signed or sent
+// before Submit.
+func TestPreparePublicSend_showsTheFeeThatIsSigned(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	p, err := newClient(t, chain, signer).PreparePublicSend(context.Background(), testRecipient, "1500000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(signer.signed) != 0 || len(chain.sent) != 0 {
+		t.Fatalf("preparing signed %d and sent %d", len(signer.signed), len(chain.sent))
+	}
+	if p.Fee != "2250000" || p.Gas != 150_000 {
+		t.Fatalf("prepared gas %d fee %s", p.Gas, p.Fee)
+	}
+	receipt, err := p.Submit(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc := decodeSignDoc(t, signer.signed[0]); doc.fee != p.Fee || doc.gas != p.Gas || receipt.Fee != p.Fee {
+		t.Fatalf("signed fee %s gas %d, receipt fee %s; prepared %s/%d", doc.fee, doc.gas, receipt.Fee, p.Fee, p.Gas)
+	}
+}
+
+func TestPreparePublicSend_aFeeOverTheLimitIsNotPrepared(t *testing.T) {
+	chain := newFakeChain()
+	chain.baseFee = "100000000000"
+	if _, err := newClient(t, chain, newSigner()).PreparePublicSend(context.Background(), testRecipient, "1"); err == nil {
+		t.Fatal("an absurd fee was prepared")
+	}
+}

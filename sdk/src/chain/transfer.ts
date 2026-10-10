@@ -147,7 +147,20 @@ async function transferPrivate(
   const txs = await options.shielded.build({ to, amount });
   if (txs.length === 0) throw new Error("the shielded wallet built no transaction");
   const txHashes: string[] = [];
-  for (const tx of txs) txHashes.push((await chain.broadcastTx(tx)).txHash);
+  for (const tx of txs) {
+    try {
+      txHashes.push((await chain.broadcastTx(tx)).txHash);
+    } catch (err) {
+      if (txHashes.length === 0) throw err;
+      // An earlier transaction is already on its way: say which, so the caller does not send it again.
+      throw new SDKError(
+        `transaction ${txHashes.length + 1} of ${txs.length} failed after ${txHashes.length} were broadcast (${txHashes.join(", ")}): ${(err as Error).message}`,
+        502,
+        "PRIVATE_TRANSFER_INCOMPLETE",
+        { txHashes, failedIndex: txHashes.length },
+      );
+    }
+  }
   return { privacy: "private", txHashes };
 }
 

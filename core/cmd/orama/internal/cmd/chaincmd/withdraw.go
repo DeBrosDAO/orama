@@ -25,14 +25,19 @@ RootWallet that builds shielded bundles). Withdrawing is itself visible on the
 chain: it shows that this account withdrew this amount.
 
 The RootWallet shows the transaction and asks you to approve it. Transactions go
-through the gateway of the selected network, or --node.
+through the gateway of the selected network, or --node, over https or on this
+machine, and the wallet signs only for the chain the selected network names (see
+'orama chain send' for --chain-id and --max-fee).
 
   orama chain withdraw-earnings 25`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWithdraw,
 }
 
-func init() { Cmd.AddCommand(withdrawCmd) }
+func init() {
+	addTxFlags(withdrawCmd)
+	Cmd.AddCommand(withdrawCmd)
+}
 
 // withdrawReport is what `orama chain withdraw-earnings` prints in JSON.
 type withdrawReport struct {

@@ -6,6 +6,7 @@ import {
   PrivateTransferUnavailableError,
   addressFromPublicKey,
   transfer,
+  txHashOf,
   verifyTx,
   type ShieldedTransferBuilder,
 } from "../../../src/chain";
@@ -21,6 +22,11 @@ const gw = "https://gw.example";
 
 interface Call { url: string; init?: RequestInit }
 
+/** The hash of the transaction a request carries, as a node computes it. */
+function postedHash(init?: RequestInit): string {
+  return txHashOf(Uint8Array.from(Buffer.from(JSON.parse(String(init?.body)).tx_bytes, "base64")));
+}
+
 /** The messages of the transaction a call posted, after checking its signature. */
 function postedMessages(call: Call) {
   const txBytes = Uint8Array.from(Buffer.from(JSON.parse(String(call.init?.body)).tx_bytes, "base64"));
@@ -29,7 +35,7 @@ function postedMessages(call: Call) {
 }
 
 /** A chain that knows the signer's account and takes every broadcast. */
-function chainFor() {
+function chainFor(failOnBroadcast?: number) {
   const calls: Call[] = [];
   const fn = (async (url: string, init?: RequestInit) => {
     calls.push({ url, init });
@@ -37,10 +43,13 @@ function chainFor() {
       return new Response(JSON.stringify({ account: { account_number: "7", sequence: "3" } }));
     }
     if (url.endsWith("/cosmos/tx/v1beta1/txs")) {
-      return new Response(JSON.stringify({ tx_response: { code: 0, txhash: "PUBLICHASH", raw_log: "" } }));
+      return new Response(JSON.stringify({ tx_response: { code: 0, txhash: postedHash(init), raw_log: "" } }));
     }
     if (url.endsWith("/v1/chain/broadcast")) {
-      return new Response(JSON.stringify({ code: 0, log: "", tx_hash: `SHIELDED${calls.length}` }));
+      if (failOnBroadcast !== undefined && calls.filter((c) => c.url.endsWith("/v1/chain/broadcast")).length - 1 === failOnBroadcast) {
+        return new Response("gateway down", { status: 503 });
+      }
+      return new Response(JSON.stringify({ code: 0, log: "", tx_hash: postedHash(init) }));
     }
     return new Response("{}", { status: 404 });
   }) as unknown as typeof fetch;
@@ -94,9 +103,25 @@ describe("transfer: private by default", () => {
     const shielded = builder([new Uint8Array([1, 2]), new Uint8Array([3])]);
     const result = await chain.transfer({ to: "shielded-address", amount: "250" }, { shielded });
     expect(shielded.requests).toEqual([{ to: "shielded-address", amount: 250n }]);
-    expect(result).toEqual({ privacy: "private", txHashes: ["SHIELDED1", "SHIELDED2"] });
+    expect(result).toEqual({ privacy: "private", txHashes: [txHashOf(new Uint8Array([1, 2])), txHashOf(new Uint8Array([3]))] });
     expect(calls.map((c) => c.url)).toEqual([`${gw}/v1/chain/broadcast`, `${gw}/v1/chain/broadcast`]);
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ tx_bytes: "AQI=" });
+  });
+
+  it("names the transactions already broadcast when a later one fails", async () => {
+    const { chain } = chainFor(1);
+    const shielded = builder([new Uint8Array([1]), new Uint8Array([2]), new Uint8Array([3])]);
+    const err = await chain.transfer({ to: "x", amount: 1n }, { shielded }).catch((e) => e);
+    expect(err).toBeInstanceOf(SDKError);
+    expect(err.code).toBe("PRIVATE_TRANSFER_INCOMPLETE");
+    expect(err.details.txHashes).toEqual([txHashOf(new Uint8Array([1]))]);
+    expect(err.message).toContain(txHashOf(new Uint8Array([1])));
+  });
+
+  it("does not wrap the failure of the first transaction, which left nothing behind", async () => {
+    const { chain } = chainFor(0);
+    const err = await chain.transfer({ to: "x", amount: 1n }, { shielded: builder([new Uint8Array([1])]) }).catch((e) => e);
+    expect(err.code).not.toBe("PRIVATE_TRANSFER_INCOMPLETE");
   });
 
   it("fails when the shielded wallet builds nothing", async () => {
@@ -109,7 +134,8 @@ describe("transfer: public by explicit choice", () => {
   it("signs a bank send and returns the warning", async () => {
     const { chain, calls } = chainFor();
     const result = await chain.transfer({ to: OTHER, amount: "1500000000", public: true }, { signer, tx: TX });
-    expect(result).toEqual({ privacy: "public", txHash: "PUBLICHASH", warning: PUBLIC_TRANSFER_WARNING });
+    expect(result).toMatchObject({ privacy: "public", warning: PUBLIC_TRANSFER_WARNING });
+    expect((result as { txHash: string }).txHash).toMatch(/^[0-9A-F]{64}$/);
     expect(PUBLIC_TRANSFER_WARNING).toContain("visible on the chain to everyone");
     const msg = MSG.bankSend.decode(postedMessages(calls[1]!)[0]!.value);
     expect(msg.fromAddress).toBe(signer.address);
@@ -158,7 +184,7 @@ describe("withdrawEarnings", () => {
   it("builds MsgWithdrawEarnings for the signer with no destination", async () => {
     const { chain, calls } = chainFor();
     const result = await chain.withdrawEarnings(25_000_000_000n, signer, TX);
-    expect(result.txHash).toBe("PUBLICHASH");
+    expect(result.txHash).toMatch(/^[0-9A-F]{64}$/);
     expect(result.withdrawn).toBe("25 ORAMA (25000000000 norama)");
     const [message] = postedMessages(calls[1]!);
     expect(message!.typeUrl).toBe("/orama.fees.v1.MsgWithdrawEarnings");

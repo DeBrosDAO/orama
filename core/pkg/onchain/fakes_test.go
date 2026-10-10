@@ -32,6 +32,9 @@ type fakeChain struct {
 	broadcast  error
 	waitErr    error
 	height     int64
+	// answerHash replaces the hash the chain answers to a broadcast (default: the real hash).
+	answerHash string
+	waited     []string
 
 	simulated [][]byte
 	sent      [][]byte
@@ -47,9 +50,15 @@ func (f *fakeChain) SimulateGas(_ context.Context, tx []byte) (uint64, error) {
 }
 func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	f.sent = append(f.sent, tx)
-	return "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789", f.broadcast
+	if f.answerHash != "" {
+		return f.answerHash, f.broadcast
+	}
+	return TxHash(tx), f.broadcast
 }
-func (f *fakeChain) WaitIncluded(context.Context, string) (int64, error) { return f.height, f.waitErr }
+func (f *fakeChain) WaitIncluded(_ context.Context, hash string) (int64, error) {
+	f.waited = append(f.waited, hash)
+	return f.height, f.waitErr
+}
 
 // fakeSigner is a RootWallet that signs with a fixed signature.
 type fakeSigner struct {

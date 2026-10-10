@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"math"
+	"math/big"
 	"net/http"
 	"strings"
 	"testing"
@@ -83,11 +85,11 @@ func TestSend_aZeroBaseFeeStillPaysOneNorama(t *testing.T) {
 }
 
 func TestSend_aSmallGasRoundsUp(t *testing.T) {
-	if got := scaleUp(1, GasSafetyNumerator, GasSafetyDenominator); got != 2 {
-		t.Errorf("scaleUp(1) = %d, want 2", got)
+	if got, err := scaleUp(1, GasSafetyNumerator, GasSafetyDenominator); err != nil || got != 2 {
+		t.Errorf("scaleUp(1) = %d, %v, want 2", got, err)
 	}
-	if got := scaleUp(0, GasSafetyNumerator, GasSafetyDenominator); got != 0 {
-		t.Errorf("scaleUp(0) = %d, want 0", got)
+	if got, err := scaleUp(0, GasSafetyNumerator, GasSafetyDenominator); err != nil || got != 0 {
+		t.Errorf("scaleUp(0) = %d, %v, want 0", got, err)
 	}
 }
 
@@ -104,7 +106,7 @@ func TestSend_aFailureAtAnyStepStopsBeforeTheNext(t *testing.T) {
 		"simulation refuse": {func(c *fakeChain, _ *fakeSigner) { c.simErr = boom }, "simulate", 0, 0},
 		"owner declines":    {func(_ *fakeChain, s *fakeSigner) { s.signErr = boom }, "sign", 1, 0},
 		"broadcast refused": {func(c *fakeChain, _ *fakeSigner) { c.broadcast = boom }, "broadcast", 1, 1},
-		"block refuses":     {func(c *fakeChain, _ *fakeSigner) { c.waitErr = boom }, "transaction ABCDEF", 1, 1},
+		"block refuses":     {func(c *fakeChain, _ *fakeSigner) { c.waitErr = boom }, "transaction ", 1, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain, signer := newFakeChain(), newSigner()
@@ -162,9 +164,142 @@ func TestNew_validatesItsInputs(t *testing.T) {
 	if _, err := New(newFakeChain(), nil, testChainID); err == nil {
 		t.Error("New accepted no signer")
 	}
-	for _, id := range []string{"", strings.Repeat("a", 65)} {
+	for _, id := range []string{"", strings.Repeat("a", 65), "orama stagenet", "orama-1\x1b[2J", "orama/1", "orama-1\n", "chaîn"} {
 		if _, err := New(newFakeChain(), newSigner(), id); err == nil {
 			t.Errorf("New accepted chain id %q", id)
 		}
+	}
+}
+
+func TestNew_acceptsTheChainIDsTheNetworksUse(t *testing.T) {
+	for _, id := range []string{"orama-stagenet-5", "orama-1", "orama_localnet.2", strings.Repeat("a", 64)} {
+		if _, err := New(newFakeChain(), newSigner(), id); err != nil {
+			t.Errorf("New refused chain id %q: %v", id, err)
+		}
+	}
+}
+
+// The gas limit is the simulation's gas scaled by 1.5: a simulation near the top of uint64 must be an
+// error, not a limit that wrapped around to a small number.
+func TestSend_aGasLimitThatOverflowsIsRefused(t *testing.T) {
+	if _, err := scaleUp(math.MaxUint64, GasSafetyNumerator, GasSafetyDenominator); err == nil {
+		t.Fatal("scaleUp wrapped around")
+	}
+	chain, signer := newFakeChain(), newSigner()
+	chain.gasUsed = math.MaxUint64 - 1
+	_, err := newClient(t, chain, signer).RegisterOperator(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "does not fit") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(signer.signed) != 0 || len(chain.sent) != 0 {
+		t.Fatal("a wrapped gas limit was signed")
+	}
+}
+
+func TestParseBaseFee(t *testing.T) {
+	for _, ok := range []string{"0", "1", "10", "007", strings.Repeat("9", maxBaseFeeDigits)} {
+		if _, err := ParseBaseFee(ok); err != nil {
+			t.Errorf("ParseBaseFee(%q) = %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "-1", "+5", "0x10", "1e3", "1.5", " 5", "5 ", "5\n", "1_000", strings.Repeat("9", maxBaseFeeDigits+1), "\x1b[2J"} {
+		if _, err := ParseBaseFee(bad); err == nil {
+			t.Errorf("ParseBaseFee(%q) succeeded", bad)
+		}
+	}
+}
+
+func TestSend_aBaseFeeThatIsNotAPlainIntegerSignsNothing(t *testing.T) {
+	for _, fee := range []string{"-5", "1e30", strings.Repeat("9", 40), "0x10", ""} {
+		chain, signer := newFakeChain(), newSigner()
+		chain.baseFee = fee
+		if _, err := newClient(t, chain, signer).RegisterOperator(context.Background()); err == nil {
+			t.Errorf("base fee %q accepted", fee)
+		}
+		if len(signer.signed) != 0 || len(chain.sent) != 0 {
+			t.Errorf("base fee %q: signed %d, sent %d", fee, len(signer.signed), len(chain.sent))
+		}
+	}
+}
+
+// A hostile base fee that is a valid number but absurd must not become a fee the wallet signs.
+func TestSend_aFeeOverTheLimitIsRefusedUntilTheLimitIsRaised(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	chain.baseFee = "100000000000" // 150,000 gas x 1.5 x 1e11 = 2.25e16 norama
+	c := newClient(t, chain, signer)
+	_, err := c.RegisterOperator(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "over the limit") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(signer.signed) != 0 || len(chain.sent) != 0 {
+		t.Fatal("an absurd fee was signed")
+	}
+	if err := c.SetMaxFee(new(big.Int).Mul(big.NewInt(DefaultMaxFeeNorama), big.NewInt(1_000_000_000))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RegisterOperator(context.Background()); err != nil {
+		t.Fatalf("an explicit limit above the fee still refused: %v", err)
+	}
+}
+
+func TestSend_aNormalFeeIsFarUnderTheDefaultLimit(t *testing.T) {
+	receipt, err := newClient(t, newFakeChain(), newSigner()).RegisterOperator(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fee, _ := new(big.Int).SetString(receipt.Fee, 10)
+	if fee.Cmp(big.NewInt(DefaultMaxFeeNorama/100)) > 0 {
+		t.Fatalf("a normal fee %s is not under a hundredth of the default limit", receipt.Fee)
+	}
+}
+
+func TestSetMaxFee_refusesAnythingButAPositiveAmount(t *testing.T) {
+	c := newClient(t, newFakeChain(), newSigner())
+	for _, v := range []*big.Int{nil, big.NewInt(0), big.NewInt(-1)} {
+		if err := c.SetMaxFee(v); err == nil {
+			t.Errorf("SetMaxFee(%v) succeeded", v)
+		}
+	}
+}
+
+// The chain's answer to a broadcast must be the hash of the bytes that were sent. Another hash
+// would have the wait, and the receipt, follow some other transaction.
+func TestSend_aHashThatIsNotTheTransactionsIsRefused(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	chain.answerHash = strings.Repeat("AB", 32)
+	_, err := newClient(t, chain, signer).RegisterOperator(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "refusing to follow or report") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(chain.waited) != 0 {
+		t.Fatalf("waited on %v", chain.waited)
+	}
+}
+
+func TestSend_theReceiptCarriesTheLocallyComputedHashInAnyCase(t *testing.T) {
+	chain := newFakeChain()
+	c := newClient(t, chain, newSigner())
+	chain.answerHash = "" // the real hash
+	receipt, err := c.RegisterOperator(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Hash != TxHash(chain.sent[0]) || len(chain.waited) != 1 || chain.waited[0] != receipt.Hash {
+		t.Fatalf("receipt %s, waited %v", receipt.Hash, chain.waited)
+	}
+	chain.answerHash = strings.ToLower(TxHash(chain.sent[0]))
+	// a lower-case answer of the right hash is the same hash
+	if _, err := c.RegisterOperator(context.Background()); err == nil {
+		// the second transaction has another sequence only if the chain moved; the fake does not move, so
+		// the bytes are equal and the lower-case answer must be accepted
+		return
+	}
+	t.Fatal("a lower-case answer of the right hash was refused")
+}
+
+func TestTxHash_isTheSHA256OfTheBytesInUpperCaseHex(t *testing.T) {
+	// SHA-256 of the empty input.
+	if got := TxHash(nil); got != "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" {
+		t.Fatalf("TxHash(nil) = %s", got)
 	}
 }

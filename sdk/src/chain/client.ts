@@ -1,8 +1,8 @@
 import { NetworkError, NotFoundError, SDKError } from "../errors";
-import { BASE_DENOM } from "./format";
+import { BASE_DENOM, printable } from "./format";
 import type { AnyMsg } from "./msg";
 import type { OramaSigner } from "./signer";
-import { signTx, type SignedTx } from "./tx";
+import { signTx, txHashOf, type SignedTx } from "./tx";
 import { transfer, withdrawEarnings, type TransferOptions, type TransferRequest, type TransferResult } from "./transfer";
 
 /** Where the chain is read from. Each read names the base it uses. */
@@ -66,7 +66,7 @@ export class ChainTxRefusedError extends SDKError {
   readonly txHash?: string;
 
   constructor(body: { code: number; codespace?: string; log?: string; tx_hash?: string }) {
-    const log = body.log ?? "";
+    const log = printable(body.log ?? "");
     super(
       `the chain rejected the transaction (code ${body.code}): ${log.slice(0, 200)}`,
       422,
@@ -439,7 +439,7 @@ export class OramaChainClient {
    */
   async broadcastTx(txBytes: Uint8Array): Promise<GatewayBroadcastResult> {
     const body = (await this.post("broadcast", assertTxBytes(txBytes))) as { tx_hash: string; log: string };
-    return { txHash: body.tx_hash, code: 0, log: body.log };
+    return { txHash: boundHash(body.tx_hash, txBytes), code: 0, log: body.log };
   }
 
   /** x/nodes parameters. */
@@ -631,12 +631,12 @@ export class OramaChainClient {
     const res = body.tx_response;
     if (!res?.txhash) throw new SDKError("the chain returned no transaction response", 502, "CHAIN_BAD_RESPONSE");
     if (res.code) {
-      throw new SDKError(`the chain rejected the transaction (code ${res.code}): ${(res.raw_log ?? "").slice(0, 200)}`, 400, "CHAIN_TX_REJECTED", {
+      throw new SDKError(`the chain rejected the transaction (code ${res.code}): ${printable(res.raw_log ?? "").slice(0, 200)}`, 400, "CHAIN_TX_REJECTED", {
         code: res.code,
         txHash: res.txhash,
       });
     }
-    return { txHash: res.txhash, code: 0, rawLog: res.raw_log ?? "" };
+    return { txHash: boundHash(res.txhash, txBytes), code: 0, rawLog: res.raw_log ?? "" };
   }
 
   /**
@@ -742,6 +742,26 @@ function gatewayUint64(value: unknown, field: string): bigint {
 
 function isTxRefusal(body: unknown): body is { code: number; codespace?: string; log?: string; tx_hash?: string } {
   return typeof body === "object" && body !== null && typeof (body as { code?: unknown }).code === "number";
+}
+
+/**
+ * The hash a broadcast answered must be the hash of the bytes that were sent. A node or gateway that
+ * answers another would have the caller poll for, and report, some other transaction. Returns the
+ * locally computed hash.
+ */
+function boundHash(answered: unknown, txBytes: Uint8Array): string {
+  const local = txHashOf(txBytes);
+  const given = typeof answered === "string" ? answered.replace(/^0x/i, "").toUpperCase() : "";
+  if (given !== local) {
+    const shown = String(answered).replace(/[^\x20-\x7e]/g, "").slice(0, 80);
+    throw new SDKError(
+      `the chain answered the transaction hash "${shown}" for a transaction whose hash is ${local}; refusing to follow or report it`,
+      502,
+      "CHAIN_TX_HASH_MISMATCH",
+      { expected: local },
+    );
+  }
+  return local;
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {

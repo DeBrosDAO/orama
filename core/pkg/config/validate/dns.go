@@ -23,8 +23,10 @@ type DNSConfig struct {
 }
 
 // ValidateDNS checks the dns block. An empty node_names_zone is valid: the node does not publish
-// node names. A zone must be a domain this cluster answers, since a name written under any other
-// would sit in a registry whose nameservers are never asked for it.
+// node names. A zone must be a dedicated sub-zone strictly below this cluster's base domain: a name
+// written under any other domain would sit in a registry whose nameservers are never asked for it,
+// and a zone equal to the base domain would let a claimed name shadow the hostnames the cluster
+// publishes there (a namespace gateway, push, a node).
 func ValidateDNS(c DNSConfig) []error {
 	if c.NodeNamesZone == "" {
 		return nil
@@ -35,8 +37,8 @@ func ValidateDNS(c DNSConfig) []error {
 	if !ZoneServedBy(c.NodeNamesZone, c.BaseDomain) {
 		return []error{ValidationError{
 			Path:    "dns.node_names_zone",
-			Message: fmt.Sprintf("%q is not this cluster's zone (http_gateway.base_domain is %q)", c.NodeNamesZone, c.BaseDomain),
-			Hint:    "set it to the base domain or a subdomain of it; only the cluster whose nameservers answer the zone publishes its node names",
+			Message: fmt.Sprintf("%q is not a sub-zone below this cluster's base domain (http_gateway.base_domain is %q)", c.NodeNamesZone, c.BaseDomain),
+			Hint:    "use a dedicated subdomain of the base domain, for example nodes.<base domain>, never the base domain itself; only the cluster whose nameservers answer the zone publishes its node names",
 		}}
 	}
 	return nil
@@ -66,8 +68,8 @@ func ValidateZone(zone string) error {
 	return nil
 }
 
-// ZoneServedBy reports whether a cluster whose base domain is baseDomain answers zone: the zone is
-// the base domain or below it.
+// ZoneServedBy reports whether a cluster whose base domain is baseDomain answers zone as a
+// dedicated sub-zone: the zone is strictly below the base domain, never equal to it.
 func ZoneServedBy(zone, baseDomain string) bool {
-	return baseDomain != "" && (zone == baseDomain || strings.HasSuffix(zone, "."+baseDomain))
+	return baseDomain != "" && strings.HasSuffix(zone, "."+baseDomain)
 }

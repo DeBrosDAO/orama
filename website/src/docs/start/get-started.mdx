@@ -14,7 +14,7 @@ Both paths install the same signed release, one node per machine you give, and b
 |---|---|---|
 | What you get | Machines that join the network as nodes with the chain, public storage and a Tor relay, and a validator for your operator account | The same, plus a private cluster of your own where you deploy apps under your own domain |
 | Command | `orama setup --network <name> --name <name> <ip> ...` | `orama setup --network <name> --name <name> --domain <your domain> <ip> ...` |
-| Domain | None. Each node gets a free identification name, `<name>.<network>.orama.network` | One you control, with NS and glue records you publish |
+| Domain | None. Each node can have a free identification name, `<name>.<zone>`, in the network's names sub-zone | One you control, with NS and glue records you publish |
 | Machines | One or more | Three or more for a cluster that survives a failure; one for evaluation |
 
 A third, smaller choice is `--cluster-only`: only the cluster node, with no chain, storage or relay, and so no validator and no rewards. It is for a private cluster that does not take part in the chain.
@@ -105,7 +105,7 @@ Setup never turns an exit on for you. It needs `--exit`, a Tor network file and 
 
 There are two ways to be found by name.
 
-**A free identification name** (the default). `<name>.<network>.orama.network` is one address record, A or AAAA, for each literal public IP of your node, served by the network's own nameservers from the chain. It identifies the node and nothing more: no NS records, no glue, no certificate, and nothing delegated to you. The name is claimed on the chain (`MsgClaimNodeName`, with a refundable deposit that comes back when you release the name or retire the node); the setup flow is planned to send that claim for the `--name` you give, and until it does you send it yourself with `oramad tx nodes claim-name <node-id> <name>` on a node. Names are 3 to 32 characters, first come first served, one per node. See [Serving node names](/docs/operator/nameserver#serving-node-names).
+**A free identification name** (the default). `<name>.<zone>`, in the dedicated names sub-zone the network publishes under its domain (for example `nodes.stagenet.orama.network`), is one address record, A or AAAA, for each literal public IP of your node, served by the network's own nameservers from the chain. It identifies the node and nothing more: no NS records, no glue, no certificate, and nothing delegated to you. The name is claimed on the chain (`MsgClaimNodeName`, with a refundable deposit that comes back when you release the name or retire the node); the setup flow is planned to send that claim for the `--name` you give, and until it does you send it yourself with `oramad tx nodes claim-name <node-id> <name>` on a node. Names are 3 to 32 characters, first come first served, one per node. See [Serving node names](/docs/operator/nameserver#serving-node-names).
 
 **Your own domain** (`--domain`). Your cluster becomes the authoritative nameserver for it, so apps, namespaces and certificates under it are answered by your own nodes. You publish NS and glue records at your registrar, or in the parent zone for a subdomain. Setup prints the exact records, then waits until they resolve and the cluster has a certificate. The steps, and the choice between a subdomain and a whole domain, are in [DNS and nameservers](/docs/operator/nameserver).
 

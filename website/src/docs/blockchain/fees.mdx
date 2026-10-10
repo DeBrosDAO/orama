@@ -55,6 +55,8 @@ Earnings are yours to use in four ways, and you choose each time:
 3. **Shield them.** `MsgShieldEarnings` moves earnings straight into the shielded pool, and a transfer inside the pool shows no sender, recipient or amount. Building the shielded bundle needs a wallet that holds your shielded spending key; the RootWallet cannot yet, so today this is a path for wallets and tools that build the bundle themselves.
 4. **Send privately.** `orama chain send <to> <amount>` without `--public` is a private send, and private is the default on purpose: with no choice made, a payment can never become public. A private send needs the same shielded wallet, so with today's RootWallet the command stops and says so; it does not fall back to a public payment.
 
+`send` and `withdraw-earnings` sign only for the chain the selected network names (from its registry manifest; `--chain-id` for a network that names none), through an https or local endpoint. `send --public` shows the fee it will sign before you confirm, and any fee over 1 ORAMA is refused unless you raise the limit with `--max-fee`.
+
 The SDK has the same choice: `chain.transfer({ to, amount, public: true })` pays openly, anything else is private, and `chain.withdrawEarnings(amount, signer, tx)` withdraws (see the [SDK reference](/docs/developer/sdk-reference)).
 
 ## Hot-key fee balances

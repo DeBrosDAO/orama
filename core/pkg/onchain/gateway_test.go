@@ -20,7 +20,7 @@ func gatewayChain(t *testing.T, h http.HandlerFunc) Gateway {
 
 func TestGateway_sendsATransactionThroughTheGatewayRoutes(t *testing.T) {
 	var calls []string
-	hash := strings.Repeat("AB", 32)
+	var hash string
 	g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) {
 		calls = append(calls, r.Method+" "+r.URL.Path)
 		switch {
@@ -31,6 +31,7 @@ func TestGateway_sendsATransactionThroughTheGatewayRoutes(t *testing.T) {
 		case r.URL.Path == "/v1/chain/simulate":
 			_, _ = w.Write([]byte(`{"gas_wanted":"10000000","gas_used":"100000","fee":{"denom":"norama","amount":"1"},"base_fee":"10"}`))
 		case r.URL.Path == "/v1/chain/broadcast":
+			hash = postedHash(t, r)
 			_, _ = w.Write([]byte(`{"code":0,"codespace":"","log":"","tx_hash":"` + hash + `"}`))
 		case r.URL.Path == "/v1/chain/tx":
 			if r.URL.Query().Get("hash") != hash {
@@ -120,5 +121,58 @@ func TestGateway_aRefusedSimulationIsReportedWithTheChainsReason(t *testing.T) {
 	var refused *chainread.TxRefusedError
 	if !errors.As(err, &refused) || refused.Log != "insufficient funds" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGateway_baseFeeMustBeAPlainInteger(t *testing.T) {
+	for _, fee := range []string{"-1", "1e9", strings.Repeat("9", 30), "", "0x5", "1.5"} {
+		g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"base_fee":"` + fee + `"}`))
+		})
+		if got, err := g.BaseFee(context.Background()); err == nil {
+			t.Errorf("base fee %q accepted as %q", fee, got)
+		}
+	}
+	g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"base_fee":"25"}`)) })
+	if got, err := g.BaseFee(context.Background()); err != nil || got != "25" {
+		t.Fatalf("base fee %q, %v", got, err)
+	}
+}
+
+// The gateway answers 422 for a refusal, but a 200 that carries a non-zero code is not an accepted
+// transaction either.
+func TestGateway_aNonZeroBroadcastCodeIsARefusal(t *testing.T) {
+	g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":13,"codespace":"sdk","log":"insufficient fee\u001b[2J","tx_hash":"` + strings.Repeat("AB", 32) + `"}`))
+	})
+	_, err := g.Broadcast(context.Background(), []byte{1})
+	var refused *chainread.TxRefusedError
+	if !errors.As(err, &refused) || refused.Code != 13 {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) {
+		t.Fatalf("the refusal carries an escape sequence: %q", err.Error())
+	}
+}
+
+func TestGateway_anAcceptedBroadcastWithoutAHashIsRefused(t *testing.T) {
+	g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"code":0,"tx_hash":""}`)) })
+	if _, err := g.Broadcast(context.Background(), []byte{1}); err == nil {
+		t.Fatal("an answer with no hash was accepted")
+	}
+}
+
+func TestGateway_whatTheGatewaySaysIsStrippedBeforeItIsPrinted(t *testing.T) {
+	g := gatewayChain(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad \x1b[31mred\x1b[0m \u202eoverride", http.StatusBadGateway)
+	})
+	_, err := g.BaseFee(context.Background())
+	if err == nil {
+		t.Fatal("no error")
+	}
+	for _, bad := range []string{"\x1b", "\u202e"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("error %q carries %q", err.Error(), bad)
+		}
 	}
 }

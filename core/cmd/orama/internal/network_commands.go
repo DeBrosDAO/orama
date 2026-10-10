@@ -151,6 +151,26 @@ func chainOf(env Environment, registry *netregistry.Registry) string {
 	return noValue
 }
 
+// ExpectedChainID is the chain id the active network is known to run, read from the manifest of its
+// registry network, with that network's name. Both are empty when no network is active or the active
+// one belongs to no registry network (a cluster added by its gateway URL alone): nothing then says
+// which chain it runs, and a command that signs must be told.
+func ExpectedChainID() (chainID, network string, err error) {
+	env, err := GetActiveEnvironment()
+	if err != nil || env.Network == "" {
+		return "", "", nil
+	}
+	registry, err := LoadNetworks()
+	if err != nil {
+		return "", "", fmt.Errorf("load the networks to find the chain id of %q: %w", env.Network, err)
+	}
+	n, err := registry.Get(env.Network)
+	if err != nil {
+		return "", "", nil
+	}
+	return n.Manifest.ChainID, env.Network, nil
+}
+
 // NetworkCurrent prints the active network and its gateway URL.
 func NetworkCurrent(p *printer.Printer) error {
 	if err := InitializeEnvironments(); err != nil {

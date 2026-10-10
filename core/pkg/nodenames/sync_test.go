@@ -12,7 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-const testZone = "stagenet.orama.network"
+const testZone = "nodes.stagenet.orama.network"
 
 // newRegistry is an in-memory dns_records with the registry's uniqueness rule.
 func newRegistry(t *testing.T) *sql.DB {
@@ -48,7 +48,12 @@ type fakeChain struct {
 	// loop answers the same page key for ever.
 	loop  bool
 	calls int
+	// catchingUp and statusErr are the chain node's status.
+	catchingUp bool
+	statusErr  error
 }
+
+func (f *fakeChain) CatchingUp(context.Context) (bool, error) { return f.catchingUp, f.statusErr }
 
 func (f *fakeChain) NodeNames(_ context.Context, key string) (Page, error) {
 	f.calls++
@@ -122,9 +127,9 @@ func TestSync_writesTheChainsNames(t *testing.T) {
 		t.Errorf("stats = %+v", stats)
 	}
 	want := []row{
-		{"alice.stagenet.orama.network.", "A", "93.184.216.34", RecordNamespace, true},
-		{"alice.stagenet.orama.network.", "AAAA", "2606:4700:4700::1111", RecordNamespace, true},
-		{"bob.stagenet.orama.network.", "A", "1.1.1.1", RecordNamespace, true},
+		{"alice.nodes.stagenet.orama.network.", "A", "93.184.216.34", RecordNamespace, true},
+		{"alice.nodes.stagenet.orama.network.", "AAAA", "2606:4700:4700::1111", RecordNamespace, true},
+		{"bob.nodes.stagenet.orama.network.", "A", "1.1.1.1", RecordNamespace, true},
 	}
 	got := rows(t, db)
 	if len(got) != len(want) {
@@ -192,9 +197,9 @@ func TestSync_emptyChainRemovesEveryOwnedRow(t *testing.T) {
 func TestSync_neverTouchesRowsItDoesNotOwn(t *testing.T) {
 	db := newRegistry(t)
 	for _, r := range []row{
-		{"stagenet.orama.network.", "A", "93.184.216.1", "system", true},
-		{"ns1.stagenet.orama.network.", "A", "93.184.216.2", "system", true},
-		{"alice.stagenet.orama.network.", "A", "93.184.216.34", "namespace:alice", true}, // another owner holds this exact row
+		{"nodes.stagenet.orama.network.", "A", "93.184.216.1", "system", true},
+		{"ns1.nodes.stagenet.orama.network.", "A", "93.184.216.2", "system", true},
+		{"alice.nodes.stagenet.orama.network.", "A", "93.184.216.34", "namespace:alice", true}, // another owner holds this exact row
 		{"x.other.example.", "A", "1.1.1.1", "deployment", true},
 	} {
 		if _, err := db.Exec(`INSERT INTO dns_records (fqdn, record_type, value, namespace, is_active) VALUES (?,?,?,?,?)`,

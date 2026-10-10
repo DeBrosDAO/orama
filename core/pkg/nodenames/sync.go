@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/config/validate"
@@ -25,10 +26,25 @@ const (
 	// MaxWritesPerPass bounds the rows one pass writes through the registry's Raft log. A first
 	// pass over a large chain converges over several passes, CatchUpDelay apart.
 	MaxWritesPerPass = 2000
+
+	// MaxRemovalsNumerator over MaxRemovalsDenominator is the share of the rows the sync owns that
+	// one pass may remove, and MinRemovalsPerPass is the most it may remove from a small zone. A
+	// pass that wants to remove more than that has most likely read a truncated or stale list, so
+	// it removes the bound and leaves the rest for the next passes, where a corrected read puts
+	// back what was removed in error and costs a minute of DNS rather than the whole zone.
+	MaxRemovalsNumerator   = 1
+	MaxRemovalsDenominator = 4
+	MinRemovalsPerPass     = 50
+
+	// foreignRefusal is why a name with another owner's record at its fqdn is not published.
+	foreignRefusal = "already has records of another owner in dns_records"
 )
 
 const (
 	selectOwnedSQL = `SELECT fqdn, record_type, value, is_active FROM dns_records WHERE namespace = ?`
+
+	// selectForeignSQL lists the names below the zone that someone else already answers for.
+	selectForeignSQL = `SELECT DISTINCT fqdn FROM dns_records WHERE namespace != ? AND fqdn LIKE ?`
 
 	insertSQL = `INSERT INTO dns_records (fqdn, record_type, value, ttl, namespace, created_by, is_active, created_at, updated_at)
 	VALUES (?, ?, ?, ?, ?, ?, TRUE, datetime('now'), datetime('now'))
@@ -48,7 +64,8 @@ type Syncer struct {
 	// replaced when the registry restarts, and it may not exist yet at start-up.
 	Registry func() (*sql.DB, error)
 	Chain    Chain
-	// Zone is the domain names are published under, for example stagenet.orama.network.
+	// Zone is the dedicated sub-zone names are published under, for example
+	// nodes.stagenet.orama.network: strictly below the cluster's base domain.
 	Zone string
 }
 
@@ -60,6 +77,12 @@ type Stats struct {
 	Added, Reactivated, Removed int
 	// Remaining is how many writes the pass left for the next one (MaxWritesPerPass).
 	Remaining int
+	// CatchingUp is set when the chain node was still catching up: its list may be old, so nothing
+	// was removed.
+	CatchingUp bool
+	// RemovalsHeld is how many removals the pass left undone, because the chain node was catching
+	// up or because the pass had reached its bound (MaxRemovalsNumerator).
+	RemovalsHeld int
 	// Refused lists the names and addresses that were not published, and why.
 	Refused []Refusal
 }
@@ -67,16 +90,26 @@ type Stats struct {
 // Changed reports whether the pass wrote anything.
 func (s Stats) Changed() bool { return s.Added+s.Reactivated+s.Removed > 0 }
 
+// plan is the difference between the records wanted and the rows held.
+type plan struct {
+	add, activate, remove []Record
+}
+
 // Sync reads every claimed name from the chain and brings the zone's rows in line: it adds the
-// records that are missing, reactivates the ones something deactivated, and removes the ones whose
-// name was released or whose node's address changed. Records are added before any is removed, so a
-// name that moves is never unresolvable in between.
+// records that are missing, reactivates the ones something deactivated, and removes the records of
+// a name that was released or whose node's address changed. Records are added before any is
+// removed, so a name that moves is never unresolvable in between.
 //
 // Nothing is written unless the whole list was read: a chain that fails half way leaves the zone as
-// it was, rather than deleting the names on the pages that were not read.
+// it was, rather than deleting the names on the pages that were not read. Nothing is removed while
+// the chain node is catching up, and a pass removes at most a bounded share of the zone.
 func (s *Syncer) Sync(ctx context.Context) (Stats, error) {
 	if err := validate.ValidateZone(s.Zone); err != nil {
 		return Stats{}, fmt.Errorf("node names zone: %w", err)
+	}
+	catchingUp, err := s.Chain.CatchingUp(ctx)
+	if err != nil {
+		return Stats{}, fmt.Errorf("ask the chain node whether it is catching up: %w", err)
 	}
 	entries, err := s.readAll(ctx)
 	if err != nil {
@@ -87,12 +120,19 @@ func (s *Syncer) Sync(ctx context.Context) (Stats, error) {
 		return Stats{}, fmt.Errorf("open the cluster registry to publish node names: %w", err)
 	}
 	want, refused := Desired(entries, s.Zone)
-	stats := Stats{Names: len(entries), Refused: refused}
+	foreign, err := foreignNames(ctx, db, s.Zone)
+	if err != nil {
+		return Stats{}, err
+	}
+	want, shadowing := dropForeign(want, foreign)
+	stats := Stats{Names: len(entries), CatchingUp: catchingUp, Refused: append(refused, shadowing...)}
 	have, err := owned(ctx, db)
 	if err != nil {
 		return stats, err
 	}
-	return stats, reconcile(ctx, db, want, have, &stats)
+	p := diff(want, have)
+	p.remove, stats.RemovalsHeld = boundRemovals(p.remove, len(have), catchingUp)
+	return stats, apply(ctx, db, p, &stats)
 }
 
 // readAll pages the chain to the end.
@@ -120,7 +160,50 @@ func (s *Syncer) readAll(ctx context.Context) ([]Named, error) {
 	}
 }
 
-// owned reads the rows this package owns, with whether each is active.
+// foreignNames is the set of names below zone that a record of another owner already answers for.
+// A claimed name must not add an address next to a host the cluster itself publishes, so such a
+// name is not published.
+func foreignNames(ctx context.Context, db *sql.DB, zone string) (map[string]struct{}, error) {
+	rows, err := rqlite.SafeQueryContext(db, ctx, selectForeignSQL, RecordNamespace, "%."+zone+".")
+	if err != nil {
+		return nil, fmt.Errorf("read the names below %s that other writers own: %w", zone, err)
+	}
+	defer rows.Close()
+	foreign := map[string]struct{}{}
+	for rows.Next() {
+		var fqdn string
+		if err := rows.Scan(&fqdn); err != nil {
+			return nil, fmt.Errorf("read a name that another writer owns: %w", err)
+		}
+		foreign[fqdn] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read the names below %s that other writers own: %w", zone, err)
+	}
+	return foreign, nil
+}
+
+// dropForeign removes the records of names that another owner holds, and reports each such name.
+func dropForeign(want []Record, foreign map[string]struct{}) ([]Record, []Refusal) {
+	var kept []Record
+	var refused []Refusal
+	reported := map[string]struct{}{}
+	for _, r := range want {
+		if _, taken := foreign[r.FQDN]; !taken {
+			kept = append(kept, r)
+			continue
+		}
+		if _, done := reported[r.FQDN]; !done {
+			reported[r.FQDN] = struct{}{}
+			refused = append(refused, Refusal{Name: r.FQDN, Reason: foreignRefusal})
+		}
+	}
+	return kept, refused
+}
+
+// owned reads the rows this package owns, with whether each is active. is_active comes back as a
+// bool from SQLite's driver and as a JSON number (float64) from the rqlite driver, and database/sql
+// converts neither to the other, so it is scanned as it comes and read by truthy.
 func owned(ctx context.Context, db *sql.DB) (map[Record]bool, error) {
 	rows, err := rqlite.SafeQueryContext(db, ctx, selectOwnedSQL, RecordNamespace)
 	if err != nil {
@@ -130,11 +213,15 @@ func owned(ctx context.Context, db *sql.DB) (map[Record]bool, error) {
 	have := map[Record]bool{}
 	for rows.Next() {
 		var r Record
-		var active bool
+		var active any
 		if err := rows.Scan(&r.FQDN, &r.Type, &r.Value, &active); err != nil {
 			return nil, fmt.Errorf("read a node-name record: %w", err)
 		}
-		have[r] = active
+		on, err := truthy(active)
+		if err != nil {
+			return nil, fmt.Errorf("read the is_active of %s %s %s: %w", r.FQDN, r.Type, r.Value, err)
+		}
+		have[r] = on
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read the node-name records in dns_records: %w", err)
@@ -142,59 +229,135 @@ func owned(ctx context.Context, db *sql.DB) (map[Record]bool, error) {
 	return have, nil
 }
 
-// reconcile writes the difference between want and have, adds first. A failed write is reported
-// and does not stop the others: one row that cannot be written must not starve the rest.
-func reconcile(ctx context.Context, db *sql.DB, want []Record, have map[Record]bool, stats *Stats) error {
+// truthy reads a boolean column the way either driver returns it.
+func truthy(v any) (bool, error) {
+	switch x := v.(type) {
+	case bool:
+		return x, nil
+	case int64:
+		return x != 0, nil
+	case float64:
+		return x != 0, nil
+	case []byte:
+		return truthy(string(x))
+	case string:
+		switch x {
+		case "1", "true", "TRUE":
+			return true, nil
+		case "0", "false", "FALSE":
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("%v (%T) is not a boolean", v, v)
+}
+
+// diff is what must be added, reactivated and removed to make have equal want. Each list is sorted,
+// so every node of the cluster does the same writes in the same order.
+func diff(want []Record, have map[Record]bool) plan {
+	var p plan
 	wanted := make(map[Record]struct{}, len(want))
-	var add, activate, remove []Record
 	for _, r := range want {
 		wanted[r] = struct{}{}
 		if active, present := have[r]; !present {
-			add = append(add, r)
+			p.add = append(p.add, r)
 		} else if !active {
-			activate = append(activate, r)
+			p.activate = append(p.activate, r)
 		}
 	}
 	for r := range have {
 		if _, keep := wanted[r]; !keep {
-			remove = append(remove, r)
+			p.remove = append(p.remove, r)
 		}
+	}
+	sortRecords(p.remove)
+	return p
+}
+
+func sortRecords(rs []Record) {
+	sort.Slice(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		if a.FQDN != b.FQDN {
+			return a.FQDN < b.FQDN
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		return a.Value < b.Value
+	})
+}
+
+// boundRemovals returns the removals this pass may make and how many it holds back. While the chain
+// node is catching up none is made; otherwise at most the larger of MinRemovalsPerPass and the
+// MaxRemovalsNumerator/MaxRemovalsDenominator share of the rows held.
+func boundRemovals(remove []Record, held int, catchingUp bool) ([]Record, int) {
+	if catchingUp {
+		return nil, len(remove)
+	}
+	allowed := max(MinRemovalsPerPass, held*MaxRemovalsNumerator/MaxRemovalsDenominator)
+	if len(remove) <= allowed {
+		return remove, 0
+	}
+	return remove[:allowed], len(remove) - allowed
+}
+
+// writeStep is one kind of write of a pass.
+type writeStep struct {
+	what    string
+	rows    []Record
+	sql     string
+	args    func(Record) []any
+	counter *int
+}
+
+func addArgs(r Record) []any {
+	return []any{r.FQDN, r.Type, r.Value, RecordTTL, RecordNamespace, RecordNamespace}
+}
+
+func ownedArgs(r Record) []any { return []any{r.FQDN, r.Type, r.Value, RecordNamespace} }
+
+// apply writes the plan, adds first, within the pass's write budget. A failed write is reported and
+// does not stop the others: one row that cannot be written must not starve the rest. A cancelled
+// context ends the pass at once, with one error and not one per remaining row.
+func apply(ctx context.Context, db *sql.DB, p plan, stats *Stats) error {
+	steps := []writeStep{
+		{"add", p.add, insertSQL, addArgs, &stats.Added},
+		{"reactivate", p.activate, activateSQL, ownedArgs, &stats.Reactivated},
+		{"remove", p.remove, deleteSQL, ownedArgs, &stats.Removed},
 	}
 	var errs []error
 	budget := MaxWritesPerPass
-	for _, step := range []struct {
-		what    string
-		rows    []Record
-		sql     string
-		args    func(Record) []any
-		counter *int
-	}{
-		{"add", add, insertSQL, func(r Record) []any {
-			return []any{r.FQDN, r.Type, r.Value, RecordTTL, RecordNamespace, RecordNamespace}
-		}, &stats.Added},
-		{"reactivate", activate, activateSQL, ownedArgs, &stats.Reactivated},
-		{"remove", remove, deleteSQL, ownedArgs, &stats.Removed},
-	} {
+	for _, step := range steps {
 		for _, r := range step.rows {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(errs, fmt.Errorf("the pass ended before every row was written: %w", err))...)
+			}
 			if budget == 0 {
 				stats.Remaining++
 				continue
 			}
 			budget--
-			res, err := rqlite.SafeExecContext(db, ctx, step.sql, step.args(r)...)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("%s %s %s %s: %w", step.what, r.FQDN, r.Type, r.Value, err))
-				continue
-			}
-			if affected, aerr := res.RowsAffected(); aerr == nil && affected > 0 {
-				*step.counter++
+			if err := step.write(ctx, db, r); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func ownedArgs(r Record) []any { return []any{r.FQDN, r.Type, r.Value, RecordNamespace} }
+func (s writeStep) write(ctx context.Context, db *sql.DB, r Record) error {
+	res, err := rqlite.SafeExecContext(db, ctx, s.sql, s.args(r)...)
+	if err != nil {
+		return fmt.Errorf("%s %s %s %s: %w", s.what, r.FQDN, r.Type, r.Value, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s %s %s %s: count the rows written: %w", s.what, r.FQDN, r.Type, r.Value, err)
+	}
+	if affected > 0 {
+		*s.counter++
+	}
+	return nil
+}
 
 // Run syncs until ctx ends: once at once, then every SyncInterval, or after CatchUpDelay while a
 // pass has writes left. report receives every pass's outcome.
