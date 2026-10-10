@@ -101,7 +101,7 @@ func (s *chainStep) checkValidator(target inspector.Node, hasChain bool) error {
 		return clierr.Unavailable("could not read whether %s is in the validator set from the cluster's telemetry: %v\n"+
 			"  Sign in with 'orama auth login' and try again; if the machine is gone, pass --offline", target.Host, err)
 	case !known:
-		return clierr.Conflict("%s runs the chain, and the cluster's telemetry has no report from it to say whether it signs for the validator set. "+
+		return clierr.Conflict("%s runs the chain, and the cluster's telemetry has no usable chain report from it to say whether it signs for the validator set. "+
 			"Erasing a validator destroys its consensus key and jails it.\n  Wait for the node to report ('orama status'), or pass --drop-validator to remove it anyway", target.Host)
 	case isValidator:
 		return clierr.Conflict("%s signs blocks for the validator set. Erasing it destroys the validator's consensus key and the "+
@@ -168,7 +168,7 @@ func hostBinding(node chainreach.ChainNode, host string) (note string, err error
 		return "", clierr.Conflict("node %s on the chain is registered with the endpoints %v, and none is %s: --chain-node-id is probably another node's. "+
 			"Check it with 'orama chain node <id>'", node.ID, node.Endpoints, host)
 	default:
-		return " (it registered no endpoint, so it could not be matched to " + host + ")", nil
+		return " (it registered no IPv4 endpoint to compare with " + host + ")", nil
 	}
 }
 

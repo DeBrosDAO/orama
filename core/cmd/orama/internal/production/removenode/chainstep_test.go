@@ -124,7 +124,7 @@ func TestPreflight_aNodeWithNoTelemetryReportIsNotAssumedToBeNoValidator(t *test
 
 	_, err := w.step(Options{Node: "10.0.0.3", NoChain: true}).Preflight(plan())
 
-	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "no report from it") || !strings.Contains(err.Error(), "--drop-validator") {
+	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "no usable chain report") || !strings.Contains(err.Error(), "--drop-validator") {
 		t.Fatalf("err = %v, want a conflict: the key a missing report would have named is about to be erased", err)
 	}
 }
@@ -287,7 +287,7 @@ func TestPreflight_aNodeWithNoRegisteredEndpointIsAllowedAndTheStepSaysItCouldNo
 
 	steps, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
 
-	if err != nil || len(steps) != 1 || !strings.Contains(steps[0], "registered no endpoint") {
+	if err != nil || len(steps) != 1 || !strings.Contains(steps[0], "no IPv4 endpoint") {
 		t.Fatalf("steps = %v, err = %v", steps, err)
 	}
 }
