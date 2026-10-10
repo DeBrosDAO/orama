@@ -53,6 +53,8 @@ var wipeCmd = &cobra.Command{
 	Short: "Erase Orama from remote nodes (target-side only)",
 	Long: `Remove all Orama data, services and configuration from remote nodes.
 Tor is left installed (its config and state are removed); --nuclear purges it.
+The wipe ends by listing what of Orama is still on the machine (LEFTOVER lines) and fails if
+anything is; the system accounts are removed only with --nuclear.
 
 Target-side only: this says nothing to the cluster. If the node is still a
 member, use 'orama remove' instead — otherwise the survivors keep
@@ -63,7 +65,7 @@ This is a DESTRUCTIVE operation. Use --force to skip confirmation.
 Examples:
   orama node wipe --env testnet                      # Wipe every node
   orama node wipe --env testnet --node 1.2.3.4       # Wipe one node
-  orama node wipe --env testnet --nuclear             # Also remove shared binaries`,
+  orama node wipe --env testnet --nuclear             # Also remove shared binaries and accounts`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return decommission.RunWipe(&wipeFlags)
 	},
@@ -75,7 +77,7 @@ func init() {
 	d.StringVar(&removeFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	d.StringVar(&removeFlags.Node, "node", "", "Public IP of the node to remove [required]")
 	d.BoolVar(&removeFlags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
-	d.BoolVar(&removeFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries and the Tor package")
+	d.BoolVar(&removeFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries, the Tor package and the system accounts Orama created")
 	d.BoolVar(&removeForce, "force", false, "Skip confirmation (DESTRUCTIVE)")
 	d.BoolVar(&removeFlags.DryRun, "dry-run", false, "Print the quorum impact and the statements, change nothing")
 	d.StringVar(&removeFlags.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry: retire it there before removing it")
@@ -86,6 +88,6 @@ func init() {
 	w := wipeCmd.Flags()
 	w.StringVar(&wipeFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	w.StringVar(&wipeFlags.Node, "node", "", "Public IP of the node to wipe; omit to wipe every node in the environment")
-	w.BoolVar(&wipeFlags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...) and the Tor package")
+	w.BoolVar(&wipeFlags.Nuclear, "nuclear", false, "Also remove shared binaries (rqlited, ipfs, caddy, ...), the Tor package and the system accounts Orama created (orama, orama-*, ntfy)")
 	w.BoolVar(&wipeFlags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
 }

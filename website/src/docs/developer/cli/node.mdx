@@ -186,6 +186,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--join-sni` | — | Server name to present to --join; the invite carries it, so it is only needed to override it |
 | `--join` | — | Gateway to join; the invite carries this, so it is only needed to override it |
 | `--nameserver` | `false` | Make this node a nameserver (runs CoreDNS + Caddy) |
+| `--node-names-zone` | — | Zone this node's cluster publishes node identification names under, strictly below --base-domain (for example nodes.&lt;base-domain>); omit to keep the zone node.yaml carries |
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
@@ -612,7 +613,7 @@ orama node remove --env testnet --node 203.0.113.4 --force
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
 | `--node` | — | Public IP of the node to remove [required] |
-| `--nuclear` | `false` | When wiping, also remove shared binaries and the Tor package |
+| `--nuclear` | `false` | When wiping, also remove shared binaries, the Tor package and the system accounts Orama created |
 | `--offline` | `false` | The node is already gone: retire it cluster-side only, do not try to wipe it |
 
 ## orama node report
@@ -850,6 +851,8 @@ orama node wipe [flags]
 
 Remove all Orama data, services and configuration from remote nodes.
 Tor is left installed (its config and state are removed); --nuclear purges it.
+The wipe ends by listing what of Orama is still on the machine (LEFTOVER lines) and fails if
+anything is; the system accounts are removed only with --nuclear.
 
 Target-side only: this says nothing to the cluster. If the node is still a
 member, use 'orama remove' instead — otherwise the survivors keep
@@ -861,7 +864,7 @@ Examples:
 ```bash
 orama node wipe --env testnet                      # Wipe every node
 orama node wipe --env testnet --node 203.0.113.4       # Wipe one node
-orama node wipe --env testnet --nuclear             # Also remove shared binaries
+orama node wipe --env testnet --nuclear             # Also remove shared binaries and accounts
 ```
 
 | Flag | Default | Description |
@@ -869,4 +872,4 @@ orama node wipe --env testnet --nuclear             # Also remove shared binarie
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--node` | — | Public IP of the node to wipe; omit to wipe every node in the environment |
-| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) and the Tor package |
+| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...), the Tor package and the system accounts Orama created (orama, orama-*, ntfy) |

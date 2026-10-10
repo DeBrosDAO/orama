@@ -171,7 +171,7 @@ func TestWipeScript_removesCaddyStorage(t *testing.T) {
 func TestWipeScript_removesInstallsDropIns(t *testing.T) {
 	script := wipeScript(false)
 	for _, want := range []string{
-		"rm -rf /etc/systemd/system/orama-namespace-gateway@index.service.d /etc/systemd/system/orama-deploy-build@.service.d\n",
+		`find /etc/systemd/system -maxdepth 2 -name "orama-*" -exec rm -rf {} +`,
 		"rm -f " + install.BuildResolvConfPath + "\n",
 	} {
 		if !strings.Contains(script, want) {

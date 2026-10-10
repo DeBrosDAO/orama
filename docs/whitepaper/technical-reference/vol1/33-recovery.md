@@ -200,11 +200,12 @@ The script, in order:
 2. Stops the privileged helper socket, so nothing reaches root through it during teardown.
 3. Stops the supervisor and the legacy host units (`orama-node`, `orama-turn`, `orama-sni-router`, `caddy`, `coredns`, `ntfy`, and the older per-service names), and purges leftovers of the removed Anyone network if the node was never upgraded past it.
 4. Kills stragglers by full path or binary name, anchored so an unrelated command line containing `ipfs` is not matched.
-5. Removes the unit files, tears down `wg0` and `wg0.conf`, and deletes the ufw rules tagged `orama`, newest first. The rules for the ports `sshd` listens on stay, whoever added them, because the script runs over SSH; if `sshd -T` cannot be read, the firewall is left untouched.
-6. Removes `/opt/orama`, the root-owned unit-env and deploy trees, the Caddy store (the node's TLS private keys and ACME account key), the archive trust anchor and its rotation mark, `/etc/coredns`, `/etc/caddy` and the temporary archives.
-7. With `--nuclear`, also removes shared binaries and purges the Tor package and its apt source.
+5. Removes the unit files (everything named `orama-*` under `/etc/systemd/system`, drop-in directories of deployments included), stops and resets any unit that outlives its file (a transient `orama-namespace-wireguard@index`), tears down `wg0`, `wg0.conf` and the mesh iptables accept rule, and deletes the ufw rules tagged `orama` or `orama-global`, newest first. The rules for the ports `sshd` listens on stay, whoever added them, because the script runs over SSH; if `sshd -T` cannot be read, the firewall is left untouched.
+6. Removes `/opt/orama`, `/etc/orama` itself, the root-owned unit-env and deploy trees, the Caddy store (the node's TLS private keys and ACME account key), the archive trust anchor and its rotation mark, `/etc/coredns`, `/etc/caddy` and the temporary archives.
+7. With `--nuclear`, also removes shared binaries, purges the Tor package and its apt source, and deletes the system accounts Orama created (the `orama` user, `orama-*` and `ntfy` below uid 1000, with their groups) after killing their processes.
+8. Checks what is left (`wipe_leftovers.go:leftoverCheck`): the removed paths, `orama-*` entries under the unit directory, units systemd still lists, `wg0` and its iptables rule, and non-SSH ufw rules tagged `orama` or `orama-global`, plus binaries and accounts with `--nuclear`. Each is printed as `LEFTOVER`, and any makes the script exit non-zero (`wipe INCOMPLETE`), so the wipe cannot report success over state it left.
 
-`rm -rf` is an unlink, not a cryptographic erase; provider disks remain readable, and the command says so. The `orama` user itself is not removed by this script. `orama node clean` is a deprecated alias for `wipe`.
+`rm -rf` is an unlink, not a cryptographic erase; provider disks remain readable, and the command says so. Without `--nuclear` the system accounts stay; `ufw` is never disabled or reset, and the rules for the ports `sshd` listens on stay. `orama node clean` is a deprecated alias for `wipe`.
 
 `wipe` with no `--node` erases every node in the environment. With one node it prints that the cluster is told nothing and that a member should be removed instead, because the survivors keep counting it toward quorum.
 

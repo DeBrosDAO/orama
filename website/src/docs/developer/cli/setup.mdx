@@ -83,7 +83,7 @@ machine until every machine passes.
 | `--publish-dir` | — | With --create-network: where networks/&lt;name>/ is written (default ./networks) |
 | `--release-repo` | — | With --create-network: the https base URL of the release repository (default https://releases.orama.network) |
 | `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's) |
-| `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.&lt;name>.orama.network, one per machine) |
+| `--seed` | — | With --create-network: a seed DNS name (repeatable; default ns1.&lt;name>.orama.network ..., one per machine; with --domain, the cluster's nameservers ns&lt;N>.&lt;domain>, one per machine up to 13) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it) |
 | `--user` | `root` | SSH login on the machines |

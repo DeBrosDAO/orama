@@ -130,13 +130,16 @@ func removeRetiresAndWipes(t *testing.T, f *fleet.Fleet, extra harness.Extra) {
 	if c, _ := tomb.Values[0][0].(float64); c != 1 {
 		t.Errorf("no eviction tombstone for raft id %s: nothing stops it being re-added", raftID)
 	}
-	for _, gone := range []string{"/opt/orama", infra.ArchiveSigners, infra.WireGuardConfPath, "/etc/systemd/system/" + infra.NodeUnit} {
+	for _, gone := range []string{"/opt/orama", "/etc/orama", infra.ArchiveSigners, infra.WireGuardConfPath, "/etc/systemd/system/" + infra.NodeUnit} {
 		if f.Exec(t, extra.Node, "test -e "+gone).Exit == 0 {
 			t.Errorf("the wiped node still has %s", gone)
 		}
 	}
 	if f.Exec(t, extra.Node, "ip link show wg0").Exit == 0 {
 		t.Error("the wiped node still has wg0")
+	}
+	if out := f.Exec(t, extra.Node, `find /etc/systemd/system -maxdepth 2 -name "orama-*"`); strings.TrimSpace(out.Stdout) != "" {
+		t.Errorf("the wiped node still has orama-named unit files or drop-in directories:\n%s", out.Stdout)
 	}
 	rules := infra.UFWRules(t, f, extra.Node)
 	if !infra.HasRule(rules, operatorPort, operatorComment) {

@@ -62,7 +62,7 @@ Examples:
 	f.StringVar(&opts.Env, "env", "", "Network the node belongs to (default: the active one)")
 	f.StringVar(&opts.Node, "node", "", "Public IP of the node to remove [required]")
 	f.BoolVar(&opts.Offline, "offline", false, "The machine is already gone: retire it from the cluster only, do not wipe it")
-	f.BoolVar(&opts.Nuclear, "nuclear", false, "When wiping, also remove the shared binaries and the Tor package")
+	f.BoolVar(&opts.Nuclear, "nuclear", false, "When wiping, also remove the shared binaries, the Tor package and the system accounts Orama created")
 	f.BoolVar(&opts.Yes, "yes", false, "Do not ask for confirmation (DESTRUCTIVE)")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "Print the quorum impact and every step, change nothing")
 	f.StringVar(&opts.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry: retire it there before removing it")

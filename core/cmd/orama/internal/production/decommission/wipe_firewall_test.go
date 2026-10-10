@@ -43,6 +43,12 @@ func firewallBlock(t *testing.T) string {
 // numbers it deleted, in order. sshdPorts nil means sshd cannot be asked.
 func runFirewallBlock(t *testing.T, sshdPorts []string) []string {
 	t.Helper()
+	return runFirewallBlockWith(t, numberedStatus, sshdPorts)
+}
+
+// runFirewallBlockWith is runFirewallBlock against the given `ufw status numbered`.
+func runFirewallBlockWith(t *testing.T, ufwStatus string, sshdPorts []string) []string {
+	t.Helper()
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -50,7 +56,7 @@ func runFirewallBlock(t *testing.T, sshdPorts []string) []string {
 	dir := t.TempDir()
 	deleted := filepath.Join(dir, "deleted")
 	status := filepath.Join(dir, "status")
-	if err := os.WriteFile(status, []byte(numberedStatus), 0o600); err != nil {
+	if err := os.WriteFile(status, []byte(ufwStatus), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	fake := func(name, body string) {
@@ -106,5 +112,39 @@ func TestWipeFirewall_keepsEverySSHDPort(t *testing.T) {
 func TestWipeFirewall_withoutSSHDTouchesNothing(t *testing.T) {
 	if got := runFirewallBlock(t, nil); len(got) != 0 {
 		t.Fatalf("deleted %v without knowing the SSH ports", got)
+	}
+}
+
+// The status of a global node: the rules its install added are tagged orama-global, and the
+// ones that publish the namespace's ports are route rules.
+const globalNumberedStatus = `Status: active
+
+     To                         Action      From
+     --                         ------      ----
+[ 1] 22/tcp                     ALLOW IN    Anywhere                   # orama
+[ 2] 26656/tcp                  ALLOW IN    Anywhere                   # orama-global
+[ 3] 26656/udp                  ALLOW IN    Anywhere                   # orama-global
+[ 4] 9100/tcp                   ALLOW IN    Anywhere
+[ 5] 10.200.0.2 26656/tcp       ALLOW FWD   Anywhere                   # orama-global
+[ 6] Anywhere on veth-host      ALLOW FWD   10.200.0.2                 # orama-global
+[ 7] 22/tcp (v6)                ALLOW IN    Anywhere (v6)              # orama
+[ 8] 26656/tcp (v6)             ALLOW IN    Anywhere (v6)              # orama-global
+`
+
+// A global node's rules were left behind: the tag differs from the cluster's.
+func TestWipeFirewall_removesTheGlobalRulesToo(t *testing.T) {
+	got := runFirewallBlockWith(t, globalNumberedStatus, []string{"22"})
+	if want := "8 6 5 3 2"; strings.Join(got, " ") != want {
+		t.Fatalf("deleted rules %v, want %s (orama-global rules and route rules, not ssh, not the operator's 9100)", got, want)
+	}
+}
+
+// Whatever the tag, the SSH rule is never deleted, nor is ufw switched off.
+func TestWipeFirewall_neverTouchesSSHOrUFWState(t *testing.T) {
+	block := firewallBlock(t)
+	for _, forbidden := range []string{"ufw disable", "ufw reset", "ufw --force reset", "ufw default", "ufw --force enable", "deny"} {
+		if strings.Contains(block, forbidden) {
+			t.Errorf("the firewall section contains %q", forbidden)
+		}
 	}
 }

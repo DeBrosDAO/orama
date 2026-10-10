@@ -3076,7 +3076,7 @@ commit networks/ and core/pkg/netregistry/embedded/ together.
 | `--name` | — | Network name, for example stagenet [required] |
 | `--release-repo` | — | https base URL of the release repository [required] |
 | `--release-root` | — | The release-root.json file its releases are verified against [required] |
-| `--seed` | — | A seed DNS name (repeatable; default: the creator's seed&lt;N>.&lt;name>.orama.network) |
+| `--seed` | — | A seed DNS name (repeatable; default: the creator's ns&lt;N>.&lt;name>.orama.network) |
 
 
 ## orama maint network publish
@@ -3310,6 +3310,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--join-sni` | — | Server name to present to --join; the invite carries it, so it is only needed to override it |
 | `--join` | — | Gateway to join; the invite carries this, so it is only needed to override it |
 | `--nameserver` | `false` | Make this node a nameserver (runs CoreDNS + Caddy) |
+| `--node-names-zone` | — | Zone this node's cluster publishes node identification names under, strictly below --base-domain (for example nodes.&lt;base-domain>); omit to keep the zone node.yaml carries |
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
@@ -4988,7 +4989,7 @@ Examples:
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
 | `--node` | — | Public IP of the node to remove [required] |
-| `--nuclear` | `false` | When wiping, also remove shared binaries and the Tor package |
+| `--nuclear` | `false` | When wiping, also remove shared binaries, the Tor package and the system accounts Orama created |
 | `--offline` | `false` | The node is already gone: retire it cluster-side only, do not try to wipe it |
 
 
@@ -5247,6 +5248,8 @@ orama node wipe [flags]
 ```text
 Remove all Orama data, services and configuration from remote nodes.
 Tor is left installed (its config and state are removed); --nuclear purges it.
+The wipe ends by listing what of Orama is still on the machine (LEFTOVER lines) and fails if
+anything is; the system accounts are removed only with --nuclear.
 
 Target-side only: this says nothing to the cluster. If the node is still a
 member, use 'orama remove' instead — otherwise the survivors keep
@@ -5257,7 +5260,7 @@ This is a DESTRUCTIVE operation. Use --force to skip confirmation.
 Examples:
   orama node wipe --env testnet                      # Wipe every node
   orama node wipe --env testnet --node 1.2.3.4       # Wipe one node
-  orama node wipe --env testnet --nuclear             # Also remove shared binaries
+  orama node wipe --env testnet --nuclear             # Also remove shared binaries and accounts
 ```
 
 | Flag | Default | Description |
@@ -5265,7 +5268,7 @@ Examples:
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
 | `--node` | — | Public IP of the node to wipe; omit to wipe every node in the environment |
-| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...) and the Tor package |
+| `--nuclear` | `false` | Also remove shared binaries (rqlited, ipfs, caddy, ...), the Tor package and the system accounts Orama created (orama, orama-*, ntfy) |
 
 
 ## orama nodes
@@ -5345,7 +5348,7 @@ Examples:
 | `--env` | — | Network the node belongs to (default: the active one) |
 | `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
 | `--node` | — | Public IP of the node to remove [required] |
-| `--nuclear` | `false` | When wiping, also remove the shared binaries and the Tor package |
+| `--nuclear` | `false` | When wiping, also remove the shared binaries, the Tor package and the system accounts Orama created |
 | `--offline` | `false` | The machine is already gone: retire it from the cluster only, do not wipe it |
 | `--yes` | `false` | Do not ask for confirmation (DESTRUCTIVE) |
 
@@ -5429,7 +5432,7 @@ machine until every machine passes.
 | `--publish-dir` | — | With --create-network: where networks/&lt;name>/ is written (default ./networks) |
 | `--release-repo` | — | With --create-network: the https base URL of the release repository (default https://releases.orama.network) |
 | `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's) |
-| `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.&lt;name>.orama.network, one per machine) |
+| `--seed` | — | With --create-network: a seed DNS name (repeatable; default ns1.&lt;name>.orama.network ..., one per machine; with --domain, the cluster's nameservers ns&lt;N>.&lt;domain>, one per machine up to 13) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it) |
 | `--user` | `root` | SSH login on the machines |

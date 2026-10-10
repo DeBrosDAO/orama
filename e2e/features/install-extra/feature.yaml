@@ -5,7 +5,9 @@
 # install flag refusals, the dry run and the archive-trust refusals change
 # nothing; a second setup changes nothing,
 # remove prints its plan, declines without a confirmation, then retires the
-# node cluster-wide and wipes it (the operator's own firewall rule survives),
+# node cluster-wide and wipes it (the operator's own firewall rule survives; the
+# wipe ends with a check that fails on any orama-related leftover, /etc/orama and
+# drop-in directories included),
 # and a removed node is no longer a target for remove, wipe or clean.
 id: install-extra
 title: Fresh server setup, join, re-run, remove and wipe
