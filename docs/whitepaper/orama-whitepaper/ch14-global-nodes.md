@@ -24,7 +24,7 @@ Ordering is done by the CLI, not by systemd, which uses `Wants=` rather than `Re
 
 `orama global install` checks everything that can refuse before changing anything: options, firewall state, the cosmovisor tarball's pinned SHA-256, every binary and the shielded verifier against the release manifest, and `oramad` against the verifier it pins. It starts nothing. The verifier sits beside `oramad` in the cosmovisor layout, so each chain version runs its own.
 
-`orama setup` runs this install over SSH on every machine, beside the cluster node, then registers the operator, nodes, bonds and validator on the chain, signed by the RootWallet. The installer writes the chain configuration (announced address, no peer exchange, custom pruning, a snapshot every 1,000 blocks) and a state-sync block from two seeds' light-client routes, so a joiner restores a snapshot instead of replaying the chain. `core/pkg/install/chainconfig.go:RenderChainConfig`, `core/pkg/statesync/trust.go:Resolve`.
+`orama setup` runs this install over SSH on every machine, beside the cluster node, then registers the operator, nodes, bonds and validator on the chain, signed by the RootWallet. It writes the chain configuration (announced address, no peer exchange, custom pruning, a snapshot every 1,000 blocks) and a state-sync block from two seeds' light-client routes, so a joiner restores a snapshot instead of replaying the chain. `core/pkg/install/chainconfig.go:RenderChainConfig`, `core/pkg/statesync/trust.go:Resolve`.
 
 ## Upgrading the chain
 
@@ -52,11 +52,11 @@ Two nftables tables, each replaced atomically, define the boundary. Published po
 
 `x/nodes` has thirteen messages and no authority address, no pause and no parameter-change message; its genesis values are final. Every message is signed by the operator who owns the record, from a wallet key that never sits on a node.
 
-**Registration.** `MsgRegisterNode` fixes the node's roles and carries service-key bindings: each service key signs `orama-global-bind-v1|chain-id|operator|service|pubkey`. A key binds to one live node network-wide and a retired key is revoked forever, so nobody can claim another operator's relay identity. The node's secp256k1 hot key proves itself with a `hot-key` binding; the provider, archiver and reporter sign with it. `MsgFundHotKey` funds it from earnings with no destination field, so the money reaches only that key, and it pays base fees only.
+**Registration.** `MsgRegisterNode` fixes the node's roles and carries service-key bindings: each service key signs `orama-global-bind-v1|chain-id|operator|service|pubkey`. A key binds to one live node network-wide and a retired key is revoked forever, so nobody can claim another operator's relay identity. The node's secp256k1 hot key proves itself with a `hot-key` binding; the provider, archiver and reporter sign with it. `MsgFundHotKey` funds it from earnings with no destination field, so the money reaches only that key and pays base fees only.
 
 **Endpoints.** Hosts must be public, and no two live nodes may claim one literal IP.
 
-**Names.** An operator can claim one identification name per node: a DNS label in a dedicated sub-zone of the network's domain, pointing at the node's literal IPs and delegating nothing. The chain enforces the label rules, a reserved list, first come first served and a deposit refunded on release or retirement. The cluster serving the zone reads the names from the chain once a minute, so the zone cannot drift from the chain.
+**Names.** An operator can claim one identification name per node: a DNS label in a dedicated sub-zone of the network's domain, pointing at the node's literal IPs, delegating nothing. The chain enforces the label rules, a reserved list, first come first served and a deposit refunded on release or retirement. The cluster serving the zone reads the names from the chain once a minute, so the zone cannot drift from the chain.
 
 **Bonds.** A bond is norama escrowed in the `nodes` module account, per role. A role is active only while the node is active and that role's bond meets the minimum. Unbonding queues the amount for 21 days, still slashable.
 
