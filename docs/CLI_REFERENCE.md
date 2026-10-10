@@ -72,6 +72,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama domain list`](#orama-domain-list) — List your custom domains
   - [`orama domain remove`](#orama-domain-remove) — Detach a domain
   - [`orama domain verify`](#orama-domain-verify) — Check the TXT record and activate the domain
+- [`orama edit`](#orama-edit) — Change a node you already installed: storage size, exit role
 - [`orama function`](#orama-function) — Manage serverless functions
   - [`orama function build`](#orama-function-build) — Build a function to WASM using TinyGo
   - [`orama function delete`](#orama-function-delete) — Delete a deployed function
@@ -116,6 +117,8 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
       - [`orama maint cluster settings set`](#orama-maint-cluster-settings-set) — Change namespace creation, the per-wallet cap or the update policy
       - [`orama maint cluster settings show`](#orama-maint-cluster-settings-show) — Show who may create namespaces, the per-wallet cap and the update policy
   - [`orama maint global`](#orama-maint-global) — Validator keys, chain binary staging, the Tor network's authorities and the transaction gate
+    - [`orama maint global edit`](#orama-maint-global-edit) — Change this node's public storage size or exit role (run as root)
+    - [`orama maint global refresh`](#orama-maint-global-refresh) — Bring the installed global services up to the staged release (run as root)
     - [`orama maint global stage-oramad`](#orama-maint-global-stage-oramad) — Place a TUF-verified oramad in the cosmovisor layout
     - [`orama maint global tor`](#orama-maint-global-tor) — The Orama Tor network: authority key ceremony, vote archive, relay monitor, onion list
       - [`orama maint global tor archive`](#orama-maint-global-tor-archive) — Archive this directory authority's consensus and votes (run by orama-global-tor-archive.timer)
@@ -219,7 +222,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node invite`](#orama-node-invite) — Manage invite tokens for joining the cluster
   - [`orama node list`](#orama-node-list) — List your nodes across environments
   - [`orama node logs`](#orama-node-logs) — View production service logs
-  - [`orama node remove`](#orama-node-remove) — Remove one node from the cluster, then erase it
+  - [`orama node remove`](#orama-node-remove) — Remove one node from the cluster, then erase it (replaced by orama remove)
   - [`orama node report`](#orama-node-report) — Output comprehensive node health data as JSON
   - [`orama node restart`](#orama-node-restart) — Restart all production services (requires sudo)
   - [`orama node setup`](#orama-node-setup) — Set up a fresh VPS as an Orama node
@@ -232,6 +235,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama node upgrade`](#orama-node-upgrade) — Upgrade existing installation (requires sudo)
   - [`orama node wipe`](#orama-node-wipe) — Erase Orama from remote nodes (target-side only)
 - [`orama nodes`](#orama-nodes) — List your nodes across environments
+- [`orama remove`](#orama-remove) — Remove one node from your network, then erase it
 - [`orama ssh`](#orama-ssh) — SSH into a node
 - [`orama status`](#orama-status) — Show your nodes, the cluster, the chain and your account
   - [`orama status alerts`](#orama-status-alerts) — Alerts, most severe first, with what to do (one-shot)
@@ -258,6 +262,7 @@ out](DEV_DEPLOY.md), [functions](SERVERLESS.md). This page is the index.
   - [`orama storage revoke`](#orama-storage-revoke) — Revoke a deal allowance
   - [`orama storage rewrap`](#orama-storage-rewrap) — Rebuild one storage slot from another slot's ciphertext
   - [`orama storage seal`](#orama-storage-seal) — Seal a file into one ciphertext per storage slot
+- [`orama upgrade`](#orama-upgrade) — Upgrade your nodes to the newest signed release of the network's channel
 - [`orama version`](#orama-version) — Show version information
 
 ---
@@ -1109,6 +1114,55 @@ freshly created DNS record needs.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--wait` | `0s` | Keep checking until the record appears, up to this long |
+
+### orama edit
+
+Change a node you already installed: storage size, exit role
+
+```
+orama edit [flags]
+```
+
+Change a setting of a node that is already installed, without installing it again.
+With no setting flag, in a terminal, it opens a form: choose the node, then the
+settings it has. With flags it changes exactly what they name.
+
+  --storage-gb N    the public storage capacity the node offers. The node's public
+                    Kubo is sized for N GB (its StorageMax becomes N plus 10%) and
+                    restarted, and the capacity is declared on the chain
+                    (MsgDeclareCapacity, signed by your RootWallet through an SSH
+                    tunnel to a node's chain). The chain refuses a capacity the
+                    node's role bond does not back, and one below the bytes deals
+                    already reserve; if it refuses, the node is left as it was.
+                    The chain needs the node's id there: --chain-node-id (see
+                    'orama chain node <id>'), or --no-chain to resize the node only.
+  --exit=true|false switch the node's Tor relay between a plain relay and an exit by
+                    rewriting only the exit section of its torrc, and restart the
+                    relay. An exit needs a network whose Tor file allows exits. The
+                    node's roles on the chain are not changed by this.
+  --global=...      the global layer cannot be turned on or off here, and edit says
+                    what does it: running setup again for the IP adds it, 'orama remove'
+                    takes a node out.
+
+The change is made on the node by its own CLI, one node at a time, and the plan is
+shown first; --yes skips the question. A node on a release without the node-side
+command needs 'orama upgrade' first.
+
+Examples:
+  orama edit                                    # The form
+  orama edit --node 203.0.113.7 --storage-gb 200 --chain-node-id node-7
+  orama edit --node 203.0.113.7 --exit=true --yes
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chain-node-id` | — | The node's id in the chain's node registry, to declare its capacity there |
+| `--env` | — | Network the node belongs to (default: the active one) |
+| `--exit` | `false` | Make the node's Tor relay an exit (true) or a plain relay (false) |
+| `--global` | `false` | Ask for the global layer on or off (refused, with what does it) |
+| `--no-chain` | `false` | Resize the node without declaring the capacity on the chain |
+| `--node` | — | Public IP of the node to edit (default: ask) |
+| `--storage-gb` | `0` | Public storage capacity to offer, in GB |
+| `--yes` | `false` | Do not ask for confirmation |
 
 ### orama function
 
@@ -2003,7 +2057,66 @@ Validator keys, chain binary staging, the Tor network's authorities and the tran
 orama maint global
 ```
 
-Subcommands: `stage-oramad`, `tor`, `txgate`, `validator`
+Subcommands: `edit`, `refresh`, `stage-oramad`, `tor`, `txgate`, `validator`
+
+### orama maint global edit
+
+Change this node's public storage size or exit role (run as root)
+
+```
+orama maint global edit [flags]
+```
+
+Change a setting of the global layer installed on this node. 'orama edit' runs it over
+SSH with the node's own CLI; it declares the same change on the chain from your
+machine.
+
+--storage-gb N sizes the public Kubo for N GB of declared capacity (its StorageMax
+becomes N plus 10%) and restarts it; the repo, its identity and token stay. The
+capacity itself is declared on the chain with MsgDeclareCapacity, which 'orama edit'
+sends first: the chain refuses a capacity the role bond does not back, and one below
+the bytes already reserved by deals.
+
+--exit=true|false switches the Tor relay between a plain relay and an exit by
+rewriting only the exit section of its torrc, then restarts the relay. An exit
+needs a network whose file allows exits, and refuses the destinations listed in
+the exit reject list.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--exit` | `false` | Make the Tor relay an exit (true) or a plain relay (false) |
+| `--storage-gb` | `0` | Declared public storage capacity, in GB |
+
+### orama maint global refresh
+
+Bring the installed global services up to the staged release (run as root)
+
+```
+orama maint global refresh [flags]
+```
+
+Put the staged release's global binaries in place of the installed ones and restart
+the services that run them. 'orama upgrade' runs it on every node that has the
+global layer, after the node's cluster services are upgraded, one node at a time.
+
+Each binary the installed services need (orama, orama-global, ipfs) is read from
+--staged-dir, held to the release manifest, and replaced atomically when its bytes
+differ. A service is restarted only if the binary its own process runs was
+replaced: the provider, archiver, indexer, repair delegate and reporter run
+orama-global, the public Kubo runs ipfs, the onion service's gate runs orama. The
+chain and the Tor relay or directory authority are never restarted by a refresh
+(the chain runs oramad from the cosmovisor layout; Tor runs the distro's tor).
+
+oramad changes only through a governed upgrade. When the release carries an oramad
+other than the one cosmovisor runs, the refresh reads the chain's scheduled
+upgrade plan: with one, it stages the release's oramad and shielded verifier for
+that plan, and cosmovisor switches to them at the plan's height; without one, it
+keeps the running oramad and says so.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--manifest` | `/opt/orama/manifest.json` | The staged release's manifest.json |
+| `--staged-dir` | `/opt/orama/bin` | The staged release's bin/ directory |
 
 ### orama maint global stage-oramad
 
@@ -4056,7 +4169,7 @@ Remote, run from your machine and reaching nodes over SSH:
 Installing a node's software, staging an archive, auto-update, recovery and
 migration are maintainer commands: see 'orama maint node'.
 
-Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `remove`, `report`, `restart`, `setup`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
+Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `report`, `restart`, `setup`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
 
 ### orama node dns
 
@@ -4173,13 +4286,16 @@ Aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqli
 
 ### orama node remove
 
-Remove one node from the cluster, then erase it
+Remove one node from the cluster, then erase it (replaced by orama remove)
 
 ```
 orama node remove [flags]
 ```
 
-Retire a node from every store the cluster keeps, then wipe it.
+Retire a node from every store the cluster keeps, then wipe it. This is the
+cluster-side removal behind 'orama remove', which is the command to use: it adds
+the node's chain registration and the refusals a newcomer needs. This path stays
+for scripts and prints a notice.
 
 Runs the cluster-side removal from a SURVIVOR. First it prints what the removal
 costs every raft cluster the node is a voter in — the platform cluster and each
@@ -4404,6 +4520,12 @@ orama node upgrade [flags]
 Upgrade the Orama node binary and optionally restart services.
 Uses rolling restart with quorum safety to ensure zero downtime.
 
+Run on a node, with sudo, this upgrades that node. Run from your machine with
+--env it rolls the nodes of an environment one at a time from the build already
+staged on them: that remote mode is replaced by 'orama upgrade' (the newest signed
+release of your network's channel) and 'orama maint rollout' (a build of your own),
+and prints a notice.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--acme-ca` | — | ACME directory this node's TLS certificates come from, recorded in node.yaml: letsencrypt (production), letsencrypt-staging or an https URL (default: the recorded one) |
@@ -4429,7 +4551,7 @@ Remove all Orama data, services and configuration from remote nodes.
 Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
-member, use 'orama node remove' instead — otherwise the survivors keep
+member, use 'orama remove' instead — otherwise the survivors keep
 counting it toward quorum and re-adding its WireGuard peer.
 
 This is a DESTRUCTIVE operation. Use --force to skip confirmation.
@@ -4462,6 +4584,62 @@ Requires: orama auth login (for API-based resolution)
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--env` | — | Filter by environment (default: active environment) |
+
+### orama remove
+
+Remove one node from your network, then erase it
+
+```
+orama remove [flags]
+```
+
+Take one node out of every store the network keeps, then wipe it.
+
+Before anything changes, remove prints what the removal costs every raft cluster
+the node is a voter in (the platform cluster and each namespace it serves) and
+refuses if any of them would lose quorum. It also refuses:
+
+  a node in the validator set       erasing it destroys the validator's consensus key
+                                    and jails the validator; move the key first, or
+                                    pass --drop-validator
+  a node with the global layer      it may be registered on the chain with a bond; say
+                                    what happens to that: --chain-node-id <id> retires
+                                    it, --no-chain leaves it
+  a node that holds storage deals   the chain refuses to retire a node whose deals
+                                    still reserve bytes
+
+With --chain-node-id the node is retired on the chain first (MsgRetireNode, signed
+by your RootWallet, sent through a surviving node's chain over SSH): its service keys
+are revoked and its bonds start to unbond. If the chain or the RootWallet refuses,
+nothing has been removed. Then the node leaves the raft configuration, an eviction
+tombstone keeps anything from re-adding it, its mesh address, nameserver slot,
+namespace memberships, port blocks and TURN and SFU allocations are released, its DNS
+records are purged, and the machine is wiped.
+
+Use --offline when the machine is already gone: the removal is done from the
+survivors and nothing is attempted on the target. Every step is keyed on the node and
+safe to repeat, so a removal that failed part way is finished by running it again.
+
+--dry-run prints the quorum arithmetic and every step, changing nothing. This is
+DESTRUCTIVE: it asks you to type 'yes' unless --yes is given.
+
+Examples:
+  orama remove --node 203.0.113.9 --dry-run
+  orama remove --node 203.0.113.9
+  orama remove --node 203.0.113.9 --chain-node-id node-9
+  orama remove --node 203.0.113.9 --offline --no-chain
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chain-node-id` | — | The node's id in the chain's node registry: retire it there before removing it |
+| `--drop-validator` | `false` | Remove the node although it signs for the validator set; its consensus key is erased with it |
+| `--dry-run` | `false` | Print the quorum impact and every step, change nothing |
+| `--env` | — | Network the node belongs to (default: the active one) |
+| `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
+| `--node` | — | Public IP of the node to remove [required] |
+| `--nuclear` | `false` | When wiping, also remove the shared binaries and the Tor package |
+| `--offline` | `false` | The machine is already gone: retire it from the cluster only, do not wipe it |
+| `--yes` | `false` | Do not ask for confirmation (DESTRUCTIVE) |
 
 ### orama ssh
 
@@ -4961,6 +5139,57 @@ It does not upload the bytes and it does not submit a deal.
 | `--repair-seed-file` | — | File holding the repair seed, hex, at least 32 bytes, mode 0600 |
 | `--replicas` | `3` | Number of slots, 1 to 32 |
 | `--storage-key-file` | — | File holding the orama-storage-v1 key from RootWallet (never the wallet seed), hex, exactly 32 bytes, mode 0600 |
+
+### orama upgrade
+
+Upgrade your nodes to the newest signed release of the network's channel
+
+```
+orama upgrade [flags]
+```
+
+Fetch the newest release of your network's channel, show what each node runs and
+what it will go through, and after you confirm, upgrade the nodes one at a time.
+
+The release comes from the release repository and channel the network publishes
+(orama network list). It is verified here against the release root built into this
+CLI before anything is sent: the signed metadata, then the archive's length and
+hashes. Every node verifies it again against the release root it adopted, and
+refuses a release that does not match, before it replaces a file.
+
+The plan lists each node with the release it runs now (from the cluster's
+telemetry, as 'orama status' shows it), the release it will run, and its place in
+the rollout: followers first, nameservers spread so the zone keeps answering, the
+raft leader last. A node that already runs the release is left alone
+(--reinstall puts it in place again); a node that runs a newer one is never
+downgraded.
+
+The release is staged on every node first, which restarts nothing. Then each node
+in turn is upgraded and restarted, and the next one starts only when that node is
+healthy and carrying its share of the cluster again: never two RQLite voters at once.
+A node that has the global layer also refreshes it right after its own upgrade:
+the global binaries are replaced, and the services that run them are restarted.
+The chain binary (oramad) is staged for cosmovisor only when the release carries
+another one and the chain has a governed upgrade scheduled; otherwise the running
+oramad is kept and the output says so.
+
+--node upgrades one node. --dry-run prints the plan and stops.
+
+Examples:
+  orama upgrade --dry-run          # What would change
+  orama upgrade                    # Show the plan, ask, then roll
+  orama upgrade --yes              # Roll without asking
+  orama upgrade --node 203.0.113.7
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--delay` | `300` | Seconds a node has to rejoin the cluster after its upgrade before the rollout stops |
+| `--dry-run` | `false` | Print the plan and stop; nothing is staged or restarted |
+| `--env` | — | Network to upgrade (default: the active one) |
+| `--node` | — | Upgrade only the node with this public IP |
+| `--reinstall` | `false` | Put the release in place again on nodes that already run it |
+| `--ssh` | `false` | Read what the nodes run over SSH instead of the gateway's telemetry |
+| `--yes` | `false` | Do not ask for confirmation |
 
 ### orama version
 

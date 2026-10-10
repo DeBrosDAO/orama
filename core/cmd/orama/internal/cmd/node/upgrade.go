@@ -1,6 +1,8 @@
 package node
 
 import (
+	"fmt"
+
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/upgrade"
 	"github.com/DeBrosOfficial/network/pkg/rollout"
 	"github.com/spf13/cobra"
@@ -12,12 +14,27 @@ var upgradeFlags upgrade.Flags
 // through the post-swap re-exec; see upgradeReexecAnyoneClientFlag.
 var upgradeAnyoneClient bool
 
+// upgradeReplacedNotice is what the remote mode says: `orama upgrade` rolls the
+// signed release of the network's channel, and `orama maint rollout` a build of
+// your own.
+const upgradeReplacedNotice = "Note: the remote mode of `orama node upgrade` (--env) is replaced by `orama upgrade`, which rolls the newest signed release of your network's channel; " +
+	"`orama maint rollout` rolls a build of your own."
+
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrade existing installation (requires sudo)",
 	Long: `Upgrade the Orama node binary and optionally restart services.
-Uses rolling restart with quorum safety to ensure zero downtime.`,
+Uses rolling restart with quorum safety to ensure zero downtime.
+
+Run on a node, with sudo, this upgrades that node. Run from your machine with
+--env it rolls the nodes of an environment one at a time from the build already
+staged on them: that remote mode is replaced by 'orama upgrade' (the newest signed
+release of your network's channel) and 'orama maint rollout' (a build of your own),
+and prints a notice.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if upgradeFlags.Env != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), upgradeReplacedNotice)
+		}
 		if err := checkUpgradeAnyoneClient(upgradeAnyoneClient, upgradeFlags.ReexecedAfterBinarySwap); err != nil {
 			return err
 		}

@@ -435,7 +435,66 @@ Validator keys, chain binary staging, the Tor network's authorities and the tran
 orama maint global
 ```
 
-Subcommands: `stage-oramad`, `tor`, `txgate`, `validator`
+Subcommands: `edit`, `refresh`, `stage-oramad`, `tor`, `txgate`, `validator`
+
+## orama maint global edit
+
+Change this node's public storage size or exit role (run as root)
+
+```
+orama maint global edit [flags]
+```
+
+Change a setting of the global layer installed on this node. 'orama edit' runs it over
+SSH with the node's own CLI; it declares the same change on the chain from your
+machine.
+
+--storage-gb N sizes the public Kubo for N GB of declared capacity (its StorageMax
+becomes N plus 10%) and restarts it; the repo, its identity and token stay. The
+capacity itself is declared on the chain with MsgDeclareCapacity, which 'orama edit'
+sends first: the chain refuses a capacity the role bond does not back, and one below
+the bytes already reserved by deals.
+
+--exit=true|false switches the Tor relay between a plain relay and an exit by
+rewriting only the exit section of its torrc, then restarts the relay. An exit
+needs a network whose file allows exits, and refuses the destinations listed in
+the exit reject list.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--exit` | `false` | Make the Tor relay an exit (true) or a plain relay (false) |
+| `--storage-gb` | `0` | Declared public storage capacity, in GB |
+
+## orama maint global refresh
+
+Bring the installed global services up to the staged release (run as root)
+
+```
+orama maint global refresh [flags]
+```
+
+Put the staged release's global binaries in place of the installed ones and restart
+the services that run them. 'orama upgrade' runs it on every node that has the
+global layer, after the node's cluster services are upgraded, one node at a time.
+
+Each binary the installed services need (orama, orama-global, ipfs) is read from
+--staged-dir, held to the release manifest, and replaced atomically when its bytes
+differ. A service is restarted only if the binary its own process runs was
+replaced: the provider, archiver, indexer, repair delegate and reporter run
+orama-global, the public Kubo runs ipfs, the onion service's gate runs orama. The
+chain and the Tor relay or directory authority are never restarted by a refresh
+(the chain runs oramad from the cosmovisor layout; Tor runs the distro's tor).
+
+oramad changes only through a governed upgrade. When the release carries an oramad
+other than the one cosmovisor runs, the refresh reads the chain's scheduled
+upgrade plan: with one, it stages the release's oramad and shielded verifier for
+that plan, and cosmovisor switches to them at the plan's height; without one, it
+keeps the running oramad and says so.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--manifest` | `/opt/orama/manifest.json` | The staged release's manifest.json |
+| `--staged-dir` | `/opt/orama/bin` | The staged release's bin/ directory |
 
 ## orama maint global stage-oramad
 

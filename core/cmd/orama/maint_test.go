@@ -26,7 +26,7 @@ var targetCommands = map[string]bool{
 // existingVisible are the target commands that exist today; the others are built
 // by other work.
 var existingVisible = []string{
-	"status", "ssh", "network", "deploy", "app", "db", "function", "domain", "namespace",
+	"status", "upgrade", "edit", "remove", "ssh", "network", "deploy", "app", "db", "function", "domain", "namespace",
 	"members", "storage", "audit", "version", "auth",
 }
 

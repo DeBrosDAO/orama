@@ -19,6 +19,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/dbcmd"
 	deploycmd "github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/deploy"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/editcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/functioncmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/memberscmd"
@@ -26,9 +27,11 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/networkcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/removecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/upgradecmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/domain"
 )
 
@@ -46,7 +49,7 @@ func newRootCmd() *cobra.Command {
 		Short: "Orama CLI — operate nodes and manage a namespace",
 		Long: `The human interface to the Orama network. One binary, three audiences:
 
-  Operators  orama status, ssh, network, …
+  Operators  orama status, upgrade, edit, remove, ssh, network, …
   Tenants    orama deploy, app, function, db, namespace, …
   Maintainers  orama maint …  (hidden from this help; every command in it works)
 
@@ -115,6 +118,9 @@ and no Orama MCP.`,
 	// Unified node management commands
 	rootCmd.AddCommand(nodescmd.Cmd)
 	rootCmd.AddCommand(statuscmd.Cmd)
+	rootCmd.AddCommand(upgradecmd.Cmd)
+	rootCmd.AddCommand(removecmd.Cmd)
+	rootCmd.AddCommand(editcmd.Cmd)
 	rootCmd.AddCommand(sshcmd.Cmd)
 
 	hideReplacedGroups()

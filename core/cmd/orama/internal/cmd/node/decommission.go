@@ -1,6 +1,9 @@
 package node
 
 import (
+	"fmt"
+
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/decommission"
 	"github.com/spf13/cobra"
 )
@@ -10,10 +13,18 @@ var (
 	wipeFlags         decommission.WipeFlags
 )
 
+// removeReplacedNotice is what the old path says: `orama remove` does the same
+// removal and retires the node on the chain as well.
+const removeReplacedNotice = "Note: `orama node remove` is replaced by `orama remove`, which also retires the node on the chain (--chain-node-id) and refuses to erase a validator."
+
 var decommissionCmd = &cobra.Command{
-	Use:   "remove",
-	Short: "Remove one node from the cluster, then erase it",
-	Long: `Retire a node from every store the cluster keeps, then wipe it.
+	Use:    "remove",
+	Short:  "Remove one node from the cluster, then erase it (replaced by orama remove)",
+	Hidden: true,
+	Long: `Retire a node from every store the cluster keeps, then wipe it. This is the
+cluster-side removal behind 'orama remove', which is the command to use: it adds
+the node's chain registration and the refusals a newcomer needs. This path stays
+for scripts and prints a notice.
 
 Runs the cluster-side removal from a SURVIVOR. First it prints what the removal
 costs every raft cluster the node is a voter in — the platform cluster and each
@@ -38,6 +49,7 @@ Examples:
   orama node remove --env testnet --node 1.2.3.4 --offline   # VPS already deleted
   orama node remove --env testnet --node 1.2.3.4 --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Fprintln(cmd.ErrOrStderr(), removeReplacedNotice)
 		return decommission.Run(&decommissionFlags)
 	},
 }
@@ -49,7 +61,7 @@ var wipeCmd = &cobra.Command{
 Tor is left installed (its config and state are removed); --nuclear purges it.
 
 Target-side only: this says nothing to the cluster. If the node is still a
-member, use 'orama node remove' instead — otherwise the survivors keep
+member, use 'orama remove' instead — otherwise the survivors keep
 counting it toward quorum and re-adding its WireGuard peer.
 
 This is a DESTRUCTIVE operation. Use --force to skip confirmation.
@@ -64,6 +76,7 @@ Examples:
 }
 
 func init() {
+	cmdmeta.MarkListed(decommissionCmd)
 	d := decommissionCmd.Flags()
 	d.StringVar(&decommissionFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
 	d.StringVar(&decommissionFlags.Node, "node", "", "Public IP of the node to remove [required]")
