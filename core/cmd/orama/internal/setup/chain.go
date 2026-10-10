@@ -45,7 +45,18 @@ func (c tunneledChain) Open(ctx context.Context, m Machine, chainID string) (Cha
 		stop()
 		return nil, err
 	}
-	return &restSession{Client: client, base: local, http: &http.Client{Timeout: chainReadTimeout}, stop: stop}, nil
+	return &restSession{Client: client, base: local, http: chainHTTPClient(), stop: stop}, nil
+}
+
+// chainHTTPClient is the client the chain's REST API is read and written with: a
+// node that answers with a redirect is not followed. The node is a machine setup
+// has just installed, and it must not be able to send the operator's laptop to
+// another URL.
+func chainHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:       chainReadTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // restSession reads the chain through its REST API and sends the operator's

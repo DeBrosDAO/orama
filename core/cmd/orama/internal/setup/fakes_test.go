@@ -87,8 +87,9 @@ type fakeMachine struct {
 	facts Facts
 
 	installClusterErr error
-	// quorumRefuses: the node's own quorum check refuses a restart without --force.
-	quorumRefuses bool
+	// quorumRefusal, when set, is what the node's own quorum check answers to a
+	// restart without --force.
+	quorumRefusal string
 	state         ChainState
 	stateErr      error
 	waitErr       error
@@ -158,8 +159,8 @@ func (m *fakeMachine) WaitNode(context.Context, time.Duration) error {
 }
 func (m *fakeMachine) RestartNode(_ context.Context, _ time.Duration, force bool) error {
 	m.w.add("restart-force=%v %s", force, m.ip)
-	if m.quorumRefuses && !force {
-		return errors.New("Cannot restart: it would break quorum.\n  Use 'orama node restart --force' to proceed anyway.")
+	if m.quorumRefusal != "" && !force {
+		return errors.New(m.quorumRefusal)
 	}
 	m.w.mu.Lock()
 	m.w.restarting++
@@ -176,8 +177,8 @@ func (m *fakeMachine) RestartNode(_ context.Context, _ time.Duration, force bool
 func (m *fakeMachine) Close() { m.w.add("close %s", m.ip) }
 
 type fakeEnroller struct {
-	// quorumRefuses makes every machine's restart refuse without --force.
-	quorumRefuses bool
+	// quorumRefusal makes every machine's restart refuse without --force.
+	quorumRefusal string
 	w             *world
 	facts         map[string]Facts
 	fail          map[string]error
@@ -194,7 +195,7 @@ func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, e
 	if !ok {
 		facts = freshFacts()
 	}
-	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefuses: e.quorumRefuses}
+	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefusal: e.quorumRefusal}
 	if e.created == nil {
 		e.created = map[string]*fakeMachine{}
 	}
@@ -206,6 +207,17 @@ func (e *fakeEnroller) Reach(ctx context.Context, ip, user string) (Machine, err
 	e.w.add("reach %s", ip)
 	return e.Enroll(ctx, MachineRequest{IP: ip, User: user})
 }
+
+// quorumBreak is the refusal of `orama node restart` on a cluster of voters
+// voters (core/cmd/orama/internal/production/lifecycle/quorum.go), with the hint
+// every refusal ends with.
+func quorumBreak(voters int) string {
+	return fmt.Sprintf("Stopping this node (Follower, voter) would break RQLite quorum: %d of %d configured voters would remain reachable, need %d.\n"+
+		"  Use 'orama node restart --force' to proceed anyway.", voters-1, voters, voters/2+1)
+}
+
+const quorumUnreadable = "Cannot verify quorum safety: this node is a Follower VOTER but the cluster member list could not be read (timeout).\n" +
+	"  Use 'orama node restart --force' to proceed anyway."
 
 type fakeNetworks struct {
 	w          *world

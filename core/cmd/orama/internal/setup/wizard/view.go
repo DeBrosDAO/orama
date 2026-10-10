@@ -103,7 +103,7 @@ func (m *Model) hostKeyBody() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s presents these SSH host keys.\nCompare one with the fingerprint your provider's console shows, then press its number.\n\n", m.currentHost())
 	for i, k := range m.hostKeys {
-		fmt.Fprintf(&b, "  %d  %-8s %s\n", i+1, k.Type, k.Fingerprint)
+		fmt.Fprintf(&b, "  %d  %-8s %s\n", i+1, setup.CleanTerminal(k.Type), setup.CleanTerminal(k.Fingerprint))
 	}
 	return b.String()
 }

@@ -66,3 +66,12 @@ func TestCommand_refusesANodeWithoutAKey(t *testing.T) {
 		t.Fatal("no key, no session")
 	}
 }
+
+func TestBaseSSHOptions_neverPromptAndNeverForwardAnAgent(t *testing.T) {
+	joined := strings.Join(baseSSHOptions(), " ")
+	for _, want := range []string{"BatchMode=yes", "ForwardAgent=no", "IdentitiesOnly=yes", "PreferredAuthentications=publickey"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("scp and ssh sessions lack %s: %s", want, joined)
+		}
+	}
+}

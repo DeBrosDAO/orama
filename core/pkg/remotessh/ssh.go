@@ -107,10 +107,8 @@ func Command(ctx context.Context, node inspector.Node, command string) (*exec.Cm
 		return nil, fmt.Errorf("no SSH key for %s (call PrepareNodeKeys first)", node.Name())
 	}
 	args := append(node.HostKeyOptions(), baseSSHOptions()...)
-	// BatchMode: a server's prompt (a keyboard-interactive challenge) is never put
-	// on the operator's terminal, where no filter reaches it. ClearAllForwardings:
-	// no port forward from the operator's ssh_config.
-	args = append(args, "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes",
+	// ClearAllForwardings: no port forward from the operator's ssh_config.
+	args = append(args, "-o", "ClearAllForwardings=yes",
 		"-i", node.SSHKey, fmt.Sprintf("%s@%s", node.User, node.Host), command)
 	return exec.CommandContext(ctx, "ssh", args...), nil
 }
@@ -155,5 +153,10 @@ func baseSSHOptions() []string {
 		// The operator's ssh_config may forward an agent; a machine the CLI reaches is
 		// never given one.
 		"-o", "ForwardAgent=no",
+		// Every session authenticates with the RootWallet's key: a server's
+		// keyboard-interactive prompt is never put on the operator's terminal, where
+		// no filter reaches it.
+		"-o", "BatchMode=yes",
+		"-o", "PreferredAuthentications=publickey",
 	}
 }

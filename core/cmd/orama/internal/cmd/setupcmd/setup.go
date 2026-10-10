@@ -7,7 +7,6 @@ package setupcmd
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,8 +107,15 @@ func cleanError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return clierr.Wrap(clierr.CodeOf(err), errors.New(setup.CleanTerminal(err.Error())))
+	return clierr.Wrap(clierr.CodeOf(err), cleanedError{err})
 }
+
+// cleanedError is err with a message safe to print; the error itself stays
+// reachable for errors.Is and errors.As.
+type cleanedError struct{ err error }
+
+func (c cleanedError) Error() string { return setup.CleanTerminal(c.err.Error()) }
+func (c cleanedError) Unwrap() error { return c.err }
 
 func runSetup(cmd *cobra.Command, args []string) error {
 	opts, err := optionsFromFlags(cmd, args)

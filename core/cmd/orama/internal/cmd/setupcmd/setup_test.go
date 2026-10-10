@@ -270,3 +270,15 @@ func TestFilterStreams_whatReachesTheRealStreamsIsCleaned(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestCleanError_theOriginalErrorStaysReachable(t *testing.T) {
+	root := errors.New("rqlite is down")
+	err := cleanError(fmt.Errorf("machine x: %w", root))
+	if !errors.Is(err, root) {
+		t.Error("errors.Is must still reach the cause through the cleaned error")
+	}
+	var nf interface{ Error() string }
+	if !errors.As(err, &nf) {
+		t.Error("errors.As must work")
+	}
+}

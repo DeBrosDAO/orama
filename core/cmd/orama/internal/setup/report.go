@@ -56,18 +56,20 @@ type Reporter interface {
 	Linef(format string, args ...any)
 }
 
-// CleanTerminal replaces what could drive the operator's terminal in text a
-// machine, a seed or a chain node produced: control characters (an escape
-// sequence can rewrite the screen, set the window title or write the
-// clipboard), the C1 controls, the bidirectional overrides that make a line read
-// differently from how it is stored, and bytes that are not UTF-8. Line feeds and
-// tabs stay.
+// CleanTerminal replaces what could drive the operator's terminal, or make text
+// read differently from how it is stored, in text a machine, a seed or a chain
+// node produced: control characters (an escape sequence can rewrite the screen,
+// set the window title or write the clipboard), every Unicode format character
+// (the bidirectional overrides and isolates, the direction and zero-width marks,
+// the byte-order mark, the tag block), the line and paragraph separators, and
+// bytes that are not UTF-8. Line feeds and tabs stay; use oneLine where a value
+// must not be able to start another line.
 func CleanTerminal(s string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
 		case r == '\n' || r == '\t':
 			return r
-		case unicode.IsControl(r), r >= bidiFirst && r <= bidiLast, r >= isolateFirst && r <= isolateLast, isMark(r), r == unicode.ReplacementChar:
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), unicode.Is(unicode.Zl, r), unicode.Is(unicode.Zp, r), r == unicode.ReplacementChar:
 			return '?'
 		}
 		return r
@@ -88,10 +90,10 @@ type terminalWriter struct {
 func (t *terminalWriter) Write(p []byte) (int, error) {
 	data := append(t.tail, p...)
 	cut := wholeRunes(data)
-	t.tail = append([]byte(nil), data[cut:]...)
 	if _, err := io.WriteString(t.w, CleanTerminal(string(data[:cut]))); err != nil {
 		return 0, err
 	}
+	t.tail = append([]byte(nil), data[cut:]...)
 	return len(p), nil
 }
 
@@ -114,18 +116,6 @@ func wholeRunes(data []byte) int {
 func oneLine(s string) string {
 	return strings.ReplaceAll(CleanTerminal(s), "\n", " | ")
 }
-
-// isMark: the direction marks and the line and paragraph separators, which move
-// text on the line without being visible.
-func isMark(r rune) bool {
-	return r == '\u200e' || r == '\u200f' || r == '\u061c' || r == '\u2028' || r == '\u2029'
-}
-
-// The bidirectional embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069).
-const (
-	bidiFirst, bidiLast       = '\u202a', '\u202e'
-	isolateFirst, isolateLast = '\u2066', '\u2069'
-)
 
 // TextReporter prints a run as lines.
 type TextReporter struct {

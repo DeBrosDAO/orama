@@ -70,3 +70,22 @@ func TestFinish_nothingToWaitForWhenNoRunStarted(t *testing.T) {
 	m := New(context.Background(), newFake().services(), setup.Options{})
 	m.finish() // must return at once
 }
+
+func TestDetachStdin_codeThatReadsStdinGetsNothingAndItComesBack(t *testing.T) {
+	before := os.Stdin
+	restore, err := detachStdin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.Stdin == before {
+		t.Fatal("standard input was not detached")
+	}
+	buf := make([]byte, 8)
+	if n, _ := os.Stdin.Read(buf); n != 0 {
+		t.Errorf("read %d bytes from a detached standard input", n)
+	}
+	restore()
+	if os.Stdin != before {
+		t.Fatal("standard input was not restored")
+	}
+}

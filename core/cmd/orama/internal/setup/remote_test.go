@@ -401,3 +401,9 @@ func TestTailBuffer_keepsOnlyTheEnd(t *testing.T) {
 		t.Errorf("got %q: only the last bytes of a machine's stderr are kept", got)
 	}
 }
+
+func TestTail_isOneLine(t *testing.T) {
+	if got := tail("one\n[203.0.113.9] cluster done", 100); strings.Contains(got, "\n") {
+		t.Errorf("got %q: stderr of a machine cannot start a line of its own", got)
+	}
+}

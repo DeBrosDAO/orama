@@ -190,3 +190,19 @@ func TestRestSession_aNegativeBondIsRefused(t *testing.T) {
 		t.Error("a negative minimum bond is not a parameter")
 	}
 }
+
+func TestChainHTTPClient_doesNotFollowARedirect(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the redirect was followed")
+	}))
+	defer elsewhere.Close()
+	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL, http.StatusFound)
+	}))
+	defer node.Close()
+	s := &restSession{base: node.URL, http: chainHTTPClient(), stop: func() {}}
+	_, err := s.Balance(context.Background(), testOperator)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("got %v: a node that redirects is an error, never a place to go", err)
+	}
+}

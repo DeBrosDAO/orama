@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sync/errgroup"
@@ -182,8 +184,8 @@ func (r *runner) waitSynced(ctx context.Context, n *nodeRun) error {
 		failed = 0
 		if !st.Running {
 			if down++; down >= syncStalls {
-				return false, fmt.Errorf("the chain unit on %s is not running (%d polls in a row); the end of its log:\n%s\n"+
-					"  if the log asks for a binary of a later upgrade, the network has upgraded since the genesis binary: see the known gaps of the setup docs", ip, down, st.Detail)
+				return false, fmt.Errorf("the chain unit on %s is not running (%d polls in a row); the end of its log, quoted:\n%s\n"+
+					"  if the log asks for a binary of a later upgrade, the network has upgraded since the genesis binary: see the known gaps of the setup docs", ip, down, quoteLog(st.Detail))
 			}
 			return false, nil
 		}
@@ -219,28 +221,51 @@ func (r *runner) restartPhase(ctx context.Context) error {
 	return nil
 }
 
-// restartNode restarts the cluster node under the node's own quorum check. Only a
-// node that refuses, on a cluster the CLI records as under three nodes (which
-// cannot keep a quorum through any restart), is restarted again with --force: the
-// check is the node's own reading of its voters, and the record is only a count
-// of the nodes this CLI installed.
+// quoteLog prefixes every line of a log a machine produced, so that none of it can
+// pass for a line setup printed itself.
+func quoteLog(log string) string {
+	lines := strings.Split(strings.TrimRight(log, "\n"), "\n")
+	for i, l := range lines {
+		lines[i] = "    | " + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// restartNode restarts the cluster node under the node's own quorum check. When
+// that check refuses because the cluster has fewer than three voters (so no
+// restart can keep a quorum), the refusal says so with the voter count the node
+// itself read, and only then is the node restarted again with --force. A refusal
+// that does not count voters (the check could not read its status or the member
+// list), or one on three or more voters, is the answer and is returned.
 func (r *runner) restartNode(ctx context.Context, n *nodeRun) error {
 	budget := r.d.Timing.RestartBudget
 	err := n.m.RestartNode(ctx, budget, false)
-	if err == nil || !r.clusterTooSmallForQuorum() || !strings.Contains(err.Error(), quorumRefusalHint) {
+	if err == nil {
+		return nil
+	}
+	voters, ok := refusedForTooFewVoters(err)
+	if !ok {
 		return err
 	}
-	r.d.Report.Linef("the cluster has %d recorded node(s), too few to keep a quorum through a restart: restarting %s with --force", r.clusterSize, n.plan.IP)
+	r.d.Report.Linef("the cluster has %d voter(s), too few to keep a quorum through a restart: restarting %s with --force", voters, n.plan.IP)
 	return n.m.RestartNode(ctx, budget, true)
 }
 
-// quorumRefusalHint is what `orama node restart` says when its quorum check
-// refuses: "Use 'orama node restart --force' to proceed anyway".
-const quorumRefusalHint = "node restart --force"
+// quorumRefusal matches the refusal of `orama node restart` that counts voters
+// (core/cmd/orama/internal/production/lifecycle/quorum.go:evaluateQuorumSafety):
+// "would break RQLite quorum: R of N configured voters would remain reachable".
+var quorumRefusal = regexp.MustCompile(`would break RQLite quorum: \d+ of (\d+) configured voters`)
 
-// clusterTooSmallForQuorum says restarting a node cannot keep a quorum: with one
-// or two voters, one down is already too many. The node's own check refuses
-// then, and --force is the only way a small cluster restarts at all.
-func (r *runner) clusterTooSmallForQuorum() bool {
-	return r.clusterSize < minQuorumCluster
+// refusedForTooFewVoters reports whether err is that refusal on fewer than
+// minQuorumCluster voters, and how many the node counted.
+func refusedForTooFewVoters(err error) (voters int, ok bool) {
+	m := quorumRefusal.FindStringSubmatch(err.Error())
+	if m == nil {
+		return 0, false
+	}
+	voters, convErr := strconv.Atoi(m[1])
+	if convErr != nil || voters < 1 || voters >= minQuorumCluster {
+		return 0, false
+	}
+	return voters, true
 }

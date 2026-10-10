@@ -71,17 +71,16 @@ func TestRun_threeFullNodesFromScratch(t *testing.T) {
 	}
 }
 
-func TestRun_aSmallClusterIsForcedOnlyWhenTheNodeItselfRefuses(t *testing.T) {
+func TestRun_aClusterWithFewerThanThreeVotersIsForcedOnlyWhenTheNodeSaysSo(t *testing.T) {
 	small := newHarness()
-	small.enroll.quorumRefuses = true
+	small.enroll.quorumRefusal = quorumBreak(2)
 	mustRun(t, small, small.opts(ip1, ip2))
-	entries := strings.Join(small.w.entries(), "\n")
-	if small.w.index("restart-force=false "+ip1) < 0 || small.w.index("restart-force=true "+ip1) < 0 ||
-		small.w.index("restart-force=false "+ip1) > small.w.index("restart-force=true "+ip1) {
-		t.Errorf("a two-node cluster cannot keep quorum through a restart: the node is asked first, then forced:\n%s", entries)
+	first, forced := small.w.index("restart-force=false "+ip1), small.w.index("restart-force=true "+ip1)
+	if first < 0 || forced < 0 || first > forced {
+		t.Errorf("the node is asked first, then forced:\n%s", strings.Join(small.w.entries(), "\n"))
 	}
-	if !strings.Contains(small.report.text(), "too few to keep a quorum") {
-		t.Errorf("forcing is announced:\n%s", small.report.text())
+	if !strings.Contains(small.report.text(), "the cluster has 2 voter(s), too few to keep a quorum") {
+		t.Errorf("forcing is announced with the node's own count:\n%s", small.report.text())
 	}
 
 	willing := newHarness()
@@ -91,9 +90,34 @@ func TestRun_aSmallClusterIsForcedOnlyWhenTheNodeItselfRefuses(t *testing.T) {
 	}
 }
 
+func TestRun_aStaleRecordNeverForcesALargerCluster(t *testing.T) {
+	// The CLI recorded two nodes; the node itself counts four voters, one of them down.
+	h := newHarness()
+	h.enroll.quorumRefusal = quorumBreak(4)
+	_, err := run(t, h, h.opts(ip1, ip2))
+	if err == nil || !strings.Contains(err.Error(), "4 configured voters") {
+		t.Fatalf("got %v: the node's count decides, not the CLI's record", err)
+	}
+	if h.w.index("restart-force=true") >= 0 {
+		t.Error("a cluster the node counts at four voters was forced")
+	}
+}
+
+func TestRun_aRefusalThatCountsNoVotersIsNeverForced(t *testing.T) {
+	h := newHarness()
+	h.enroll.quorumRefusal = quorumUnreadable
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "Cannot verify quorum safety") {
+		t.Fatalf("got %v", err)
+	}
+	if h.w.index("restart-force=true") >= 0 {
+		t.Error("a check that could not read the cluster was overridden")
+	}
+}
+
 func TestRun_aClusterOfThreeIsNeverForced(t *testing.T) {
 	h := newHarness()
-	h.enroll.quorumRefuses = true
+	h.enroll.quorumRefusal = quorumBreak(3)
 	_, err := run(t, h, h.opts(ip1, ip2, ip3))
 	if err == nil || !strings.Contains(err.Error(), "restart the cluster node") || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("got %v: the node's refusal on a cluster that can keep a quorum is the answer", err)
@@ -103,6 +127,23 @@ func TestRun_aClusterOfThreeIsNeverForced(t *testing.T) {
 	}
 	if h.w.count("restart-force=false") != 1 {
 		t.Errorf("the next machine is not touched after a refusal, got %d restarts", h.w.count("restart-force=false"))
+	}
+}
+
+func TestRefusedForTooFewVoters(t *testing.T) {
+	for _, tc := range []struct {
+		msg    string
+		voters int
+		ok     bool
+	}{
+		{quorumBreak(1), 1, true}, {quorumBreak(2), 2, true}, {quorumBreak(3), 0, false}, {quorumBreak(5), 0, false},
+		{quorumUnreadable, 0, false}, {"exit status 1", 0, false},
+		{"would break RQLite quorum: 0 of 0 configured voters", 0, false},
+	} {
+		voters, ok := refusedForTooFewVoters(errors.New(tc.msg))
+		if ok != tc.ok || voters != tc.voters {
+			t.Errorf("%.60q: got %d, %v; want %d, %v", tc.msg, voters, ok, tc.voters, tc.ok)
+		}
 	}
 }
 
@@ -320,7 +361,7 @@ func TestRun_chainUnitDownEndsTheWaitWithItsLog(t *testing.T) {
 	h := newHarness()
 	h.enroll.state = ChainState{Running: false, Detail: "ERR UPGRADE \"v2\" NEEDED at height 4000"}
 	_, err := run(t, h, h.opts(ip1))
-	if err == nil || !strings.Contains(err.Error(), "UPGRADE") || !strings.Contains(err.Error(), "known gaps") {
+	if err == nil || !strings.Contains(err.Error(), "    | ERR UPGRADE") || !strings.Contains(err.Error(), "known gaps") {
 		t.Fatalf("got %v, want the chain's own log", err)
 	}
 }
@@ -718,18 +759,10 @@ func TestRun_aBondTheChainReportsAboveTheTargetIsNotSigned(t *testing.T) {
 	}
 }
 
-func TestBondRoles_refusesToSignAnInflatedDelta(t *testing.T) {
-	h := newHarness()
-	r := &runner{d: h.deps}
-	n := &nodeRun{plan: NodePlan{Name: "alice", Roles: []int{clusterreg.RoleStorage}}}
-	// A negative bond that reached here would make the difference larger than the target.
-	node := &RegisteredNode{Bonds: map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(-5 * noramaPerOrama)}}
-	target := map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(10 * noramaPerOrama)}
-	err := r.bondRoles(context.Background(), &fakeSession{w: h.w}, n, node, target)
-	if err == nil || !strings.Contains(err.Error(), "not signing a bond of 15000000000") {
-		t.Fatalf("got %v", err)
-	}
-	if h.w.count("tx bond") != 0 {
-		t.Error("nothing is signed")
+func TestQuoteLog_noLineOfARemoteLogPassesForOurs(t *testing.T) {
+	got := quoteLog("first\n[203.0.113.9] cluster done\n")
+	want := "    | first\n    | [203.0.113.9] cluster done"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

@@ -65,14 +65,14 @@ func (s sshShell) Upload(local, remote string) error {
 	return remotessh.UploadFile(s.node, local, remote)
 }
 
-// tail is the end of s, at most n bytes, cleaned for the terminal it will be
-// printed on.
+// tail is the end of s, at most n bytes, on one line and cleaned for the terminal
+// it will be printed on: what a machine printed cannot start a line of its own.
 func tail(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {
 		s = "..." + s[len(s)-n:]
 	}
-	return CleanTerminal(s)
+	return oneLine(s)
 }
 
 const (

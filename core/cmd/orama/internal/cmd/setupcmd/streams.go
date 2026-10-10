@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/setup"
 )
@@ -31,7 +32,11 @@ func filterStreams() (restore func(), err error) {
 	var wg sync.WaitGroup
 	forward := func(dst io.Writer, src *os.File) {
 		defer wg.Done()
-		_, _ = io.Copy(setup.NewTerminalWriter(dst), src)
+		if _, err := io.Copy(setup.NewTerminalWriter(dst), src); err != nil {
+			// The terminal went away. Whatever is printed after this must not block on
+			// a full pipe, so the rest is read and dropped.
+			_, _ = io.Copy(io.Discard, src)
+		}
 	}
 	wg.Add(2)
 	go forward(realOut, outR)
@@ -40,8 +45,18 @@ func filterStreams() (restore func(), err error) {
 		os.Stdout, os.Stderr = realOut, realErr
 		_ = outW.Close()
 		_ = errW.Close()
-		wg.Wait()
+		drained := make(chan struct{})
+		go func() { wg.Wait(); close(drained) }()
+		select {
+		case <-drained:
+		case <-time.After(drainBudget):
+			// A child that outlived the command still holds the write end. Closing the
+			// read ends below ends the copies; what it prints after this is lost.
+		}
 		_ = outR.Close()
 		_ = errR.Close()
 	}, nil
 }
+
+// drainBudget is how long restoring the streams waits for what is still in the pipes.
+const drainBudget = 2 * time.Second

@@ -18,6 +18,8 @@ func TestCleanTerminal(t *testing.T) {
 		"invalid utf-8":     {"a\xffb", "a?b"},
 		"a carriage return": {"a\rb", "a?b"},
 		"direction marks":   {"a\u200eb\u200fc\u061cd", "a?b?c?d"},
+		"zero width":        {"a\u200bb\u2060c\ufeffd", "a?b?c?d"},
+		"the tag block":     {"a\U000e0041b", "a?b"},
 		"line separators":   {"a\u2028b\u2029c", "a?b?c"},
 		"unicode text":      {"héllo wörld", "héllo wörld"},
 	} {

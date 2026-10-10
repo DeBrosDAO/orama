@@ -3,8 +3,10 @@ package wizard
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -27,6 +29,14 @@ func Start(ctx context.Context, svc Services, preset setup.Options) (Outcome, er
 	}
 	defer restore()
 	prog := tea.NewProgram(m, tea.WithOutput(realOut), tea.WithInput(os.Stdin))
+	// The program owns the terminal's input. Code that reads os.Stdin while it runs
+	// (the ssh sessions of the reused node-setup code inherit it) must not compete
+	// for the keys, or hand them to a remote command.
+	restoreIn, err := detachStdin()
+	if err != nil {
+		return Outcome{}, err
+	}
+	defer restoreIn()
 	_, err = prog.Run()
 	// Whatever ended the program, a run in flight is cancelled and awaited, so it
 	// closes its connections and removes its temporary files before the process exits.
@@ -35,6 +45,20 @@ func Start(ctx context.Context, svc Services, preset setup.Options) (Outcome, er
 		return Outcome{}, err
 	}
 	return m.Outcome(), nil
+}
+
+// detachStdin points os.Stdin at /dev/null until the returned func is called.
+func detachStdin() (restore func(), err error) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
+	}
+	old := os.Stdin
+	os.Stdin = null
+	return func() {
+		os.Stdin = old
+		_ = null.Close()
+	}, nil
 }
 
 // finish waits for a run the person interrupted to end, so that it closes its
@@ -70,7 +94,12 @@ func captureOutput(m *Model) (restore func(), err error) {
 	return func() {
 		os.Stdout, os.Stderr = oldOut, oldErr
 		_ = w.Close()
-		<-done
+		select {
+		case <-done:
+		case <-time.After(drainBudget):
+			// A child that outlived the run still holds the write end; closing the read
+			// end below ends the pump.
+		}
 		_ = r.Close()
 	}, nil
 }
@@ -90,4 +119,6 @@ func pump(r io.Reader, feed func(string)) {
 const (
 	pumpInitialBuffer = 64 << 10
 	pumpMaxLine       = 1 << 20
+	// drainBudget is how long restoring the streams waits for what is still in the pipe.
+	drainBudget = 2 * time.Second
 )

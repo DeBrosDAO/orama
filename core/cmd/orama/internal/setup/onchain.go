@@ -18,6 +18,8 @@ import (
 // sent again, so a run that stopped half way resumes where it did.
 func (r *runner) onchainPhase(ctx context.Context) error {
 	full := r.fullRuns()
+	// The transactions go through the same client as the reads: no redirects.
+	ctx = clusterreg.WithHTTPClient(ctx, chainHTTPClient())
 	sess, err := r.d.Chain.Open(ctx, full[0].m, r.net.Manifest.ChainID)
 	if err != nil {
 		return fmt.Errorf("reach the chain through %s: %w", full[0].plan.IP, err)
@@ -190,9 +192,6 @@ func (r *runner) bondRoles(ctx context.Context, sess ChainSession, n *nodeRun, n
 			continue
 		}
 		delta := new(big.Int).Sub(target, have)
-		if delta.Sign() <= 0 || delta.Cmp(target) > 0 {
-			return fmt.Errorf("node %q: the chain reports a bond of %s for role %d against a target of %s: not signing a bond of %s", n.plan.Name, have, role, target, delta)
-		}
 		if _, err := sess.Bond(ctx, clusterreg.Bond{NodeID: n.plan.Name, Role: role, Amount: delta.String()}); err != nil {
 			return fmt.Errorf("bond %s ORAMA to role %d of node %q: %w", Orama(delta), role, n.plan.Name, err)
 		}

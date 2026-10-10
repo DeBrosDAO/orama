@@ -2,7 +2,7 @@ package setup
 
 import (
 	"fmt"
-	"net"
+	"net/netip"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
@@ -108,7 +108,7 @@ func Reach(ip, user string) (*Enrolled, error) {
 	nodes := []inspector.Node{node}
 	cleanup, err := remotessh.PrepareNodeKeys(nodes)
 	if err != nil {
-		return nil, fmt.Errorf("the RootWallet has no SSH key for %s@%s: %w", user, ip, err)
+		return nil, fmt.Errorf("the RootWallet has no SSH key for %s@%s: %w", node.User, ip, err)
 	}
 	if err := checkNodeAccess(Options{IP: ip, User: user}, nodes[0]); err != nil {
 		cleanup()
@@ -127,7 +127,7 @@ func reachableNode(ip, user, knownHosts string) (inspector.Node, error) {
 	if !sshUserPattern.MatchString(user) {
 		return inspector.Node{}, fmt.Errorf("the recorded login %q is not a login name", user)
 	}
-	if parsed := net.ParseIP(ip); parsed == nil || parsed.To4() == nil {
+	if addr, err := netip.ParseAddr(ip); err != nil || !addr.Is4() {
 		return inspector.Node{}, fmt.Errorf("the recorded address %q is not an IPv4 address", ip)
 	}
 	return inspector.Node{Host: ip, User: user, VaultTarget: ip + "/" + user, KnownHostsFile: knownHosts}, nil
