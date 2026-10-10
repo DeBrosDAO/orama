@@ -18,6 +18,12 @@ var (
 	ErrPubkeyReused = errors.New("service pubkey cannot be reused")
 	// ErrHotKey is returned when a hot key equals its operator.
 	ErrHotKey = errors.New("hot key must differ from the operator")
+	// ErrNameTaken is returned when a node name is already claimed.
+	ErrNameTaken = errors.New("node name is already claimed")
+	// ErrNodeHasName is returned when a node that already holds a name claims another.
+	ErrNodeHasName = errors.New("node already has a name")
+	// ErrNoName is returned when a node that holds no name releases one.
+	ErrNoName = errors.New("node has no name")
 	// ErrEndpointTaken is returned when a literal-IP endpoint is already registered by another node.
 	ErrEndpointTaken = errors.New("endpoint address is registered by another node")
 	// ErrCapacity is returned when declared capacity is above the bond-backed cap.

@@ -85,7 +85,11 @@ Source: `chain/proto/orama/emission/v1/query.proto`
 
 ### Messages
 
-`x/fees` has no Msg service.
+Source: `chain/proto/orama/fees/v1/tx.proto`
+
+| Msg | Request fields | Description |
+|---|---|---|
+| `WithdrawEarnings` | `signer string`, `amount string` | MsgWithdrawEarnings moves amount from the signer's own earnings account to the signer's own bank balance, where an ordinary public MsgSend can spend it. The destination is never a field: it is always the signer, so earnings cannot be aimed at another address by this message. The amount is positive and at most the signer's earnings balance; a larger amount fails the whole message and moves nothing. |
 
 ### Queries
 
@@ -172,6 +176,8 @@ Source: `chain/proto/orama/nodes/v1/tx.proto`
 | `RegisterCluster` | `operator string`, `cluster_id string`, `base_domain string`, `public_endpoints repeated string`, `metadata_uri string` | MsgRegisterCluster adds an optional discovery row. It does not join any node to a cluster (D1, track A8). |
 | `UpdateCluster` | `operator string`, `cluster_id string`, `base_domain string`, `public_endpoints repeated string`, `metadata_uri string` |  |
 | `RetireCluster` | `operator string`, `cluster_id string` |  |
+| `ClaimNodeName` | `operator string`, `node_id string`, `name string` | MsgClaimNodeName claims name for one of the operator's nodes and locks name_deposit. A node holds at most one name, and a name belongs to one node (first come, first served). The name is a DNS label of 3 to 32 characters from a-z, 0-9 and '-', without a leading or trailing '-', and not reserved. |
+| `ReleaseNodeName` | `operator string`, `node_id string` | MsgReleaseNodeName gives the node's name up and returns its deposit to the operator. A node that retires releases its name the same way. |
 
 ### Queries
 
@@ -185,6 +191,9 @@ Source: `chain/proto/orama/nodes/v1/query.proto`
 | `Cluster` `/orama/nodes/v1/cluster/{cluster_id}` | `cluster_id string` |  |
 | `NodeUnbondings` `/orama/nodes/v1/node-unbondings/{node_id}` | `node_id string` |  |
 | `Invariants` `/orama/nodes/v1/invariants` | none |  |
+| `NodeByName` `/orama/nodes/v1/node-by-name/{name}` | `name string` |  |
+| `NameOfNode` `/orama/nodes/v1/name-of-node/{node_id}` | `node_id string` |  |
+| `NodeNames` `/orama/nodes/v1/node-names` | `pagination cosmos.base.query.v1beta1.PageRequest` | QueryNodeNamesRequest pages through every claimed name in name order. |
 
 ## x/power
 

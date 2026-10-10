@@ -147,9 +147,9 @@ type StorageCreateDeal struct {
 	Pieces         []storagetypes.PieceCommitment `json:"pieces"`
 }
 
-// EarningsMsg pays norama to a user's earnings account. It is how a contract pays a user in ORAMA:
-// bank sends from a contract to a user are refused, so the payment lands in the user's earnings
-// (C2) and never as a public balance.
+// EarningsMsg pays norama to a user's earnings account. A contract can also pay a user's public
+// balance with a bank send; this is the way to pay a payout that should be usable for fees and
+// bonds like any other earnings (C2).
 type EarningsMsg struct {
 	Pay *EarningsPay `json:"pay,omitempty"`
 }

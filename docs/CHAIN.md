@@ -111,13 +111,10 @@ being duplicated as magic strings.
 (`chain/app/genesis_overrides.go`), so wallets and block explorers that read denom metadata from
 genesis see the display denom without hardcoding it.
 
-A bank send of `norama` from one user account to another is refused, and so is a send from a
-registered contract to a user. Module accounts can still move `norama`, and a user can pay a
-registered contract (a contract is any address wasmd holds a `ContractInfo` for, or is instantiating: it
-moves the attached funds before it registers the contract, so `x/wasmpolicy.WithFundedContract` marks
-that one recipient). The private path between users is a `MsgShieldedTransfer` in `x/shielded`,
-which a node accepts only with both proof verifiers present (see "`x/shielded`" below); on any other
-node a user cannot pay another user at all.
+A bank send of `norama` between accounts (a user, a contract) is an ordinary public payment. The module
+accounts are blocked addresses, so no bank message can pay one. The private path between users is a
+`MsgShieldedTransfer` in `x/shielded`, which a node accepts only with both proof verifiers present (see
+"`x/shielded`" below); on any other node only public payments work.
 
 ### Other genesis defaults
 
@@ -734,9 +731,13 @@ P_i = (1 - lambda) * B_i + lambda * C_i
 
 - **`B_i`** (`types.EqualBootstrapShares`): `1/n` for each of the `n` committee members, `0` for
   everyone else. This is what makes a committee seat "worth" voting power without any stake.
-- **`C_i`** (`types.ComputeCappedShares`): each validator's share of total bonded stake, **capped**
+- **`C_i`** (`types.ComputeOperatorCappedShares`, over `types.ComputeCappedShares`): each
+  operator's share of total bonded stake, where an operator is the account that registered the
+  `x/nodes` node whose `consensus` binding holds the validator's consensus key (validators no node
+  binds share one operator, `unlinked`), **capped**
   at `Params.CapFractionNormal` (5%) or `Params.CapFractionReduced` (3%, once more than
-  `Params.CapStepDownValidatorCount` validators are active), with the excess above the cap
+  `Params.CapStepDownValidatorCount` operators are active), and split back over the operator's
+  validators in proportion to their admitted stake, with the excess above the cap
   redistributed proportionally among not-yet-capped validators (an iterative "water-filling" pass,
   ICS power-shaping's algorithm) until it converges - or, if the cap can't be respected by *any*
   distribution (`cap * n < 1`), an **equal fallback** (every validator in that calculation gets
@@ -962,6 +963,13 @@ touch the ledger. `SettleFee` also adds the fee to three counters: collected, bu
 
 A balance debited back to zero is removed from the earnings map rather than stored as a zero row.
 
+`MsgWithdrawEarnings{signer, amount}` (`x/fees`, `oramad tx fees withdraw-earnings`) moves `amount` from the
+signer's own earnings to the signer's own bank balance: `Keeper.WithdrawEarnings` debits the ledger and sends
+the same coins from the `fees` module account in one step, so the first invariant still holds. The amount is a
+positive integer no larger than the signer's earnings (a larger one fails the message and moves nothing), the
+destination is the signer and not a field, and the message emits `withdraw_earnings` with the signer, the amount
+and the earnings left. A fee-only balance is not earnings and cannot be withdrawn.
+
 Earnings today pay **tx fees** (the ante decorator), fund the signer's own **bond** and **storage deal and token fees** (inside the
 message handlers: staking, `x/nodes` `MsgBondNode`, `x/storage` `MsgCreateDeal`/`MsgExtendDeal` for
 the signer's own funds, never a grantor's, and `x/token` `MsgCreateToken`; each calls `FundSpendFromEarnings`
@@ -1114,7 +1122,7 @@ pays from the bank balance) or, signed by the seller, accepts a bid (`bid_id` se
 seller still owns the leaf, moves the leaf to the buyer (the delegate is cleared), refunds every other
 bid, and credits the royalty (`price * royalty_bps / 10,000`, rounded down) to the collection creator's
 **earnings account** and the rest to the seller's earnings account. Nothing is paid to a bank balance, so
-the market cannot be a public payment rail. A transfer outside the market pays no royalty. `oramad query
+the payee does not get a balance the buyer chose. A transfer outside the market pays no royalty. `oramad query
 market invariants` checks that the module account holds exactly the open bids.
 
 **Not built.**
@@ -1228,7 +1236,7 @@ There is no authority address, no pause, and no message that changes parameters 
 (plans/open-network.md D18).
 
 Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis must already hold
-`bonds + unbonding` norama there; `InitGenesis` checks that and does not mint.
+`bonds + unbonding + name deposits` norama there; `InitGenesis` checks that and does not mint.
 
 ### Records
 
@@ -1246,6 +1254,13 @@ Bonds and unbonding escrow sit in the `nodes` module account. The bank genesis m
   document. With `--node` it asks the RootWallet agent to sign the document and
   broadcasts the transaction to that REST API. Without `--node` it prints the
   sign document and does not submit it.
+- **Node name.** A node holds at most one identification name, a DNS label under the network's
+  domain (`MsgClaimNodeName`, `MsgReleaseNodeName`): lowercase `a-z`, `0-9` and `-`, 3 to 32
+  characters, no leading or trailing `-`, not reserved (`types.ReservedNames`, `seed`, `seedN`,
+  `nsN`, `www`, `api`, ...). A name belongs to one node (first come, first served); the claimant locks
+  `name_deposit` in the `nodes` account, returned on release, retire or tombstone. The queries are
+  `NodeByName` (with the literal IPs of the node's endpoints), `NameOfNode` and a paginated
+  `NodeNames`.
 - **Unbonding queue, revoked pubkeys, service days, and a STORAGE free-capacity index.** The
   index key is `(class, operator, node id)`. Class `0` is unused; any free byte count uses
   `bits.Len64(free)`. Jailed, retired, and tombstoned nodes are not indexed.
@@ -2436,7 +2451,7 @@ every embedded one. Every module's `Invariants` query walks the module's whole s
 are `orama.houses.v1.Query/Tiers` (reads every operator and its service days) and
 `orama.shielded.v1.Query/Pools` (every pool). The served queries are point lookups, constant
 computations, or walks the module caps on the server: `Challenges` requires a `node_id` and reads that
-node's key range, and `Snapshots` and `NodeUnbondings` return at most 1000 entries. A test fails for an
+node's key range, `Snapshots` and `NodeUnbondings` return at most 1000 entries, and `NodeNames` pages by key (at most 1000 names a page, no offset, no total count). A test fails for an
 embedded Query method on neither list, so a new module query is not public until someone decides it
 should be. `orama chain query --rpc` and the node's own gRPC serve all of them.
 
@@ -2612,7 +2627,7 @@ carries the human-readable decoders, must hold all of them. Regenerate both with
 **Wallet-flow tests.** `chain/app/wallet_flow_test.go` drives the builder against a real app through
 `FinalizeBlock`, with secp256k1 accounts, so each transaction crosses the ante chain and the message
 router. What the chain lets a wallet do today: the fee comes from the bank balance and falls back to
-earnings when the bank is short; `x/bank` refuses public user-to-user norama sends; the four
+earnings when the bank is short; a public user-to-user norama send moves the bank balance; the four
 shielded messages are registered and signed by the same builder, and refused here because this build
 links neither verifier (the accepted proofs run in `shielded_real_test.go` and
 `shielded_wallet_test.go` under the `orchardffi` build); a wallet delegates and undelegates from earnings; votes in the token house; registers
@@ -2718,12 +2733,11 @@ has no `wasm` module). `chain/scripts/stagenet/deploy.sh` runs it after the boot
 and builds the static binary with `make build-linux-amd64-full`. `WITH_WASM=1 make localnet` does the same on a
 localnet with a host cgo build.
 
-**What the standard contracts cannot do with ORAMA.** They run as contracts, so the send restriction
-applies to them. A CW3 multisig proposal that bank-sends ORAMA to a user fails when executed. The escrow
-releases and refunds by bank send, so ORAMA escrowed for a user recipient cannot leave it (it stays in the
-escrow; token and CW20 escrows work). The vesting contract's instantiate for the native denom sends a
-distribution `SetWithdrawAddress`, which is refused, so ORAMA cannot be vested at all; it can vest a user
-token. A contract pays a user ORAMA through the `earnings` binding below.
+**What the standard contracts can do with ORAMA.** They run as contracts and pay like any account. A CW3
+multisig proposal that bank-sends ORAMA to a user executes, and the escrow releases and refunds ORAMA to its
+recipient or creator. The vesting contract's instantiate for the native denom sends a distribution
+`SetWithdrawAddress`, which is refused, so ORAMA cannot be vested; it can vest a user token. A contract can
+also pay a user's earnings through the `earnings` binding below.
 
 ### Native library
 
@@ -2756,15 +2770,11 @@ names no code id, so even the exact bytes of a genesis contract are refused befo
 Every other message is unaffected: anyone can instantiate a stored code at any time. A contract cannot
 upload code: `CosmosMsg` has no such variant.
 
-### The send restriction and contract messages
+### Norama sends and contract messages
 
-`norama` moves between accounts only when one side is a module account or the recipient is a contract
-(`x/shielded/policy.NoramaSendRestriction`, with `isContract` bound to wasmd's `HasContractInfo`, and
-`x/wasmpolicy/ante.ContractSendDecorator`, which allows every module account). So a user can pay a
-contract, a contract can pay a contract or a module (the token, market and storage bindings pull
-fees and escrow that way) and a contract cannot pay a user. `BankMsg::Send` to a module account is refused
-by bank's blocked-address rule. wasmd's instantiate moves the attached funds before it registers the
-contract, so the coin transferrer marks that recipient (`WithFundedContract`) for the one transfer.
+`norama` has no send restriction. A user can pay a user, a contract or an account, and a contract can pay a
+user or another contract. The module accounts are blocked addresses, so `BankMsg::Send` to one is refused by
+bank's blocked-address rule; the token, market and storage bindings reach module accounts through keeper sends.
 
 The message handler (`wasmbindings.Messenger`) also refuses `CosmosMsg::Staking` (the delegation rules in `x/power` are ante-only, so a contract could otherwise fill the epoch reward walk with dust delegations), `CosmosMsg::Any`, which is how the stargate
 form arrives, and distribution `SetWithdrawAddress`. IBC messages are refused as before. A contract reaches
@@ -3533,11 +3543,11 @@ What the script does that the docs of the individual commands do not say:
   no `Msg` service to fuzz).
 - **`app-db-backend` defaults to `pebbledb`, not `goleveldb`** - see the gotcha section above.
   This is a workaround for a real bug in the pinned dependency versions, not a stylistic choice.
-- **`x/bank` refuses user-to-user and contract-to-user `norama` sends.** A user can pay a
-  contract, and a contract can pay a contract or a module account. The private path is `x/shielded`: a
-  node accepts a shielded bundle only with the orchard library linked (a cgo `orchardffi` build) and
-  the verifier binary present, so on any other node payments between users are not possible at all.
-  The two verifiers share the upstream `orchard` crate; a genuinely independent implementation is open.
+- **`norama` moves publicly between plain accounts and contracts.** The module accounts are blocked
+  addresses. The private path is `x/shielded`: a node accepts a shielded bundle only with the orchard
+  library linked (a cgo `orchardffi` build) and the verifier binary present, so on any other node only
+  public payments work. The two verifiers share the upstream `orchard` crate; a genuinely independent
+  implementation is open.
 - **The validator share now flows through `x/power`, not stock `x/distribution` - resolving a
   deviation from the first pass.** `x/emission` hands its epoch mint to
   `PowerKeeper.DistributeEpochRewards`, which pays it out on capped power `P_i`, split between each

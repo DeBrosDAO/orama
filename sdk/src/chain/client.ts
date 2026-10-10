@@ -397,7 +397,7 @@ export class OramaChainClient {
     return this.runQuery(WASM, "ContractInfo", { address: assertAddress(address) }, options);
   }
 
-  /** Whether an address is a contract, so a wallet can refuse a user-to-user send to one before signing. */
+  /** Whether an address is a contract, so a wallet can tell a contract from a plain account before it signs a send. */
   async isContract(address: string, options: QueryOptions = {}): Promise<boolean> {
     try {
       await this.contractInfo(address, options);
@@ -464,6 +464,21 @@ export class OramaChainClient {
   /** A node's bond unbondings still in progress. */
   async nodeUnbondings(nodeId: string, options?: QueryOptions): Promise<ChainQueryResult> {
     return this.moduleQuery(NODES, "NodeUnbondings", { node_id: assertText(nodeId, "nodeId") }, options);
+  }
+
+  /** The node that holds an identification name, with the literal IPs of its endpoints. */
+  async nodeByName(name: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "NodeByName", { name: assertText(name, "name") }, options);
+  }
+
+  /** The identification name a node holds, with its deposit. */
+  async nameOfNode(nodeId: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "NameOfNode", { node_id: assertText(nodeId, "nodeId") }, options);
+  }
+
+  /** One page of every claimed node name, in name order. Pass the previous page's `next_key` to continue. */
+  async nodeNames(pageKey?: string, options?: QueryOptions): Promise<ChainQueryResult> {
+    return this.moduleQuery(NODES, "NodeNames", pageKey ? { pagination: { key: pageKey } } : {}, options);
   }
 
   /** x/storage parameters. */

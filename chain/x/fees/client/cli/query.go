@@ -1,5 +1,5 @@
-// Package cli implements x/fees's read-only CLI query commands (`oramad query fees ...`). x/fees
-// ships no Msg service, so there is no tx.go in this package.
+// Package cli implements x/fees's CLI query commands (`oramad query fees ...`); tx.go holds its
+// one transaction command.
 package cli
 
 import (

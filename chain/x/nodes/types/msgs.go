@@ -7,6 +7,8 @@ import (
 )
 
 var (
+	_ sdk.Msg = &MsgClaimNodeName{}
+	_ sdk.Msg = &MsgReleaseNodeName{}
 	_ sdk.Msg = &MsgRegisterOperator{}
 	_ sdk.Msg = &MsgRegisterNode{}
 	_ sdk.Msg = &MsgUpdateNode{}
@@ -252,6 +254,31 @@ func validateClusterBody(id, domain string, endpoints []string, metadata string)
 	}
 	if err := ValidateMetadataURI(metadata); err != nil {
 		return err
+	}
+	return nil
+}
+
+// ValidateBasic checks MsgClaimNodeName.
+func (msg MsgClaimNodeName) ValidateBasic() error {
+	if _, err := CanonicalAddress(msg.Operator); err != nil {
+		return fmt.Errorf("claim node name: %w", err)
+	}
+	if err := ValidateID(msg.NodeId); err != nil {
+		return fmt.Errorf("claim node name: %w", err)
+	}
+	if err := ValidateName(msg.Name); err != nil {
+		return fmt.Errorf("claim node name: %w", err)
+	}
+	return nil
+}
+
+// ValidateBasic checks MsgReleaseNodeName.
+func (msg MsgReleaseNodeName) ValidateBasic() error {
+	if _, err := CanonicalAddress(msg.Operator); err != nil {
+		return fmt.Errorf("release node name: %w", err)
+	}
+	if err := ValidateID(msg.NodeId); err != nil {
+		return fmt.Errorf("release node name: %w", err)
 	}
 	return nil
 }

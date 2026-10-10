@@ -242,7 +242,7 @@ The marketplace has no listing index on chain: a client that wants "all listings
 
 ### Settlement credits earnings
 
-*Chosen:* the seller and the creator are paid through `CreditEarnings`. *Rejected:* a bank payout. *Why:* a bank payout would publish the payee's new balance; norama cannot move user to user in the open ([the shielded pool](43-the-shielded-pool.md)), and the earnings account is the destination the rest of the chain uses for income.
+*Chosen:* the seller and the creator are paid through `CreditEarnings`. *Rejected:* a bank payout. *Why:* the earnings account is the destination the rest of the chain uses for income, and the market module pays it without the buyer aiming a bank send at the payee.
 
 ### No royalty on a plain transfer
 

@@ -45,6 +45,10 @@ type Keeper struct {
 	// from genesis; neither is exported.
 	HotKeys collections.Map[string, string]
 	LiveIPs collections.Map[string, string]
+	// Names maps every claimed identification name to its claim, and NodeNames maps a node id to
+	// the name it holds. Both are exported through the genesis node_names list.
+	Names     collections.Map[string, types.NodeName]
+	NodeNames collections.Map[string, string]
 }
 
 // NewKeeper builds a keeper. bankKeeper escrows bonds; depositKeeper locks
@@ -109,6 +113,8 @@ func NewKeeper(
 		StorageDirty: collections.NewKeySet(sb, types.StorageDirtyPrefix, "storage_dirty", collections.StringKey),
 		HotKeys:      collections.NewMap(sb, types.HotKeyPrefix, "hot_keys", collections.StringKey, collections.StringValue),
 		LiveIPs:      collections.NewMap(sb, types.LiveIPPrefix, "live_ips", collections.StringKey, collections.StringValue),
+		Names:        collections.NewMap(sb, types.NameOwnerPrefix, "node_names", collections.StringKey, codec.CollValue[types.NodeName](cdc)),
+		NodeNames:    collections.NewMap(sb, types.NodeNamePrefix, "node_name_of", collections.StringKey, collections.StringValue),
 	}
 	schema, err := sb.Build()
 	if err != nil {

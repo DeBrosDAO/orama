@@ -16,7 +16,7 @@ Supply is a function of the epoch number alone. The schedule counts completed ep
 
 Validators must not decide what the storage, relay and development shares are worth. Those shares are ceilings, minted only when a module proves work against them. What nobody claims is never minted.
 
-A payout must not be a public transfer. Because user-to-user sends are refused (see [The chain](ch16-the-chain.md)), every protocol payment lands in the recipient's earnings ledger inside `x/fees`, and cannot be aimed at a chosen address.
+A payout must not be aimed at a chosen address. Every protocol payment lands in the recipient's earnings ledger inside `x/fees`, never in a public balance chosen by the payer. Users can pay each other in the open with an ordinary bank send, or privately through the pool (see [The chain](ch16-the-chain.md)).
 
 Fees follow the EIP-1559 shape and the base fee is burned entirely, so ordering a block enriches nobody.
 
@@ -65,7 +65,7 @@ Storage, relay and development shares are claimed by the modules that can prove 
 
 The fee must be at least the base fee times the gas limit; the excess is a tip. The payer is the fee granter if there is one, otherwise the first signer. The base fee comes from the payer's bank balance, with any shortfall drawn from its fee-only balance and then its earnings, so a validator holding only rewards can still transact. It is burned. The tip is credited to the proposer's operator earnings; if the proposer cannot be resolved, the whole fee is burned. An exact invariant holds: `burned + distributed == collected`.
 
-The tip must come from the bank balance alone. If a tip could draw on earnings, an account with no bank balance could send value to the next proposer's address by inflating the tip, which would be a public payment through the back door.
+The tip must come from the bank balance alone. A tip is a payment to the proposer; earnings pay fees and bonds.
 
 ## Earnings
 

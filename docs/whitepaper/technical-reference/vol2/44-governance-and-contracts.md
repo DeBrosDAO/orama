@@ -21,7 +21,7 @@ Third, nothing about the vote may be a shortcut. The delays are floors in code, 
 
 The contract runtime answers a different question: what may user code do on a chain whose money is private by default. Four constraints follow.
 
-- **User code must not reopen the public payment graph.** A contract cannot pay a user in norama. It pays into the user's earnings account instead.
+- **Norama is not wrapped.** A contract pays norama like any account, and can also pay into a user's earnings account. It cannot wrap norama as a token.
 - **User code must not become a way to upload unreviewed bytecode early.** Upload is closed until a sunset height, and a governed allow-list of code hashes is the only exception.
 - **State is not free.** Without a price on storage a contract could fill every node's disk. Contract state carries a refundable deposit.
 - **A contract must act only for itself.** The binding layer makes the contract the signer of every message it sends and has no field that names another.
@@ -140,13 +140,12 @@ A governance vote moves very little. The six parameters of the first row are the
 - **Upload.** The `UploadSunsetDecorator` checks every message of every transaction, including simulations. Before `upload_sunset_height` (default 3,162,240 blocks, 183 days at an assumed 5 s; the anchor window of the shielded pool assumes 6 s), `MsgStoreCode`, `MsgStoreAndInstantiateContract` and `MsgStoreAndMigrateContract` are refused unless the code id is in the genesis code set or the SHA-256 of the uncompressed wasm is on the enacted allow-list. A fresh store message names no code id, so in practice only the allow-list opens the door. The hash is of the uncompressed bytes (a gzip upload is decompressed, capped at 4 MiB), so a gzip wrapper does not change it. No message can change the sunset: `InitGenesis` is the only writer and it refuses a second write (`chain/x/wasmpolicy/keeper/keeper.go:CheckMsg`).
 - **Instantiate.** Every standard code accepts `Everybody`; instantiate is not otherwise restricted.
 
-### Norama stays out of contract hands
+### Norama stays out of token wrappers
 
-Three rules keep the public payment graph closed:
+Two rules keep norama itself intact:
 
-1. **Bank restriction.** `NoramaSendRestriction` lets a user or a contract send norama to a contract, but not a user to a user ([the shielded pool](43-the-shielded-pool.md)).
-2. **Contract send.** `ContractSendDecorator` is both an ante decorator and a bank send restriction: a contract may send norama only to another contract or to a module account on its list, never to a user (`chain/x/wasmpolicy/ante/send.go:ContractSendDecorator`). As a bank restriction it also applies to sends that a contract's submessages make and that never appear in the outer transaction.
-3. **Earnings.** A contract that owes a user ORAMA uses the earnings binding. The payment lands in the user's earnings account in `x/fees`, which cannot be sent, so the public balance never appears.
+1. **Public sends.** A contract is an ordinary account for payments. A user can pay a contract, a contract can bank-send norama to a user or to another contract, and nobody can bank-send to a module account (`BlockedAddresses`). A contract's submessages follow the same rule.
+2. **Earnings.** A contract that wants a payout to land in a user's earnings account, where it pays fees and bonds, uses the earnings binding.
 
 A token wrapper cannot hold or create norama: `RefuseNoramaWrapper` refuses a created denom that is `norama` or a factory denom whose subdenom is `norama`, and a held factory denom of that form. A contract may hold the native denom, to escrow ORAMA (`chain/x/wasmpolicy/norama.go:RefuseNoramaWrapper`). The same refusal covers mint and burn through the binding.
 
@@ -266,7 +265,7 @@ Queries for `x/houses`: `Params`, `Proposal`, `Vote`, `HouseBond`, `Tiers`, `Ena
 
 **No authority.** Every stock module's authority is the hash of a name that no module registers. `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg` covers bank, staking, distribution, consensus and upgrade. The upgrade path that `x/houses` uses is the keeper's `ScheduleUpgrade`, which needs no authority message and is reachable only from `execute`.
 
-**Contracts.** A contract can act for itself only. It cannot name a sender, reach a module that has no binding, delegate stake, redirect rewards, open a channel, or hold a norama wrapper. Its state costs the person who calls it. The remaining powers of a contract are the ones the bound modules give any account: create tokens, mint NFTs, list and bid, open a storage deal with its own funds, and pay a user's earnings. A contract that receives norama from users is a public account whose balance is visible, which is the opposite of the pool; the standard escrow and vesting contracts therefore pay out in tokens or into earnings.
+**Contracts.** A contract can act for itself only. It cannot name a sender, reach a module that has no binding, delegate stake, redirect rewards, open a channel, or hold a norama wrapper. Its state costs the person who calls it. The remaining powers of a contract are the ones the bound modules give any account: create tokens, mint NFTs, list and bid, open a storage deal with its own funds, and pay a user's earnings. A contract that receives norama from users is a public account whose balance is visible, which is the opposite of the pool. The standard escrow and multisig pay norama out by bank send; the vesting contract vests tokens.
 
 **Upload.** The sunset is the main defence against unreviewed code: before it, only the genesis five and governed hashes can be stored. After it, upload is open, and any code that passes wasmd's capability check can run. Gas and the deposit are then the bounds.
 
@@ -317,9 +316,9 @@ Queries for `x/houses`: `Params`, `Proposal`, `Vote`, `HouseBond`, `Tiers`, `Ena
 
 *Chosen:* wrap wasmd's VM engine with a metered store and a ledger of per-payer chunks. *Rejected:* a flat fee, and wasmd's own accounting. *Why:* wasmd prices gas but not retained bytes; a refundable deposit prices occupancy and returns it. Chunks per payer let the refund go to the person who paid, with a walk bounded by the chunk cap.
 
-### Contracts pay users through earnings
+### Contracts pay users by bank send or into earnings
 
-*Chosen:* the `earnings.pay` binding and a bank rule that refuses contract-to-user norama. *Rejected:* letting contracts send norama. *Why:* a contract payout would otherwise be a public transfer from a public account to a user, which is the leak the pool exists to prevent.
+*Chosen:* an ordinary bank send for a public payout, and the `earnings.pay` binding for a payout into earnings. *Rejected:* a bank rule that refuses contract-to-user norama. *Why:* user-to-user payments are public, so the rule protected nothing, and it stopped the multisig and the escrow from releasing ORAMA.
 
 ## Known gaps
 
@@ -341,7 +340,7 @@ Queries for `x/houses`: `Params`, `Proposal`, `Vote`, `HouseBond`, `Tiers`, `Ena
 - `chain/x/houses/keeper/`: `TestTiersStayClosedUntilOpeningRulesHold`, `TestSmallOperatorHouseBlocksStructuralVotes`, `TestOperatorHousePrefix16AndASNCaps`, `TestHouseBondLockAndSlashOnEquivocation`, `TestVetoWindow`, `TestDelegatedVoteCap`, `TestDirectVoteOverridesValidator`, `TestTimelocksAndNoEarlyExecution`, `TestSpendMintsOnlyWhenApprovedAndWithinCeiling`, `TestSplitStaysInsideCodedBoundsAndMIsOneWay`, `TestAdvance_aProposalThatNeverAdvancesIsFailedAtTheBound`, `TestAdvance_aStoreFaultStaysFatal`, `TestSoftwareUpgrade_isScheduledOnlyAfterItsTimelock`, `TestRelayReporters_refusedChangeFailsTheProposal`.
 - `chain/app/`: `TestEnactment_softwareUpgradeBecomesAnUpgradePlan`, `TestEnactment_uploadAllowListOpensOneCodeHashBeforeTheSunset`, `TestEnactment_emissionClosesEpochsAtTheEnactedSplit`, `TestUnreachableAuthority_rejectsEveryAuthorityGatedMsg`, `TestDeposit_growthIsChargedToTheCallerAndDeletionRefunds`, `TestDeposit_aTransactionCannotLockMoreThanTheCap`, `TestUpload_theHeightCannotBeChangedByAnyMessage`, `TestBindings_bypassAttemptsAreRefused`, `TestBindings_earningsPaymentIsTheOnlyNoramaPathToAUser`, `TestStandardMultisig_cannotPayNoramaToAUser`, `TestContracts_gasExhaustionAndUnboundedRecursionFailTheTransaction`, `TestCapabilitiesOmitIBCAndStargate`.
 - `chain/x/wasmbindings/`: `TestDecode_aSenderFieldCannotBeSmuggledIn`, `TestMessenger_refusesAnyStargateAndSetWithdrawAddress`, `TestQuerier_verifyProofRejectsTamperedProofsWithoutAnError`.
-- `chain/x/wasmpolicy/`: `TestUploadSunset`, `TestKeeperHasNoSunsetSetter`, `TestContractSendDecorator`, `TestApplyStateDelta_shrinkReleasesNewestChunkFirstToItsPayer`, `TestApplyStateDelta_aContractHoldsAtMostMaxChunksPayers`, `TestMeteredStore_countsNewKeysOverwritesAndDeletes`, `TestRefuseNoramaWrapper`.
+- `chain/x/wasmpolicy/`: `TestUploadSunset`, `TestKeeperHasNoSunsetSetter`, `TestApplyStateDelta_shrinkReleasesNewestChunkFirstToItsPayer`, `TestApplyStateDelta_aContractHoldsAtMostMaxChunksPayers`, `TestMeteredStore_countsNewKeysOverwritesAndDeletes`, `TestRefuseNoramaWrapper`.
 - `chain/contracts/standard/`: `TestLoad_everyArtifactMatchesItsPinnedHash`, `TestApply_refusesWhatItCannotAddTo`.
 
 **Fleet e2e** (the owner runs the fleet suite): `e2e/features/chain-economics/` covers the six houses messages' refusals, the houses queries and the closed tiers; `e2e/features/chain-assets/` covers the wasm policy against the build (no VM: no wasm types; VM: upload closed before the sunset); `e2e/features/chain-waivers/` holds the tripwires for unwired surfaces.

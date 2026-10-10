@@ -30,7 +30,13 @@ Each validator gets a power figure `P = (1 - lambda) x B + lambda x C`:
 
 The limits on `C`:
 
-**A cap.** No validator's capped share can exceed 5% of the set. Once more than 60 validators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs. Power removed from a capped validator is redistributed by water-filling.
+**A cap per operator.** No operator's capped share can exceed 5% of the set, however many validators it runs. Once more than 60 operators are active, the cap becomes 3%. It returns to 5% only after the active count has stayed under 50 for 30 epochs. Power removed from a capped operator is redistributed by water-filling.
+
+An operator is the account that registered the `x/nodes` node whose `consensus` binding holds the validator's ed25519 consensus key (see [Nodes](/docs/blockchain/nodes#bindings)). The chain adds up the stake of all of an operator's validators, applies the cap to the sum, and splits the operator's capped share back over its validators in proportion to their stake. One operator with 20 validators therefore holds 5% in total, not 20 shares of 5%, and a validator never holds more than its operator does. The ramp applies to each validator's stake as before, so adding a validator to a capped operator moves no power until its stake is admitted, and then only inside the operator's cap.
+
+A validator whose consensus key no live node binds belongs to no operator. All such validators share one bucket and one cap, so leaving a validator unregistered gains nothing over registering it. `oramad query power validator-power <valoper>` shows the operator a validator counts toward, or `unlinked`. Retiring the node unlinks its validators.
+
+The chain cannot tell two operator accounts apart: anyone can register a second operator, a second node and a second consensus binding. The cap therefore bounds a declared operator and raises the cost of splitting. It does not stop a determined party who registers separate operators.
 
 **A ramp.** A validator that has just become eligible does not receive its full share at once. The share ramps in over 30 epochs.
 
@@ -54,9 +60,9 @@ lambda = min(1, max(lambda_previous,
                     epochs since genesis / 365))
 ```
 
-So the committee fades out when bonded stake reaches 271,000 ORAMA or at epoch 365, whichever comes first. Two protections:
+So the committee fades out when bonded stake reaches 271,000 ORAMA or at epoch 365, whichever comes first. 271,000 ORAMA is about 5% of the first year's maximum emission: a year is 365 epochs of 14,848 ORAMA, 5,419,520 ORAMA, and 5% of that is 270,976 ORAMA (`bootstrap_exit_stake` in `chain/x/power/types/params.go`). Two protections:
 
-- Until the active validator count reaches a gate (twice the validators needed to fill 100% at the current cap), lambda is held at 0.95. Crossing the gate sets a flag permanently.
+- Until the active operator count reaches a gate (twice the operators needed to fill 100% at the current cap), lambda is held at 0.95. Crossing the gate sets a flag permanently.
 - Each step is shortened if needed so ramped shares and capped-stake shifts stay within one third per block.
 
 At lambda = 1 a seat that exists only on the committee drops to zero power.
@@ -94,4 +100,4 @@ The chain's systemd unit runs `check-sign-floor` before every start, so a stale 
 
 ## Queries
 
-`x/power` has no messages. Queries: `params`, `bootstrap-committee`, `lambda`, `validator-power` (only `comet_power` is filled) and `invariants`. `orama chain validator` lists the set. See [Reading the chain](/docs/blockchain/reading-the-chain).
+`x/power` has no messages. Queries: `params`, `bootstrap-committee`, `lambda`, `validator-power` (`comet_power` and the `operator` the validator counts toward are filled) and `invariants`. `orama chain validator` lists the set. See [Reading the chain](/docs/blockchain/reading-the-chain).

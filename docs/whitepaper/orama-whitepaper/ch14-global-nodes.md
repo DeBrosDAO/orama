@@ -48,11 +48,13 @@ Two nftables tables, each replaced atomically, define the boundary. Published po
 
 ## The registry
 
-`x/nodes` has eleven messages and no authority address, no pause and no parameter-change message; its genesis values are final. Every message is signed by the operator who owns the record, from a wallet key that never sits on a node.
+`x/nodes` has thirteen messages and no authority address, no pause and no parameter-change message; its genesis values are final. Every message is signed by the operator who owns the record, from a wallet key that never sits on a node.
 
 **Registration.** `MsgRegisterNode` fixes the node's roles and carries service-key bindings: a service key signs `orama-global-bind-v1|chain-id|operator|service|pubkey`, proving the holder accepts that operator. A key can be bound to one live node network-wide, and a retired key is revoked forever, so nobody can claim another operator's relay identity. The node also has a secp256k1 hot key, which must prove possession of itself through a `hot-key` binding. The provider, archiver and reporter sign with it. `MsgFundHotKey` funds it from the operator's earnings and has no destination field, so the money can only reach the key that proved itself; it pays base fees and nothing else.
 
 **Endpoints.** Hosts must be public, and no two live nodes may claim one literal IP.
+
+**Names.** An operator can claim one identification name per node, a DNS label under the network's domain that points at the node's literal IPs and delegates nothing. The chain enforces the label rules, a reserved list, first come first served and a refundable deposit that comes back when the name is released or the node retires.
 
 **Bonds.** A bond is norama escrowed in the `nodes` module account, per role. A role is active only while the node is active and that role's bond meets the minimum. Unbonding queues the amount for 21 days, still slashable.
 

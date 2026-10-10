@@ -16,6 +16,7 @@ func DefaultGenesisState() *GenesisState {
 		Unbondings:     []UnbondingEntry{},
 		RevokedPubkeys: []RevokedPubkey{},
 		ServiceDays:    []ServiceDay{},
+		NodeNames:      []NodeName{},
 	}
 }
 
@@ -125,6 +126,10 @@ func (gs GenesisState) Validate() error {
 		return fmt.Errorf("next_unbonding_id %d is not above existing ids (need >= %d)", gs.NextUnbondingId, maxID)
 	}
 
+	if err := validateGenesisNames(gs.NodeNames, nodes); err != nil {
+		return err
+	}
+
 	days := make(map[string]struct{}, len(gs.ServiceDays))
 	for _, day := range gs.ServiceDays {
 		addr, err := CanonicalAddress(day.Operator)
@@ -145,6 +150,40 @@ func (gs GenesisState) Validate() error {
 			return fmt.Errorf("duplicate service day %s", key)
 		}
 		days[key] = struct{}{}
+	}
+	return nil
+}
+
+// validateGenesisNames checks the claimed names against the nodes that hold them: valid and unique
+// names, one per node, each on a live node of the claiming operator, each with a positive deposit.
+func validateGenesisNames(names []NodeName, nodes map[string]Node) error {
+	byName := make(map[string]struct{}, len(names))
+	byNode := make(map[string]struct{}, len(names))
+	for _, claim := range names {
+		if err := ValidateName(claim.Name); err != nil {
+			return fmt.Errorf("node name: %w", err)
+		}
+		node, ok := nodes[claim.NodeId]
+		if !ok {
+			return fmt.Errorf("name %s references unknown node %s", claim.Name, claim.NodeId)
+		}
+		if node.Status == NodeStatusRetired || node.Status == NodeStatusTombstoned {
+			return fmt.Errorf("name %s is held by %s node %s", claim.Name, node.Status, claim.NodeId)
+		}
+		if claim.Operator != node.Operator {
+			return fmt.Errorf("name %s operator %s does not own node %s", claim.Name, claim.Operator, claim.NodeId)
+		}
+		if err := PositiveAmount(claim.Deposit); err != nil {
+			return fmt.Errorf("name %s deposit: %w", claim.Name, err)
+		}
+		if _, ok := byName[claim.Name]; ok {
+			return fmt.Errorf("duplicate node name %s", claim.Name)
+		}
+		if _, ok := byNode[claim.NodeId]; ok {
+			return fmt.Errorf("node %s holds two names", claim.NodeId)
+		}
+		byName[claim.Name] = struct{}{}
+		byNode[claim.NodeId] = struct{}{}
 	}
 	return nil
 }
@@ -181,6 +220,9 @@ func validateGenesisNode(node Node, p Params, operators, revoked map[string]stru
 			return fmt.Errorf("node %s requires a binding", node.NodeId)
 		}
 		if err := CheckHotKeyBinding(node.HotKey, node.Bindings); err != nil {
+			return fmt.Errorf("node %s: %w", node.NodeId, err)
+		}
+		if err := CheckConsensusBinding(node.Bindings); err != nil {
 			return fmt.Errorf("node %s: %w", node.NodeId, err)
 		}
 	}

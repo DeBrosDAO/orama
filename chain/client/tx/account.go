@@ -4,8 +4,7 @@
 // is params.CoinType, applied through the SDK config the same way
 // app.SetAddressPrefixes does. This package does not derive that leaf again,
 // does not submit transactions, and does not prove shielded payments. A
-// user-to-user MsgSend can be encoded here; whether the chain accepts the
-// payment is the app's send restriction, not this builder.
+// user-to-user MsgSend can be encoded here like any other message.
 package tx
 
 import (

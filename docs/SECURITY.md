@@ -792,12 +792,11 @@ the other way round. CosmWasm contracts are the one place that rule has a declar
   (escrow, markets, DeFi all need that), and a contract may mint its own token: through the `x/token`
   binding (`factory/{contract}/{subdenom}`), or as a CW20 (the standard CW20 base). Nothing on chain ties
   the token's supply to the ORAMA the contract holds, and the token transfers publicly between users, so a
-  contract that issues one turns held ORAMA into a public payment rail. The chain does not stop this. The
+  contract that issues one turns held ORAMA into a transferable token. The chain does not stop this. The
   only way to stop it is to forbid contracts from holding ORAMA between transactions, which breaks escrow,
   markets and DeFi, and the owner chose to allow it and declare it here.
 - **What the chain does refuse.** A token wrapper named `norama` (the `x/token` binding refuses to create,
-  mint or burn a token whose subdenom is `norama`, or `norama` itself), a bank send from a contract to a
-  user, `CosmosMsg::Any` (the stargate form) and `SetWithdrawAddress`, so a contract cannot reach a module
+  mint or burn a token whose subdenom is `norama`, or `norama` itself), `CosmosMsg::Any` (the stargate form) and `SetWithdrawAddress`, so a contract cannot reach a module
   it has no binding for or redirect staking rewards. The genesis CW20 base is a user-token base; it is
   never given ORAMA to wrap. `x/wasmpolicy.RefuseNoramaWrapper` is the rule and
   `TestBindings_aContractCanIssueAPublicIOUForOramaItHolds` and `TestBindings_tokenBindingRefusesToWrapNorama`

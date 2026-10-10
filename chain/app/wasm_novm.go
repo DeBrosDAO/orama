@@ -3,7 +3,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,10 +12,8 @@ import (
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
 
-	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
@@ -36,8 +33,6 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		panic(err)
 	}
 	app.mountWasmPolicy(keys)
-	app.isContract = func(context.Context, sdk.AccAddress) bool { return false }
-	app.contractSend = ante.NewContractSendDecorator(app.isContract, moduleAccountNames())
 	app.wasmModules = []module.AppModule{policyModule(app.WasmPolicyKeeper)}
 	app.wasmGenesisOrder = []string{types.ModuleName}
 }

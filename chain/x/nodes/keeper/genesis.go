@@ -11,7 +11,7 @@ import (
 )
 
 // InitGenesis writes genesis state. The nodes module account must already
-// hold bonds + unbonding norama; this method does not mint.
+// hold bonds + unbonding + name deposit norama; this method does not mint.
 func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 	if err := gs.Validate(); err != nil {
 		return fmt.Errorf("invalid nodes genesis state: %w", err)
@@ -82,6 +82,11 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs types.GenesisState) error {
 			return fmt.Errorf("set unbonding sequence: %w", err)
 		}
 	}
+	for _, claim := range gs.NodeNames {
+		if err := k.indexName(ctx, claim); err != nil {
+			return err
+		}
+	}
 	for _, day := range gs.ServiceDays {
 		if err := k.ServiceDays.Set(ctx, collections.Join(day.Operator, day.DayIndex), day); err != nil {
 			return fmt.Errorf("set service day %s/%d: %w", day.Operator, day.DayIndex, err)
@@ -140,6 +145,12 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("export service days: %w", err)
 	}
+	if err := k.Names.Walk(ctx, nil, func(_ string, claim types.NodeName) (bool, error) {
+		gs.NodeNames = append(gs.NodeNames, claim)
+		return false, nil
+	}); err != nil {
+		return nil, fmt.Errorf("export node names: %w", err)
+	}
 	next, err := k.NextUnbonding.Peek(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("export unbonding sequence: %w", err)
@@ -162,6 +173,9 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (*types.GenesisState, error) {
 	}
 	if gs.ServiceDays == nil {
 		gs.ServiceDays = []types.ServiceDay{}
+	}
+	if gs.NodeNames == nil {
+		gs.NodeNames = []types.NodeName{}
 	}
 	return gs, nil
 }

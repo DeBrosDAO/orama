@@ -101,6 +101,9 @@ func (k Keeper) RegisterNode(ctx sdk.Context, msg *types.MsgRegisterNode) error 
 		if err := types.CheckHotKeyBinding(hot, msg.Bindings); err != nil {
 			return err
 		}
+		if err := types.CheckConsensusBinding(msg.Bindings); err != nil {
+			return err
+		}
 		for _, binding := range msg.Bindings {
 			if err := k.assertPubkeyAvailable(ctx, binding.Pubkey, ""); err != nil {
 				return err
@@ -186,6 +189,9 @@ func (k Keeper) UpdateNode(ctx sdk.Context, msg *types.MsgUpdateNode) error {
 			return err
 		}
 		if err := types.CheckHotKeyBinding(node.HotKey, node.Bindings); err != nil {
+			return err
+		}
+		if err := types.CheckConsensusBinding(node.Bindings); err != nil {
 			return err
 		}
 		if err := k.reindexNode(ctx, before, node); err != nil {
@@ -333,6 +339,9 @@ func (k Keeper) retireNode(ctx sdk.Context, node *types.Node, status types.NodeS
 		}
 	}
 	if err := k.releaseIdentity(ctx, *node); err != nil {
+		return err
+	}
+	if _, err := k.releaseNodeName(ctx, node.NodeId, retireReason(status)); err != nil {
 		return err
 	}
 	node.Bindings = nil
@@ -705,4 +714,12 @@ func (k Keeper) chargeCluster(ctx sdk.Context, cluster *types.Cluster) error {
 	cluster.DepositBytes = got
 	cluster.DepositParts = parts
 	return nil
+}
+
+// retireReason names why a closing node releases its name.
+func retireReason(status types.NodeStatus) string {
+	if status == types.NodeStatusTombstoned {
+		return releaseReasonTombstone
+	}
+	return releaseReasonRetire
 }

@@ -164,6 +164,7 @@ export const BLOCKCHAIN_DOCS: DocLink[] = [
   { title: "The modules", slug: "blockchain/modules", icon: Boxes, description: "Every module and its state", group: "The chain" },
   { title: "Reading the chain", slug: "blockchain/reading-the-chain", icon: Search, description: "CLI, gateway, SDK, explorer", group: "The chain" },
   { title: "Supply and emission", slug: "blockchain/supply", icon: Coins, description: "Halving schedule and the split", group: "Economics" },
+  { title: "What do I earn", slug: "blockchain/what-do-i-earn", icon: Coins, description: "Pay per epoch for validators, storage and relays", group: "Economics" },
   { title: "Fees", slug: "blockchain/fees", icon: Coins, description: "Base fee, tips, earnings", group: "Economics" },
   { title: "Validators and staking", slug: "blockchain/validators", icon: ShieldCheck, description: "Power, hand-over, slashing", group: "Consensus" },
   { title: "Governance", slug: "blockchain/governance", icon: Gavel, description: "The two houses", group: "Consensus" },

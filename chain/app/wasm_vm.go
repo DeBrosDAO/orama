@@ -34,7 +34,6 @@ import (
 	tokenkeeper "github.com/DeBrosOfficial/network/chain/x/token/keeper"
 	"github.com/DeBrosOfficial/network/chain/x/wasmbindings"
 	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy"
-	"github.com/DeBrosOfficial/network/chain/x/wasmpolicy/ante"
 	policytypes "github.com/DeBrosOfficial/network/chain/x/wasmpolicy/types"
 )
 
@@ -68,9 +67,8 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 
 	var wasmK *wasmkeeper.Keeper
 	isContract := func(ctx context.Context, addr sdk.AccAddress) bool {
-		return wasmK.HasContractInfo(ctx, addr) || wasmpolicy.IsFundedContract(ctx, addr)
+		return wasmK.HasContractInfo(ctx, addr)
 	}
-	app.isContract = isContract
 	querier := wasmbindings.NewQuerier(
 		tokenkeeper.NewQueryServerImpl(app.TokenKeeper),
 		app.CnftKeeper,
@@ -95,7 +93,6 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		wasmtypes.VMConfig{},
 		WasmCapabilities(),
 		UnreachableAuthority(),
-		wasmkeeper.WithCoinTransferrer(newAllowModuleTransferrer(app.BankKeeper)),
 		wasmkeeper.WithMessageHandlerDecorator(func(old wasmkeeper.Messenger) wasmkeeper.Messenger {
 			return wasmbindings.NewMessenger(rejectContractIBC(old), app.MsgServiceRouter(), app.FeesKeeper)
 		}),
@@ -112,7 +109,6 @@ func (app *OramaApp) installWasm(keys map[string]*storetypes.KVStoreKey, appOpts
 		return err
 	}
 	app.wasmKeeper = keeper
-	app.contractSend = ante.NewContractSendDecorator(isContract, moduleAccountNames())
 	//lint:ignore SA1019 module.NewManager accepts only the legacy module.AppModule; the modules are wired through it
 	app.wasmModules = []module.AppModule{
 		policyModule(app.WasmPolicyKeeper),
@@ -193,36 +189,6 @@ func (noopChannelV2) GetAsyncPacket(sdk.Context, string, uint64) (channeltypesv2
 type noopPort struct{}
 
 func (noopPort) GetPort(sdk.Context) string { return "" }
-
-type allowModuleTransferrer struct {
-	inner wasmkeeper.CoinTransferrer
-	bank  wasmtypes.BankKeeper
-	allow []sdk.AccAddress
-}
-
-func newAllowModuleTransferrer(bank wasmtypes.BankKeeper) allowModuleTransferrer {
-	allow := make([]sdk.AccAddress, 0, len(wasmpolicy.FeeEarningsModules()))
-	for _, name := range wasmpolicy.FeeEarningsModules() {
-		allow = append(allow, authtypes.NewModuleAddress(name))
-	}
-	return allowModuleTransferrer{
-		inner: wasmkeeper.NewBankCoinTransferrer(bank),
-		bank:  bank,
-		allow: allow,
-	}
-}
-
-func (t allowModuleTransferrer) TransferCoins(ctx sdk.Context, from, to sdk.AccAddress, amt sdk.Coins) error {
-	for _, allowed := range t.allow {
-		if allowed.Equals(to) {
-			// Skip the stock BlockedAddr check. SendCoins still runs the norama restriction.
-			return t.bank.SendCoins(ctx, from, to, amt)
-		}
-	}
-	// wasmd calls this only to fund a contract, instantiate or execute, and for instantiate the
-	// contract is not registered yet: tell the norama restrictions the recipient is one.
-	return t.inner.TransferCoins(wasmpolicy.WithFundedContract(ctx, to), from, to, amt)
-}
 
 type ibcRejectMessenger struct {
 	next wasmkeeper.Messenger

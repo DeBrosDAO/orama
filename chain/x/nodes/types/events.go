@@ -12,6 +12,8 @@ const (
 	EventTypeRegisterCluster  = "register_cluster"
 	EventTypeUpdateCluster    = "update_cluster"
 	EventTypeRetireCluster    = "retire_cluster"
+	EventTypeClaimNodeName    = "claim_node_name"
+	EventTypeReleaseNodeName  = "release_node_name"
 	EventTypeSlash            = "slash_node"
 	EventTypeJail             = "jail_node"
 	EventTypeUnjail           = "unjail_node"
@@ -23,4 +25,7 @@ const (
 	AttributeRole     = "role"
 	AttributeAmount   = "amount"
 	AttributeHotKey   = "hot_key"
+	AttributeName     = "name"
+	AttributeDeposit  = "deposit"
+	AttributeReason   = "reason"
 )
