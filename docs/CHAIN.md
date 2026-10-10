@@ -579,11 +579,11 @@ first, so a refusal the chain would give costs the faucet no fee, and answers
 `200 {"tx_hash","amount","height"}` once the drip is in a block. The refusals are JSON `{"error","message"}`:
 `bad_request` (400), `bad_recipient` (400: not a canonical lowercase address, the faucet's own account, or a
 module or blocked account, which the chain decides), `bad_amount` (400: not a whole number of norama, or over
-`faucet_max_drip`), `cooldown` (429), `epoch_cap` (503), `faucet_disabled` (403), `busy` (503 with
+`faucet_max_drip`), `cooldown` (429), `allowance_spent` (429 with `Retry-After`: a client network may ask 20,000 ORAMA in a day in all, charged before the drip and given back if it is not made, so that one client cannot spend the epoch's cap on fresh recipients), `epoch_cap` (503), `faucet_disabled` (403), `busy` (503 with
 `Retry-After`: 16 drips wait for the account's turn), `unavailable` (503: the faucet account does not exist or
 cannot pay a fee), `pending` (504: sent and not yet in a block, after 45 seconds) and `faucet_failed` (502, the
 details only in the gateway's log). The route has two rate-limit buckets of its own, 3 a minute with a burst of
-3 per client network and 20 a minute with a burst of 6 for the whole route, and at most 24 requests in flight.
+3 per client network and 20 a minute with a burst of 6 for the whole route, and at most 24 requests in flight. A caller on the node's own loopback with no forwarding header, exempt from every other route's limits, is held to them too.
 
 **Provisioning.** On the node, as root, `orama maint faucet init` makes the key (never replacing one) and prints
 the faucet account. The account pays one fee per drip and holds nothing else, so it needs a few ORAMA. It cannot

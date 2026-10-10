@@ -157,3 +157,35 @@ func TestChainTxRoutes_oneClientCannotUseUpTheFaucetForOthers(t *testing.T) {
 		t.Errorf("a client past the route's burst got %d, want 429: many addresses must not lift the route's limit", last.Code)
 	}
 }
+
+// The faucet mints for whoever asks, so a caller on this machine without a forwarding header, which
+// every other route lets through, is held to the faucet's buckets: tenant code runs here too.
+func TestChainTxRoutes_theFaucetLimitsLocalCallersToo(t *testing.T) {
+	logger, _ := logging.NewColoredLogger(logging.ComponentGateway, false)
+	g := &Gateway{
+		logger:             logger,
+		rateLimiter:        NewRateLimiter(100000, 100000),
+		chainFaucetLimiter: newChainTxLimiter(chainFaucetPerAddressPerMinute, chainFaucetPerAddressBurst, chainFaucetRoutePerMinute, chainFaucetRouteBurst),
+	}
+	served := 0
+	handler := g.rateLimitMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { served++ }))
+	local := func(method, path string) *http.Request {
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = "127.0.0.1:40000"
+		return req
+	}
+	for i := 0; i < 10; i++ {
+		handler.ServeHTTP(httptest.NewRecorder(), local(http.MethodPost, chainFaucetPath))
+	}
+	if served != chainFaucetPerAddressBurst {
+		t.Errorf("a local caller was served %d of 10 faucet requests, want its burst of %d", served, chainFaucetPerAddressBurst)
+	}
+	served = 0
+	for _, path := range []string{"/v1/chain/status", chainBroadcastPath} {
+		handler.ServeHTTP(httptest.NewRecorder(), local(http.MethodPost, path))
+	}
+	handler.ServeHTTP(httptest.NewRecorder(), local(http.MethodGet, chainFaucetPath))
+	if served != 3 {
+		t.Errorf("%d of 3 other local requests were served: only a POST to the faucet is held to its buckets", served)
+	}
+}

@@ -95,6 +95,11 @@ func (g *Gateway) chainTxLimiterFor(r *http.Request) *chainTxLimiter {
 	return nil
 }
 
+// isFaucetPost reports whether r is a POST to the faucet route.
+func isFaucetPost(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == chainFaucetPath
+}
+
 func writeChainTxRateLimited(w http.ResponseWriter) {
 	httputil.WriteRPCError(w, http.StatusTooManyRequests,
 		httputil.ErrCodeRateLimited,

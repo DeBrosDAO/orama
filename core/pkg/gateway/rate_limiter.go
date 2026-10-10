@@ -144,7 +144,10 @@ func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		client, exempt := rateLimitClient(r)
-		if exempt {
+		// A process on this machine is exempt from the limits, and a tenant's code can be one:
+		// the faucet mints for whoever asks, so its buckets apply to the node's own loopback
+		// callers too (they share the one bucket of the loopback address).
+		if exempt && !isFaucetPost(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

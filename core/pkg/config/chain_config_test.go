@@ -56,6 +56,9 @@ func TestConfigValidate_faucet(t *testing.T) {
 		"a key file with the faucet off": {KeyFile: "/etc/orama/faucet.key"},
 		"a relative key file":            {Enabled: true, KeyFile: "faucet.key"},
 		"an unclean key file":            {Enabled: true, KeyFile: "/etc/orama/../faucet.key"},
+		"a quote in the key file":        {Enabled: true, KeyFile: `/etc/orama/"x.key`},
+		"a newline in the key file":      {Enabled: true, KeyFile: "/etc/orama/x\nfaucet.key"},
+		"a space in the key file":        {Enabled: true, KeyFile: "/etc/orama/my faucet.key"},
 	} {
 		cfg.Chain.Faucet = f
 		errs := cfg.Validate()

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/chainfaucet"
+	"github.com/DeBrosOfficial/network/pkg/gateway/clientkey"
 )
 
 // The faucet route of a test network's gateway:
@@ -91,12 +92,30 @@ func (p *Proxy) serveFaucet(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), faucetWait)
 	defer cancel()
+	// The allowance is charged before the drip and given back if it is not made, so a refused
+	// request costs the client nothing; a drip that is sent and not yet in a block stays charged.
+	client := clientkey.BucketKey(clientkey.Attribute(r))
+	if wait, ok := p.faucetBudget.Take(client, amount); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeFaucetError(w, http.StatusTooManyRequests, string(chainfaucet.KindAllowance),
+			"this network has asked for its whole allowance of the faucet for now; try again later")
+		return
+	}
 	dripped, err := p.faucet.Drip(ctx, req.Recipient, amount)
 	if err != nil {
+		if !isPending(err) {
+			p.faucetBudget.Return(client, amount)
+		}
 		writeFaucetFailure(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, faucetAnswer{TxHash: dripped.TxHash, Amount: dripped.Amount.String(), Height: strconv.FormatInt(dripped.Height, 10)})
+}
+
+// isPending reports a drip that was sent and is not in a block yet.
+func isPending(err error) bool {
+	var refusal *chainfaucet.Refusal
+	return errors.As(err, &refusal) && refusal.Kind == chainfaucet.KindPending
 }
 
 // readFaucetRequest checks the method, the content type and the body, and returns the request and
@@ -151,6 +170,7 @@ var faucetStatus = map[chainfaucet.Kind]int{
 	chainfaucet.KindBadRecipient: http.StatusBadRequest,
 	chainfaucet.KindBadAmount:    http.StatusBadRequest,
 	chainfaucet.KindCooldown:     http.StatusTooManyRequests,
+	chainfaucet.KindAllowance:    http.StatusTooManyRequests,
 	chainfaucet.KindEpochCap:     http.StatusServiceUnavailable,
 	chainfaucet.KindDisabled:     http.StatusForbidden,
 	chainfaucet.KindBusy:         http.StatusServiceUnavailable,

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -205,6 +206,7 @@ func TestFaucet_everyRefusalIsAStatusAndAKindTheClientCanActOn(t *testing.T) {
 		chainfaucet.KindBadRecipient: http.StatusBadRequest,
 		chainfaucet.KindBadAmount:    http.StatusBadRequest,
 		chainfaucet.KindCooldown:     http.StatusTooManyRequests,
+		chainfaucet.KindAllowance:    http.StatusTooManyRequests,
 		chainfaucet.KindEpochCap:     http.StatusServiceUnavailable,
 		chainfaucet.KindDisabled:     http.StatusForbidden,
 		chainfaucet.KindBusy:         http.StatusServiceUnavailable,
@@ -229,7 +231,7 @@ func TestFaucet_everyRefusalIsAStatusAndAKindTheClientCanActOn(t *testing.T) {
 
 func TestFaucet_everyKindHasAStatus(t *testing.T) {
 	for _, kind := range []chainfaucet.Kind{
-		chainfaucet.KindBadRecipient, chainfaucet.KindBadAmount, chainfaucet.KindCooldown, chainfaucet.KindEpochCap,
+		chainfaucet.KindBadRecipient, chainfaucet.KindBadAmount, chainfaucet.KindCooldown, chainfaucet.KindAllowance, chainfaucet.KindEpochCap,
 		chainfaucet.KindDisabled, chainfaucet.KindBusy, chainfaucet.KindUnavailable, chainfaucet.KindPending,
 	} {
 		if _, ok := faucetStatus[kind]; !ok {
@@ -281,5 +283,68 @@ func TestFaucet_requestsInFlightAreBounded(t *testing.T) {
 	}
 	if postFaucet(p, `{"recipient":"`+faucetRecipient+`"}`).Code != http.StatusOK {
 		t.Error("the slots were not given back")
+	}
+}
+
+// One client network cannot ask for the chain's maximum drip over and over for fresh recipients
+// until the epoch's cap is spent for everyone: it has an allowance for the day.
+func TestFaucet_aClientNetworkHasADailyAllowance(t *testing.T) {
+	f := &fakeFaucet{}
+	p := faucetProxy(t, f)
+	each := big.NewInt(chainfaucet.DefaultBudgetNorama / 2)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + each.String() + `"}`
+	for i := 0; i < 2; i++ {
+		if rec := postFaucet(p, body); rec.Code != http.StatusOK {
+			t.Fatalf("drip %d inside the allowance: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	rec := postFaucet(p, body)
+	if rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindAllowance) {
+		t.Fatalf("a drip over the allowance: %d %s", rec.Code, rec.Body)
+	}
+	if secs, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || secs < 1 {
+		t.Errorf("Retry-After = %q: it says when the allowance comes back", rec.Header().Get("Retry-After"))
+	}
+	if len(f.got()) != 2 {
+		t.Errorf("%d drips reached the faucet; the refused one must not", len(f.got()))
+	}
+	other := httptest.NewRequest(http.MethodPost, mountPrefix+faucetPath, strings.NewReader(body))
+	other.Header.Set("Content-Type", "application/json")
+	other.RemoteAddr = "198.51.100.9:4000"
+	otherRec := httptest.NewRecorder()
+	p.ServeHTTP(otherRec, other)
+	if otherRec.Code != http.StatusOK {
+		t.Errorf("another network was refused for the first one's drips: %d %s", otherRec.Code, otherRec.Body)
+	}
+}
+
+func TestFaucet_aDripThatWasNotMadeCostsNoAllowance(t *testing.T) {
+	f := &fakeFaucet{err: &chainfaucet.Refusal{Kind: chainfaucet.KindCooldown, Message: "soon"}}
+	p := faucetProxy(t, f)
+	whole := big.NewInt(chainfaucet.DefaultBudgetNorama)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + whole.String() + `"}`
+	for i := 0; i < 5; i++ {
+		if rec := postFaucet(p, body); rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindCooldown) {
+			t.Fatalf("refusal %d: %d %s; refusals of the chain must not use the allowance up", i, rec.Code, rec.Body)
+		}
+	}
+	f.err = nil
+	if rec := postFaucet(p, body); rec.Code != http.StatusOK {
+		t.Errorf("a drip after five refusals: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A drip that was sent and is not in a block yet may still land, so it stays charged.
+func TestFaucet_aPendingDripStaysCharged(t *testing.T) {
+	f := &fakeFaucet{err: &chainfaucet.Refusal{Kind: chainfaucet.KindPending, Message: "waiting"}}
+	p := faucetProxy(t, f)
+	whole := big.NewInt(chainfaucet.DefaultBudgetNorama)
+	body := `{"recipient":"` + faucetRecipient + `","amount":"` + whole.String() + `"}`
+	if rec := postFaucet(p, body); rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	f.err = nil
+	if rec := postFaucet(p, body); rec.Code != http.StatusTooManyRequests || faucetErrorOf(t, rec).Error != string(chainfaucet.KindAllowance) {
+		t.Errorf("a pending drip gave its allowance back: %d %s", rec.Code, rec.Body)
 	}
 }

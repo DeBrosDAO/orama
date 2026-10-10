@@ -24,6 +24,8 @@ const (
 	// KindDisabled: this chain does not run a faucet (a production chain id, or the genesis
 	// left faucet_enabled off).
 	KindDisabled Kind = "faucet_disabled"
+	// KindAllowance: the client network has asked for its whole allowance of the window.
+	KindAllowance Kind = "allowance_spent"
 	// KindBusy: too many drips are waiting for the faucet's turn.
 	KindBusy Kind = "busy"
 	// KindUnavailable: the faucet cannot pay for the drip, or cannot reach its chain.

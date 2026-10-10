@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/chainfaucet"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -169,8 +171,9 @@ type Proxy struct {
 	// lightSlots bounds the light-client calls in flight (light.go).
 	lightSlots chan struct{}
 	// faucet and faucetSlots are the faucet route's service and its requests in flight (faucet.go).
-	faucet      FaucetService
-	faucetSlots chan struct{}
+	faucet       FaucetService
+	faucetSlots  chan struct{}
+	faucetBudget *chainfaucet.Budget
 	// heightMu guards the cached latest height the query window check reads.
 	heightMu  sync.Mutex
 	heightVal int64
@@ -213,6 +216,7 @@ func New(cfg Config) (*Proxy, error) {
 		lightSlots:     make(chan struct{}, lightMaxConcurrent),
 		faucet:         cfg.Faucet,
 		faucetSlots:    make(chan struct{}, faucetMaxConcurrent),
+		faucetBudget:   chainfaucet.NewBudget(big.NewInt(chainfaucet.DefaultBudgetNorama), chainfaucet.BudgetWindow),
 	}, nil
 }
 
