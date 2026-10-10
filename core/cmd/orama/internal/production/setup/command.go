@@ -246,11 +246,9 @@ func enrollKey(opts Options, pubKey, knownHosts string) error {
 	fmt.Printf("  Installing SSH key on %s...\n", opts.IP)
 	var err error
 	if opts.UsePassword {
-		password := opts.Password
-		if password == "" {
-			if password, err = vaultPassword(opts.IP, opts.User); err != nil {
-				return err
-			}
+		var password string
+		if password, err = enrollPassword(opts); err != nil {
+			return err
 		}
 		err = installPublicKey(opts.IP, opts.User, password, pubKey, knownHosts)
 	} else {
@@ -261,6 +259,15 @@ func enrollKey(opts Options, pubKey, knownHosts string) error {
 	}
 	fmt.Println("  SSH key installed")
 	return nil
+}
+
+// enrollPassword is the VPS password for this run: the one typed into the wizard,
+// else the login entry in the RootWallet vault.
+func enrollPassword(opts Options) (string, error) {
+	if opts.Password != "" {
+		return opts.Password, nil
+	}
+	return vaultPassword(opts.IP, opts.User)
 }
 
 // pinHostKey scans the VPS host key, has the operator confirm it (or matches

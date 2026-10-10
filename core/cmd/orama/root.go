@@ -26,6 +26,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/networkcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/node"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/nodescmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/setupcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/sshcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/statuscmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/storagecmd"
@@ -69,6 +70,9 @@ and no Orama MCP.`,
 			fmt.Fprintln(cmd.OutOrStdout(), resolveBuildInfo(version, commit, date))
 		},
 	})
+
+	// Join a network from fresh machines
+	rootCmd.AddCommand(setupcmd.Cmd)
 
 	// Node operator commands (was "prod")
 	rootCmd.AddCommand(node.Cmd)

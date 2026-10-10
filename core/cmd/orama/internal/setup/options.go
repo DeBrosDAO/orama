@@ -20,6 +20,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -131,6 +132,13 @@ func (o *Options) Normalize() error {
 		}
 	}
 	return nil
+}
+
+// ParseIPList splits a pasted list of addresses (spaces, commas, semicolons or
+// lines) and checks each one is a public IPv4 address.
+func ParseIPList(list string) ([]string, error) {
+	fields := strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ';' || unicode.IsSpace(r) })
+	return normalizeIPs(fields)
 }
 
 func normalizeIPs(in []string) ([]string, error) {

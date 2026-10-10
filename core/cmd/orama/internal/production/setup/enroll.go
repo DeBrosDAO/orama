@@ -2,6 +2,7 @@ package setup
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/inspector"
 	"github.com/DeBrosOfficial/network/pkg/remotessh"
@@ -88,4 +89,38 @@ func Enroll(req EnrollRequest) (*Enrolled, error) {
 // NodeArch is the architecture the node reports, as Go names it (amd64, arm64).
 func NodeArch(node inspector.Node) (string, error) {
 	return nodeArchitecture(node)
+}
+
+// HostKeyInfo is one SSH host key a machine presents: its type and its
+// SHA256:... fingerprint, as a provider's console shows it.
+type HostKeyInfo struct {
+	Type        string
+	Fingerprint string
+}
+
+// HostKeys scans the host keys ip presents now, with their fingerprints. Nothing
+// vouches for them: the caller shows them to the operator, who compares them with
+// the provider's console, and passes the one that matched as the expected
+// fingerprint of EnrollRequest.
+func HostKeys(ip string) ([]HostKeyInfo, error) {
+	hk, err := scanHostKey(ip)
+	if err != nil {
+		return nil, err
+	}
+	return hostKeyInfos(hk), nil
+}
+
+// hostKeyInfos describes each scanned key: the type is the second field of its
+// known_hosts line (ssh-ed25519, ecdsa-sha2-nistp256, ssh-rsa).
+func hostKeyInfos(hk *hostKey) []HostKeyInfo {
+	keys := make([]HostKeyInfo, len(hk.lines))
+	for i, line := range hk.lines {
+		fields := strings.Fields(line)
+		typ := "unknown"
+		if len(fields) >= 2 {
+			typ = strings.TrimPrefix(fields[1], "ssh-")
+		}
+		keys[i] = HostKeyInfo{Type: typ, Fingerprint: hk.fingerprints[i]}
+	}
+	return keys
 }

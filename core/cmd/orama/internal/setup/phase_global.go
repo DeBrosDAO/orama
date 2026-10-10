@@ -97,7 +97,7 @@ func (r *runner) contact() string {
 	if r.opts.Contact != "" {
 		return r.opts.Contact
 	}
-	return "orama operator " + r.oper
+	return "operator " + r.oper
 }
 
 // waitSynced polls the chain node until it has restored its snapshot and caught

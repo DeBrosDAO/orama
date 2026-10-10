@@ -460,7 +460,7 @@ list, setup, remove, wipe, dns delegation
 Installing a node's software, staging an archive, auto-update, recovery and
 migration are maintainer commands: see 'orama maint node'.
 
-Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `remove`, `report`, `restart`, `setup`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
+Subcommands: `dns`, `doctor`, `invite`, `list`, `logs`, `remove`, `report`, `restart`, `start`, `status`, `stop`, `trust`, `uninstall`, `upgrade`, `wipe`
 
 ## orama node dns
 
@@ -657,11 +657,14 @@ Use --force to bypass quorum safety check.
 
 ## orama node setup
 
-Set up a fresh VPS as an Orama node
+Set up a fresh VPS as an Orama node (use orama setup)
 
 ```
 orama node setup [flags]
 ```
+
+Use "orama setup": it does this for every machine you give it, and the rest of joining the
+network as well. This command stays for now and installs the cluster node only.
 
 Bootstrap a fresh VPS into a running Orama node in one command.
 

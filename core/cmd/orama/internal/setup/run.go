@@ -156,30 +156,45 @@ func (r *runner) preflight(ctx context.Context) error {
 			return fmt.Errorf("network %s: %w", r.net.Manifest.Name, err)
 		}
 	}
-	env := r.environment()
-	r.plan, err = BuildPlan(PlanInput{Options: r.opts, Network: r.net.Manifest, Env: env, ExistingHosts: hostsOf(r.d.Record.Hosts(env))})
+	plan, err := planForNetwork(r.opts, r.d, r.net)
 	if err != nil {
 		return err
 	}
-	r.res.Plan, r.res.Env, r.res.Operator = r.plan, env, r.oper
+	r.plan = plan
+	r.res.Plan, r.res.Env, r.res.Operator = plan, plan.Env, r.oper
 	return r.confirm()
 }
 
-// environment is the CLI environment the cluster is recorded under: the one
-// --env names, else the active one when it runs on this network, else a new
-// <network>-<name> (<network>-cluster without a name).
-func (r *runner) environment() string {
-	if r.opts.Env != "" {
-		return r.opts.Env
+// planForNetwork builds the plan of opts on network n: the environment the cluster is
+// recorded under (the one --env names, else the active one when it runs on this
+// network, else a new <network>-<name>; <network>-cluster without a name) and
+// whether it already has nodes.
+func planForNetwork(opts Options, d Deps, n *netregistry.Network) (*Plan, error) {
+	env := opts.Env
+	if env == "" {
+		env = d.Record.ActiveFor(n.Manifest.Name)
 	}
-	if active := r.d.Record.ActiveFor(r.net.Manifest.Name); active != "" {
-		return active
+	if env == "" {
+		name := opts.Name
+		if name == "" {
+			name = "cluster"
+		}
+		env = n.Manifest.Name + "-" + name
 	}
-	name := r.opts.Name
-	if name == "" {
-		name = "cluster"
+	return BuildPlan(PlanInput{Options: opts, Network: n.Manifest, Env: env, ExistingHosts: hostsOf(d.Record.Hosts(env))})
+}
+
+// PlanFor resolves the network and builds the plan of opts, touching no machine.
+// The wizard shows it before it asks to go ahead.
+func PlanFor(ctx context.Context, opts Options, d Deps) (*Plan, error) {
+	if err := opts.Normalize(); err != nil {
+		return nil, err
 	}
-	return r.net.Manifest.Name + "-" + name
+	n, err := d.Networks.Resolve(ctx, opts.Network)
+	if err != nil {
+		return nil, err
+	}
+	return planForNetwork(opts, d, n)
 }
 
 func hostsOf(nodes []RecordedNode) []string {

@@ -124,3 +124,16 @@ func TestNormalize_namesAreLowercased(t *testing.T) {
 		t.Fatalf("got %q, %v", o.Name, err)
 	}
 }
+
+func TestParseIPList(t *testing.T) {
+	got, err := ParseIPList("203.0.113.10, 203.0.113.11;203.0.113.12\n203.0.113.13\t")
+	if err != nil || len(got) != 4 || got[3] != "203.0.113.13" {
+		t.Fatalf("%v, %v", got, err)
+	}
+	if _, err := ParseIPList("   "); err == nil {
+		t.Error("an empty paste names no machine")
+	}
+	if _, err := ParseIPList("203.0.113.10 nonsense"); err == nil {
+		t.Error("a word that is not an address is refused")
+	}
+}

@@ -446,3 +446,94 @@ func (f *failSecond) Enroll(ctx context.Context, req MachineRequest) (Machine, e
 	}
 	return m, err
 }
+
+func TestInspect_reportsEachMachineAndChangesNothing(t *testing.T) {
+	h := newHarness()
+	small := freshFacts()
+	small.Hardware.CPUCores = 2
+	installed := freshFacts()
+	installed.ClusterInstalled, installed.GlobalInstalled = true, true
+	h.enroll.facts = map[string]Facts{ip2: small, ip3: installed}
+	h.enroll.fail = map[string]error{"203.0.113.14": errors.New("host key not confirmed")}
+	opts := h.opts(ip1, ip2, ip3, "203.0.113.14")
+	got, err := Inspect(context.Background(), opts, h.enroll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got[0].Err != nil || !strings.Contains(got[0].Summary(), "enough") {
+		t.Fatalf("%+v", got)
+	}
+	if got[1].Err == nil || !strings.Contains(got[1].Summary(), "2 vCPU (needs 4)") {
+		t.Errorf("the small machine: %s", got[1].Summary())
+	}
+	if !got[2].Installed || !strings.Contains(got[2].Summary(), "already installed") {
+		t.Errorf("the installed machine: %s", got[2].Summary())
+	}
+	if got[3].Err == nil || !strings.Contains(got[3].Summary(), "cannot reach it") {
+		t.Errorf("the unreachable machine: %s", got[3].Summary())
+	}
+	for _, changed := range []string{"stage ", "cluster ", "global ", "tx ", "fetch release"} {
+		if h.w.index(changed) >= 0 {
+			t.Errorf("an inspection did %q", changed)
+		}
+	}
+	if h.w.count("close ") != 3 {
+		t.Errorf("every machine reached is closed, got %d", h.w.count("close "))
+	}
+}
+
+func TestInspect_refusesBadOptions(t *testing.T) {
+	h := newHarness()
+	opts := h.opts()
+	if _, err := Inspect(context.Background(), opts, h.enroll); err == nil {
+		t.Fatal("no machines, no inspection")
+	}
+}
+
+func TestPlanFor_resolvesTheNetworkAndTouchesNoMachine(t *testing.T) {
+	h := newHarness()
+	plan, err := PlanFor(context.Background(), h.opts(ip1, ip2), h.deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Network != "stagenet" || plan.Env != "stagenet-alice" || len(plan.Nodes) != 2 || plan.Nodes[0].Cluster != ClusterCreate {
+		t.Fatalf("%+v", plan)
+	}
+	if len(h.w.entries()) != 0 {
+		t.Errorf("planning touched the world: %v", h.w.entries())
+	}
+}
+
+func TestPlanFor_anExistingClusterOfTheEnvironmentIsJoined(t *testing.T) {
+	h := newHarness()
+	h.rec.hosts["mine"] = []RecordedNode{{Host: ip1, User: "root"}}
+	opts := h.opts(ip2)
+	opts.Env = "mine"
+	plan, err := PlanFor(context.Background(), opts, h.deps)
+	if err != nil || !plan.JoinsExisting || plan.Env != "mine" {
+		t.Fatalf("%+v, %v", plan, err)
+	}
+}
+
+func TestPlanFor_badOptionsAreRefused(t *testing.T) {
+	h := newHarness()
+	opts := h.opts(ip1)
+	opts.Name = ""
+	if _, err := PlanFor(context.Background(), opts, h.deps); err == nil {
+		t.Fatal("a full node needs a name")
+	}
+}
+
+func TestNewDeps_wiresEveryPortExceptTheNameClaimer(t *testing.T) {
+	d := NewDeps(&bufReporter{}, nil)
+	if d.Networks == nil || d.Releases == nil || d.Trust == nil || d.Wallet == nil || d.Enroll == nil || d.Chain == nil ||
+		d.Funder == nil || d.ASN == nil || d.Record == nil || d.Domain == nil || d.Report == nil {
+		t.Fatalf("a port is missing: %+v", d)
+	}
+	if d.Names != nil {
+		t.Error("the name claim is not implemented yet and must say so, not pretend")
+	}
+	if d.Timing.SyncDeadline <= 0 || d.Timing.DNSDeadline <= 0 {
+		t.Errorf("timing %+v", d.Timing)
+	}
+}
