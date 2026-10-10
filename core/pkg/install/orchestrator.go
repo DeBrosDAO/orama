@@ -566,6 +566,12 @@ func (ps *ProductionSetup) Phase4GenerateConfigs(peerAddresses []string, vpsIP s
 		ps.logf("  ✓ SNI router enabled — Caddy HTTPS will bind :8443")
 	}
 
+	// A nameserver node's CoreDNS is authoritative for the zone, so Caddy checks
+	// its DNS-01 records there rather than through the public DNS tree.
+	if ps.isNameserver {
+		ps.binaryInstaller.EnableCaddyLocalNameserverChecks()
+	}
+
 	acmeCA, err := ps.configGenerator.ACMECA()
 	if err != nil {
 		return fmt.Errorf("configure Caddy: %w", err)

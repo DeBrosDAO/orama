@@ -94,6 +94,13 @@ func (bi *BinaryInstaller) EnableCaddyNtfyProxy(hostname string) {
 	bi.caddy.EnableNtfyProxy(hostname)
 }
 
+// EnableCaddyLocalNameserverChecks makes the next ConfigureCaddy() check DNS-01
+// records on this node's own CoreDNS. Call only on a nameserver node, BEFORE
+// ConfigureCaddy.
+func (bi *BinaryInstaller) EnableCaddyLocalNameserverChecks() {
+	bi.caddy.EnableLocalNameserverChecks()
+}
+
 // EnableCaddySNIRouterMode moves Caddy's HTTPS listener off :443 to :8443 on
 // the next ConfigureCaddy() call, freeing :443 for the orama-sni-router
 // (feat-124). Must be called BEFORE ConfigureCaddy.

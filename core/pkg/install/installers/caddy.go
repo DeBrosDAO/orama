@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
@@ -62,6 +64,10 @@ type CaddyInstaller struct {
 	// EnableSNIRouterMode. Plain HTTP (:80) is unaffected. When false the
 	// generated Caddyfile is byte-identical to the pre-feature output.
 	behindSNIRouter bool
+
+	// localNameserver, when set, makes the DNS-01 propagation check ask this
+	// node's own CoreDNS (EnableLocalNameserverChecks).
+	localNameserver bool
 }
 
 // CaddyHTTPSPortBehindSNI is the port Caddy binds for HTTPS when the node runs
@@ -99,6 +105,21 @@ func (ci *CaddyInstaller) EnableNtfyProxy(hostname string) {
 // HTTPS on :443.
 func (ci *CaddyInstaller) EnableSNIRouterMode() {
 	ci.behindSNIRouter = true
+}
+
+// EnableLocalNameserverChecks makes Caddy's DNS-01 propagation check ask this
+// node's own CoreDNS, which is authoritative for the cluster's zone, instead of
+// finding the zone's nameservers through the public DNS tree. That walk is cached
+// per Caddy process for the SOA refresh of whatever zone it ends at: on a node
+// whose CoreDNS was not answering yet (it starts with rqlite and restarts until
+// rqlite has a leader) and whose domain was not delegated yet, it ended at the
+// parent zone, so Caddy asked the parent's nameservers, which only refer, for
+// hours, and no certificate was issued (live stagenet create run, 2026-10-10).
+// Asking the local server cannot cache a wrong zone; when CoreDNS is down the
+// check fails and the next attempt asks again. Call only on a nameserver node,
+// BEFORE Configure.
+func (ci *CaddyInstaller) EnableLocalNameserverChecks() {
+	ci.localNameserver = true
 }
 
 // Configure creates Caddy configuration files.
@@ -188,6 +209,28 @@ func writeCaddyTLSStoreKey(clusterSecret string) error {
 	return restrictToGroup(CaddyTLSStoreKeyPath, serviceUserName)
 }
 
+// propagationOptions are the acme issuer's DNS-01 propagation options: on a
+// nameserver node, check this node's own CoreDNS, after a delay long enough for
+// the other nameservers to have reloaded the record from their rqlite replica
+// (EnableLocalNameserverChecks). Elsewhere Caddy's defaults stand.
+func (ci *CaddyInstaller) propagationOptions() string {
+	if !ci.localNameserver {
+		return ""
+	}
+	return fmt.Sprintf("            resolvers %s\n            propagation_delay %s\n",
+		net.JoinHostPort(localNameserverHost, strconv.Itoa(constants.DNSPort)), challengePropagationDelay)
+}
+
+const (
+	// localNameserverHost is where a nameserver node's Caddy reaches its own CoreDNS.
+	localNameserverHost = "127.0.0.1"
+	// challengePropagationDelay is how long Caddy waits after writing a DNS-01
+	// record before it checks: three reloads of every nameserver's CoreDNS from
+	// its rqlite replica (coreDNSRecordRefresh), since Let's Encrypt may ask any
+	// of them, not only this node.
+	challengePropagationDelay = 3 * coreDNSRecordRefresh
+)
+
 // isOneLabelUnder reports whether host is exactly one label below base, which
 // the `*.<base>` certificate covers.
 func isOneLabelUnder(host, base string) bool {
@@ -217,8 +260,8 @@ func (ci *CaddyInstaller) generateCaddyfile(domain, email, acmeEndpoint, baseDom
                 endpoint %s
                 key_file %s
             }
-        }
-    }`, acmeEndpoint, CaddyACMEKeyPath)
+%s        }
+    }`, acmeEndpoint, CaddyACMEKeyPath, ci.propagationOptions())
 
 	var sb strings.Builder
 	// Caddy protocol restrictions:

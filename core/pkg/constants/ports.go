@@ -36,4 +36,6 @@ const (
 
 	// Edge — not in 10100.
 	WireGuardPort = 51820
+	// DNSPort is where a nameserver node's CoreDNS answers, on every address.
+	DNSPort = 53
 )

@@ -7,7 +7,7 @@ This page explains the records, how to choose the base domain, how to create the
 ## Why you need your own nameservers
 
 - Deployments get names like `myapp-f3o4if.cluster.example.com` the moment they are created. A row is inserted, and the next DNS query sees it. There is no zone file and no external DNS provider.
-- Certificates are issued through the ACME DNS-01 challenge. The challenge record is served by your own CoreDNS, and the certificate authority finds that CoreDNS through the delegation. **Until the parent zone delegates to the cluster, the genesis node cannot get a certificate.**
+- Certificates are issued through the ACME DNS-01 challenge. The challenge record is served by your own CoreDNS, and the certificate authority finds that CoreDNS through the delegation. **Until the parent zone delegates to the cluster, the genesis node cannot get a certificate.** Before it asks the certificate authority, Caddy on a nameserver node checks that the challenge record is served by checking the node's own CoreDNS (`resolvers 127.0.0.1:53`), after a 15-second delay that lets the other nameservers reload the record. It never looks the zone up through public DNS: a lookup made while the node's CoreDNS was restarting and the domain not yet delegated would end at the parent zone, and Caddy keeps that answer for hours.
 - Wildcard names (`*.cluster.example.com`) work for every subdomain.
 
 ## Nameserver slots

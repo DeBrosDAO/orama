@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"strconv"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
@@ -118,6 +119,10 @@ func RestrictCorefileToCoreDNS() error {
 
 // generateCorefile creates the CoreDNS configuration (RQLite only). The
 // plugin reaches the index rqlited where it binds, with its credentials.
+// coreDNSRecordRefresh is how often the rqlite plugin reloads the zone's records
+// from the node's rqlite replica: how stale a nameserver's answer can be.
+const coreDNSRecordRefresh = 5 * time.Second
+
 func (ci *CoreDNSInstaller) generateCorefile(domain string, rq rqlite.Endpoint) string {
 	authBlock := fmt.Sprintf("        username %s\n        password %s\n", rq.Username, rq.Password)
 
@@ -129,7 +134,7 @@ func (ci *CoreDNSInstaller) generateCorefile(domain string, rq rqlite.Endpoint) 
     # RQLite handles all records: SOA, NS, A, TXT (ACME), etc.
     rqlite {
         dsn %s
-        refresh 5s
+        refresh %s
         ttl 30
         cache_size 10000
 %s    }
@@ -161,7 +166,7 @@ func (ci *CoreDNSInstaller) generateCorefile(domain string, rq rqlite.Endpoint) 
     cache 300
     errors
 }
-`, domain, domain, rq.BaseURL(), authBlock)
+`, domain, domain, rq.BaseURL(), coreDNSRecordRefresh, authBlock)
 }
 
 // restrictToGroup makes path root:group 0640.
