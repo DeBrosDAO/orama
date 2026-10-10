@@ -24,31 +24,36 @@ The code does not check hardware. These are the sizes the plan gives
 
 ## Install
 
-Stage the release's `oramad`, `orama-global` and `orama` (this CLI; the chain
-unit runs its sign-floor check), Kubo's `ipfs` (v0.43.1, when you install the
-`ipfs` service) and the official cosmovisor release tarball
-`cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz` (from the cosmos-sdk release
-`cosmovisor/v1.7.3`) in a directory that root owns
-and nobody else may write (for example `/root/orama-global-release`). The
-installer copies from there and refuses a symlink or a directory another account
-could change.
+The staged directory is a release archive's `bin/`. An amd64 release (`orama
+build`, or a published one) carries everything the install reads: `oramad`
+(built with the Orchard library), its out-of-process verifier
+`orama-orchard-verifier` and the digest file beside it, `orama-global`, `orama`
+(this CLI; the chain unit runs its sign-floor check), Kubo's `ipfs` (v0.43.1) and
+the official cosmovisor release tarball
+`cosmovisor-v1.7.3-linux-amd64.tar.gz`. Once the release is extracted on the
+node, `--staged-dir /opt/orama/bin` and its manifest `/opt/orama/manifest.json`
+(the default of `--manifest`) are all the install needs. A directory you assemble
+yourself works too if root owns it, nobody else may write it, and you give a
+manifest that lists its files. The installer refuses a symlink or a directory
+another account could change.
 
-**You are trusting these binaries.** The installer does not verify `oramad`, `orama`,
-`orama-global` or `ipfs` (it does verify the cosmovisor tarball against a pinned
-SHA-256, and runs `ipfs --version` as an unprivileged account to require Kubo
-v0.43.1). It does not verify them
-against the release root or any signature: the release archive does not carry
-`oramad` or `orama-global` yet, so there is nothing to check them against. The
-chain unit runs the staged `orama` as root before every start (the sign-floor
-check), `oramad` holds the validator key, and `orama-global` holds hot keys and
-repair seeds. Put in the staged directory only binaries you built or verified
-yourself.
+**What is checked.** Every file the install reads is hashed as it is read and
+must match the release manifest, so a file that is not the one the release
+shipped is refused before anything on the host changes. The verifier must match
+its digest file, and `oramad` must pin that digest (a release links it in).
+The cosmovisor tarball is checked against a SHA-256 pinned in the CLI, and
+`ipfs --version` runs as an unprivileged account to require Kubo v0.43.1. The
+manifest is trusted because the archive it came from was verified when it was
+extracted (a wallet you trust, or the release root). The chain unit runs the
+staged `orama` as root before every start, `oramad` holds the validator key, and
+`orama-global` holds hot keys and repair seeds; if you assemble the directory
+yourself you are the root of trust for it.
 
 ```bash
 sudo orama global install \
   --services chain,ipfs,provider \
   --public-storage-gb 500 \
-  --staged-dir /root/orama-global-release \
+  --staged-dir /opt/orama/bin \
   --persistent-peers <node-id>@<host>:31000,<node-id>@<host>:31000 \
   --init-chain --chain-id <chain-id> --moniker <name> --genesis /root/genesis.json \
   --enable-firewall --ssh-port 22
@@ -83,12 +88,14 @@ sudo orama global install \
   which runs `oramad` from `/var/lib/orama-global/chain/cosmovisor/current/bin`.
   Install checks the staged tarball's SHA-256 against the pin built into the CLI
   (an unofficial or altered tarball is refused), installs only its `cosmovisor`
-  file, and places the staged `oramad` as the genesis binary in that layout. The
-  chain home must therefore already have a genesis: use `--init-chain` on the
+  file, and places the staged `oramad` as the genesis binary in that layout, with
+  `orama-orchard-verifier` beside it; the unit passes `oramad` `--shielded-verifier
+  /var/lib/orama-global/chain/cosmovisor/current/bin/orama-orchard-verifier`, so each
+  version runs the verifier it was built with. The chain home must therefore already have a genesis: use `--init-chain` on the
   first install. A second install with the same `oramad` changes nothing; one
   with different `oramad` bytes is refused. To change the chain binary use
-  `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the
-  plan's height; a plan with no staged binary halts the chain until one is staged.
+  `orama global stage-oramad --upgrade <plan> --verifier <file> --verifier-target
+  <name>` and let cosmovisor switch at the plan's height; a plan with no staged binary halts the chain until one is staged.
   A patch that does not change consensus has no installed update path yet (the
   updater is not built): stage it as an upgrade plan.
 - The public Kubo (`ipfs`) is a second daemon, never the private cluster's: its
@@ -360,7 +367,7 @@ against `/opt/orama/.orama`), which each unit already hides from the other.
 
 ```bash
 sudo orama global install --colocated --services chain,ipfs,provider \
-  --public-storage-gb 500 --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
+  --public-storage-gb 500 --staged-dir /opt/orama/bin --enable-firewall --ssh-port 22
 ```
 
 Run it on a machine where `orama node setup` has already installed the cluster
@@ -530,15 +537,11 @@ was written in.
 
 - `orama node setup --role global` from the operator's machine; install runs on
   the node.
-- TUF verification of the staged binaries by the installer, and an installed
-  update path for a chain patch that changes no consensus behaviour.
+- An installed update path for a chain patch that changes no consensus behaviour.
 - An `orama global` command for `MsgUpdateNode`: an ASN is set at
   registration only.
 - An `orama` command for `MsgRegisterOperator`. `register` needs the operator to be registered first, and
   no CLI command builds that message (the stagenet deploy sends it with its own helper, `stagenet-node`).
-- Staging the shielded verifier. `orama global install` places `oramad` and `orama` but not
-  `orama-orchard-verifier`; oramad looks for it at `/var/lib/orama-global/chain/bin/orama-orchard-verifier`
-  and a node without it accepts no shielded bundle.
 - Removing a service, or its firewall rule, that a later install leaves out; removing the co-located layout.
 - The relay and Tor units.
 - A remote signer (TMKMS, Horcrux) or sentry topology.

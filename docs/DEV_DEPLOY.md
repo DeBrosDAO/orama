@@ -474,12 +474,12 @@ private network, is refused by `ParseRepositoryURL` — cluster setting and
 against `pkg/netguard`'s reserved ranges once the name is resolved, redirects
 included; only a test sets `ORAMA_ALLOW_LOCAL_RELEASE_REPO=1` to serve one from
 loopback): `timestamp.json`, `snapshot.json`,
-`targets.json`, one `<channel>.json` per delegated channel (`stable`, `nightly`),
-and the files under `targets/`, such as
-`targets/stable/orama-0.3.1-linux-amd64.tar.gz`. A channel is a delegated targets
-role with keys and a threshold of its own, trusted only for `<channel>/*`.
-`releaseverify.Repository` fetches it. The client reads no root from the
-repository: the root is the operator's out-of-band decision.
+`targets.json`, `root.json` and every `<N>.root.json`, and the files under `targets/`, such as
+`targets/nightly/orama-0.3.1-linux-amd64.tar.gz`. A channel (`nightly`, `main`,
+`dev/<branch>`) is the path prefix of its targets in the one targets file, not a
+role. `releaseverify.Repository` fetches it. The client never takes its first root from
+the repository (a network's manifest pins its SHA-256), but it follows the
+repository's `<N>.root.json` rotations from the root it holds.
 
 **Install from a release.** `orama node setup --release <version> --release-repo
 <url> --release-root <root.json> [--channel stable]` needs no checkout, Go or
@@ -492,9 +492,9 @@ wallet's signature, and the archive goes on through the install above. The
 cluster therefore still trusts your wallet for what it installs, and now also
 trusts the root. `--release` and `--archive` are alternatives.
 
-**Signers and the test root.** Publishing a production release is a signing
-ceremony of the release signers (`pkg/releasesign`, a RootWallet purpose of its
-own); it is not implemented as a command. For a test network,
+**Signers and the test root.** Publishing a release is `orama maint release` (`pkg/releasepub`): the RootWallet
+release key signs targets, snapshot and timestamp, three approvals, and `publish`
+uploads the archives to a GitHub release and the metadata to the release host. For a test network,
 `go run ./cmd/testtuf` (in `core/`) makes and updates a repository signed by
 software keys: `testtuf init -dir D`, `testtuf publish -dir D -channel stable
 -archive orama-0.3.1-linux-amd64.tar.gz`, and `testtuf refresh -dir D` before the

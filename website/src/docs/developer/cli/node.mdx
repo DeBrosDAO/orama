@@ -56,8 +56,9 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
-A validator (--role validator) is never auto: the mode is refused, and chain
-upgrades are staged explicitly with 'orama global stage-oramad'.
+A validator (--role validator) is never auto: on auto the decision is skip, with
+the reason, and the command exits 0; chain upgrades are staged explicitly with
+'orama global stage-oramad'.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -288,7 +289,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
 | `--ssh-user` | — | SSH user for remote management |
 | `--token` | — | Invite from 'orama invite'; it carries the gateway to join and the certificate to pin |
@@ -774,8 +775,8 @@ above: the release root is required in addition to it, not in place of it.
 is an unsigned release (the CI build), it must not name signers or a release
 root, and the node records in /etc/orama/release-staged.json that it was staged
 through the release root, which is what lets 'orama node upgrade' install it.
-A channel target ('stable/orama-...') is checked against that channel's
-delegated role.
+A channel target ('nightly/orama-...') is a target of the top-level targets
+metadata, under its channel's path prefix.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -924,7 +925,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--node` | — | Upgrade a single node IP only |
 | `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
 
 ## orama node wipe

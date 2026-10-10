@@ -21,15 +21,15 @@ The code does not check hardware. These sizes come from the plan:
 
 ## Install
 
-Stage these in a directory that root owns and nobody else may write (for example `/root/orama-global-release`): the release's `oramad`, `orama-global` and `orama`, Kubo's `ipfs` (v0.43.1, when you install the `ipfs` service) and the official cosmovisor tarball `cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz`. The installer refuses a symlink or a directory another account could change.
+The staged directory is a release's `bin/` (`/opt/orama/bin` once the release archive is extracted on the node): an amd64 release carries `oramad`, its shielded verifier `orama-orchard-verifier` with its `.sha256` file, `orama-global`, `orama`, Kubo's `ipfs` (v0.43.1) and the official cosmovisor tarball `cosmovisor-v1.7.3-linux-amd64.tar.gz`. The release's `manifest.json` (`--manifest`, `/opt/orama/manifest.json` by default) lists them. The installer refuses a symlink or a directory another account could change.
 
-**You are trusting these binaries.** The installer verifies the cosmovisor tarball against a pinned SHA-256 and runs `ipfs --version` as an unprivileged account to require v0.43.1. It does **not** verify `oramad`, `orama`, `orama-global` or `ipfs` against any signature: the release archive does not carry `oramad` or `orama-global` yet, so there is nothing to check them against. The chain unit runs the staged `orama` as root before every start, `oramad` holds the validator key, and `orama-global` holds hot keys and repair seeds. Put in the directory only binaries you built or verified yourself.
+**What is verified.** Every file the install reads must match the release manifest before anything on the host changes, the verifier must match its digest file, and `oramad` must pin that digest. The installer also verifies the cosmovisor tarball against a pinned SHA-256 and runs `ipfs --version` as an unprivileged account to require v0.43.1. The manifest is trusted because the archive was verified when it was extracted (a wallet you trust, or the release root). The chain unit runs the staged `orama` as root before every start, `oramad` holds the validator key, and `orama-global` holds hot keys and repair seeds; a directory you assemble yourself makes you the root of trust for it.
 
 ```bash
 sudo orama global install \
   --services chain,ipfs,provider \
   --public-storage-gb 500 \
-  --staged-dir /root/orama-global-release \
+  --staged-dir /opt/orama/bin \
   --persistent-peers <node-id>@<host>:31000,<node-id>@<host>:31000 \
   --init-chain --chain-id <chain-id> --moniker <name> --genesis /root/genesis.json \
   --enable-firewall --ssh-port 22
@@ -38,7 +38,7 @@ sudo orama global install \
 - `--services` is `chain` plus any of `ipfs`, `provider`, `archiver`, `indexer`, `repair`; the Tor roles `dirauth`, `relay` (with `exit` for an exit) and `onion` are described under [The Tor network roles](#the-tor-network-roles). The chain is required: the others reach it only through its RPC on `127.0.0.1:31001`. A `dirauth` or `relay` host needs no chain, and `onion` joins a chain that is already installed. `provider` needs `ipfs` beside it, since it pins public deals through this host's public Kubo. **`provider` and `repair` are never on the same host:** a repair delegate holds repair seeds and a provider must not. `indexer` is optional (loopback 31015, proxied by a gateway).
 - Each service gets its own system account (`orama-chain`, `orama-ipfs-pub`, `orama-provider`, `orama-archiver`, `orama-indexer`, `orama-repair`). Binaries go to `/usr/lib/orama-global/bin`, root-owned, 0755.
 - Units are written to `/etc/systemd/system/orama-global-*.service` and enabled, not started. None is part of `orama-node.service`. They start after the chain unit and want it.
-- The chain unit runs **cosmovisor v1.7.3** with downloads disabled. The chain home must already have a genesis, so use `--init-chain` on the first install. A second install with the same `oramad` changes nothing; different bytes are refused. To change the chain binary use `orama global stage-oramad --upgrade <plan>` and let cosmovisor switch at the plan's height.
+- The chain unit runs **cosmovisor v1.7.3** with downloads disabled. The chain home must already have a genesis, so use `--init-chain` on the first install. The shielded verifier is placed in the cosmovisor layout beside `oramad`, and the unit passes it to `oramad` through `current/bin`, so each version runs the verifier it was built with. A second install with the same `oramad` changes nothing; different bytes are refused. To change the chain binary use `orama global stage-oramad --upgrade <plan> --verifier <file> --verifier-target <name>` and let cosmovisor switch at the plan's height.
 - The public Kubo is a second daemon, never the private cluster's: its own repo in `/var/lib/orama-global/ipfs` (`ipfs init --profile=server`), no swarm key, the swarm on 31010 tcp and udp, private address ranges filtered and not announced, only pinned content announced. Its RPC is `127.0.0.1:31011` behind a bearer token that allows only `add`, `cat`, `pin/add`, `pin/rm`, `repo/gc` and the read-only `repo/stat`. `--public-storage-gb` is the capacity you will declare; Kubo's `StorageMax` is that plus 10%, and a garbage-collection timer runs 20 minutes after start and then every 6 hours.
 - With `provider` installed, `PUBLIC_PIN` and `ARCHIVE` deals are pinned in the public Kubo before the slot is accepted. `PRIVATE` deals never touch it.
 - `--init-chain` runs `oramad init` as `orama-chain` and puts `--genesis` in place (its `chain_id` must equal `--chain-id`). The flag is refused when the home already has a genesis.
@@ -164,7 +164,7 @@ A machine can be a cluster node and a global node (`role: both`). The global ser
 
 ```bash
 sudo orama global install --colocated --services chain,ipfs,provider \
-  --public-storage-gb 500 --staged-dir /root/orama-global-release --enable-firewall --ssh-port 22
+  --public-storage-gb 500 --staged-dir /opt/orama/bin --enable-firewall --ssh-port 22
 ```
 
 Run it on a machine where `orama node setup` has already installed the cluster node. The namespace cannot reach the WireGuard mesh, so chain peers use public addresses. Removing the layout means restoring `net.ipv4.ip_forward` from `/var/lib/orama-global/netns-prior-ip-forward` before deleting `/var/lib/orama-global`.

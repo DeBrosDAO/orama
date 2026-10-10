@@ -164,7 +164,7 @@ func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 	meta := home + "/metadata"
 	f.MustExec(t, n, "mkdir -m 0700 "+fleet.ShellQuote(meta))
 	out := onNode(t, f, n, "global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", meta,
-		"--release-target", "oramad", "--upgrade", "e2e-bogus", "--home", home)
+		"--release-target", "oramad", "--verifier", "/bin/true", "--verifier-target", "orama-orchard-verifier", "--upgrade", "e2e-bogus", "--home", home)
 	// Refused by release verification (releaseverify.CheckFile): the node has
 	// no adopted root, or the empty metadata dir lacks the TUF files.
 	expectNodeFailure(t, f, out, "no release root adopted", "read release metadata")
@@ -183,8 +183,10 @@ func TestGlobalStageOramad_unverifiedBinaryRefused(t *testing.T) {
 func TestGlobalStageOramad_argumentChecks(t *testing.T) {
 	t.Parallel()
 	cli := cliNoWallet(t)
-	full := []string{"global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", t.TempDir(), "--release-target", "oramad"}
+	full := []string{"global", "stage-oramad", "--binary", "/bin/true", "--release-metadata", t.TempDir(), "--release-target", "oramad",
+		"--verifier", "/bin/true", "--verifier-target", "orama-orchard-verifier"}
 	infra.ExpectExit(t, run(t, cli, full[:4]...), exitUsage, "required")
+	infra.ExpectExit(t, run(t, cli, full[:8]...), exitUsage, "--verifier and --verifier-target are required")
 	infra.ExpectExit(t, run(t, cli, full...), exitUsage, "exactly one of --upgrade")
 	infra.ExpectExit(t, run(t, cli, append(full, "--genesis", "--upgrade", "x")...), exitUsage, "exactly one of --upgrade")
 	res := run(t, cli, append(full, "--genesis")...)

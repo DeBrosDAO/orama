@@ -151,8 +151,8 @@ above: the release root is required in addition to it, not in place of it.
 is an unsigned release (the CI build), it must not name signers or a release
 root, and the node records in /etc/orama/release-staged.json that it was staged
 through the release root, which is what lets 'orama node upgrade' install it.
-A channel target ('stable/orama-...') is checked against that channel's
-delegated role.`,
+A channel target ('nightly/orama-...') is a target of the top-level targets
+metadata, under its channel's path prefix.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return Stage(opts)

@@ -603,6 +603,11 @@ then package them into a deployment archive. The archive includes:
   - Orama binaries (CLI, node, gateway, identity, SFU, TURN)
   - Olric, IPFS Kubo, IPFS Cluster, RQLite, CoreDNS, Caddy (built from
     checked-in, checksum-pinned modules; Kubo and RQLite by pinned digest)
+  - The global layer, for amd64: oramad (with the orchard verifier linked) and its
+    out-of-process verifier orama-orchard-verifier, orama-global and the pinned
+    cosmovisor release, which 'orama global install' puts on a node. It needs
+    rustup with the x86_64-unknown-linux-musl target, cargo, make and rsync.
+    --skip-global-layer leaves it out (a cluster-only archive; arm64 always is).
   - Systemd namespace templates
   - manifest.json with checksums of every file, and manifest.sig
 
@@ -640,6 +645,7 @@ Examples:
 | `--output` | — | Output archive path (default: /tmp/orama-<version>-linux-<arch>.tar.gz) |
 | `--release-root` | — | A TUF root.json to put in the signed manifest: nodes that install this build adopt it as their release root |
 | `--signers` | — | Rotate the trusted archive signers: nodes that install this build trust only these addresses (comma-separated) |
+| `--skip-global-layer` | `false` | Leave out the global layer (oramad, its verifier, orama-global, cosmovisor): a cluster-only archive |
 | `--unsigned` | `false` | Do not sign the manifest (a node installs it only through its adopted TUF release root) |
 | `--verbose` | `false` | Verbose output |
 
@@ -1719,7 +1725,11 @@ For each service it creates the service's system account, copies its binaries
 validator check-sign-floor' before every start; ipfs, Kubo v0.43.1, for ipfs;
 orama-global for the others) from --staged-dir into /usr/lib/orama-global/bin
 (root-owned, 0755; a symlink in the staged directory is refused, and as root the
-directory must be root's and not writable by others), writes and enables its
+directory must be root's and not writable by others). A release archive's bin/
+directory (/opt/orama/bin once the release is extracted) is the staged directory,
+and the release's manifest (--manifest, /opt/orama/manifest.json) must list every
+file the install reads with the digest it has; a file that is not the release's is
+refused before anything on the host changes. It writes and enables its
 orama-global-* unit, and opens its public port in ufw (31000 tcp+udp for the
 chain, 31010 tcp+udp for the public Kubo swarm, 31013 tcp for the provider)
 with the comment orama-global. It does not start anything: 'orama global start'
@@ -1729,8 +1739,10 @@ The chain unit runs oramad under cosmovisor v1.7.3. Stage the official
 cosmovisor-v1.7.3-linux-<amd64|arm64>.tar.gz beside the other binaries: its
 SHA-256 must equal the pin built into this CLI, and only its cosmovisor file is
 installed. oramad itself is placed in the chain home's cosmovisor layout as the
-genesis binary, so the chain home must already have a genesis (--init-chain, or
-an existing home). A binary already staged there with different bytes is
+genesis binary, together with the release's shielded verifier (orama-orchard-verifier,
+which the release ships beside oramad and whose digest oramad pins): the chain unit
+passes oramad the one in the layout's current/bin, so an upgrade brings its own.
+The chain home must already have a genesis (--init-chain, or an existing home). A binary already staged there with different bytes is
 refused: change the chain binary with 'orama global stage-oramad --upgrade'.
 
 The ipfs service is a public Kubo of its own: no swarm.key, its own repo in
@@ -1805,12 +1817,13 @@ refuses the install, and the set is kept by later installs.
 | `--enable-firewall` | `false` | Enable an inactive ufw (deny incoming, allow --ssh-port) |
 | `--genesis` | — | The network's genesis.json, with --init-chain |
 | `--init-chain` | `false` | Create the chain home with oramad init and install --genesis |
+| `--manifest` | `/opt/orama/manifest.json` | The release's manifest.json, which must list every file the install reads with its digest |
 | `--moniker` | — | Node moniker, with --init-chain |
 | `--persistent-peers` | — | Chain peers, id@host:port,... (written into the chain unit) |
 | `--public-storage-gb` | `0` | Capacity in GB you will declare for the provider; sizes the public Kubo (required with ipfs) |
 | `--services` | — | Services: chain[,ipfs,provider,archiver,indexer,repair,dirauth,relay,exit,onion,reporter] [required] |
 | `--ssh-port` | `22` | SSH port --enable-firewall allows |
-| `--staged-dir` | — | Directory holding the release's oramad, orama, orama-global, ipfs and the cosmovisor tarball [required] |
+| `--staged-dir` | — | Directory holding the release's oramad, orama-orchard-verifier (and its .sha256), orama, orama-global, ipfs and the cosmovisor tarball: the release's bin/ [required] |
 | `--tor-address` | — | dirauth, relay: the public IPv4 address the relay publishes |
 | `--tor-authority-keys` | — | dirauth: the authority's key bundle from 'orama global tor ceremony' (deploy/<nickname>) |
 | `--tor-bandwidth-mbit` | `0` | dirauth, relay: limit on what the relay carries for others, in Mbit/s each way (0 = unlimited) |
@@ -1946,6 +1959,8 @@ layout; install places the first oramad here as the genesis binary.
 | `--release-metadata` | — | Directory holding timestamp.json, snapshot.json and targets.json [required] |
 | `--release-target` | — | Name the binary has in the release targets metadata [required] |
 | `--upgrade` | — | Upgrade plan name to stage for |
+| `--verifier-target` | — | Name the verifier has in the release targets metadata [required] |
+| `--verifier` | — | The release's orama-orchard-verifier, staged beside oramad [required] |
 
 ### orama global start
 
@@ -3849,8 +3864,8 @@ above: the release root is required in addition to it, not in place of it.
 is an unsigned release (the CI build), it must not name signers or a release
 root, and the node records in /etc/orama/release-staged.json that it was staged
 through the release root, which is what lets 'orama node upgrade' install it.
-A channel target ('stable/orama-...') is checked against that channel's
-delegated role.
+A channel target ('nightly/orama-...') is a target of the top-level targets
+metadata, under its channel's path prefix.
 
 | Flag | Default | Description |
 |------|---------|-------------|

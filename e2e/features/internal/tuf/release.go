@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -120,6 +121,8 @@ type ChannelRepo struct {
 	root []byte
 	// until is when the root and the roles under it expire.
 	until time.Time
+	// version is the version of root.
+	version int64
 }
 
 // NewChannelRepo generates a root valid for a day.
@@ -134,7 +137,26 @@ func NewChannelRepo(t testing.TB) *ChannelRepo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &ChannelRepo{keys: keys, root: root, until: until}
+	return &ChannelRepo{keys: keys, root: root, until: until, version: 1}
+}
+
+// Rotate makes the next version of the root under new keys, signed by the old
+// root key and the new one, and returns the file name a repository publishes it
+// as (<version>.root.json) and its bytes. Files after it is signed by the new
+// keys, so a node that has not followed the rotation refuses it.
+func (r *ChannelRepo) Rotate(t testing.TB) (string, []byte) {
+	t.Helper()
+	next, err := releaserepo.GenerateKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := releaserepo.NextRoot(r.root, r.keys, next, r.until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.keys, r.root = next, root
+	r.version++
+	return fmt.Sprintf("%d.root.json", r.version), root
 }
 
 // Root is the signed root.json.
@@ -150,9 +172,16 @@ func (r *ChannelRepo) Digest() string { return releaseverify.RootDigest(r.root) 
 // frozen repository.
 func (r *ChannelRepo) Files(t testing.TB, snapshot int64, timestampExpires time.Time, arch string, archives map[string][]byte) map[string][]byte {
 	t.Helper()
+	return r.FilesOn(t, Channel, snapshot, timestampExpires, arch, archives)
+}
+
+// FilesOn is Files for another channel: the archives are targets under that
+// channel's path prefix (nightly/..., dev/<branch>/...).
+func (r *ChannelRepo) FilesOn(t testing.TB, channel string, snapshot int64, timestampExpires time.Time, arch string, archives map[string][]byte) map[string][]byte {
+	t.Helper()
 	targets := map[string][]byte{}
 	for version, data := range archives {
-		targets[releaseverify.ArchiveTarget(Channel, version, arch)] = data
+		targets[releaseverify.ArchiveTarget(channel, version, arch)] = data
 	}
 	files, err := releaserepo.Build(r.keys, releaserepo.Spec{
 		Version: snapshot, RootValidUntil: r.until, TimestampExpires: timestampExpires,
@@ -162,7 +191,7 @@ func (r *ChannelRepo) Files(t testing.TB, snapshot int64, timestampExpires time.
 		t.Fatal(err)
 	}
 	for version, data := range archives {
-		files["targets/"+releaseverify.ArchiveTarget(Channel, version, arch)] = data
+		files["targets/"+releaseverify.ArchiveTarget(channel, version, arch)] = data
 	}
 	return files
 }
