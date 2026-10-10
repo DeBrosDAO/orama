@@ -29,7 +29,7 @@ func TestNormalize_createDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := o.Create
-	if o.Name != "seed" || c.ReleaseRepo != DefaultReleaseRepo || c.PublishDir != "networks" || c.Channel != "nightly" || c.MinVersion != version.Current {
+	if o.Name != "founder" || c.ReleaseRepo != DefaultReleaseRepo || c.PublishDir != "networks" || c.Channel != "nightly" || c.MinVersion != version.Current {
 		t.Errorf("defaults: name %q, %+v", o.Name, c)
 	}
 	if got := c.seedNames(3); strings.Join(got, " ") != "seed1.stagenet.orama.network seed2.stagenet.orama.network seed3.stagenet.orama.network" {
@@ -162,7 +162,7 @@ func TestBuildCreatePlan_everyMachineIsASeat(t *testing.T) {
 			t.Errorf("node %d = %+v: every seat is full, only the first creates the cluster, none creates a validator", i, n)
 		}
 	}
-	if p.Nodes[0].Name != "seed" || p.Nodes[4].Name != "seed-5" {
+	if p.Nodes[0].Name != "founder" || p.Nodes[4].Name != "founder-5" {
 		t.Errorf("names = %q .. %q", p.Nodes[0].Name, p.Nodes[4].Name)
 	}
 	notes := strings.Join(p.Notes, "\n")

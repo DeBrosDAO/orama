@@ -10,9 +10,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
 
-// Deps are the ports a run uses. Funder, Names and Domain may be nil: without a
-// faucet an unfunded account is reported, without a name claimer the claim is
-// skipped with a line saying so, and without a domain waiter a --domain run
+// Deps are the ports a run uses. Funder and Domain may be nil: without a faucet
+// an unfunded account is reported, and without a domain waiter a --domain run
 // only prints the records.
 type Deps struct {
 	Networks NetworkSource
@@ -22,12 +21,15 @@ type Deps struct {
 	Enroll   Enroller
 	Chain    ChainOpener
 	Funder   Funder
-	Names    NameClaimer
-	ASN      ASNLookup
-	Record   Recorder
-	Domain   DomainWaiter
-	Report   Reporter
-	Timing   Timing
+	// CreateFunder funds the operator of a network being created, whose seeds serve
+	// no public faucet yet; nil falls back to Funder.
+	CreateFunder Funder
+	Names        NameClaimer
+	ASN          ASNLookup
+	Record       Recorder
+	Domain       DomainWaiter
+	Report       Reporter
+	Timing       Timing
 	// Confirm is asked once with the plan when the run is not --yes. Declining
 	// ends the run with nothing changed.
 	Confirm func(*Plan) (bool, error)

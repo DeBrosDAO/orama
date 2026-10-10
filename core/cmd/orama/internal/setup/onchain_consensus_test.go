@@ -106,7 +106,7 @@ func TestRunCreate_everySeatBindsItsConsensusKey(t *testing.T) {
 	if got := h.w.count("identity ") - h.w.count("consensus=false"); got != 5 {
 		t.Errorf("%d identities asked for the consensus binding, want 5", got)
 	}
-	for _, name := range []string{"seed", "seed-2", "seed-3", "seed-4", "seed-5"} {
+	for _, name := range []string{"founder", "founder-2", "founder-3", "founder-4", "founder-5"} {
 		if !slices.ContainsFunc(h.w.entries(), func(e string) bool {
 			return strings.HasPrefix(e, "tx register-node "+name+" ") && strings.HasSuffix(e, "bindings=hot-key,consensus")
 		}) {

@@ -110,6 +110,8 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
     - [`orama maint cluster settings`](#orama-maint-cluster-settings) - Show or change the cluster's settings
       - [`orama maint cluster settings set`](#orama-maint-cluster-settings-set) - Change namespace creation, the per-wallet cap or the update policy
       - [`orama maint cluster settings show`](#orama-maint-cluster-settings-show) - Show who may create namespaces, the per-wallet cap and the update policy
+  - [`orama maint faucet`](#orama-maint-faucet) - Set up the public faucet of a test network on this node
+    - [`orama maint faucet init`](#orama-maint-faucet-init) - Create this node's faucet key and print the account to fund
   - [`orama maint global`](#orama-maint-global) - Validator keys, chain binary staging, the Tor network's authorities and the transaction gate
     - [`orama maint global edit`](#orama-maint-global-edit) - Change this node's public storage size or exit role (run as root)
     - [`orama maint global refresh`](#orama-maint-global-refresh) - Bring the installed global services up to the staged release (run as root)
@@ -2179,9 +2181,10 @@ and they all work.
   node                       install and stage a node, auto-update, recovery, migration
   global                     validator keys, chain binary staging, the Tor network, tx gate
   network                    publish a network's manifest
+  faucet                     set up a test network's public faucet on this node
 ```
 
-Subcommands: `build`, `cluster`, `global`, `inspect`, `invite`, `network`, `node`, `operator`, `push`, `release`, `rollout`, `sandbox`, `vpn`
+Subcommands: `build`, `cluster`, `faucet`, `global`, `inspect`, `invite`, `network`, `node`, `operator`, `push`, `release`, `rollout`, `sandbox`, `vpn`
 
 ## orama maint build
 
@@ -2358,6 +2361,61 @@ Show who may create namespaces, the per-wallet cap and the update policy
 ```text
 orama maint cluster settings show
 ```
+
+
+## orama maint faucet
+
+Set up the public faucet of a test network on this node
+
+```text
+orama maint faucet
+```
+
+Subcommands: `init`
+
+## orama maint faucet init
+
+Create this node's faucet key and print the account to fund
+
+```text
+orama maint faucet init [flags]
+```
+
+```text
+Create the key a node's gateway signs faucet drips with, and print the account
+it belongs to. Run it on the node, as root.
+
+The faucet gives test ORAMA to whoever asks (POST /v1/chain/faucet): the gateway
+signs MsgFaucet for the recipient with this key and the chain mints the drip.
+It exists only on a test network (a chain id with -stagenet-, -devnet- or
+-localnet-; the gateway refuses to sign anywhere else), the chain keeps its own
+limits (a maximum drip, a cooldown per recipient, a cap per epoch), and it must
+be on in the genesis (faucet_enabled).
+
+The key file is created owned by the gateway's account with mode 0600, and an
+existing key is never replaced: running init again prints the same account. The
+faucet account pays the transaction fee of every drip and mints the drip itself,
+so it needs a small balance and nothing more: fund it from the genesis
+(chain/scripts/stagenet/deploy.sh does this on stagenet) or from another faucet.
+
+Then turn it on in node.yaml and restart the node:
+
+  chain:
+    faucet:
+      enabled: true
+
+  orama node restart
+
+orama node upgrade keeps the block. Check it with:
+
+  curl -sS -X POST https://<gateway>/v1/chain/faucet \
+    -H 'Content-Type: application/json' -d '{"recipient":"orama1..."}'
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--key-file` | `/opt/orama/.orama/secrets/chain-faucet.key` | Where the key goes (node.yaml chain.faucet.key_file, when it is not this default) |
+| `--owner` | `orama` | The account that owns the key file: the one the gateway runs as |
 
 
 ## orama maint global
@@ -3028,10 +3086,14 @@ orama maint network publish [flags]
 ```
 
 ```text
-Write networks/<name>/ (genesis.json, release-root.json and, last, manifest.json)
-from the genesis a deploy built, for the chain id it was built under. The
-manifest carries the SHA-256 of the genesis and of the release root, so what a
-joining operator fetches can be checked.
+Write networks/<name>/ (genesis.json, release-root.json, tor-network.json when the
+network has one and, last, manifest.json) from the genesis a deploy built, for
+the chain id it was built under. The manifest carries the SHA-256 of the genesis,
+of the release root and of the Tor network file, so what a joining operator
+fetches can be checked. --tor-network pins the network's Tor network file
+(tor-network.json, the private Orama Tor network its relays join), which
+'orama setup' then gives to every relay it installs; the Tor network is a
+different thing from the chain, so a reset of the chain keeps the file.
 
 An unset field keeps its value from the manifest already published; the first
 publish of a network sets --seeds, --channel, --min-version, --release-repo and
@@ -3055,6 +3117,7 @@ and commit networks/ and core/pkg/netregistry/embedded/ together.
 | `--release-repo` | — | https base URL of the release repository (default: the published one) |
 | `--release-root` | — | The release-root.json file (default: the published one) |
 | `--seeds` | — | Seed DNS names, comma-separated (default: the published ones) |
+| `--tor-network` | — | The Tor network's tor-network.json (default: the published one, if any) |
 
 
 ## orama maint node
@@ -5275,8 +5338,8 @@ For each machine setup gives your RootWallet an SSH key (and pins the machine's 
 checks the hardware against what the machine will run, installs the signed release of the
 network's channel (verified against the release root the network pins), installs the cluster
 node and, beside it, the global layer: the chain (it joins by state sync from two seeds that
-must agree), public storage and its provider, and a Tor relay when you give the network's Tor
-file. Then it registers your operator, each node, its bonds and its storage capacity on the
+must agree), public storage and its provider, and a Tor relay (the network pins the Tor network file its
+relays join; --tor-network gives another, --no-relay leaves the relay out). Then it registers your operator, each node, its bonds and its storage capacity on the
 chain and creates your validator, signing every transaction with your RootWallet. Nodes are
 restarted one at a time, each waiting until it carries its share of the cluster again.
 
@@ -5323,7 +5386,7 @@ machine until every machine passes.
 | `--create-network` | — | Create a network of this name instead of joining one: the machines are its bootstrap validators |
 | `--domain` | — | Base domain of a cluster of your own: setup prints the NS and glue records to create, then waits until they resolve and the cluster has a certificate |
 | `--env` | — | CLI environment to record the cluster under (default: the active one on this network, else &lt;network>-&lt;name>) |
-| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs --tor-network and --yes |
+| `--exit` | `false` | Make the relay an exit relay: other people's traffic leaves from your IP address. Needs the network's Tor network file and --yes |
 | `--force-new-genesis` | `false` | With --create-network: build a new genesis although the machines carry one. Refused once a chain has run |
 | `--host-key` | — | Expected SSH host-key fingerprint, SHA256:..., for a single machine or &lt;ip>=SHA256:... for each (repeatable) |
 | `--ip` | — | Public IPv4 address of a machine (repeatable; the addresses can also be given as arguments) |
@@ -5331,6 +5394,7 @@ machine until every machine passes.
 | `--name` | — | Node name, the node's id on the chain; several machines are named &lt;name>, &lt;name>-2, ... (required unless --cluster-only) |
 | `--network` | — | Network to join: a name from `orama network list` (default: the active network, or the only one) |
 | `--no-faucet` | `false` | With --create-network: leave the test-network faucet out of the genesis |
+| `--no-relay` | `false` | Run no relay though the network pins a Tor network file |
 | `--no-validator` | `false` | Do not create a validator (and do not bond the 1,000 ORAMA self-bond) |
 | `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add &lt;ip>), never from the command line |
 | `--publish-dir` | — | With --create-network: where networks/&lt;name>/ is written (default ./networks) |
@@ -5338,7 +5402,7 @@ machine until every machine passes.
 | `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's) |
 | `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.&lt;name>.orama.network, one per machine) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
-| `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |
+| `--tor-network` | — | A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it) |
 | `--user` | `root` | SSH login on the machines |
 | `-y`, `--yes` | `false` | Ask nothing: use the answers given as flags (every machine needs a --host-key) |
 

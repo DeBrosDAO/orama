@@ -146,3 +146,13 @@ func TestWaitIncluded_theRightHashInAnyCaseIsAccepted(t *testing.T) {
 		t.Fatalf("height %d err %v", height, err)
 	}
 }
+
+// A log of several lines stays several readable pieces on one line; the lines are not run together.
+func TestWaitIncluded_aMultiLineLogIsOnOneLineWithItsLinesApart(t *testing.T) {
+	srv, _ := txServer(t, 0, http.StatusOK, `{"tx_response":{"txhash":"`+testHash+`","height":"7","code":3,"raw_log":"failed to execute message\n  message index: 0\r\nreason: cooldown\n"}}`)
+	_, err := WaitIncluded(context.Background(), srv.URL, testHash, time.Minute, testPoll)
+	want := "failed to execute message | message index: 0 | reason: cooldown"
+	if err == nil || strings.ContainsAny(err.Error(), "\r\n") || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %q, want it to contain %q", err, want)
+	}
+}

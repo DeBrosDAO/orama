@@ -286,6 +286,9 @@ func TestRoutePolicy_chainWalletRoutesArePublic(t *testing.T) {
 	for _, path := range []string{
 		"/v1/chain/simulate",
 		"/v1/chain/broadcast",
+		// The test-network faucet (served only where a faucet key is configured) is for a
+		// newcomer who has no account yet, so it takes no credential either.
+		"/v1/chain/faucet",
 		"/v1/chain/query/cosmos.bank.v1beta1.Query/Balance",
 		"/v1/chain/query/cosmwasm.wasm.v1.Query/ContractInfo",
 	} {

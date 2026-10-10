@@ -242,6 +242,18 @@ func TestWizard_presetFlagsStartTheAnswers(t *testing.T) {
 	d.wantView("ubuntu")
 }
 
+func TestWizard_aFullNodeNameTheChainWouldRefuseIsRefusedAtOnce(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.toOptions()
+	d.enter()
+	d.enter()
+	d.wantStep(stepName)
+	d.text("gateway")
+	d.enter()
+	d.wantStep(stepName)
+	d.wantView("reserved")
+}
+
 func TestWizard_clusterOnlySkipsStorageAndNeedsNoName(t *testing.T) {
 	f := newFake()
 	d := newDriver(t, f, setup.Options{})
@@ -295,6 +307,51 @@ func TestWizard_theExitRoleNeedsTheWarningAccepted(t *testing.T) {
 	d.wantStep(stepName)
 	if !d.m.opts.Exit || d.m.opts.TorNetwork != "/tmp/tor-network.json" {
 		t.Errorf("options %+v", d.m.opts)
+	}
+}
+
+// A network that pins its Tor network file runs a relay by default and asks for no file.
+func TestWizard_aPinnedTorNetworkNeedsNoFileAndTheRelayStartsOn(t *testing.T) {
+	f := newFake()
+	f.networks[0].TorNetwork = true
+	d := newDriver(t, f, setup.Options{})
+	d.toOptions()
+	d.wantView("[x] Run a Tor relay (this network pins the Tor network file it joins)")
+	d.enter()
+	d.wantStep(stepStorage)
+	d.enter()
+	d.wantStep(stepName) // no Tor network file is asked for
+	if d.m.opts.NoRelay || d.m.opts.TorNetwork != "" {
+		t.Errorf("options %+v: the relay comes from the pin", d.m.opts)
+	}
+}
+
+func TestWizard_leavingTheRelayOutOfAPinningNetworkIsSaid(t *testing.T) {
+	f := newFake()
+	f.networks[0].TorNetwork = true
+	d := newDriver(t, f, setup.Options{})
+	d.toOptions()
+	d.key(tea.KeyMsg{Type: tea.KeyDown}) // relay row
+	d.key(tea.KeyMsg{Type: tea.KeySpace})
+	d.wantView("[ ] Run a Tor relay")
+	d.enter()
+	d.wantStep(stepStorage)
+	if !d.m.opts.NoRelay {
+		t.Errorf("options %+v: the plan would give the nodes the relay the pin makes the default", d.m.opts)
+	}
+}
+
+func TestWizard_aNetworkThatPinsNothingStillAsksForTheFile(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.toOptions()
+	d.key(tea.KeyMsg{Type: tea.KeyDown})
+	d.key(tea.KeyMsg{Type: tea.KeySpace})
+	d.enter()
+	d.wantStep(stepStorage)
+	d.enter()
+	d.wantStep(stepTor)
+	if d.m.opts.NoRelay {
+		t.Error("no relay was refused: the person asked for one")
 	}
 }
 

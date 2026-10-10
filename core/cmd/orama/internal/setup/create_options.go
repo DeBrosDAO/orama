@@ -12,8 +12,8 @@ import (
 
 const (
 	// DefaultCreateNodeName is the base of the committee nodes' names when
-	// --name is not given: seed, seed-2, ... They are the network's seeds.
-	DefaultCreateNodeName = "seed"
+	// --name is not given: founder, founder-2, ... (not seed: the chain keeps seed<N> for the labels the zone publishes itself).
+	DefaultCreateNodeName = "founder"
 	// DefaultReleaseRepo is the release repository a new network takes its
 	// software from unless --release-repo says otherwise
 	// (website/src/docs/contributor/deployment.mdx).

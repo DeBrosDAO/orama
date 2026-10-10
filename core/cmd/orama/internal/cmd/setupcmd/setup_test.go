@@ -205,6 +205,17 @@ func TestChoicesFrom_marksTheActiveNetworkTheDefault(t *testing.T) {
 	}
 }
 
+func TestChoiceOf_saysWhetherTheNetworkPinsATorNetwork(t *testing.T) {
+	plain := &netregistry.Network{Manifest: &netregistry.Manifest{Name: "stagenet", ChainID: "orama-stagenet-1"}}
+	pinned := &netregistry.Network{Manifest: &netregistry.Manifest{Name: "testnet", ChainID: "orama-testnet-1", TorNetworkSHA256: strings.Repeat("ab", 32)}}
+	if c := choiceOf(plain, "stagenet"); c.TorNetwork || !c.Default || c.Name != "stagenet" {
+		t.Errorf("%+v", c)
+	}
+	if c := choiceOf(pinned, "stagenet"); !c.TorNetwork || c.Default {
+		t.Errorf("%+v", c)
+	}
+}
+
 func TestPrintSummary(t *testing.T) {
 	var out bytes.Buffer
 	plan := &setup.Plan{Nodes: []setup.NodePlan{{IP: "203.0.113.10"}, {IP: "203.0.113.11"}}}

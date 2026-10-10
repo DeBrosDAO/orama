@@ -18,6 +18,7 @@ import (
 	"time"
 
 	nodeauth "github.com/DeBrosOfficial/network/pkg/auth"
+	"github.com/DeBrosOfficial/network/pkg/chainfaucet"
 	"github.com/DeBrosOfficial/network/pkg/client"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/deployments"
@@ -237,6 +238,11 @@ type Gateway struct {
 	chainBroadcastLimiter *chainTxLimiter
 	// chainLightLimiter caps the light-client route joining nodes state-sync through.
 	chainLightLimiter *chainTxLimiter
+	// chainFaucetLimiter caps the faucet route (served only when faucet is set).
+	chainFaucetLimiter *chainTxLimiter
+	// faucet makes the drips of POST /v1/chain/faucet; nil on a gateway with no faucet key
+	// (faucet.go).
+	faucet *chainfaucet.Service
 	// webrtcJoinRateLimiter caps the signalling sockets one identity opens. See webrtcJoinAllowed.
 	webrtcJoinRateLimiter *RateLimiter
 	namespaceRateLimiter  *NamespaceRateLimiter // legacy; superseded by rateLimitManager when set
@@ -653,6 +659,11 @@ func New(logger *logging.ColoredLogger, cfg *Config) (*Gateway, error) {
 	// Per-IP: token bucket against the client IP. Generous so legitimate
 	// users behind shared NATs aren't squeezed.
 	configureRateLimiters(gw)
+
+	if gw.faucet, err = newFaucet(gw.shutdownCtx, cfg, logger); err != nil {
+		shutdown()
+		return nil, err
+	}
 
 	// Challenges are Raft-replicated rows that stop being claimable the moment
 	// they expire, and nothing removed them: the table only ever grew.
@@ -1690,6 +1701,8 @@ func configureRateLimiters(gw *Gateway) {
 		chainBroadcastRoutePerMinute, chainBroadcastRouteBurst)
 	gw.chainLightLimiter = newChainTxLimiter(chainLightPerAddressPerMinute, chainLightPerAddressBurst,
 		chainLightRoutePerMinute, chainLightRouteBurst)
+	gw.chainFaucetLimiter = newChainTxLimiter(chainFaucetPerAddressPerMinute, chainFaucetPerAddressBurst,
+		chainFaucetRoutePerMinute, chainFaucetRouteBurst)
 
 	gw.webrtcJoinRateLimiter = NewRateLimiter(webrtcJoinsPerMinute, webrtcJoinBurst)
 	gw.webrtcJoinRateLimiter.StartCleanup(5*time.Minute, 10*time.Minute)

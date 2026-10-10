@@ -19,6 +19,8 @@ type PublishInput struct {
 	Genesis []byte
 	// ReleaseRoot is release-root.json. Empty keeps the one already published.
 	ReleaseRoot []byte
+	// TorNetwork is tor-network.json. Empty keeps the one already published, if any.
+	TorNetwork []byte
 	// The fields below override the published manifest when set. A first
 	// publish of a network must set all of them.
 	Seeds       []string
@@ -51,11 +53,25 @@ func Publish(in PublishInput) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
+	torNetwork, err := publishedTorNetwork(dir, in.TorNetwork)
+	if err != nil {
+		return nil, err
+	}
 	m := merge(prev, in)
 	m.GenesisSHA256 = Digest(in.Genesis)
 	m.ReleaseRootSHA256 = Digest(root)
+	// The manifest pins the file that is published with it, and no other.
+	m.TorNetworkSHA256 = ""
+	if torNetwork != nil {
+		m.TorNetworkSHA256 = Digest(torNetwork)
+	}
 	if err := m.Validate(); err != nil {
 		return nil, err
+	}
+	if torNetwork != nil {
+		if err := m.VerifyTorNetwork(torNetwork); err != nil {
+			return nil, err
+		}
 	}
 	if prev != nil && !prev.Announced() && prev.ChainID == m.ChainID && prev.GenesisSHA256 != m.GenesisSHA256 {
 		return nil, fmt.Errorf("%w: chain %s has genesis sha256 %s, the new genesis is %s; a reset needs a new chain id",
@@ -68,15 +84,23 @@ func Publish(in PublishInput) (*Manifest, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create %s: %w", dir, err)
 	}
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{{GenesisFile, in.Genesis}, {ReleaseRootFile, root}, {ManifestFile, manifest}} {
+	files := []publishedFile{{GenesisFile, in.Genesis}, {ReleaseRootFile, root}}
+	if torNetwork != nil {
+		files = append(files, publishedFile{TorNetworkFile, torNetwork})
+	}
+	// The manifest goes last, so a reader that finds it finds the files it names.
+	for _, f := range append(files, publishedFile{ManifestFile, manifest}) {
 		if err := writeFileAtomic(filepath.Join(dir, f.name), f.data); err != nil {
 			return nil, err
 		}
 	}
 	return m, nil
+}
+
+// publishedFile is one file of a network's directory.
+type publishedFile struct {
+	name string
+	data []byte
 }
 
 // readPublished returns the manifest already in dir, or nil when there is none.
@@ -104,6 +128,22 @@ func publishedRoot(dir string, given []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no release root given and none published in %s: %w", dir, err)
 	}
 	return root, nil
+}
+
+// publishedTorNetwork is the Tor network file to publish: the one given, else the one already in
+// dir, else nil when the network has none.
+func publishedTorNetwork(dir string, given []byte) ([]byte, error) {
+	if len(given) > 0 {
+		return given, nil
+	}
+	file, err := os.ReadFile(filepath.Join(dir, TorNetworkFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the published Tor network file: %w", err)
+	}
+	return file, nil
 }
 
 // merge builds the new manifest from the published one, with in's overrides.

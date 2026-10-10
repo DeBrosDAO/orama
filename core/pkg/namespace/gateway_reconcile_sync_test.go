@@ -191,3 +191,27 @@ func TestGatewayYAML_bootstrapPeersReachTheGatewayAndAreDrift(t *testing.T) {
 		t.Fatal("a config with no bootstrap_peers compared in sync with one that has them")
 	}
 }
+
+// The cluster gateway's faucet key file reaches its YAML, and a YAML written before the node was
+// given one is drift, so it is rewritten and the gateway restarts with the faucet.
+func TestGatewayYAML_faucetKeyFileReachesTheGatewayAndIsDrift(t *testing.T) {
+	const keyFile = "/opt/orama/.orama/secrets/chain-faucet.key"
+	desired := gatewayYAMLFromInstance(gatewayspec.InstanceConfig{Namespace: "index", FaucetKeyFile: keyFile},
+		"hmac", "/cluster-secret", "10.0.0.5:6001")
+	if desired.FaucetKeyFile != keyFile {
+		t.Fatalf("faucet_key_file = %q, want %q", desired.FaucetKeyFile, keyFile)
+	}
+	old := desired
+	old.FaucetKeyFile = ""
+	if gatewayYAMLEqual(old, desired) {
+		t.Fatal("a gateway config with no faucet compared in sync with one that has it")
+	}
+	cfg, err := instanceFromGatewayYAML(desired, "node-1")
+	if err != nil || cfg.FaucetKeyFile != keyFile {
+		t.Fatalf("a config read back from disk lost the faucet: %q, %v", cfg.FaucetKeyFile, err)
+	}
+	none := gatewayYAMLFromInstance(gatewayspec.InstanceConfig{Namespace: "ns"}, "hmac", "/cluster-secret", "10.0.0.5:6101")
+	if none.FaucetKeyFile != "" {
+		t.Errorf("a gateway that was given no faucet writes %q", none.FaucetKeyFile)
+	}
+}

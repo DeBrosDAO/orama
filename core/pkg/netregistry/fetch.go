@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"path"
 	"time"
+
+	"github.com/DeBrosOfficial/network/pkg/tornet"
 )
 
 const (
@@ -18,6 +20,8 @@ const (
 	maxRedirects = 5
 	// maxRootBytes bounds a release root. A TUF root is a few KiB.
 	maxRootBytes = 1 << 20
+	// maxTorNetworkBytes bounds a Tor network file, as pkg/tornet does for one read from disk.
+	maxTorNetworkBytes = tornet.NetworkFileLimit
 	// maxGenesisBytes bounds a genesis. One that carries the standard contracts
 	// is a few MiB.
 	maxGenesisBytes = 64 << 20
@@ -92,8 +96,9 @@ func get(ctx context.Context, client *http.Client, rawURL string, limit int64) (
 }
 
 // FetchNetwork fetches the manifest at manifestURL and the release root beside
-// it, and checks the root against the manifest. The URL must end in
-// /manifest.json, because the root and genesis are named relative to it.
+// it, and checks the root against the manifest; a manifest that pins a Tor network file has
+// that fetched and checked too. The URL must end in /manifest.json, because the root, genesis
+// and Tor network file are named relative to it.
 func FetchNetwork(ctx context.Context, client *http.Client, manifestURL string) (*Network, error) {
 	u, err := url.Parse(manifestURL)
 	if err != nil {
@@ -121,7 +126,29 @@ func FetchNetwork(ctx context.Context, client *http.Client, manifestURL string) 
 	if err := m.VerifyRoot(root); err != nil {
 		return nil, fmt.Errorf("%s: %w", rootURL, err)
 	}
-	return &Network{Manifest: m, Root: root, Source: manifestURL}, nil
+	n := &Network{Manifest: m, Root: root, Source: manifestURL}
+	if m.TorNetworkSHA256 == "" {
+		return n, nil
+	}
+	if n.TorNetwork, err = fetchTorNetwork(ctx, client, m, manifestURL); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+func fetchTorNetwork(ctx context.Context, client *http.Client, m *Manifest, manifestURL string) ([]byte, error) {
+	torURL, err := siblingURL(manifestURL, TorNetworkFile)
+	if err != nil {
+		return nil, err
+	}
+	file, err := get(ctx, client, torURL, maxTorNetworkBytes)
+	if err != nil {
+		return nil, fmt.Errorf("the manifest of network %s pins a Tor network file that cannot be fetched: %w", m.Name, err)
+	}
+	if err := m.VerifyTorNetwork(file); err != nil {
+		return nil, fmt.Errorf("%s: %w", torURL, err)
+	}
+	return file, nil
 }
 
 // FetchGenesis fetches this network's genesis and checks it against the

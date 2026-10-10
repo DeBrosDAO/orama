@@ -116,7 +116,11 @@ func (m *Model) takeName(value string) (tea.Model, tea.Cmd) {
 	if value == "" && m.opts.Create != nil {
 		value = setup.DefaultCreateNodeName
 	}
-	if err := setup.ValidateNodeName(strings.ToLower(value)); err != nil {
+	validate := setup.ValidateFullNodeName
+	if m.opts.ClusterOnly {
+		validate = setup.ValidateNodeName
+	}
+	if err := validate(strings.ToLower(value)); err != nil {
 		return m.fail("%v", err)
 	}
 	m.opts.Name = strings.ToLower(value)
@@ -157,8 +161,19 @@ func (m *Model) takeLogin(method loginMethod) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) takeNetwork(n NetworkChoice) (tea.Model, tea.Cmd) {
-	m.opts.Network, m.opts.Create = n.Name, nil
+	m.chooseNetwork(n)
+	m.opts.Create = nil
 	return m.goTo(stepOptions)
+}
+
+// chooseNetwork records the network. One that pins its Tor network file runs a relay unless the
+// person says otherwise, so the relay row starts on.
+func (m *Model) chooseNetwork(n NetworkChoice) {
+	m.opts.Network = n.Name
+	m.torPinned = n.TorNetwork
+	if n.TorNetwork {
+		m.toggles[optRelay] = m.toggles[optGlobal] && !m.opts.NoRelay
+	}
 }
 
 func (m *Model) onNetworks(msg networksMsg) (tea.Model, tea.Cmd) {

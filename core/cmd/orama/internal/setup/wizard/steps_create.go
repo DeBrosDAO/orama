@@ -18,6 +18,7 @@ func (m *Model) startCreate() (tea.Model, tea.Cmd) {
 	m.opts.Network, m.opts.ClusterOnly = "", false
 	m.toggles[optGlobal], m.toggles[optRelay], m.toggles[optExit] = true, false, false
 	m.opts.Exit, m.opts.TorNetwork = false, ""
+	m.torPinned = false
 	return m.goTo(stepCreateName)
 }
 

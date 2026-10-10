@@ -70,3 +70,36 @@ func TestOrama(t *testing.T) {
 		}
 	}
 }
+
+// Every full node holds a name, and the chain locks a deposit for it.
+func TestComputeBudget_eachFullNodeSetsAsideItsNameDeposit(t *testing.T) {
+	params := defaultParams()
+	params.NameDeposit = big.NewInt(noramaPerOrama)
+	p := planFor(t, Options{IPs: []string{ip1, ip2}, Name: "alice", StorageGB: 10})
+	with, err := ComputeBudget(p, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := ComputeBudget(p, defaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := new(big.Int).Sub(with.Total, without.Total); got.Cmp(big.NewInt(2*noramaPerOrama)) != 0 {
+		t.Errorf("two nodes added %s norama, want two deposits of 1 ORAMA", got)
+	}
+	if with.NameDeposit.Cmp(big.NewInt(noramaPerOrama)) != 0 {
+		t.Errorf("per-node deposit %s", with.NameDeposit)
+	}
+}
+
+func TestComputeBudget_clusterOnlyLocksNoNameDeposit(t *testing.T) {
+	params := defaultParams()
+	params.NameDeposit = big.NewInt(noramaPerOrama)
+	b, err := ComputeBudget(planFor(t, Options{IPs: []string{ip1}, ClusterOnly: true}), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Total.Sign() != 0 && b.Reserve.Cmp(big.NewInt(feeReserveOperator)) != 0 {
+		t.Errorf("reserve %s", b.Reserve)
+	}
+}

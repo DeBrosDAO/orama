@@ -58,13 +58,13 @@ func TestWizard_createANetworkAsksTheThreeQuestionsAndSkipsTheOptions(t *testing
 	d.wantStep(stepStorage)
 	d.enter()
 	d.wantStep(stepName)
-	d.wantView("seed")
+	d.wantView("founder")
 	d.enter() // the default name for the seats
 	d.wantStep(stepInspect)
 	d.enter()
 	d.wantStep(stepConfirm)
-	d.wantView("seed (" + ipA + ")")
-	d.wantView("seed-2 (" + ipB + ")")
+	d.wantView("founder (" + ipA + ")")
+	d.wantView("founder-2 (" + ipB + ")")
 	c := d.m.opts.Create
 	if c == nil || c.Name != "stagenet" || c.ChainID != "orama-stagenet-7" || c.ReleaseRoot != "/tmp/release-root.json" || d.m.opts.Network != "" {
 		t.Fatalf("options = %+v, create %+v", d.m.opts, c)

@@ -185,8 +185,8 @@ func printFaucet(p *printer.Printer, r faucetReport, amount *big.Int) error {
 
 // Fund sends amount of norama from the faucet to recipient, signed on a node of
 // the environment env over SSH (see the faucet command). It is what `orama setup`
-// calls for a new operator on a test network; the same checks apply: the chain
-// must be a test network and the node must hold the faucet signer's key.
+// calls for the operator of a network it is creating; the same checks apply: the
+// chain must be a test network and the node must hold the faucet signer's key.
 func Fund(env, recipient string, amount *big.Int) error {
 	if err := requireRecipient(recipient); err != nil {
 		return err

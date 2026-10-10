@@ -37,7 +37,7 @@ func (r *runner) onchainPhase(ctx context.Context) error {
 			r.emit(n.plan.IP, StepOnchain, StateFailed, err.Error())
 			return fmt.Errorf("machine %s: %w", n.plan.IP, err)
 		}
-		if err := r.claimName(ctx, n); err != nil {
+		if err := r.claimName(ctx, sess, n); err != nil {
 			return err
 		}
 	}
@@ -70,24 +70,55 @@ func (r *runner) fund(ctx context.Context, sess ChainSession) (*Budget, error) {
 		return budget, nil
 	}
 	notFunded := &NotFundedError{Address: r.oper, Have: have, Need: need, Budget: budget}
-	if !r.net.Manifest.Faucet || r.d.Funder == nil {
+	funder := r.d.Funder
+	if r.create != nil && r.d.CreateFunder != nil {
+		funder = r.d.CreateFunder
+	}
+	if !r.net.Manifest.Faucet || funder == nil {
 		return nil, notFunded
 	}
 	shortfall := new(big.Int).Sub(need, have)
 	r.d.Report.Linef("asking the %s faucet for %s ORAMA for %s", r.net.Manifest.Name, Orama(shortfall), r.oper)
-	if err := r.d.Funder.Fund(ctx, r.net.Manifest, r.oper, shortfall); err != nil {
+	if err := funder.Fund(ctx, r.net.Manifest, r.oper, shortfall); err != nil {
 		notFunded.FaucetTried = err.Error()
 		return nil, notFunded
 	}
-	if have, err = sess.Balance(ctx, r.oper); err != nil {
-		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, err)
+	if have, err = r.awaitFunds(ctx, sess, need); err != nil {
+		return nil, err
 	}
 	if have.Cmp(need) < 0 {
 		notFunded.Have = have
-		notFunded.FaucetTried = "it paid less than the setup needs"
+		notFunded.FaucetTried = "it paid less than the setup needs, or the node setup reads the chain through has not seen the drip"
 		return nil, notFunded
 	}
 	return budget, nil
+}
+
+// awaitFunds reads the operator's balance through the session until it holds need, and returns what it
+// last read. The seed that paid answered when the drip was in a block it had seen, and this node can
+// be a block behind it, so a balance that is short at the first read is not a drip that was too small.
+// A balance still short at the deadline is returned for the caller to report; only a read that fails
+// or a cancelled run is an error.
+func (r *runner) awaitFunds(ctx context.Context, sess ChainSession, need *big.Int) (*big.Int, error) {
+	var have *big.Int
+	var readErr error
+	_ = pollUntil(ctx, r.d.Timing.BalancePoll, r.d.Timing.BalanceDeadline, "the faucet's drip to reach "+r.oper, func(ctx context.Context) (bool, error) {
+		balance, err := sess.Balance(ctx, r.oper)
+		if readErr = err; err != nil {
+			return false, err
+		}
+		have = balance
+		return have.Cmp(need) >= 0, nil
+	})
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// A read that was still in flight when this wait's own deadline passed is the deadline, not a
+	// failed read: the balance last seen is reported.
+	if readErr != nil && !(have != nil && errors.Is(readErr, context.DeadlineExceeded)) {
+		return nil, fmt.Errorf("read the balance of %s after the faucet: %w", r.oper, readErr)
+	}
+	return have, nil
 }
 
 func (r *runner) registerOperator(ctx context.Context, sess ChainSession) error {
@@ -224,15 +255,10 @@ func (r *runner) createValidator(ctx context.Context, sess ChainSession, n *node
 	return nil
 }
 
-// claimName claims <name>.<network>.orama.network for the node, once the chain
-// can. Without a claimer the step says so and the run goes on: the name only
-// identifies the node, and the chain has no transaction for it yet.
-func (r *runner) claimName(ctx context.Context, n *nodeRun) error {
-	if r.d.Names == nil {
-		r.emit(n.plan.IP, StepName, StateSkipped, "name claim not available on this chain yet")
-		return nil
-	}
-	if err := r.d.Names.Claim(ctx, n.plan.Name, n.plan.Name); err != nil {
+// claimName claims <name>.<network>.orama.network for the node: the name is the
+// node's name in the plan, which is also its id on the chain.
+func (r *runner) claimName(ctx context.Context, sess ChainSession, n *nodeRun) error {
+	if err := r.d.Names.Claim(ctx, sess, n.plan.Name, n.plan.Name); err != nil {
 		r.emit(n.plan.IP, StepName, StateFailed, err.Error())
 		return fmt.Errorf("machine %s: claim the name %q: %w", n.plan.IP, n.plan.Name, err)
 	}
@@ -241,8 +267,8 @@ func (r *runner) claimName(ctx context.Context, n *nodeRun) error {
 }
 
 // remainingNeed is what the account still has to hold: the budget less the bonds
-// the chain already shows, the validator if it exists, and the reserve of every
-// node that is already registered. A run that stopped after bonding is not asked
+// the chain already shows, the validator if it exists, the reserve of every
+// node that is already registered and the deposit of every name already held. A run that stopped after bonding is not asked
 // for the bonds again.
 func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget) (*big.Int, error) {
 	need := new(big.Int).Set(b.Total)
@@ -259,6 +285,13 @@ func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget
 			if have := node.Bonds[role]; have != nil {
 				need.Sub(need, minInt(have, target))
 			}
+		}
+		held, err := sess.NodeName(ctx, n.plan.Name)
+		if err != nil {
+			return nil, fmt.Errorf("check whether node %q holds a name: %w", n.plan.Name, err)
+		}
+		if held != "" {
+			need.Sub(need, b.NameDeposit)
 		}
 	}
 	if exists, err := sess.ValidatorExists(ctx, r.oper); err != nil {

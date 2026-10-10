@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -99,6 +100,27 @@ func TestRunCreate_theFaucetIsAskedAfterTheEpoch(t *testing.T) {
 	if h.w.index("faucet ") < 0 || h.w.index("faucet ") < h.w.index("epoch ") {
 		t.Errorf("the faucet pays from the seats' earnings, so it is asked after the epoch:\n%s", strings.Join(h.w.entries(), "\n"))
 	}
+}
+
+// A network being created has no public faucet yet: the operator is funded by the funder that signs on
+// the seats, and the one that asks the seeds' gateways is not asked.
+func TestRunCreate_theOperatorIsFundedBySigningOnTheSeatsNotByAskingTheSeeds(t *testing.T) {
+	h := newCreateHarness(t)
+	h.w.balance = new(big.Int)
+	h.w.faucetPays = bigOramaMany()
+	h.deps.CreateFunder = fakeFunder{h.w}
+	h.deps.Funder = failingFunder{}
+	h.mustCreate(t, h.createOpts(fiveIPs[0]))
+	if h.w.count("faucet ") != 1 {
+		t.Errorf("the seat-signing funder was asked %d times, want once:\n%s", h.w.count("faucet "), strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+// failingFunder fails the test run when it is asked.
+type failingFunder struct{}
+
+func (failingFunder) Fund(context.Context, *netregistry.Manifest, string, *big.Int) error {
+	return errors.New("the public faucet of a network being created was asked")
 }
 
 func TestRunCreate_noFaucetNoEpochWait(t *testing.T) {

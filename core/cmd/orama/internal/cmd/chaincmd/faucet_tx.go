@@ -5,32 +5,29 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
+	"github.com/DeBrosOfficial/network/pkg/chainfaucet"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 )
 
 const (
-	// faucetTypeURL is the Any type URL of orama.emission.v1.MsgFaucet.
-	faucetTypeURL = "/orama.emission.v1.MsgFaucet"
 	// faucetGas is the gas limit of the faucet transaction. The fee is this times the base fee.
 	faucetGas = 300000
 	// faucetOperatorKey is the operator key in oramad's test keyring on a stagenet or devnet node
 	// (chain/scripts/stagenet/deploy.sh, create_operator_key). It signs on the node and never leaves it.
 	faucetOperatorKey = "validator"
-	// faucetDefaultAmount is 100 ORAMA in norama, a tenth of the chain's default maximum drip.
-	faucetDefaultAmount = "100000000000"
 	// norama per ORAMA (chain/app/params NoramaPerOrama, 9 decimals).
 	noramaPerOrama = 1_000_000_000
-	// faucetMaxDigits bounds the amount before the chain's own maximum drip is asked: no drip is
-	// anywhere near 10^18 norama (a billion ORAMA), and a bounded number is safe on a command line.
-	faucetMaxDigits = 18
+	// faucetMaxDigits bounds the amount before the chain's own maximum drip is asked.
+	faucetMaxDigits = chainfaucet.MaxAmountDigits
 )
 
-// testNetworkMarkers are the chain id fragments of the networks that may run a faucet: the chain
-// refuses a faucet on any other chain id (docs/CHAIN.md), and the CLI says so before it signs.
-var testNetworkMarkers = []string{"-stagenet-", "-devnet-", "-localnet-"}
+// faucetDefaultAmount is the drip the faucet gives when no amount is asked for: 100 ORAMA, the same
+// for the public faucet route.
+var faucetDefaultAmount = strconv.FormatInt(chainfaucet.DefaultDripNorama, 10)
 
 var plainDecimal = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
@@ -61,13 +58,11 @@ func requireRecipient(arg string) error {
 
 // requireTestNetwork refuses a chain id that is not a stagenet, devnet or localnet.
 func requireTestNetwork(chainID string) error {
-	for _, m := range testNetworkMarkers {
-		if strings.Contains(chainID, m) {
-			return nil
-		}
+	if chainfaucet.IsTestNetwork(chainID) {
+		return nil
 	}
 	return clierr.Usage("chain %q is not a test network: the faucet exists only on a chain whose id contains one of %s",
-		chainID, strings.Join(testNetworkMarkers, ", "))
+		chainID, strings.Join(chainfaucet.TestNetworkMarkers, ", "))
 }
 
 // unsignedFaucetTx is the proto-JSON of a cosmos.tx.v1beta1.Tx carrying one MsgFaucet and no
@@ -77,7 +72,7 @@ func unsignedFaucetTx(signer, recipient string, amount *big.Int) ([]byte, error)
 	tx := map[string]any{
 		"body": map[string]any{
 			"messages": []any{map[string]any{
-				"@type":     faucetTypeURL,
+				"@type":     clusterreg.FaucetTypeURL,
 				"signer":    signer,
 				"recipient": recipient,
 				"amount":    amount.String(),

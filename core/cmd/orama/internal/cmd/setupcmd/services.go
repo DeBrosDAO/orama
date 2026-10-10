@@ -36,7 +36,7 @@ func runWizard(ctx context.Context, cmd *cobra.Command, preset setup.Options) er
 // wizardServices connects the wizard to the setup package.
 func wizardServices() wizard.Services {
 	quiet := &setup.TextReporter{Out: io.Discard}
-	deps := setup.NewDeps(quiet, nil)
+	deps := setup.NewDeps(quiet)
 	return wizard.Services{
 		Wallet:   deps.Wallet.Unlocked,
 		Networks: networkChoices,
@@ -49,7 +49,7 @@ func wizardServices() wizard.Services {
 		},
 		Plan: func(ctx context.Context, o setup.Options) (*setup.Plan, error) { return setup.PlanFor(ctx, o, deps) },
 		Run: func(ctx context.Context, o setup.Options, rep setup.Reporter) (*setup.Result, error) {
-			return setup.Run(ctx, o, setup.NewDeps(rep, nil))
+			return setup.Run(ctx, o, setup.NewDeps(rep))
 		},
 	}
 }
@@ -93,7 +93,14 @@ func choicesFrom(reg *netregistry.Registry, active string) ([]wizard.NetworkChoi
 		if err != nil {
 			return nil, fmt.Errorf("read network %s: %w", name, err)
 		}
-		out = append(out, wizard.NetworkChoice{Name: name, ChainID: n.Manifest.ChainID, Default: name == active, Announced: n.Manifest.Announced()})
+		out = append(out, choiceOf(n, active))
 	}
 	return out, nil
+}
+
+// choiceOf is the wizard's view of a network: whether it is the active one, and whether its
+// chain is created yet, and whether its manifest pins the Tor network file its relays join.
+func choiceOf(n *netregistry.Network, active string) wizard.NetworkChoice {
+	m := n.Manifest
+	return wizard.NetworkChoice{Name: m.Name, ChainID: m.ChainID, Default: m.Name == active, Announced: m.Announced(), TorNetwork: m.TorNetworkSHA256 != ""}
 }

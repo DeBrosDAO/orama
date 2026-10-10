@@ -897,6 +897,7 @@ func gatewayYAMLFromInstance(cfg gatewayspec.InstanceConfig, hmacSecret, cluster
 		NtfyBaseURL:           cfg.NtfyBaseURL,
 		APIKeyHMACSecret:      hmacSecret,
 		StateDir:              cfg.StateDir,
+		FaucetKeyFile:         cfg.FaucetKeyFile,
 		WebRTC: gatewayspec.GatewayYAMLWebRTC{
 			Enabled:           cfg.WebRTCEnabled,
 			SFUPort:           cfg.SFUPort,
@@ -969,6 +970,7 @@ func gatewayYAMLEqual(a, b gatewayspec.GatewayYAMLConfig) bool {
 		a.ClusterSecretPath == b.ClusterSecretPath &&
 		a.APIKeyHMACSecret == b.APIKeyHMACSecret &&
 		a.NtfyBaseURL == b.NtfyBaseURL &&
+		a.FaucetKeyFile == b.FaucetKeyFile &&
 		a.StateDir == b.StateDir
 }
 
@@ -1123,6 +1125,7 @@ func instanceFromGatewayYAML(y gatewayspec.GatewayYAMLConfig, nodeID string) (ga
 		SecretsEncryptionKey:  y.SecretsEncryptionKey,
 		NtfyBaseURL:           y.NtfyBaseURL,
 		StateDir:              y.StateDir,
+		FaucetKeyFile:         y.FaucetKeyFile,
 	}, nil
 }
 

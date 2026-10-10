@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 // different network on the web than in the binary. This copies it into the built
 // site and fails if anything in the copy differs from the source.
 
-const PUBLISHED = ["manifest.json", "release-root.json", "genesis.json"];
+const PUBLISHED = ["manifest.json", "release-root.json", "genesis.json", "tor-network.json"];
 
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 
@@ -34,6 +34,16 @@ export function verifyNetworkDir(dir) {
   const genesisFile = join(dir, "genesis.json");
   if (existsSync(genesisFile) && manifest.genesis_sha256 !== sha256(genesisFile)) {
     throw new Error(`${dir}: genesis.json does not match genesis_sha256 in the manifest`);
+  }
+  const torFile = join(dir, "tor-network.json");
+  if (manifest.tor_network_sha256 && !existsSync(torFile)) {
+    throw new Error(`${dir}: the manifest pins tor-network.json (tor_network_sha256) but the file is missing`);
+  }
+  if (manifest.tor_network_sha256 && manifest.tor_network_sha256 !== sha256(torFile)) {
+    throw new Error(`${dir}: tor-network.json does not match tor_network_sha256 in the manifest`);
+  }
+  if (!manifest.tor_network_sha256 && existsSync(torFile)) {
+    throw new Error(`${dir}: tor-network.json is there but the manifest does not pin it (tor_network_sha256)`);
   }
   const extra = listFiles(dir).filter((f) => !PUBLISHED.includes(f));
   if (extra.length > 0) {

@@ -62,10 +62,14 @@ Write networks/&lt;name>/ for a chain that was just deployed
 orama maint network publish [flags]
 ```
 
-Write networks/&lt;name>/ (genesis.json, release-root.json and, last, manifest.json)
-from the genesis a deploy built, for the chain id it was built under. The
-manifest carries the SHA-256 of the genesis and of the release root, so what a
-joining operator fetches can be checked.
+Write networks/&lt;name>/ (genesis.json, release-root.json, tor-network.json when the
+network has one and, last, manifest.json) from the genesis a deploy built, for
+the chain id it was built under. The manifest carries the SHA-256 of the genesis,
+of the release root and of the Tor network file, so what a joining operator
+fetches can be checked. --tor-network pins the network's Tor network file
+(tor-network.json, the private Orama Tor network its relays join), which
+'orama setup' then gives to every relay it installs; the Tor network is a
+different thing from the chain, so a reset of the chain keeps the file.
 
 An unset field keeps its value from the manifest already published; the first
 publish of a network sets --seeds, --channel, --min-version, --release-repo and
@@ -88,6 +92,7 @@ and commit networks/ and core/pkg/netregistry/embedded/ together.
 | `--release-repo` | — | https base URL of the release repository (default: the published one) |
 | `--release-root` | — | The release-root.json file (default: the published one) |
 | `--seeds` | — | Seed DNS names, comma-separated (default: the published ones) |
+| `--tor-network` | — | The Tor network's tor-network.json (default: the published one, if any) |
 
 ## orama network
 

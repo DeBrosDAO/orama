@@ -47,6 +47,10 @@ func (c *Config) ValidateConfig() []error {
 		}
 	}
 
+	if c.FaucetKeyFile != "" && !filepath.IsAbs(c.FaucetKeyFile) {
+		errs = append(errs, fmt.Errorf("gateway.faucet_key_file: %q must be an absolute path", c.FaucetKeyFile))
+	}
+
 	// state_dir is where this gateway's signing keys live. With none, it has
 	// nowhere it may write them (the unit is ProtectSystem=strict), so it could
 	// start serving /health while every auth route is missing.

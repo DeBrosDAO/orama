@@ -28,11 +28,11 @@ func TestVerifyGenesis_refusesWhatIsNotTheCommittee(t *testing.T) {
 		want string
 	}{
 		"another chain":             {genesisFor{chainID: "orama-stagenet-5", seats: seats, allowStake: true, faucet: true}, "not \"orama-stagenet-6\""},
-		"a seat is missing":         {genesisFor{chainID: good.chainID, seats: seats[:2], allowStake: true, faucet: true}, "seed-3"},
+		"a seat is missing":         {genesisFor{chainID: good.chainID, seats: seats[:2], allowStake: true, faucet: true}, "founder-3"},
 		"a validator is extra":      {genesisFor{chainID: good.chainID, seats: append(append([]Seat(nil), seats...), fakeSeat(7)), allowStake: true, faucet: true}, "names 4 bootstrap validators"},
 		"a seat twice":              {genesisFor{chainID: good.chainID, seats: []Seat{seats[0], seats[1], seats[1]}, allowStake: true, faucet: true}, "2 times"},
-		"another consensus key":     {genesisFor{chainID: good.chainID, seats: wrongKey, allowStake: true, faucet: true}, "seed-2"},
-		"another moniker":           {genesisFor{chainID: good.chainID, seats: wrongName, allowStake: true, faucet: true}, "seed-3"},
+		"another consensus key":     {genesisFor{chainID: good.chainID, seats: wrongKey, allowStake: true, faucet: true}, "founder-2"},
+		"another moniker":           {genesisFor{chainID: good.chainID, seats: wrongName, allowStake: true, faucet: true}, "founder-3"},
 		"a faucet nobody asked for": {genesisFor{chainID: good.chainID, seats: seats, allowStake: true, faucet: false}, "faucet_enabled=false"},
 		"no bootstrap stake":        {genesisFor{chainID: good.chainID, seats: seats, allowStake: false, faucet: true}, "allow_bootstrap_stake=false"},
 		"a balance":                 {genesisFor{chainID: good.chainID, seats: seats, allowStake: true, faucet: true, extra: []string{"orama1thief"}}, "zero supply"},

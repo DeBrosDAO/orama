@@ -6,6 +6,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -198,6 +200,156 @@ func TestParseCymru_firstOfSeveral(t *testing.T) {
 }
 
 // ---- faucet
+
+// seedDoer answers each seed's faucet request from a script and records the order they were asked in.
+type seedDoer struct {
+	answers map[string]seedAnswer
+	asked   []string
+	body    string
+}
+
+type seedAnswer struct {
+	status int
+	body   string
+	err    error
+}
+
+func (d *seedDoer) Do(req *http.Request) (*http.Response, error) {
+	d.asked = append(d.asked, req.URL.Host)
+	if req.URL.Scheme != "https" || req.URL.Path != "/v1/chain/faucet" || req.Method != http.MethodPost {
+		return nil, fmt.Errorf("unexpected request %s %s", req.Method, req.URL)
+	}
+	raw, _ := io.ReadAll(req.Body)
+	d.body = string(raw)
+	a, ok := d.answers[req.URL.Host]
+	if !ok {
+		return nil, fmt.Errorf("no answer scripted for %s", req.URL.Host)
+	}
+	if a.err != nil {
+		return nil, a.err
+	}
+	return &http.Response{StatusCode: a.status, Body: io.NopCloser(strings.NewReader(a.body))}, nil
+}
+
+func paid(amount int64) seedAnswer {
+	return seedAnswer{status: http.StatusOK, body: fmt.Sprintf(`{"tx_hash":"%s","amount":"%d","height":"9"}`, strings.Repeat("AB", 32), amount)}
+}
+
+func refused(status int, kind, message string) seedAnswer {
+	return seedAnswer{status: status, body: fmt.Sprintf(`{"error":%q,"message":%q}`, kind, message)}
+}
+
+var faucetNetwork = &netregistry.Manifest{Name: "stagenet", Seeds: []string{"seed1.stagenet.example", "seed2.stagenet.example", "seed3.stagenet.example"}}
+
+func TestGatewayFaucet_theFirstSeedToPayEndsTheAsking(t *testing.T) {
+	d := &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": paid(5)}}
+	if err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(5)); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.asked) != 1 || d.asked[0] != "seed1.stagenet.example" {
+		t.Errorf("asked %v, want only the first seed", d.asked)
+	}
+	if !strings.Contains(d.body, testOperator) || !strings.Contains(d.body, `"amount":"5"`) {
+		t.Errorf("request body %s", d.body)
+	}
+}
+
+// Seeds are replicas: one that serves no faucet, is busy or cannot be reached says nothing about the
+// network, and the next is asked.
+func TestGatewayFaucet_aSeedThatCannotPayIsPassedOver(t *testing.T) {
+	d := &seedDoer{answers: map[string]seedAnswer{
+		"seed1.stagenet.example": {status: http.StatusNotFound, body: "not found\n"},
+		"seed2.stagenet.example": {err: errors.New("connection refused")},
+		"seed3.stagenet.example": paid(7),
+	}}
+	if err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(7)); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.asked) != 3 {
+		t.Errorf("asked %v, want all three in order", d.asked)
+	}
+	for _, kind := range []string{"busy", "unavailable", "faucet_disabled", "faucet_failed"} {
+		d := &seedDoer{answers: map[string]seedAnswer{
+			"seed1.stagenet.example": refused(http.StatusServiceUnavailable, kind, "this seed cannot"),
+			"seed2.stagenet.example": paid(1),
+		}}
+		if err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1)); err != nil || len(d.asked) != 2 {
+			t.Errorf("%s: err %v, asked %v", kind, err, d.asked)
+		}
+	}
+}
+
+// What the chain refused, every seed would refuse: the run is told at once and no other seed is asked.
+func TestGatewayFaucet_aRefusalOfTheChainEndsTheAsking(t *testing.T) {
+	for kind, status := range map[string]int{"cooldown": 429, "epoch_cap": 503, "bad_amount": 400, "bad_recipient": 400} {
+		t.Run(kind, func(t *testing.T) {
+			d := &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": refused(status, kind, "the chain says no")}}
+			err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1))
+			if err == nil || !strings.Contains(err.Error(), "the chain says no") || !strings.Contains(err.Error(), "seed1.stagenet.example") || !strings.Contains(err.Error(), kind) {
+				t.Fatalf("err = %v", err)
+			}
+			if len(d.asked) != 1 {
+				t.Errorf("asked %v after a refusal no other seed could change", d.asked)
+			}
+		})
+	}
+}
+
+// A drip that is being made or was sent is not refused: no other seed is asked, since it could drip
+// twice, and the balance poll that follows every drip says whether the account was paid.
+func TestGatewayFaucet_aPendingDripEndsTheAskingWithoutAnError(t *testing.T) {
+	d := &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": refused(504, "pending", "being made")}}
+	if err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1)); err != nil {
+		t.Fatalf("a pending drip is an error: %v", err)
+	}
+	if len(d.asked) != 1 {
+		t.Errorf("asked %v after a drip that is on its way", d.asked)
+	}
+}
+
+func TestGatewayFaucet_whenNoSeedPaysEverySeedsAnswerIsReported(t *testing.T) {
+	d := &seedDoer{answers: map[string]seedAnswer{
+		"seed1.stagenet.example": {status: http.StatusNotFound, body: "not found"},
+		"seed2.stagenet.example": refused(503, "unavailable", "the faucet account has no funds"),
+		"seed3.stagenet.example": {err: errors.New("connection refused")},
+	}}
+	err := (gatewayFaucet{client: d}).Fund(context.Background(), faucetNetwork, testOperator, big.NewInt(1))
+	if err == nil {
+		t.Fatal("a network whose seeds all failed was funded")
+	}
+	for _, want := range []string{"seed1.stagenet.example: seed1.stagenet.example serves no faucet", "seed2.stagenet.example: unavailable: the faucet account has no funds", "seed3.stagenet.example: ask the faucet of seed3.stagenet.example", "connection refused", "none of the 3 seeds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, lacks %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("the report is not on one line: %q", err)
+	}
+}
+
+func TestGatewayFaucet_noSeedsOrACancelledRunIsNotAnAnswer(t *testing.T) {
+	d := &seedDoer{}
+	if err := (gatewayFaucet{client: d}).Fund(context.Background(), &netregistry.Manifest{Name: "stagenet"}, testOperator, big.NewInt(1)); err == nil || len(d.asked) != 0 {
+		t.Errorf("a network with no seeds: %v, asked %v", err, d.asked)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	d = &seedDoer{answers: map[string]seedAnswer{"seed1.stagenet.example": {err: ctx.Err()}}}
+	if err := (gatewayFaucet{client: d}).Fund(ctx, faucetNetwork, testOperator, big.NewInt(1)); !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled run = %v, want the cancellation, not a report on every seed", err)
+	}
+	if len(d.asked) > 1 {
+		t.Errorf("asked %v after the run was cancelled", d.asked)
+	}
+}
+
+func TestNewGatewayFaucet_waitsLongEnoughForABlock(t *testing.T) {
+	f := newGatewayFaucet()
+	client, ok := f.client.(*http.Client)
+	if !ok || client.Timeout < 45*time.Second {
+		t.Fatalf("client %T with timeout %v: the gateway answers when the drip is in a block, up to 45 seconds", f.client, client.Timeout)
+	}
+}
 
 func TestSSHFaucet(t *testing.T) {
 	var gotEnv, gotAddr string

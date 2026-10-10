@@ -98,6 +98,10 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		Network: in.Network.Name, ChainID: in.Network.ChainID, Channel: in.Network.Channel,
 		Env: in.Env, Domain: o.Domain, JoinsExisting: len(in.ExistingHosts) > 0,
 	}
+	relay := relayWanted(o, in.Network)
+	if o.Exit && !relay && !o.ClusterOnly {
+		return nil, clierr.Usage("--exit needs a relay, and a relay needs the Tor network file: network %s pins none, so pass --tor-network <file>", in.Network.Name)
+	}
 	validatorTaken := false
 	for i, ip := range o.IPs {
 		n := NodePlan{IP: ip, Name: names[i], Profile: install.ProfileClusterOnly, Cluster: ClusterJoin}
@@ -106,15 +110,15 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		}
 		if !o.ClusterOnly {
 			n.Profile, n.StorageGB, n.Exit = install.ProfileFull, o.StorageGB, o.Exit
-			n.Services, n.Roles = globalServices(o)
+			n.Services, n.Roles = globalServices(o, relay)
 			if !validatorTaken && !o.NoValidator {
 				n.Validator, n.BindConsensus, validatorTaken = true, true, true
 			}
 		}
 		p.Nodes = append(p.Nodes, n)
 	}
-	if !o.ClusterOnly && o.TorNetwork == "" {
-		p.Notes = append(p.Notes, "no relay: the Tor network file (--tor-network) is not given, so the nodes run the chain and the public storage only")
+	if !o.ClusterOnly && !relay {
+		p.Notes = append(p.Notes, noRelayNote(o, in.Network))
 	}
 	return p, nil
 }
@@ -128,21 +132,43 @@ func planNames(o Options) ([]string, error) {
 	}
 	names := NodeNames(o.Name, len(o.IPs))
 	for _, n := range names {
-		if err := ValidateNodeName(n); err != nil {
+		validate := ValidateNodeName
+		if !o.ClusterOnly {
+			validate = ValidateFullNodeName
+		}
+		if err := validate(n); err != nil {
 			return nil, clierr.Usage("--name: %v (the nodes are named %s)", err, strings.Join(names, ", "))
 		}
 	}
 	return names, nil
 }
 
+// relayWanted says the full nodes run a relay: the Tor network file is at hand
+// (--tor-network, else the one the network's manifest pins) and --no-relay was
+// not given.
+func relayWanted(o Options, network *netregistry.Manifest) bool {
+	if o.ClusterOnly || o.NoRelay {
+		return false
+	}
+	return o.TorNetwork != "" || network.TorNetworkSHA256 != ""
+}
+
+// noRelayNote says why the full nodes run no relay.
+func noRelayNote(o Options, network *netregistry.Manifest) string {
+	if o.NoRelay {
+		return "no relay: --no-relay was given, so the nodes run the chain and the public storage only"
+	}
+	return fmt.Sprintf("no relay: network %s pins no Tor network file and --tor-network is not given, so the nodes run the chain and the public storage only", network.Name)
+}
+
 // globalServices are the services of the full profile and the on-chain roles
 // that go with them. The chain is on every node; the public IPFS and its
-// provider are the storage role; the relay is installed when the Tor network
-// file is at hand, and is an exit only on request.
-func globalServices(o Options) ([]install.GlobalService, []int) {
+// provider are the storage role; the relay is installed when relay is set, and
+// is an exit only on request.
+func globalServices(o Options, relay bool) ([]install.GlobalService, []int) {
 	services := []install.GlobalService{install.GlobalServiceChain, install.GlobalServiceIPFS, install.GlobalServiceProvider}
 	roles := []int{clusterreg.RoleStorage}
-	if o.TorNetwork != "" {
+	if relay {
 		services = append(services, install.GlobalServiceRelay)
 		roles = append(roles, clusterreg.RoleRelay)
 		if o.Exit {

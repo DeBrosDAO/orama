@@ -16,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
+	"github.com/DeBrosOfficial/network/pkg/tornet/tornettest"
 )
 
 var (
@@ -292,6 +293,28 @@ func TestNetworkAddManifest_showsTheDigestAndStoresOnlyAfterYes(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "custom", "manifest.json")); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestNetworkAddManifest_aPinnedTorNetworkIsShownAndStored(t *testing.T) {
+	dir := useNetworkFixtures(t, &EnvironmentConfig{}, "stagenet")
+	torFile := tornettest.NetworkFile(t)
+	url, client := manifestServer(t, func(files map[string][]byte) {
+		m := networkManifest("custom", "orama-custom-1")
+		m.TorNetworkSHA256 = netregistry.Digest(torFile)
+		files["manifest.json"] = manifestJSON(t, m)
+		files["tor-network.json"] = torFile
+	})
+	p, out := capture(t)
+
+	if err := NetworkAddManifest(context.Background(), p, client, strings.NewReader("yes\n"), url, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Tor network:   sha256 "+netregistry.Digest(torFile)) {
+		t.Errorf("the digest of the Tor network file is not shown for the person to confirm:\n%s", out)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "custom", "tor-network.json")); err != nil || string(got) != string(torFile) {
+		t.Errorf("stored Tor network = %q, %v", got, err)
 	}
 }
 

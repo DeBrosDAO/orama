@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -66,6 +67,19 @@ func FetchAccount(ctx context.Context, base, address string) (Account, error) {
 	return acct, nil
 }
 
+// ErrBroadcastRejected is wrapped by the error Broadcast returns when the node answered and refused the
+// transaction (CheckTx failed): it is not in the mempool.
+var ErrBroadcastRejected = errors.New("broadcast rejected the tx")
+
+// NotSent reports whether err from Broadcast says for certain that the node did not take the
+// transaction: it refused it (ErrBroadcastRejected), or answered a client error. Any other failure
+// (a timeout, a reset connection, an answer that cannot be read, a server error) leaves it unknown,
+// since the node may have admitted the transaction before the answer was lost.
+func NotSent(err error) bool {
+	var status *StatusError
+	return errors.Is(err, ErrBroadcastRejected) || (errors.As(err, &status) && status.Code >= 400 && status.Code < 500)
+}
+
 // Broadcast posts a signed tx and returns its hash. A non-zero code is an error.
 func Broadcast(ctx context.Context, base string, tx []byte) (string, error) {
 	payload, err := json.Marshal(map[string]string{
@@ -90,11 +104,11 @@ func Broadcast(ctx context.Context, base string, tx []byte) (string, error) {
 		return "", fmt.Errorf("broadcast response is not JSON")
 	}
 	if resp.TxResponse.Code != 0 || resp.TxResponse.TxHash == "" {
-		log := []rune(printable(resp.TxResponse.RawLog))
+		log := []rune(oneLine(resp.TxResponse.RawLog))
 		if len(log) > 200 {
 			log = log[:200]
 		}
-		return "", fmt.Errorf("broadcast rejected the tx (code %d): %s", resp.TxResponse.Code, string(log))
+		return "", fmt.Errorf("%w (code %d): %s", ErrBroadcastRejected, resp.TxResponse.Code, string(log))
 	}
 	return resp.TxResponse.TxHash, nil
 }
@@ -191,7 +205,7 @@ func errorMessage(body []byte) string {
 	if json.Unmarshal(body, &doc) == nil && doc.Message != "" {
 		text = doc.Message
 	}
-	runes := []rune(printable(text))
+	runes := []rune(oneLine(text))
 	if len(runes) > maxErrorMessage {
 		runes = runes[:maxErrorMessage]
 	}

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
 
 const (
@@ -68,6 +71,59 @@ func TestRun_threeFullNodesFromScratch(t *testing.T) {
 	}
 	if res.Operator != testOperator || h.rec.oper[res.Env] != testOperator {
 		t.Errorf("the operator %q was not recorded on %q", res.Operator, res.Env)
+	}
+}
+
+func TestRun_aPinnedTorNetworkIsGivenToTheRelay(t *testing.T) {
+	pinned := []byte(`{"name":"pinned"}`)
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: pinned}
+	mustRun(t, h, h.opts(ip1))
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; string(got) != string(pinned) {
+		t.Errorf("the relay was given %q, want the network's pinned file", got)
+	}
+	if !strings.Contains(strings.Join(h.w.entries(), "\n"), "global "+ip1+" chain,ipfs,provider,relay") {
+		t.Errorf("a network that pins a Tor network gets a relay with no flag:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_theTorNetworkFlagOverridesThePin(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "mine.json")
+	if err := os.WriteFile(file, []byte(`{"name":"mine"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: []byte(`{"name":"pinned"}`)}
+	opts := h.opts(ip1)
+	opts.TorNetwork = file
+	mustRun(t, h, opts)
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; string(got) != `{"name":"mine"}` {
+		t.Errorf("the relay was given %q, want the operator's own file", got)
+	}
+}
+
+func TestRun_noRelayInstallsNoRelayOnAPinningNetwork(t *testing.T) {
+	h := newHarness()
+	h.deps.Networks = fakeNetworks{w: h.w, torNetwork: []byte(`{"name":"pinned"}`)}
+	opts := h.opts(ip1)
+	opts.NoRelay = true
+	mustRun(t, h, opts)
+	if got := h.enroll.created[ip1].globalIn.TorNetwork; got != nil {
+		t.Errorf("a relay-less node was given a Tor network: %q", got)
+	}
+	if h.w.index("global "+ip1+" chain,ipfs,provider") < 0 || strings.Contains(strings.Join(h.w.entries(), "\n"), "provider,relay") {
+		t.Errorf("services:\n%s", strings.Join(h.w.entries(), "\n"))
+	}
+}
+
+func TestRun_aRelayWithNeitherAPinNorAFileIsAnErrorNotAnEmptyNetwork(t *testing.T) {
+	// The plan decided on a relay from the pin; a network that pins a file but did not load its
+	// bytes is a registry fault that must stop the run, not install a relay that joins nothing.
+	h := newHarness()
+	h.deps.Networks = pinnedWithoutBytes{fakeNetworks{w: h.w}}
+	_, err := run(t, h, h.opts(ip1))
+	if err == nil || !strings.Contains(err.Error(), "Tor network") {
+		t.Fatalf("got %v", err)
 	}
 }
 
@@ -306,6 +362,37 @@ func TestRun_faucetFundsAUnfundedOperator(t *testing.T) {
 	}
 }
 
+// The seed that paid saw the drip in a block; the node setup reads the chain through can be a block
+// behind it. A balance that is short at the first read is waited on, not reported as a drip too small.
+func TestRun_aDripThatTheSessionSeesLateIsWaitedFor(t *testing.T) {
+	h := newHarness()
+	h.networks.faucet = true
+	h.deps.Networks = h.networks
+	h.deps.Funder = fakeFunder{h.w}
+	h.w.balance = new(big.Int)
+	h.w.faucetPays = new(big.Int).Mul(big.NewInt(2000), big.NewInt(noramaPerOrama))
+	h.w.faucetLag = 3
+	mustRun(t, h, h.opts(ip1))
+	if h.w.faucetCalls != 1 {
+		t.Errorf("the faucet was asked %d times: a drip that is on its way must not be asked for again", h.w.faucetCalls)
+	}
+}
+
+func TestRun_aDripThatNeverShowsIsReportedAsNotFunded(t *testing.T) {
+	h := newHarness()
+	h.networks.faucet = true
+	h.deps.Networks = h.networks
+	h.deps.Funder = fakeFunder{h.w}
+	h.w.balance = new(big.Int)
+	h.w.faucetPays = new(big.Int).Mul(big.NewInt(2000), big.NewInt(noramaPerOrama))
+	h.w.faucetLag = 1 << 20
+	_, err := run(t, h, h.opts(ip1))
+	var nf *NotFundedError
+	if !errors.As(err, &nf) || !strings.Contains(err.Error(), "has not seen the drip") {
+		t.Fatalf("got %v, want a NotFundedError that says the drip is not visible", err)
+	}
+}
+
 func TestRun_faucetThatRefusesIsReportedWithTheShortfall(t *testing.T) {
 	h := newHarness()
 	h.networks.faucet = true
@@ -343,6 +430,24 @@ func TestRun_resumedRunBondsOnlyTheDifference(t *testing.T) {
 	if h.w.index("tx bond alice role=2 amount=6000000000") < 0 {
 		t.Errorf("only the missing 6 ORAMA are bonded:\n%s", strings.Join(h.w.entries(), "\n"))
 	}
+}
+
+func TestRun_aNameDepositAlreadyPaidIsNotAskedForAgain(t *testing.T) {
+	h := newHarness()
+	h.chain.params.NameDeposit = big.NewInt(5 * noramaPerOrama)
+	// Short by the 5 ORAMA deposit of a name the node does not hold yet.
+	h.w.balance = big.NewInt(1014 * noramaPerOrama)
+	if _, err := run(t, h, h.opts(ip1)); err == nil {
+		t.Fatal("the deposit is part of what the account must hold")
+	}
+	h = newHarness()
+	h.chain.params.NameDeposit = big.NewInt(5 * noramaPerOrama)
+	h.w.balance = big.NewInt(1014 * noramaPerOrama)
+	h.w.operatorRegistered = true
+	h.w.names["alice"] = "alice"
+	h.w.nodes["alice"] = &RegisteredNode{Roles: []int{clusterreg.RoleStorage}, Bonds: map[int]*big.Int{}}
+	h.w.validator = false
+	mustRun(t, h, h.opts(ip1))
 }
 
 func TestRun_chainThatNeverCatchesUpIsAnError(t *testing.T) {
@@ -420,17 +525,27 @@ func TestRun_asnLookupFailureNamesTheFlag(t *testing.T) {
 	}
 }
 
-func TestRun_nameClaimNeedsAClaimerElseSaysSo(t *testing.T) {
+func TestRun_eachFullNodeClaimsItsOwnNameAfterItIsRegistered(t *testing.T) {
 	h := newHarness()
-	mustRun(t, h, h.opts(ip1))
-	if !h.report.has(ip1, StepName, StateSkipped) {
-		t.Error("without a claimer the step must say the claim is not available")
+	mustRun(t, h, h.opts(ip1, ip2))
+	if h.w.index("claim alice alice") < 0 || h.w.index("claim alice-2 alice-2") < 0 {
+		t.Errorf("each node claims its own name: %v", h.w.entries())
 	}
-	h2 := newHarness()
-	h2.deps.Names = fakeNames{w: h2.w}
-	mustRun(t, h2, h2.opts(ip1, ip2))
-	if h2.w.index("claim alice alice") < 0 || h2.w.index("claim alice-2 alice-2") < 0 {
-		t.Errorf("each node claims its own name: %v", h2.w.entries())
+	if h.w.index("claim alice alice") < h.w.index("tx register-node alice ") {
+		t.Errorf("a name is claimed for a node the chain already knows: %v", h.w.entries())
+	}
+	if !h.report.has(ip1, StepName, StateDone) {
+		t.Error("the claim is reported done")
+	}
+}
+
+func TestRun_aClusterOnlyRunClaimsNoName(t *testing.T) {
+	h := newHarness()
+	opts := h.opts(ip1)
+	opts.ClusterOnly, opts.StorageGB, opts.Name = true, 0, ""
+	mustRun(t, h, opts)
+	if h.w.count("claim ") != 0 {
+		t.Errorf("a cluster-only node has no chain identity to name: %v", h.w.entries())
 	}
 }
 
@@ -600,14 +715,11 @@ func TestPlanFor_badOptionsAreRefused(t *testing.T) {
 	}
 }
 
-func TestNewDeps_wiresEveryPortExceptTheNameClaimer(t *testing.T) {
-	d := NewDeps(&bufReporter{}, nil)
+func TestNewDeps_wiresEveryPort(t *testing.T) {
+	d := NewDeps(&bufReporter{})
 	if d.Networks == nil || d.Releases == nil || d.Trust == nil || d.Wallet == nil || d.Enroll == nil || d.Chain == nil ||
-		d.Funder == nil || d.ASN == nil || d.Record == nil || d.Domain == nil || d.Report == nil {
+		d.Funder == nil || d.Names == nil || d.ASN == nil || d.Record == nil || d.Domain == nil || d.Report == nil {
 		t.Fatalf("a port is missing: %+v", d)
-	}
-	if d.Names != nil {
-		t.Error("the name claim is not implemented yet and must say so, not pretend")
 	}
 	if d.Timing.SyncDeadline <= 0 || d.Timing.DNSDeadline <= 0 {
 		t.Errorf("timing %+v", d.Timing)
@@ -769,4 +881,13 @@ func TestQuoteLog_noLineOfARemoteLogPassesForOurs(t *testing.T) {
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+}
+
+// pinnedWithoutBytes is a registry whose network pins a Tor network file but carries none.
+type pinnedWithoutBytes struct{ fakeNetworks }
+
+func (p pinnedWithoutBytes) Resolve(ctx context.Context, name string) (*netregistry.Network, error) {
+	n, _ := p.fakeNetworks.Resolve(ctx, name)
+	n.Manifest.TorNetworkSHA256 = strings.Repeat("ab", 32)
+	return n, nil
 }

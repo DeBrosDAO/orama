@@ -80,11 +80,15 @@ func (s Store) Save(n *Network) error {
 		return fmt.Errorf("create a temporary network directory: %w", err)
 	}
 	defer os.RemoveAll(tmp)
-	for file, data := range map[string][]byte{
+	files := map[string][]byte{
 		ManifestFile:    manifest,
 		ReleaseRootFile: n.Root,
 		sourceFile:      []byte(n.Source + "\n"),
-	} {
+	}
+	if n.TorNetwork != nil {
+		files[TorNetworkFile] = n.TorNetwork
+	}
+	for file, data := range files {
 		if err := os.WriteFile(filepath.Join(tmp, file), data, storeFilePerm); err != nil {
 			return fmt.Errorf("write %s of network %s: %w", file, name, err)
 		}

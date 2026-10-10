@@ -118,6 +118,9 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		// RelayAllowedSuffixes: see GatewayYAMLConfig. Optional; the anonymous
 		// relay's destination allowlist, the base domain when empty.
 		RelayAllowedSuffixes []string `yaml:"relay_allowed_suffixes"`
+		// FaucetKeyFile: see GatewayYAMLConfig. Optional; the cluster gateway's
+		// test-network faucet key.
+		FaucetKeyFile string `yaml:"faucet_key_file"`
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -161,6 +164,7 @@ func parseGatewayConfig(logger *logging.ColoredLogger) *gateway.Config {
 		cfg.ClientNamespace = v
 	}
 	cfg.StateDir = strings.TrimSpace(y.StateDir)
+	cfg.FaucetKeyFile = strings.TrimSpace(y.FaucetKeyFile)
 	for _, suffix := range y.RelayAllowedSuffixes {
 		if v := strings.TrimSpace(suffix); v != "" {
 			cfg.RelayAllowedSuffixes = append(cfg.RelayAllowedSuffixes, v)

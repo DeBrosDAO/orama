@@ -11,25 +11,25 @@ import (
 )
 
 // NewDeps wires the real ports: SSH to the machines, the network registry, the
-// signed release repository, the seeds' light-client routes, the chain through
-// an SSH tunnel to a node, and the operator's RootWallet. names is the name
-// claimer, nil until the chain has the transaction.
-func NewDeps(report Reporter, names NameClaimer) Deps {
+// signed release repository, the seeds' light-client and faucet routes, the chain
+// through an SSH tunnel to a node, and the operator's RootWallet.
+func NewDeps(report Reporter) Deps {
 	wallet := newAgentWallet()
 	return Deps{
-		Networks: registryNetworks{load: cli.LoadNetworks, active: activeNetwork, client: netregistry.NewHTTPClient()},
-		Releases: newReleaseFetcher(),
-		Trust:    seedTrust{client: statesync.NewHTTPClient()},
-		Wallet:   wallet,
-		Enroll:   sshEnroller{wallet: wallet, report: report},
-		Chain:    tunneledChain{signer: rwagent.New(os.Getenv("RW_AGENT_SOCK"))},
-		Funder:   newSSHFaucet(),
-		Names:    names,
-		ASN:      OriginASN,
-		Record:   cliRecorder{},
-		Domain:   newClusterDomain(),
-		Report:   report,
-		Timing:   DefaultTiming(),
+		Networks:     registryNetworks{load: cli.LoadNetworks, active: activeNetwork, client: netregistry.NewHTTPClient()},
+		Releases:     newReleaseFetcher(),
+		Trust:        seedTrust{client: statesync.NewHTTPClient()},
+		Wallet:       wallet,
+		Enroll:       sshEnroller{wallet: wallet, report: report},
+		Chain:        tunneledChain{signer: rwagent.New(os.Getenv("RW_AGENT_SOCK"))},
+		Funder:       newGatewayFaucet(),
+		CreateFunder: newSSHFaucet(),
+		Names:        ChainNames{},
+		ASN:          OriginASN,
+		Record:       cliRecorder{},
+		Domain:       newClusterDomain(),
+		Report:       report,
+		Timing:       DefaultTiming(),
 	}
 }
 

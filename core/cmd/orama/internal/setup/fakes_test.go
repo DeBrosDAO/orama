@@ -39,16 +39,23 @@ type world struct {
 	operatorRegistered bool
 	nodes              map[string]*RegisteredNode
 	validator          bool
-	balance            *big.Int
-	faucetPays         *big.Int
-	faucetCalls        int
+	// names is the name each node holds, by node id.
+	names       map[string]string
+	balance     *big.Int
+	faucetPays  *big.Int
+	faucetCalls int
+	// faucetLag is how many balance reads pass before a drip is visible through the session, as a
+	// node that is a block behind the seed that paid shows it.
+	faucetLag int
+	// arriving is the drip waiting to become visible.
+	arriving *big.Int
 
 	// concurrency probe for restarts
 	restarting, maxRestarting int
 }
 
 func newWorld() *world {
-	return &world{nodes: map[string]*RegisteredNode{}, balance: new(big.Int)}
+	return &world{nodes: map[string]*RegisteredNode{}, names: map[string]string{}, balance: new(big.Int)}
 }
 
 func (w *world) add(format string, args ...any) {
@@ -263,6 +270,8 @@ type fakeNetworks struct {
 	// announced makes the network one whose chain is not created yet, and
 	// unknown makes it one the registry does not have.
 	announced, unknown bool
+	// torNetwork is the Tor network file the network pins; nil pins none.
+	torNetwork []byte
 }
 
 func testGenesisDoc() []byte { return []byte(`{"chain_id":"` + testChainID + `"}`) }
@@ -278,8 +287,12 @@ func (n fakeNetworks) Resolve(_ context.Context, name string) (*netregistry.Netw
 	if n.announced {
 		m.GenesisSHA256 = ""
 	}
-	return &netregistry.Network{Manifest: m, Root: []byte(`{"signed":{"_type":"announced-root"}}`)}, nil
+	if n.torNetwork != nil {
+		m.TorNetworkSHA256 = netregistry.Digest(n.torNetwork)
+	}
+	return &netregistry.Network{Manifest: m, Root: []byte(`{"signed":{"_type":"announced-root"}}`), TorNetwork: n.torNetwork}, nil
 }
+
 func (n fakeNetworks) Genesis(context.Context, *netregistry.Network) ([]byte, error) {
 	return testGenesisDoc(), n.genesisErr
 }
@@ -339,6 +352,12 @@ func (s *fakeSession) Params(context.Context) (ChainParams, error) { return s.pa
 func (s *fakeSession) Balance(context.Context, string) (*big.Int, error) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
+	if s.w.arriving != nil {
+		if s.w.faucetLag--; s.w.faucetLag <= 0 {
+			s.w.balance.Add(s.w.balance, s.w.arriving)
+			s.w.arriving = nil
+		}
+	}
 	return new(big.Int).Set(s.w.balance), nil
 }
 func (s *fakeSession) OperatorRegistered(context.Context, string) (bool, error) {
@@ -355,6 +374,14 @@ func (s *fakeSession) ValidatorExists(context.Context, string) (bool, error) {
 	s.w.mu.Lock()
 	defer s.w.mu.Unlock()
 	return s.w.validator, nil
+}
+func (s *fakeSession) NodeName(_ context.Context, id string) (string, error) {
+	s.w.mu.Lock()
+	defer s.w.mu.Unlock()
+	return s.w.names[id], nil
+}
+func (s *fakeSession) ClaimNodeName(context.Context, string, string) (*onchain.Receipt, error) {
+	return &onchain.Receipt{}, nil
 }
 func (s *fakeSession) RegisterOperator(context.Context) (*onchain.Receipt, error) {
 	s.w.add("tx register-operator")
@@ -423,6 +450,10 @@ func (f fakeFunder) Fund(_ context.Context, _ *netregistry.Manifest, address str
 	if f.w.faucetPays == nil {
 		return errors.New("the faucet refused: cooldown")
 	}
+	if f.w.faucetLag > 0 {
+		f.w.arriving = new(big.Int).Set(f.w.faucetPays)
+		return nil
+	}
 	f.w.balance.Add(f.w.balance, f.w.faucetPays)
 	return nil
 }
@@ -432,7 +463,7 @@ type fakeNames struct {
 	err error
 }
 
-func (f fakeNames) Claim(_ context.Context, name, nodeID string) error {
+func (f fakeNames) Claim(_ context.Context, _ NameChain, name, nodeID string) error {
 	f.w.add("claim %s %s", name, nodeID)
 	return f.err
 }
@@ -529,8 +560,8 @@ func newHarness() *harness {
 		rec: newRecorder(w), report: &bufReporter{}, networks: fakeNetworks{w: w}}
 	h.deps = Deps{
 		Networks: h.networks, Releases: fakeReleases{w}, Trust: fakeTrust{w}, Wallet: fakeWallet{}, Enroll: h.enroll, Chain: h.chain,
-		ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
-		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second},
+		Names: fakeNames{w: w}, ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
+		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second, BalancePoll: time.Millisecond, BalanceDeadline: 50 * time.Millisecond},
 	}
 	return h
 }

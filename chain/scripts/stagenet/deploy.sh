@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Maintenance of the stagenet nodes: reset them, read their status, check the chain's invariants,
-# run the live smoke, and build the shielded wallet's scenario.
+# run the live smoke, switch the public faucet on, and build the shielded wallet's scenario.
 #
 # The network itself is not made here. A network is created, and its nodes joined, by `orama setup`
 # (website/src/docs/operator/setup.mdx, "Create a network"):
@@ -24,12 +24,19 @@
 # the node: `smoke` pipes it, on the node, into a signing agent that speaks the RootWallet agent
 # protocol.
 #
-# Usage: deploy.sh reset | status | invariants | smoke | gen-shielded
+# Usage: deploy.sh reset | status | invariants | faucet | smoke | gen-shielded
 #
 #   reset        stop and remove the global install (and any legacy direct-unit chain install) and
 #                wipe chain, provider, archiver, indexer and IPFS state. Idempotent.
 #   status       services, height and peers of every node.
 #   invariants   every module's invariants query on every node.
+#   faucet       on a created network: make the public faucet's key on every node (`orama maint faucet
+#                init`, which never replaces one), fund each faucet account with a MsgFaucet drip signed by
+#                that node's own seat key (`orama chain faucet`, over SSH), write chain.faucet.enabled into
+#                node.yaml and restart the nodes one at a time with `orama node restart` (its health gate
+#                decides when the next may go). Run it once, after `orama setup --create-network` has
+#                finished (the chain is at epoch 2 by then). Idempotent: a key, an account that holds
+#                its funds and a node.yaml that has the block are left as they are.
 #   smoke        live checks, PASS/FAIL/SKIP each: blocks and inclusion lists, invariants, standard
 #                contracts and a CW20, a private storage deal, archive ranges, shielded, and the
 #                gateway's chain read.
@@ -37,6 +44,9 @@
 #
 # Environment (all optional):
 #   CHAIN_ID                        orama-stagenet-1; must contain -stagenet- or -devnet-.
+#   ORAMA_ENV                       the CLI environment of this network (the one `orama setup` recorded, named
+#                                   after the network) for `faucet` to fund the accounts through (default stagenet).
+#   FAUCET_FUND_NORAMA              what `faucet` gives each node's faucet account for transaction fees (1,000 ORAMA).
 #   VOTE_EXTENSIONS_ENABLE_HEIGHT   the height vote extensions turn on at; `orama setup` writes 2 (smoke checks it).
 #   CA_FILE                         PEM bundle that signs the gateway certificate (smoke).
 #   GATEWAY_URL                     the gateway smoke reads through (https://stagenet.dbrsteting.bid).
@@ -63,9 +73,10 @@ esac
 # run in a network namespace that cannot reach the WireGuard mesh, so the chain peers over the
 # public network (website/src/docs/blockchain/run-a-global-node.mdx, "Sharing a machine with a cluster node").
 # Every loop below runs over NODES.
-# The name is the node's id on the chain: `orama setup --name seed` with these five addresses, in this
-# order, registers seed, seed-2, ... seed-5. The ssh alias is how this script reaches the machine.
-NODES=("seed:mew:57.129.166.16" "seed-2:mewtwo:57.129.166.17" "seed-3:gengar:161.97.184.199" "seed-4:magicarp:161.97.184.202" "seed-5:froakie:161.97.151.255")
+# The name is the node's id on the chain: `orama setup --create-network ... --name founder` with these five
+# addresses, in this order, makes founder, founder-2, ... founder-5 (a name must pass the chain's grammar,
+# which keeps seed<N> and ns<N> for the zone). The ssh alias is how this script reaches the machine.
+NODES=("founder:mew:57.129.166.16" "founder-2:mewtwo:57.129.166.17" "founder-3:gengar:161.97.184.199" "founder-4:magicarp:161.97.184.202" "founder-5:froakie:161.97.151.255")
 BIN_DIR="/usr/lib/orama-global/bin"
 HOME_DIR="/var/lib/orama-global/chain"
 SVC_USER="orama-chain"
@@ -75,6 +86,8 @@ TOOLS_DIR="/usr/local/lib/orama-stagenet"
 NS_ADDR="198.18.0.2"
 RPC_ADDR="tcp://$NS_ADDR:31001"
 RPC_HTTP="http://$NS_ADDR:31001"
+REST_HTTP="http://$NS_ADDR:31003"
+DENOM="norama"
 # The height vote extensions turn on at: `orama setup` writes 2 into every genesis it builds
 # (core/cmd/orama/internal/setup/create_genesis.go, voteExtensionsEnableHeight), and smoke checks it.
 VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-2}"
@@ -82,9 +95,21 @@ VOTE_EXTENSIONS_ENABLE_HEIGHT="${VOTE_EXTENSIONS_ENABLE_HEIGHT:-2}"
 CA_FILE="${CA_FILE:-/Users/pen/orama-stagenet-handoff/le-roots.pem}"
 GATEWAY_URL="${GATEWAY_URL:-https://stagenet.dbrsteting.bid}"
 SHIELDED_SCENARIO="${SHIELDED_SCENARIO:-}"
+ORAMA_ENV="${ORAMA_ENV:-stagenet}"
+# What each node's faucet account is given for fees. A drip mints to the recipient and costs the faucet account one
+# transaction fee, so this lasts for as many drips as there will ever be.
+FAUCET_FUND_NORAMA="${FAUCET_FUND_NORAMA:-1000000000000}"
+# The CLI on the nodes (the cluster's, not the global install's): `orama node restart` is its.
+NODE_CLI="/opt/orama/bin/orama"
 
-if ! [[ "$VOTE_EXTENSIONS_ENABLE_HEIGHT" =~ ^[0-9]{1,15}$ ]]; then
-	echo "invalid VOTE_EXTENSIONS_ENABLE_HEIGHT (expected a plain integer): $VOTE_EXTENSIONS_ENABLE_HEIGHT" >&2
+for v in VOTE_EXTENSIONS_ENABLE_HEIGHT FAUCET_FUND_NORAMA; do
+	if ! [[ "${!v}" =~ ^[0-9]{1,15}$ ]]; then
+		echo "invalid $v (expected a plain integer): ${!v}" >&2
+		exit 1
+	fi
+done
+if ! [[ "$ORAMA_ENV" =~ ^[a-z0-9-]{1,48}$ ]]; then
+	echo "invalid ORAMA_ENV (expected [a-z0-9-]{1,48}): $ORAMA_ENV" >&2
 	exit 1
 fi
 
@@ -240,6 +265,42 @@ sys.exit(0 if checks and all(checks) else 1)'; then
 }
 
 # ------------------------------------------------------------------------------------------------
+# faucet
+
+# cmd_faucet switches the public faucet (core/pkg/chainfaucet, POST /v1/chain/faucet) on for every node
+# of a created network, one node at a time. The gateway of a node signs a drip with a key of its own, the
+# faucet account pays the transaction fee, and the chain mints the drip: the account needs a little norama
+# and nothing else.
+#
+# The account cannot be a genesis account: a genesis starts at exactly zero supply (x/emission
+# checkPremineGate). It is funded the way any account is, by a drip signed by the node's seat key (the
+# "validator" key of oramad's test keyring) over SSH, which `orama chain faucet --env` does and which needs
+# the network's faucet on in the genesis (`orama setup --create-network` puts it there unless --no-faucet)
+# and the seat to have earned the fee, which it has at epoch 2. The restart is the CLI's: it decides, by
+# its own health gate, whether the node is back before the next one is touched.
+cmd_faucet() {
+	local n alias name ip out addr held
+	for n in "${NODES[@]}"; do
+		alias="$(field "$n" 2)"; name="$(field "$n" 1)"; ip="$(field "$n" 3)"
+		out="$(remote_run "$alias" sudo "$BIN_DIR/orama" maint faucet init --json </dev/null)"
+		addr="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["address"])' <<<"$out")"
+		validate "$addr" "$ADDR_RE" "faucet account of $name"
+		log "[$name] faucet account $addr"
+		held="$(remote_run "$alias" curl -fsS --max-time 10 "$REST_HTTP/cosmos/bank/v1beta1/balances/$addr/by_denom?denom=$DENOM" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("balance", {}).get("amount", "0"))')"
+		validate "$held" '^[0-9]{1,15}$' "balance of the faucet account of $name"
+		if [ "$held" -ge "$FAUCET_FUND_NORAMA" ]; then
+			log "[$name] it holds $held norama already; not funding it again (a second drip to it would be refused by the recipient cooldown)"
+		else
+			log "[$name] funding it with $FAUCET_FUND_NORAMA norama"
+			orama chain faucet "$addr" --env "$ORAMA_ENV" --node "$ip" --amount "$FAUCET_FUND_NORAMA"
+		fi
+		log "[$name] enabling chain.faucet and restarting the node"
+		run_remote_script "$alias" enable-faucet.sh
+		remote_run "$alias" sudo "$NODE_CLI" node restart < /dev/null
+	done
+}
+
+# ------------------------------------------------------------------------------------------------
 # smoke
 
 nodes_spec() {
@@ -295,7 +356,8 @@ case "${1:-}" in
 	reset) cmd_reset ;;
 	status) cmd_status ;;
 	invariants) cmd_invariants ;;
+	faucet) cmd_faucet ;;
 	smoke) cmd_smoke ;;
 	gen-shielded) cmd_gen_shielded ;;
-	*) echo "usage: $0 reset|status|invariants|smoke|gen-shielded" >&2; exit 2 ;;
+	*) echo "usage: $0 reset|status|invariants|faucet|smoke|gen-shielded" >&2; exit 2 ;;
 esac

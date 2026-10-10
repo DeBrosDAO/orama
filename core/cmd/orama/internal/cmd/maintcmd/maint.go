@@ -12,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/buildcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/clustercmd"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/faucetcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/globalcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/inspectcmd"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmd/invitecmd"
@@ -44,7 +45,8 @@ and they all work.
   vpn                        a Tor client for an Orama Tor network
   node                       install and stage a node, auto-update, recovery, migration
   global                     validator keys, chain binary staging, the Tor network, tx gate
-  network                    publish a network's manifest`,
+  network                    publish a network's manifest
+  faucet                     set up a test network's public faucet on this node`,
 	})
 	maint.AddCommand(
 		buildcmd.Cmd, pushcmd.Cmd, rolloutcmd.Cmd,
@@ -54,6 +56,7 @@ and they all work.
 		vpncmd.Cmd,
 		node.MaintCmd, globalcmd.MaintCmd,
 		networkcmd.MaintCmd,
+		faucetcmd.MaintCmd,
 	)
 	return maint
 }

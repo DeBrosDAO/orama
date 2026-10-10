@@ -105,8 +105,10 @@ type Model struct {
 	hostKeys   []HostKey
 	networks   []NetworkChoice
 	// announced are the names of the networks that are announced and not yet created.
-	announced   map[string]bool
-	toggles     [optCount]bool
+	announced map[string]bool
+	toggles   [optCount]bool
+	// torPinned says the chosen network pins its Tor network file.
+	torPinned   bool
 	exitAsked   bool
 	inspections []setup.Inspection
 	plan        *setup.Plan

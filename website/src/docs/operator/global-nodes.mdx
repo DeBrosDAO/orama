@@ -169,6 +169,27 @@ sudo orama global install --colocated --services chain,ipfs,provider \
 
 Run it on a machine where `orama node setup` has already installed the cluster node. The namespace cannot reach the WireGuard mesh, so chain peers use public addresses. Removing the layout means restoring `net.ipv4.ip_forward` from `/var/lib/orama-global/netns-prior-ip-forward` before deleting `/var/lib/orama-global`.
 
+## Run a faucet
+
+On a test network (a chain id with `-stagenet-`, `-devnet-` or `-localnet-`) a gateway can fund newcomers. They have no account, no node and no SSH access, so the gateway signs the faucet transaction (`MsgFaucet`) for them with a key of its own, and `orama setup` asks the network's seeds for it. It is off unless you turn it on, and the gateway signs on no other kind of network. The chain keeps its own limits: a maximum drip, a cooldown per recipient (a day by default) and a cap per epoch.
+
+Do this on each gateway that should serve it, one at a time:
+
+1. As root on the node, make the key: `orama maint faucet init`. It creates the key owned by the gateway's account with mode 0600, prints the faucet account, and never replaces a key (running it again prints the same account).
+2. Fund the account. It pays the fee of every drip and holds nothing else, so a few ORAMA last for the life of the network. It cannot be a genesis account (a genesis starts at zero supply), so fund it like any account, with a drip signed by a node's operator: `orama chain faucet <faucet account> --env <network> --amount 1000000000000`.
+3. In the node's `node.yaml`:
+
+```yaml
+chain:
+  faucet:
+    enabled: true
+    # key_file: /opt/orama/.orama/secrets/chain-faucet.key   # the default
+```
+
+4. `orama node restart`. `orama node upgrade` keeps the block. The gateway fails to start, and says why, if the key file is missing, is not owned by its account or is readable by others.
+
+Check it: `curl -sS -X POST https://<gateway>/v1/chain/faucet -H 'Content-Type: application/json' -d '{"recipient":"orama1…"}'` answers the transaction hash, the amount and the block. The request, the refusals and the limits are in [Reading the chain](/docs/blockchain/reading-the-chain). A drip is one transaction signed by one account, one at a time, so a gateway serves about one drip a block; a network that expects more gives several of its gateways their own keys. The network's genesis `faucet_max_drip` has to be at least what one `orama setup` needs, which is more than the validator's 1,000 ORAMA self-bond (stagenet's is 10,000 ORAMA).
+
 ## Not built yet
 
 - `orama node setup --role global` from your machine; install runs on the node.

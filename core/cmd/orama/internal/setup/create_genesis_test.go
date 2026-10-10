@@ -25,7 +25,7 @@ func TestGenesisSteps_testNetworkWithFaucet(t *testing.T) {
 	got := GenesisSteps(GenesisSpec{ChainID: "orama-stagenet-6", Seats: twoSeats(), TestNetwork: true, Faucet: true})
 	want := [][]string{
 		{"init", "genesis-work", "--chain-id", "orama-stagenet-6", "--default-denom", "norama"},
-		{"genesis", "set-emission-params", "--epoch-duration", "300s", "--min-blocks-per-epoch", "10", "--allow-bootstrap-stake", "--faucet-enabled"},
+		{"genesis", "set-emission-params", "--epoch-duration", "300s", "--min-blocks-per-epoch", "10", "--allow-bootstrap-stake", "--faucet-enabled", "--faucet-max-drip", "10000000000000"},
 		{"genesis", "add-bootstrap-validator", seatAddrA, "--moniker", "seed", "--consensus-pubkey-base64", seatKeyA, "--min-committee-size", "2"},
 		{"genesis", "add-bootstrap-validator", seatAddrB, "--moniker", "seed-2", "--consensus-pubkey-base64", seatKeyB},
 		{"genesis", "add-standard-contracts"},

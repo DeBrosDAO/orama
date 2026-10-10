@@ -859,13 +859,13 @@ The stagenet is five machines (`mew`, `mewtwo`, `gengar`, `magicarp`, `froakie`;
 
 | Node | Public IP | WG overlay | Login | Provider (ASN) | OS / systemd | Chain id |
 |---|---|---|---|---|---|---|
-| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `seed` |
-| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `seed-2` |
-| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-3` |
-| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-4` |
-| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `seed-5` |
+| `mew` | 57.129.166.16 | 10.0.0.1 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `founder` |
+| `mewtwo` | 57.129.166.17 | 10.0.0.2 | `ubuntu` | OVH (16276) | Ubuntu 26.04, systemd 259 with BPF_FRAMEWORK | `founder-2` |
+| `gengar` | 161.97.184.199 | 10.0.0.3 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-3` |
+| `magicarp` | 161.97.184.202 | 10.0.0.4 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-4` |
+| `froakie` | 161.97.151.255 | 10.0.0.5 | `root` | Contabo (51167) | Ubuntu 24.04, systemd 255 without BPF_FRAMEWORK | `founder-5` |
 
-All five are chain validators: the bootstrap committee is the five of them. The last column is the node's id on the chain when the addresses are given to `orama setup` in this order with the default `--name seed`. Without BPF_FRAMEWORK systemd accepts `SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
+All five are chain validators: the bootstrap committee is the five of them. The last column is the node's id on the chain when the addresses are given to `orama setup` in this order with the default `--name founder` (not `seed`: the chain keeps `seed<N>` for the labels the zone publishes itself). Without BPF_FRAMEWORK systemd accepts `SocketBindDeny` but does not enforce it, so the deployment sandbox's bind check refuses a bind only on mew and mewtwo.
 
 The five are made with one command (every reset of the stagenet gets a new chain id, `orama-stagenet-N`):
 
@@ -883,6 +883,7 @@ cd chain/scripts/stagenet
 
 ./deploy.sh reset      # remove any earlier global install (also the legacy direct-unit one) and its state; do it before the next creation
 ./deploy.sh status
+./deploy.sh faucet     # once, after the creation: the public faucet on every node (key, funding, node.yaml, one restart at a time)
 ./deploy.sh invariants
 ./deploy.sh gen-shielded                      # optional: the shielded wallet scenario for this chain
 SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke   # gen-shielded prints this path
@@ -890,10 +891,14 @@ SHIELDED_SCENARIO=../../build/stagenet-shielded-scenario.json ./deploy.sh smoke 
 
 `reset` removes the `orama-global-*` units and state, the namespace, veth and nftables rulesets, the ufw rules tagged `orama-global`, puts `net.ipv4.ip_forward` back to the value the install recorded in `/var/lib/orama-global/netns-prior-ip-forward`, and removes the two lines (`role: both`, `global_netns`) the install added to the cluster's `/opt/orama/.orama/preferences.yaml`. `smoke` prints PASS, FAIL or SKIP for each check and exits non-zero if any failed. A SKIP names an environmental cause the script detected in the chain's state and is never used to hide a failure; the archive and storage checks SKIP on a network whose nodes run no archiver, which `orama setup` does not install.
 
+`faucet` (once, on a created network) switches the public faucet on node by node. On each node it runs `orama maint faucet init`, which makes the key its gateway signs `POST /v1/chain/faucet` drips with; funds that account with `FAUCET_FUND_NORAMA` through `orama chain faucet --env $ORAMA_ENV`, a drip signed on the node by its seat key (a genesis account is not an option: the chain refuses a genesis that does not start at zero supply); writes `chain.faucet.enabled: true` into the node's node.yaml (`remote/enable-faucet.sh`); and restarts the node with `orama node restart`, whose health gate decides when the next node may go (docs/CHAIN.md, "Test-network faucet"). The genesis `orama setup --create-network` builds sets the faucet's largest drip to 10,000 ORAMA, since one `orama setup` is funded by one drip and needs the validator's 1,000 ORAMA self-bond on top of its bonds and fees. A key, an account that already holds its funds and a node.yaml that already has the block are left as they are, so the command can be run again.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `CHAIN_ID` | `orama-stagenet-1` | must contain `-stagenet-` or `-devnet-` |
 | `VOTE_EXTENSIONS_ENABLE_HEIGHT` | `2` | the height vote extensions turn on at; `orama setup` writes 2 into the genesis it builds and `smoke` checks it |
+| `ORAMA_ENV` | `stagenet` | the CLI environment of this network (the one `orama setup` recorded, named after the network); `deploy.sh faucet` funds the faucet accounts through it |
+| `FAUCET_FUND_NORAMA` | `1000000000000` | what `deploy.sh faucet` gives each node's faucet account for the transaction fees of the drips its gateway signs (1,000 ORAMA) |
 | `CA_FILE` | `/Users/pen/orama-stagenet-handoff/le-roots.pem` | CA bundle that signs the gateway's certificate (Let's Encrypt production's ISRG roots: stagenet serves production certificates) |
 | `GATEWAY_URL` | `https://stagenet.dbrsteting.bid` | the gateway `smoke` reads through |
 | `SHIELDED_SCENARIO` | unset | scenario JSON from `gen-shielded`; without it the shielded check is a SKIP |

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
@@ -112,4 +113,22 @@ func requireHealthy(t *testing.T, cli *oramacli.Runner, env string, want int) st
 		t.Fatalf("orama status: healthy=%v with %d nodes, want healthy with %d\n%s", doc.Healthy, len(doc.Nodes), want, raw)
 	}
 	return doc
+}
+
+// requireNodeName fails unless the chain says node id holds the name setup claimed for it, which
+// is the node's own name.
+func requireNodeName(t *testing.T, id string) {
+	t.Helper()
+	c := chain.New(t)
+	var ofNode struct {
+		Name struct {
+			Name    string    `json:"name"`
+			NodeID  string    `json:"node_id"`
+			Deposit chain.Int `json:"deposit"`
+		} `json:"name"`
+	}
+	c.Query(t, c.Node(t, 0), &ofNode, "nodes", "name-of-node", id)
+	if ofNode.Name.Name != id || ofNode.Name.NodeID != id || ofNode.Name.Deposit.IsZero() {
+		t.Errorf("name-of-node %s = %+v, want the name %s with its deposit locked", id, ofNode.Name, id)
+	}
 }

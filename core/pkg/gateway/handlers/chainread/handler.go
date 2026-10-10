@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -35,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DeBrosOfficial/network/pkg/chainfaucet"
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/globalnetns"
 	"github.com/DeBrosOfficial/network/pkg/logging"
@@ -92,6 +94,9 @@ type Config struct {
 	IndexInstalled func() bool
 	// Logger receives the error behind a 502 the proxy answers with a generic body. Nil logs nothing.
 	Logger *logging.ColoredLogger
+	// Faucet makes the drips of POST /v1/chain/faucet (faucet.go). Nil means this gateway has no
+	// faucet, and the route is not there.
+	Faucet FaucetService
 }
 
 // ConfigFromEnv reads ORAMA_CHAIN_RPC_URL, ORAMA_CHAIN_REST_URL and
@@ -165,6 +170,12 @@ type Proxy struct {
 	broadcastSlots chan struct{}
 	// lightSlots bounds the light-client calls in flight (light.go).
 	lightSlots chan struct{}
+	// faucet and faucetSlots are the faucet route's service and its requests in flight (faucet.go).
+	faucet       FaucetService
+	faucetSlots  chan struct{}
+	faucetBudget *chainfaucet.Budget
+	// faucetCeiling is what the gateway gives out in all, whoever asks.
+	faucetCeiling *chainfaucet.Budget
 	// heightMu guards the cached latest height the query window check reads.
 	heightMu  sync.Mutex
 	heightVal int64
@@ -205,6 +216,10 @@ func New(cfg Config) (*Proxy, error) {
 		simulateSlots:  make(chan struct{}, simulateMaxConcurrent),
 		broadcastSlots: make(chan struct{}, broadcastMaxConcurrent),
 		lightSlots:     make(chan struct{}, lightMaxConcurrent),
+		faucet:         cfg.Faucet,
+		faucetSlots:    make(chan struct{}, faucetMaxConcurrent),
+		faucetBudget:   chainfaucet.NewBudget(big.NewInt(chainfaucet.DefaultBudgetNorama), chainfaucet.BudgetWindow),
+		faucetCeiling:  chainfaucet.NewBudget(big.NewInt(chainfaucet.DefaultCeilingNorama), chainfaucet.BudgetWindow),
 	}, nil
 }
 
@@ -301,6 +316,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case lightPath:
 		p.serveLight(w, r)
+		return
+	case faucetPath:
+		p.serveFaucet(w, r)
 		return
 	}
 	if !knownRoute(rest) {

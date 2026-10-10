@@ -103,8 +103,75 @@ func TestBuildPlan_relayOnlyWithTheTorFileExitOnlyOnRequest(t *testing.T) {
 
 func TestBuildPlan_noTorFileMeansNoRelayAndSaysSo(t *testing.T) {
 	p := planFor(t, Options{IPs: []string{ip1}, Name: "alice"})
-	if len(p.Notes) != 1 || !strings.Contains(p.Notes[0], "--tor-network") {
+	if len(p.Notes) != 1 || !strings.Contains(p.Notes[0], "pins no Tor network file") || !strings.Contains(p.Notes[0], "--tor-network") {
 		t.Fatalf("notes %v", p.Notes)
+	}
+}
+
+// A network whose manifest pins a Tor network file gives its nodes a relay with no flag.
+func TestBuildPlan_aPinnedTorNetworkMeansARelayWithoutAFlag(t *testing.T) {
+	pinned := testManifestFor()
+	pinned.TorNetworkSHA256 = strings.Repeat("ab", 32)
+	o := Options{IPs: []string{ip1}, Name: "alice"}
+	if err := o.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildPlan(PlanInput{Options: o, Network: pinned, Env: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(p.Nodes[0].ServiceNames(), ","); got != "chain,ipfs,provider,relay" {
+		t.Errorf("services %s, want the relay", got)
+	}
+	if len(p.Notes) != 0 {
+		t.Errorf("notes %v: nothing was left out", p.Notes)
+	}
+}
+
+func TestBuildPlan_noRelayLeavesItOutOfAPinningNetwork(t *testing.T) {
+	pinned := testManifestFor()
+	pinned.TorNetworkSHA256 = strings.Repeat("ab", 32)
+	o := Options{IPs: []string{ip1}, Name: "alice", NoRelay: true}
+	if err := o.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildPlan(PlanInput{Options: o, Network: pinned, Env: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(p.Nodes[0].ServiceNames(), ","); got != "chain,ipfs,provider" {
+		t.Errorf("services %s, want no relay", got)
+	}
+	if len(p.Notes) != 1 || !strings.Contains(p.Notes[0], "--no-relay") {
+		t.Errorf("notes %v", p.Notes)
+	}
+}
+
+func TestBuildPlan_aTorFileOnTheCommandLineGivesARelay(t *testing.T) {
+	// --tor-network is an override: the relay is planned the same way, with the operator's file.
+	p := planFor(t, Options{IPs: []string{ip1}, Name: "alice", TorNetwork: "mine.json"})
+	if got := strings.Join(p.Nodes[0].ServiceNames(), ","); got != "chain,ipfs,provider,relay" {
+		t.Errorf("services %s", got)
+	}
+}
+
+func TestBuildPlan_anExitNeedsATorNetworkFromTheFlagOrThePin(t *testing.T) {
+	o := Options{IPs: []string{ip1}, Name: "alice", Exit: true, Yes: true}
+	if err := o.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := BuildPlan(PlanInput{Options: o, Network: testManifestFor(), Env: "e"})
+	if err == nil || !strings.Contains(err.Error(), "--tor-network") {
+		t.Fatalf("an exit with no Tor network file = %v", err)
+	}
+	pinned := testManifestFor()
+	pinned.TorNetworkSHA256 = strings.Repeat("ab", 32)
+	p, err := BuildPlan(PlanInput{Options: o, Network: pinned, Env: "e"})
+	if err != nil {
+		t.Fatalf("an exit on a network that pins the file was refused: %v", err)
+	}
+	if got := strings.Join(p.Nodes[0].ServiceNames(), ","); got != "chain,ipfs,provider,relay,exit" {
+		t.Errorf("services %s", got)
 	}
 }
 
@@ -131,6 +198,23 @@ func TestBuildPlan_aLongNameIsRefusedBeforeItsSuffix(t *testing.T) {
 	_, err := BuildPlan(PlanInput{Options: o, Network: testManifestFor(), Env: "e"})
 	if err == nil || !strings.Contains(err.Error(), "-2") {
 		t.Fatalf("got %v, want the second name's length refused", err)
+	}
+}
+
+// A cluster-only node claims no name, so the chain's grammar does not bind its name.
+func TestBuildPlan_aClusterOnlyNameNeedNotBeAClaimableName(t *testing.T) {
+	p := planFor(t, Options{IPs: []string{ip1}, Name: "ab", ClusterOnly: true})
+	if p.Nodes[0].Name != "ab" {
+		t.Errorf("name %q", p.Nodes[0].Name)
+	}
+}
+
+func TestBuildPlan_aFullNodeNameThePlanDerivesIsHeldToTheChainsRules(t *testing.T) {
+	o := Options{IPs: []string{ip1}, Name: "node"}
+	o.StorageGB = 10
+	_, err := BuildPlan(PlanInput{Options: o, Network: testManifestFor(), Env: "e"})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("got %v, want the reserved name refused", err)
 	}
 }
 

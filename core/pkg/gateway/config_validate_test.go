@@ -469,3 +469,21 @@ func TestValidateConfig_relayAllowedSuffixes(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateConfig_faucetKeyFileMustBeAbsolute(t *testing.T) {
+	cfg := &Config{
+		ListenAddr: ":8080", ClientNamespace: "default", RQLiteDSN: "http://10.0.0.1:10100",
+		StateDir: "/opt/orama/.orama/data/namespaces/default/gateway", BaseDomain: "example.com", NodePeerID: testNodePeerID,
+	}
+	for _, ok := range []string{"", "/opt/orama/.orama/secrets/chain-faucet.key"} {
+		cfg.FaucetKeyFile = ok
+		if errs := cfg.ValidateConfig(); len(errs) != 0 {
+			t.Errorf("faucet_key_file %q: %v", ok, errs)
+		}
+	}
+	cfg.FaucetKeyFile = "secrets/chain-faucet.key"
+	errs := cfg.ValidateConfig()
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "faucet_key_file") {
+		t.Errorf("a relative key file path = %v, want one error naming faucet_key_file", errs)
+	}
+}

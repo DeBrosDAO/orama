@@ -28,6 +28,9 @@ type NetworkChoice struct {
 	// Announced marks a network whose chain does not exist yet: it cannot be
 	// joined, and creating it needs no chain id or release root.
 	Announced bool
+	// TorNetwork says the network pins the Tor network file its relays join, so a relay
+	// needs no file from the person.
+	TorNetwork bool
 }
 
 // Services is what the wizard needs from the outside. Each is called from a

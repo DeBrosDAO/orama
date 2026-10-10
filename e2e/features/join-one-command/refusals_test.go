@@ -38,15 +38,37 @@ func TestSetup_aFullNodeNeedsAName(t *testing.T) {
 	infra.ExpectExit(t, res, infra.ExitUsage, "--name")
 }
 
-// TestSetup_theExitRelayNeedsTheWarningAcceptedAndTheTorFile: --exit without
-// --yes and without a terminal is refused with the warning, and with --yes it
-// still needs the Tor network file because an exit is a relay.
-func TestSetup_theExitRelayNeedsTheWarningAcceptedAndTheTorFile(t *testing.T) {
+// TestSetup_theExitRelayNeedsTheWarningAcceptedAndARelay: --exit without --yes
+// and without a terminal is refused with the warning, and an exit is a relay,
+// so it cannot go with --no-relay.
+func TestSetup_theExitRelayNeedsTheWarningAcceptedAndARelay(t *testing.T) {
 	cli := isolatedCLI(t)
 	withoutConsent := infra.Run(t, cli, "setup", "--exit", "--tor-network", "tor-network.json", "--name", "exit", "--ip", unusedIP, "--host-key", "SHA256:abc")
 	infra.ExpectRefused(t, withoutConsent, "exit relay", "abuse complaints")
-	withoutFile := infra.Run(t, cli, "setup", "--exit", "--yes", "--name", "exit", "--ip", unusedIP, "--host-key", "SHA256:abc")
-	infra.ExpectExit(t, withoutFile, infra.ExitUsage, "--tor-network")
+	withoutRelay := infra.Run(t, cli, "setup", "--exit", "--no-relay", "--yes", "--name", "exit", "--ip", unusedIP, "--host-key", "SHA256:abc")
+	infra.ExpectExit(t, withoutRelay, infra.ExitUsage, "--no-relay")
+}
+
+// TestSetup_theRelayFlagsAreAlternatives: the Tor network file is the one the
+// network pins or the operator's own (--tor-network), never both, and the
+// relay flags belong to the global layer.
+func TestSetup_theRelayFlagsAreAlternatives(t *testing.T) {
+	cli := isolatedCLI(t)
+	both := infra.Run(t, cli, "setup", "--yes", "--no-relay", "--tor-network", "tor-network.json", "--name", "relay", "--ip", unusedIP, "--host-key", "SHA256:abc")
+	infra.ExpectExit(t, both, infra.ExitUsage, "alternatives")
+	clusterOnly := infra.Run(t, cli, "setup", "--yes", "--cluster-only", "--no-relay", "--ip", unusedIP, "--host-key", "SHA256:abc")
+	infra.ExpectExit(t, clusterOnly, infra.ExitUsage, "--cluster-only")
+}
+
+// TestSetup_aNameTheChainWouldRefuseIsRefusedBeforeAnyServerIsTouched: a full
+// node's name is also the name it claims on the chain, so the chain's rules
+// (3 to 32 characters, nothing reserved) apply to --name at once.
+func TestSetup_aNameTheChainWouldRefuseIsRefusedBeforeAnyServerIsTouched(t *testing.T) {
+	cli := isolatedCLI(t)
+	for name, want := range map[string]string{"gateway": "reserved", "ab": "3 to 32"} {
+		res := infra.Run(t, cli, "setup", "--yes", "--name", name, "--ip", unusedIP, "--host-key", "SHA256:abc")
+		infra.ExpectExit(t, res, infra.ExitUsage, "--name", want)
+	}
 }
 
 // TestSetup_clusterOnlyRefusesTheGlobalLayerFlags: --exit, --storage-gb and

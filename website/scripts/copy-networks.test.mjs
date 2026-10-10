@@ -11,7 +11,7 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 
 /** Writes networks/<name>/ under a fresh source dir; `genesis` is optional. */
-function makeSource(label, { name = "teststage", genesis = '{"chain_id":"x"}', rootText = '{"signed":1}', genesisSha = sha('{"chain_id":"x"}') } = {}) {
+function makeSource(label, { name = "teststage", genesis = '{"chain_id":"x"}', rootText = '{"signed":1}', genesisSha = sha('{"chain_id":"x"}'), tor = null } = {}) {
   const source = join(root, label, "networks");
   mkdirSync(join(source, name), { recursive: true });
   const manifest = {
@@ -19,10 +19,12 @@ function makeSource(label, { name = "teststage", genesis = '{"chain_id":"x"}', r
     chain_id: "x",
     genesis_sha256: genesisSha,
     release_root_sha256: sha(rootText),
+    ...(tor === null ? {} : { tor_network_sha256: sha(tor) }),
   };
   writeFileSync(join(source, name, "manifest.json"), JSON.stringify(manifest));
   writeFileSync(join(source, name, "release-root.json"), rootText);
   if (genesis !== null) writeFileSync(join(source, name, "genesis.json"), genesis);
+  if (tor !== null) writeFileSync(join(source, name, "tor-network.json"), tor);
   return { source, dist: join(root, label, "dist") };
 }
 
@@ -31,6 +33,12 @@ describe("copyNetworks", () => {
     const { source, dist } = makeSource("ok");
     expect(copyNetworks(source, dist)).toEqual(["teststage"]);
     expect(readFileSync(join(dist, "networks", "teststage", "genesis.json"), "utf8")).toBe('{"chain_id":"x"}');
+  });
+
+  it("TestCopyNetworks_copiesAPinnedTorNetwork", () => {
+    const { source, dist } = makeSource("tor", { tor: '{"name":"orama-teststage"}' });
+    expect(copyNetworks(source, dist)).toEqual(["teststage"]);
+    expect(readFileSync(join(dist, "networks", "teststage", "tor-network.json"), "utf8")).toBe('{"name":"orama-teststage"}');
   });
 
   it("TestCopyNetworks_aManifestWithoutAGenesisYet", () => {
@@ -73,6 +81,24 @@ describe("verifyNetworkDir", () => {
   it("TestVerifyNetworkDir_anAnnouncementThatCarriesAGenesis", () => {
     const { source } = makeSource("announcedgenesis", { genesisSha: "" });
     expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/genesis_sha256/);
+  });
+
+  it("TestVerifyNetworkDir_torNetworkThatIsNotPinned", () => {
+    const { source } = makeSource("badtor", { tor: '{"a":1}' });
+    writeFileSync(join(source, "teststage", "tor-network.json"), '{"a":2}');
+    expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/tor_network_sha256/);
+  });
+
+  it("TestVerifyNetworkDir_pinnedTorNetworkThatIsMissing", () => {
+    const { source } = makeSource("missingtor", { tor: '{"a":1}' });
+    rmSync(join(source, "teststage", "tor-network.json"));
+    expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/the file is missing/);
+  });
+
+  it("TestVerifyNetworkDir_torNetworkTheManifestDoesNotPin", () => {
+    const { source } = makeSource("unpinnedtor");
+    writeFileSync(join(source, "teststage", "tor-network.json"), '{"a":1}');
+    expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/does not pin it/);
   });
 
   it("TestVerifyNetworkDir_missingRootAndStrayFiles", () => {

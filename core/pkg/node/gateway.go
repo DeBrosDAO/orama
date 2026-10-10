@@ -78,6 +78,8 @@ func (n *Node) startIndexGateway(ctx context.Context) error {
 		NodePeerID:  nodeID,
 
 		RelayAllowedSuffixes: n.config.HTTPGateway.RelayAllowedSuffixes,
+		// The test-network faucet (node.yaml chain.faucet); empty serves none.
+		FaucetKeyFile: n.config.Chain.Faucet.KeyFilePath(),
 	})
 }
 

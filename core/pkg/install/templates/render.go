@@ -107,6 +107,11 @@ type NodeConfigData struct {
 	// carried forward across regenerations, so an upgrade never switches the names off.
 	NodeNamesZone string
 
+	// ChainFaucetKeyFile is the key file of this node's test-network faucet (node.yaml
+	// chain.faucet); empty serves none. An operator writes the block into node.yaml and it is
+	// carried forward across regenerations, so an upgrade never switches the faucet off.
+	ChainFaucetKeyFile string
+
 	// PublicIP is the node's public address (orama node install --vps-ip),
 	// which an invite minted on this node names as the gateway to join.
 	PublicIP string

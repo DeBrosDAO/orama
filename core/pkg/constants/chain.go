@@ -28,6 +28,10 @@ const (
 	ChainHome = "/var/lib/orama-global/chain"
 	// ChainUser is the account the chain unit runs as.
 	ChainUser = "orama-chain"
+	// ChainFaucetKeyFile is where a test network's faucet key lives on a node unless node.yaml's
+	// chain.faucet.key_file says otherwise: a secp256k1 key owned by the gateway's account, in
+	// the secrets directory the cluster gateway can read (`orama maint faucet init` creates it).
+	ChainFaucetKeyFile = ProductionOramaDir + "/secrets/chain-faucet.key"
 	// ChainDaemonName is the chain binary, cosmovisor's DAEMON_NAME.
 	ChainDaemonName = "oramad"
 	// ChainVerifierBinary is the out-of-process shielded verifier, the second

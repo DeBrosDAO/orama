@@ -34,6 +34,9 @@ func (g *Gateway) Routes() http.Handler {
 	// Explorer reads. The proxy refuses anything outside its allowlist.
 	chainCfg := chainread.ConfigFromEnv()
 	chainCfg.Logger = g.logger
+	if g.faucet != nil {
+		chainCfg.Faucet = g.faucet
+	}
 	if proxy, err := chainread.New(chainCfg); err != nil {
 		mux.Handle("/v1/chain/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "chain proxy is misconfigured", http.StatusServiceUnavailable)

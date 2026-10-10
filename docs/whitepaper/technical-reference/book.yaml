@@ -454,6 +454,7 @@ volumes:
               - chain/Makefile
               - chain/go.mod
               - chain/go.sum
+              - core/pkg/chainfaucet/
               - core/pkg/chainread/
               - core/pkg/clusterreg/
               - core/pkg/gateway/handlers/chainread/

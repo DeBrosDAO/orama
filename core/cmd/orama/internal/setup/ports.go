@@ -198,6 +198,7 @@ type Transactor interface {
 	Bond(ctx context.Context, b clusterreg.Bond) (*onchain.Receipt, error)
 	DeclareCapacity(ctx context.Context, c clusterreg.Capacity) (*onchain.Receipt, error)
 	CreateValidator(ctx context.Context, spec onchain.ValidatorSpec) (*onchain.Receipt, error)
+	ClaimNodeName(ctx context.Context, nodeID, name string) (*onchain.Receipt, error)
 }
 
 // ChainReader reads what setup needs to know before it sends a transaction.
@@ -210,6 +211,8 @@ type ChainReader interface {
 	// Node is the registered node, or nil.
 	Node(ctx context.Context, id string) (*RegisteredNode, error)
 	ValidatorExists(ctx context.Context, operator string) (bool, error)
+	// NodeName is the name the node holds on the chain, or "" when it holds none.
+	NodeName(ctx context.Context, nodeID string) (string, error)
 }
 
 // ChainParams are the x/nodes parameters the budget needs.
@@ -218,6 +221,8 @@ type ChainParams struct {
 	MinBond map[int]*big.Int
 	// BondPerGiB is the storage bond per GiB of declared capacity.
 	BondPerGiB *big.Int
+	// NameDeposit is the norama locked while a node holds its name.
+	NameDeposit *big.Int
 }
 
 // RegisteredNode is a node as the chain holds it.
@@ -235,12 +240,17 @@ type Funder interface {
 }
 
 // NameClaimer claims a node's name (<name>.<network>.orama.network) on the
-// chain. The transaction exists on another branch; setup calls this interface,
-// and without an implementation it says the claim is not available yet.
+// chain, through the operator's session.
 type NameClaimer interface {
 	// Claim claims name for the node nodeID of the signing operator. Claiming a
-	// name the operator already holds for that node is not an error.
-	Claim(ctx context.Context, name, nodeID string) error
+	// name the node already holds is not an error.
+	Claim(ctx context.Context, chain NameChain, name, nodeID string) error
+}
+
+// NameChain is the part of a chain session a name claim uses; ChainSession is one.
+type NameChain interface {
+	NodeName(ctx context.Context, nodeID string) (string, error)
+	ClaimNodeName(ctx context.Context, nodeID, name string) (*onchain.Receipt, error)
 }
 
 // ASNLookup finds the autonomous system number an IP address belongs to.

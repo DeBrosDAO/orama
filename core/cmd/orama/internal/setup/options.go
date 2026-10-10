@@ -25,6 +25,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/nodenames"
 )
 
 const (
@@ -112,9 +113,12 @@ type Options struct {
 	// ASNSet leaves it undeclared.
 	ASN    uint32
 	ASNSet bool
-	// TorNetwork is the Orama Tor network's tor-network.json. Without it no
-	// relay is installed (see the known gaps).
+	// TorNetwork is the path of a tor-network.json to give the relays instead of the
+	// one the network's manifest pins. A network that pins none installs a relay
+	// only with it.
 	TorNetwork string
+	// NoRelay leaves the relay out though the network pins a Tor network.
+	NoRelay bool
 	// NoValidator skips creating the validator (and the 1,000 ORAMA self-bond).
 	NoValidator bool
 	// Create, when set, makes the run create the network instead of joining one:
@@ -217,6 +221,8 @@ func (o *Options) checkProfile() error {
 			return clierr.Usage("--storage-gb is the public storage of the global layer; it cannot go with --cluster-only")
 		case o.TorNetwork != "":
 			return clierr.Usage("--tor-network is for the relay of the global layer; it cannot go with --cluster-only")
+		case o.NoRelay:
+			return clierr.Usage("--no-relay is for the global layer; --cluster-only has no relay")
 		}
 	} else {
 		if o.StorageGB == 0 {
@@ -225,8 +231,8 @@ func (o *Options) checkProfile() error {
 		if o.StorageGB > MaxStorageGB {
 			return clierr.Usage("--storage-gb %d is more than the %d GB setup accepts", o.StorageGB, MaxStorageGB)
 		}
-		if err := ValidateNodeName(o.Name); err != nil {
-			return clierr.Usage("--name: %v (a full node's name is its id on the chain; --cluster-only needs none)", err)
+		if err := ValidateFullNodeName(o.Name); err != nil {
+			return clierr.Usage("--name: %v (a full node's name is its id on the chain and the name it claims; --cluster-only needs none)", err)
 		}
 	}
 	if o.Name != "" && o.ClusterOnly {
@@ -237,8 +243,11 @@ func (o *Options) checkProfile() error {
 	if o.Exit && !o.Yes && !o.ExitConfirmed {
 		return clierr.Usage("--exit makes this machine an exit relay.\n%s\nPass --yes to accept this, or leave --exit out", ExitWarning)
 	}
-	if o.Exit && o.TorNetwork == "" {
-		return clierr.Usage("--exit needs --tor-network: the exit is a relay, and a relay needs the Tor network file")
+	switch {
+	case o.NoRelay && o.TorNetwork != "":
+		return clierr.Usage("--no-relay and --tor-network are alternatives")
+	case o.NoRelay && o.Exit:
+		return clierr.Usage("--exit is a relay; it cannot go with --no-relay")
 	}
 	return nil
 }
@@ -257,6 +266,18 @@ func ValidateNodeName(name string) error {
 		return fmt.Errorf("%q must be %d to %d characters", name, nodeNameMin, nodeNameMax)
 	case !nameRE.MatchString(name):
 		return fmt.Errorf("%q must be lowercase letters, digits and single hyphens, starting with a letter", name)
+	}
+	return nil
+}
+
+// ValidateFullNodeName checks the name of a full node, which is also the name it
+// claims on the chain: ValidateNodeName, and the chain's grammar and reserved words.
+func ValidateFullNodeName(name string) error {
+	if err := ValidateNodeName(name); err != nil {
+		return err
+	}
+	if err := nodenames.ValidateName(name); err != nil {
+		return fmt.Errorf("%q %w", name, err)
 	}
 	return nil
 }

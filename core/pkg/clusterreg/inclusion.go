@@ -30,8 +30,16 @@ var txHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
 // printable is httputil.Printable: text the chain sent is printed to the operator's terminal.
 func printable(s string) string { return httputil.Printable(s) }
 
+// oneLine is httputil.OneLine: a node's error text or a transaction's log can span lines, and the
+// lines are kept apart on one.
+func oneLine(s string) string { return httputil.OneLine(s) }
+
 // ErrNotIncluded is returned when a broadcast transaction is not in a block by the deadline.
 var ErrNotIncluded = errors.New("the transaction is not in a block")
+
+// ErrTxFailed is wrapped by the error WaitIncluded returns for a transaction that is in a block and
+// failed there: it was run, the fee was paid, and what its messages would have done was not done.
+var ErrTxFailed = errors.New("the transaction failed")
 
 // WaitIncluded asks the chain REST API at base for the transaction hash every poll until it is in
 // a block, and returns that block's height. A broadcast only admits a transaction to the mempool:
@@ -104,11 +112,11 @@ func txResult(ctx context.Context, url, hash string) (int64, bool, error) {
 		return 0, false, fmt.Errorf("transaction result has no block height (%q)", resp.TxResponse.Height)
 	}
 	if resp.TxResponse.Code != 0 {
-		log := []rune(printable(resp.TxResponse.RawLog))
+		log := []rune(oneLine(resp.TxResponse.RawLog))
 		if len(log) > maxResultLog {
 			log = log[:maxResultLog]
 		}
-		return height, true, fmt.Errorf("the transaction failed in block %d (code %d): %s", height, resp.TxResponse.Code, string(log))
+		return height, true, fmt.Errorf("%w in block %d (code %d): %s", ErrTxFailed, height, resp.TxResponse.Code, string(log))
 	}
 	return height, true, nil
 }

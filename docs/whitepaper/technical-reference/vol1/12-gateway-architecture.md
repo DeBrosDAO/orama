@@ -220,6 +220,7 @@ The credential cache (`middlewareCache`, TTL `CredentialStaleness` = 60 s) holds
 | chain query | 120 | 30 | `/v1/chain/query/` |
 | chain simulate | 30 per client, 1,200 per route | 10, 200 | `POST /v1/chain/simulate` |
 | chain broadcast | 12 per client, 600 per route | 4, 100 | `POST /v1/chain/broadcast` |
+| chain faucet | 3 per client, 20 per route | 3, 6 | `POST /v1/chain/faucet`, served only where a faucet key is configured |
 | capability upgrade | 60 | 20 | function WebSocket opened with a capability |
 | relay stream | 30 | 10 | `/v1/proxy/relay` |
 | WebRTC join | 60 | 20 | per signed-in identity, inside the handler |

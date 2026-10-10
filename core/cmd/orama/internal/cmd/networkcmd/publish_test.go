@@ -11,6 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/printer"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
+	"github.com/DeBrosOfficial/network/pkg/tornet/tornettest"
 )
 
 const (
@@ -93,6 +94,51 @@ func TestPublish_aResetKeepsTheRestAndAChangedGenesisIsAConflict(t *testing.T) {
 	_, err := publish(t, "--dir", filepath.Join(tmp, "networks"), "--name", "pubnet", "--chain-id", "orama-pubnet-2", "--genesis", changed)
 	if clierr.CodeOf(err) != clierr.CodeConflict {
 		t.Fatalf("error = %v (code %d), want a conflict", err, clierr.CodeOf(err))
+	}
+}
+
+func TestPublish_aTorNetworkIsPinnedInTheManifestAndKeptByAReset(t *testing.T) {
+	tmp := t.TempDir()
+	torFile := tornettest.NetworkFile(t)
+	args := append(firstPublishArgs(t, tmp), "--tor-network", writeFile(t, tmp, "tor-network.json", string(torFile)))
+	out, err := publish(t, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := netregistry.Digest(torFile)
+	if !strings.Contains(out, "Tor network file sha256 "+digest) {
+		t.Errorf("the output does not show the pinned digest:\n%s", out)
+	}
+	dir := filepath.Join(tmp, "networks", "pubnet")
+	data, _ := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	m, err := netregistry.ParseManifest(data)
+	if err != nil || m.TorNetworkSHA256 != digest {
+		t.Fatalf("manifest = %+v, %v", m, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "tor-network.json")); err != nil || string(got) != string(torFile) {
+		t.Fatalf("tor-network.json = %q, %v", got, err)
+	}
+	next := writeFile(t, tmp, "genesis2.json", `{"chain_id":"orama-pubnet-2"}`)
+	if _, err := publish(t, "--dir", filepath.Join(tmp, "networks"), "--name", "pubnet", "--chain-id", "orama-pubnet-2", "--genesis", next); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if m, _ := netregistry.ParseManifest(data); m == nil || m.TorNetworkSHA256 != digest {
+		t.Errorf("a reset of the chain lost the pinned Tor network: %+v", m)
+	}
+}
+
+func TestPublish_aTorNetworkFileThatCannotBeReadOrUsedIsRefused(t *testing.T) {
+	tmp := t.TempDir()
+	for name, file := range map[string]string{
+		"absent":            filepath.Join(tmp, "absent.json"),
+		"not a tor network": writeFile(t, tmp, "bad.json", `{"name":"x"}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := publish(t, append(firstPublishArgs(t, t.TempDir()), "--tor-network", file)...); err == nil {
+				t.Fatal("publish accepted it")
+			}
+		})
 	}
 }
 

@@ -23,6 +23,11 @@ const (
 	// production chain id keeps the chain's own defaults (24h, 14,400 blocks).
 	testEpochDuration     = "300s"
 	testMinBlocksPerEpoch = 10
+	// testFaucetMaxDripNorama is the largest single faucet drip of a test network,
+	// 10,000 ORAMA: the chain's default of 1,000
+	// ORAMA is less than one newcomer's setup needs, since the validator's
+	// self-bond alone is 1,000 ORAMA. The epoch cap keeps its default.
+	testFaucetMaxDripNorama = "10000000000000"
 	// consensusMaxGas is the finite block gas limit set in genesis (deploy.sh):
 	// x/consensus has no genesis state of its own, so the top-level consensus
 	// field would otherwise keep CometBFT's unlimited default.
@@ -73,7 +78,7 @@ func GenesisSteps(s GenesisSpec) [][]string {
 		emission := []string{"genesis", "set-emission-params", "--epoch-duration", testEpochDuration,
 			"--min-blocks-per-epoch", strconv.Itoa(testMinBlocksPerEpoch), "--allow-bootstrap-stake"}
 		if s.Faucet {
-			emission = append(emission, "--faucet-enabled")
+			emission = append(emission, "--faucet-enabled", "--faucet-max-drip", testFaucetMaxDripNorama)
 		}
 		steps = append(steps, emission)
 	}
