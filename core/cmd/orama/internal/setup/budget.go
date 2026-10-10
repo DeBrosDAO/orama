@@ -36,6 +36,9 @@ type Budget struct {
 	Bonds map[string]map[int]*big.Int
 	// SelfBond is the validator's self-bond; zero when no validator is created.
 	SelfBond *big.Int
+	// NameDeposit is what the chain locks while one node holds its name; the
+	// Reserve holds one for every full node.
+	NameDeposit *big.Int
 	// Reserve is the fee and deposit allowance.
 	Reserve *big.Int
 	// Total is everything the operator account must hold.
@@ -49,7 +52,10 @@ func StorageCapacityBytes(storageGB uint64) uint64 { return storageGB * bytesPer
 // role's floor, except storage, whose bond backs the capacity the node declares:
 // bond_per_gib for each GiB of it.
 func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
-	b := &Budget{Bonds: map[string]map[int]*big.Int{}, SelfBond: new(big.Int), Reserve: new(big.Int).SetUint64(feeReserveOperator), Total: new(big.Int)}
+	b := &Budget{Bonds: map[string]map[int]*big.Int{}, SelfBond: new(big.Int), NameDeposit: new(big.Int), Reserve: new(big.Int).SetUint64(feeReserveOperator), Total: new(big.Int)}
+	if params.NameDeposit != nil {
+		b.NameDeposit.Set(params.NameDeposit)
+	}
 	for _, n := range p.Nodes {
 		if !n.Full() {
 			continue
@@ -60,6 +66,7 @@ func ComputeBudget(p *Plan, params ChainParams) (*Budget, error) {
 		}
 		b.Bonds[n.Name] = bonds
 		b.Reserve.Add(b.Reserve, new(big.Int).SetUint64(feeReservePerNode))
+		b.Reserve.Add(b.Reserve, b.NameDeposit)
 		for _, amount := range bonds {
 			b.Total.Add(b.Total, amount)
 		}

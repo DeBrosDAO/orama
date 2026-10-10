@@ -344,6 +344,24 @@ func TestRun_resumedRunBondsOnlyTheDifference(t *testing.T) {
 	}
 }
 
+func TestRun_aNameDepositAlreadyPaidIsNotAskedForAgain(t *testing.T) {
+	h := newHarness()
+	h.chain.params.NameDeposit = big.NewInt(5 * noramaPerOrama)
+	// Short by the 5 ORAMA deposit of a name the node does not hold yet.
+	h.w.balance = big.NewInt(1014 * noramaPerOrama)
+	if _, err := run(t, h, h.opts(ip1)); err == nil {
+		t.Fatal("the deposit is part of what the account must hold")
+	}
+	h = newHarness()
+	h.chain.params.NameDeposit = big.NewInt(5 * noramaPerOrama)
+	h.w.balance = big.NewInt(1014 * noramaPerOrama)
+	h.w.operatorRegistered = true
+	h.w.names["alice"] = "alice"
+	h.w.nodes["alice"] = &RegisteredNode{Roles: []int{clusterreg.RoleStorage}, Bonds: map[int]*big.Int{}}
+	h.w.validator = false
+	mustRun(t, h, h.opts(ip1))
+}
+
 func TestRun_chainThatNeverCatchesUpIsAnError(t *testing.T) {
 	h := newHarness()
 	h.enroll.state = ChainState{Running: true, Height: 10, CatchingUp: true}
@@ -419,17 +437,27 @@ func TestRun_asnLookupFailureNamesTheFlag(t *testing.T) {
 	}
 }
 
-func TestRun_nameClaimNeedsAClaimerElseSaysSo(t *testing.T) {
+func TestRun_eachFullNodeClaimsItsOwnNameAfterItIsRegistered(t *testing.T) {
 	h := newHarness()
-	mustRun(t, h, h.opts(ip1))
-	if !h.report.has(ip1, StepName, StateSkipped) {
-		t.Error("without a claimer the step must say the claim is not available")
+	mustRun(t, h, h.opts(ip1, ip2))
+	if h.w.index("claim alice alice") < 0 || h.w.index("claim alice-2 alice-2") < 0 {
+		t.Errorf("each node claims its own name: %v", h.w.entries())
 	}
-	h2 := newHarness()
-	h2.deps.Names = fakeNames{w: h2.w}
-	mustRun(t, h2, h2.opts(ip1, ip2))
-	if h2.w.index("claim alice alice") < 0 || h2.w.index("claim alice-2 alice-2") < 0 {
-		t.Errorf("each node claims its own name: %v", h2.w.entries())
+	if h.w.index("claim alice alice") < h.w.index("tx register-node alice ") {
+		t.Errorf("a name is claimed for a node the chain already knows: %v", h.w.entries())
+	}
+	if !h.report.has(ip1, StepName, StateDone) {
+		t.Error("the claim is reported done")
+	}
+}
+
+func TestRun_aClusterOnlyRunClaimsNoName(t *testing.T) {
+	h := newHarness()
+	opts := h.opts(ip1)
+	opts.ClusterOnly, opts.StorageGB, opts.Name = true, 0, ""
+	mustRun(t, h, opts)
+	if h.w.count("claim ") != 0 {
+		t.Errorf("a cluster-only node has no chain identity to name: %v", h.w.entries())
 	}
 }
 
@@ -599,14 +627,11 @@ func TestPlanFor_badOptionsAreRefused(t *testing.T) {
 	}
 }
 
-func TestNewDeps_wiresEveryPortExceptTheNameClaimer(t *testing.T) {
-	d := NewDeps(&bufReporter{}, nil)
+func TestNewDeps_wiresEveryPort(t *testing.T) {
+	d := NewDeps(&bufReporter{})
 	if d.Networks == nil || d.Releases == nil || d.Trust == nil || d.Wallet == nil || d.Enroll == nil || d.Chain == nil ||
-		d.Funder == nil || d.ASN == nil || d.Record == nil || d.Domain == nil || d.Report == nil {
+		d.Funder == nil || d.Names == nil || d.ASN == nil || d.Record == nil || d.Domain == nil || d.Report == nil {
 		t.Fatalf("a port is missing: %+v", d)
-	}
-	if d.Names != nil {
-		t.Error("the name claim is not implemented yet and must say so, not pretend")
 	}
 	if d.Timing.SyncDeadline <= 0 || d.Timing.DNSDeadline <= 0 {
 		t.Errorf("timing %+v", d.Timing)

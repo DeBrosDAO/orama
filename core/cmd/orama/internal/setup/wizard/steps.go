@@ -111,7 +111,11 @@ func (m *Model) takeName(value string) (tea.Model, tea.Cmd) {
 		m.opts.Name = ""
 		return m.goTo(stepInspect)
 	}
-	if err := setup.ValidateNodeName(strings.ToLower(value)); err != nil {
+	validate := setup.ValidateFullNodeName
+	if m.opts.ClusterOnly {
+		validate = setup.ValidateNodeName
+	}
+	if err := validate(strings.ToLower(value)); err != nil {
 		return m.fail("%v", err)
 	}
 	m.opts.Name = strings.ToLower(value)

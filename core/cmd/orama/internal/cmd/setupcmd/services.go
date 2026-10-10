@@ -36,7 +36,7 @@ func runWizard(ctx context.Context, cmd *cobra.Command, preset setup.Options) er
 // wizardServices connects the wizard to the setup package.
 func wizardServices() wizard.Services {
 	quiet := &setup.TextReporter{Out: io.Discard}
-	deps := setup.NewDeps(quiet, nil)
+	deps := setup.NewDeps(quiet)
 	return wizard.Services{
 		Wallet:   deps.Wallet.Unlocked,
 		Networks: networkChoices,
@@ -46,7 +46,7 @@ func wizardServices() wizard.Services {
 		},
 		Plan: func(ctx context.Context, o setup.Options) (*setup.Plan, error) { return setup.PlanFor(ctx, o, deps) },
 		Run: func(ctx context.Context, o setup.Options, rep setup.Reporter) (*setup.Result, error) {
-			return setup.Run(ctx, o, setup.NewDeps(rep, nil))
+			return setup.Run(ctx, o, setup.NewDeps(rep))
 		},
 	}
 }

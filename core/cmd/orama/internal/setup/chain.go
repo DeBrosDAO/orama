@@ -112,7 +112,8 @@ func (s *restSession) Params(ctx context.Context) (ChainParams, error) {
 				Role   string `json:"role"`
 				Amount string `json:"amount"`
 			} `json:"min_bond"`
-			BondPerGiB string `json:"bond_per_gib"`
+			BondPerGiB  string `json:"bond_per_gib"`
+			NameDeposit string `json:"name_deposit"`
 		} `json:"params"`
 	}
 	if found, err := s.get(ctx, "/orama/nodes/v1/params", &doc); err != nil || !found {
@@ -130,6 +131,9 @@ func (s *restSession) Params(ctx context.Context) (ChainParams, error) {
 	var ok bool
 	if p.BondPerGiB, ok = parseAmount(doc.Params.BondPerGiB); !ok {
 		return ChainParams{}, fmt.Errorf("the chain's bond_per_gib %q is not a number", doc.Params.BondPerGiB)
+	}
+	if p.NameDeposit, ok = parseAmount(doc.Params.NameDeposit); !ok {
+		return ChainParams{}, fmt.Errorf("the chain's name_deposit %q is not a number", doc.Params.NameDeposit)
 	}
 	return p, nil
 }
@@ -240,4 +244,18 @@ func (s *restSession) ValidatorExists(ctx context.Context, operator string) (boo
 	}
 	var doc struct{}
 	return s.get(ctx, "/cosmos/staking/v1beta1/validators/"+url.PathEscape(valoper), &doc)
+}
+
+// NodeName reads the name a node holds; "" when it holds none.
+func (s *restSession) NodeName(ctx context.Context, nodeID string) (string, error) {
+	var doc struct {
+		Name struct {
+			Name string `json:"name"`
+		} `json:"name"`
+	}
+	found, err := s.get(ctx, "/orama/nodes/v1/name-of-node/"+url.PathEscape(nodeID), &doc)
+	if err != nil || !found {
+		return "", err
+	}
+	return doc.Name.Name, nil
 }

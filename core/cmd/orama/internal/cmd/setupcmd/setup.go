@@ -148,7 +148,7 @@ func runFlags(ctx context.Context, cmd *cobra.Command, opts setup.Options, tty b
 			return err
 		}
 	}
-	deps := setup.NewDeps(&setup.TextReporter{Out: out}, nil)
+	deps := setup.NewDeps(&setup.TextReporter{Out: out})
 	if !opts.Yes {
 		deps.Confirm = func(p *setup.Plan) (bool, error) { return askYesNo(os.Stdin, out, "Go ahead?") }
 	}

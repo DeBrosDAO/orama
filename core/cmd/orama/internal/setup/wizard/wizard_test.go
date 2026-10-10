@@ -240,6 +240,18 @@ func TestWizard_presetFlagsStartTheAnswers(t *testing.T) {
 	d.wantView("ubuntu")
 }
 
+func TestWizard_aFullNodeNameTheChainWouldRefuseIsRefusedAtOnce(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.toOptions()
+	d.enter()
+	d.enter()
+	d.wantStep(stepName)
+	d.text("gateway")
+	d.enter()
+	d.wantStep(stepName)
+	d.wantView("reserved")
+}
+
 func TestWizard_clusterOnlySkipsStorageAndNeedsNoName(t *testing.T) {
 	f := newFake()
 	d := newDriver(t, f, setup.Options{})

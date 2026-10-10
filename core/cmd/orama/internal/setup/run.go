@@ -10,9 +10,8 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 )
 
-// Deps are the ports a run uses. Funder, Names and Domain may be nil: without a
-// faucet an unfunded account is reported, without a name claimer the claim is
-// skipped with a line saying so, and without a domain waiter a --domain run
+// Deps are the ports a run uses. Funder and Domain may be nil: without a faucet
+// an unfunded account is reported, and without a domain waiter a --domain run
 // only prints the records.
 type Deps struct {
 	Networks NetworkSource

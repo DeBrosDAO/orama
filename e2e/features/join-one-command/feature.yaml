@@ -25,6 +25,10 @@ requires:
 covers:
   cli:
     - orama setup
+  msgs:
+    - orama.nodes.v1.MsgClaimNodeName
+  queries:
+    - orama.nodes.v1.NameOfNode
   claims:
     - "docs/CLI_REFERENCE.md#orama-setup: unattended, a machine needs a --host-key and a host key setup was not given is never trusted"
     - "docs/CLI_REFERENCE.md#orama-setup: the first machine creates the cluster, the others join it, and a second run with the same arguments changes nothing"
@@ -32,3 +36,4 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-setup: --cluster-only installs the cluster node alone"
     - "docs/CLI_REFERENCE.md#orama-setup: --exit needs --tor-network and the warning accepted"
     - "docs/CLI_REFERENCE.md#orama-setup: nothing is installed on any machine until every machine passes"
+    - "website/src/docs/operator/setup.mdx#what-happens-in-order: setup claims each full node's name on the chain, and a second run does not claim it again"

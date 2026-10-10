@@ -25,6 +25,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
+	"github.com/DeBrosOfficial/network/pkg/nodenames"
 )
 
 const (
@@ -217,8 +218,8 @@ func (o *Options) checkProfile() error {
 		if o.StorageGB > MaxStorageGB {
 			return clierr.Usage("--storage-gb %d is more than the %d GB setup accepts", o.StorageGB, MaxStorageGB)
 		}
-		if err := ValidateNodeName(o.Name); err != nil {
-			return clierr.Usage("--name: %v (a full node's name is its id on the chain; --cluster-only needs none)", err)
+		if err := ValidateFullNodeName(o.Name); err != nil {
+			return clierr.Usage("--name: %v (a full node's name is its id on the chain and the name it claims; --cluster-only needs none)", err)
 		}
 	}
 	if o.Name != "" && o.ClusterOnly {
@@ -249,6 +250,18 @@ func ValidateNodeName(name string) error {
 		return fmt.Errorf("%q must be %d to %d characters", name, nodeNameMin, nodeNameMax)
 	case !nameRE.MatchString(name):
 		return fmt.Errorf("%q must be lowercase letters, digits and single hyphens, starting with a letter", name)
+	}
+	return nil
+}
+
+// ValidateFullNodeName checks the name of a full node, which is also the name it
+// claims on the chain: ValidateNodeName, and the chain's grammar and reserved words.
+func ValidateFullNodeName(name string) error {
+	if err := ValidateNodeName(name); err != nil {
+		return err
+	}
+	if err := nodenames.ValidateName(name); err != nil {
+		return fmt.Errorf("%q %w", name, err)
 	}
 	return nil
 }

@@ -32,22 +32,24 @@ func jsonBody(body string) func(http.ResponseWriter) {
 
 func TestRestSession_params(t *testing.T) {
 	s := chainServer(t, map[string]func(http.ResponseWriter){
-		"/orama/nodes/v1/params": jsonBody(`{"params":{"min_bond":[{"role":"ROLE_STORAGE","amount":"1000000000"},{"role":"ROLE_RELAY","amount":"2000000000"}],"bond_per_gib":"1000000000"}}`),
+		"/orama/nodes/v1/params": jsonBody(`{"params":{"min_bond":[{"role":"ROLE_STORAGE","amount":"1000000000"},{"role":"ROLE_RELAY","amount":"2000000000"}],"bond_per_gib":"1000000000","name_deposit":"1000000000"}}`),
 	})
 	p, err := s.Params(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.MinBond[clusterreg.RoleRelay].String() != "2000000000" || p.BondPerGiB.String() != "1000000000" {
+	if p.MinBond[clusterreg.RoleRelay].String() != "2000000000" || p.BondPerGiB.String() != "1000000000" || p.NameDeposit.String() != "1000000000" {
 		t.Fatalf("%+v", p)
 	}
 }
 
 func TestRestSession_paramsRefusals(t *testing.T) {
 	for name, body := range map[string]string{
-		"an unknown role":    `{"params":{"min_bond":[{"role":"ROLE_KING","amount":"1"}],"bond_per_gib":"1"}}`,
-		"a bad amount":       `{"params":{"min_bond":[{"role":"ROLE_STORAGE","amount":"lots"}],"bond_per_gib":"1"}}`,
-		"no bond per GiB":    `{"params":{"min_bond":[]}}`,
+		"an unknown role":    `{"params":{"min_bond":[{"role":"ROLE_KING","amount":"1"}],"bond_per_gib":"1","name_deposit":"1"}}`,
+		"a bad amount":       `{"params":{"min_bond":[{"role":"ROLE_STORAGE","amount":"lots"}],"bond_per_gib":"1","name_deposit":"1"}}`,
+		"no bond per GiB":    `{"params":{"min_bond":[],"name_deposit":"1"}}`,
+		"no name deposit":    `{"params":{"min_bond":[],"bond_per_gib":"1"}}`,
+		"a bad name deposit": `{"params":{"min_bond":[],"bond_per_gib":"1","name_deposit":"-1"}}`,
 		"something not json": `<html>`,
 	} {
 		s := chainServer(t, map[string]func(http.ResponseWriter){"/orama/nodes/v1/params": jsonBody(body)})
@@ -204,5 +206,21 @@ func TestChainHTTPClient_doesNotFollowARedirect(t *testing.T) {
 	_, err := s.Balance(context.Background(), testOperator)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
 		t.Fatalf("got %v: a node that redirects is an error, never a place to go", err)
+	}
+}
+
+func TestRestSession_nodeNameIsReadOrEmpty(t *testing.T) {
+	s := chainServer(t, map[string]func(http.ResponseWriter){
+		"/orama/nodes/v1/name-of-node/alice": jsonBody(`{"name":{"name":"alpha-one","node_id":"alice","operator":"` + testOperator + `","deposit":"1000000000"}}`),
+		"/orama/nodes/v1/name-of-node/bad":   jsonBody(`<html>`),
+	})
+	if got, err := s.NodeName(context.Background(), "alice"); err != nil || got != "alpha-one" {
+		t.Errorf("a node with a name: %q, %v", got, err)
+	}
+	if got, err := s.NodeName(context.Background(), "ghost"); err != nil || got != "" {
+		t.Errorf("a node with no name is empty, not an error: %q, %v", got, err)
+	}
+	if _, err := s.NodeName(context.Background(), "bad"); err == nil {
+		t.Error("an answer that is not the JSON expected is an error")
 	}
 }

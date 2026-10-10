@@ -123,7 +123,11 @@ func planNames(o Options) ([]string, error) {
 	}
 	names := NodeNames(o.Name, len(o.IPs))
 	for _, n := range names {
-		if err := ValidateNodeName(n); err != nil {
+		validate := ValidateNodeName
+		if !o.ClusterOnly {
+			validate = ValidateFullNodeName
+		}
+		if err := validate(n); err != nil {
 			return nil, clierr.Usage("--name: %v (the nodes are named %s)", err, strings.Join(names, ", "))
 		}
 	}

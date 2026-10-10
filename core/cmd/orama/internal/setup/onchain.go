@@ -37,7 +37,7 @@ func (r *runner) onchainPhase(ctx context.Context) error {
 			r.emit(n.plan.IP, StepOnchain, StateFailed, err.Error())
 			return fmt.Errorf("machine %s: %w", n.plan.IP, err)
 		}
-		if err := r.claimName(ctx, n); err != nil {
+		if err := r.claimName(ctx, sess, n); err != nil {
 			return err
 		}
 	}
@@ -214,15 +214,10 @@ func (r *runner) createValidator(ctx context.Context, sess ChainSession, n *node
 	return nil
 }
 
-// claimName claims <name>.<network>.orama.network for the node, once the chain
-// can. Without a claimer the step says so and the run goes on: the name only
-// identifies the node, and the chain has no transaction for it yet.
-func (r *runner) claimName(ctx context.Context, n *nodeRun) error {
-	if r.d.Names == nil {
-		r.emit(n.plan.IP, StepName, StateSkipped, "name claim not available on this chain yet")
-		return nil
-	}
-	if err := r.d.Names.Claim(ctx, n.plan.Name, n.plan.Name); err != nil {
+// claimName claims <name>.<network>.orama.network for the node: the name is the
+// node's name in the plan, which is also its id on the chain.
+func (r *runner) claimName(ctx context.Context, sess ChainSession, n *nodeRun) error {
+	if err := r.d.Names.Claim(ctx, sess, n.plan.Name, n.plan.Name); err != nil {
 		r.emit(n.plan.IP, StepName, StateFailed, err.Error())
 		return fmt.Errorf("machine %s: claim the name %q: %w", n.plan.IP, n.plan.Name, err)
 	}
@@ -231,8 +226,8 @@ func (r *runner) claimName(ctx context.Context, n *nodeRun) error {
 }
 
 // remainingNeed is what the account still has to hold: the budget less the bonds
-// the chain already shows, the validator if it exists, and the reserve of every
-// node that is already registered. A run that stopped after bonding is not asked
+// the chain already shows, the validator if it exists, the reserve of every
+// node that is already registered and the deposit of every name already held. A run that stopped after bonding is not asked
 // for the bonds again.
 func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget) (*big.Int, error) {
 	need := new(big.Int).Set(b.Total)
@@ -249,6 +244,13 @@ func (r *runner) remainingNeed(ctx context.Context, sess ChainSession, b *Budget
 			if have := node.Bonds[role]; have != nil {
 				need.Sub(need, minInt(have, target))
 			}
+		}
+		held, err := sess.NodeName(ctx, n.plan.Name)
+		if err != nil {
+			return nil, fmt.Errorf("check whether node %q holds a name: %w", n.plan.Name, err)
+		}
+		if held != "" {
+			need.Sub(need, b.NameDeposit)
 		}
 	}
 	if exists, err := sess.ValidatorExists(ctx, r.oper); err != nil {

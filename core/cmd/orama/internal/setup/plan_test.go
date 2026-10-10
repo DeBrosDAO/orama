@@ -121,6 +121,23 @@ func TestBuildPlan_aLongNameIsRefusedBeforeItsSuffix(t *testing.T) {
 	}
 }
 
+// A cluster-only node claims no name, so the chain's grammar does not bind its name.
+func TestBuildPlan_aClusterOnlyNameNeedNotBeAClaimableName(t *testing.T) {
+	p := planFor(t, Options{IPs: []string{ip1}, Name: "ab", ClusterOnly: true})
+	if p.Nodes[0].Name != "ab" {
+		t.Errorf("name %q", p.Nodes[0].Name)
+	}
+}
+
+func TestBuildPlan_aFullNodeNameThePlanDerivesIsHeldToTheChainsRules(t *testing.T) {
+	o := Options{IPs: []string{ip1}, Name: "node"}
+	o.StorageGB = 10
+	_, err := BuildPlan(PlanInput{Options: o, Network: testManifestFor(), Env: "e"})
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("got %v, want the reserved name refused", err)
+	}
+}
+
 func TestBuildPlan_summaryNamesEachMachine(t *testing.T) {
 	p := planFor(t, Options{IPs: []string{ip1, ip2}, Name: "alice", Domain: "cluster.example.org"})
 	text := strings.Join(p.Summary(), "\n")

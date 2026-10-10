@@ -78,6 +78,7 @@ func oneFreshServerBecomesAFullNode(t *testing.T, f *fleet.Fleet, cli *oramacli.
 	if doc.Operator == nil || !strings.HasPrefix(doc.Operator.Address, "orama1") {
 		t.Errorf("orama status shows no operator account though setup recorded it: %+v", doc.Operator)
 	}
+	requireNodeName(t, nodeName)
 }
 
 // theSameCommandAgainChangesNothing: setup reads each server before it changes
@@ -110,6 +111,8 @@ func twoMoreJoinTheSameCluster(t *testing.T, f *fleet.Fleet, cli *oramacli.Runne
 		}
 	}
 	doc := requireHealthy(t, cli, env, 3)
+	requireNodeName(t, nodeName+"-more")
+	requireNodeName(t, nodeName+"-more-2")
 	seen := map[string]bool{}
 	for _, n := range doc.Nodes {
 		seen[n.Host] = true

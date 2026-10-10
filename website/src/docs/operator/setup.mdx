@@ -35,7 +35,7 @@ orama setup --network stagenet --name alice --yes \
   --host-key 203.0.113.10=SHA256:... --host-key 203.0.113.11=SHA256:... --host-key 203.0.113.12=SHA256:...
 ```
 
-`--name` is the first node's name and its id on the chain; the others are `alice-2` and `alice-3`. A cluster-only run needs no name.
+`--name` is the first node's name, its id on the chain and the name it claims there; the others are `alice-2` and `alice-3`. A full node's name follows the chain's rules for a node name (3 to 32 characters of a-z, 0-9 and `-`, no leading or trailing `-`, nothing the network reserves such as `gateway` or `seed1`), and a name the chain would refuse is refused before anything is installed. A cluster-only run needs no name.
 
 ## What happens, in order
 
@@ -53,7 +53,7 @@ orama setup --network stagenet --name alice --yes \
    - the budget is printed (the bonds, the self-bond, the fee allowance) and checked against a ceiling of 1,000,000 ORAMA, because the figures come from the chain node setup has just installed; the operator account is then checked for funds (see below);
    - register the operator, unless it is registered;
    - for each node: read its keys (the hot key is created on first use), register it with its roles, endpoint and autonomous system number, bond each role, declare its storage capacity, start the provider, and, on the first node, create the validator with the 1,000 ORAMA self-bond;
-   - claim the node's name.
+   - claim the node's name on the chain, unless the node already holds it. A node holds one name, and a name belongs to the first operator who claims it; the chain locks a deposit while the node holds it (the `name_deposit` parameter, 1 ORAMA at genesis), which setup counts in the amount it asks you to hold and which you get back when the name is released. A node that already holds another name stops the run with that name; release it, or give `--name` that name.
    Each step first asks the chain whether it is already done.
 8. **Your own domain** (`--domain`). Setup prints the NS and glue records to create at the parent zone as soon as the cluster exists, and at the end polls DNS until the parent zone returns them and the cluster serves a certificate for the domain.
 9. **The record.** The operator account is stored on the environment, so `orama status` shows your earnings, balance and bond without `--operator`. On a terminal, setup then offers to open `orama status`.
@@ -79,7 +79,6 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 ## Known gaps
 
 - **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.
-- **Name claim.** The chain transaction that claims `<name>.<network>.orama.network` is not part of this build. The step says "name claim not available on this chain yet" and does nothing.
 - **The faucet is SSH-signed.** There is no public faucet endpoint; see Funding.
 - **Earnings are not counted** when setup checks the account has enough. A bond can be paid from earnings, so an operator who holds only earnings is told to fund the account.
 - **A chain that has upgraded since its genesis.** A joiner starts on the genesis binary in the cosmovisor layout. If the snapshot it restores was taken after an upgrade, the chain stops asking for that upgrade's binary; setup ends the wait with the chain's log. The release metadata does not list upgrade heights, so setup cannot stage the right binary itself yet.

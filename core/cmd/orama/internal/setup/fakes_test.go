@@ -37,16 +37,18 @@ type world struct {
 	operatorRegistered bool
 	nodes              map[string]*RegisteredNode
 	validator          bool
-	balance            *big.Int
-	faucetPays         *big.Int
-	faucetCalls        int
+	// names is the name each node holds, by node id.
+	names       map[string]string
+	balance     *big.Int
+	faucetPays  *big.Int
+	faucetCalls int
 
 	// concurrency probe for restarts
 	restarting, maxRestarting int
 }
 
 func newWorld() *world {
-	return &world{nodes: map[string]*RegisteredNode{}, balance: new(big.Int)}
+	return &world{nodes: map[string]*RegisteredNode{}, names: map[string]string{}, balance: new(big.Int)}
 }
 
 func (w *world) add(format string, args ...any) {
@@ -312,6 +314,14 @@ func (s *fakeSession) ValidatorExists(context.Context, string) (bool, error) {
 	defer s.w.mu.Unlock()
 	return s.w.validator, nil
 }
+func (s *fakeSession) NodeName(_ context.Context, id string) (string, error) {
+	s.w.mu.Lock()
+	defer s.w.mu.Unlock()
+	return s.w.names[id], nil
+}
+func (s *fakeSession) ClaimNodeName(context.Context, string, string) (*onchain.Receipt, error) {
+	return &onchain.Receipt{}, nil
+}
 func (s *fakeSession) RegisterOperator(context.Context) (*onchain.Receipt, error) {
 	s.w.add("tx register-operator")
 	s.w.mu.Lock()
@@ -372,7 +382,7 @@ type fakeNames struct {
 	err error
 }
 
-func (f fakeNames) Claim(_ context.Context, name, nodeID string) error {
+func (f fakeNames) Claim(_ context.Context, _ NameChain, name, nodeID string) error {
 	f.w.add("claim %s %s", name, nodeID)
 	return f.err
 }
@@ -469,7 +479,7 @@ func newHarness() *harness {
 		rec: newRecorder(w), report: &bufReporter{}, networks: fakeNetworks{w: w}}
 	h.deps = Deps{
 		Networks: h.networks, Releases: fakeReleases{w}, Trust: fakeTrust{w}, Wallet: fakeWallet{}, Enroll: h.enroll, Chain: h.chain,
-		ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
+		Names: fakeNames{w: w}, ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
 		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second},
 	}
 	return h
