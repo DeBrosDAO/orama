@@ -25,6 +25,11 @@ relays join; --tor-network gives another, --no-relay leaves the relay out). Then
 chain and creates your validator, signing every transaction with your RootWallet. Nodes are
 restarted one at a time, each waiting until it carries its share of the cluster again.
 
+Each machine downloads the release from the release repository itself, up to eight at a time, and checks the
+file against the length and SHA-256 of the release metadata that setup verified here; the archive does not pass
+through this computer. A machine that cannot reach the repository fails the run; --upload-release downloads the
+archive here and uploads it to each machine over SSH, one after the other, for such machines.
+
 The first machine creates the cluster; the others join it. Running setup again with more
 addresses adds nodes to the same cluster, and a machine that already has a step does not get
 it again, so a run that stopped can be run again as it was.
@@ -86,5 +91,6 @@ machine until every machine passes.
 | `--seed` | — | With --create-network: a seed DNS name (repeatable; default ns1.&lt;name>.orama.network ..., one per machine; with --domain, the cluster's nameservers ns&lt;N>.&lt;domain>, one per machine up to 13) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | A tor-network.json to give the relays instead of the one the network pins (a network that pins none runs a relay only with it) |
+| `--upload-release` | `false` | Download the release on this computer and upload it to each machine over SSH, one after the other, instead of each machine downloading it from the release repository (for machines that cannot reach the repository) |
 | `--user` | `root` | SSH login on the machines |
 | `-y`, `--yes` | `false` | Ask nothing: use the answers given as flags (every machine needs a --host-key) |

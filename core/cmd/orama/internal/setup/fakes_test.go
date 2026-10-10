@@ -111,6 +111,9 @@ type fakeMachine struct {
 	identityErr   error
 	// tamperIdentity, when set, changes what the node reports about its keys.
 	tamperIdentity func(*NodeIdentity)
+	// release says how the machine behaves when it fetches the release itself.
+	release fakeRelease
+	gate    *fetchGate
 }
 
 func goodHardware() install.Hardware {
@@ -231,6 +234,10 @@ type fakeEnroller struct {
 	state         ChainState
 	// tamperIdentity changes what every machine reports about its keys.
 	tamperIdentity func(*NodeIdentity)
+	// releases is how each machine, by address, behaves when it fetches the release;
+	// gate is shared by all of them.
+	releases map[string]fakeRelease
+	gate     *fetchGate
 }
 
 func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, error) {
@@ -242,7 +249,8 @@ func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, e
 	if !ok {
 		facts = freshFacts()
 	}
-	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefusal: e.quorumRefusal, tamperIdentity: e.tamperIdentity}
+	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefusal: e.quorumRefusal, tamperIdentity: e.tamperIdentity,
+		release: e.releases[req.IP], gate: e.gate}
 	if e.created == nil {
 		e.created = map[string]*fakeMachine{}
 	}
@@ -298,13 +306,6 @@ func (n fakeNetworks) Resolve(_ context.Context, name string) (*netregistry.Netw
 
 func (n fakeNetworks) Genesis(context.Context, *netregistry.Network) ([]byte, error) {
 	return testGenesisDoc(), n.genesisErr
-}
-
-type fakeReleases struct{ w *world }
-
-func (f fakeReleases) Fetch(_ context.Context, _ *netregistry.Network, arch string) (*Release, error) {
-	f.w.add("fetch release %s", arch)
-	return &Release{Version: "0.3.1", Arch: arch, ManifestSHA256: testManifest, CLISHA256: testCLISHA}, nil
 }
 
 type fakeTrust struct{ w *world }
@@ -575,7 +576,7 @@ func newHarness() *harness {
 	h := &harness{w: w, enroll: &fakeEnroller{w: w, state: ChainState{Running: true, Height: 5000}}, chain: &fakeChain{w: w, params: defaultParams()},
 		rec: newRecorder(w), report: &bufReporter{}, networks: fakeNetworks{w: w}}
 	h.deps = Deps{
-		Networks: h.networks, Releases: fakeReleases{w}, Trust: fakeTrust{w}, Wallet: fakeWallet{}, Enroll: h.enroll, Chain: h.chain,
+		Networks: h.networks, Releases: fakeReleases{w: w}, Trust: fakeTrust{w}, Wallet: fakeWallet{}, Enroll: h.enroll, Chain: h.chain,
 		Names: fakeNames{w: w}, ASN: func(context.Context, string) (uint32, error) { return 24940, nil }, Record: h.rec, Report: h.report,
 		Timing: Timing{SyncPoll: time.Millisecond, SyncDeadline: time.Second, RestartBudget: time.Second, ReadyBudget: time.Second, DNSPoll: time.Millisecond, DNSDeadline: time.Second, BalancePoll: time.Millisecond, BalanceDeadline: 50 * time.Millisecond},
 	}

@@ -71,6 +71,7 @@ func (o Options) CommandLine() string {
 	}
 	flag("tor-network", o.TorNetwork)
 	on("no-relay", o.NoRelay)
+	on("upload-release", o.UploadRelease)
 	on("no-validator", o.NoValidator)
 	on("allow-quorum-loss", o.AllowQuorumLoss)
 	parts = append(parts, o.Create.commandLine()...)

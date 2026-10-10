@@ -10,7 +10,12 @@
 // the newest release for the architecture, downloads it and checks its length
 // and hashes against the signed targets.
 //
-// What comes back needs no operator signature to install: the archive is
+// Resolve does the same without the download, for a caller whose machines each
+// download the archive: it verifies the metadata and returns the archive's URL,
+// length and SHA-256 from the signed targets, and Accept raises the rollback
+// record once those machines have checked the file.
+//
+// What Fetch returns needs no operator signature to install: the archive is
 // unsigned, and a node accepts it because it verified against the release
 // root (`orama maint node stage-archive --release-only --release-metadata
 // <Release.MetadataDir> --release-target <Release.Target>`, after the root is
@@ -21,6 +26,7 @@ package releasefetch
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
@@ -96,37 +102,130 @@ func (r *Release) Remove() error { return r.rel.Remove() }
 // Fetch downloads and verifies the newest release of the channel for the
 // architecture.
 func Fetch(ctx context.Context, p Params) (*Release, error) {
-	if err := p.check(); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
+	defer cancel()
+	f, err := newest(ctx, p)
+	if err != nil {
 		return nil, err
 	}
+	if err := f.src.Download(ctx, p.RepoURL, f.rel); err != nil {
+		return nil, errors.Join(err, f.rel.Remove())
+	}
+	root, err := releaseverify.ReadRoot(f.rootPath)
+	if err != nil {
+		return nil, errors.Join(err, f.rel.Remove())
+	}
+	rel := f.rel
+	return &Release{Version: rel.Version, Target: rel.Target.Path, ArchivePath: rel.ArchivePath(), MetadataDir: rel.MetadataDir(), Root: root, rel: rel}, nil
+}
+
+// Resolution is the newest release of a channel as the verified metadata names
+// it, with the archive not downloaded: for a caller whose machines each download
+// the archive from URL and check the file they get against Length and SHA256,
+// which are the signed targets' own.
+type Resolution struct {
+	Version string
+	// Target is the name the archive has in the signed targets.
+	Target string
+	// URL is where the repository serves the archive.
+	URL string
+	// Length and SHA256 (hex) are the archive's size and digest in the signed
+	// targets metadata.
+	Length int64
+	SHA256 string
+	// Root is the root the metadata verified under: the embedded root, or the
+	// newest the repository's rotations led to.
+	Root  []byte
+	rel   autoupdate.Release
+	check releaseverify.FileCheck
+}
+
+// Remove deletes the fetched metadata.
+func (r *Resolution) Remove() error { return r.rel.Remove() }
+
+// Accept raises this machine's rollback record to the snapshot the release was
+// resolved from. It is called once the archive has been checked against
+// SHA256 and Length wherever it was downloaded: a snapshot older than one
+// accepted this way is refused by the next fetch.
+func (r *Resolution) Accept() error {
+	if _, err := releaseverify.Accept(r.check); err != nil {
+		return fmt.Errorf("record release %s as accepted: %w", r.Version, err)
+	}
+	return nil
+}
+
+// Resolve is Fetch without the download: it verifies the channel's metadata the
+// same way, picks the newest release for the architecture and checks it against
+// the manifest's minimum version, and returns what the signed targets say about
+// the archive. Only the metadata, a few kilobytes, is fetched.
+func Resolve(ctx context.Context, p Params) (*Resolution, error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
+	defer cancel()
+	f, err := newest(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	res, err := f.resolution(p)
+	if err != nil {
+		return nil, errors.Join(err, f.rel.Remove())
+	}
+	return res, nil
+}
+
+// found is the newest release of a channel, its metadata verified.
+type found struct {
+	src      autoupdate.Source
+	rel      autoupdate.Release
+	rootPath string
+}
+
+func (f found) resolution(p Params) (*Resolution, error) {
+	target := f.rel.Target
+	sum := target.Hashes["sha256"]
+	if len(sum) != sha256.Size {
+		return nil, fmt.Errorf("the signed targets metadata gives no SHA-256 for %s, which a machine downloading it needs to check it", target.Path)
+	}
+	url, err := (releaseverify.Repository{BaseURL: p.RepoURL}).TargetURL(target)
+	if err != nil {
+		return nil, err
+	}
+	root, err := releaseverify.ReadRoot(f.rootPath)
+	if err != nil {
+		return nil, err
+	}
+	check := releaseverify.FileCheck{RootPath: f.rootPath, SeenPath: p.SeenPath, MetadataDir: f.rel.MetadataDir(), Target: target.Path, Now: p.Now}
+	return &Resolution{
+		Version: f.rel.Version, Target: target.Path, URL: url, Length: target.Length, SHA256: hex.EncodeToString(sum),
+		Root: root, rel: f.rel, check: check,
+	}, nil
+}
+
+// newest holds the parameters to their pins, brings the root up to the
+// repository's newest, and verifies the channel's metadata: the newest release
+// for the architecture, not older than the manifest's minimum.
+func newest(ctx context.Context, p Params) (found, error) {
+	if err := p.check(); err != nil {
+		return found{}, err
+	}
 	if err := os.MkdirAll(p.WorkDir, workDirPerm); err != nil {
-		return nil, fmt.Errorf("create %s: %w", p.WorkDir, err)
+		return found{}, fmt.Errorf("create %s: %w", p.WorkDir, err)
 	}
 	rootPath := filepath.Join(p.WorkDir, rootFileName)
 	if err := writeRoot(rootPath, p.Root); err != nil {
-		return nil, err
+		return found{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, fetchBudget)
-	defer cancel()
 	src := autoupdate.Source{RootPath: rootPath, SeenPath: p.SeenPath, AdoptedRoot: p.AdoptedRoot, WorkDir: p.WorkDir, Arch: p.Arch, Now: func() time.Time { return p.Now }}
 	rel, ok, err := src.Newest(ctx, p.RepoURL, p.Channel)
 	if err != nil {
-		return nil, fmt.Errorf("the %s channel of %s: %w", p.Channel, p.RepoURL, err)
+		return found{}, fmt.Errorf("the %s channel of %s: %w", p.Channel, p.RepoURL, err)
 	}
 	if !ok {
-		return nil, fmt.Errorf("the %s channel of %s lists no release for linux/%s", p.Channel, p.RepoURL, p.Arch)
+		return found{}, fmt.Errorf("the %s channel of %s lists no release for linux/%s", p.Channel, p.RepoURL, p.Arch)
 	}
 	if err := p.checkMinVersion(rel.Version); err != nil {
-		return nil, errors.Join(err, rel.Remove())
+		return found{}, errors.Join(err, rel.Remove())
 	}
-	if err := src.Download(ctx, p.RepoURL, rel); err != nil {
-		return nil, errors.Join(err, rel.Remove())
-	}
-	root, err := releaseverify.ReadRoot(rootPath)
-	if err != nil {
-		return nil, errors.Join(err, rel.Remove())
-	}
-	return &Release{Version: rel.Version, Target: rel.Target.Path, ArchivePath: rel.ArchivePath(), MetadataDir: rel.MetadataDir(), Root: root, rel: rel}, nil
+	return found{src: src, rel: rel, rootPath: rootPath}, nil
 }
 
 // check validates the parameters and holds the embedded root to the pin. The

@@ -9,8 +9,8 @@ import (
 )
 
 // stageReleases puts the verified release of the network's channel on every
-// machine that still has something to install, fetching it once per
-// architecture. A machine that already runs exactly that build is left alone.
+// machine that still has something to install, one architecture after the other
+// (stageArch). A machine that already runs exactly that build is left alone.
 func (r *runner) stageReleases(ctx context.Context) error {
 	byArch := map[string][]*nodeRun{}
 	for _, n := range r.runs {
@@ -33,7 +33,9 @@ func (r *runner) stageReleases(ctx context.Context) error {
 	return nil
 }
 
-func (r *runner) stageArch(ctx context.Context, arch string, nodes []*nodeRun) error {
+// uploadArch is the release of --upload-release: it is downloaded and verified
+// here, once, and uploaded to each machine in turn from this computer.
+func (r *runner) uploadArch(ctx context.Context, arch string, nodes []*nodeRun) error {
 	r.d.Report.Linef("fetching the %s release for linux/%s and verifying it against the network's release root", r.net.Manifest.Channel, arch)
 	rel, err := r.d.Releases.Fetch(ctx, r.net, arch)
 	if err != nil {

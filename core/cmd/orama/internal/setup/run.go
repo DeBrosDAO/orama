@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
@@ -75,6 +76,8 @@ type runner struct {
 	// clusterSize is how many nodes the cluster has once this run is done.
 	clusterSize int
 	res         *Result
+	// skipMu guards res.Skipped.
+	skipMu sync.Mutex
 	// create is what a network creation keeps between its phases.
 	create *createState
 }
@@ -134,8 +137,12 @@ func (r *runner) emit(ip string, step Step, state State, detail string) {
 	r.d.Report.Emit(Event{Node: ip, Step: step, State: state, Detail: detail})
 }
 
+// skip records that the machine already has a step. Machines that fetch the
+// release at the same time call it together.
 func (r *runner) skip(ip string, step Step, detail string) {
+	r.skipMu.Lock()
 	r.res.Skipped[ip] = append(r.res.Skipped[ip], step)
+	r.skipMu.Unlock()
 	r.emit(ip, step, StateSkipped, detail)
 }
 

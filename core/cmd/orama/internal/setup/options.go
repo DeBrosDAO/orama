@@ -123,6 +123,12 @@ type Options struct {
 	TorNetwork string
 	// NoRelay leaves the relay out though the network pins a Tor network.
 	NoRelay bool
+	// UploadRelease makes this computer download the release once and upload it to
+	// each machine over SSH, instead of each machine downloading it from the
+	// release repository: for machines that cannot reach the repository. Without
+	// it every machine downloads the release itself, and one that cannot fails the
+	// run; setup never switches to the upload by itself.
+	UploadRelease bool
 	// AllowQuorumLoss lets the run restart a cluster node with --force when the cluster
 	// has fewer than three voters, so the restart takes its quorum down for as long as
 	// the node is away. Without it (or a yes to the plan that shows it) that restart

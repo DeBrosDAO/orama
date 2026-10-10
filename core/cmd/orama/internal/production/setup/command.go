@@ -902,6 +902,38 @@ func uploadAndStage(ctx context.Context, node inspector.Node, archive, cliSum st
 // directory is interpolated into a root shell command, so nothing else passes.
 var uploadDirPattern = regexp.MustCompile(`^/tmp/orama-archive\.[A-Za-z0-9]{8}$`)
 
+// ArchiveDirTemplate is the mktemp template of an archive's private directory on
+// a node, the only kind StageArchiveCommand takes.
+const ArchiveDirTemplate = "/tmp/orama-archive.XXXXXXXX"
+
+var cliSumPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// ValidArchiveDir reports whether dir is a directory ArchiveDirTemplate made:
+// the only kind a root shell command of a caller's may name.
+func ValidArchiveDir(dir string) bool { return uploadDirPattern.MatchString(dir) }
+
+// StageArchiveCommand is the command that stages the archive a caller put at
+// dir/archive.tar.gz on a node that has no verified orama yet, as an upload
+// does (see stageArchiveCommand): the CLI alone is extracted, checked against
+// cliSum, and run to verify and stage the archive against the node's trust
+// anchor, or, on a node without one, against trusted. dir is removed however it
+// ends. It refuses a dir that is not an ArchiveDirTemplate directory, a cliSum
+// that is not a lowercase SHA-256 and a trusted list that is not EVM addresses,
+// because all three go into a root shell command.
+func StageArchiveCommand(dir, cliSum string, trusted []string) (string, error) {
+	if !uploadDirPattern.MatchString(dir) {
+		return "", fmt.Errorf("%q is not a directory made from %s", dir, ArchiveDirTemplate)
+	}
+	if !cliSumPattern.MatchString(cliSum) {
+		return "", fmt.Errorf("the CLI checksum %q is not a lowercase SHA-256", cliSum)
+	}
+	signers, err := archivetrust.NormalizeSigners(trusted)
+	if err != nil {
+		return "", fmt.Errorf("the signers to trust: %w", err)
+	}
+	return stageArchiveCommand(dir, cliSum, signers), nil
+}
+
 // stageArchiveCommand, as root on the node: extracts only the CLI from the
 // archive uploaded to dir into a new root-only directory under /opt/orama (not
 // /tmp, which may be noexec), refuses it unless it has the checksum the

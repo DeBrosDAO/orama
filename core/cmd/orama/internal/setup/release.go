@@ -37,12 +37,29 @@ type releaseFetcher struct {
 	// Test seams.
 	fetch   func(context.Context, releasefetch.Params) (*releasefetch.Release, error)
 	endorse func(src, dst string, root []byte) error
+	// resolve and seal are the download-free path (Resolve, Endorse): the metadata
+	// alone, and the signature on a manifest a machine reports.
+	resolve func(context.Context, releasefetch.Params) (*releasefetch.Resolution, error)
+	seal    func(manifest, root []byte) (sealed []byte, signature string, err error)
 	now     func() time.Time
 	home    func() (string, error)
 }
 
 func newReleaseFetcher() releaseFetcher {
-	return releaseFetcher{fetch: releasefetch.Fetch, endorse: build.EndorseRelease, now: time.Now, home: oramaHome}
+	return releaseFetcher{
+		fetch: releasefetch.Fetch, endorse: build.EndorseRelease, resolve: releasefetch.Resolve, seal: build.EndorseManifest,
+		now: time.Now, home: oramaHome,
+	}
+}
+
+// params are the parameters of a fetch of n's channel for arch: the manifest's
+// pins, the root built into this CLI, and the rollback records in the orama home.
+func (f releaseFetcher) params(n *netregistry.Network, arch, home, work string) releasefetch.Params {
+	return releasefetch.Params{
+		RepoURL: n.Manifest.ReleaseRepo, Channel: n.Manifest.Channel, Arch: arch, Root: n.Root, RootSHA256: n.Manifest.ReleaseRootSHA256,
+		MinVersion: n.Manifest.MinVersion, WorkDir: work, SeenPath: filepath.Join(home, operatorSeenFile),
+		AdoptedRoot: filepath.Join(home, adoptedRootFile), Now: f.now(),
+	}
 }
 
 func oramaHome() (string, error) {
@@ -67,11 +84,7 @@ func (f releaseFetcher) Fetch(ctx context.Context, n *netregistry.Network, arch 
 	if err != nil {
 		return nil, fmt.Errorf("create a working directory for the release: %w", err)
 	}
-	rel, err := f.fetch(ctx, releasefetch.Params{
-		RepoURL: n.Manifest.ReleaseRepo, Channel: n.Manifest.Channel, Arch: arch, Root: n.Root, RootSHA256: n.Manifest.ReleaseRootSHA256,
-		MinVersion: n.Manifest.MinVersion, WorkDir: work, SeenPath: filepath.Join(home, operatorSeenFile),
-		AdoptedRoot: filepath.Join(home, adoptedRootFile), Now: f.now(),
-	})
+	rel, err := f.fetch(ctx, f.params(n, arch, home, work))
 	if err != nil {
 		return nil, errors.Join(err, os.RemoveAll(work))
 	}

@@ -67,6 +67,7 @@ func oneFreshServerBecomesAFullNode(t *testing.T, f *fleet.Fleet, cli *oramacli.
 	args := append(setupArgs(t, net, env, extra), "--name", nodeName)
 	res := infra.RunFor(t, cli, infra.InstallBudget, args...)
 	infra.ExpectExit(t, res, infra.ExitOK, "Done.", "orama status --env "+env)
+	requireDownloadedByTheMachine(t, f, res.Stdout, extra)
 	for _, unit := range []string{infra.NodeUnit, infra.ChainUnit} {
 		if out := f.Exec(t, extra.Node, "systemctl is-active "+unit); out.Exit != 0 {
 			t.Errorf("%s is not active on %s after setup:\n%s", unit, extra.PublicIP, out.Stdout)
@@ -134,6 +135,7 @@ func twoMoreJoinTheSameCluster(t *testing.T, f *fleet.Fleet, cli *oramacli.Runne
 		if !strings.Contains(res.Stdout, "["+e.PublicIP+"] cluster done") {
 			t.Errorf("%s did not join the cluster:\n%s", e.PublicIP, res.Stdout)
 		}
+		requireDownloadedByTheMachine(t, f, res.Stdout, e)
 	}
 	doc := requireHealthy(t, cli, env, 3)
 	requireNodeName(t, nodeName+"-more")
@@ -177,4 +179,44 @@ func TestSetup_clusterOnlyInstallsNoGlobalLayer(t *testing.T) {
 	if strings.Contains(res.Stdout, "Operator account") {
 		t.Errorf("a cluster-only run printed an operator account:\n%s", res.Stdout)
 	}
+}
+
+// requireDownloadedByTheMachine: the release reached the machine from the release
+// repository (each machine downloaded it itself, not this computer over SSH), the
+// machine staged it, and the private directory the archive was downloaded into is
+// gone.
+func requireDownloadedByTheMachine(t *testing.T, f *fleet.Fleet, stdout string, extra harness.Extra) {
+	t.Helper()
+	ip := extra.PublicIP
+	if !strings.Contains(stdout, "["+ip+"] release running: downloading") || !strings.Contains(stdout, "["+ip+"] release done") {
+		t.Errorf("%s did not download and stage the release:\n%s", ip, stdout)
+	}
+	if strings.Contains(stdout, "["+ip+"] release running: uploading") {
+		t.Errorf("the release was uploaded to %s from this computer, not downloaded by the machine:\n%s", ip, stdout)
+	}
+	if out := f.Exec(t, extra.Node, "ls -d /tmp/orama-archive.* 2>/dev/null | wc -l"); strings.TrimSpace(out.Stdout) != "0" {
+		t.Errorf("the archive directory of the download is still on %s:\n%s", ip, out.Stdout)
+	}
+}
+
+// TestSetup_uploadReleaseUploadsFromThisComputer: --upload-release is the way for
+// a machine that cannot reach the release repository. This computer downloads the
+// release and uploads it, and the machine never downloads it.
+func TestSetup_uploadReleaseUploadsFromThisComputer(t *testing.T) {
+	f := harness.Fleet(t)
+	cli := isolatedCLI(t)
+	net := network(t, cli)
+	extra := harness.ExtraNode(t, "join-one-upload", extraLocation)
+	env := net + "-upload"
+
+	args := append(setupArgs(t, net, env, extra), "--cluster-only", "--upload-release")
+	res := infra.RunFor(t, cli, infra.InstallBudget, args...)
+	infra.ExpectExit(t, res, infra.ExitOK, "Done.", "["+extra.PublicIP+"] release running: uploading", "["+extra.PublicIP+"] release done")
+	if strings.Contains(res.Stdout, "release running: downloading") {
+		t.Errorf("a machine downloaded the release although --upload-release was given:\n%s", res.Stdout)
+	}
+	if out := f.Exec(t, extra.Node, "systemctl is-active "+infra.NodeUnit); out.Exit != 0 {
+		t.Errorf("%s is not active after setup:\n%s", infra.NodeUnit, out.Stdout)
+	}
+	requireHealthy(t, cli, env, 1)
 }

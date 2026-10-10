@@ -46,6 +46,8 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-setup: --exit needs a relay (the Tor network file the network pins, or --tor-network) and the warning accepted"
     - "docs/CLI_REFERENCE.md#orama-setup: a network that pins its Tor network file gives every full node a relay, --tor-network gives another file and --no-relay leaves it out (unit-tested in cmd/orama/internal/setup)"
     - "docs/CLI_REFERENCE.md#orama-setup: nothing is installed on any machine until every machine passes"
+    - "docs/CLI_REFERENCE.md#orama-setup: each machine downloads the release from the release repository itself, in parallel, and checks it against the digest of the release metadata verified on the operator's computer; the archive does not pass through it"
+    - "docs/CLI_REFERENCE.md#orama-setup: --upload-release downloads the release on the operator's computer and uploads it to each machine in turn, for machines that cannot reach the release repository (the download failing on a machine is unit-tested in cmd/orama/internal/setup)"
     - "docs/CLI_REFERENCE.md#orama-setup: --create-network makes the machines the bootstrap committee of a new chain, builds its genesis from their keys and writes networks/<name>/ for publishing"
     - "docs/CLI_REFERENCE.md#orama-setup: running a creation again keeps the keys the machines made and the genesis they carry"
     - "docs/CLI_REFERENCE.md#orama-setup: a network announced in the registry supplies its chain id, release repository, channel, seeds, faucet and release root to --create-network, and cannot be joined before it is created"

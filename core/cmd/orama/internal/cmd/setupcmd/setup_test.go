@@ -25,7 +25,7 @@ func resetFlags(t *testing.T) {
 	flags.acmeCA, flags.env, flags.contact, flags.torNetwork = "", "", "", ""
 	flags.ips, flags.hostKeys = nil, nil
 	flags.clusterOnly, flags.exit, flags.yes, flags.password, flags.noValidator = false, false, false, false, false
-	flags.allowQuorumLoss = false
+	flags.allowQuorumLoss, flags.uploadRelease = false, false
 	flags.storageGB, flags.asn = 0, 0
 	flags.create = createFlags{}
 	Cmd.Flags().VisitAll(func(f *pflag.Flag) { f.Changed = false })
@@ -78,6 +78,18 @@ func TestOptionsFromFlags(t *testing.T) {
 	}
 	if opts.ASNSet {
 		t.Error("--asn was not given")
+	}
+	if opts.UploadRelease {
+		t.Error("machines download the release themselves unless --upload-release is given")
+	}
+}
+
+func TestOptionsFromFlags_uploadReleaseIsAnExplicitChoice(t *testing.T) {
+	resetFlags(t)
+	flags.uploadRelease = true
+	opts, err := optionsFromFlags(Cmd, nil)
+	if err != nil || !opts.UploadRelease {
+		t.Fatalf("%+v, %v", opts, err)
 	}
 }
 
@@ -247,7 +259,7 @@ func TestCleanError_keepsTheCodeAndDropsTheEscapes(t *testing.T) {
 
 func TestCmd_isRegisteredWithItsFlags(t *testing.T) {
 	for _, name := range []string{"network", "ip", "name", "cluster-only", "exit", "storage-gb", "yes", "user", "password", "bootstrap-key", "host-key", "domain", "env", "tor-network", "asn", "no-validator", "contact", "acme-ca",
-		"create-network", "chain-id", "release-root", "release-repo", "channel", "min-version", "seed", "publish-dir", "force-new-genesis", "no-faucet"} {
+		"create-network", "chain-id", "release-root", "release-repo", "channel", "min-version", "seed", "publish-dir", "force-new-genesis", "no-faucet", "upload-release"} {
 		if Cmd.Flags().Lookup(name) == nil {
 			t.Errorf("orama setup has no --%s", name)
 		}

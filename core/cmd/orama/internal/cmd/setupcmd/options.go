@@ -27,7 +27,8 @@ func optionsFromFlags(cmd *cobra.Command, args []string) (setup.Options, error) 
 		User: flags.user, UsePassword: flags.password, BootstrapKey: flags.bootstrapKey, HostKeys: hostKeys,
 		Domain: flags.domain, ACMECA: flags.acmeCA, Env: flags.env, Contact: flags.contact,
 		ASN: flags.asn, ASNSet: cmd.Flags().Changed("asn"), TorNetwork: flags.torNetwork, NoRelay: flags.noRelay, NoValidator: flags.noValidator, AllowQuorumLoss: flags.allowQuorumLoss,
-		Create: create,
+		UploadRelease: flags.uploadRelease,
+		Create:        create,
 	}
 	return opts, nil
 }

@@ -23,8 +23,20 @@ type Machine interface {
 	// Probe reads what the machine is and already has.
 	Probe(ctx context.Context) (Facts, error)
 	// StageRelease puts the release on the machine and in place at /opt/orama,
-	// after verifying it again there against the signer it was endorsed by.
+	// after verifying it again there against the signer it was endorsed by. It is
+	// the upload path (--upload-release): the archive comes from this computer.
 	StageRelease(ctx context.Context, rel *Release) error
+	// FetchRelease has the machine download the release from the repository and
+	// check the file against the length and SHA-256 of the signed targets. It
+	// returns what the machine holds: where, the digest it computed and the
+	// archive's manifest. Nothing is put in place yet.
+	FetchRelease(ctx context.Context, ref *ReleaseRef) (*FetchedRelease, error)
+	// StageFetched puts a fetched release in place at /opt/orama: the machine
+	// makes the archive the operator endorsed from the one it downloaded, and
+	// verifies that against the signer as StageRelease does.
+	StageFetched(ctx context.Context, f *FetchedRelease, e *Endorsement) error
+	// DiscardFetched removes what FetchRelease left on the machine.
+	DiscardFetched(ctx context.Context, f *FetchedRelease) error
 	// InstallCluster runs `orama node install` for the cluster node.
 	InstallCluster(ctx context.Context, in ClusterInstall) error
 	// MintInvite mints a single-use invite for a new node on this machine, which
@@ -89,9 +101,18 @@ type Release struct {
 	Remove         func() error
 }
 
-// ReleaseSource fetches and verifies the newest release of a network's channel.
+// ReleaseSource finds the newest release of a network's channel, verified
+// against the release root the network pins, and has the operator endorse it.
 type ReleaseSource interface {
+	// Fetch downloads the release here, verifies it and endorses it (the upload
+	// path).
 	Fetch(ctx context.Context, n *netregistry.Network, arch string) (*Release, error)
+	// Resolve verifies the channel's metadata and names the release, without
+	// downloading the archive.
+	Resolve(ctx context.Context, n *netregistry.Network, arch string) (*ReleaseRef, error)
+	// Endorse has the operator's RootWallet sign the manifest of the release ref
+	// names, as a machine that downloaded it reports it.
+	Endorse(ctx context.Context, ref *ReleaseRef, manifest []byte) (*Endorsement, error)
 }
 
 // NetworkSource resolves --network to a verified network and its genesis.

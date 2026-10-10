@@ -316,7 +316,7 @@ func TestRun_hardwareRefusedBeforeAnyMachineIsChanged(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), ip2) || !strings.Contains(err.Error(), "8.0 GiB") || !strings.Contains(err.Error(), "--cluster-only") {
 		t.Fatalf("got %v, want the small machine named with its floor and the way out", err)
 	}
-	for _, changed := range []string{"stage ", "cluster ", "fetch release"} {
+	for _, changed := range []string{"stage ", "cluster ", "resolve release", "download "} {
 		if h.w.index(changed) >= 0 {
 			t.Errorf("%q ran although a machine was refused", changed)
 		}
@@ -339,7 +339,7 @@ func TestRun_alreadyInstalledMachinesAreSkipped(t *testing.T) {
 		Bindings: append(hotOnly(), clusterreg.NodeBinding{Service: clusterreg.ConsensusService, KeyType: "ed25519", Pubkey: fakeConsensusPub(ip1)}),
 	}
 	res := mustRun(t, h, h.opts(ip1))
-	for _, forbidden := range []string{"stage ", "cluster ", "global ", "restart ", "fetch release", "trust point", "tx "} {
+	for _, forbidden := range []string{"stage ", "cluster ", "global ", "restart ", "resolve release", "download ", "trust point", "tx "} {
 		if h.w.index(forbidden) >= 0 {
 			t.Errorf("a finished machine was given %q again:\n%s", forbidden, strings.Join(h.w.entries(), "\n"))
 		}
@@ -739,7 +739,7 @@ func TestInspect_reportsEachMachineAndChangesNothing(t *testing.T) {
 	if got[3].Err == nil || !strings.Contains(got[3].Summary(), "cannot reach it") {
 		t.Errorf("the unreachable machine: %s", got[3].Summary())
 	}
-	for _, changed := range []string{"stage ", "cluster ", "global ", "tx ", "fetch release"} {
+	for _, changed := range []string{"stage ", "cluster ", "global ", "tx ", "resolve release", "download "} {
 		if h.w.index(changed) >= 0 {
 			t.Errorf("an inspection did %q", changed)
 		}

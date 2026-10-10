@@ -185,11 +185,8 @@ func (r Repository) getMetadata(ctx context.Context, name string) ([]byte, error
 // repository cannot make the client store more. Whether the bytes are the
 // target is for CheckFile to say.
 func (r Repository) FetchTarget(ctx context.Context, t Target, dst *os.File) error {
-	if t.Length < 0 || t.Length > maxTargetBytes {
-		return fmt.Errorf("target %s is %d bytes, outside what a release archive may be", t.Path, t.Length)
-	}
-	if path.Clean(t.Path) != t.Path || path.IsAbs(t.Path) || strings.HasPrefix(t.Path, "../") {
-		return fmt.Errorf("target path %q is not a plain relative path", t.Path)
+	if err := checkTarget(t); err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, targetTimeout)
 	defer cancel()
@@ -204,6 +201,32 @@ func (r Repository) FetchTarget(ctx context.Context, t Target, dst *os.File) err
 	}
 	if n != t.Length {
 		return fmt.Errorf("%w: %s is %d bytes, the metadata says %d", ErrTargetHash, t.Path, n, t.Length)
+	}
+	return nil
+}
+
+// TargetURL is where the repository serves t, for a client that downloads the
+// target itself and checks the file against t's length and hashes. The path of
+// the URL is the target's name below the repository's targets directory.
+func (r Repository) TargetURL(t Target) (string, error) {
+	if err := checkTarget(t); err != nil {
+		return "", err
+	}
+	base, err := ParseRepositoryURL(r.BaseURL)
+	if err != nil {
+		return "", err
+	}
+	return base.JoinPath(append([]string{targetsDir}, strings.Split(t.Path, "/")...)...).String(), nil
+}
+
+// checkTarget refuses a target that is no archive a repository may serve: one
+// of a size no release has, or a name that is not a plain relative path.
+func checkTarget(t Target) error {
+	if t.Length < 0 || t.Length > maxTargetBytes {
+		return fmt.Errorf("target %s is %d bytes, outside what a release archive may be", t.Path, t.Length)
+	}
+	if path.Clean(t.Path) != t.Path || path.IsAbs(t.Path) || strings.HasPrefix(t.Path, "../") {
+		return fmt.Errorf("target path %q is not a plain relative path", t.Path)
 	}
 	return nil
 }

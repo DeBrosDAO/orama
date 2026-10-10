@@ -37,6 +37,11 @@ relays join; --tor-network gives another, --no-relay leaves the relay out). Then
 chain and creates your validator, signing every transaction with your RootWallet. Nodes are
 restarted one at a time, each waiting until it carries its share of the cluster again.
 
+Each machine downloads the release from the release repository itself, up to eight at a time, and checks the
+file against the length and SHA-256 of the release metadata that setup verified here; the archive does not pass
+through this computer. A machine that cannot reach the repository fails the run; --upload-release downloads the
+archive here and uploads it to each machine over SSH, one after the other, for such machines.
+
 The first machine creates the cluster; the others join it. Running setup again with more
 addresses adds nodes to the same cluster, and a machine that already has a step does not get
 it again, so a run that stopped can be run again as it was.
@@ -94,6 +99,7 @@ var flags struct {
 	network, name, user, bootstrapKey, domain, acmeCA, env, contact, torNetwork string
 	ips, hostKeys                                                               []string
 	clusterOnly, exit, yes, password, noValidator, noRelay, allowQuorumLoss     bool
+	uploadRelease                                                               bool
 	storageGB                                                                   uint64
 	asn                                                                         uint32
 	create                                                                      createFlags
@@ -121,6 +127,7 @@ func init() {
 	f.BoolVar(&flags.noRelay, "no-relay", false, "Run no relay though the network pins a Tor network file")
 	f.BoolVar(&flags.noValidator, "no-validator", false, "Do not create a validator (and do not bond the 1,000 ORAMA self-bond)")
 	f.BoolVar(&flags.allowQuorumLoss, "allow-quorum-loss", false, "Restart a cluster of fewer than three voters with --force when the global layer is installed: the cluster is unavailable while the node restarts (without it, a run with --yes stops there)")
+	f.BoolVar(&flags.uploadRelease, "upload-release", false, "Download the release on this computer and upload it to each machine over SSH, one after the other, instead of each machine downloading it from the release repository (for machines that cannot reach the repository)")
 	flags.create.bind(f)
 }
 

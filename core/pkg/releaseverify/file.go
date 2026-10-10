@@ -71,10 +71,27 @@ type FileCheck struct {
 // that passes is the rollback record raised to the accepted snapshot. The
 // record is locked from its read to its write, so two checks cannot both
 // read the old version and the lower one land last.
-func CheckFile(c FileCheck) (v *Verified, err error) {
+func CheckFile(c FileCheck) (*Verified, error) {
 	if c.File == nil {
 		return nil, fmt.Errorf("no file to check against target %q", c.Target)
 	}
+	return acceptTarget(c, func(t Target) error { return t.MatchOpen(c.File) })
+}
+
+// Accept is CheckFile for a caller that had the file checked somewhere else:
+// the machines of a setup run each download the archive and check it against
+// the length and SHA-256 that Lookup returns, and this machine never holds the
+// file. It verifies the metadata in c.MetadataDir as CheckFile does, requires
+// c.Target to be named in it, and raises the rollback record to the accepted
+// snapshot. It is called only once the file has been checked against that
+// target; c.File is not used.
+func Accept(c FileCheck) (*Verified, error) {
+	return acceptTarget(c, func(Target) error { return nil })
+}
+
+// acceptTarget verifies the metadata, hands the verified c.Target to match,
+// and only when match agrees raises the rollback record.
+func acceptTarget(c FileCheck, match func(Target) error) (v *Verified, err error) {
 	meta, err := readMetadata(c.RootPath, c.MetadataDir)
 	if err != nil {
 		return nil, err
@@ -96,7 +113,7 @@ func CheckFile(c FileCheck) (v *Verified, err error) {
 	if !ok {
 		return nil, fmt.Errorf("targets metadata does not name %q", c.Target)
 	}
-	if err := target.MatchOpen(c.File); err != nil {
+	if err := match(target); err != nil {
 		return nil, err
 	}
 	if verified.SnapshotVersion > seen.SnapshotVersion {
