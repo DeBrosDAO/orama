@@ -77,6 +77,8 @@ func declaredGasLimit(raw []byte) (uint64, error) {
 
 // varintField returns the value of the first varint field num in msg, and whether it is there.
 func varintField(msg []byte, want protowire.Number) (uint64, bool, error) {
+	var last uint64
+	found := false
 	for len(msg) > 0 {
 		num, typ, n := protowire.ConsumeTag(msg)
 		if n < 0 {
@@ -88,7 +90,10 @@ func varintField(msg []byte, want protowire.Number) (uint64, bool, error) {
 			if vn < 0 {
 				return 0, false, protowire.ParseError(vn)
 			}
-			return v, true, nil
+			// Protobuf: a scalar that appears twice takes its last value, as the chain decodes it.
+			last, found = v, true
+			msg = msg[vn:]
+			continue
 		}
 		skip := protowire.ConsumeFieldValue(num, typ, msg)
 		if skip < 0 {
@@ -96,11 +101,13 @@ func varintField(msg []byte, want protowire.Number) (uint64, bool, error) {
 		}
 		msg = msg[skip:]
 	}
-	return 0, false, nil
+	return last, found, nil
 }
 
 // bytesField returns the value of the first length-delimited field num in msg.
 func bytesField(msg []byte, want protowire.Number) ([]byte, bool, error) {
+	var merged []byte
+	found := false
 	for len(msg) > 0 {
 		num, typ, n := protowire.ConsumeTag(msg)
 		if n < 0 {
@@ -112,7 +119,16 @@ func bytesField(msg []byte, want protowire.Number) ([]byte, bool, error) {
 			if vn < 0 {
 				return nil, false, protowire.ParseError(vn)
 			}
-			return v, true, nil
+			// Protobuf: an embedded message that appears twice is merged, and
+			// concatenating the serialized occurrences is that merge.
+			if !found {
+				merged = v
+			} else {
+				merged = append(append([]byte(nil), merged...), v...)
+			}
+			found = true
+			msg = msg[vn:]
+			continue
 		}
 		skip := protowire.ConsumeFieldValue(num, typ, msg)
 		if skip < 0 {
@@ -120,7 +136,7 @@ func bytesField(msg []byte, want protowire.Number) ([]byte, bool, error) {
 		}
 		msg = msg[skip:]
 	}
-	return nil, false, nil
+	return merged, found, nil
 }
 
 // baseFee reads x/fees' base fee, in norama per unit of gas.

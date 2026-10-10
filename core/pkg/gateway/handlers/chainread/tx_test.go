@@ -509,3 +509,33 @@ func TestSanitizeCodespace(t *testing.T) {
 		}
 	}
 }
+
+// A field that appears twice decodes as the chain decodes it: a repeated
+// gas_limit takes its last value, and a repeated fee (or auth_info) message is
+// merged, so a limit in the second copy wins. Taking the first occurrence showed
+// a wallet a limit the chain would not apply.
+func TestDeclaredGasLimit_duplicateFieldsDecodeAsTheChainDoes(t *testing.T) {
+	limit := func(v uint64) []byte {
+		return protowire.AppendVarint(protowire.AppendTag(nil, feeGasLimitField, protowire.VarintType), v)
+	}
+	feeMsg := func(b []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, authInfoFeeField, protowire.BytesType), b)
+	}
+	authInfo := func(b []byte) []byte {
+		return protowire.AppendBytes(protowire.AppendTag(nil, txRawAuthInfoField, protowire.BytesType), b)
+	}
+	for name, tc := range map[string]struct {
+		raw  []byte
+		want uint64
+	}{
+		"gas_limit twice in one fee":     {authInfo(feeMsg(append(limit(100), limit(200)...))), 200},
+		"fee twice, limit in the second": {authInfo(append(feeMsg(limit(100)), feeMsg(limit(300))...)), 300},
+		"fee twice, limit in the first":  {authInfo(append(feeMsg(limit(100)), feeMsg(nil)...)), 100},
+		"auth_info twice":                {append(authInfo(feeMsg(limit(100))), authInfo(feeMsg(limit(400)))...), 400},
+	} {
+		got, err := declaredGasLimit(tc.raw)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: limit %d err %v, want %d", name, got, err, tc.want)
+		}
+	}
+}

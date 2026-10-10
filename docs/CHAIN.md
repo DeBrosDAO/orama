@@ -2511,6 +2511,8 @@ chain does not change, and a larger one is 413). They take no query and any othe
   `{"code":N,"codespace":"…","log":"…","tx_hash":"<64 hex, upper case>"}`. The caller then reads
   `GET /v1/chain/tx?hash=` until the transaction is in a block (404 with `Retry-After` until it is).
 
+**Upgrade order.** A gateway older than this change answers `gas_wanted`/`gas_used` as bare numbers, which the current Go and TypeScript clients refuse (the TS SDK throws `CHAIN_BAD_RESPONSE` rather than round). Upgrade the gateways before shipping a client built on this SDK.
+
 **64-bit integers are decimal strings.** Every 64-bit integer the chain proxy, CometBFT and the module queries answer
 is a JSON string, as proto3 JSON has it: `gas_wanted` and `gas_used` here, and in the module queries every `uint64`/`int64`, `account_number`
 and `sequence` included. The bare numbers in the proxy's own and CometBFT's answers are 32-bit (`code`, a transaction's `index`, a

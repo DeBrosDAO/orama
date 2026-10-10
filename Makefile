@@ -48,7 +48,7 @@ sdk-build:
 # gateway's Go source (the auth error codes), so a gateway change can break them.
 sdk-test:
 	@test -d sdk/node_modules || { echo "sdk/node_modules is missing: run 'cd sdk && pnpm install --frozen-lockfile' first, then make test again"; exit 1; }
-	pnpm --dir sdk test
+	pnpm --dir sdk test:unit
 
 # === Vault (Zig) ===
 .PHONY: vault vault-build vault-test
