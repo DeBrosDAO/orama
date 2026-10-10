@@ -46,6 +46,9 @@ func TestAutoupdate_decisions(t *testing.T) {
 		{"verify beats bad", "1.2.3", "1.2.4", []string{"--bad", "--verify", "hash"}, "refuse: release archive does not match its targets metadata"},
 		{"v prefix and length", "v1.2", "1.2.0.1", []string{"--mode", "auto"}, "upgrade: newer release 1.2.0.1"},
 		{"validator notify", "1.2.3", "1.2.4", []string{"--role", "validator"}, "notify: newer release 1.2.4 (notify)"},
+		// A validator never installs a release by itself: on auto it skips, with the
+		// way to upgrade it, and the rollout counts it as done (docs/DEV_DEPLOY.md, "Auto-update").
+		{"validator auto", "1.2.3", "1.2.4", []string{"--mode", "auto", "--role", "validator"}, "skip: release 1.2.4 is not installed here: this machine is a validator, upgrade it by hand ('orama global stage-oramad')"},
 	}
 	for _, c := range cases {
 		exit, out := autoupdate(t, c.cur, c.cand, c.flags...)
@@ -84,7 +87,7 @@ func TestAutoupdate_windowDecides(t *testing.T) {
 // TestAutoupdate_refusals: every input the decision cannot use is a usage
 // error, never a decision: missing versions, a non-numeric or leading-zero
 // version, an unknown mode, role or TUF failure, a malformed or out-of-range
-// window, and auto for a validator.
+// window. (A validator on auto is a decision, a skip: see the table above.)
 func TestAutoupdate_refusals(t *testing.T) {
 	t.Parallel()
 	cases := [][]string{
@@ -98,7 +101,6 @@ func TestAutoupdate_refusals(t *testing.T) {
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--verify", "maybe"},
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "night"},
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--window", "1-24"},
-		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "1.0.1", "--mode", "auto", "--role", "validator"},
 		{"node", "autoupdate", "--current", "1.0.0", "--candidate", "\u202e1.0.1"},
 	}
 	for _, args := range cases {
