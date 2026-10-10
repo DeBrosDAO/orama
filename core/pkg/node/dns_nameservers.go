@@ -146,7 +146,7 @@ func claimNameserverSlot(ctx context.Context, db *sql.DB, nodeID, domain, ip str
 		}
 	}
 	return "", fmt.Errorf("all %d nameserver slots for %s are held by other nodes; "+
-		"retire a departed nameserver with `orama node remove` to free its slot", maxNameserverSlots, domain)
+		"retire a departed nameserver with `orama remove` to free its slot", maxNameserverSlots, domain)
 }
 
 // refreshHeldSlot keeps a held slot's address and glue on ip. It writes

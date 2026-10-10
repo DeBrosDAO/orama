@@ -20,6 +20,30 @@ type Flags struct {
 	Nuclear bool
 	Force   bool
 	DryRun  bool
+	// Extension adds steps of the caller's to the removal; nil adds none.
+	Extension Extension
+}
+
+// Plan is a removal as far as it is known before anything changes: the node,
+// the survivor that drives the cluster-side removal, and the node's records.
+type Plan struct {
+	Env        string
+	Nodes      []inspector.Node
+	Target     inspector.Node
+	Survivor   inspector.Node
+	Record     clusterops.NodeRecord
+	RaftNodeID string
+}
+
+// Extension is how `orama remove` adds the chain to a removal.
+type Extension interface {
+	// Preflight runs once the quorum arithmetic has passed and before anything
+	// is shown for confirmation, dry run included. It returns the steps it will
+	// add, in words, and refuses the removal by returning an error.
+	Preflight(p *Plan) (steps []string, err error)
+	// Before runs after the operator confirmed and before the cluster changes. An
+	// error stops the removal with nothing changed.
+	Before(p *Plan) error
 }
 
 // Run is the entry point for `orama node remove`.
@@ -114,8 +138,19 @@ func execute(flags *Flags) error {
 		return err
 	}
 
+	plan := &Plan{Env: flags.Env, Nodes: nodes, Target: target, Survivor: survivor, Record: record, RaftNodeID: raftNodeID}
+	var extra []string
+	if flags.Extension != nil {
+		if extra, err = flags.Extension.Preflight(plan); err != nil {
+			return err
+		}
+	}
+
 	if flags.DryRun {
 		fmt.Printf("\n  --dry-run, so nothing was changed. This would run:\n")
+		for _, step := range extra {
+			fmt.Printf("    %s\n", step)
+		}
 		for _, step := range clusterops.RetirementPlan(record) {
 			fmt.Printf("    %s\n      %s\n", step.What, step.SQL)
 		}
@@ -127,7 +162,11 @@ func execute(flags *Flags) error {
 	}
 
 	if !flags.Force {
-		fmt.Printf("\nThis removes %s from raft, the mesh and every namespace it serves", target.Host)
+		fmt.Println()
+		for _, step := range extra {
+			fmt.Printf("  Also: %s\n", step)
+		}
+		fmt.Printf("This removes %s from raft, the mesh and every namespace it serves", target.Host)
 		if !flags.Offline {
 			fmt.Printf(", then ERASES it")
 		}
@@ -137,6 +176,12 @@ func execute(flags *Flags) error {
 			return err
 		}
 		fmt.Println()
+	}
+
+	if flags.Extension != nil {
+		if err := flags.Extension.Before(plan); err != nil {
+			return err
+		}
 	}
 
 	if err := clusterops.RemoveRaftMember(survivor, raftNodeID); err != nil {

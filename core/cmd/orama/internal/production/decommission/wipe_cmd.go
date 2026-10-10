@@ -77,7 +77,7 @@ func executeWipe(flags *WipeFlags) error {
 
 	if flags.Node != "" && len(nodes) == 1 {
 		fmt.Printf("Note: this erases the node but tells the cluster nothing. If it is still a\n")
-		fmt.Printf("      member, use `orama node remove` instead, or the survivors will keep\n")
+		fmt.Printf("      member, use `orama remove` instead, or the survivors will keep\n")
 		fmt.Printf("      counting it toward quorum.\n\n")
 	}
 
