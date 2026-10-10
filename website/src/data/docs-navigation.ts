@@ -72,6 +72,7 @@ export interface DocLink {
 /* One flat, ordered list per section. `group` only labels runs of links. */
 
 export const START_DOCS: DocLink[] = [
+  { title: "Get started", slug: "start/get-started", icon: Rocket, description: "Join the network: wallet, setup, DNS, rewards", group: "Start here" },
   { title: "What is Orama", slug: "start/what-is-orama", icon: BookOpen, description: "What it is, how it is built, what it is not", group: "Start here" },
   { title: "Choose your path", slug: "start/journeys", icon: Compass, description: "Reading orders for developers, operators and more", group: "Start here" },
   { title: "What works today", slug: "start/status", icon: CheckCircle2, description: "Live, partial and not built", group: "Start here" },

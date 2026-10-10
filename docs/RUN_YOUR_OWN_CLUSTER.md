@@ -1,5 +1,7 @@
 # Run your own cluster
 
+> **Reference.** To join the network, start with the Get started page (`website/src/docs/start/get-started.mdx`, published at `/docs/start/get-started`). This page is reference for running your own cluster.
+
 A private Orama cluster is three or more Linux machines that you install with
 `orama node setup`, plus a domain whose nameserver records you can publish.
 The installer refuses a machine that fails the checks in

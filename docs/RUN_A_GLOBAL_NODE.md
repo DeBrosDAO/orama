@@ -1,5 +1,7 @@
 # Run a global node
 
+> **Reference.** To join the network, start with the Get started page (`website/src/docs/start/get-started.mdx`, published at `/docs/start/get-started`). This page is reference for running a global node by hand.
+
 A global node runs the public Orama L1 (`oramad`) and, optionally, the services
 beside it: the storage provider, the history archiver, or the repair delegate.
 It needs no domain, no WireGuard, and no cluster. This guide covers what the
