@@ -3,45 +3,35 @@ package node
 import (
 	"fmt"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/decommission"
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/removenode"
 	"github.com/spf13/cobra"
 )
 
 var (
-	decommissionFlags decommission.Flags
-	wipeFlags         decommission.WipeFlags
+	// removeFlags are the flags of `orama remove`, which this path runs.
+	removeFlags removenode.Options
+	// removeForce is --force, the old name of --yes.
+	removeForce bool
+	wipeFlags   decommission.WipeFlags
 )
 
-// removeReplacedNotice is what the old path says: `orama remove` does the same
-// removal and retires the node on the chain as well.
-const removeReplacedNotice = "Note: `orama node remove` is replaced by `orama remove`, which also retires the node on the chain (--chain-node-id) and refuses to erase a validator."
+// removeReplacedNotice is what the old path says: it runs `orama remove`, which
+// adds the node's chain registration and the refusals a newcomer needs.
+const removeReplacedNotice = "Note: `orama node remove` is replaced by `orama remove` and runs it: it also retires the node on the chain (--chain-node-id) and refuses to erase a validator."
 
 var decommissionCmd = &cobra.Command{
 	Use:    "remove",
 	Short:  "Remove one node from the cluster, then erase it (replaced by orama remove)",
 	Hidden: true,
-	Long: `Retire a node from every store the cluster keeps, then wipe it. This is the
-cluster-side removal behind 'orama remove', which is the command to use: it adds
-the node's chain registration and the refusals a newcomer needs. This path stays
-for scripts and prints a notice.
-
-Runs the cluster-side removal from a SURVIVOR. First it prints what the removal
-costs every raft cluster the node is a voter in — the platform cluster and each
-namespace it serves — and refuses if any of them would lose quorum. Then it
-takes the node out of the raft configuration, writes an eviction tombstone so
-nothing re-adds it automatically, releases its mesh address, nameserver slot,
-namespace memberships, namespace port blocks and its TURN and SFU allocations,
-and marks it retired so the cluster purges its DNS records. Then it wipes the
-target, unless --offline.
-
-Use --offline when the machine is already gone. The cluster-side removal still
-happens; nothing is attempted against the target.
-
-Every step is keyed on the node and safe to repeat, so a removal that failed
-part way through is finished by running it again.
-
-This is a DESTRUCTIVE operation. Use --force to skip confirmation.
+	Long: `The old path of 'orama remove', which is the command to use: this one runs it
+(--force is --yes) and prints a notice. The removal is the same: the quorum
+arithmetic for every raft cluster the node votes in, the tombstone, the
+retirement and the wipe, plus the chain: a node in the validator set is refused
+unless --drop-validator, and a node with the global layer needs --chain-node-id
+or --no-chain. See 'orama remove --help'.
 
 Examples:
   orama node remove --env testnet --node 1.2.3.4 --dry-run   # Show the plan only
@@ -50,7 +40,11 @@ Examples:
   orama node remove --env testnet --node 1.2.3.4 --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(cmd.ErrOrStderr(), removeReplacedNotice)
-		return decommission.Run(&decommissionFlags)
+		if removeFlags.Env == "" {
+			return clierr.Usage("--env is required\nUsage: orama node remove --env <devnet|testnet> --node <ip> [--offline] [--force]")
+		}
+		removeFlags.Yes = removeForce
+		return removenode.Run(cmd.Context(), removeFlags)
 	},
 }
 
@@ -78,12 +72,15 @@ Examples:
 func init() {
 	cmdmeta.MarkListed(decommissionCmd)
 	d := decommissionCmd.Flags()
-	d.StringVar(&decommissionFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
-	d.StringVar(&decommissionFlags.Node, "node", "", "Public IP of the node to remove [required]")
-	d.BoolVar(&decommissionFlags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
-	d.BoolVar(&decommissionFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries and the Tor package")
-	d.BoolVar(&decommissionFlags.Force, "force", false, "Skip confirmation (DESTRUCTIVE)")
-	d.BoolVar(&decommissionFlags.DryRun, "dry-run", false, "Print the quorum impact and the statements, change nothing")
+	d.StringVar(&removeFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")
+	d.StringVar(&removeFlags.Node, "node", "", "Public IP of the node to remove [required]")
+	d.BoolVar(&removeFlags.Offline, "offline", false, "The node is already gone: retire it cluster-side only, do not try to wipe it")
+	d.BoolVar(&removeFlags.Nuclear, "nuclear", false, "When wiping, also remove shared binaries and the Tor package")
+	d.BoolVar(&removeForce, "force", false, "Skip confirmation (DESTRUCTIVE)")
+	d.BoolVar(&removeFlags.DryRun, "dry-run", false, "Print the quorum impact and the statements, change nothing")
+	d.StringVar(&removeFlags.ChainNodeID, "chain-node-id", "", "The node's id in the chain's node registry: retire it there before removing it")
+	d.BoolVar(&removeFlags.NoChain, "no-chain", false, "Leave the node's chain registration alone (its bonds stay locked until you retire it)")
+	d.BoolVar(&removeFlags.DropValidator, "drop-validator", false, "Remove the node although it signs for the validator set; its consensus key is erased with it")
 
 	w := wipeCmd.Flags()
 	w.StringVar(&wipeFlags.Env, "env", "", "Target environment (devnet, testnet) [required]")

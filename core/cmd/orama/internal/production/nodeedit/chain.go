@@ -50,7 +50,7 @@ func (d *declarer) close() {
 // preflight reads the node's record from the chain and refuses a declaration
 // the chain would refuse, before anything is changed. candidates are the nodes
 // whose chain can carry it, the edited node first.
-func (d *declarer) preflight(ctx context.Context, nodeID string, bytes uint64, candidates []inspector.Node) error {
+func (d *declarer) preflight(ctx context.Context, nodeID, host string, bytes uint64, candidates []inspector.Node) error {
 	reach, err := d.runner.Open(ctx, candidates)
 	if err != nil {
 		return clierr.Unavailable("declare the capacity of %s on the chain: %v", nodeID, err)
@@ -66,6 +66,10 @@ func (d *declarer) preflight(ctx context.Context, nodeID string, bytes uint64, c
 		return clierr.Conflict("node %s is already %s on the chain, so it cannot declare capacity", nodeID, node.Status)
 	case node.ReservedBytes > bytes:
 		return clierr.Conflict("deals already reserve %d bytes on node %s; the capacity cannot go below that (asked for %d)", node.ReservedBytes, nodeID, bytes)
+	}
+	if listed, known := node.ListsHost(host); known && !listed {
+		return clierr.Conflict("node %s on the chain is registered with the endpoints %v, and none is %s: --chain-node-id is probably another node's. "+
+			"Check it with 'orama chain node <id>'", nodeID, node.Endpoints, host)
 	}
 	d.node = node
 	return nil

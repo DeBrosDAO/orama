@@ -8,8 +8,14 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/install/installers"
 )
 
-// bytesPerGB is the decimal gigabyte Kubo's StorageMax counts in.
-const bytesPerGB = 1_000_000_000
+const (
+	// bytesPerGB is the decimal gigabyte Kubo's StorageMax counts in.
+	bytesPerGB = 1_000_000_000
+	// maxStorageGB bounds a declared capacity: a petabyte, far above any node and
+	// far below where the byte count overflows. The node-side command holds the
+	// same bound.
+	maxStorageGB = 1_000_000
+)
 
 // Settings are the changes asked for. A nil field is left as it is.
 type Settings struct {
@@ -52,6 +58,9 @@ func BuildPlan(host string, st NodeState, s Settings, chainNodeID string, noChai
 	if s.Empty() {
 		return nil, clierr.Usage("name what to change: --storage-gb, --exit or --global")
 	}
+	if noChain && chainNodeID != "" {
+		return nil, clierr.Usage("--no-chain and --chain-node-id contradict each other: either the capacity is declared on the chain or it is not")
+	}
 	p := &Plan{Host: host}
 	if err := p.planGlobal(st, s); err != nil {
 		return nil, err
@@ -92,8 +101,8 @@ func (p *Plan) planStorage(st NodeState, s Settings, chainNodeID string, noChain
 	switch {
 	case !st.IPFS:
 		return clierr.Conflict("%s has no public storage (its public Kubo is not installed), so there is no storage to resize. Nothing was changed", p.Host)
-	case gb == 0:
-		return clierr.Usage("--storage-gb 0 is not a size: use `orama remove` to stop providing storage")
+	case gb == 0 || gb > maxStorageGB:
+		return clierr.Usage("--storage-gb must be between 1 and %d GB (use `orama remove` to stop providing storage)", maxStorageGB)
 	case chainNodeID == "" && !noChain:
 		return clierr.Usage("the capacity is also declared on the chain, for the node's id there: pass --chain-node-id <id>, or --no-chain to resize the node only")
 	}

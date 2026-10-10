@@ -3,11 +3,14 @@ package globalcmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/pkg/install"
 )
 
@@ -63,6 +66,45 @@ func TestHandleChainBinary_aScheduledUpgradeThatCannotBeStagedIsAnError(t *testi
 	}
 	if strings.Contains(out.String(), "staged") {
 		t.Errorf("output claims a stage that failed:\n%s", out.String())
+	}
+}
+
+func planWithChecksum(sum string) string {
+	info := `{"binaries":{"` + runtime.GOOS + `/` + runtime.GOARCH + `":"https://x.example/oramad?checksum=sha256:` + sum + `"}}`
+	body, _ := json.Marshal(map[string]any{"plan": map[string]string{"name": "v0-4-0", "info": info}})
+	return string(body)
+}
+
+func TestHandleChainBinary_aPlanThatNamesAnotherBinaryIsNotStaged(t *testing.T) {
+	srv := chainServer(t, planWithChecksum(strings.Repeat("c", 64)), http.StatusOK)
+	var out bytes.Buffer
+
+	err := handleChainBinary(context.Background(), &out, install.GlobalHost{}, install.RefreshOptions{Manifest: "/nonexistent/manifest.json"}, newOramad, srv.URL)
+
+	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "not the one the proposal was for") {
+		t.Fatalf("err = %v, want a refusal before anything is staged (a staging attempt would have failed on the missing manifest instead)", err)
+	}
+}
+
+func TestHandleChainBinary_aPlanThatNamesThisBinaryIsStaged(t *testing.T) {
+	srv := chainServer(t, planWithChecksum(newOramad.ReleaseSHA256), http.StatusOK)
+	var out bytes.Buffer
+
+	err := handleChainBinary(context.Background(), &out, install.GlobalHost{}, install.RefreshOptions{Manifest: "/nonexistent/manifest.json"}, newOramad, srv.URL)
+
+	if err == nil || !strings.Contains(err.Error(), "release manifest") {
+		t.Fatalf("err = %v, want staging attempted (and failing on the missing manifest)", err)
+	}
+}
+
+func TestHandleChainBinary_aPlanThatNamesNoChecksumSaysTheBinaryWasNotCheckedAgainstIt(t *testing.T) {
+	srv := chainServer(t, `{"plan":{"name":"v0-4-0","info":"upgrade to 0.4.0"}}`, http.StatusOK)
+	var out bytes.Buffer
+
+	_ = handleChainBinary(context.Background(), &out, install.GlobalHost{}, install.RefreshOptions{Manifest: "/nonexistent/manifest.json"}, newOramad, srv.URL)
+
+	if !strings.Contains(out.String(), "names no checksum") {
+		t.Errorf("output does not say the release's oramad was not checked against the plan:\n%s", out.String())
 	}
 }
 

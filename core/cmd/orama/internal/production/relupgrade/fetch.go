@@ -19,7 +19,9 @@ var archByMachine = map[string]string{
 
 // releaseSet is the verified releases fetched for one upgrade, by architecture.
 type releaseSet struct {
-	byArch  map[string]*releasefetch.Release
+	byArch map[string]*releasefetch.Release
+	// archOf is each planned node's architecture, read once.
+	archOf  map[string]string
 	version string
 }
 
@@ -33,7 +35,7 @@ func (s *releaseSet) remove() {
 // fetchReleases fetches the channel's newest release for each architecture the
 // planned nodes run, and requires them to be one version.
 func (r *runner) fetchReleases(ctx context.Context, steps []rollout.Step, out io.Writer) (*releaseSet, error) {
-	set := &releaseSet{byArch: map[string]*releasefetch.Release{}}
+	set := &releaseSet{byArch: map[string]*releasefetch.Release{}, archOf: map[string]string{}}
 	for _, step := range steps {
 		machine, err := r.seams.arch(step.Node)
 		if err != nil {
@@ -43,6 +45,7 @@ func (r *runner) fetchReleases(ctx context.Context, steps []rollout.Step, out io
 		if !ok {
 			return nil, set.fail(clierr.Failure("%s reports the machine type %q; releases are built for amd64 and arm64", step.Node.Host, strings.TrimSpace(machine)))
 		}
+		set.archOf[step.Node.Host] = arch
 		if _, done := set.byArch[arch]; done {
 			continue
 		}

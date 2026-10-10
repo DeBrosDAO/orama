@@ -2111,7 +2111,14 @@ oramad changes only through a governed upgrade. When the release carries an oram
 other than the one cosmovisor runs, the refresh reads the chain's scheduled
 upgrade plan: with one, it stages the release's oramad and shielded verifier for
 that plan, and cosmovisor switches to them at the plan's height; without one, it
-keeps the running oramad and says so.
+keeps the running oramad and says so. When the plan's info names a checksum for
+this platform's binary, the release's oramad has to be that one or it is not
+staged.
+
+A service is restarted when its running process executes a file that has been
+replaced (/proc/<pid>/exe is "(deleted)"), not because of what this run replaced:
+a refresh that was interrupted is finished by running it again. A service that is
+not running is not started by it.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -4292,27 +4299,12 @@ Remove one node from the cluster, then erase it (replaced by orama remove)
 orama node remove [flags]
 ```
 
-Retire a node from every store the cluster keeps, then wipe it. This is the
-cluster-side removal behind 'orama remove', which is the command to use: it adds
-the node's chain registration and the refusals a newcomer needs. This path stays
-for scripts and prints a notice.
-
-Runs the cluster-side removal from a SURVIVOR. First it prints what the removal
-costs every raft cluster the node is a voter in — the platform cluster and each
-namespace it serves — and refuses if any of them would lose quorum. Then it
-takes the node out of the raft configuration, writes an eviction tombstone so
-nothing re-adds it automatically, releases its mesh address, nameserver slot,
-namespace memberships, namespace port blocks and its TURN and SFU allocations,
-and marks it retired so the cluster purges its DNS records. Then it wipes the
-target, unless --offline.
-
-Use --offline when the machine is already gone. The cluster-side removal still
-happens; nothing is attempted against the target.
-
-Every step is keyed on the node and safe to repeat, so a removal that failed
-part way through is finished by running it again.
-
-This is a DESTRUCTIVE operation. Use --force to skip confirmation.
+The old path of 'orama remove', which is the command to use: this one runs it
+(--force is --yes) and prints a notice. The removal is the same: the quorum
+arithmetic for every raft cluster the node votes in, the tombstone, the
+retirement and the wipe, plus the chain: a node in the validator set is refused
+unless --drop-validator, and a node with the global layer needs --chain-node-id
+or --no-chain. See 'orama remove --help'.
 
 Examples:
   orama node remove --env testnet --node 1.2.3.4 --dry-run   # Show the plan only
@@ -4322,9 +4314,12 @@ Examples:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--chain-node-id` | — | The node's id in the chain's node registry: retire it there before removing it |
+| `--drop-validator` | `false` | Remove the node although it signs for the validator set; its consensus key is erased with it |
 | `--dry-run` | `false` | Print the quorum impact and the statements, change nothing |
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
+| `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
 | `--node` | — | Public IP of the node to remove [required] |
 | `--nuclear` | `false` | When wiping, also remove shared binaries and the Tor package |
 | `--offline` | `false` | The node is already gone: retire it cluster-side only, do not try to wipe it |
@@ -4617,7 +4612,9 @@ namespace memberships, port blocks and TURN and SFU allocations are released, it
 records are purged, and the machine is wiped.
 
 Use --offline when the machine is already gone: the removal is done from the
-survivors and nothing is attempted on the target. Every step is keyed on the node and
+survivors and nothing is attempted on the target. It cannot be asked whether it
+was registered on the chain, so its registration is left alone and the plan says
+so; --chain-node-id retires it through a surviving node. Every step is keyed on the node and
 safe to repeat, so a removal that failed part way is finished by running it again.
 
 --dry-run prints the quorum arithmetic and every step, changing nothing. This is
@@ -4627,7 +4624,7 @@ Examples:
   orama remove --node 203.0.113.9 --dry-run
   orama remove --node 203.0.113.9
   orama remove --node 203.0.113.9 --chain-node-id node-9
-  orama remove --node 203.0.113.9 --offline --no-chain
+  orama remove --node 203.0.113.9 --offline
 
 | Flag | Default | Description |
 |------|---------|-------------|

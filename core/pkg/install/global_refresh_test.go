@@ -1,9 +1,13 @@
 package install
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,7 +38,19 @@ func installedFixture(t *testing.T) *globalFixture {
 }
 
 func (f *globalFixture) refreshOptions(services ...GlobalService) RefreshOptions {
-	return RefreshOptions{Installed: services, StagedDir: f.staged, Manifest: f.manifest}
+	return RefreshOptions{Installed: services, StagedDir: f.staged, Manifest: f.manifest, Stale: staleNone}
+}
+
+// staleNone says no running process executes a replaced file.
+func staleNone(string) (bool, error) { return false, nil }
+
+// staleUnits says the named units run a replaced file, and records every unit it
+// was asked about.
+func staleUnits(asked *[]string, units ...string) func(string) (bool, error) {
+	return func(unit string) (bool, error) {
+		*asked = append(*asked, unit)
+		return slices.Contains(units, unit), nil
+	}
 }
 
 var allInstalled = []GlobalService{GlobalServiceChain, GlobalServiceIPFS, GlobalServiceProvider, GlobalServiceArchiver}
@@ -42,8 +58,11 @@ var allInstalled = []GlobalService{GlobalServiceChain, GlobalServiceIPFS, Global
 func TestRefreshGlobal_replacesOnlyWhatTheReleaseChangedAndRestartsOnlyWhoRunsIt(t *testing.T) {
 	f := installedFixture(t)
 	f.restage(t, "orama-global", "binary orama-global v2")
+	var asked []string
+	opts := f.refreshOptions(allInstalled...)
+	opts.Stale = staleUnits(&asked, constants.GlobalProviderUnit, constants.GlobalArchiverUnit)
 
-	res, err := RefreshGlobal(f.host, f.refreshOptions(allInstalled...))
+	res, err := RefreshGlobal(f.host, opts)
 	if err != nil {
 		t.Fatalf("RefreshGlobal: %v", err)
 	}
@@ -57,6 +76,11 @@ func TestRefreshGlobal_replacesOnlyWhatTheReleaseChangedAndRestartsOnlyWhoRunsIt
 	got, err := os.ReadFile(filepath.Join(f.host.BinDir, "orama-global"))
 	if err != nil || string(got) != "binary orama-global v2" {
 		t.Errorf("installed orama-global = %q, %v", got, err)
+	}
+	for _, unit := range asked {
+		if unit == constants.ChainServiceUnit {
+			t.Error("the chain was looked at for a restart: it runs oramad from the cosmovisor layout and is never restarted by a refresh")
+		}
 	}
 }
 
@@ -77,8 +101,11 @@ func TestRefreshGlobal_aChangedCLIRestartsNeitherTheChainNorKubo(t *testing.T) {
 func TestRefreshGlobal_aChangedKuboRestartsTheKuboUnit(t *testing.T) {
 	f := installedFixture(t)
 	f.restage(t, "ipfs", "binary ipfs v2")
+	var asked []string
+	opts := f.refreshOptions(allInstalled...)
+	opts.Stale = staleUnits(&asked, constants.GlobalIPFSUnit)
 
-	res, err := RefreshGlobal(f.host, f.refreshOptions(allInstalled...))
+	res, err := RefreshGlobal(f.host, opts)
 	if err != nil {
 		t.Fatalf("RefreshGlobal: %v", err)
 	}
@@ -104,10 +131,13 @@ func TestRefreshGlobal_sameReleaseChangesNothing(t *testing.T) {
 	}
 }
 
-func TestRefreshGlobal_aBinaryNotInTheManifestIsRefusedAndNothingIsReplaced(t *testing.T) {
+func TestRefreshGlobal_aBinaryNotInTheManifestIsRefusedBeforeAnythingIsReplaced(t *testing.T) {
 	f := installedFixture(t)
-	f.restage(t, "orama-global", "binary orama-global v2")
-	if err := os.WriteFile(filepath.Join(f.staged, "orama"), []byte("tampered after the manifest"), 0o700); err != nil {
+	f.restage(t, "ipfs", "binary ipfs v2")
+	f.restage(t, "orama", "binary orama v2")
+	// orama-global sorts after both: a refresh that wrote as it went would have
+	// replaced ipfs and orama by the time it reached this one.
+	if err := os.WriteFile(filepath.Join(f.staged, "orama-global"), []byte("tampered after the manifest"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,9 +146,115 @@ func TestRefreshGlobal_aBinaryNotInTheManifestIsRefusedAndNothingIsReplaced(t *t
 	if err == nil || !strings.Contains(err.Error(), "not the file the release shipped") {
 		t.Fatalf("err = %v, want the tampered binary refused", err)
 	}
-	got, _ := os.ReadFile(filepath.Join(f.host.BinDir, "orama"))
-	if string(got) != "binary orama" {
-		t.Errorf("installed orama = %q: a binary that is not the release's was installed", got)
+	for name, want := range map[string]string{"ipfs": "binary ipfs", "orama": "binary orama", "orama-global": "binary orama-global"} {
+		if got, _ := os.ReadFile(filepath.Join(f.host.BinDir, name)); string(got) != want {
+			t.Errorf("installed %s = %q, want it untouched (%q) after a refusal", name, got, want)
+		}
+	}
+}
+
+func TestRefreshGlobal_aServiceStillRunningAReplacedFileIsRestartedEvenWhenNothingIsReplacedNow(t *testing.T) {
+	f := installedFixture(t)
+	var asked []string
+	opts := f.refreshOptions(allInstalled...)
+	opts.Stale = staleUnits(&asked, constants.GlobalProviderUnit)
+
+	res, err := RefreshGlobal(f.host, opts)
+	if err != nil {
+		t.Fatalf("RefreshGlobal: %v", err)
+	}
+
+	if len(res.Replaced) != 0 || !slices.Equal(res.Restart, []GlobalService{GlobalServiceProvider}) {
+		t.Errorf("replaced %v, restart %v: a refresh interrupted after it replaced a binary must still restart the service that runs it the next time", res.Replaced, res.Restart)
+	}
+}
+
+func TestRefreshGlobal_aServiceThatIsNotRunningIsNotStarted(t *testing.T) {
+	f := installedFixture(t)
+	f.restage(t, "orama-global", "binary orama-global v2")
+
+	res, err := RefreshGlobal(f.host, f.refreshOptions(allInstalled...))
+	if err != nil {
+		t.Fatalf("RefreshGlobal: %v", err)
+	}
+
+	if len(res.Restart) != 0 {
+		t.Errorf("restart %v: a service an operator stopped starts on the new file when they start it, not because of a refresh", res.Restart)
+	}
+}
+
+func TestRefreshGlobal_aFailedProcessCheckIsAnError(t *testing.T) {
+	f := installedFixture(t)
+	opts := f.refreshOptions(allInstalled...)
+	opts.Stale = func(string) (bool, error) { return false, errors.New("systemctl unavailable") }
+
+	if _, err := RefreshGlobal(f.host, opts); err == nil || !strings.Contains(err.Error(), "systemctl unavailable") {
+		t.Fatalf("err = %v, want the failed check reported, not read as a service that needs no restart", err)
+	}
+}
+
+func fakeRun(answer string, err error) commandRunner {
+	return func(string, ...string) ([]byte, error) { return []byte(answer), err }
+}
+
+func TestRunningStale_aUnitThatIsNotRunningIsNotStale(t *testing.T) {
+	if stale, err := RunningStale(fakeRun("0\n", nil), "x.service"); err != nil || stale {
+		t.Fatalf("stale = %v, err = %v", stale, err)
+	}
+}
+
+func TestRunningStale_aProcessOnItsOwnFileIsNotStale(t *testing.T) {
+	if stale, err := RunningStale(fakeRun(strconv.Itoa(os.Getpid())+"\n", nil), "x.service"); err != nil || stale {
+		t.Fatalf("stale = %v, err = %v: this test's own executable has not been replaced", stale, err)
+	}
+}
+
+func TestRunningStale_aReplacedExecutableIsStale(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("/proc/<pid>/exe names a replaced file only on Linux")
+	}
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep binary")
+	}
+	data, err := os.ReadFile(sleep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "svc")
+	if err := os.WriteFile(copyPath, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(copyPath, "30")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot run a copy of sleep: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	if err := os.Rename(copyPath, copyPath+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copyPath, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(copyPath + ".old"); err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := RunningStale(fakeRun(strconv.Itoa(cmd.Process.Pid)+"\n", nil), "x.service")
+
+	if err != nil || !stale {
+		t.Fatalf("stale = %v, err = %v: the process runs a file that no longer exists", stale, err)
+	}
+}
+
+func TestRunningStale_badAnswersAreErrors(t *testing.T) {
+	if _, err := RunningStale(fakeRun("", errors.New("no systemctl")), "x.service"); err == nil {
+		t.Error("a failed systemctl was read as not stale")
+	}
+	for _, out := range []string{"", "abc\n", "-3\n"} {
+		if _, err := RunningStale(fakeRun(out, nil), "x.service"); err == nil {
+			t.Errorf("main pid %q was accepted", out)
+		}
 	}
 }
 

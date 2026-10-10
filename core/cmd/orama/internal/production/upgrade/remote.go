@@ -1,7 +1,6 @@
 package upgrade
 
 import (
-	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,6 +23,11 @@ type RemoteUpgrader struct {
 	// before the gate that waits for it to rejoin. `orama upgrade` uses it for
 	// the co-located global layer.
 	AfterUpgrade func(node inspector.Node) error
+
+	// step upgrades one node and gate waits for it to carry its share again;
+	// nil is the real thing (upgradeNode, rollout.WaitReady). A test replaces them.
+	step func(node inspector.Node) error
+	gate func(node inspector.Node, budget time.Duration) error
 }
 
 // NewRemoteUpgrader creates a new remote upgrader.
@@ -98,7 +102,7 @@ func (r *RemoteUpgrader) Roll(plan *rollout.Plan) error {
 		fmt.Printf("[%d/%d] Upgrading %s (%s, %s)...\n",
 			i+1, len(plan.Steps), step.Node.Host, step.Node.Role, step.Role)
 
-		if err := r.upgradeNode(step.Node); err != nil {
+		if err := r.upgradeStep(step.Node); err != nil {
 			return fmt.Errorf("upgrade failed on %s: %w\nStopping rollout — %d node(s) not upgraded",
 				step.Node.Host, err, len(plan.Steps)-i-1)
 		}
@@ -117,7 +121,7 @@ func (r *RemoteUpgrader) Roll(plan *rollout.Plan) error {
 		// is how a rolling upgrade takes out a quorum.
 		if i < len(plan.Steps)-1 {
 			fmt.Printf("  Waiting for %s to rejoin the cluster...\n", step.Node.Host)
-			if err := rollout.WaitReady(step.Node, rollout.DefaultRunner, r.gateBudget()); err != nil {
+			if err := r.waitGate(step.Node); err != nil {
 				return fmt.Errorf("%w\nStopping rollout — %d node(s) not upgraded. "+
 					"The cluster still has its remaining voters; fix this node before continuing",
 					err, len(plan.Steps)-i-1)
@@ -161,6 +165,22 @@ func (r *RemoteUpgrader) gateBudget() time.Duration {
 		return time.Duration(r.flags.Delay) * time.Second
 	}
 	return rollout.GateBudget
+}
+
+// upgradeStep upgrades one node: the real upgrade unless a test replaced it.
+func (r *RemoteUpgrader) upgradeStep(node inspector.Node) error {
+	if r.step != nil {
+		return r.step(node)
+	}
+	return r.upgradeNode(node)
+}
+
+// waitGate waits for the node to rejoin within the gate budget.
+func (r *RemoteUpgrader) waitGate(node inspector.Node) error {
+	if r.gate != nil {
+		return r.gate(node, r.gateBudget())
+	}
+	return rollout.WaitReady(node, rollout.DefaultRunner, r.gateBudget())
 }
 
 // upgradeNode runs the upgrade on a single remote node.
@@ -211,10 +231,7 @@ func upgradeCommand(sudo string, flags *Flags) string {
 // root, behind the guard above: only a build that a push or a release stage
 // verified, in a tree only root can change, is run.
 func StagedCLICommand(sudo, args string) string {
-	script := upgradeScript(nodeStagedPaths, args)
-	// The shell has to decode it. Piping the encoded text to bash runs the
-	// base64 itself as a command, and the node never starts the upgrade.
-	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | base64 -d | " + sudo + "bash -s"
+	return remotessh.ScriptCommand(sudo, upgradeScript(nodeStagedPaths, args))
 }
 
 // upgradeArgs are the arguments after the CLI.

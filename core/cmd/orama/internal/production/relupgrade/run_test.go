@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func testTarget() Target {
 
 // fleet is a fake cluster and the log of what was done to it.
 type fleet struct {
+	mu       sync.Mutex // the staging runs in goroutines
 	nodes    []inspector.Node
 	roles    map[string]rollout.RaftRole
 	versions map[string]NodeState
@@ -110,6 +112,8 @@ func (f *fleet) runner(opts Options) (*runner, *bytes.Buffer) {
 			},
 			states: func(context.Context, string, bool) (map[string]NodeState, error) { return f.versions, f.statesErr },
 			stage: func(n inspector.Node, _ push.ReleaseFiles) (string, error) {
+				f.mu.Lock()
+				defer f.mu.Unlock()
 				f.events = append(f.events, "stage "+n.Host)
 				f.staged = append(f.staged, n.Host)
 				return "", f.stageErr[n.Host]

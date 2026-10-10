@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/chainread"
 )
@@ -27,6 +28,27 @@ type ChainNode struct {
 	// DeclaredBytes and ReservedBytes are the storage capacity the node declared
 	// and the part deals have reserved.
 	DeclaredBytes, ReservedBytes uint64
+	// Endpoints are the public addresses the node registered.
+	Endpoints []string
+}
+
+// endpointSeparators split an endpoint into the host and the rest: a port, a
+// scheme, a path, an address in brackets.
+const endpointSeparators = "/:@[] "
+
+// ListsHost reports whether one of the node's registered endpoints is host, and
+// whether the node registered any endpoint at all. A node with none cannot be
+// matched to a machine by its record.
+func (n ChainNode) ListsHost(host string) (listed, known bool) {
+	for _, ep := range n.Endpoints {
+		known = true
+		for _, tok := range strings.FieldsFunc(ep, func(r rune) bool { return strings.ContainsRune(endpointSeparators, r) }) {
+			if strings.EqualFold(tok, host) {
+				return true, true
+			}
+		}
+	}
+	return false, known
 }
 
 // Gone reports whether the node has left the chain for good.
@@ -54,11 +76,12 @@ func (r *Reach) ChainNode(ctx context.Context, id string) (*ChainNode, error) {
 func parseChainNode(raw json.RawMessage) (*ChainNode, error) {
 	var resp struct {
 		Node struct {
-			NodeID        string `json:"node_id"`
-			Operator      string `json:"operator"`
-			Status        string `json:"status"`
-			DeclaredBytes string `json:"declared_capacity_bytes"`
-			ReservedBytes string `json:"reserved_capacity_bytes"`
+			NodeID        string   `json:"node_id"`
+			Operator      string   `json:"operator"`
+			Status        string   `json:"status"`
+			DeclaredBytes string   `json:"declared_capacity_bytes"`
+			ReservedBytes string   `json:"reserved_capacity_bytes"`
+			Endpoints     []string `json:"endpoints"`
 		} `json:"node"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -74,7 +97,7 @@ func parseChainNode(raw json.RawMessage) (*ChainNode, error) {
 	}
 	return &ChainNode{
 		ID: resp.Node.NodeID, Operator: resp.Node.Operator, Status: resp.Node.Status,
-		DeclaredBytes: declared, ReservedBytes: reserved,
+		DeclaredBytes: declared, ReservedBytes: reserved, Endpoints: resp.Node.Endpoints,
 	}, nil
 }
 

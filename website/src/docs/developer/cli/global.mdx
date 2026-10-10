@@ -489,7 +489,14 @@ oramad changes only through a governed upgrade. When the release carries an oram
 other than the one cosmovisor runs, the refresh reads the chain's scheduled
 upgrade plan: with one, it stages the release's oramad and shielded verifier for
 that plan, and cosmovisor switches to them at the plan's height; without one, it
-keeps the running oramad and says so.
+keeps the running oramad and says so. When the plan's info names a checksum for
+this platform's binary, the release's oramad has to be that one or it is not
+staged.
+
+A service is restarted when its running process executes a file that has been
+replaced (/proc/&lt;pid>/exe is "(deleted)"), not because of what this run replaced:
+a refresh that was interrupted is finished by running it again. A service that is
+not running is not started by it.
 
 | Flag | Default | Description |
 |------|---------|-------------|

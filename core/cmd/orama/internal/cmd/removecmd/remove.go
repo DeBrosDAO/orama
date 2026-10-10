@@ -40,7 +40,9 @@ namespace memberships, port blocks and TURN and SFU allocations are released, it
 records are purged, and the machine is wiped.
 
 Use --offline when the machine is already gone: the removal is done from the
-survivors and nothing is attempted on the target. Every step is keyed on the node and
+survivors and nothing is attempted on the target. It cannot be asked whether it
+was registered on the chain, so its registration is left alone and the plan says
+so; --chain-node-id retires it through a surviving node. Every step is keyed on the node and
 safe to repeat, so a removal that failed part way is finished by running it again.
 
 --dry-run prints the quorum arithmetic and every step, changing nothing. This is
@@ -50,7 +52,7 @@ Examples:
   orama remove --node 203.0.113.9 --dry-run
   orama remove --node 203.0.113.9
   orama remove --node 203.0.113.9 --chain-node-id node-9
-  orama remove --node 203.0.113.9 --offline --no-chain`,
+  orama remove --node 203.0.113.9 --offline`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return removenode.Run(cmd.Context(), opts)

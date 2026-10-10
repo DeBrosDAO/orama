@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
@@ -48,7 +49,14 @@ oramad changes only through a governed upgrade. When the release carries an oram
 other than the one cosmovisor runs, the refresh reads the chain's scheduled
 upgrade plan: with one, it stages the release's oramad and shielded verifier for
 that plan, and cosmovisor switches to them at the plan's height; without one, it
-keeps the running oramad and says so.`,
+keeps the running oramad and says so. When the plan's info names a checksum for
+this platform's binary, the release's oramad has to be that one or it is not
+staged.
+
+A service is restarted when its running process executes a file that has been
+replaced (/proc/<pid>/exe is "(deleted)"), not because of what this run replaced:
+a refresh that was interrupted is finished by running it again. A service that is
+not running is not started by it.`,
 	Args: cobra.NoArgs,
 	RunE: runRefresh,
 }
@@ -103,18 +111,40 @@ func handleChainBinary(ctx context.Context, out io.Writer, host install.GlobalHo
 		return clierr.Failure("the release carries a different oramad (%s) and the chain's scheduled upgrade could not be read, so the chain binary is undecided: %v",
 			short(chain.ReleaseSHA256), err)
 	}
-	if plan == "" {
+	if plan.Name == "" {
 		fmt.Fprintf(out, "  chain: oramad kept. The release carries another one (%s, the chain runs %s), but no governed upgrade is scheduled, "+
 			"and a chain binary changes only at a governed upgrade. When a proposal passes, run 'orama upgrade' again to stage it.\n",
 			short(chain.ReleaseSHA256), short(chain.CurrentSHA256))
 		return nil
 	}
-	dst, err := install.StageChainUpgrade(host, opts, plan)
+	named, err := checkPlanNamesThisBinary(out, plan, chain)
+	if err != nil {
+		return err
+	}
+	dst, err := install.StageChainUpgrade(host, opts, plan.Name)
 	if err != nil {
 		return clierr.Failure("%v", err)
 	}
-	fmt.Fprintf(out, "  chain: the release's oramad staged for the scheduled upgrade %q at %s; cosmovisor switches to it at the plan's height\n", plan, dst)
+	fmt.Fprintf(out, "  chain: the release's oramad staged for the scheduled upgrade %q at %s; cosmovisor switches to it at the plan's height%s\n", plan.Name, dst, named)
 	return nil
+}
+
+// checkPlanNamesThisBinary holds the release's oramad to the checksum the
+// scheduled plan names for this platform, when it names one: a binary the
+// proposal does not name is not staged, because cosmovisor would switch the
+// validator to it at the plan's height. A plan that names none is allowed, and
+// the output says it was not checked.
+func checkPlanNamesThisBinary(out io.Writer, plan globalnode.UpgradePlan, chain install.ChainBinaryState) (note string, err error) {
+	sum, named := plan.BinaryChecksum(runtime.GOOS + "/" + runtime.GOARCH)
+	switch {
+	case !named:
+		fmt.Fprintf(out, "  chain: the scheduled upgrade %q names no checksum for this platform's binary, so the release's oramad (%s) could not be checked against it\n", plan.Name, short(chain.ReleaseSHA256))
+		return "", nil
+	case sum != chain.ReleaseSHA256:
+		return "", clierr.Conflict("the scheduled upgrade %q names an oramad with sha256 %s, but the release carries %s: this release is not the one the proposal was for, so it is not staged",
+			plan.Name, short(sum), short(chain.ReleaseSHA256))
+	}
+	return " (its checksum is the one the plan names)", nil
 }
 
 // short is the first digits of a digest, enough to tell two binaries apart.

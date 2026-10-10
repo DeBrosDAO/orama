@@ -25,7 +25,7 @@ type chainStep struct {
 	opts Options
 
 	runner    chainreach.Runner
-	validator func(ctx context.Context, env, host string) (bool, error)
+	validator func(ctx context.Context, env, host string) (isValidator, known bool, err error)
 	readNode  func(ctx context.Context, r *chainreach.Reach, id string) (*chainreach.ChainNode, error)
 	newClient func(ctx context.Context, r *chainreach.Reach) (txClient, error)
 
@@ -62,11 +62,11 @@ func (s *chainStep) close() {
 // Preflight refuses what must not be removed unattended and returns the chain
 // step, if any.
 func (s *chainStep) Preflight(p *decommission.Plan) ([]string, error) {
-	if err := s.checkValidator(p.Target); err != nil {
-		return nil, err
-	}
 	hasGlobal, err := s.targetHasGlobalLayer(p.Target)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.checkValidator(p.Target, hasGlobal); err != nil {
 		return nil, err
 	}
 	switch {
@@ -79,25 +79,31 @@ func (s *chainStep) Preflight(p *decommission.Plan) ([]string, error) {
 			"  Retire it there too: --chain-node-id <the node's id in x/nodes> (orama chain node <id> shows it)\n"+
 			"  Or leave its registration alone: --no-chain", p.Target.Host)
 	case s.opts.ChainNodeID == "" && s.opts.Offline:
-		return nil, clierr.Usage("%s is gone, so it cannot be asked whether it was registered on the chain.\n"+
-			"  Retire it there too: --chain-node-id <the node's id in x/nodes>\n"+
-			"  Or say it has nothing on the chain: --no-chain", p.Target.Host)
+		return []string{fmt.Sprintf("%s is gone, so it cannot be asked whether it was registered on the chain: its registration, if it has one, is left alone, and "+
+			"'orama global retire' (or --chain-node-id here) retires it", p.Target.Host)}, nil
 	case s.opts.ChainNodeID == "":
 		return nil, nil
 	}
 	return s.planRetire(p)
 }
 
-// checkValidator refuses to erase a node that signs for the validator set.
-func (s *chainStep) checkValidator(target inspector.Node) error {
-	if s.opts.Offline || s.opts.DropValidator {
+// checkValidator refuses to erase a node that signs for the validator set, and
+// one that might: only a node with the chain unit can be a validator, and for
+// that node the cluster's telemetry has to say it is not. A missing report is no
+// answer, because the key it would have named is about to be erased.
+func (s *chainStep) checkValidator(target inspector.Node, hasChain bool) error {
+	if s.opts.Offline || s.opts.DropValidator || !hasChain {
 		return nil
 	}
-	isValidator, err := s.validator(s.ctx, s.env, target.Host)
-	if err != nil {
-		return clierr.Unavailable("could not read whether %s is in the validator set: %v\n  If the machine is gone, pass --offline", target.Host, err)
-	}
-	if isValidator {
+	isValidator, known, err := s.validator(s.ctx, s.env, target.Host)
+	switch {
+	case err != nil:
+		return clierr.Unavailable("could not read whether %s is in the validator set from the cluster's telemetry: %v\n"+
+			"  Sign in with 'orama auth login' and try again; if the machine is gone, pass --offline", target.Host, err)
+	case !known:
+		return clierr.Conflict("%s runs the chain, and the cluster's telemetry has no report from it to say whether it signs for the validator set. "+
+			"Erasing a validator destroys its consensus key and jails it.\n  Wait for the node to report ('orama status'), or pass --drop-validator to remove it anyway", target.Host)
+	case isValidator:
 		return clierr.Conflict("%s signs blocks for the validator set. Erasing it destroys the validator's consensus key and the "+
 			"validator is jailed for the blocks it misses.\n  Move the key to another host first ('orama maint global validator migrate'), "+
 			"or pass --drop-validator to remove it anyway", target.Host)
@@ -140,9 +146,30 @@ func (s *chainStep) planRetire(p *decommission.Plan) ([]string, error) {
 		return nil, clierr.Conflict("node %s still holds %d bytes reserved by storage deals, and the chain refuses to retire it. "+
 			"Let the deals end or be repaired first", node.ID, node.ReservedBytes)
 	}
+	note, err := hostBinding(*node, p.Target.Host)
+	if err != nil {
+		return nil, err
+	}
 	s.node = node
-	return []string{fmt.Sprintf("retire node %s on the chain (MsgRetireNode, signed by your RootWallet, through %s): its service keys are revoked "+
-		"and its bonds start to unbond", node.ID, reach.Node.Host)}, nil
+	return []string{fmt.Sprintf("retire node %s on the chain%s (MsgRetireNode, signed by your RootWallet, through %s): its service keys are revoked "+
+		"and its bonds start to unbond", node.ID, note, reach.Node.Host)}, nil
+}
+
+// hostBinding checks that the node the chain calls id is this machine, from the
+// endpoints it registered: a mistyped id would otherwise retire another of the
+// operator's nodes, which cannot be undone. A node that registered no endpoint
+// cannot be matched, and the plan says so.
+func hostBinding(node chainreach.ChainNode, host string) (note string, err error) {
+	listed, known := node.ListsHost(host)
+	switch {
+	case listed:
+		return " (its registered endpoint is " + host + ")", nil
+	case known:
+		return "", clierr.Conflict("node %s on the chain is registered with the endpoints %v, and none is %s: --chain-node-id is probably another node's. "+
+			"Check it with 'orama chain node <id>'", node.ID, node.Endpoints, host)
+	default:
+		return " (it registered no endpoint, so it could not be matched to " + host + ")", nil
+	}
 }
 
 // chainCandidates are the nodes whose chain can carry the retirement: the

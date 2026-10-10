@@ -1559,7 +1559,7 @@ orama remove --env testnet --node 1.2.3.4 --dry-run
 orama remove --env testnet --node 1.2.3.4 --yes
 
 # The machine is already gone: do the cluster-side removal only.
-orama remove --env testnet --node 1.2.3.4 --offline --no-chain --yes
+orama remove --env testnet --node 1.2.3.4 --offline --yes
 ```
 
 `orama remove` also refuses a node that signs for the validator set (it would

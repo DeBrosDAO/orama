@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/DeBrosOfficial/network/pkg/constants"
 	"github.com/DeBrosOfficial/network/pkg/cosmovisor"
@@ -42,6 +44,9 @@ type RefreshOptions struct {
 	// file the refresh reads is held to the manifest.
 	StagedDir string
 	Manifest  string
+	// Stale reports whether the unit's running process executes a file that has
+	// been replaced since it started. Nil asks the node (RunningStale).
+	Stale func(unit string) (bool, error)
 }
 
 // RefreshResult says what a refresh did and what it left alone.
@@ -49,8 +54,10 @@ type RefreshResult struct {
 	// Replaced are the binaries in the global bin directory whose bytes the
 	// release changed.
 	Replaced []string
-	// Restart are the installed services whose running binary was replaced; they
-	// pick it up when restarted.
+	// Restart are the running services whose process still executes a binary
+	// that has been replaced, whether in this refresh or in an earlier one that
+	// was interrupted; they pick the new file up when restarted. A service that is
+	// not running is left as it is: it starts on the new file.
 	Restart []GlobalService
 	// Chain is set when the chain is installed.
 	Chain *ChainBinaryState
@@ -80,8 +87,19 @@ func RefreshGlobal(h GlobalHost, opts RefreshOptions) (RefreshResult, error) {
 	if err != nil {
 		return RefreshResult{}, err
 	}
+	stale := opts.Stale
+	if stale == nil {
+		stale = func(unit string) (bool, error) { return RunningStale(h.Run, unit) }
+	}
 	for _, s := range opts.Installed {
-		if bin, ok := globalRunsBinary[s]; ok && slices.Contains(res.Replaced, bin) {
+		if _, runs := globalRunsBinary[s]; !runs {
+			continue
+		}
+		old, err := stale(globalServiceSpecs[s].unit)
+		if err != nil {
+			return RefreshResult{}, err
+		}
+		if old {
 			res.Restart = append(res.Restart, s)
 		}
 	}
@@ -91,6 +109,34 @@ func RefreshGlobal(h GlobalHost, opts RefreshOptions) (RefreshResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// RunningStale reports whether the unit's main process executes a file that was
+// replaced after the process started: Linux names such an executable
+// "<path> (deleted)" in /proc/<pid>/exe. A unit that is not running is not stale.
+// The answer comes from the process, not from what this run replaced, so a
+// refresh that was interrupted after replacing a binary still restarts the
+// service that runs it the next time.
+func RunningStale(run commandRunner, unit string) (bool, error) {
+	out, err := run("systemctl", "show", "-p", "MainPID", "--value", unit)
+	if err != nil {
+		return false, fmt.Errorf("systemctl show %s: %w\n%s", unit, err, strings.TrimSpace(string(out)))
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || pid < 0 {
+		return false, fmt.Errorf("systemctl show %s answered the main pid %q", unit, strings.TrimSpace(string(out)))
+	}
+	if pid == 0 {
+		return false, nil
+	}
+	exe, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the executable of %s (pid %d): %w", unit, pid, err)
+	}
+	return strings.HasSuffix(exe, " (deleted)"), nil
 }
 
 // refreshBinaries are the binaries the installed services need, except oramad.
@@ -107,11 +153,20 @@ func refreshBinaries(installed []GlobalService) []string {
 	return names
 }
 
-// replaceChangedBinaries installs each binary whose staged bytes differ from
-// the installed ones, after holding it to the manifest, and returns their names.
+// stagedBinary is a binary of the release, verified, and where it goes.
+type stagedBinary struct {
+	name string
+	data []byte
+	dst  string
+}
+
+// replaceChangedBinaries installs each binary whose staged bytes differ from the
+// installed ones and returns their names. Every binary is read and held to the
+// manifest before the first is written, so a file that is not the release's
+// leaves the installed ones as they were.
 func replaceChangedBinaries(h GlobalHost, opts RefreshOptions, manifest stagedManifest) ([]string, error) {
 	staged := rootfs.At(opts.StagedDir)
-	var changed []string
+	var verified []stagedBinary
 	for _, name := range refreshBinaries(opts.Installed) {
 		data, err := staged.ReadFile(filepath.Join(opts.StagedDir, name), globalBinaryLimit)
 		if err != nil {
@@ -120,22 +175,25 @@ func replaceChangedBinaries(h GlobalHost, opts RefreshOptions, manifest stagedMa
 		if err := manifest.verify(name, data); err != nil {
 			return nil, err
 		}
-		dst := filepath.Join(h.BinDir, name)
-		current, err := h.BinRoot.ReadFile(dst, globalBinaryLimit)
+		verified = append(verified, stagedBinary{name: name, data: data, dst: filepath.Join(h.BinDir, name)})
+	}
+	var changed []string
+	for _, b := range verified {
+		current, err := h.BinRoot.ReadFile(b.dst, globalBinaryLimit)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("read the installed %s: %w", dst, err)
+			return nil, fmt.Errorf("read the installed %s: %w", b.dst, err)
 		}
-		if err == nil && bytes.Equal(current, data) {
+		if err == nil && bytes.Equal(current, b.data) {
 			continue
 		}
-		if err := h.BinRoot.WriteFile(dst, data, globalBinaryMode); err != nil {
-			return nil, fmt.Errorf("install %s: %w", dst, err)
+		if err := h.BinRoot.WriteFile(b.dst, b.data, globalBinaryMode); err != nil {
+			return nil, fmt.Errorf("install %s (binaries replaced before it: %v; run the refresh again, it restarts what still runs a replaced file): %w", b.dst, changed, err)
 		}
-		if err := rootOwned(h, dst, globalBinaryMode); err != nil {
+		if err := rootOwned(h, b.dst, globalBinaryMode); err != nil {
 			return nil, err
 		}
-		h.Logf("  ✓ %s replaced", dst)
-		changed = append(changed, name)
+		h.Logf("  ✓ %s replaced", b.dst)
+		changed = append(changed, b.name)
 	}
 	return changed, nil
 }

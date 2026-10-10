@@ -53,6 +53,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		env = active.Name
 	}
+	if opts.NoChain && opts.ChainNodeID != "" {
+		return clierr.Usage("--no-chain and --chain-node-id contradict each other: either the capacity is declared on the chain or it is not")
+	}
 	if opts.Settings.Empty() && !opts.Interactive {
 		return clierr.Usage("name what to change (--storage-gb, --exit or --global), or run `orama edit` in a terminal for the form")
 	}
@@ -108,7 +111,7 @@ func (r *runner) run(ctx context.Context) error {
 		return nil
 	}
 	if plan.DeclareOnChain {
-		if err := r.seams.declarer.preflight(ctx, chainID, *plan.Storage*bytesPerGB, r.candidates(node)); err != nil {
+		if err := r.seams.declarer.preflight(ctx, chainID, node.Host, *plan.Storage*bytesPerGB, r.candidates(node)); err != nil {
 			return err
 		}
 	}
@@ -134,10 +137,10 @@ func (r *runner) apply(ctx context.Context, node inspector.Node, plan *Plan, cha
 	}
 	if err := r.seams.editNode(node, plan); err != nil {
 		if plan.DeclareOnChain {
-			return clierr.Failure("the chain now declares %d GB for %s, but %s was not changed: %v\n  Run the same command again: declaring the same capacity is a no-op, and the node is changed this time",
+			return clierr.Failure("the chain now declares %d GB for %s, but the edit of %s failed and it may be partly changed: %v\n  Run the same command again: declaring the same capacity is a no-op, and the node is changed this time",
 				*plan.Storage, chainID, node.Host, err)
 		}
-		return clierr.Failure("%s was not changed: %v", node.Host, err)
+		return clierr.Failure("the edit of %s failed and it may be partly changed: %v\n  Run the same command again once the cause is fixed", node.Host, err)
 	}
 	fmt.Fprintf(out, "  ✓ %s edited\n", node.Host)
 	return nil
@@ -146,6 +149,9 @@ func (r *runner) apply(ctx context.Context, node inspector.Node, plan *Plan, cha
 // pickNode is the node named by --node, or the one chosen in the form.
 func (r *runner) pickNode() (inspector.Node, error) {
 	host := r.opts.Node
+	if host == "" && !r.opts.Interactive {
+		return inspector.Node{}, clierr.Usage("--node is required outside a terminal: the form that asks which node needs one")
+	}
 	if host == "" {
 		hosts := make([]string, len(r.nodes))
 		for i, n := range r.nodes {

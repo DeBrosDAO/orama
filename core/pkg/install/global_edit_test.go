@@ -74,15 +74,24 @@ func installRelay(t *testing.T) *torFixture {
 	return tf
 }
 
-func TestSetRelayExit_switchesTheExitSectionAndKeepsTheRestOfTheTorrc(t *testing.T) {
+// switchRelay plans and applies the role and returns the torrc written.
+func switchRelay(t *testing.T, tf *torFixture, exit bool) string {
+	t.Helper()
+	change, err := PlanRelayExit(tf.host, exit)
+	if err != nil || !change.Changed {
+		t.Fatalf("PlanRelayExit(%v) = %+v, %v; want a change", exit, change, err)
+	}
+	if err := change.Apply(tf.host); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	return relayTorrc(t, tf)
+}
+
+func TestPlanRelayExit_switchesTheExitSectionAndKeepsTheRestOfTheTorrc(t *testing.T) {
 	tf := installRelay(t)
 	plain := relayTorrc(t, tf)
 
-	changed, err := SetRelayExit(tf.host, true)
-	if err != nil || !changed {
-		t.Fatalf("SetRelayExit(true) = %v, %v", changed, err)
-	}
-	exit := relayTorrc(t, tf)
+	exit := switchRelay(t, tf, true)
 	if !strings.Contains(exit, "ExitRelay 1") || strings.Contains(exit, "ExitRelay 0") {
 		t.Errorf("the torrc is not an exit's:\n%s", exit)
 	}
@@ -91,26 +100,40 @@ func TestSetRelayExit_switchesTheExitSectionAndKeepsTheRestOfTheTorrc(t *testing
 		t.Errorf("the relay's identity lines changed with the role:\n%s", exit)
 	}
 
-	changed, err = SetRelayExit(tf.host, false)
-	if err != nil || !changed {
-		t.Fatalf("SetRelayExit(false) = %v, %v", changed, err)
-	}
+	switchRelay(t, tf, false)
 	if relayTorrc(t, tf) != plain {
 		t.Error("switching to an exit and back did not restore the plain relay's torrc")
 	}
 }
 
-func TestSetRelayExit_alreadyInTheRoleChangesNothing(t *testing.T) {
+func TestPlanRelayExit_alreadyInTheRoleChangesNothing(t *testing.T) {
 	tf := installRelay(t)
+	before := relayTorrc(t, tf)
 
-	changed, err := SetRelayExit(tf.host, false)
+	change, err := PlanRelayExit(tf.host, false)
 
-	if err != nil || changed {
-		t.Fatalf("SetRelayExit(false) on a plain relay = %v, %v; want unchanged", changed, err)
+	if err != nil || change.Changed {
+		t.Fatalf("PlanRelayExit(false) on a plain relay = %+v, %v; want unchanged", change, err)
+	}
+	if err := change.Apply(tf.host); err != nil || relayTorrc(t, tf) != before {
+		t.Errorf("applying no change wrote the torrc: %v", err)
 	}
 }
 
-func TestSetRelayExit_networkThatForbidsExitsIsRefused(t *testing.T) {
+func TestPlanRelayExit_writesNothingUntilApplied(t *testing.T) {
+	tf := installRelay(t)
+	before := relayTorrc(t, tf)
+
+	if _, err := PlanRelayExit(tf.host, true); err != nil {
+		t.Fatal(err)
+	}
+
+	if relayTorrc(t, tf) != before {
+		t.Error("planning the switch changed the torrc")
+	}
+}
+
+func TestPlanRelayExit_networkThatForbidsExitsIsRefused(t *testing.T) {
 	tf := installRelay(t)
 	network := tf.network
 	network.AllowExit = false
@@ -122,22 +145,36 @@ func TestSetRelayExit_networkThatForbidsExitsIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = SetRelayExit(tf.host, true)
+	_, err = PlanRelayExit(tf.host, true)
 
 	if err == nil || !strings.Contains(err.Error(), "does not allow exits") {
 		t.Fatalf("err = %v, want the network's refusal", err)
 	}
 }
 
-func TestSetRelayExit_withoutARelayIsRefused(t *testing.T) {
+func TestPlanRelayExit_withoutARelayIsRefused(t *testing.T) {
 	f := newGlobalFixture(t)
 	if err := InstallGlobal(f.options(GlobalServiceChain), f.host); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := SetRelayExit(f.host, true)
+	_, err := PlanRelayExit(f.host, true)
 
 	if err == nil || !strings.Contains(err.Error(), "no Tor relay") {
 		t.Fatalf("err = %v, want the missing relay named", err)
+	}
+}
+
+func TestRequirePublicKubo(t *testing.T) {
+	f := installedFixture(t)
+	if err := RequirePublicKubo(f.host); err != nil {
+		t.Errorf("a node with the public Kubo was refused: %v", err)
+	}
+	g := newGlobalFixture(t)
+	if err := InstallGlobal(g.options(GlobalServiceChain), g.host); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequirePublicKubo(g.host); err == nil || !strings.Contains(err.Error(), "public Kubo is not installed") {
+		t.Errorf("err = %v, want the missing Kubo named", err)
 	}
 }

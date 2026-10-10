@@ -1,7 +1,6 @@
 package push
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -83,7 +82,8 @@ func ReleaseToNode(node inspector.Node, rel ReleaseFiles) (out string, err error
 
 // releaseStageHint says what a refused release stage most often means.
 const releaseStageHint = "the node's installed orama verifies the release against the release root it adopted " +
-	"(" + releaseverify.RootPath + "); a node that trusts another root, or that was never installed, refuses it"
+	"(" + releaseverify.RootPath + "); a node that trusts another root, that was never installed, or whose release has no --release-only stage " +
+	"(it needs one signed push first: orama maint push --trust-signers) refuses it"
 
 // metadataFiles lists the files under dir as slash-separated relative paths,
 // each element of which is safe in a remote shell command.
@@ -169,5 +169,5 @@ func releaseStageCommand(sudo, dir, target string) string {
 			" --release-metadata " + path.Join(dir, uploadMetadataDir) +
 			" --release-target " + target + " --release-only",
 	}, "\n") + "\n"
-	return "printf %s " + base64.StdEncoding.EncodeToString([]byte(script)) + " | base64 -d | " + sudo + "bash -s"
+	return remotessh.ScriptCommand(sudo, script)
 }

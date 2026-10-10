@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/push"
@@ -50,15 +49,11 @@ func (r *runner) stageAll(steps []rollout.Step, releases *releaseSet, out io.Wri
 
 // stageNode stages the release for the node's architecture on one node.
 func (r *runner) stageNode(step rollout.Step, releases *releaseSet) error {
-	machine, err := r.seams.arch(step.Node)
-	if err != nil {
-		return err
-	}
-	rel := releases.byArch[archByMachine[strings.TrimSpace(machine)]]
+	rel := releases.byArch[releases.archOf[step.Node.Host]]
 	if rel == nil {
-		return fmt.Errorf("no release was fetched for machine type %q", strings.TrimSpace(machine))
+		return fmt.Errorf("no release was fetched for %s", step.Node.Host)
 	}
-	_, err = r.seams.stage(step.Node, push.ReleaseFiles{
+	_, err := r.seams.stage(step.Node, push.ReleaseFiles{
 		Archive: rel.ArchivePath, MetadataDir: rel.MetadataDir, Target: rel.Target, Root: rel.Root,
 	})
 	return err

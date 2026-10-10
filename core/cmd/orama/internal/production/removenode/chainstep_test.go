@@ -38,7 +38,9 @@ func (f *fakeTx) RetireNode(_ context.Context, id string) (*onchain.Receipt, err
 type world struct {
 	probes    map[string]string // host -> probe answer
 	validator map[string]bool
+	unknown   map[string]bool // hosts with no telemetry report
 	valErr    error
+	asked     []string // hosts whose validator status was read
 	chain     *chainreach.ChainNode
 	openErr   error
 	opened    [][]string
@@ -50,6 +52,7 @@ func newWorld() *world {
 	return &world{
 		probes:    map[string]string{"10.0.0.1": "yes no\n", "10.0.0.2": "yes no\n", "10.0.0.3": "no no\n"},
 		validator: map[string]bool{},
+		unknown:   map[string]bool{},
 		tx:        &fakeTx{operator: operatorAddr},
 	}
 }
@@ -67,7 +70,10 @@ func (w *world) step(opts Options) *chainStep {
 				return "127.0.0.1:1", func() error { return nil }, nil
 			},
 		},
-		validator: func(_ context.Context, _, host string) (bool, error) { return w.validator[host], w.valErr },
+		validator: func(_ context.Context, _, host string) (bool, bool, error) {
+			w.asked = append(w.asked, host)
+			return w.validator[host], !w.unknown[host], w.valErr
+		},
 		readNode: func(context.Context, *chainreach.Reach, string) (*chainreach.ChainNode, error) {
 			return w.chain, nil
 		},
@@ -81,11 +87,12 @@ func plan() *decommission.Plan {
 }
 
 func activeNode() *chainreach.ChainNode {
-	return &chainreach.ChainNode{ID: "node-3", Operator: operatorAddr, Status: "NODE_STATUS_ACTIVE"}
+	return &chainreach.ChainNode{ID: "node-3", Operator: operatorAddr, Status: "NODE_STATUS_ACTIVE", Endpoints: []string{"10.0.0.3:31000"}}
 }
 
 func TestPreflight_aNodeInTheValidatorSetIsNotErasedByAccident(t *testing.T) {
 	w := newWorld()
+	w.probes["10.0.0.3"] = "yes no\n"
 	w.validator["10.0.0.3"] = true
 
 	_, err := w.step(Options{Node: "10.0.0.3"}).Preflight(plan())
@@ -101,6 +108,7 @@ func TestPreflight_dropValidatorAndOfflineAcceptTheLoss(t *testing.T) {
 		"offline":        {Node: "10.0.0.3", Offline: true, NoChain: true},
 	} {
 		w := newWorld()
+		w.probes["10.0.0.3"] = "yes no\n"
 		w.validator["10.0.0.3"] = true
 
 		if _, err := w.step(opts).Preflight(plan()); err != nil {
@@ -109,14 +117,40 @@ func TestPreflight_dropValidatorAndOfflineAcceptTheLoss(t *testing.T) {
 	}
 }
 
+func TestPreflight_aNodeWithNoTelemetryReportIsNotAssumedToBeNoValidator(t *testing.T) {
+	w := newWorld()
+	w.probes["10.0.0.3"] = "yes no\n"
+	w.unknown["10.0.0.3"] = true
+
+	_, err := w.step(Options{Node: "10.0.0.3", NoChain: true}).Preflight(plan())
+
+	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "no report from it") || !strings.Contains(err.Error(), "--drop-validator") {
+		t.Fatalf("err = %v, want a conflict: the key a missing report would have named is about to be erased", err)
+	}
+}
+
+func TestPreflight_aNodeWithoutTheChainUnitCannotBeAValidatorAndIsNeverLookedUp(t *testing.T) {
+	w := newWorld()
+	w.validator["10.0.0.3"] = true
+
+	if _, err := w.step(Options{Node: "10.0.0.3"}).Preflight(plan()); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+
+	if len(w.asked) != 0 {
+		t.Errorf("the telemetry was read for %v: a node with no chain unit has no validator key, and a removal should not need the gateway to say so", w.asked)
+	}
+}
+
 func TestPreflight_unreadableValidatorStatusIsNotAssumedToBeNo(t *testing.T) {
 	w := newWorld()
+	w.probes["10.0.0.3"] = "yes no\n"
 	w.valErr = errors.New("gateway down")
 
 	_, err := w.step(Options{Node: "10.0.0.3"}).Preflight(plan())
 
-	if clierr.CodeOf(err) != clierr.CodeUnavailable || !strings.Contains(err.Error(), "--offline") {
-		t.Fatalf("err = %v, want unavailable with the --offline hint", err)
+	if clierr.CodeOf(err) != clierr.CodeUnavailable || !strings.Contains(err.Error(), "--offline") || !strings.Contains(err.Error(), "orama auth login") {
+		t.Fatalf("err = %v, want unavailable with the sign-in and --offline hints", err)
 	}
 }
 
@@ -155,13 +189,16 @@ func TestPreflight_aClusterOnlyNodeHasNothingOnTheChain(t *testing.T) {
 	}
 }
 
-func TestPreflight_aGoneNodeCannotBeAskedSoItMustBeToldWhatToDo(t *testing.T) {
+func TestPreflight_aGoneNodeCannotBeAskedSoItsRegistrationIsLeftAndTheStepSaysSo(t *testing.T) {
 	w := newWorld()
 
-	_, err := w.step(Options{Node: "10.0.0.3", Offline: true}).Preflight(plan())
+	steps, err := w.step(Options{Node: "10.0.0.3", Offline: true}).Preflight(plan())
 
-	if clierr.CodeOf(err) != clierr.CodeUsage || !strings.Contains(err.Error(), "is gone") {
-		t.Fatalf("err = %v", err)
+	if err != nil || len(steps) != 1 || !strings.Contains(steps[0], "is gone") || !strings.Contains(steps[0], "orama global retire") {
+		t.Fatalf("steps = %v, err = %v: removing a machine that is already gone must not need a decision about a chain it cannot be asked about", steps, err)
+	}
+	if len(w.opened) != 0 {
+		t.Error("the chain was reached for a node that was not asked to be retired there")
 	}
 }
 
@@ -228,6 +265,41 @@ func TestPreflight_reservedBytesRefuseBeforeAnythingIsErased(t *testing.T) {
 
 	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "4096 bytes") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestPreflight_anIdThatBelongsToAnotherMachineIsRefused(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+	w.chain.Endpoints = []string{"10.0.0.1:31000"}
+
+	_, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
+
+	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "none is 10.0.0.3") {
+		t.Fatalf("err = %v, want the mistyped id refused: retiring another of the operator's nodes cannot be undone", err)
+	}
+}
+
+func TestPreflight_aNodeWithNoRegisteredEndpointIsAllowedAndTheStepSaysItCouldNotBeMatched(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+	w.chain.Endpoints = nil
+
+	steps, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
+
+	if err != nil || len(steps) != 1 || !strings.Contains(steps[0], "registered no endpoint") {
+		t.Fatalf("steps = %v, err = %v", steps, err)
+	}
+}
+
+func TestPreflight_theStepNamesTheEndpointThatMatched(t *testing.T) {
+	w := newWorld()
+	w.chain = activeNode()
+
+	steps, err := w.step(Options{Node: "10.0.0.3", ChainNodeID: "node-3"}).Preflight(plan())
+
+	if err != nil || len(steps) != 1 || !strings.Contains(steps[0], "its registered endpoint is 10.0.0.3") {
+		t.Fatalf("steps = %v, err = %v", steps, err)
 	}
 }
 

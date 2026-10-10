@@ -26,8 +26,8 @@ func TestCurrentUpgradePlan_scheduledPlanIsNamed(t *testing.T) {
 
 	got, err := CurrentUpgradePlan(context.Background(), srv.URL, srv.Client())
 
-	if err != nil || got != "v0-4-0" {
-		t.Fatalf("CurrentUpgradePlan = %q, %v; want v0-4-0", got, err)
+	if err != nil || got.Name != "v0-4-0" {
+		t.Fatalf("CurrentUpgradePlan = %+v, %v; want v0-4-0", got, err)
 	}
 }
 
@@ -37,8 +37,8 @@ func TestCurrentUpgradePlan_noPlanIsEmpty(t *testing.T) {
 
 		got, err := CurrentUpgradePlan(context.Background(), srv.URL, srv.Client())
 
-		if err != nil || got != "" {
-			t.Errorf("body %s: CurrentUpgradePlan = %q, %v; want no plan", body, got, err)
+		if err != nil || got.Name != "" {
+			t.Errorf("body %s: CurrentUpgradePlan = %+v, %v; want no plan", body, got, err)
 		}
 	}
 }
@@ -57,7 +57,7 @@ func TestCurrentUpgradePlan_chainErrorsAreNotAnAbsentPlan(t *testing.T) {
 	srv := planServer(t, http.StatusInternalServerError, `boom`)
 
 	if got, err := CurrentUpgradePlan(context.Background(), srv.URL, srv.Client()); err == nil {
-		t.Fatalf("CurrentUpgradePlan = %q, nil; a failed read must not look like no plan", got)
+		t.Fatalf("CurrentUpgradePlan = %+v, nil; a failed read must not look like no plan", got)
 	}
 }
 
@@ -76,5 +76,40 @@ func TestCurrentUpgradePlan_unreachableChain(t *testing.T) {
 
 	if _, err := CurrentUpgradePlan(context.Background(), base, nil); err == nil {
 		t.Fatal("an unreachable chain must be an error, not no plan")
+	}
+}
+
+func TestCurrentUpgradePlan_carriesTheInfo(t *testing.T) {
+	srv := planServer(t, http.StatusOK, `{"plan":{"name":"v2","info":"{\"binaries\":{}}"}}`)
+
+	got, err := CurrentUpgradePlan(context.Background(), srv.URL, srv.Client())
+
+	if err != nil || got.Info != `{"binaries":{}}` {
+		t.Fatalf("plan = %+v, %v", got, err)
+	}
+}
+
+func TestUpgradePlan_BinaryChecksum(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	tests := []struct {
+		name  string
+		info  string
+		want  string
+		named bool
+	}{
+		{"the platform's binary", `{"binaries":{"linux/amd64":"https://x.example/oramad?checksum=sha256:` + sum + `"}}`, sum, true},
+		{"any platform", `{"binaries":{"any":"https://x.example/oramad?checksum=sha256:` + strings.ToUpper(sum) + `"}}`, sum, true},
+		{"another platform only", `{"binaries":{"linux/arm64":"https://x.example/oramad?checksum=sha256:` + sum + `"}}`, "", false},
+		{"no checksum in the url", `{"binaries":{"linux/amd64":"https://x.example/oramad"}}`, "", false},
+		{"free text", `upgrade to 0.4.0`, "", false},
+		{"empty", ``, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, named := UpgradePlan{Info: tt.info}.BinaryChecksum("linux/amd64")
+			if got != tt.want || named != tt.named {
+				t.Errorf("BinaryChecksum = %q, %v; want %q, %v", got, named, tt.want, tt.named)
+			}
+		})
 	}
 }

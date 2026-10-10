@@ -151,3 +151,30 @@ func TestUploadBytes_aFailedCopyIsAnErrorAndStillCleansUp(t *testing.T) {
 		t.Error("the temporary copy was left behind after a failed upload")
 	}
 }
+
+func TestTunnel_closeMayBeCalledTwiceAndAfterTheProcessExited(t *testing.T) {
+	tun := startedTunnel(t, net.JoinHostPort(loopbackHost, "1"), "true")
+	// The process ends on its own; Close still has to return, twice.
+	if err := tun.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := tun.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestTunnel_closeKillsARunningForward(t *testing.T) {
+	tun := startedTunnel(t, net.JoinHostPort(loopbackHost, "1"), "sleep", "30")
+	done := make(chan error, 1)
+
+	go func() { done <- tun.Close() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return: the forward was not killed")
+	}
+}

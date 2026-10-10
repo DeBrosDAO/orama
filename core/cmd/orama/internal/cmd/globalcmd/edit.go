@@ -2,6 +2,7 @@ package globalcmd
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/clierr"
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/cmdmeta"
@@ -14,6 +15,9 @@ const (
 	// storageFlag and exitFlag are the settings `orama edit` changes on a node.
 	storageFlag = "storage-gb"
 	exitFlag    = "exit"
+	// maxStorageGB bounds a declared capacity: a petabyte, far above any node and
+	// far below where the byte count overflows.
+	maxStorageGB = 1_000_000
 )
 
 var nodeEditFlags struct {
@@ -54,36 +58,66 @@ func runNodeEdit(cmd *cobra.Command, _ []string) error {
 	if !storage && !exit {
 		return clierr.Usage("name a setting to change: --%s or --%s", storageFlag, exitFlag)
 	}
+	if storage && (nodeEditFlags.storageGB == 0 || nodeEditFlags.storageGB > maxStorageGB) {
+		return clierr.Usage("--%s must be between 1 and %d GB", storageFlag, maxStorageGB)
+	}
 	if err := clierr.RequireRoot("editing the global layer"); err != nil {
 		return err
 	}
 	out := cmd.OutOrStdout()
 	life := globalnode.DefaultLifecycle(out)
 	host := install.DefaultGlobalHost(func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) })
+	// Everything that can refuse is checked before anything is written, so a
+	// refused exit change does not leave a node whose Kubo was already resized.
+	var relay install.RelayExitChange
 	if storage {
-		bytes := nodeEditFlags.storageGB * bytesPerGB
-		if err := install.SetPublicStorage(host, bytes, install.ChainColocated(life.UnitDir)); err != nil {
+		if err := install.RequirePublicKubo(host); err != nil {
 			return clierr.Failure("%v", err)
 		}
-		if err := life.Restart(cmd.Context(), []install.GlobalService{install.GlobalServiceIPFS}); err != nil {
-			return clierr.Failure("restart the public Kubo with its new size: %v", err)
-		}
-		fmt.Fprintf(out, "  public Kubo sized for %d GB\n", nodeEditFlags.storageGB)
 	}
 	if exit {
-		changed, err := install.SetRelayExit(host, nodeEditFlags.exit)
-		if err != nil {
+		var err error
+		if relay, err = install.PlanRelayExit(host, nodeEditFlags.exit); err != nil {
 			return clierr.Failure("%v", err)
 		}
-		if !changed {
-			fmt.Fprintf(out, "  relay: already %s\n", exitWord(nodeEditFlags.exit))
-			return nil
-		}
-		if err := life.Restart(cmd.Context(), []install.GlobalService{install.GlobalServiceRelay}); err != nil {
-			return clierr.Failure("restart the relay with its new role: %v", err)
-		}
-		fmt.Fprintf(out, "  relay: now %s\n", exitWord(nodeEditFlags.exit))
 	}
+	if storage {
+		if err := resizeKubo(cmd, life, host, out); err != nil {
+			return err
+		}
+	}
+	if exit {
+		return switchRelay(cmd, life, host, relay, out)
+	}
+	return nil
+}
+
+// resizeKubo sizes the public Kubo and restarts it.
+func resizeKubo(cmd *cobra.Command, life globalnode.Lifecycle, host install.GlobalHost, out io.Writer) error {
+	bytes := nodeEditFlags.storageGB * bytesPerGB
+	if err := install.SetPublicStorage(host, bytes, install.ChainColocated(life.UnitDir)); err != nil {
+		return clierr.Failure("%v", err)
+	}
+	if err := life.Restart(cmd.Context(), []install.GlobalService{install.GlobalServiceIPFS}); err != nil {
+		return clierr.Failure("restart the public Kubo with its new size: %v", err)
+	}
+	fmt.Fprintf(out, "  public Kubo sized for %d GB\n", nodeEditFlags.storageGB)
+	return nil
+}
+
+// switchRelay writes the planned torrc and restarts the relay.
+func switchRelay(cmd *cobra.Command, life globalnode.Lifecycle, host install.GlobalHost, change install.RelayExitChange, out io.Writer) error {
+	if !change.Changed {
+		fmt.Fprintf(out, "  relay: already %s\n", exitWord(nodeEditFlags.exit))
+		return nil
+	}
+	if err := change.Apply(host); err != nil {
+		return clierr.Failure("%v", err)
+	}
+	if err := life.Restart(cmd.Context(), []install.GlobalService{install.GlobalServiceRelay}); err != nil {
+		return clierr.Failure("restart the relay with its new role: %v", err)
+	}
+	fmt.Fprintf(out, "  relay: now %s\n", exitWord(nodeEditFlags.exit))
 	return nil
 }
 

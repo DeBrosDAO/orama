@@ -46,7 +46,7 @@ type harness struct {
 func newHarness() *harness {
 	return &harness{
 		state:     fullNode,
-		chainNode: &chainreach.ChainNode{ID: "node-1", Operator: walletAddr, Status: "NODE_STATUS_ACTIVE"},
+		chainNode: &chainreach.ChainNode{ID: "node-1", Operator: walletAddr, Status: "NODE_STATUS_ACTIVE", Endpoints: []string{"10.0.0.1:31000"}},
 		tx:        &fakeTx{operator: walletAddr},
 	}
 }
@@ -183,7 +183,7 @@ func TestRun_aNodeFailureAfterTheChainSaysWhatStateItIsIn(t *testing.T) {
 
 	err := r.run(context.Background())
 
-	if err == nil || !strings.Contains(err.Error(), "the chain now declares 100 GB") || !strings.Contains(err.Error(), "ssh timeout") {
+	if err == nil || !strings.Contains(err.Error(), "the chain now declares 100 GB") || !strings.Contains(err.Error(), "ssh timeout") || !strings.Contains(err.Error(), "partly changed") {
 		t.Fatalf("err = %v, want the half-done state spelled out", err)
 	}
 }
@@ -263,5 +263,46 @@ func TestEditArgs(t *testing.T) {
 	}
 	if got := editArgs(&Plan{Exit: flag(false)}); got != "maint global edit --exit=false" {
 		t.Errorf("args = %q", got)
+	}
+}
+
+func TestRun_noNodeOutsideATerminalIsAUsageError(t *testing.T) {
+	h := newHarness()
+	r, _ := h.runner(Options{Settings: Settings{Exit: flag(true)}, Yes: true})
+
+	err := r.run(context.Background())
+
+	if clierr.CodeOf(err) != clierr.CodeUsage || !strings.Contains(err.Error(), "--node is required") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(h.edited) != 0 {
+		t.Errorf("edited %v without a node", h.edited)
+	}
+}
+
+func TestRun_anIdThatBelongsToAnotherMachineIsRefusedBeforeConfirming(t *testing.T) {
+	h := newHarness()
+	h.chainNode.Endpoints = []string{"10.0.0.2:31000"}
+	r, _ := h.runner(Options{Node: "10.0.0.1", Settings: Settings{StorageGB: gb(100)}, ChainNodeID: "node-1", In: strings.NewReader("")})
+
+	err := r.run(context.Background())
+
+	if clierr.CodeOf(err) != clierr.CodeConflict || !strings.Contains(err.Error(), "none is 10.0.0.1") {
+		t.Fatalf("err = %v, want the mistyped id refused: declaring another node's capacity is not what the operator asked for", err)
+	}
+	if len(h.tx.declared)+len(h.edited) != 0 {
+		t.Errorf("declared %v, edited %v", h.tx.declared, h.edited)
+	}
+}
+
+func TestRun_aNodeEditFailureWithoutTheChainSaysItMayBePartlyChanged(t *testing.T) {
+	h := newHarness()
+	h.editErr = errors.New("ssh timeout")
+	r, _ := h.runner(Options{Node: "10.0.0.1", Settings: Settings{Exit: flag(true)}, Yes: true})
+
+	err := r.run(context.Background())
+
+	if err == nil || !strings.Contains(err.Error(), "may be partly changed") || !strings.Contains(err.Error(), "ssh timeout") {
+		t.Fatalf("err = %v", err)
 	}
 }

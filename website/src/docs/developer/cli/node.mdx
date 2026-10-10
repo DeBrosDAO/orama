@@ -587,27 +587,12 @@ Remove one node from the cluster, then erase it (replaced by orama remove)
 orama node remove [flags]
 ```
 
-Retire a node from every store the cluster keeps, then wipe it. This is the
-cluster-side removal behind 'orama remove', which is the command to use: it adds
-the node's chain registration and the refusals a newcomer needs. This path stays
-for scripts and prints a notice.
-
-Runs the cluster-side removal from a SURVIVOR. First it prints what the removal
-costs every raft cluster the node is a voter in — the platform cluster and each
-namespace it serves — and refuses if any of them would lose quorum. Then it
-takes the node out of the raft configuration, writes an eviction tombstone so
-nothing re-adds it automatically, releases its mesh address, nameserver slot,
-namespace memberships, namespace port blocks and its TURN and SFU allocations,
-and marks it retired so the cluster purges its DNS records. Then it wipes the
-target, unless --offline.
-
-Use --offline when the machine is already gone. The cluster-side removal still
-happens; nothing is attempted against the target.
-
-Every step is keyed on the node and safe to repeat, so a removal that failed
-part way through is finished by running it again.
-
-This is a DESTRUCTIVE operation. Use --force to skip confirmation.
+The old path of 'orama remove', which is the command to use: this one runs it
+(--force is --yes) and prints a notice. The removal is the same: the quorum
+arithmetic for every raft cluster the node votes in, the tombstone, the
+retirement and the wipe, plus the chain: a node in the validator set is refused
+unless --drop-validator, and a node with the global layer needs --chain-node-id
+or --no-chain. See 'orama remove --help'.
 
 Examples:
 ```bash
@@ -619,9 +604,12 @@ orama node remove --env testnet --node 203.0.113.4 --force
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--chain-node-id` | — | The node's id in the chain's node registry: retire it there before removing it |
+| `--drop-validator` | `false` | Remove the node although it signs for the validator set; its consensus key is erased with it |
 | `--dry-run` | `false` | Print the quorum impact and the statements, change nothing |
 | `--env` | — | Target environment (devnet, testnet) [required] |
 | `--force` | `false` | Skip confirmation (DESTRUCTIVE) |
+| `--no-chain` | `false` | Leave the node's chain registration alone (its bonds stay locked until you retire it) |
 | `--node` | — | Public IP of the node to remove [required] |
 | `--nuclear` | `false` | When wiping, also remove shared binaries and the Tor package |
 | `--offline` | `false` | The node is already gone: retire it cluster-side only, do not try to wipe it |

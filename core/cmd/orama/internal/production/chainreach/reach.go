@@ -23,8 +23,8 @@ import (
 const (
 	// unitDir is where the global layer's units are installed.
 	unitDir = "/etc/systemd/system"
-	// probeAnswer is what the probe prints: whether the chain unit is installed
-	// and whether it runs in the orama-global namespace.
+	// probeYes is a yes of the probe's answer, which says whether the chain unit
+	// is installed and whether it runs in the orama-global namespace.
 	probeYes = "yes"
 	// nodeInfoPath is the SDK's node info, which names the chain.
 	nodeInfoPath = "/cosmos/base/tendermint/v1beta1/node_info"

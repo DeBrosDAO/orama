@@ -144,3 +144,24 @@ func TestBuildPlan_nothingAskedIsUsage(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestBuildPlan_noChainAndAChainNodeContradict(t *testing.T) {
+	_, err := BuildPlan("10.0.0.1", fullNode, Settings{StorageGB: gb(100)}, "node-1", true)
+
+	if clierr.CodeOf(err) != clierr.CodeUsage || !strings.Contains(err.Error(), "contradict") {
+		t.Fatalf("err = %v: --no-chain with --chain-node-id must not quietly declare on the chain", err)
+	}
+}
+
+func TestBuildPlan_storageBeyondTheBoundIsRefusedBeforeItOverflows(t *testing.T) {
+	for _, v := range []uint64{maxStorageGB + 1, 1 << 55, ^uint64(0)} {
+		_, err := BuildPlan("10.0.0.1", fullNode, Settings{StorageGB: gb(v)}, "node-1", false)
+
+		if clierr.CodeOf(err) != clierr.CodeUsage || !strings.Contains(err.Error(), "between 1 and") {
+			t.Errorf("--storage-gb %d: err = %v", v, err)
+		}
+	}
+	if _, err := BuildPlan("10.0.0.1", fullNode, Settings{StorageGB: gb(maxStorageGB)}, "node-1", false); err != nil {
+		t.Errorf("the bound itself was refused: %v", err)
+	}
+}
