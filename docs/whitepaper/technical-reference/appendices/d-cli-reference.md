@@ -2056,13 +2056,20 @@ this --chain-id and --operator.
 Restart the installed global services in order (run as root)
 
 ```text
-orama global restart [service...]
+orama global restart [service...] [flags]
 ```
 
 ```text
 Stop then start the named global services (all installed ones when none is
 named). Restarting the chain restarts every installed service, chain first.
+
+A directory authority is restarted one at a time, at least 30 minutes apart:
+see "orama global stop". --force overrides the check.
 ```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--force` | `false` | Stop or restart a directory authority although another has started less than 30 minutes ago (the network may lose its consensus) or its state cannot be read |
 
 
 ## orama global retire
@@ -2169,14 +2176,23 @@ orama global status
 Stop the installed global services, chain last (run as root)
 
 ```text
-orama global stop [service...]
+orama global stop [service...] [flags]
 ```
 
 ```text
 Stop the installed orama-global-* units, or only the named ones, in reverse
 start order. Stopping the chain stops every installed service that needs it
 first.
+
+A directory authority is not stopped while another has started less than 30
+minutes ago: a fresh authority casts no Running vote for that long and a
+consensus needs two of the three (docs/TOR_NETWORK.md, "Directory authorities").
+--force overrides it.
 ```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--force` | `false` | Stop or restart a directory authority although another has started less than 30 minutes ago (the network may lose its consensus) or its state cannot be read |
 
 
 ## orama global tor

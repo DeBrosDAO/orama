@@ -311,6 +311,12 @@ func TestExit_leavesFromTheNodeAndRefusesWhatItShould(t *testing.T) {
 		harness.SkipNotApplicable(t, "no relay of this target is installed as an exit (--services relay,exit)")
 	}
 	info := homeInfo(t, infoOf(t, f, *exit), *exit, constants.GlobalTorRelayHome)
+	// After the authorities made no consensus for an hour (docs/TOR_NETWORK.md#directory-authorities)
+	// the exit holds an expired one until it fetches the next: test it once it is valid again.
+	eventually.Require(t, pollEvery, consensusBudget, "the exit "+exit.Name+" to hold a valid consensus", func() (bool, error) {
+		cons := homeInfo(t, infoOf(t, f, *exit), *exit, constants.GlobalTorRelayHome).Consensus
+		return cons != nil && cons.Valid, nil
+	})
 	c := startClient(t, f, *exit, networkOf(t, f, *exit), "ExitNodes $"+info.Fingerprint, "StrictNodes 1")
 	eventually.Require(t, pollEvery, consensusBudget, "a page to load through the exit "+exit.Name, func() (bool, error) {
 		code, _ := c.fetch(t, publicPage)

@@ -31,14 +31,25 @@ Kubo's GC timer starts and stops with it.`,
 	},
 }
 
+// forceAuthorityRoll is --force of stop and restart.
+var forceAuthorityRoll bool
+
+const forceAuthorityRollUsage = "Stop or restart a directory authority although another has started less than 30 minutes ago (the network may lose its consensus) or its state cannot be read"
+
 var stopCmd = &cobra.Command{
 	Use:   "stop [service...]",
 	Short: "Stop the installed global services, chain last (run as root)",
 	Long: `Stop the installed orama-global-* units, or only the named ones, in reverse
 start order. Stopping the chain stops every installed service that needs it
-first.`,
+first.
+
+A directory authority is not stopped while another has started less than 30
+minutes ago: a fresh authority casts no Running vote for that long and a
+consensus needs two of the three (docs/TOR_NETWORK.md, "Directory authorities").
+--force overrides it.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLifecycle(cmd, args, "stopping the global services", func(l globalnode.Lifecycle, s []install.GlobalService) error {
+			l.ForceAuthorityRoll = forceAuthorityRoll
 			return l.Stop(s)
 		})
 	},
@@ -48,9 +59,13 @@ var restartCmd = &cobra.Command{
 	Use:   "restart [service...]",
 	Short: "Restart the installed global services in order (run as root)",
 	Long: `Stop then start the named global services (all installed ones when none is
-named). Restarting the chain restarts every installed service, chain first.`,
+named). Restarting the chain restarts every installed service, chain first.
+
+A directory authority is restarted one at a time, at least 30 minutes apart:
+see "orama global stop". --force overrides the check.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runLifecycle(cmd, args, "restarting the global services", func(l globalnode.Lifecycle, s []install.GlobalService) error {
+			l.ForceAuthorityRoll = forceAuthorityRoll
 			return l.Restart(cmd.Context(), s)
 		})
 	},
@@ -64,6 +79,8 @@ var statusCmd = &cobra.Command{
 }
 
 func init() {
+	stopCmd.Flags().BoolVar(&forceAuthorityRoll, "force", false, forceAuthorityRollUsage)
+	restartCmd.Flags().BoolVar(&forceAuthorityRoll, "force", false, forceAuthorityRollUsage)
 	Cmd.AddCommand(startCmd, stopCmd, restartCmd, statusCmd)
 }
 

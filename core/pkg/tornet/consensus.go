@@ -35,7 +35,11 @@ type Relay struct {
 	Fingerprint string
 	Address     string
 	ORPort      int
-	Flags       []string
+	// Published is when the relay's descriptor was published, the date and time
+	// of the r line. A relay publishes a new one when it starts. The microdescriptor
+	// consensus writes a placeholder here; only the full ("ns") one has the real time.
+	Published time.Time
+	Flags     []string
 	// Bandwidth is the consensus weight (the w line's Bandwidth=), in kilobytes per second.
 	Bandwidth int64
 	// Measured is true when a bandwidth authority measured the relay.
@@ -179,7 +183,11 @@ func parseRouterLine(rest string) (Relay, error) {
 	if err != nil {
 		return Relay{}, fmt.Errorf("ORPort: %w", err)
 	}
-	return Relay{Nickname: f[0], Fingerprint: strings.ToUpper(hex.EncodeToString(id)), Address: f[n-3], ORPort: port}, nil
+	published, err := parseConsensusTime(f[n-5] + " " + f[n-4])
+	if err != nil {
+		return Relay{}, fmt.Errorf("publication time: %w", err)
+	}
+	return Relay{Nickname: f[0], Fingerprint: strings.ToUpper(hex.EncodeToString(id)), Address: f[n-3], ORPort: port, Published: published}, nil
 }
 
 // parseWeightLine reads "Bandwidth=N [Measured=M] [Unmeasured=1]".

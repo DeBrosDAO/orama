@@ -32,7 +32,13 @@ type Lifecycle struct {
 	WaitChainRPC func(ctx context.Context) error
 	// CheckSignFloor is the double-sign guard run before the chain starts.
 	CheckSignFloor func() error
-	Out            io.Writer
+	// CheckAuthorityRoll is run before a directory authority is stopped or
+	// restarted: it fails when another authority has started too recently to
+	// be voting, so taking this one down would leave no consensus. Nil skips it.
+	CheckAuthorityRoll func() error
+	// ForceAuthorityRoll skips CheckAuthorityRoll (--force).
+	ForceAuthorityRoll bool
+	Out                io.Writer
 }
 
 // DefaultLifecycle is this node: systemctl through the privileged helper's
@@ -54,10 +60,11 @@ func defaultLifecycle(dir string, out io.Writer) Lifecycle {
 		Systemctl: func(args ...string) ([]byte, error) {
 			return privhelper.Command(privhelper.ToolSystemctl, args...).CombinedOutput()
 		},
-		UnitDir:        dir,
-		WaitChainRPC:   wait,
-		CheckSignFloor: DefaultHost().CheckSignFloor,
-		Out:            out,
+		UnitDir:            dir,
+		WaitChainRPC:       wait,
+		CheckSignFloor:     DefaultHost().CheckSignFloor,
+		CheckAuthorityRoll: CheckAuthorityRoll,
+		Out:                out,
 	}
 }
 
@@ -173,6 +180,11 @@ func (l Lifecycle) Stop(only []install.GlobalService) error {
 	}
 	if slices.Contains(targets, install.GlobalServiceChain) {
 		targets = withChainDependents(installed)
+	}
+	if slices.Contains(targets, install.GlobalServiceDirauth) && l.CheckAuthorityRoll != nil && !l.ForceAuthorityRoll {
+		if err := l.CheckAuthorityRoll(); err != nil {
+			return fmt.Errorf("the directory authority was not stopped (--force overrides): %w", err)
+		}
 	}
 	for i := len(targets) - 1; i >= 0; i-- {
 		if err := l.companions("stop", targets[i]); err != nil {

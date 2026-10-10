@@ -117,6 +117,13 @@ func ReadNodeInfo(home string, now time.Time) (NodeInfo, error) {
 	return info, nil
 }
 
+// ReadHeldConsensus is the consensus in the DataDirectory: the full one an
+// authority or directory cache keeps, else the microdescriptor one a client
+// keeps. It is nil when tor has not written one yet.
+func ReadHeldConsensus(home string) (*Consensus, error) {
+	return readHeldConsensus(home)
+}
+
 // readHeldConsensus is the consensus in the DataDirectory: the full one an
 // authority or directory cache keeps, else the microdescriptor one a client keeps.
 func readHeldConsensus(home string) (*Consensus, error) {

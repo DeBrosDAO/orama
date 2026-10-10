@@ -2,6 +2,7 @@ package globalnode
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -79,5 +80,48 @@ func TestLifecycle_onionServiceNeedsTheChainAndStartsItsGate(t *testing.T) {
 	}
 	if f.states[onionUnit] != "active" || f.states[gateUnit] != "active" {
 		t.Fatalf("states = %v", f.states)
+	}
+}
+
+func TestLifecycle_aDirectoryAuthorityIsNotStoppedWhileAnotherIsLearning(t *testing.T) {
+	l, f := newLifecycle(t, install.GlobalServiceDirauth)
+	f.states[dirauthUnit] = "active"
+	l.CheckAuthorityRoll = func() error { return errors.New("OramaAuth2 started 5m ago") }
+	for name, act := range map[string]func() error{
+		"stop": func() error { return l.Stop(nil) },
+		"restart": func() error {
+			return l.Restart(context.Background(), []install.GlobalService{install.GlobalServiceDirauth})
+		},
+	} {
+		f.calls = nil
+		err := act()
+		if err == nil || !strings.Contains(err.Error(), "OramaAuth2 started 5m ago") || !strings.Contains(err.Error(), "--force") {
+			t.Errorf("%s: err = %v, want the reason and the way to override it", name, err)
+		}
+		if len(f.calls) != 0 || f.states[dirauthUnit] != "active" {
+			t.Errorf("%s touched the authority: calls %v, state %q", name, f.calls, f.states[dirauthUnit])
+		}
+	}
+}
+
+func TestLifecycle_forceStopsADirectoryAuthorityAnyway(t *testing.T) {
+	l, f := newLifecycle(t, install.GlobalServiceDirauth)
+	f.states[dirauthUnit] = "active"
+	l.CheckAuthorityRoll = func() error { return errors.New("OramaAuth2 started 5m ago") }
+	l.ForceAuthorityRoll = true
+	if err := l.Stop(nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.states[dirauthUnit] != "inactive" {
+		t.Fatalf("state = %q", f.states[dirauthUnit])
+	}
+}
+
+func TestLifecycle_theAuthorityCheckOnlyGuardsDirectoryAuthorities(t *testing.T) {
+	l, f := newLifecycle(t, install.GlobalServiceRelay)
+	f.states[relayUnit] = "active"
+	l.CheckAuthorityRoll = func() error { return errors.New("must not run for a relay") }
+	if err := l.Restart(context.Background(), nil); err != nil {
+		t.Fatalf("a relay restart: %v", err)
 	}
 }

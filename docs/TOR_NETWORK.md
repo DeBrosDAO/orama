@@ -272,6 +272,26 @@ loss. See [SECURITY_PLAYBOOKS.md](SECURITY_PLAYBOOKS.md#directory-authority-comp
   archive oneshot then also exports the authority's own vote for it
   ([where the votes come from](#the-relay-bandwidth-reporter)).
 
+**Restarting authorities: one at a time, 30 minutes apart.** An authority that has
+just started casts no Running vote for 30 minutes (Tor's
+`TestingAuthDirTimeToLearnReachability`, whose default `AssumeReachable` does not
+shorten and which only `TestingTorNetwork` can change), and a consensus needs the
+Running flag in a majority of the votes: with three authorities, in two. Restarting
+the second while the first is still inside its 30 minutes leaves a round with one
+vote for the flag, and the authorities then make no consensus
+("Nobody has voted on the Running flag ... Not generating a consensus!"). On
+stagenet, three authorities restarted within four minutes of each other (02:25 to
+02:29 UTC on 2026-10-10) made no consensus for 02:30 and 03:00 and the next one only
+at 03:30; every node's consensus expired at 03:30, a relay fetched the next after its
+retry delay (the exit node's full consensus was still the 02:00 one at 03:36 and its
+microdescriptor consensus was replaced at 04:24), and the fleet e2e tests of that hour
+failed. A restarted onion service built its descriptors from the older consensus it
+still held (below). `orama global stop dirauth` and `restart dirauth` therefore refuse
+while another authority of the network file published its descriptor (which it does
+when it starts) less than 30 minutes ago, or is not in the consensus, or when this
+authority holds no valid full consensus to judge by; `--force` overrides it. Verify
+`orama global tor info` between restarts as before, and wait out the 30 minutes.
+
 **Archive.** Every voting period is copied to
 `/var/lib/orama-global/tor-dirauth/archive/<valid-after>/`:
 
@@ -524,7 +544,16 @@ Tor clamps a voted `hsdir_interval` to 30 through 14400 minutes.
 (`onion period`), clamped to Tor's range, and says when the voted value was
 outside it. Onion services MUST be restarted after the consensus first carries the
 parameter (Rolling it out, step 10): a running service keeps the period it
-started with and stays on a stale descriptor for up to two rotations.
+started with and stays on a stale descriptor for up to two rotations. A service
+also builds its descriptors at the start from the consensus its tor then holds,
+which can be the one cached before the restart: **restart an onion service only
+once `orama global tor info` shows `onion period` for its own home
+(`/var/lib/orama-global/tor-onion`)**, not only for the authority's. On stagenet
+the mew service was restarted 35 seconds after the first consensus with the
+parameter, before its tor held it (the cached file was replaced 3 minutes
+later). Its descriptor for the voted period was on no HSDir while the other four
+services' were, which is what a service built on the default period looks like; it
+was the one onion service clients could not find.
 
 ## Rolling it out on stagenet
 
@@ -600,17 +629,19 @@ two /16 networks, hence `allow_shared_subnets`.
    on every node, re-run the same install command on each, then restart one
    node at a time, authorities first and verifying `tor info` between each
    (`orama global restart dirauth|relay|onion`). Three authorities hold a
-   majority with one down; two restarting at once lose the consensus.
+   majority with one down; two restarting at once lose the consensus, and so do
+   two restarted within 30 minutes of each other ([Directory authorities](#directory-authorities)).
 10. **Onion service time period** (a network installed before the authorities
    voted `hsdir_interval`, [Onion service time periods](#onion-service-time-periods)).
    Stage the new `orama`, then on each authority in turn re-run its step 5
    command (it rewrites the torrc, the other services of the node are kept) and
    `sudo /root/orama-global-release/orama global restart dirauth`; wait until
-   `orama global tor info` on it shows a fresh consensus with three signatures
-   before the next one. When two authorities vote it, every node's consensus
+   `orama global tor info` on it shows a fresh consensus with three signatures,
+   and at least 30 minutes, before the next one (the command refuses sooner). When two authorities vote it, every node's consensus
    carries `hsdir_interval` (`onion period 720 minutes` in `tor info`). Then restart
-   the onion services one node at a time (`orama global restart onion`): they
-   build their descriptors for the period the consensus now names.
+   the onion services one node at a time (`orama global restart onion`), each only
+   once its own `tor-onion` home shows `onion period 720 minutes`: they build
+   their descriptors for the period the consensus they hold names.
 11. **Verify** with the fleet e2e on the stagenet target: feature `tor-network`,
    stage 8 (`TestAuthorities_signAConsensusThatListsEveryRelay`,
    `TestNetwork_consensusVotesTheOnionTimePeriodOfOneSharedRandomRun`,
