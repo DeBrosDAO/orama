@@ -331,3 +331,28 @@ func TestPrintTorInfo_saysWhenExitsAcceptNoPort(t *testing.T) {
 		t.Errorf("want one warning, for the relay whose exits are all unusable:\n%s", text.String())
 	}
 }
+
+func TestPrintTorInfo_saysWhenTheVotedOnionPeriodWasClamped(t *testing.T) {
+	voted := int64(5)
+	for name, tc := range map[string]struct {
+		c    tornet.ConsensusInfo
+		want string
+	}{
+		"clamped":   {tornet.ConsensusInfo{Flavor: "ns", HSDirIntervalMinutes: 30, HSDirIntervalVotedMinutes: &voted}, "onion period 30 minutes (hsdir_interval voted 5, outside the range Tor accepts: Tor clamps it)"},
+		"in range":  {tornet.ConsensusInfo{Flavor: "ns", HSDirIntervalMinutes: 720}, "onion period 720 minutes (hsdir_interval)\n"},
+		"not voted": {tornet.ConsensusInfo{Flavor: "ns"}, "onion period not voted"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var text bytes.Buffer
+			cmd := &cobra.Command{}
+			cmd.SetOut(&text)
+			c := tc.c
+			if err := printTorInfo(cmd, []tornet.NodeInfo{{Home: "/h", Consensus: &c}}, false); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(text.String(), tc.want) {
+				t.Errorf("want %q in:\n%s", tc.want, text.String())
+			}
+		})
+	}
+}

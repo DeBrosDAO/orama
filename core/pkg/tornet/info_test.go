@@ -108,3 +108,36 @@ func TestReadNodeInfo_reportsTheOnionTimePeriodTheAuthoritiesVoted(t *testing.T)
 		})
 	}
 }
+
+func TestEffectiveHSDirInterval_isWhatTorUses(t *testing.T) {
+	for name, tc := range map[string]struct {
+		params      string
+		want        int
+		clampedFrom int64
+		clamped     bool
+	}{
+		"not voted":         {"", 0, 0, false},
+		"in range":          {"params hsdir_interval=720\n", 720, 0, false},
+		"the floor":         {"params hsdir_interval=30\n", 30, 0, false},
+		"the ceiling":       {"params hsdir_interval=14400\n", 14400, 0, false},
+		"below the floor":   {"params hsdir_interval=29\n", 30, 29, true},
+		"zero":              {"params hsdir_interval=0\n", 30, 0, true},
+		"above the ceiling": {"params hsdir_interval=14401\n", 14400, 14401, true},
+		"huge":              {"params hsdir_interval=9000000000\n", 14400, 9000000000, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, err := ParseConsensus(strings.NewReader(withParams(t, tc.params)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, from := effectiveHSDirInterval(c)
+			if got != tc.want || (from != nil) != tc.clamped || (from != nil && *from != tc.clampedFrom) {
+				t.Errorf("effective = %d, clamped from %v; want %d, clamped %t from %d", got, from, tc.want, tc.clamped, tc.clampedFrom)
+			}
+			info := summarise(c, "", time.Now())
+			if info.HSDirIntervalMinutes != tc.want || (info.HSDirIntervalVotedMinutes != nil) != tc.clamped {
+				t.Errorf("summary = %d %v, want %d clamped %t", info.HSDirIntervalMinutes, info.HSDirIntervalVotedMinutes, tc.want, tc.clamped)
+			}
+		})
+	}
+}

@@ -56,6 +56,14 @@ const (
 	// maxHSDirIntervalMinutes is HS_TIME_PERIOD_LENGTH_MAX in Tor's hs_common.h:
 	// the longest time period an authority can ask clients to use.
 	maxHSDirIntervalMinutes = 60 * 24 * 10
+	// minHSDirIntervalMinutes is HS_TIME_PERIOD_LENGTH_MIN in Tor's hs_common.h:
+	// Tor clamps a voted hsdir_interval into [min, max].
+	minHSDirIntervalMinutes = 30
+	// maxVotingIntervalMinutes is the longest voting interval a network can use:
+	// the largest divisor of 24 hours whose shared-random run (24 intervals)
+	// fits maxHSDirIntervalMinutes. Not derived: 600 would fit the run, but does
+	// not divide the day.
+	maxVotingIntervalMinutes = 480
 	// minDelaySeconds is Tor's floor for V3AuthVoteDelay and V3AuthDistDelay.
 	minDelaySeconds = 20
 	minutesPerDay   = 24 * 60
@@ -313,23 +321,27 @@ func (n Network) validateOnions() error {
 // of its own.
 //
 // Tor's default is 1440 minutes, which is a protocol run only when the voting
-// interval is the public network's 60 minutes. With a shorter interval a run
-// ends several times inside one default period, and a service rotates its
-// descriptors at the end of every run (rotate_all_descriptors in hs_service.c):
-// each rotation promotes the descriptor for the NEXT period to current and
-// closes the introduction circuits of the one clients still ask for, so the
-// service is unreachable until the period itself ends. A period one run long,
-// started half a run after the run does (the rotation offset Tor derives from
-// the voting interval), is the arrangement of the public network at any interval.
+// interval is the public network's 60 minutes. A service rotates its
+// descriptors at the start of every run (rotate_all_descriptors in
+// hs_service.c), and a period starts half a run after a run does (the offset
+// Tor derives from the voting interval): with a period one run long, the
+// rotation therefore falls half a period after a period start, as on the
+// public network at any interval. The rotation promotes the current period's
+// descriptor and drops a stale one. With a period longer than the run, the
+// rotation falls anywhere in the period and can drop the descriptor clients
+// still ask for, which leaves the service unreachable until the period ends.
 func (n Network) HSDirIntervalMinutes() int { return sharedRandomRounds * n.VotingIntervalMinutes }
 
 func (n Network) validateSchedule() error {
-	if n.VotingIntervalMinutes < minVotingIntervalMinutes || minutesPerDay%n.VotingIntervalMinutes != 0 {
-		return fmt.Errorf("voting_interval_minutes %d must be at least %d and divide 24 hours evenly", n.VotingIntervalMinutes, minVotingIntervalMinutes)
+	if n.VotingIntervalMinutes < minVotingIntervalMinutes {
+		return fmt.Errorf("voting_interval_minutes %d must be at least %d", n.VotingIntervalMinutes, minVotingIntervalMinutes)
 	}
 	if n.HSDirIntervalMinutes() > maxHSDirIntervalMinutes {
 		return fmt.Errorf("voting_interval_minutes %d makes a shared-random run of %d minutes, longer than the %d minutes Tor allows an onion service time period (hsdir_interval); use at most %d",
-			n.VotingIntervalMinutes, n.HSDirIntervalMinutes(), maxHSDirIntervalMinutes, maxHSDirIntervalMinutes/sharedRandomRounds)
+			n.VotingIntervalMinutes, n.HSDirIntervalMinutes(), maxHSDirIntervalMinutes, maxVotingIntervalMinutes)
+	}
+	if minutesPerDay%n.VotingIntervalMinutes != 0 {
+		return fmt.Errorf("voting_interval_minutes %d must divide 24 hours evenly", n.VotingIntervalMinutes)
 	}
 	if n.VoteDelaySeconds < minDelaySeconds || n.DistDelaySeconds < minDelaySeconds {
 		return fmt.Errorf("vote_delay_seconds %d and dist_delay_seconds %d must each be at least %d", n.VoteDelaySeconds, n.DistDelaySeconds, minDelaySeconds)

@@ -133,7 +133,8 @@ func ParseConsensus(r io.Reader) (Consensus, error) {
 	return c, nil
 }
 
-// parseParams reads the params line: space-separated key=integer pairs.
+// parseParams reads the params line: space-separated key=integer pairs. Tor
+// refuses a consensus that lists a key twice, and so does this.
 func parseParams(rest string) (map[string]int64, error) {
 	out := map[string]int64{}
 	for _, kv := range strings.Fields(rest) {
@@ -141,6 +142,9 @@ func parseParams(rest string) (map[string]int64, error) {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if !ok || k == "" || err != nil {
 			return nil, fmt.Errorf("bad network parameter %q", kv)
+		}
+		if _, dup := out[k]; dup {
+			return nil, fmt.Errorf("network parameter %q is listed twice", k)
 		}
 		out[k] = n
 	}

@@ -141,14 +141,29 @@ func TestParseConsensus_readsTheNetworkParameters(t *testing.T) {
 
 func TestParseConsensus_refusesABrokenParameter(t *testing.T) {
 	for name, line := range map[string]string{
-		"not a number": "params hsdir_interval=soon\n",
-		"no value":     "params hsdir_interval\n",
-		"no key":       "params =720\n",
+		"not a number":            "params hsdir_interval=soon\n",
+		"no value":                "params hsdir_interval\n",
+		"no key":                  "params =720\n",
+		"overflowing":             "params hsdir_interval=99999999999999999999\n",
+		"duplicate":               "params hsdir_interval=720 hsdir_interval=1440\n",
+		"duplicate, not adjacent": "params hsdir_interval=720 AuthDirMaxServersPerAddr=1 hsdir_interval=720\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := ParseConsensus(strings.NewReader(withParams(t, line))); err == nil {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+func TestParseConsensus_anEmptyParamsLineHasNoParameters(t *testing.T) {
+	for _, line := range []string{"params\n", "params \n"} {
+		c, err := ParseConsensus(strings.NewReader(withParams(t, line)))
+		if err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		if len(c.Params) != 0 {
+			t.Errorf("%q: params = %v, want none", line, c.Params)
+		}
 	}
 }

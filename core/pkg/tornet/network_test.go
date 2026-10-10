@@ -144,3 +144,76 @@ func TestNetwork_HSDirIntervalMinutes_isOneSharedRandomRun(t *testing.T) {
 		}
 	}
 }
+
+func TestNetwork_votingIntervalBounds(t *testing.T) {
+	for _, tc := range []struct {
+		interval int
+		want     string // empty: valid
+	}{
+		{5, ""},
+		{480, ""},
+		{4, "at least 5"},
+		{7, "divide 24 hours"},
+		{481, "divide 24 hours"},
+		{601, "use at most 480"},
+		{720, "use at most 480"},
+		{1440, "use at most 480"},
+	} {
+		n := testNetwork()
+		n.VotingIntervalMinutes, n.VoteDelaySeconds, n.DistDelaySeconds = tc.interval, minDelaySeconds, minDelaySeconds
+		err := n.Validate()
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("interval %d refused: %v", tc.interval, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("interval %d: error %v, want one containing %q", tc.interval, err, tc.want)
+		}
+	}
+}
+
+func TestNetwork_maxVotingIntervalIsTheLargestValidOne(t *testing.T) {
+	largest := 0
+	for interval := 1; interval <= 2*minutesPerDay; interval++ {
+		n := testNetwork()
+		n.VotingIntervalMinutes, n.VoteDelaySeconds, n.DistDelaySeconds = interval, minDelaySeconds, minDelaySeconds
+		if n.validateSchedule() == nil {
+			largest = interval
+		}
+	}
+	if largest != maxVotingIntervalMinutes {
+		t.Errorf("the largest voting interval validateSchedule accepts is %d, maxVotingIntervalMinutes is %d", largest, maxVotingIntervalMinutes)
+	}
+}
+
+// Tor derives the onion service time period from the voting interval i: the
+// shared-random protocol (SRV) runs 24 x i minutes, starting at multiples of the
+// run since the epoch, and period k starts at k x L + 12 x i minutes, with L the
+// hsdir_interval. With L one run, a period starts half a run after an SRV run
+// does, so a service's rotation (at each run start) never falls on a period
+// boundary but half a period after a period start.
+func TestNetwork_periodStartsHalfARunAfterAnSRVStart(t *testing.T) {
+	const roundsPerPhase = 12
+	valid := 0
+	for interval := 1; interval <= minutesPerDay; interval++ {
+		n := testNetwork()
+		n.VotingIntervalMinutes, n.VoteDelaySeconds, n.DistDelaySeconds = interval, minDelaySeconds, minDelaySeconds
+		if n.validateSchedule() != nil {
+			continue
+		}
+		valid++
+		run, period := sharedRandomRounds*interval, n.HSDirIntervalMinutes()
+		for k := 0; k < 4; k++ {
+			start := k*period + roundsPerPhase*interval
+			srvStart := start / run * run
+			if start-srvStart != run/2 {
+				t.Errorf("interval %d, period %d: starts %d min after an SRV start, want %d (half a run)", interval, k, start-srvStart, run/2)
+			}
+			if nextRotation := srvStart + run; nextRotation-start != period/2 {
+				t.Errorf("interval %d, period %d: next rotation is %d min after the period start, want %d (half a period)", interval, k, nextRotation-start, period/2)
+			}
+		}
+	}
+	if valid == 0 {
+		t.Fatal("no voting interval is valid")
+	}
+}

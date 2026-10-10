@@ -133,10 +133,10 @@ data after the object is an error, and the file is at most 1 MiB.
   (see Rolling it out, step 8). The command validates every address, does not
   list one twice, keeps the file's mode and replaces it atomically; a file that
   does not already load is left untouched.
-- `voting_interval_minutes` must divide 24 hours and be at most 600 (a
-  shared-random run, 24 intervals, must fit Tor's longest onion service time
-  period), delays are at least 20 s and `2 x (vote + dist)` must be under the
-  interval: the same checks Tor makes, made at install so a bad file fails there
+- `voting_interval_minutes` must be at least 5, divide 24 hours and be at most
+  480, the largest divisor of 24 hours whose shared-random run (24 intervals) fits
+  Tor's longest onion service time period (14400 minutes), delays are at least
+  20 s and `2 x (vote + dist)` must be under the interval: the same checks Tor makes, made at install so a bad file fails there
   and not on a restart. All authorities must run the same schedule, which is why
   it is in the file. The interval also sets the onion service time period the
   authorities vote (`hsdir_interval`, [Onion service time periods](#onion-service-time-periods)).
@@ -486,15 +486,17 @@ Tor's `hs_service.c`): it closes the introduction circuits of the descriptor it
 serves, makes the descriptor it had prepared for the *next* period the current
 one, and prepares another. Tor's time period is 1440 minutes (the consensus
 parameter `hsdir_interval`) and starts half a run after the run does (Tor
-derives that offset from the voting interval, `hs_get_time_period_num`). Those
-two are the same length, and the rotation falls on a period boundary, only when
-the voting interval is the public network's 60 minutes.
+derives that offset from the voting interval, `hs_get_time_period_num`). The
+rotation does not fall on a period boundary. When the period is exactly one run
+long, as on the public network (60-minute interval, 24-hour run and period), it
+falls half a period after a period start: the descriptor it promotes
+is the current period's and the one it drops is stale.
 
 With a shorter interval a run is shorter than the period. Stagenet's 30 minutes
 makes a run 12 hours: the service rotates at 00:00 and 12:00 UTC, the period
-still changes at 06:00 UTC only. The rotation at 00:00 hands out the descriptor
-for the next period and closes the introduction circuits of the one that clients
-still ask for, so from 00:00 to 06:00 UTC the service answers nothing
+still changes at 06:00 UTC only. The rotation at 00:00 falls inside a period that
+is longer than the run, promotes the descriptor for the next period and closes
+the introduction circuits of the one that clients still ask for, so from 00:00 to 06:00 UTC the service answers nothing
 (`INTRODUCE_ACK` "unknown service" from every introduction point, then "descriptor
 not found" once the directories drop the old copy after its 3-hour lifetime).
 The fleet e2e `TestNetwork_circuitsAndOnionServicesWorkThroughOurAuthorities`
@@ -505,21 +507,24 @@ The fix is Tor's own parameter, voted by the authorities: every authority's torr
 carries `ConsensusParams hsdir_interval=<24 x voting_interval_minutes>`
 (`Network.HSDirIntervalMinutes`; 720 for stagenet, 1440 for a 60-minute network),
 which makes the period as long as the run and keeps the half-run offset Tor
-already derives, the same arrangement as the public network at any interval. The
-parameter reaches the consensus when more than half of the authorities vote it
-(`dirvote_compute_params`), and then every service and every client of the
+already derives, so a rotation always falls half a period after a period start,
+the same arrangement as the public network at any interval. The parameter
+reaches the consensus when more than half of the authorities (integer division:
+`votes > n / 2`) or at least 3 of them vote it (`dirvote_compute_params`), and then every service and every client of the
 network, wallets included, reads it from the consensus: nobody needs a setting of
 their own. The alternative Tor documents for test networks, `TestingTorNetwork 1`,
 also sets the period to the run's length, but on every party's own torrc and
 together with a bundle of unsafe defaults (`ExtendAllowPrivateAddresses 1`,
 `ClientRejectInternalAddresses 0`, ...); it is not used. A voting interval above
-600 minutes would make a run longer than the 14400 minutes Tor accepts for
-`hsdir_interval`, so the network file is refused.
+480 minutes (the largest that divides 24 hours and keeps a run within the 14400
+minutes Tor accepts for `hsdir_interval`) is refused with the network file.
+Tor clamps a voted `hsdir_interval` to 30 through 14400 minutes.
 
-`orama global tor info` shows the value the node's consensus carries
-(`onion period`). A running onion service keeps the period it started with until
-its next rotation, so after the consensus carries the parameter the services are
-restarted (Rolling it out, step 10).
+`orama global tor info` shows the value Tor uses from the node's consensus
+(`onion period`), clamped to Tor's range, and says when the voted value was
+outside it. Onion services MUST be restarted after the consensus first carries the
+parameter (Rolling it out, step 10): a running service keeps the period it
+started with and stays on a stale descriptor for up to two rotations.
 
 ## Rolling it out on stagenet
 

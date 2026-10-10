@@ -60,10 +60,15 @@ type ConsensusInfo struct {
 	// accepting no port, which no client uses (full consensus only).
 	ExitsWithoutPorts int `json:"exits_without_ports,omitempty"`
 	Guards            int `json:"guards"`
-	// HSDirIntervalMinutes is the consensus's hsdir_interval: the length of the
-	// time period an onion service publishes for. Zero when the authorities
-	// vote none, which leaves Tor's 1440 minutes in force.
+	// HSDirIntervalMinutes is the length of the time period an onion service
+	// publishes for, as Tor uses it: the consensus's hsdir_interval clamped to
+	// Tor's accepted range. Zero when the authorities vote none, which leaves
+	// Tor's 1440 minutes in force.
 	HSDirIntervalMinutes int `json:"hsdir_interval_minutes,omitempty"`
+	// HSDirIntervalVotedMinutes is the hsdir_interval the authorities voted, set
+	// only when it lies outside Tor's range and HSDirIntervalMinutes is the
+	// clamped value (a pointer: a voted zero is a clamped value too).
+	HSDirIntervalVotedMinutes *int64 `json:"hsdir_interval_voted_minutes,omitempty"`
 	// Listed is true when the consensus lists this process's own relay.
 	Listed      bool     `json:"listed"`
 	ListedFlags []string `json:"listed_flags,omitempty"`
@@ -132,13 +137,30 @@ func readHeldConsensus(home string) (*Consensus, error) {
 	return nil, nil
 }
 
+// effectiveHSDirInterval is the time period length Tor derives from the
+// consensus's hsdir_interval: the voted value clamped to [minHSDirIntervalMinutes,
+// maxHSDirIntervalMinutes]. It returns zero when none is voted, and the voted
+// value as the second result only when it was clamped.
+func effectiveHSDirInterval(c Consensus) (minutes int, clampedFrom *int64) {
+	voted, ok := c.Params[paramHSDirInterval]
+	switch {
+	case !ok:
+		return 0, nil
+	case voted < minHSDirIntervalMinutes:
+		return minHSDirIntervalMinutes, &voted
+	case voted > maxHSDirIntervalMinutes:
+		return maxHSDirIntervalMinutes, &voted
+	}
+	return int(voted), nil
+}
+
 func summarise(c Consensus, fingerprint string, now time.Time) *ConsensusInfo {
 	out := &ConsensusInfo{
 		Flavor: c.Flavor, ValidAfter: c.ValidAfter, FreshUntil: c.FreshUntil, ValidUntil: c.ValidUntil,
 		Fresh: c.Fresh(now), Valid: c.Valid(now), Signatures: c.Signatures,
 		Relays: len(c.Relays), Running: c.Running(), Exits: c.Exits(), ExitsWithoutPorts: c.ExitsWithoutPorts(), Guards: c.Guards(),
-		HSDirIntervalMinutes: int(c.Params[paramHSDirInterval]),
 	}
+	out.HSDirIntervalMinutes, out.HSDirIntervalVotedMinutes = effectiveHSDirInterval(c)
 	if fingerprint != "" {
 		if r, ok := c.Listed(fingerprint); ok {
 			out.Listed = true
