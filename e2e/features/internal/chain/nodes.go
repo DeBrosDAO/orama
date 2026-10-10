@@ -197,6 +197,19 @@ func (c *Chain) RegisterProvenNode(t testing.TB, k Key, roles []string, services
 	return n
 }
 
+// RegisterTestNodeAt is RegisterTestNode with the given endpoints instead of a hostname of its own:
+// for a test that needs the node to have a literal IP (x/nodes refuses a public IP another live
+// node holds, so the address must be one no node of the run uses).
+func (c *Chain) RegisterTestNodeAt(t testing.TB, k Key, roles []string, endpoints []string, services ...string) string {
+	t.Helper()
+	hot, proof := HotKeyBinding(t, c.ID, k.Address)
+	id := UniqueID(t, "e2e-node-")
+	bindings := c.serviceBindings(t, k, services)
+	c.registerNode(t, k, NodeSpec{Operator: k.Address, NodeID: id, Roles: roles, HotKey: hot,
+		Bindings: append(append([]Binding{}, bindings...), proof), Endpoints: endpoints})
+	return id
+}
+
 func (c *Chain) serviceBindings(t testing.TB, k Key, services []string) []Binding {
 	var bindings []Binding
 	for _, s := range services {
@@ -210,7 +223,9 @@ func (c *Chain) serviceBindings(t testing.TB, k Key, services []string) []Bindin
 // run shares its operator's server) and retires the node at cleanup.
 func (c *Chain) registerNode(t testing.TB, k Key, spec NodeSpec) {
 	t.Helper()
-	spec.Endpoints = []string{fmt.Sprintf("https://%s.example.com:31013", spec.NodeID)}
+	if len(spec.Endpoints) == 0 {
+		spec.Endpoints = []string{fmt.Sprintf("https://%s.example.com:31013", spec.NodeID)}
+	}
 	r := c.Submit(t, k, TxOptions{}, RegisterNodeMsg(spec))
 	if !r.OK() {
 		t.Fatalf("failed to register node %s: %s", spec.NodeID, r)

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/DeBrosOfficial/network/pkg/chainread"
+	"github.com/DeBrosOfficial/network/pkg/httputil"
 )
 
 const (
@@ -14,6 +16,12 @@ const (
 	queryNodeNames = "orama.nodes.v1.Query/NodeNames"
 	// PageLimit is the most names one NodeNames page holds; the chain clamps a larger request to it.
 	PageLimit = 1000
+
+	// MaxBlockAge is how old the chain node's newest block may be before its list of names is
+	// treated as old: many blocks, since a block takes seconds.
+	MaxBlockAge = 5 * time.Minute
+
+	maxTimeText = 40
 
 	// statusPath is CometBFT's status on the node's RPC; statusRoute is the gateway's copy of it.
 	statusPath  = "/status"
@@ -36,7 +44,11 @@ type Chain interface {
 
 // ReaderChain reads the names through a chainread.Reader: the co-located node's CometBFT RPC when
 // the Reader has one, the gateway's public query route otherwise.
-type ReaderChain struct{ Reader *chainread.Reader }
+type ReaderChain struct {
+	Reader *chainread.Reader
+	// Now is the clock the block age is measured on; nil is time.Now.
+	Now func() time.Time
+}
 
 type nodeNamesRequest struct {
 	Pagination nodeNamesPagination `json:"pagination"`
@@ -58,18 +70,24 @@ type nodeNamesResponse struct {
 	} `json:"pagination"`
 }
 
+// syncInfo is the part of CometBFT's status that says how current the node is.
+type syncInfo struct {
+	CatchingUp      bool   `json:"catching_up"`
+	LatestBlockTime string `json:"latest_block_time"`
+}
+
 // statusAnswer is CometBFT's status, bare or inside the JSON-RPC envelope the gateway forwards.
 type statusAnswer struct {
-	SyncInfo *struct {
-		CatchingUp bool `json:"catching_up"`
-	} `json:"sync_info"`
-	Result *struct {
-		SyncInfo *struct {
-			CatchingUp bool `json:"catching_up"`
-		} `json:"sync_info"`
+	SyncInfo *syncInfo `json:"sync_info"`
+	Result   *struct {
+		SyncInfo *syncInfo `json:"sync_info"`
 	} `json:"result"`
 }
 
+// CatchingUp reports whether the chain node's list of names may be old: it says it is catching up,
+// or the newest block it holds is more than MaxBlockAge old. The second test is the one that
+// holds when the flag is wrong: a node that stopped, was cut off, or restored an old snapshot can
+// report catching_up false while it stands at a height the chain left behind.
 func (c ReaderChain) CatchingUp(ctx context.Context) (bool, error) {
 	var raw json.RawMessage
 	var err error
@@ -85,13 +103,25 @@ func (c ReaderChain) CatchingUp(ctx context.Context) (bool, error) {
 	if err := json.Unmarshal(raw, &st); err != nil {
 		return false, fmt.Errorf("the chain node's status is not JSON: %w", err)
 	}
-	switch {
-	case st.SyncInfo != nil:
-		return st.SyncInfo.CatchingUp, nil
-	case st.Result != nil && st.Result.SyncInfo != nil:
-		return st.Result.SyncInfo.CatchingUp, nil
+	info := st.SyncInfo
+	if info == nil && st.Result != nil {
+		info = st.Result.SyncInfo
 	}
-	return false, errors.New("the chain node's status has no sync_info, so it cannot be known to be caught up")
+	if info == nil {
+		return false, errors.New("the chain node's status has no sync_info, so it cannot be known to be caught up")
+	}
+	if info.CatchingUp {
+		return true, nil
+	}
+	latest, err := time.Parse(time.RFC3339Nano, info.LatestBlockTime)
+	if err != nil {
+		return false, fmt.Errorf("the chain node's latest_block_time %q is not a time, so its age cannot be known: %w", httputil.PrintableMax(info.LatestBlockTime, maxTimeText), err)
+	}
+	now := time.Now
+	if c.Now != nil {
+		now = c.Now
+	}
+	return now().Sub(latest) > MaxBlockAge, nil
 }
 
 func (c ReaderChain) NodeNames(ctx context.Context, pageKey string) (Page, error) {

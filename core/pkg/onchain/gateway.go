@@ -110,9 +110,6 @@ func (g Gateway) SimulateGas(ctx context.Context, tx []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if res.GasUsed == 0 {
-		return 0, errors.New("the simulation reported no gas used")
-	}
 	return res.GasUsed, nil
 }
 

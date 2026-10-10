@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/encoding/protowire"
 
@@ -271,17 +272,32 @@ func statusServer(t *testing.T, body string) *httptest.Server {
 	return srv
 }
 
+const blockTime = "2026-10-10T12:00:00Z"
+
+var clockAt = func(offset time.Duration) func() time.Time {
+	at, _ := time.Parse(time.RFC3339Nano, blockTime)
+	return func() time.Time { return at.Add(offset) }
+}
+
+func status(catchingUp bool, latest string) string {
+	return fmt.Sprintf(`{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"catching_up":%v,"latest_block_time":%q}}}`, catchingUp, latest)
+}
+
 func TestReaderChain_catchingUpFromTheRPCAndFromTheGateway(t *testing.T) {
 	for name, tc := range map[string]struct {
 		body string
+		now  time.Duration
 		want bool
 	}{
-		"caught up":   {`{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"catching_up":false}}}`, false},
-		"catching up": {`{"jsonrpc":"2.0","id":-1,"result":{"sync_info":{"catching_up":true}}}`, true},
+		"caught up, a fresh block":              {status(false, blockTime), 10 * time.Second, false},
+		"the node says it is catching up":       {status(true, blockTime), 10 * time.Second, true},
+		"caught up but the block is stale":      {status(false, blockTime), MaxBlockAge + time.Second, true},
+		"a block exactly at the limit is fresh": {status(false, blockTime), MaxBlockAge, false},
+		"a block from the future is fresh":      {status(false, blockTime), -time.Minute, false},
 	} {
 		srv := statusServer(t, tc.body)
 		for route, reader := range map[string]*chainread.Reader{"rpc": {RPC: srv.URL}, "gateway": {Gateway: srv.URL}} {
-			got, err := ReaderChain{Reader: reader}.CatchingUp(context.Background())
+			got, err := ReaderChain{Reader: reader, Now: clockAt(tc.now)}.CatchingUp(context.Background())
 			if err != nil || got != tc.want {
 				t.Errorf("%s via %s: %v, %v", name, route, got, err)
 			}
@@ -290,10 +306,18 @@ func TestReaderChain_catchingUpFromTheRPCAndFromTheGateway(t *testing.T) {
 }
 
 func TestReaderChain_catchingUpRefusesAStatusItCannotRead(t *testing.T) {
-	for name, body := range map[string]string{"no sync info": `{"result":{"node_info":{}}}`, "not an object": `[1]`} {
+	for name, body := range map[string]string{
+		"no sync info":                 `{"result":{"node_info":{}}}`,
+		"not an object":                `[1]`,
+		"no block time":                `{"result":{"sync_info":{"catching_up":false}}}`,
+		"a block time that is not one": `{"result":{"sync_info":{"catching_up":false,"latest_block_time":"yesterday\u001b[2J"}}}`,
+	} {
 		srv := statusServer(t, body)
-		if _, err := (ReaderChain{Reader: &chainread.Reader{Gateway: srv.URL}}).CatchingUp(context.Background()); err == nil {
+		_, err := (ReaderChain{Reader: &chainread.Reader{Gateway: srv.URL}, Now: clockAt(0)}).CatchingUp(context.Background())
+		if err == nil {
 			t.Errorf("%s accepted", name)
+		} else if strings.ContainsRune(err.Error(), 0x1b) {
+			t.Errorf("%s: the error carries an escape sequence: %q", name, err.Error())
 		}
 	}
 	if _, err := (ReaderChain{Reader: &chainread.Reader{RPC: "http://127.0.0.1:1"}}).CatchingUp(context.Background()); err == nil {

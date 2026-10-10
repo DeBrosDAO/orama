@@ -62,6 +62,11 @@ var (
 	chainIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,` + fmt.Sprint(maxChainIDLen) + `}$`)
 )
 
+// ValidChainID reports whether id is a chain id the client signs for: 1 to 64 characters of
+// A-Z, a-z, 0-9, '.', '_' and '-'. It is the one definition; callers that read a chain id from an
+// endpoint check it with this before they show it.
+func ValidChainID(id string) bool { return chainIDPattern.MatchString(id) }
+
 // ErrAccountNotFound says the signing account is not on the chain yet. An
 // account exists once it has received funds, and only an existing account can
 // pay a fee.
@@ -208,6 +213,9 @@ func (c *Client) gasFor(ctx context.Context, tx clusterreg.Direct) (uint64, erro
 	used, err := c.chain.SimulateGas(ctx, raw)
 	if err != nil {
 		return 0, fmt.Errorf("simulate the transaction: %w", err)
+	}
+	if used == 0 {
+		return 0, errors.New("the simulation reported no gas used, so no gas limit can be derived from it")
 	}
 	gas, err := scaleUp(used, GasSafetyNumerator, GasSafetyDenominator)
 	if err != nil {

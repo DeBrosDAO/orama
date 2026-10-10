@@ -171,6 +171,14 @@ func TestNew_validatesItsInputs(t *testing.T) {
 	}
 }
 
+func TestValidChainID(t *testing.T) {
+	for id, want := range map[string]bool{"orama-stagenet-5": true, "a": true, strings.Repeat("a", 64): true, "": false, strings.Repeat("a", 65): false, "a b": false, "a\x1b": false, "é": false} {
+		if got := ValidChainID(id); got != want {
+			t.Errorf("ValidChainID(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
+
 func TestNew_acceptsTheChainIDsTheNetworksUse(t *testing.T) {
 	for _, id := range []string{"orama-stagenet-5", "orama-1", "orama_localnet.2", strings.Repeat("a", 64)} {
 		if _, err := New(newFakeChain(), newSigner(), id); err != nil {
@@ -276,10 +284,9 @@ func TestSend_aHashThatIsNotTheTransactionsIsRefused(t *testing.T) {
 	}
 }
 
-func TestSend_theReceiptCarriesTheLocallyComputedHashInAnyCase(t *testing.T) {
+func TestSend_theReceiptCarriesTheLocallyComputedHash(t *testing.T) {
 	chain := newFakeChain()
 	c := newClient(t, chain, newSigner())
-	chain.answerHash = "" // the real hash
 	receipt, err := c.RegisterOperator(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -287,19 +294,44 @@ func TestSend_theReceiptCarriesTheLocallyComputedHashInAnyCase(t *testing.T) {
 	if receipt.Hash != TxHash(chain.sent[0]) || len(chain.waited) != 1 || chain.waited[0] != receipt.Hash {
 		t.Fatalf("receipt %s, waited %v", receipt.Hash, chain.waited)
 	}
-	chain.answerHash = strings.ToLower(TxHash(chain.sent[0]))
-	// a lower-case answer of the right hash is the same hash
-	if _, err := c.RegisterOperator(context.Background()); err == nil {
-		// the second transaction has another sequence only if the chain moved; the fake does not move, so
-		// the bytes are equal and the lower-case answer must be accepted
-		return
+}
+
+// A node may answer the right hash in lower case; it is the same hash, and the client follows and
+// reports its own upper-case form.
+func TestSend_aLowerCaseAnswerOfTheRightHashIsAccepted(t *testing.T) {
+	chain := newFakeChain()
+	c := newClient(t, chain, newSigner())
+	first, err := c.RegisterOperator(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("a lower-case answer of the right hash was refused")
+	// The fake chain does not move, so the second transaction is the same bytes with the same hash.
+	chain.answerHash = strings.ToLower(first.Hash)
+	second, err := c.RegisterOperator(context.Background())
+	if err != nil {
+		t.Fatalf("a lower-case answer of the right hash was refused: %v", err)
+	}
+	if second.Hash != first.Hash || chain.waited[len(chain.waited)-1] != first.Hash {
+		t.Fatalf("second %s, waited %v", second.Hash, chain.waited)
+	}
 }
 
 func TestTxHash_isTheSHA256OfTheBytesInUpperCaseHex(t *testing.T) {
 	// SHA-256 of the empty input.
 	if got := TxHash(nil); got != "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" {
 		t.Fatalf("TxHash(nil) = %s", got)
+	}
+}
+
+// Both chains report "no gas used" the same way, so the refusal is the client's and not a chain's.
+func TestSend_aSimulationThatUsedNoGasIsRefused(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	chain.gasUsed = 0
+	_, err := newClient(t, chain, signer).RegisterOperator(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "no gas used") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(signer.signed) != 0 || len(chain.sent) != 0 {
+		t.Fatal("a zero gas limit was signed")
 	}
 }

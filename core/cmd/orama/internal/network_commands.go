@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -157,7 +158,13 @@ func chainOf(env Environment, registry *netregistry.Registry) string {
 // which chain it runs, and a command that signs must be told.
 func ExpectedChainID() (chainID, network string, err error) {
 	env, err := GetActiveEnvironment()
-	if err != nil || env.Network == "" {
+	if errors.Is(err, ErrNoActiveNetwork) {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("read the active network to find the chain it runs: %w", err)
+	}
+	if env.Network == "" {
 		return "", "", nil
 	}
 	registry, err := LoadNetworks()
@@ -165,8 +172,11 @@ func ExpectedChainID() (chainID, network string, err error) {
 		return "", "", fmt.Errorf("load the networks to find the chain id of %q: %w", env.Network, err)
 	}
 	n, err := registry.Get(env.Network)
-	if err != nil {
+	if errors.Is(err, netregistry.ErrNotFound) {
 		return "", "", nil
+	}
+	if err != nil {
+		return "", "", fmt.Errorf("find network %q in the registry: %w", env.Network, err)
 	}
 	return n.Manifest.ChainID, env.Network, nil
 }

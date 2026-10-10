@@ -26,6 +26,9 @@ const (
 	// MaxWritesPerPass bounds the rows one pass writes through the registry's Raft log. A first
 	// pass over a large chain converges over several passes, CatchUpDelay apart.
 	MaxWritesPerPass = 2000
+	// BatchSize is the rows written in one request: one transaction, one Raft log entry. A pass
+	// of MaxWritesPerPass rows is at most MaxWritesPerPass/BatchSize requests.
+	BatchSize = 100
 
 	// MaxRemovalsNumerator over MaxRemovalsDenominator is the share of the rows the sync owns that
 	// one pass may remove, and MinRemovalsPerPass is the most it may remove from a small zone. A
@@ -300,13 +303,16 @@ func boundRemovals(remove []Record, held int, catchingUp bool) ([]Record, int) {
 	return remove[:allowed], len(remove) - allowed
 }
 
-// writeStep is one kind of write of a pass.
-type writeStep struct {
+// op is one row write of a pass.
+type op struct {
 	what    string
-	rows    []Record
-	sql     string
-	args    func(Record) []any
+	rec     Record
+	stmt    rqlite.Statement
 	counter *int
+}
+
+func (o op) describe() string {
+	return fmt.Sprintf("%s %s %s %s", o.what, o.rec.FQDN, o.rec.Type, o.rec.Value)
 }
 
 func addArgs(r Record) []any {
@@ -315,48 +321,72 @@ func addArgs(r Record) []any {
 
 func ownedArgs(r Record) []any { return []any{r.FQDN, r.Type, r.Value, RecordNamespace} }
 
-// apply writes the plan, adds first, within the pass's write budget. A failed write is reported and
-// does not stop the others: one row that cannot be written must not starve the rest. A cancelled
-// context ends the pass at once, with one error and not one per remaining row.
-func apply(ctx context.Context, db *sql.DB, p plan, stats *Stats) error {
-	steps := []writeStep{
-		{"add", p.add, insertSQL, addArgs, &stats.Added},
-		{"reactivate", p.activate, activateSQL, ownedArgs, &stats.Reactivated},
-		{"remove", p.remove, deleteSQL, ownedArgs, &stats.Removed},
+// ops lists the plan's writes, adds first, within the pass's write budget; the rest is counted in
+// stats.Remaining for the next pass.
+func ops(p plan, stats *Stats) []op {
+	var all []op
+	for _, r := range p.add {
+		all = append(all, op{"add", r, rqlite.Statement{Query: insertSQL, Arguments: addArgs(r)}, &stats.Added})
 	}
+	for _, r := range p.activate {
+		all = append(all, op{"reactivate", r, rqlite.Statement{Query: activateSQL, Arguments: ownedArgs(r)}, &stats.Reactivated})
+	}
+	for _, r := range p.remove {
+		all = append(all, op{"remove", r, rqlite.Statement{Query: deleteSQL, Arguments: ownedArgs(r)}, &stats.Removed})
+	}
+	if len(all) > MaxWritesPerPass {
+		stats.Remaining = len(all) - MaxWritesPerPass
+		all = all[:MaxWritesPerPass]
+	}
+	return all
+}
+
+// apply writes the plan in transactions of at most BatchSize rows, each one request to the
+// registry, adds first. A row the database rejects is reported and left out of its batch, which is
+// sent again without it: one row that cannot be written must not starve the rest. A cancelled
+// context or a failed request ends the pass at once, with one error and not one per remaining row.
+// The counters count the rows sent: an add another node wrote first is a no-op that still counts.
+func apply(ctx context.Context, db *sql.DB, p plan, stats *Stats) error {
+	pending := ops(p, stats)
 	var errs []error
-	budget := MaxWritesPerPass
-	for _, step := range steps {
-		for _, r := range step.rows {
-			if err := ctx.Err(); err != nil {
-				return errors.Join(append(errs, fmt.Errorf("the pass ended before every row was written: %w", err))...)
-			}
-			if budget == 0 {
-				stats.Remaining++
-				continue
-			}
-			budget--
-			if err := step.write(ctx, db, r); err != nil {
-				errs = append(errs, err)
-			}
+	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, fmt.Errorf("the pass ended before every row was written: %w", err))...)
 		}
+		n := min(BatchSize, len(pending))
+		chunkErrs, err := execChunk(ctx, db, pending[:n])
+		errs = append(errs, chunkErrs...)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		pending = pending[n:]
 	}
 	return errors.Join(errs...)
 }
 
-func (s writeStep) write(ctx context.Context, db *sql.DB, r Record) error {
-	res, err := rqlite.SafeExecContext(db, ctx, s.sql, s.args(r)...)
-	if err != nil {
-		return fmt.Errorf("%s %s %s %s: %w", s.what, r.FQDN, r.Type, r.Value, err)
+// execChunk sends one batch. When the database blames a statement, that row is reported and the
+// batch is sent again without it; each round removes a row, so the loop ends. A fault that blames
+// no row (transport, lost leader, deadline) is returned as the pass's error.
+func execChunk(ctx context.Context, db *sql.DB, chunk []op) (rowErrs []error, err error) {
+	for len(chunk) > 0 {
+		stmts := make([]rqlite.Statement, len(chunk))
+		for i, o := range chunk {
+			stmts[i] = o.stmt
+		}
+		failed, execErr := rqlite.ExecBatch(ctx, db, stmts)
+		if execErr == nil {
+			for _, o := range chunk {
+				*o.counter++
+			}
+			return rowErrs, nil
+		}
+		if failed < 0 {
+			return rowErrs, fmt.Errorf("write %d node-name rows in one request: %w", len(chunk), execErr)
+		}
+		rowErrs = append(rowErrs, fmt.Errorf("%s: %w", chunk[failed].describe(), execErr))
+		chunk = append(chunk[:failed:failed], chunk[failed+1:]...)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("%s %s %s %s: count the rows written: %w", s.what, r.FQDN, r.Type, r.Value, err)
-	}
-	if affected > 0 {
-		*s.counter++
-	}
-	return nil
+	return rowErrs, nil
 }
 
 // Run syncs until ctx ends: once at once, then every SyncInterval, or after CatchUpDelay while a
@@ -374,10 +404,24 @@ func (s *Syncer) Run(ctx context.Context, report func(Stats, error)) {
 		stats, err := s.Sync(passCtx)
 		cancel()
 		report(stats, err)
-		wait := SyncInterval
-		if err == nil && stats.Remaining > 0 {
-			wait = CatchUpDelay
-		}
-		timer.Reset(wait)
+		timer.Reset(nextWait(ctx, stats, err))
 	}
+}
+
+// nextWait is the wait before the next pass: SyncInterval, unless the pass left work that a prompt
+// retry would finish. That is a pass that ran out of its write budget, and a pass whose own
+// SyncTimeout ended it part way (rows written before the deadline stay written, and waiting a
+// whole interval for the rest would leave the zone half updated). A pass that failed for another
+// reason waits the interval; so does any pass once the run itself is ending.
+func nextWait(run context.Context, stats Stats, err error) time.Duration {
+	if run.Err() != nil {
+		return SyncInterval
+	}
+	if err == nil && stats.Remaining > 0 {
+		return CatchUpDelay
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return CatchUpDelay
+	}
+	return SyncInterval
 }

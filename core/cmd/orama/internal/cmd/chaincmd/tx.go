@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"regexp"
 
 	"github.com/spf13/cobra"
 
@@ -20,10 +19,6 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/onchain"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
-
-// chainIDPattern is what a chain id may be made of. A chain id is shown in the prompt a transaction
-// is approved from, so nothing else may reach it.
-var chainIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 const (
 	// nodeInfoPath is a node's Cosmos REST route for its chain id.
@@ -179,7 +174,7 @@ func chainID(ctx context.Context, r *chainread.Reader) (string, error) {
 	if id == "" {
 		id = doc.Result.NodeInfo.Network
 	}
-	if !chainIDPattern.MatchString(id) {
+	if !onchain.ValidChainID(id) {
 		return "", clierr.Failure("the chain's status has no usable chain id: %q is not 1 to 64 characters of A-Z, a-z, 0-9, '.', '_' and '-'", httputil.Printable(id))
 	}
 	return id, nil
