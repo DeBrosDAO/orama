@@ -158,6 +158,10 @@ A slot is not released by a missed heartbeat. The reaper below marks a silent no
 
 `pinPushDesignated` makes `push.<base>` resolve to exactly one healthy nameserver: the first public IP among slots whose node has an active `dns_nodes` row seen in the last 90 s, ordered as text (`ORDER BY ip_address`, so `100.x` sorts before `20.x`). Every nameserver node computes the same value without an election, upserts the row (TTL 60) and deletes every other A row for the name, which is also the failover step. The shared ntfy tier keeps no cross-node state, so a publisher and a subscriber must meet on one instance ([push notifications](22-push-notifications.md)). With no healthy nameserver the pin does nothing and the base wildcard serves the name.
 
+#### Node identification names
+
+When `dns.node_names_zone` is set in `node.yaml`, every node of the cluster that answers the zone runs `nodenames.Syncer` (`core/pkg/nodenames/sync.go`, started from `startDNSRegistration` by `startNodeNamesSync`, `core/pkg/node/dns_node_names.go`). It pages the chain's `orama.nodes.v1.Query/NodeNames` through the co-located node's RPC (1,000 names a page, resumed by the previous page's key) once every `SyncInterval` (60 s), builds the records the zone must hold, and reconciles them against the rows tagged `namespace = 'node-names'`: a name is one `A` or `AAAA` row per literal public IP of the named node, TTL 300, and nothing else (no NS, no glue). The statements are keyed on (fqdn, type, value): an insert is `ON CONFLICT DO NOTHING`, so a row another writer owns is never claimed, a reactivation and a delete name the tag, so no row of another writer is touched, and several nodes writing the same difference leave the same rows. Adds and reactivations run before deletes, so a name whose node moved is never empty. Nothing is written unless the whole list was read; a page key that repeats, a list over `MaxPages` (1,000 pages) or a failed page leaves the zone as it was. An address in a private or reserved range (`netguard.Reserved`), a malformed label and the labels the zone publishes itself (`ns<N>`, `seed<N>`) are refused and logged once. One pass writes at most `MaxWritesPerPass` (2,000) rows and the next starts a second later. `ValidateDNS` (`core/pkg/config/validate/dns.go`) stops the node at start when the zone is malformed or is not the cluster's `http_gateway.base_domain` or a subdomain of it.
+
 #### Namespace records
 
 A namespace has three families of records, all with TTL 60.
@@ -214,6 +218,7 @@ Delegation comes before certificates. The genesis node's certificate is issued b
 | What | Where | Written by | Read by |
 |---|---|---|---|
 | `dns_records` | index RQLite, migrations `005` and `009` (unique on fqdn, type, value) | every writer in this chapter | the plugin, the delegation query, the node sweeps |
+| Node-name rows in `dns_records` | the same table, tagged `namespace = 'node-names'` | `nodenames.Syncer` on every node of the cluster that sets `dns.node_names_zone` | the plugin |
 | `dns_nameservers` | index RQLite, migration `011` (primary key `hostname`, unique on node and domain) | `claimNameserverSlot`, `orama node remove` | the node (NS and SOA reconcile, push pin), the CLI |
 | `dns_nodes` | index RQLite | the index gateway on the node's signed request, the reaper | liveness predicates of every purge, the push pin |
 | Plugin cache | CoreDNS process memory, 10,000 entries | the plugin | the plugin; lost on restart |
@@ -294,6 +299,7 @@ Nothing about DNS lives on disk besides the Corefile; the zone is the table.
 | Backend health ping / query timeout | 5 s / 10 s | Corefile `refresh`, `NewRQLiteClient` |
 | Backend connection pool | 10 idle connections per host | `NewRQLiteClient` |
 | Record TTLs | 300 s base, glue, NS, SOA, deployments; 60 s namespace, TURN, stealth, push, ACME | writers above |
+| Node-name sync period / pass timeout / writes per pass / pages per pass | 60 s / 45 s / 2,000 / 1,000 (1,000 names each) | `nodenames.SyncInterval`, `SyncTimeout`, `MaxWritesPerPass`, `MaxPages` |
 | Sweep, probe, reconcile periods | 30 s, 30 s, 60 s | `startDNSHeartbeat`, `startNamespaceHealthLoop`, `webrtcReconcileInterval` |
 | Inactive after / purge after | 120 s / 15 min | `reapInactiveNodeDNS`, `purgeStaleAfter` |
 | Withdraw / restore damping | 3 probes each (about 90 s) | `namespace_health.go` |
@@ -307,6 +313,8 @@ Nothing about DNS lives on disk besides the Corefile; the zone is the table.
 **Cache and misses.** A miss costs one indexed SELECT for an answer from the name's own rows, two from a wildcard, three for a negative answer (typed, owners, SOA), whatever the depth of the name; nothing a query does scans the table. Concurrent identical misses are one resolution. The table is read in full once per refresh period (the distinct names, for the ancestor set), whatever the query rate. The cache is per process and per type, and answers are stored under the query name, so a wildcard-matched name occupies its own entry. Rate limiting at the edge is not done (see Known gaps).
 
 **Round robin size.** A namespace has three gateway nodes, so an `ns-` name has three rows. The base wildcard has one row per nameserver node, at most 13. Nothing in the plugin limits answer size beyond what CoreDNS's UDP truncation does.
+
+**Node names.** At ten times today's fleet the sync keeps one to two rows per claimed name and reads one page of 1,000 names per pass for every thousand names, from the node's own chain RPC; the diff is small once the zone is up to date, so a steady-state pass is reads only. A claim or release reaches DNS within a pass plus the 300 s TTL. Each of the cluster's nodes runs the read, so the chain sees as many reads as nodes, a minute apart.
 
 **Fleet size.** The registry holds one row per record, not per query. Ten times the namespaces is ten times the namespace rows (two gateway names per node, up to three TURN and stealth names), still a small table. Deployment rows grow with deployments times replicas.
 

@@ -82,6 +82,7 @@ type Node struct {
 	// than once. Each loop must start exactly once, and from the supervisor's
 	// run context so it outlives any single attempt.
 	dnsHeartbeatOnce  sync.Once
+	nodeNamesOnce     sync.Once
 	monitoringOnce    sync.Once
 	wgSyncOnce        sync.Once
 	ipfsSwarmSyncOnce sync.Once

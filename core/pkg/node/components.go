@@ -312,6 +312,7 @@ func (n *Node) ensureDataDir(context.Context) error {
 // outlives the bounded writes below and survives every retry of this component.
 func (n *Node) startDNSRegistration(ctx context.Context) error {
 	n.dnsHeartbeatOnce.Do(func() { n.startDNSHeartbeat(ctx) })
+	n.nodeNamesOnce.Do(func() { n.startNodeNamesSync(ctx) })
 
 	workCtx, cancel := context.WithTimeout(ctx, dnsWorkTimeout)
 	defer cancel()

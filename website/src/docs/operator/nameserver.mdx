@@ -108,6 +108,30 @@ Per-namespace records are round-robin sets: `ns-<namespace>.<base>` (the gateway
 
 Two safety properties: the staleness window (15 minutes) is far longer than the 120-second active-to-inactive flip, so a blip never deletes records; and the purge never empties a name, because deleting the last record of a namespace host would make the resolver fall through to the base wildcard and silently send clients to a node that does not host the namespace. A silent misroute is harder to diagnose than an outright failure. If a host is down to one record pointing at a departed node, add a replacement node and it re-advertises itself on the next sweep.
 
+## Serving node names
+
+On a network such as stagenet, an operator can claim a short identification name for each node on the chain (`MsgClaimNodeName`, see [Nodes](/docs/blockchain/nodes#identification-names)), and `<name>.<network>.orama.network` must then resolve to the node. The cluster whose nameservers answer that zone does this from the chain, with no one writing a record by hand. A name is an address record (A or AAAA) for each literal public IP among the node's endpoints, and nothing more: no NS record and no glue, so a name delegates nothing. A private cluster does not use this; it serves its own domain with its own NS and glue (above).
+
+Turn it on in `node.yaml` of the cluster's nodes that have the chain next to them (a global layer installed on the same machine):
+
+```yaml
+http_gateway:
+  base_domain: stagenet.orama.network
+dns:
+  node_names_zone: stagenet.orama.network   # empty or absent: this node publishes no names
+```
+
+The zone must be the cluster's `http_gateway.base_domain` or a subdomain of it, in lower case with no trailing dot. Any other value stops `orama-node` at start with the key's name in the message, because records written under a zone this cluster's nameservers are never asked for would be lost. Only the cluster that is the authority for the zone sets it.
+
+Each such node pages the chain's `NodeNames` query (1,000 names a page) once a minute and keeps its `dns_records` equal to the answer, under the owner tag `node-names`:
+
+- It adds the records that are missing, reactivates one that something deactivated, and removes the records of a name that was released or whose node's address changed. Records are added before any is removed, so a name that moves never stops resolving.
+- It writes nothing unless it read the whole list. A chain that fails half way, a page key that repeats or more than a million names leaves the zone as it was and is logged as a failed pass (`Node names sync failed`).
+- It publishes only a literal public IP. An address in a private, loopback, link-local, multicast or otherwise reserved range is refused and logged once (`Node name not published`), and so is a name that is not a valid label or that is a nameserver or seed label (`ns1`, `seed2`). Rows of any other owner are never touched.
+- One pass writes at most 2,000 rows; a large first pass finishes over the next passes, a second apart. Every node of the cluster runs the same idempotent sync, so losing one does not stop the zone.
+
+A claim or a release is in DNS about a minute after it is in a block, plus the 300-second record TTL. Check a name with `dig @<nameserver> alice.stagenet.orama.network`, or read it from the chain with `orama chain query orama.nodes.v1.Query/NodeByName '{"name":"alice"}'`.
+
 ## Troubleshooting
 
 **DNS not resolving.**
@@ -118,6 +142,8 @@ Two safety properties: the staleness window (15 minutes) is far longer than the 
 4. Test locally: `dig @localhost <base-domain>`.
 
 **Glue not propagating.** For a whole registered domain, glue is stored at the registry and can take up to 48 hours; confirm at your registrar it saved. For a subdomain, glue is an ordinary A record in the parent zone; check it is not proxied. A slot does not move because a heartbeat was missed. It moves when its holder is removed with `orama node remove`, or when that node's public address changes. If a glue record names an address that no longer answers, run `orama node dns delegation --env <env>` and update the parent zone.
+
+**A node name does not resolve.** Is `dns.node_names_zone` set on a node of the cluster whose nameservers answer the zone, and does `sudo orama node logs node` show `Started node names sync`? `Node names sync failed` names the cause: the chain not reachable from the node (the node must have the global layer next to it), or the registry not ready. A name whose node has no literal public IP among its endpoints has no record, and `Node name not published` says when an address was refused.
 
 **SERVFAIL.** Usually CoreDNS configuration: check the Corefile syntax, RQLite connectivity and firewall rules. A zone with no SOA yet (no slot has glue) answers SERVFAIL rather than inventing one.
 

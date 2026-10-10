@@ -7,7 +7,10 @@
 # order (the DNS sync loop's read). MsgReleaseNodeName and retiring the node
 # return the deposit and free the name. The refusals are the claim of a
 # reserved, malformed or taken name, a second name for a node, and a release
-# of a name the node does not hold.
+# of a name the node does not hold. The records are served by the cluster that
+# sets dns.node_names_zone (core/pkg/nodenames); the run's nodes do not set it and
+# its test nodes have hostname endpoints, so the DNS answer is covered by the
+# package's unit tests until a run can write node.yaml before install.
 id: chain-node-names
 title: Node identification names
 area: chain
@@ -28,3 +31,4 @@ covers:
     - orama.nodes.v1.NodeNames
   claims:
     - "docs/CHAIN.md#x-nodes: a node holds at most one identification name, a name belongs to one node (first come first served), a reserved or malformed name is refused, and the deposit is returned on release or retire"
+    - "docs/whitepaper/technical-reference/vol1/24-dns-and-nameservers.md#node-identification-names: NOT FLEET-TESTED: the cluster that sets dns.node_names_zone serves <name>.<zone> as an A or AAAA record per literal public IP from the chain, adds before it removes, refuses private addresses and writes nothing from a partial read (unit-tested in core/pkg/nodenames; trigger: the harness can write node.yaml before install, Bugboard 2818 E2E-19)"
