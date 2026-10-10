@@ -62,7 +62,7 @@ func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	if f.answerHash != "" {
 		return f.answerHash, f.broadcast
 	}
-	return TxHash(tx), f.broadcast
+	return clusterreg.TxHash(tx), f.broadcast
 }
 func (f *fakeChain) WaitIncluded(_ context.Context, hash string) (int64, error) {
 	f.waited = append(f.waited, hash)

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/DeBrosOfficial/network/pkg/nodenames"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,6 +16,7 @@ import (
 	"github.com/DeBrosOfficial/network/pkg/gateway/ctxkeys"
 	"github.com/DeBrosOfficial/network/pkg/gateway/handlers/operator"
 	namespacepkg "github.com/DeBrosOfficial/network/pkg/namespace"
+	"github.com/DeBrosOfficial/network/pkg/nodenames"
 	"github.com/DeBrosOfficial/network/pkg/rqlite"
 	"go.uber.org/zap"
 )

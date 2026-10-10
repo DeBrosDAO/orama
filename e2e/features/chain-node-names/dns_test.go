@@ -48,15 +48,17 @@ for _ in range(an):
     i+=l
 `
 
-// answersFor is the A addresses server answers for fqdn, asked from n itself.
-func answersFor(t *testing.T, f *fleet.Fleet, n fleet.Node, server, fqdn string) []string {
+// answersFor is the A addresses server answers for fqdn, asked from n itself. A query that cannot
+// be made or answered is an error for the poll to retry, not a failed test: the nameserver may be
+// restarting.
+func answersFor(f *fleet.Fleet, t *testing.T, n fleet.Node, server, fqdn string) ([]string, error) {
 	t.Helper()
 	out := f.Exec(t, n, fmt.Sprintf("python3 -c %s %s %s", fleet.ShellQuote(aQueryScript), fleet.ShellQuote(server), fleet.ShellQuote(fqdn)))
 	lines := strings.Fields(out.Stdout)
 	if out.Exit != 0 || len(lines) == 0 {
-		t.Fatalf("%s: DNS query to %s for %s failed (exit %d): %s %s", n.Name, server, fqdn, out.Exit, out.Stdout, out.Stderr)
+		return nil, fmt.Errorf("%s: DNS query to %s for %s failed (exit %d): %s %s", n.Name, server, fqdn, out.Exit, out.Stdout, f.Redact(out.Stderr))
 	}
-	return lines[1:]
+	return lines[1:], nil
 }
 
 // waitForAnswer polls until the answer for fqdn contains want (or, when present is false, no
@@ -65,7 +67,10 @@ func waitForAnswer(t *testing.T, f *fleet.Fleet, n fleet.Node, server, fqdn, wan
 	t.Helper()
 	state := map[bool]string{true: "present", false: "gone"}[present]
 	eventually.Require(t, pollEvery, syncBudget, fmt.Sprintf("%s answers %s for %s (%s)", server, want, fqdn, state), func() (bool, error) {
-		got := answersFor(t, f, n, server, fqdn)
+		got, err := answersFor(f, t, n, server, fqdn)
+		if err != nil {
+			return false, err
+		}
 		has := slices.Contains(got, want)
 		if has == present {
 			return true, nil
@@ -94,9 +99,9 @@ func TestNodeNames_theZoneServesAClaimAndDropsARelease(t *testing.T) {
 	c := chain.New(t)
 	n := c.Node(t, chain.OperatorNode)
 
-	baseDomain := strings.TrimSpace(f.Exec(t, n, "awk '/base_domain:/ {gsub(/[\"\\x27]/,\"\",$2); print $2; exit}' "+infra.NodeConfigPath).Stdout)
+	baseDomain := f.State.BaseDomain
 	if baseDomain == "" {
-		t.Fatalf("%s: %s has no http_gateway.base_domain, so the cluster answers no zone", n.Name, infra.NodeConfigPath)
+		t.Fatal("the run has no base domain, so its cluster answers no zone")
 	}
 	zone := zoneLabel + "." + baseDomain
 	setZone(t, f, n, zone)

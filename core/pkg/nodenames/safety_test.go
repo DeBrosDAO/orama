@@ -159,30 +159,33 @@ func TestSync_aSmallZoneIsRemovedWholeWithinTheFloor(t *testing.T) {
 	}
 }
 
-func TestSync_aCancelledPassReportsOneError(t *testing.T) {
+// A cancelled context ends the write loop with one error, not one per row, and writes nothing.
+func TestApply_aCancelledContextEndsThePassWithOneError(t *testing.T) {
 	db := newRegistry(t)
-	var names []Named
-	for i := 0; i < 30; i++ {
-		names = append(names, named(fmt.Sprintf("host-%02d", i), fmt.Sprintf("93.184.2.%d", 1+i)))
-	}
+	want, _ := Desired(manyNames(30), testZone)
 	ctx, cancel := context.WithCancel(context.Background())
-	chain := &cancellingChain{fakeChain: fakeChain{names: names}, cancel: cancel}
-	_, err := syncer(db, chain).Sync(ctx)
-	if err == nil || strings.Count(err.Error(), "\n") > 1 {
-		t.Fatalf("err = %v, want one error and not one per row", err)
+	cancel()
+	var stats Stats
+	err := apply(ctx, db, diff(want, nil), &stats)
+	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("err = %v, want one error wrapping context.Canceled", err)
+	}
+	if stats.Added != 0 || len(rows(t, db)) != 0 {
+		t.Fatalf("a cancelled pass wrote: %+v, %v", stats, rows(t, db))
 	}
 }
 
-// cancellingChain cancels the pass once it has answered, before any row is written.
-type cancellingChain struct {
-	fakeChain
-	cancel func()
-}
-
-func (c *cancellingChain) NodeNames(ctx context.Context, key string) (Page, error) {
-	page, err := c.fakeChain.NodeNames(ctx, key)
-	c.cancel()
-	return page, err
+// The pass's own deadline is reported as one, so Run can retry it promptly.
+func TestApply_anExpiredDeadlineIsADeadlineError(t *testing.T) {
+	db := newRegistry(t)
+	want, _ := Desired(manyNames(30), testZone)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	var stats Stats
+	err := apply(ctx, db, diff(want, nil), &stats)
+	if !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "\n") {
+		t.Fatalf("err = %v, want one error wrapping context.DeadlineExceeded", err)
+	}
 }
 
 // floatDriver answers dns_records reads the way the rqlite driver does: a boolean column is the

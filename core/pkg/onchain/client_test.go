@@ -291,7 +291,7 @@ func TestSend_theReceiptCarriesTheLocallyComputedHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Hash != TxHash(chain.sent[0]) || len(chain.waited) != 1 || chain.waited[0] != receipt.Hash {
+	if receipt.Hash != clusterreg.TxHash(chain.sent[0]) || len(chain.waited) != 1 || chain.waited[0] != receipt.Hash {
 		t.Fatalf("receipt %s, waited %v", receipt.Hash, chain.waited)
 	}
 }
@@ -313,13 +313,6 @@ func TestSend_aLowerCaseAnswerOfTheRightHashIsAccepted(t *testing.T) {
 	}
 	if second.Hash != first.Hash || chain.waited[len(chain.waited)-1] != first.Hash {
 		t.Fatalf("second %s, waited %v", second.Hash, chain.waited)
-	}
-}
-
-func TestTxHash_isTheSHA256OfTheBytesInUpperCaseHex(t *testing.T) {
-	// SHA-256 of the empty input.
-	if got := TxHash(nil); got != "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" {
-		t.Fatalf("TxHash(nil) = %s", got)
 	}
 }
 
@@ -345,18 +338,18 @@ func TestSend_theSignedBodyCarriesATimeoutHeight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := uint64(4321 + TimeoutHeightMargin); p.tx.TimeoutHeight != want {
+	if want := uint64(4321 + clusterreg.TimeoutHeightMargin); p.tx.TimeoutHeight != want {
 		t.Fatalf("timeout height %d, want %d", p.tx.TimeoutHeight, want)
 	}
 	if _, err := p.Submit(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	body := field(t, signer.signed[0], 1)
-	if got := varint(t, body, 3); got != 4321+TimeoutHeightMargin {
-		t.Fatalf("the signed body's timeout_height = %d, want %d", got, 4321+TimeoutHeightMargin)
+	if got := varint(t, body, 3); got != 4321+clusterreg.TimeoutHeightMargin {
+		t.Fatalf("the signed body's timeout_height = %d, want %d", got, 4321+clusterreg.TimeoutHeightMargin)
 	}
 	// The simulation prices the transaction that will be signed, timeout included.
-	if got := varint(t, field(t, chain.simulated[0], 1), 3); got != 4321+TimeoutHeightMargin {
+	if got := varint(t, field(t, chain.simulated[0], 1), 3); got != 4321+clusterreg.TimeoutHeightMargin {
 		t.Fatalf("the simulated body's timeout_height = %d", got)
 	}
 }

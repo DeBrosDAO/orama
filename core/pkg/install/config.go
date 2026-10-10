@@ -41,9 +41,6 @@ type ConfigGenerator struct {
 	// acmeCA is the ACME directory set for this install; empty carries the
 	// existing node.yaml's value forward (see ACMECA).
 	acmeCA string
-	// nodeNamesZone is the node names zone set for this install; empty carries the existing
-	// node.yaml's value forward (see NodeNamesZone).
-	nodeNamesZone string
 	// publicIP is this node's public address; empty carries the existing
 	// node.yaml's value forward.
 	publicIP string
@@ -307,6 +304,13 @@ func (cg *ConfigGenerator) GenerateNodeConfig(peerAddresses []string, vpsIP stri
 	if err != nil {
 		return "", err
 	}
+	// The node refuses to start on a zone that is not strictly below its base domain
+	// (config.Validate). Writing one here would turn a regeneration into a node that does not
+	// come back, so it fails now, naming the key.
+	if zone != "" && !validate.ZoneServedBy(zone, baseDomain) {
+		return "", fmt.Errorf("node.yaml dns.node_names_zone %q is not a sub-zone below the base domain %q: "+
+			"use a dedicated subdomain such as nodes.%s, or remove the key", zone, baseDomain, baseDomain)
+	}
 	data.NodeNamesZone = zone
 
 	publicIP, err := cg.PublicIP()
@@ -410,34 +414,28 @@ func (cg *ConfigGenerator) ACMECA() (string, error) {
 	return parsed.TLS.ACMECA, nil
 }
 
-// SetNodeNamesZone sets the zone this cluster publishes node identification names under.
-func (cg *ConfigGenerator) SetNodeNamesZone(zone string) { cg.nodeNamesZone = zone }
-
-// NodeNamesZone is the node names zone set for this run, else the one the existing node.yaml
-// carries (dns.node_names_zone), else "" (no names published). An unreadable node.yaml is an
-// error and not a silent default: dropping the zone on a regeneration would take the network's
-// node names out of DNS on the next upgrade. The value is checked again rather than trusted
-// for having been checked when it was written.
+// NodeNamesZone is the node names zone the existing node.yaml carries (dns.node_names_zone), or ""
+// (no names published) when there is none. An operator writes it into node.yaml and every
+// regeneration keeps it. An unreadable node.yaml is an error and not a silent default: dropping
+// the zone on a regeneration would take the network's node names out of DNS on the next upgrade.
+// The value is checked again rather than trusted for having been checked when it was written.
 func (cg *ConfigGenerator) NodeNamesZone() (string, error) {
-	zone := cg.nodeNamesZone
-	if zone == "" {
-		raw, err := cg.readNodeConfig()
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", nil
-		}
-		if err != nil {
-			return "", fmt.Errorf("read node.yaml for dns.node_names_zone: %w", err)
-		}
-		var parsed struct {
-			DNS struct {
-				NodeNamesZone string `yaml:"node_names_zone"`
-			} `yaml:"dns"`
-		}
-		if err := yaml.Unmarshal(raw, &parsed); err != nil {
-			return "", fmt.Errorf("parse node.yaml for dns.node_names_zone: %w", err)
-		}
-		zone = parsed.DNS.NodeNamesZone
+	raw, err := cg.readNodeConfig()
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
 	}
+	if err != nil {
+		return "", fmt.Errorf("read node.yaml for dns.node_names_zone: %w", err)
+	}
+	var parsed struct {
+		DNS struct {
+			NodeNamesZone string `yaml:"node_names_zone"`
+		} `yaml:"dns"`
+	}
+	if err := yaml.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse node.yaml for dns.node_names_zone: %w", err)
+	}
+	zone := parsed.DNS.NodeNamesZone
 	if zone != "" {
 		if err := validate.ValidateZone(zone); err != nil {
 			return "", fmt.Errorf("node.yaml dns.node_names_zone: %w", err)

@@ -49,7 +49,7 @@ func (f *fakeChain) BaseFee(context.Context) (string, error) {
 func (f *fakeChain) SimulateGas(context.Context, []byte) (uint64, error) { return 50_000, nil }
 func (f *fakeChain) Broadcast(_ context.Context, tx []byte) (string, error) {
 	f.sent++
-	return onchain.TxHash(tx), f.broadcastErr
+	return clusterreg.TxHash(tx), f.broadcastErr
 }
 func (f *fakeChain) WaitIncluded(context.Context, string) (int64, error) { return 77, f.waitErr }
 

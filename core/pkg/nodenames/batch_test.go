@@ -136,34 +136,70 @@ func TestNextWait(t *testing.T) {
 	live := context.Background()
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
-	timeout := fmt.Errorf("the pass ended before every row was written: %w", context.DeadlineExceeded)
+	boom := errors.New("the chain is down")
 	for name, tc := range map[string]struct {
-		run   context.Context
-		stats Stats
-		err   error
-		want  time.Duration
+		run      context.Context
+		stats    Stats
+		err      error
+		timedOut bool
+		want     time.Duration
 	}{
-		"up to date":                    {live, Stats{}, nil, SyncInterval},
-		"budget left over":              {live, Stats{Remaining: 3}, nil, CatchUpDelay},
-		"the pass hit its own timeout":  {live, Stats{}, timeout, CatchUpDelay},
-		"the timeout joined with a row": {live, Stats{}, errors.Join(errors.New("add x"), timeout), CatchUpDelay},
-		"another failure":               {live, Stats{Remaining: 3}, errors.New("the chain is down"), SyncInterval},
-		"the run is ending":             {ended, Stats{}, timeout, SyncInterval},
+		"up to date":                       {live, Stats{}, nil, false, SyncInterval},
+		"budget left over":                 {live, Stats{Remaining: 3}, nil, false, CatchUpDelay},
+		"the pass ran out of time":         {live, Stats{}, boom, true, CatchUpDelay},
+		"finished exactly at the deadline": {live, Stats{}, nil, true, SyncInterval},
+		"another failure":                  {live, Stats{Remaining: 3}, boom, false, SyncInterval},
+		"the run is ending":                {ended, Stats{}, boom, true, SyncInterval},
 	} {
-		if got := nextWait(tc.run, tc.stats, tc.err); got != tc.want {
+		if got := nextWait(tc.run, tc.stats, tc.err, tc.timedOut); got != tc.want {
 			t.Errorf("%s: %s, want %s", name, got, tc.want)
 		}
 	}
 }
 
-// The pass's own deadline ends it part way with an error that says so, and the rows already
-// written stay written.
-func TestSync_aDeadlineMidPassIsADeadlineError(t *testing.T) {
+// slowChain blocks until the pass's time runs out and then fails with an error that has lost its
+// cause: text only, as a driver or a joined error can deliver it.
+type slowChain struct{ fakeChain }
+
+func (c *slowChain) NodeNames(ctx context.Context, _ string) (Page, error) {
+	<-ctx.Done()
+	return Page{}, errors.New("read failed: " + ctx.Err().Error())
+}
+
+// A pass that ran out of its own time retries on the catch-up delay even when the error that
+// reports it is flattened text: the decision is the pass context's, not errors.Is on the error.
+func TestRun_aPassThatRanOutOfTimeRetriesPromptlyWhateverItsError(t *testing.T) {
+	db := newRegistry(t)
+	s := &Syncer{Registry: registryOf(db), Chain: &slowChain{}, Zone: testZone, Timeout: 20 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	times := make(chan time.Time, 4)
+	errs := make(chan error, 4)
+	go s.Run(ctx, func(_ Stats, err error) { errs <- err; times <- time.Now() })
+	first, second := <-times, time.Time{}
+	select {
+	case second = <-times:
+	case <-time.After(CatchUpDelay * 5):
+		t.Fatalf("no second pass within %s: a timed-out pass waited the whole interval", CatchUpDelay*5)
+	}
+	if gap := second.Sub(first); gap > CatchUpDelay*4 {
+		t.Fatalf("the retry came %s later, want about %s", gap, CatchUpDelay)
+	}
+	if err := <-errs; err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the test's error must be flattened text, got %v", err)
+	}
+}
+
+// Sync given a pass context that has already expired fails, and says it was the deadline.
+func TestSync_anExpiredPassContextIsADeadlineError(t *testing.T) {
 	db := newRegistry(t)
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 	_, err := syncer(db, &fakeChain{names: manyNames(10)}).Sync(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+	if len(rows(t, db)) != 0 {
+		t.Fatal("an expired pass wrote rows")
 	}
 }

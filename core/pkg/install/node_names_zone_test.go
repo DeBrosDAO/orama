@@ -18,10 +18,6 @@ func TestNodeNamesZone_carriedForwardFromNodeYAML(t *testing.T) {
 	if err != nil || got != "nodes.stagenet.orama.network" {
 		t.Fatalf("got %q, %v", got, err)
 	}
-	cg.SetNodeNamesZone("names.stagenet.orama.network")
-	if got, _ := cg.NodeNamesZone(); got != "names.stagenet.orama.network" {
-		t.Errorf("an explicit zone must win over the carried-forward one, got %q", got)
-	}
 }
 
 func TestRegeneratedNodeYAML_keepsTheNodeNamesZoneAndStillParses(t *testing.T) {
@@ -74,5 +70,28 @@ func TestNodeYAML_withoutAZoneHasNoDNSBlock(t *testing.T) {
 	}
 	if strings.Contains(rendered, "node_names_zone") {
 		t.Fatalf("a node with no zone renders one:\n%s", rendered)
+	}
+}
+
+// The node refuses to start on a zone that is not below its base domain, so the regeneration that
+// would write one fails first, and writes nothing.
+func TestGenerateNodeConfig_refusesAZoneTheNodeWouldNotStartWith(t *testing.T) {
+	for zone, base := range map[string]string{
+		"stagenet.orama.network":        "stagenet.orama.network", // the base domain itself
+		"nodes.testnet.orama.network":   "stagenet.orama.network", // another network's
+		"orama.network":                 "stagenet.orama.network", // the parent
+		"nodes.xstagenet.orama.network": "stagenet.orama.network", // a suffix that is not a subdomain
+	} {
+		dir := t.TempDir()
+		writeACMENodeYAML(t, dir, "dns:\n  node_names_zone: \""+zone+"\"\n")
+		_, err := NewConfigGenerator(dir).GenerateNodeConfig(nil, "10.0.0.5", "", base, base, false)
+		if err == nil || !strings.Contains(err.Error(), "dns.node_names_zone") {
+			t.Errorf("zone %q under base %q: err = %v", zone, base, err)
+		}
+	}
+	dir := t.TempDir()
+	writeACMENodeYAML(t, dir, "dns:\n  node_names_zone: \"nodes.stagenet.orama.network\"\n")
+	if _, err := NewConfigGenerator(dir).GenerateNodeConfig(nil, "10.0.0.5", "", "stagenet.orama.network", "stagenet.orama.network", false); err != nil {
+		t.Fatalf("a sub-zone below the base domain was refused: %v", err)
 	}
 }

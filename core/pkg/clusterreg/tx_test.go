@@ -164,3 +164,46 @@ func fieldBytes(t *testing.T, msg []byte, want protowire.Number) []byte {
 	t.Fatalf("field %d not found", want)
 	return nil
 }
+
+// The cluster registration's own sign input carries the timeout height into the body too.
+func TestSignInput_passesTheTimeoutHeightThrough(t *testing.T) {
+	pub, _ := hex.DecodeString(vectorPubKey)
+	in := SignInput{
+		Registration: Registration{Operator: vectorAddress, ClusterID: "mycluster", BaseDomain: "cluster.example.com", Endpoints: []string{"https://cluster.example.com"}},
+		PubKey:       pub, FeeAmount: "5", Gas: 9, ChainID: "orama-1", TimeoutHeight: 777,
+	}
+	doc, err := in.SignDoc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := timeoutOf(t, fieldBytes(t, doc, 1)); got != 777 {
+		t.Errorf("sign document timeout height = %d, want 777", got)
+	}
+	raw, err := in.TxRaw(make([]byte, 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := timeoutOf(t, fieldBytes(t, raw, 1)); got != 777 {
+		t.Errorf("tx body timeout height = %d, want 777", got)
+	}
+	in.TimeoutHeight = 0
+	doc, _ = in.SignDoc()
+	if got := timeoutOf(t, fieldBytes(t, doc, 1)); got != 0 {
+		t.Errorf("no timeout height was encoded as %d", got)
+	}
+}
+
+// timeoutOf is TxBody.timeout_height of an encoded body.
+func timeoutOf(t *testing.T, body []byte) uint64 {
+	t.Helper()
+	for len(body) > 0 {
+		num, typ, n := protowire.ConsumeTag(body)
+		body = body[n:]
+		if num == 3 && typ == protowire.VarintType {
+			v, _ := protowire.ConsumeVarint(body)
+			return v
+		}
+		body = body[protowire.ConsumeFieldValue(num, typ, body):]
+	}
+	return 0
+}

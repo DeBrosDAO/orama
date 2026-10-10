@@ -3,8 +3,6 @@ package onchain
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -45,12 +43,6 @@ const (
 
 	// maxChainIDLen is the longest chain id the client accepts.
 	maxChainIDLen = 64
-
-	// TimeoutHeightMargin is how many blocks past the newest one a transaction may still be
-	// included in. The chain refuses it after that, so a node that holds it cannot release it
-	// later. It is far longer than the two-minute wait for inclusion at any block time the
-	// networks run, and short enough that a lost transaction is dead within the hour.
-	TimeoutHeightMargin = 200
 
 	// simulationGasLimit and simulationFee fill the gas and fee fields of the
 	// transaction that is simulated: the chain does not check either in a
@@ -184,7 +176,7 @@ func (c *Client) prepare(ctx context.Context, typeURL string, msg []byte) (*Prep
 	}
 	tx := clusterreg.Direct{
 		TypeURL: typeURL, Msg: msg, PubKey: id.PubKey, Sequence: acct.Sequence,
-		ChainID: c.chainID, AccountNumber: acct.Number, TimeoutHeight: latest + TimeoutHeightMargin,
+		ChainID: c.chainID, AccountNumber: acct.Number, TimeoutHeight: clusterreg.TimeoutHeightAfter(latest),
 	}
 	if tx.Gas, err = c.gasFor(ctx, tx); err != nil {
 		return nil, err
@@ -298,7 +290,7 @@ func (p *Prepared) submit(ctx context.Context) (*Receipt, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build the transaction: %w", err)
 	}
-	local := TxHash(raw)
+	local := clusterreg.TxHash(raw)
 	answered, err := c.chain.Broadcast(ctx, raw)
 	if err != nil {
 		return nil, fmt.Errorf("broadcast the transaction: %w", err)
@@ -312,13 +304,6 @@ func (p *Prepared) submit(ctx context.Context) (*Receipt, error) {
 		return nil, fmt.Errorf("transaction %s: %w", local, err)
 	}
 	return &Receipt{Hash: local, Height: height, Gas: tx.Gas, Fee: tx.FeeAmount}, nil
-}
-
-// TxHash is the hash CometBFT and the Cosmos SDK give a transaction: the SHA-256 of its TxRaw
-// bytes, in upper-case hex.
-func TxHash(txRaw []byte) string {
-	sum := sha256.Sum256(txRaw)
-	return strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
 // scaleUp returns ceil(v * num / den), or an error when it does not fit a uint64.

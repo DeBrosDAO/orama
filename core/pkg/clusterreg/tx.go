@@ -35,7 +35,7 @@ func (in SignInput) SignDoc() ([]byte, error) {
 	return Direct{
 		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
 		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
-		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber, TimeoutHeight: in.TimeoutHeight,
 	}.SignDoc()
 }
 
@@ -48,7 +48,7 @@ func (in SignInput) TxRaw(signature []byte) ([]byte, error) {
 	return Direct{
 		TypeURL: RegisterClusterTypeURL, Msg: EncodeRegisterCluster(in.Registration),
 		PubKey: in.PubKey, Sequence: in.Sequence, FeeAmount: in.FeeAmount, Gas: in.Gas,
-		ChainID: in.ChainID, AccountNumber: in.AccountNumber,
+		ChainID: in.ChainID, AccountNumber: in.AccountNumber, TimeoutHeight: in.TimeoutHeight,
 	}.TxRaw(signature)
 }
 

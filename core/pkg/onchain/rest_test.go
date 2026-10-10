@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 )
 
 // REST drives the chain's real endpoints, in the order a transaction needs them.
@@ -73,7 +75,7 @@ func postedHash(t *testing.T, r *http.Request) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return TxHash(raw)
+	return clusterreg.TxHash(raw)
 }
 
 func TestREST_aNodeThatAnswersAnotherHashIsRefused(t *testing.T) {
