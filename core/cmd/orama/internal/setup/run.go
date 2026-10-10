@@ -73,6 +73,9 @@ type runner struct {
 	// quorumLossAllowed says the operator accepted a restart that takes a small
 	// cluster's quorum down: --allow-quorum-loss, or a yes to the plan that shows it.
 	quorumLossAllowed bool
+	// domainReady says the cluster's domain was found delegated, with a certificate,
+	// before a machine joined (domainBeforeJoin).
+	domainReady bool
 	// clusterSize is how many nodes the cluster has once this run is done.
 	clusterSize int
 	res         *Result

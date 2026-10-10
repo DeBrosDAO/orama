@@ -74,6 +74,9 @@ func (r *runner) clusterPhase(ctx context.Context) error {
 	r.clusterSize = r.countCluster()
 	var done []RecordedNode
 	for _, n := range r.runs {
+		if err := r.domainBeforeJoin(ctx, n); err != nil {
+			return err
+		}
 		if err := r.installCluster(ctx, n); err != nil {
 			return err
 		}
