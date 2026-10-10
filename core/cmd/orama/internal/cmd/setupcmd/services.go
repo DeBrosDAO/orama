@@ -42,6 +42,9 @@ func wizardServices() wizard.Services {
 		Networks: networkChoices,
 		HostKeys: hostKeys,
 		Inspect: func(ctx context.Context, o setup.Options) ([]setup.Inspection, error) {
+			if err := setup.ResolveAnnounced(ctx, &o, deps); err != nil {
+				return nil, err
+			}
 			return setup.Inspect(ctx, o, deps.Enroll)
 		},
 		Plan: func(ctx context.Context, o setup.Options) (*setup.Plan, error) { return setup.PlanFor(ctx, o, deps) },
@@ -90,7 +93,7 @@ func choicesFrom(reg *netregistry.Registry, active string) ([]wizard.NetworkChoi
 		if err != nil {
 			return nil, fmt.Errorf("read network %s: %w", name, err)
 		}
-		out = append(out, wizard.NetworkChoice{Name: name, ChainID: n.Manifest.ChainID, Default: name == active})
+		out = append(out, wizard.NetworkChoice{Name: name, ChainID: n.Manifest.ChainID, Default: name == active, Announced: n.Manifest.Announced()})
 	}
 	return out, nil
 }

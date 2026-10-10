@@ -35,7 +35,9 @@ var ErrGenesisChange = errors.New("the chain id is already published with a diff
 // Publish writes networks/<name>/ for a chain: genesis.json, release-root.json
 // and, last, manifest.json, so a reader that finds a manifest finds the files it
 // names. It refuses to give an already published chain id a different genesis:
-// every reset of a network gets a new chain id.
+// every reset of a network gets a new chain id. A network that is only announced
+// has no genesis to protect: the full manifest is written over the announcement,
+// keeping what the announcement says that the input leaves unset.
 func Publish(in PublishInput) (*Manifest, error) {
 	dir := filepath.Join(in.Dir, in.Name)
 	prev, err := readPublished(dir)
@@ -55,7 +57,7 @@ func Publish(in PublishInput) (*Manifest, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
-	if prev != nil && prev.ChainID == m.ChainID && prev.GenesisSHA256 != m.GenesisSHA256 {
+	if prev != nil && !prev.Announced() && prev.ChainID == m.ChainID && prev.GenesisSHA256 != m.GenesisSHA256 {
 		return nil, fmt.Errorf("%w: chain %s has genesis sha256 %s, the new genesis is %s; a reset needs a new chain id",
 			ErrGenesisChange, m.ChainID, prev.GenesisSHA256, m.GenesisSHA256)
 	}

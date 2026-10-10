@@ -166,11 +166,16 @@ func (m *Model) onNetworks(msg networksMsg) (tea.Model, tea.Cmd) {
 		return m.fail("%v", msg.err)
 	}
 	// A CLI that knows no network can still create one.
-	m.networks = msg.choices
-	for i, c := range msg.choices {
-		if c.Default {
-			m.cursor = i
+	m.networks, m.announced = nil, map[string]bool{}
+	for _, c := range msg.choices {
+		if c.Announced {
+			m.announced[c.Name] = true
+			continue
 		}
+		if c.Default {
+			m.cursor = len(m.networks)
+		}
+		m.networks = append(m.networks, c)
 	}
 	return m, nil
 }

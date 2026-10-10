@@ -343,3 +343,23 @@ func TestPrintSummary_aCreationSaysHowToPublish(t *testing.T) {
 		}
 	}
 }
+
+func TestChoicesFrom_marksAnAnnouncedNetwork(t *testing.T) {
+	root := []byte("root-newnet")
+	m := netregistry.Manifest{Name: "newnet", ChainID: "orama-newnet-stagenet-1", Channel: "nightly", MinVersion: "0.3.0",
+		ReleaseRepo: "https://r.example", ReleaseRootSHA256: netregistry.Digest(root)}
+	data, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, err := netregistry.LoadFS(fstest.MapFS{
+		"r/newnet/manifest.json": &fstest.MapFile{Data: data}, "r/newnet/release-root.json": &fstest.MapFile{Data: root},
+	}, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := choicesFrom(reg, "")
+	if err != nil || len(got) != 1 || !got[0].Announced {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}

@@ -11,6 +11,8 @@
 # before it builds; `orama network add` refuses a manifest URL that is not https
 # or does not end in /manifest.json; `orama maint network publish` writes a
 # network directory in a temp dir and refuses to change a published genesis;
+# `orama maint network announce` writes one with no genesis for a network that
+# does not exist yet, and refuses one that is created;
 # the hidden `orama maint` groups answer --help like the rest of the tree.
 # Nothing here changes the fleet.
 id: cli-env-auth-misc
@@ -37,6 +39,7 @@ covers:
     - orama maint global tor
     - orama maint inspect
     - orama maint network
+    - orama maint network announce
     - orama maint network publish
     - orama maint node
     - orama ssh
@@ -45,6 +48,7 @@ covers:
     - "docs/CLI_REFERENCE.md: generated from the cobra tree, so the binary shows exactly the documented commands, flags, aliases and usage lines"
     - "docs/CLI_REFERENCE.md#orama-network-add: a manifest URL must be https and end in /manifest.json; nothing is stored before the digest of the release root is confirmed"
     - "docs/CLI_REFERENCE.md#orama-maint-network-publish: a chain id that is already published keeps its genesis; a reset needs a new chain id"
+    - "docs/CLI_REFERENCE.md#orama-maint-network-announce: an announced network has a manifest and a release root and no genesis, and a network that is already created cannot be announced"
     - "docs/CLI_REFERENCE.md#orama-network-use: switch and enable are not subcommands"
     - "docs/CLI_REFERENCE.md#orama-network-add: --ca-file trusts a PEM bundle for this environment's domain only; without it the staging chain is refused"
     - "docs/DEVNET_INSTALL.md: a missing CA file is an error naming the environment"

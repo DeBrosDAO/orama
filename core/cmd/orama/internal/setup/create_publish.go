@@ -17,6 +17,9 @@ type CreatedNetwork struct {
 	Dir string
 	// Machines are the committee's addresses in order, for the seed records.
 	Machines []string
+	// Announced says the network was announced in the registry, so the files
+	// written replace its announcement.
+	Announced bool
 }
 
 // ManifestURL is where the website serves the manifest once the network is
@@ -42,6 +45,15 @@ func (c *CreatedNetwork) SeedRecords() []string {
 	return records
 }
 
+// replaces says, for a network that was announced, that the copy takes the place
+// of its announcement.
+func (c *CreatedNetwork) replaces() string {
+	if c.Announced {
+		return " (replacing its announcement: the manifest now pins the genesis)"
+	}
+	return ""
+}
+
 // NextSteps are the lines that tell the maintainer what makes the network
 // joinable, in order.
 func (c *CreatedNetwork) NextSteps() []string {
@@ -55,7 +67,7 @@ func (c *CreatedNetwork) NextSteps() []string {
 		steps = append(steps, "       "+r)
 	}
 	steps = append(steps,
-		fmt.Sprintf("  2. In the repository: copy %s to networks/%s/, run `make -C core sync-networks`, and commit networks/ and core/pkg/netregistry/embedded/.", filepath.Clean(c.Dir), m.Name),
+		fmt.Sprintf("  2. In the repository: copy %s to networks/%s/%s, run `make -C core sync-networks`, and commit networks/ and core/pkg/netregistry/embedded/.", filepath.Clean(c.Dir), m.Name, c.replaces()),
 		"     The next CLI release then knows the network by name.",
 		"  3. Deploy the website (website/deploy.sh): it serves networks/ at "+netregistry.PublishedBaseURL+".",
 		"Until a CLI release carries it, anyone can join by adding the network from the website's copy:",

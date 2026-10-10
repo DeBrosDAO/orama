@@ -46,6 +46,9 @@ func createNotes(c *CreateOptions, m *netregistry.Manifest, machines int) []stri
 		fmt.Sprintf("writes %s/%s/ (manifest, genesis, release root) for you to publish", c.PublishDir, m.Name),
 		"each seat's account is a key in oramad's test keyring on its machine (unencrypted, never copied off it)",
 	}
+	if c.Announced {
+		notes = append(notes, "the network is announced in the registry: what no flag set (chain id, release repository, channel, minimum version, seeds, faucet and release root) comes from its announcement, and the genesis built now is published over it")
+	}
 	if c.Production() {
 		return append(notes, "production chain id: the chain's own epochs, no faucet, and the operator account must be funded by hand")
 	}
@@ -62,7 +65,7 @@ func createNotes(c *CreateOptions, m *netregistry.Manifest, machines int) []stri
 // faucet looks for a node to sign on.
 func createNetwork(opts Options) (*netregistry.Network, string, error) {
 	c := opts.Create
-	root, err := readReleaseRoot(c.ReleaseRoot)
+	root, err := c.releaseRoot()
 	if err != nil {
 		return nil, "", err
 	}
@@ -75,6 +78,15 @@ func createNetwork(opts Options) (*netregistry.Network, string, error) {
 		env = m.Name
 	}
 	return &netregistry.Network{Manifest: m, Root: root}, env, nil
+}
+
+// releaseRoot is the release root of the new network: the file --release-root
+// names, else the root of the network's announcement.
+func (c *CreateOptions) releaseRoot() ([]byte, error) {
+	if c.ReleaseRoot == "" {
+		return c.AnnouncedRoot, nil
+	}
+	return readReleaseRoot(c.ReleaseRoot)
 }
 
 // readReleaseRoot reads --release-root, at most maxReleaseRootBytes.

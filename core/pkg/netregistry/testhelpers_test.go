@@ -35,3 +35,11 @@ func marshalManifest(t *testing.T, m Manifest) []byte {
 	}
 	return data
 }
+
+// announcedManifest is validManifest as it is announced: the chain id, the
+// release facts and the root, and no genesis.
+func announcedManifest() Manifest {
+	m := validManifest()
+	m.GenesisSHA256 = ""
+	return m
+}

@@ -78,6 +78,9 @@ type runner struct {
 // when a check fails before the first machine is touched: the wallet, the
 // network, the genesis, the hardware.
 func Run(ctx context.Context, opts Options, d Deps) (*Result, error) {
+	if err := ResolveAnnounced(ctx, &opts, d); err != nil {
+		return nil, err
+	}
 	if err := opts.Normalize(); err != nil {
 		return nil, err
 	}
@@ -150,6 +153,9 @@ func (r *runner) preflight(ctx context.Context) error {
 	if r.net, err = r.d.Networks.Resolve(ctx, r.opts.Network); err != nil {
 		return err
 	}
+	if err = checkJoinable(r.net); err != nil {
+		return err
+	}
 	if r.evm, err = r.d.Wallet.EVMAddress(ctx); err != nil {
 		return err
 	}
@@ -192,6 +198,9 @@ func planForNetwork(opts Options, d Deps, n *netregistry.Network) (*Plan, error)
 // PlanFor resolves the network and builds the plan of opts, touching no machine.
 // The wizard shows it before it asks to go ahead.
 func PlanFor(ctx context.Context, opts Options, d Deps) (*Plan, error) {
+	if err := ResolveAnnounced(ctx, &opts, d); err != nil {
+		return nil, err
+	}
 	if err := opts.Normalize(); err != nil {
 		return nil, err
 	}
@@ -200,6 +209,9 @@ func PlanFor(ctx context.Context, opts Options, d Deps) (*Plan, error) {
 	}
 	n, err := d.Networks.Resolve(ctx, opts.Network)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkJoinable(n); err != nil {
 		return nil, err
 	}
 	return planForNetwork(opts, d, n)

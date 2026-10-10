@@ -13,8 +13,9 @@
 # operator and nodes registered, networks/<name>/ written for publishing) and,
 # run again, keeps the genesis; E2E_SETUP_RELEASE_ROOT names the
 # release-root.json it needs (E2E_SETUP_RELEASE_REPO and E2E_SETUP_RELEASE_CHANNEL
-# say where the release comes from). A production chain id is refused before any
-# server is touched.
+# say where the release comes from; for a network the registry announced the root,
+# chain id and release come from the announcement). A production chain id is
+# refused before any server is touched.
 #
 # The network is the fleet's chain: E2E_SETUP_NETWORK names a network the CLI
 # knows (built in, or added from E2E_SETUP_MANIFEST_URL) whose seeds and
@@ -42,4 +43,6 @@ covers:
     - "docs/CLI_REFERENCE.md#orama-setup: nothing is installed on any machine until every machine passes"
     - "docs/CLI_REFERENCE.md#orama-setup: --create-network makes the machines the bootstrap committee of a new chain, builds its genesis from their keys and writes networks/<name>/ for publishing"
     - "docs/CLI_REFERENCE.md#orama-setup: running a creation again keeps the keys the machines made and the genesis they carry"
+    - "docs/CLI_REFERENCE.md#orama-setup: a network announced in the registry supplies its chain id, release repository, channel, seeds, faucet and release root to --create-network, and cannot be joined before it is created"
+    - "docs/CLI_REFERENCE.md#orama-setup: the validator's node and every seat of a created network bind their consensus key to the operator, signed on the node"
     - "docs/CLI_REFERENCE.md#orama-setup: a production chain id needs 30 bootstrap validators and is refused before any machine is touched"

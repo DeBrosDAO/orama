@@ -87,3 +87,45 @@ func TestMaintNetworkPublish_writesANetworkAndKeepsAPublishedGenesis(t *testing.
 		t.Errorf("publishing another genesis under a published chain id: exit %d, want %d and the reset rule\n%s", again.Exit, exitConflict, output(again))
 	}
 }
+
+// TestMaintNetworkAnnounce_writesAnAnnouncementAndRefusesACreatedNetwork:
+// announce writes manifest.json and release-root.json with no genesis, can be
+// written again, refuses a production chain id with a faucet, and refuses a
+// network that is already published with its genesis
+// (docs/CLI_REFERENCE.md#orama-maint-network-announce).
+func TestMaintNetworkAnnounce_writesAnAnnouncementAndRefusesACreatedNetwork(t *testing.T) {
+	t.Parallel()
+	cli := isolated(t)
+	dir := t.TempDir()
+	root := filepath.Join(dir, "root.json")
+	if err := os.WriteFile(root, []byte(`{"signed":{"_type":"root"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	networks := filepath.Join(dir, "networks")
+	announce := []string{"maint", "network", "announce", "--dir", networks, "--name", "e2eann", "--chain-id", "orama-e2eann-stagenet-1",
+		"--release-repo", "https://releases.example.org", "--release-root", root, "--channel", "nightly", "--faucet", "--seed", "seed1.e2eann.example.org"}
+	res := cli.MustOK(t, announce...)
+	if !strings.Contains(res.Stdout, "orama setup --create-network e2eann") {
+		t.Errorf("announce printed:\n%s", res.Stdout)
+	}
+	if _, err := os.Stat(filepath.Join(networks, "e2eann", "genesis.json")); err == nil {
+		t.Error("an announcement wrote a genesis")
+	}
+	cli.MustOK(t, announce...)
+
+	production := run(t, cli, "maint", "network", "announce", "--dir", networks, "--name", "e2eprod", "--chain-id", "orama-1",
+		"--release-repo", "https://releases.example.org", "--release-root", root, "--channel", "main", "--faucet")
+	if production.Exit != exitUsage {
+		t.Errorf("a production chain id with a faucet: exit %d, want %d\n%s", production.Exit, exitUsage, output(production))
+	}
+
+	genesis := filepath.Join(dir, "genesis.json")
+	if err := os.WriteFile(genesis, []byte(`{"chain_id":"orama-e2eann-stagenet-1"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli.MustOK(t, "maint", "network", "publish", "--dir", networks, "--name", "e2eann", "--chain-id", "orama-e2eann-stagenet-1", "--genesis", genesis)
+	again := run(t, cli, announce...)
+	if again.Exit != exitConflict || !strings.Contains(output(again), "already created") {
+		t.Errorf("announcing a created network: exit %d, want %d and the reason\n%s", again.Exit, exitConflict, output(again))
+	}
+}

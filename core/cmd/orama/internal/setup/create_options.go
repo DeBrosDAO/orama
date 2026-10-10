@@ -35,8 +35,14 @@ type CreateOptions struct {
 	// -localnet- is a production one (pkg/netclass).
 	ChainID string
 	// ReleaseRoot is the path of the release-root.json the network's releases
-	// are verified against; the manifest pins its digest.
+	// are verified against; the manifest pins its digest. Without it the run uses
+	// the root of the network's announcement (AnnouncedRoot).
 	ReleaseRoot string
+	// Announced says the network is announced in the registry, and ChainID,
+	// ReleaseRepo, Channel, MinVersion, Seeds, the faucet and AnnouncedRoot that
+	// the flags left unset were taken from its manifest (ResolveAnnounced).
+	Announced     bool
+	AnnouncedRoot []byte
 	// ReleaseRepo, Channel and MinVersion default to DefaultReleaseRepo, the
 	// channel of the class of the network (nightly for a test network, main for
 	// a production one) and this CLI's version.
@@ -103,11 +109,11 @@ func (o *Options) prepareCreate() error {
 	case o.NoValidator:
 		return clierr.Usage("--no-validator has no meaning with --create-network: the machines are the network's bootstrap validators")
 	case c.ChainID == "":
-		return clierr.Usage("--create-network needs --chain-id, for example orama-%s-stagenet-1 (a chain id without -stagenet-, -devnet- or -localnet- is a production one)", c.Name)
+		return clierr.Usage("--create-network needs --chain-id, for example orama-%s-stagenet-1 (a chain id without -stagenet-, -devnet- or -localnet- is a production one); an announced network supplies it (orama maint network announce)", c.Name)
 	case strings.Contains(c.ChainID, netclass.MarkerLocalnet):
 		return clierr.Usage("--chain-id %q is a localnet's: the chain locks no parameter on a localnet, which is for scripts/localnet on one machine; use a -stagenet- or -devnet- chain id", c.ChainID)
-	case c.ReleaseRoot == "":
-		return clierr.Usage("--create-network needs --release-root: the release-root.json the network's releases are verified against")
+	case c.ReleaseRoot == "" && c.AnnouncedRoot == nil:
+		return clierr.Usage("--create-network needs --release-root: the release-root.json the network's releases are verified against (an announced network supplies it: orama maint network announce)")
 	}
 	if err := netclass.CheckCommittee(c.ChainID, len(o.IPs)); err != nil {
 		return clierr.Usage("%v", err)

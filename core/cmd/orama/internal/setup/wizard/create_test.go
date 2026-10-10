@@ -114,3 +114,30 @@ func TestWizard_theFinishedCreationShowsHowToPublish(t *testing.T) {
 		}
 	}
 }
+
+func TestWizard_aNetworkThatIsAnnouncedIsNotJoinableAndIsCreatedWithOneQuestion(t *testing.T) {
+	f := newFake()
+	f.networks = append(f.networks, NetworkChoice{Name: "newnet", ChainID: "orama-newnet-stagenet-1", Announced: true})
+	d := newDriver(t, f, setup.Options{})
+	d.toNetworks()
+	if strings.Contains(d.m.View(), "newnet") {
+		t.Errorf("an announced network is offered to join:\n%s", d.m.View())
+	}
+	d.chooseCreate(1)
+	d.wantStep(stepCreateName)
+	d.text("newnet")
+	d.enter()
+	d.wantStep(stepStorage)
+	if c := d.m.opts.Create; c == nil || c.Name != "newnet" || c.ChainID != "" || c.ReleaseRoot != "" {
+		t.Fatalf("create = %+v: the announcement supplies the chain id and the release root", c)
+	}
+}
+
+func TestWizard_aNetworkThatIsNotAnnouncedStillAsksForTheChainID(t *testing.T) {
+	d := newDriver(t, newFake(), setup.Options{})
+	d.toNetworks()
+	d.chooseCreate(1)
+	d.text("othernet")
+	d.enter()
+	d.wantStep(stepCreateChainID)
+}

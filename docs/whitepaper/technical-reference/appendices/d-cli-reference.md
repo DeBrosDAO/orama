@@ -135,6 +135,7 @@ Every command the `orama` binary defines, with its flags. [The CLI](../vol1/35-t
   - [`orama maint inspect`](#orama-maint-inspect) - Inspect cluster health via SSH
   - [`orama maint invite`](#orama-maint-invite) - Mint an invite for a new node
   - [`orama maint network`](#orama-maint-network) - Maintain the published networks
+    - [`orama maint network announce`](#orama-maint-network-announce) - Write networks/&lt;name>/ for a network that does not exist yet
     - [`orama maint network publish`](#orama-maint-network-publish) - Write networks/&lt;name>/ for a chain that was just deployed
   - [`orama maint node`](#orama-maint-node) - Install, stage, recover and migrate nodes
     - [`orama maint node autoupdate`](#orama-maint-node-autoupdate) - Decide whether a newer release should be installed
@@ -2975,7 +2976,48 @@ Maintain the published networks
 orama maint network
 ```
 
-Subcommands: `publish`
+Subcommands: `announce`, `publish`
+
+## orama maint network announce
+
+Write networks/&lt;name>/ for a network that does not exist yet
+
+```text
+orama maint network announce [flags]
+```
+
+```text
+Write networks/<name>/ (release-root.json and, last, manifest.json) for a
+network whose chain has not been created: its name, the chain id it will have, the
+channel, the release repository and the release root its releases are verified
+against, whether it has a faucet, and its seeds. The manifest pins no genesis, so
+the network is listed but cannot be joined: 'orama setup --network <name>' says it
+has not been created yet.
+
+The person who creates the network then runs 'orama setup --create-network <name>'
+with no --release-root: the chain id, the release repository, the channel and the
+release root come from the announcement (a flag overrides). When the chain exists
+the creation publishes the full manifest, with the genesis, over the announcement.
+
+An announcement can be written again until the network is created. A network that
+is already created is refused: a reset needs a new chain id from the creation.
+
+Afterwards run 'make -C core sync-networks' so the binary embeds the manifest, and
+commit networks/ and core/pkg/netregistry/embedded/ together.
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--chain-id` | — | The chain id the network will have [required] |
+| `--channel` | — | Release channel: nightly, main or dev/&lt;branch> [required] |
+| `--dir` | `networks` | The repository's networks directory |
+| `--faucet` | `false` | The network funds new operators from a faucet |
+| `--min-version` | `0.3.0` | Oldest orama version that may join, X.Y.Z |
+| `--name` | — | Network name, for example stagenet [required] |
+| `--release-repo` | — | https base URL of the release repository [required] |
+| `--release-root` | — | The release-root.json file its releases are verified against [required] |
+| `--seed` | — | A seed DNS name (repeatable; default: the creator's seed&lt;N>.&lt;name>.orama.network) |
+
 
 ## orama maint network publish
 
@@ -5258,7 +5300,9 @@ operator and the nodes as it does for a join. It writes networks/<name>/ (manife
 release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
 id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
 needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
-releases are verified against. Running it again with the same machines resumes: a machine that
+releases are verified against. A network that was announced in the registry before it was created (orama maint network announce)
+supplies its chain id, release repository, channel, minimum version, seeds, faucet and release root, so those flags can be left out;
+a flag overrides the announcement, and the genesis built here is published over it. Joining a network that is only announced is refused. Running it again with the same machines resumes: a machine that
 has its keys keeps them, and a genesis the machines carry is kept (--force-new-genesis builds a
 new one, and only while no chain has run).
 
@@ -5272,7 +5316,7 @@ machine until every machine passes.
 | `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
 | `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
 | `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
-| `--chain-id` | — | With --create-network: the chain id. A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
+| `--chain-id` | — | With --create-network: the chain id (default: the announced network's). A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
 | `--channel` | — | With --create-network: the release channel, nightly, main or dev/&lt;branch> (default nightly, main for a production chain id) |
 | `--cluster-only` | `false` | Install the cluster node only, without the chain, storage or relay |
 | `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
@@ -5291,7 +5335,7 @@ machine until every machine passes.
 | `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add &lt;ip>), never from the command line |
 | `--publish-dir` | — | With --create-network: where networks/&lt;name>/ is written (default ./networks) |
 | `--release-repo` | — | With --create-network: the https base URL of the release repository (default https://releases.orama.network) |
-| `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest |
+| `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's) |
 | `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.&lt;name>.orama.network, one per machine) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |

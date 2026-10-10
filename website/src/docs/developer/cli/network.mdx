@@ -14,7 +14,45 @@ Maintain the published networks
 orama maint network
 ```
 
-Subcommands: `publish`
+Subcommands: `announce`, `publish`
+
+## orama maint network announce
+
+Write networks/&lt;name>/ for a network that does not exist yet
+
+```
+orama maint network announce [flags]
+```
+
+Write networks/&lt;name>/ (release-root.json and, last, manifest.json) for a
+network whose chain has not been created: its name, the chain id it will have, the
+channel, the release repository and the release root its releases are verified
+against, whether it has a faucet, and its seeds. The manifest pins no genesis, so
+the network is listed but cannot be joined: 'orama setup --network &lt;name>' says it
+has not been created yet.
+
+The person who creates the network then runs 'orama setup --create-network &lt;name>'
+with no --release-root: the chain id, the release repository, the channel and the
+release root come from the announcement (a flag overrides). When the chain exists
+the creation publishes the full manifest, with the genesis, over the announcement.
+
+An announcement can be written again until the network is created. A network that
+is already created is refused: a reset needs a new chain id from the creation.
+
+Afterwards run 'make -C core sync-networks' so the binary embeds the manifest, and
+commit networks/ and core/pkg/netregistry/embedded/ together.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--chain-id` | — | The chain id the network will have [required] |
+| `--channel` | — | Release channel: nightly, main or dev/&lt;branch> [required] |
+| `--dir` | `networks` | The repository's networks directory |
+| `--faucet` | `false` | The network funds new operators from a faucet |
+| `--min-version` | `0.3.0` | Oldest orama version that may join, X.Y.Z |
+| `--name` | — | Network name, for example stagenet [required] |
+| `--release-repo` | — | https base URL of the release repository [required] |
+| `--release-root` | — | The release-root.json file its releases are verified against [required] |
+| `--seed` | — | A seed DNS name (repeatable; default: the creator's seed&lt;N>.&lt;name>.orama.network) |
 
 ## orama maint network publish
 

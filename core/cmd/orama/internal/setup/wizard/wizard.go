@@ -25,6 +25,9 @@ type NetworkChoice struct {
 	ChainID string
 	// Default marks the one chosen when the person just presses enter.
 	Default bool
+	// Announced marks a network whose chain does not exist yet: it cannot be
+	// joined, and creating it needs no chain id or release root.
+	Announced bool
 }
 
 // Services is what the wizard needs from the outside. Each is called from a

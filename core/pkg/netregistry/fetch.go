@@ -125,8 +125,12 @@ func FetchNetwork(ctx context.Context, client *http.Client, manifestURL string) 
 }
 
 // FetchGenesis fetches this network's genesis and checks it against the
-// manifest. A genesis that is not there yet is ErrGenesisUnpublished.
+// manifest. A genesis that is not there yet is ErrGenesisUnpublished; a network
+// that is only announced has none to fetch, ErrNotCreated.
 func (n *Network) FetchGenesis(ctx context.Context, client *http.Client) ([]byte, error) {
+	if err := n.Manifest.CheckCreated(); err != nil {
+		return nil, err
+	}
 	genesisURL, err := n.GenesisURL()
 	if err != nil {
 		return nil, err

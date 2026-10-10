@@ -57,7 +57,9 @@ operator and the nodes as it does for a join. It writes networks/<name>/ (manife
 release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
 id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
 needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
-releases are verified against. Running it again with the same machines resumes: a machine that
+releases are verified against. A network that was announced in the registry before it was created (orama maint network announce)
+supplies its chain id, release repository, channel, minimum version, seeds, faucet and release root, so those flags can be left out;
+a flag overrides the announcement, and the genesis built here is published over it. Joining a network that is only announced is refused. Running it again with the same machines resumes: a machine that
 has its keys keeps them, and a genesis the machines carry is kept (--force-new-genesis builds a
 new one, and only while no chain has run).
 
@@ -77,6 +79,9 @@ machine until every machine passes.`,
     --ip 203.0.113.10 --ip 203.0.113.11 --ip 203.0.113.12 --ip 203.0.113.13 --ip 203.0.113.14 \
     --host-key 203.0.113.10=SHA256:... --host-key 203.0.113.11=SHA256:... --host-key 203.0.113.12=SHA256:... \
     --host-key 203.0.113.13=SHA256:... --host-key 203.0.113.14=SHA256:...
+
+  # Create a network that was announced: the registry supplies the chain id and the release root
+  orama setup --create-network stagenet --yes --ip 203.0.113.10 --host-key SHA256:...
 
   # A cluster of your own, on your own domain, without the chain
   orama setup --cluster-only --domain cluster.example.org --yes --ip 203.0.113.10 --host-key SHA256:...`,

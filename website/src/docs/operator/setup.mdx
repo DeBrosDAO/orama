@@ -9,7 +9,7 @@ This page describes what the command does today. The flags are in the [`orama se
 ## Before you run it
 
 - **RootWallet open and unlocked.** Every step after the first signs something.
-- **A network the CLI knows.** `orama network list` shows them. A network is chosen with `--network <name>`; without it, setup uses the network the active environment runs on, or the only one the CLI has. A network you add by URL (`orama network add <manifest-url>`) shows the digest of its release root and asks you to confirm it first; `--network` takes only the name, never a URL.
+- **A network the CLI knows.** `orama network list` shows them. A network that is only *announced* (its name, its chain id and its release root are published, but nobody has created the chain yet) is listed too and cannot be joined: `orama setup --network <name>` says `<name> has not been created yet; its creator runs orama setup --create-network <name>`. A network is chosen with `--network <name>`; without it, setup uses the network the active environment runs on, or the only one the CLI has. A network you add by URL (`orama network add <manifest-url>`) shows the digest of its release root and asks you to confirm it first; `--network` takes only the name, never a URL.
 - **Fresh machines** with a public IPv4 address, a supported OS ([What you need](/docs/operator/getting-started)) and a way in: a key your RootWallet already has installed, the root password stored in your vault (`rw vault add <ip>`, then `--password`), or a private key that opens it today (`--bootstrap-key`).
 - **The machine's SSH host key**, from your provider's console. Setup never uses your credential on a host key it was not shown and given: interactively it asks you to compare the fingerprint, unattended it needs `--host-key`.
 
@@ -41,7 +41,7 @@ orama setup --network stagenet --name alice --yes \
 
 ## What happens, in order
 
-1. **Preflight, nothing changed.** The RootWallet agent is checked, the network's manifest is loaded and its genesis is fetched and checked against the digest the manifest pins, and the plan is built and shown (and confirmed, unless `--yes`).
+1. **Preflight, nothing changed.** The RootWallet agent is checked, the network's manifest is loaded (an announced network is refused here: it has no genesis) and its genesis is fetched and checked against the digest the manifest pins, and the plan is built and shown (and confirmed, unless `--yes`).
 2. **Enrol and check every machine.** For each address: an SSH key in your vault, the host key pinned, the key installed over the credential you named, the architecture, hardware and what is already installed read. A machine below its floor stops the run here.
 3. **The release.** The newest release of the network's channel is fetched from the manifest's release repository and verified against the TUF root the network pins (the root built into your CLI, followed through the repository's rotations), then your RootWallet signs it as the build your cluster runs, and each machine verifies it again before it is put under `/opt/orama`. A machine that already runs exactly that build is left alone.
 4. **The cluster.** The first machine creates the cluster, the others join it, one after another; each invite is minted over SSH on a node that is already in. With `--domain`, the nodes are nameservers of that domain. After each machine the cluster and its nodes are recorded in your CLI configuration under the environment (`--env`, else the active environment on this network, else `<network>-<name>`).
@@ -68,8 +68,8 @@ orama setup --network stagenet --name alice --yes \
 ### What you need
 
 - **The same as a join:** RootWallet unlocked, fresh machines, and each machine's SSH host key.
-- **A chain id** (`--chain-id`). A test network's carries `-stagenet-`, `-devnet-` or `-localnet-`, for example `orama-stagenet-7`. Every reset of a network gets a new chain id, and a published chain id keeps its genesis for good. A `-localnet-` id is refused (the chain locks no parameter on a localnet, which is for one machine). Any other id is a production one: the chain refuses it with fewer than 30 bootstrap validators, a faucet, a genesis supply and short epochs. Setup refuses a production id below 30 machines before it touches any, and one run takes at most 20 machines, so this command creates test networks only: a production network would also need seat keys held outside `oramad`'s test keyring.
-- **The release root** (`--release-root`): the `release-root.json` the network's releases are verified against. The manifest pins its digest, and the release setup installs is fetched from `--release-repo` (default `https://releases.orama.network`), channel `--channel` (default `nightly`, `main` for a production id), and verified against this root.
+- **A chain id** (`--chain-id`; an [announced network](#announce-it-first) supplies it). A test network's carries `-stagenet-`, `-devnet-` or `-localnet-`, for example `orama-stagenet-7`. Every reset of a network gets a new chain id, and a published chain id keeps its genesis for good. A `-localnet-` id is refused (the chain locks no parameter on a localnet, which is for one machine). Any other id is a production one: the chain refuses it with fewer than 30 bootstrap validators, a faucet, a genesis supply and short epochs. Setup refuses a production id below 30 machines before it touches any, and one run takes at most 20 machines, so this command creates test networks only: a production network would also need seat keys held outside `oramad`'s test keyring.
+- **The release root** (`--release-root`): the `release-root.json` the network's releases are verified against. The manifest pins its digest, and the release setup installs is fetched from `--release-repo` (default `https://releases.orama.network`), channel `--channel` (default `nightly`, `main` for a production id), and verified against this root. For an announced network none of these flags is needed: the announcement carries them (below).
 - **Machines of the full profile**, since each runs the chain. `--cluster-only` and `--no-validator` make no sense here and are refused.
 
 ### The command
@@ -82,7 +82,13 @@ orama setup --create-network stagenet --chain-id orama-stagenet-7 \
   --host-key 161.97.184.202=SHA256:... --host-key 161.97.151.255=SHA256:...
 ```
 
-On a terminal with no flags, the wizard offers **Create a new network** at the list of networks and asks for the name, the chain id and the release root. The nodes are named `--name` (default `seed`), `seed-2`, and so on, in the order of the addresses: their names are their ids on the chain.
+On a terminal with no flags, the wizard offers **Create a new network** at the list of networks and asks for the name, the chain id and the release root (for an announced name, only the name). A network that was announced needs none of the flags above but the machines:
+
+```bash
+orama setup --create-network stagenet --yes --ip 57.129.166.16 --ip 57.129.166.17 ... --host-key 57.129.166.16=SHA256:... ...
+```
+
+ The nodes are named `--name` (default `seed`), `seed-2`, and so on, in the order of the addresses: their names are their ids on the chain.
 
 | Flag | Meaning |
 |---|---|
@@ -96,6 +102,21 @@ On a terminal with no flags, the wizard offers **Create a new network** at the l
 | `--publish-dir <dir>` | Where `networks/<name>/` is written (default `./networks`) |
 | `--no-faucet` | Leave the test-network faucet out of the genesis |
 | `--force-new-genesis` | Build a new genesis although the machines carry one; refused once a chain has run |
+
+### Announce it first
+
+A network can be announced before it exists. A maintainer writes `networks/<name>/` with `manifest.json` and `release-root.json` and **no genesis** (the manifest's `genesis_sha256` is empty), commits it and builds a CLI release; from then on every CLI that carries it knows the name, the chain id the network will have, the channel, the release repository, the digest of its release root, whether it has a faucet and its seeds, and a newcomer who creates the network needs no file from anywhere.
+
+```bash
+orama maint network announce --name stagenet --chain-id orama-stagenet-7 \
+  --release-repo https://releases.orama.network --release-root ./release-root.json \
+  --channel nightly --faucet --seed seed1.stagenet.orama.network
+make -C core sync-networks
+```
+
+`--min-version` defaults to this CLI's version, `--seed` is repeatable and may be left out (the creator then gets `seed<N>.<name>.orama.network`), and `--faucet` is refused for a production chain id. Commit `networks/` and `core/pkg/netregistry/embedded/` together. Announcing again replaces the announcement; a network that is already created is refused, because a reset gets its new chain id from the creation, not from a new announcement.
+
+`--create-network <name>` reads the announcement of that name and takes from it what no flag sets: the chain id, the release repository, the channel, the minimum version, the seeds, the faucet (an announcement without `--faucet` creates a network without one, and `--no-faucet` turns an announced faucet off) and the release root. A flag overrides the announcement, and the plan says that the values came from it. When the genesis is built, setup writes the full manifest over the announcement for the same chain id (the chain id may be overridden by `--chain-id`), keeping what the announcement says that setup does not set. `networks/<name>/` then replaces the announcement in the repository exactly as it does for any new network (see Publish it below).
 
 ### What happens, in order
 
@@ -120,7 +141,7 @@ Every step first asks the machines what they have. A machine with a chain home k
 Setup ends by printing what makes the network joinable:
 
 1. **DNS.** A joiner reaches the chain through the seeds, which are DNS names. Create the A records setup prints (`seed1.<name>.orama.network` to the first machine, and so on).
-2. **In the repository.** Copy `networks/<name>/` to the repository's `networks/`, run `make -C core sync-networks`, and commit `networks/` and `core/pkg/netregistry/embedded/` together. The next CLI release knows the network by name.
+2. **In the repository.** Copy `networks/<name>/` to the repository's `networks/` (over the announcement, if there was one), run `make -C core sync-networks`, and commit `networks/` and `core/pkg/netregistry/embedded/` together. The next CLI release knows the network by name.
 3. **The website.** `website/deploy.sh` serves `networks/` at `https://orama.network/networks/<name>/`.
 
 Until a release carries the network, anyone can join it from the website's copy:
@@ -162,6 +183,7 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 
 - **A created network's seat accounts are test-keyring keys.** The seat's account (the one that receives the seat's share and signs the faucet) is a key in `oramad`'s unencrypted test keyring on its machine. That is acceptable for a test network; a production network needs its seat keys held elsewhere, and this command does not make one (it takes at most 20 machines, and a production id needs 30 bootstrap validators).
 - **A created network has no archiver or indexer.** The full profile installs the chain, public storage and its provider.
+- **A resumed creation of an announced network needs the announcement.** The command a stopped run prints repeats the chain id and the other values it took from the announcement, but not the release root: it is still read from the announcement, so run it again before the registry replaces the announcement with the created network, or pass `--release-root`.
 - **The seeds are not checked.** Setup prints the DNS records and does not wait for them; a joiner needs them, the seeds' gateways and their certificates.
 - **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.
 - **Name claim.** The chain transaction that claims `<name>.<network>.orama.network` is not part of this build. The step says "name claim not available on this chain yet" and does nothing.

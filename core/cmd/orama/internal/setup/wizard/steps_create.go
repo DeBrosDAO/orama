@@ -21,13 +21,18 @@ func (m *Model) startCreate() (tea.Model, tea.Cmd) {
 	return m.goTo(stepCreateName)
 }
 
-// takeCreate takes the answer to one of the three questions about the new network.
+// takeCreate takes the answer to one of the three questions about the new network
+// (one, for a network that is announced).
 func (m *Model) takeCreate(value string) (tea.Model, tea.Cmd) {
 	switch m.step {
 	case stepCreateName:
 		m.opts.Create.Name = strings.ToLower(value)
 		if m.opts.Create.Name == "" {
 			return m.fail("give the network a name")
+		}
+		if m.announced[m.opts.Create.Name] {
+			// The announcement supplies the chain id and the release root.
+			return m.goTo(stepStorage)
 		}
 		return m.goTo(stepCreateChainID)
 	case stepCreateChainID:

@@ -60,17 +60,36 @@ var (
 	ErrRootMismatch    = errors.New("release root does not match the manifest")
 )
 
-// Manifest is one network's published description.
+// ErrNotCreated says a network is announced: its manifest is published, with the
+// chain id it will have, but nobody has created the chain yet, so there is no
+// genesis to join. Callers match it to refuse a join.
+var ErrNotCreated = errors.New("the network has not been created yet")
+
+// notCreatedError is ErrNotCreated, naming the network and the command its
+// creator runs.
+type notCreatedError struct{ name string }
+
+func (e *notCreatedError) Error() string {
+	return fmt.Sprintf("%s has not been created yet; its creator runs orama setup --create-network %s", e.name, e.name)
+}
+
+func (e *notCreatedError) Is(target error) bool { return target == ErrNotCreated }
+
+// Manifest is one network's published description. A manifest whose
+// genesis_sha256 is empty is an announcement: the network's name, the chain id it
+// will have, where its releases come from and the root they are verified against,
+// published before the chain exists. It is valid but not joinable (see Announced).
 type Manifest struct {
 	// Name is the network's short name: stagenet, testnet, or an operator's own.
 	Name string `json:"name"`
 	// ChainID is the chain's id. A reset of the chain gets a new one.
 	ChainID string `json:"chain_id"`
 	// GenesisSHA256 is the SHA-256 of the genesis.json that goes with ChainID,
-	// in lowercase hex.
+	// in lowercase hex. Empty while the network is only announced.
 	GenesisSHA256 string `json:"genesis_sha256"`
 	// Seeds are DNS names of nodes a joiner reaches the chain through. Never IPs:
-	// a seed is replaced without a new manifest.
+	// a seed is replaced without a new manifest. An announcement may carry none;
+	// its creator then gets the default seeds.
 	Seeds []string `json:"seeds"`
 	// Channel is the release channel the network's nodes run.
 	Channel string `json:"channel"`
@@ -106,7 +125,21 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	return &m, nil
 }
 
+// Announced reports whether the network is announced and not yet created: its
+// manifest pins no genesis.
+func (m *Manifest) Announced() bool { return m.GenesisSHA256 == "" }
+
+// CheckCreated returns an error matching ErrNotCreated while the network is only
+// announced.
+func (m *Manifest) CheckCreated() error {
+	if m.Announced() {
+		return &notCreatedError{name: m.Name}
+	}
+	return nil
+}
+
 // Validate checks every field. The first problem is returned, naming the field.
+// An announcement passes without a genesis digest, and may carry no seeds.
 func (m *Manifest) Validate() error {
 	if !nameRE.MatchString(m.Name) {
 		return fmt.Errorf("manifest name %q: use 1-32 characters of a-z, 0-9 and -, starting with a letter", m.Name)
@@ -114,10 +147,10 @@ func (m *Manifest) Validate() error {
 	if !chainIDRE.MatchString(m.ChainID) {
 		return fmt.Errorf("manifest chain_id %q: use 1-48 characters of a-z, 0-9 and -, starting and ending with a letter or digit", m.ChainID)
 	}
-	if !sha256HexRE.MatchString(m.GenesisSHA256) {
-		return fmt.Errorf("manifest genesis_sha256 %q is not 64 lowercase hex characters", m.GenesisSHA256)
+	if !m.Announced() && !sha256HexRE.MatchString(m.GenesisSHA256) {
+		return fmt.Errorf("manifest genesis_sha256 %q is not 64 lowercase hex characters (empty announces a network that is not created yet)", m.GenesisSHA256)
 	}
-	if err := validateSeeds(m.Seeds); err != nil {
+	if err := validateSeeds(m.Seeds, m.Announced()); err != nil {
 		return err
 	}
 	if err := validateChannel(m.Channel); err != nil {
@@ -135,8 +168,8 @@ func (m *Manifest) Validate() error {
 	return nil
 }
 
-func validateSeeds(seeds []string) error {
-	if len(seeds) == 0 {
+func validateSeeds(seeds []string, optional bool) error {
+	if len(seeds) == 0 && !optional {
 		return errors.New("manifest seeds: at least one seed is required")
 	}
 	seen := map[string]bool{}
@@ -202,8 +235,12 @@ func Digest(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// VerifyGenesis checks genesis against the manifest's genesis_sha256.
+// VerifyGenesis checks genesis against the manifest's genesis_sha256. An
+// announced network has none to check against: ErrNotCreated.
 func (m *Manifest) VerifyGenesis(genesis []byte) error {
+	if err := m.CheckCreated(); err != nil {
+		return err
+	}
 	if got := Digest(genesis); got != m.GenesisSHA256 {
 		return fmt.Errorf("%w: network %s (chain %s) pins sha256 %s, the file is %s",
 			ErrGenesisMismatch, m.Name, m.ChainID, m.GenesisSHA256, got)
@@ -227,7 +264,11 @@ func (m *Manifest) Marshal() ([]byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
-	out, err := json.MarshalIndent(m, "", "  ")
+	doc := *m
+	if doc.Seeds == nil {
+		doc.Seeds = []string{}
+	}
+	out, err := json.MarshalIndent(&doc, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal manifest: %w", err)
 	}

@@ -21,8 +21,8 @@ var createOnly = []string{"chain-id", "release-root", "release-repo", "channel",
 
 func (c *createFlags) bind(f *pflag.FlagSet) {
 	f.StringVar(&c.name, "create-network", "", "Create a network of this name instead of joining one: the machines are its bootstrap validators")
-	f.StringVar(&c.chainID, "chain-id", "", "With --create-network: the chain id. A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes")
-	f.StringVar(&c.releaseRoot, "release-root", "", "With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest")
+	f.StringVar(&c.chainID, "chain-id", "", "With --create-network: the chain id (default: the announced network's). A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes")
+	f.StringVar(&c.releaseRoot, "release-root", "", "With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's)")
 	f.StringVar(&c.releaseRepo, "release-repo", "", "With --create-network: the https base URL of the release repository (default "+setup.DefaultReleaseRepo+")")
 	f.StringVar(&c.channel, "channel", "", "With --create-network: the release channel, nightly, main or dev/<branch> (default nightly, main for a production chain id)")
 	f.StringVar(&c.minVersion, "min-version", "", "With --create-network: the oldest orama version that may join, X.Y.Z (default: this CLI's version)")

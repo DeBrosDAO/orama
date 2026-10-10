@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DeBrosOfficial/network/e2e/features/internal/chain"
 	"github.com/DeBrosOfficial/network/e2e/features/internal/infra"
 	"github.com/DeBrosOfficial/network/e2e/harness"
 	"github.com/DeBrosOfficial/network/e2e/harness/fleet"
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
+	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/rwagent"
 )
 
@@ -77,6 +79,29 @@ func oneFreshServerBecomesAFullNode(t *testing.T, f *fleet.Fleet, cli *oramacli.
 	}
 	if doc.Operator == nil || !strings.HasPrefix(doc.Operator.Address, "orama1") {
 		t.Errorf("orama status shows no operator account though setup recorded it: %+v", doc.Operator)
+	}
+	validatorCountsTowardItsOperator(t, cli, extra)
+}
+
+// validatorCountsTowardItsOperator: setup bound the validator's consensus key to
+// the operator, so x/power attributes the validator to the operator's account and
+// not to the shared "unlinked" bucket.
+func validatorCountsTowardItsOperator(t *testing.T, cli *oramacli.Runner, extra harness.Extra) {
+	t.Helper()
+	acct, err := rwagent.New(cli.AgentSock).OramaAccount(t.Context())
+	if err != nil {
+		t.Fatalf("read the run wallet's orama account: %v", err)
+	}
+	valoper, err := clusterreg.ValidatorAddress(acct.Address)
+	if err != nil {
+		t.Fatalf("the validator address of %s: %v", acct.Address, err)
+	}
+	var power struct {
+		Operator string `json:"operator"`
+	}
+	chain.New(t).Query(t, extra.Node, &power, "power", "validator-power", valoper)
+	if power.Operator != acct.Address {
+		t.Errorf("the validator counts toward %q, want the operator %s: setup binds the consensus key of the validator's node", power.Operator, acct.Address)
 	}
 }
 

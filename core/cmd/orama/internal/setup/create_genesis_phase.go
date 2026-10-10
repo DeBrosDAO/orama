@@ -207,7 +207,7 @@ func (r *runner) publish(genesis []byte) error {
 	if err != nil {
 		return fmt.Errorf("write the network's description to %s: %w", c.PublishDir, err)
 	}
-	r.res.Created = &CreatedNetwork{Manifest: published, Dir: filepath.Join(c.PublishDir, published.Name), Machines: r.opts.IPs}
+	r.res.Created = &CreatedNetwork{Manifest: published, Dir: filepath.Join(c.PublishDir, published.Name), Machines: r.opts.IPs, Announced: c.Announced}
 	return nil
 }
 

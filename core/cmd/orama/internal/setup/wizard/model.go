@@ -98,12 +98,14 @@ type Model struct {
 	// err is shown under the question; it clears on the next key.
 	err string
 
-	login       loginMethod
-	cursor      int
-	hostIPs     []string
-	hostKeyIdx  int
-	hostKeys    []HostKey
-	networks    []NetworkChoice
+	login      loginMethod
+	cursor     int
+	hostIPs    []string
+	hostKeyIdx int
+	hostKeys   []HostKey
+	networks   []NetworkChoice
+	// announced are the names of the networks that are announced and not yet created.
+	announced   map[string]bool
 	toggles     [optCount]bool
 	exitAsked   bool
 	inspections []setup.Inspection

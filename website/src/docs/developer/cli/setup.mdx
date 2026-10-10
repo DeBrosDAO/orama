@@ -45,7 +45,9 @@ operator and the nodes as it does for a join. It writes networks/&lt;name>/ (man
 release root) to --publish-dir and prints what to do to publish it. --chain-id is the chain's
 id: a test network's carries -stagenet-, -devnet- or -localnet-; any other is a production id, which
 needs at least 30 bootstrap validators, more than one run takes, so setup creates test networks. --release-root is the release-root.json the network's
-releases are verified against. Running it again with the same machines resumes: a machine that
+releases are verified against. A network that was announced in the registry before it was created (orama maint network announce)
+supplies its chain id, release repository, channel, minimum version, seeds, faucet and release root, so those flags can be left out;
+a flag overrides the announcement, and the genesis built here is published over it. Joining a network that is only announced is refused. Running it again with the same machines resumes: a machine that
 has its keys keeps them, and a genesis the machines carry is kept (--force-new-genesis builds a
 new one, and only while no chain has run).
 
@@ -58,7 +60,7 @@ machine until every machine passes.
 | `--acme-ca` | — | ACME directory for the cluster's certificates: letsencrypt, letsencrypt-staging or an https URL |
 | `--asn` | `0` | Autonomous system number to declare for the nodes (default: looked up from the address; 0 leaves it undeclared) |
 | `--bootstrap-key` | — | A private key that opens the machines today (key-only images); used once to install the RootWallet key, never stored |
-| `--chain-id` | — | With --create-network: the chain id. A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
+| `--chain-id` | — | With --create-network: the chain id (default: the announced network's). A test network's carries -stagenet-, -devnet- or -localnet-; any other id is a production one, which needs 30 bootstrap validators, more than one run takes |
 | `--channel` | — | With --create-network: the release channel, nightly, main or dev/&lt;branch> (default nightly, main for a production chain id) |
 | `--cluster-only` | `false` | Install the cluster node only, without the chain, storage or relay |
 | `--contact` | — | Where an abuse complaint about the relay goes (default: your operator account) |
@@ -77,7 +79,7 @@ machine until every machine passes.
 | `--password` | `false` | Log in with the password in your RootWallet vault login for the address (rw vault add &lt;ip>), never from the command line |
 | `--publish-dir` | — | With --create-network: where networks/&lt;name>/ is written (default ./networks) |
 | `--release-repo` | — | With --create-network: the https base URL of the release repository (default https://releases.orama.network) |
-| `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest |
+| `--release-root` | — | With --create-network: the release-root.json the network's releases are verified against; the manifest pins its digest (default: the announced network's) |
 | `--seed` | — | With --create-network: a seed DNS name (repeatable; default seed1.&lt;name>.orama.network, one per machine) |
 | `--storage-gb` | `0` | Public storage each node offers, in GB (default 50); counts towards the disk floor |
 | `--tor-network` | — | The Orama Tor network's tor-network.json: with it each node also runs a relay |

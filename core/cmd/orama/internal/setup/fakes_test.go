@@ -260,16 +260,28 @@ type fakeNetworks struct {
 	w          *world
 	faucet     bool
 	genesisErr error
+	// announced makes the network one whose chain is not created yet, and
+	// unknown makes it one the registry does not have.
+	announced, unknown bool
 }
 
-func (n fakeNetworks) Resolve(context.Context, string) (*netregistry.Network, error) {
-	return &netregistry.Network{Manifest: &netregistry.Manifest{
-		Name: "stagenet", ChainID: testChainID, Seeds: []string{"seed1.stagenet.example", "seed2.stagenet.example"},
+func testGenesisDoc() []byte { return []byte(`{"chain_id":"` + testChainID + `"}`) }
+
+func (n fakeNetworks) Resolve(_ context.Context, name string) (*netregistry.Network, error) {
+	if n.unknown {
+		return nil, fmt.Errorf("%w %q (known: none): add a network", netregistry.ErrNotFound, name)
+	}
+	m := &netregistry.Manifest{
+		Name: "stagenet", ChainID: testChainID, GenesisSHA256: netregistry.Digest(testGenesisDoc()), Seeds: []string{"seed1.stagenet.example", "seed2.stagenet.example"},
 		Channel: "nightly", MinVersion: "0.3.0", ReleaseRepo: "https://releases.example", ReleaseRootSHA256: testRootSHA, Faucet: n.faucet,
-	}}, nil
+	}
+	if n.announced {
+		m.GenesisSHA256 = ""
+	}
+	return &netregistry.Network{Manifest: m, Root: []byte(`{"signed":{"_type":"announced-root"}}`)}, nil
 }
 func (n fakeNetworks) Genesis(context.Context, *netregistry.Network) ([]byte, error) {
-	return []byte(`{"chain_id":"` + testChainID + `"}`), n.genesisErr
+	return testGenesisDoc(), n.genesisErr
 }
 
 type fakeReleases struct{ w *world }

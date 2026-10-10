@@ -11,13 +11,13 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const sha = (text) => createHash("sha256").update(text).digest("hex");
 
 /** Writes networks/<name>/ under a fresh source dir; `genesis` is optional. */
-function makeSource(label, { name = "teststage", genesis = '{"chain_id":"x"}', rootText = '{"signed":1}' } = {}) {
+function makeSource(label, { name = "teststage", genesis = '{"chain_id":"x"}', rootText = '{"signed":1}', genesisSha = sha('{"chain_id":"x"}') } = {}) {
   const source = join(root, label, "networks");
   mkdirSync(join(source, name), { recursive: true });
   const manifest = {
     name,
     chain_id: "x",
-    genesis_sha256: sha('{"chain_id":"x"}'),
+    genesis_sha256: genesisSha,
     release_root_sha256: sha(rootText),
   };
   writeFileSync(join(source, name, "manifest.json"), JSON.stringify(manifest));
@@ -35,6 +35,11 @@ describe("copyNetworks", () => {
 
   it("TestCopyNetworks_aManifestWithoutAGenesisYet", () => {
     const { source, dist } = makeSource("nogenesis", { genesis: null });
+    expect(copyNetworks(source, dist)).toEqual(["teststage"]);
+  });
+
+  it("TestCopyNetworks_anAnnouncedNetworkHasNoGenesis", () => {
+    const { source, dist } = makeSource("announced", { genesis: null, genesisSha: "" });
     expect(copyNetworks(source, dist)).toEqual(["teststage"]);
   });
 
@@ -62,6 +67,11 @@ describe("verifyNetworkDir", () => {
 
   it("TestVerifyNetworkDir_genesisThatIsNotPinned", () => {
     const { source } = makeSource("badgenesis", { genesis: '{"chain_id":"y"}' });
+    expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/genesis_sha256/);
+  });
+
+  it("TestVerifyNetworkDir_anAnnouncementThatCarriesAGenesis", () => {
+    const { source } = makeSource("announcedgenesis", { genesisSha: "" });
     expect(() => verifyNetworkDir(join(source, "teststage"))).toThrow(/genesis_sha256/);
   });
 
