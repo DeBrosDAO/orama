@@ -23,15 +23,18 @@ func TestMonitor_badArgumentsAreUsage(t *testing.T) {
 		args  []string
 		want  string
 	}{
-		{"no env", []string{"monitor", "alerts"}, "env"},
-		{"unknown env", []string{"monitor", "alerts", "--env", "e2e-cli-absent"}, "cannot find the gateway"},
-		{"config without ssh", []string{"monitor", "node", "--env", env, "--config", "/dev/null"}, "only applies with --ssh"},
-		{"interval too short", []string{"monitor", "live", "--env", env, "--interval", "1s"}, "--interval must be between"},
-		{"interval too long", []string{"monitor", "live", "--env", env, "--interval", "2m"}, "--interval must be between"},
-		{"ssh interval too short", []string{"monitor", "live", "--env", env, "--ssh", "--interval", "5s"}, "at least"},
-		{"interval not a duration", []string{"monitor", "live", "--env", env, "--interval", "soon"}, "interval"},
+		{"unknown env", []string{"status", "alerts", "--env", "e2e-cli-absent"}, "cannot find the gateway"},
+		{"config without ssh", []string{"status", "node", "--env", env, "--config", "/dev/null"}, "only applies with --ssh"},
+		{"interval too short", []string{"status", "--env", env, "--interval", "1s"}, "--interval must be between"},
+		{"interval too long", []string{"status", "--env", env, "--interval", "2m"}, "--interval must be between"},
+		{"ssh interval too short", []string{"status", "--env", env, "--ssh", "--interval", "5s"}, "at least"},
+		{"interval not a duration", []string{"status", "--env", env, "--interval", "soon"}, "interval"},
 	}
 	cli := harness.CLI(t)
+	// With no --env, status reads the active environment; a CLI with none is refused.
+	if res := run(t, cli.Isolated(t), "status", "alerts"); res.Exit != exitUsage || !strings.Contains(output(res), "active environment") {
+		t.Errorf("no env and no active environment: exit %d\n%s", res.Exit, output(res))
+	}
 	for _, c := range cases {
 		res := run(t, cli, c.args...)
 		if res.Exit != exitUsage || !strings.Contains(output(res), c.want) {
@@ -47,7 +50,7 @@ func TestMonitor_noCredentialIsAuthError(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t).Isolated(t)
 	for _, v := range oneShotViews {
-		res := run(t, cli, "monitor", v, "--env", f.State.Env)
+		res := run(t, cli, "status", v, "--env", f.State.Env)
 		if res.Exit != exitAuth || !strings.Contains(output(res), "orama auth login") {
 			t.Errorf("monitor %s with no credential: exit %d, want %d\n%s", v, res.Exit, exitAuth, output(res))
 		}
@@ -61,7 +64,7 @@ func TestMonitor_sshBreakGlassReadsEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	var nodes []nodeEntry
-	decode(t, run(t, harness.CLI(t), "monitor", "node", "--env", f.State.Env, "--ssh", "--json"), &nodes)
+	decode(t, run(t, harness.CLI(t), "status", "node", "--env", f.State.Env, "--ssh", "--json"), &nodes)
 	if len(nodes) != len(f.State.Nodes) {
 		t.Fatalf("monitor node --ssh reports %d nodes, want %d", len(nodes), len(f.State.Nodes))
 	}
@@ -82,7 +85,7 @@ const unknownViewBudget = time.Minute
 func TestMonitor_unknownViewIsUsage(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
-	res := infra.RunFor(t, harness.CLI(t), unknownViewBudget, "monitor", "e2e-no-such-view", "--env", f.State.Env)
+	res := infra.RunFor(t, harness.CLI(t), unknownViewBudget, "status", "e2e-no-such-view", "--env", f.State.Env)
 	if res.Exit != exitUsage || !strings.Contains(output(res), "e2e-no-such-view") {
 		t.Errorf("monitor e2e-no-such-view: exit %d, want %d naming it\n%s", res.Exit, exitUsage, output(res))
 	}

@@ -32,7 +32,7 @@ type rawReport struct {
 func Subsystem[T any](t testing.TB, key string) map[string]T {
 	t.Helper()
 	f := harness.Fleet(t)
-	res := harness.CLI(t).MustOK(t, "monitor", "report", "--env", f.State.Env, "--json")
+	res := harness.CLI(t).MustOK(t, "status", "report", "--env", f.State.Env, "--json")
 	var r rawReport
 	if err := oramacli.DecodeJSON(res, &r); err != nil {
 		t.Fatalf("failed to decode the monitor report: %v", err)
@@ -59,7 +59,7 @@ func Subsystem[T any](t testing.TB, key string) map[string]T {
 func Alerts(t testing.TB, subsystem string) []string {
 	t.Helper()
 	f := harness.Fleet(t)
-	res := harness.CLI(t).MustOK(t, "monitor", "report", "--env", f.State.Env, "--json")
+	res := harness.CLI(t).MustOK(t, "status", "report", "--env", f.State.Env, "--json")
 	var r rawReport
 	if err := oramacli.DecodeJSON(res, &r); err != nil {
 		t.Fatalf("failed to decode the monitor report: %v", err)

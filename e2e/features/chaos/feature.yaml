@@ -21,7 +21,7 @@ requires:
   chain: false
 covers:
   cli:
-    - orama monitor report
+    - orama status report
   routes:
     - /v1/health
     - /v1/rqlite/create-table

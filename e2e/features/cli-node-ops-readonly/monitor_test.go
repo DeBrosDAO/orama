@@ -31,7 +31,7 @@ func TestMonitorViews_tableStartsWithVerdict(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
 	for _, v := range oneShotViews {
-		res := cli.MustOK(t, "monitor", v, "--env", f.State.Env)
+		res := cli.MustOK(t, "status", v, "--env", f.State.Env)
 		first := ""
 		for _, l := range strings.Split(res.Stdout, "\n") {
 			if first = strings.ToLower(strings.TrimSpace(l)); first != "" {
@@ -51,7 +51,7 @@ func TestMonitorViews_jsonDecodes(t *testing.T) {
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
 	for _, v := range oneShotViews {
-		raw(t, cli.MustOK(t, "monitor", v, "--env", f.State.Env, "--json"))
+		raw(t, cli.MustOK(t, "status", v, "--env", f.State.Env, "--json"))
 	}
 }
 
@@ -69,7 +69,7 @@ func TestMonitorMesh_fullMeshOnEveryNode(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	var mesh []meshEntry
-	decode(t, harness.CLI(t).MustOK(t, "monitor", "mesh", "--env", f.State.Env, "--json"), &mesh)
+	decode(t, harness.CLI(t).MustOK(t, "status", "mesh", "--env", f.State.Env, "--json"), &mesh)
 	if len(mesh) != len(f.State.Nodes) {
 		t.Fatalf("mesh reports %d nodes, the fleet has %d: %+v", len(mesh), len(f.State.Nodes), mesh)
 	}
@@ -101,7 +101,7 @@ func TestMonitorDNS_nameserversServeAndCertsValid(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	var dns []dnsEntry
-	decode(t, harness.CLI(t).MustOK(t, "monitor", "dns", "--env", f.State.Env, "--json"), &dns)
+	decode(t, harness.CLI(t).MustOK(t, "status", "dns", "--env", f.State.Env, "--json"), &dns)
 	if len(dns) == 0 {
 		t.Fatal("monitor dns reports no nameserver")
 	}
@@ -130,12 +130,12 @@ func TestMonitorNode_filterNarrowsToOneNode(t *testing.T) {
 	n := f.State.Nodes[len(f.State.Nodes)-1]
 	for _, addr := range []string{n.PublicIP, n.WGIP} {
 		var nodes []nodeEntry
-		decode(t, cli.MustOK(t, "monitor", "node", "--env", f.State.Env, "--node", addr, "--json"), &nodes)
+		decode(t, cli.MustOK(t, "status", "node", "--env", f.State.Env, "--node", addr, "--json"), &nodes)
 		if len(nodes) != 1 || nodes[0].Host != n.PublicIP || nodes[0].Report == nil {
 			t.Errorf("monitor node --node %s: %+v", addr, nodes)
 		}
 	}
-	res := run(t, cli, "monitor", "node", "--env", f.State.Env, "--node", documentAddr)
+	res := run(t, cli, "status", "node", "--env", f.State.Env, "--node", documentAddr)
 	if res.Exit != exitNotFound || !strings.Contains(output(res), n.PublicIP) {
 		t.Errorf("monitor node --node %s: exit %d, want %d naming the real nodes\n%s", documentAddr, res.Exit, exitNotFound, output(res))
 	}
@@ -152,7 +152,7 @@ func TestMonitorService_noFailedUnit(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	var svcs []serviceEntry
-	decode(t, harness.CLI(t).MustOK(t, "monitor", "service", "--env", f.State.Env, "--json"), &svcs)
+	decode(t, harness.CLI(t).MustOK(t, "status", "service", "--env", f.State.Env, "--json"), &svcs)
 	if len(svcs) != len(f.State.Nodes) {
 		t.Fatalf("monitor service reports %d nodes, want %d", len(svcs), len(f.State.Nodes))
 	}
@@ -180,7 +180,7 @@ func TestMonitorAlerts_noCriticalOnFreshCluster(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	var alerts []alertEntry
-	decode(t, harness.CLI(t).MustOK(t, "monitor", "alerts", "--env", f.State.Env, "--json"), &alerts)
+	decode(t, harness.CLI(t).MustOK(t, "status", "alerts", "--env", f.State.Env, "--json"), &alerts)
 	for _, a := range alerts {
 		if strings.EqualFold(a.Severity, "critical") {
 			t.Errorf("critical alert on %s: %s", a.Node, a.Message)
@@ -212,7 +212,7 @@ func TestMonitorNamespaces_newNamespaceHealthyOnEveryNode(t *testing.T) {
 	cli := harness.CLI(t)
 	eventually.Require(t, pollEvery, telemetryBudget, "namespace healthy on every node", func() (bool, error) {
 		var rows []namespaceEntry
-		res := run(t, cli, "monitor", "namespaces", "--env", f.State.Env, "--json")
+		res := run(t, cli, "status", "namespaces", "--env", f.State.Env, "--json")
 		if err := jsonOf(res, &rows); err != nil {
 			return false, err
 		}
@@ -254,7 +254,7 @@ func TestMonitorTraffic_countsGatewayRequests(t *testing.T) {
 	}
 	eventually.Require(t, pollEvery, telemetryBudget, "gateway requests counted", func() (bool, error) {
 		var tr trafficReport
-		if err := jsonOf(run(t, harness.CLI(t), "monitor", "traffic", "--env", f.State.Env, "--json"), &tr); err != nil {
+		if err := jsonOf(run(t, harness.CLI(t), "status", "traffic", "--env", f.State.Env, "--json"), &tr); err != nil {
 			return false, err
 		}
 		if tr.Totals.Reporting >= 1 && tr.Totals.Requests >= burst {

@@ -569,7 +569,7 @@ Table placement (which tables exist in a tenant RQLite and which only in the reg
 
 ```bash
 orama namespace list                 # your namespaces and their cluster_status
-orama monitor namespaces             # namespace health across nodes
+orama status namespaces             # namespace health across nodes
 curl -s "https://<ns host>/v1/namespace/status?id=<cluster id>"   # public status route
 ```
 

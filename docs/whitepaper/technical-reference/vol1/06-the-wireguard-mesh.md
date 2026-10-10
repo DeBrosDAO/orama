@@ -368,7 +368,7 @@ Run one package with `cd core && go test ./pkg/overlay/...`.
 sudo wg show wg0 dump                  # live peers: key, endpoint, allowed ips, last handshake
 sudo grep -c '^\[Peer\]' /etc/wireguard/wg0.conf
 ip -4 addr show wg0                    # this node's overlay address
-orama monitor report --env devnet      # per-node mesh section: peers, handshakes
+orama status report --env devnet      # per-node mesh section: peers, handshakes
 ```
 
 Every node's `wg show wg0 dump` should list every other node's `/32` with a handshake younger than a few minutes (the keepalive is 25 s). A `/32` in `wg0.conf` that is absent from `wg show` after a minute, or the reverse, points at the persist or the helper path; the node's journal carries `WireGuard peer sync completed` with the counts and the `source` (`leader`, `local-replica`, `bootstrap-local-replica`) of every pass.

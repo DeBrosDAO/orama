@@ -68,7 +68,7 @@ On each node the cluster gateway first imports the certificates and the ACME acc
 ```bash
 echo | openssl s_client -connect <node-ip>:443 -servername cluster.example.com 2>/dev/null \
   | openssl x509 -noout -issuer -subject -dates
-orama monitor dns --env mycluster    # certificate expiry for every nameserver
+orama status dns --env mycluster    # certificate expiry for every nameserver
 ```
 
 ## If a node has no certificate

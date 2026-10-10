@@ -51,8 +51,8 @@ See [Upgrades](/docs/operator/upgrades#automatic-updates) and [Build and sign](/
 ## Verification between nodes
 
 ```bash
-orama monitor report --env <env> --node <ip>     # that node: services, RQLite state, WireGuard peers
-orama monitor report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
+orama status report --env <env> --node <ip>     # that node: services, RQLite state, WireGuard peers
+orama status report --env <env>                 # the cluster: leader stable, quorum ok, mesh ok, indices in sync
 ```
 
 Proceed only when both pass. `orama rollout` gates on the same signals itself and stops the moment a node fails to rejoin.

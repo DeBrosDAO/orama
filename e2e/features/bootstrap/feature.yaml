@@ -15,11 +15,10 @@ requires:
   chain: true
 covers:
   cli:
-    - orama monitor
-    - orama monitor report
-    - orama monitor chain
-    - orama monitor cluster
     - orama status
+    - orama status report
+    - orama status chain
+    - orama status cluster
     - orama operator list
     - orama cluster settings set
     - orama cluster settings show

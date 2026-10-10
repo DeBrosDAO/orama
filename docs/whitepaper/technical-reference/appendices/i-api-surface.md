@@ -249,8 +249,8 @@ A namespace's cache is one Olric DMap with the `dmap` name folded into each key,
 | `/v1/operator/creators` | CLI | List (`GET`) or add (`POST` `{"wallet":"0x…"}`) wallets allowed to create namespaces when creation is `allowlist`. `orama cluster creators list`, `orama cluster creators add`. |
 | `/v1/operator/creators/` | CLI | `DELETE /v1/operator/creators/{wallet}` takes one wallet off that list. An empty list denies everyone. `orama cluster creators remove`. |
 | `/v1/operator/health` | direct | The full health report `/v1/health` summarises: each check's latency and error, and the health of every namespace hosted on this node with its ports. Operator grant **and** the operator list. |
-| `/v1/operator/telemetry` | CLI | `orama monitor`. The whole cluster: every node's health report and the alerts derived from them (`cluster.ClusterSnapshot`), assembled by this cluster gateway from its peers over the mesh and cached 5s. Operator grant **and** the operator list. |
-| `/v1/operator/telemetry/stream` | CLI | `orama monitor` live view. Server-sent events: `event: snapshot` with the snapshot as one JSON line every `?interval=` seconds (2–60, default 5), `event: error` when none could be assembled, `: keepalive` comments. Ends after 100s; the client reconnects. Same authorization as `/v1/operator/telemetry`. |
+| `/v1/operator/telemetry` | CLI | `orama status`. The whole cluster: every node's health report and the alerts derived from them (`cluster.ClusterSnapshot`), assembled by this cluster gateway from its peers over the mesh and cached 5s. Operator grant **and** the operator list. |
+| `/v1/operator/telemetry/stream` | CLI | `orama status` live view. Server-sent events: `event: snapshot` with the snapshot as one JSON line every `?interval=` seconds (2–60, default 5), `event: error` when none could be assembled, `: keepalive` comments. Ends after 100s; the client reconnects. Same authorization as `/v1/operator/telemetry`. |
 
 ### Internal (node to node)
 

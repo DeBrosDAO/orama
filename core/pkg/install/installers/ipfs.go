@@ -20,7 +20,7 @@ import (
 // kubo only auto-GCs against StorageMax when the daemon runs with --enable-gc,
 // which it does not here — reclaim is driven by orama-ipfs-gc.timer, which
 // collects every unpinned block regardless of StorageMax. So StorageMax mainly
-// (a) sizes the monitoring denominator (repo_use_pct in `orama monitor`) and
+// (a) sizes the monitoring denominator (repo_use_pct in `orama status`) and
 // (b) bounds growth if watermark GC is ever enabled. kubo's built-in default is
 // "10GB" regardless of disk size. Nodes have heterogeneous disks (observed
 // 96GB–290GB on devnet), so the budget is computed per node rather than fixed.

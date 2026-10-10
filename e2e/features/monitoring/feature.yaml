@@ -1,5 +1,5 @@
 # Operating the cluster through the observability tools, as an operator
-# does: every `orama monitor` view as a table (verdict first) and as JSON,
+# does: every `orama status` view as a table (verdict first) and as JSON,
 # with the facts each one shows checked against the fleet (every node ok,
 # nameservers with CoreDNS, Caddy and fresh certificates, a full mesh of /32
 # overlay peers only, services, alerts, a new namespace, traffic attributed
@@ -11,7 +11,7 @@
 # (summary consistent with the checks and the exit code, subsystem filter,
 # refusals, JSON on stdout), `orama status` and `orama nodes`, and the public
 # status JSON's uptime history. Alert injection is in monitoring-chaos.
-# The live view (`orama monitor`, `orama monitor live`) is a full-screen
+# The live view (`orama status`, `orama status`) is a full-screen
 # terminal program with no line output to read, so it is not claimed here:
 # its usage errors are exercised (exit 2) and its help by
 # cli-node-ops-readonly; the SSE stream it reads is asserted over HTTP.
@@ -27,16 +27,16 @@ requires:
   chain: false
 covers:
   cli:
-    - orama monitor alerts
-    - orama monitor chain
-    - orama monitor cluster
-    - orama monitor dns
-    - orama monitor mesh
-    - orama monitor namespaces
-    - orama monitor node
-    - orama monitor report
-    - orama monitor service
-    - orama monitor traffic
+    - orama status alerts
+    - orama status chain
+    - orama status cluster
+    - orama status dns
+    - orama status mesh
+    - orama status namespaces
+    - orama status node
+    - orama status report
+    - orama status service
+    - orama status traffic
     - orama inspect
     - orama status
     - orama nodes

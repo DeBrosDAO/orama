@@ -1,5 +1,5 @@
 # CLI conformance for the read-only operator commands: every `orama node`,
-# `orama monitor`, `orama nodes` and `orama status` command's help against
+# `orama status`, `orama nodes` and `orama status` command's help against
 # docs/CLI_REFERENCE.md and its usage errors; every one-shot monitor view as
 # a table (starting with the verdict) and as JSON, with meaning checked
 # against the fleet (full WireGuard mesh, nameservers serving with valid
@@ -35,15 +35,14 @@ covers:
     - orama node uninstall
     - orama node unlock
     - orama nodes
-    - orama monitor
-    - orama monitor alerts
-    - orama monitor dns
-    - orama monitor live
-    - orama monitor mesh
-    - orama monitor namespaces
-    - orama monitor node
-    - orama monitor service
-    - orama monitor traffic
+    - orama status
+    - orama status alerts
+    - orama status dns
+    - orama status mesh
+    - orama status namespaces
+    - orama status node
+    - orama status service
+    - orama status traffic
   routes:
     - /v1/node/enroll
     - /v1/operator/telemetry

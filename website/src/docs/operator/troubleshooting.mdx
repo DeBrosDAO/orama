@@ -6,8 +6,8 @@ Named failures, what causes them, and how to fix them. Start with the tools, the
 
 ```bash
 orama status                                   # which node is unhealthy?
-orama monitor alerts --env <env>               # what the cluster thinks is wrong, with a next step for each
-orama monitor node --env <env> --node <ip>   # everything one node reported
+orama status alerts --env <env>               # what the cluster thinks is wrong, with a next step for each
+orama status node --env <env> --node <ip>   # everything one node reported
 orama inspect --subsystem rqlite               # deep checks for one subsystem (see Inspector)
 sudo orama node doctor                         # on the node: services, ports, connectivity, Raft state
 sudo orama node logs <service> -n 100 -f       # logs; service aliases: caddy, cluster, coredns, gateway, ipfs, ipfs-cluster, node, olric, rqlite, turn
@@ -100,7 +100,7 @@ The credentials go to `curl` on stdin so they never appear in `ps`.
 ## Raft quorum issues
 
 ```bash
-orama monitor report --env <env>              # quorum, leader, indices
+orama status report --env <env>              # quorum, leader, indices
 orama inspect --subsystem rqlite
 sudo orama node logs rqlite -n 100
 ```
@@ -133,7 +133,7 @@ The monitor raises a critical "Raft snapshot term N is above the current term M"
 
 ## WireGuard connectivity
 
-Symptoms: `orama monitor mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama monitor mesh --env <env>`, `orama inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
+Symptoms: `orama status mesh --env <env>` shows a peer with a stale or no handshake; Olric or RQLite complain about peers. Diagnose with `orama status mesh --env <env>`, `orama inspect --subsystem wg`, `wg show wg0`, and a ping across the overlay. See [WireGuard](/docs/operator/wireguard).
 
 ## Olric cluster split after enabling encryption
 

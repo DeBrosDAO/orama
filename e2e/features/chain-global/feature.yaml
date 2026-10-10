@@ -70,7 +70,7 @@ covers:
     - orama storage revoke
     - orama storage rewrap
     - orama storage seal
-    - orama monitor chain
+    - orama status chain
   queries:
     - orama.nodes.v1.Cluster
     - orama.nodes.v1.Node

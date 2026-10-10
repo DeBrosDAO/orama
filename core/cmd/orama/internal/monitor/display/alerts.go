@@ -36,7 +36,7 @@ func AlertLines(t view.Theme, rows []view.AlertRow, env string, limit int) strin
 	for i, r := range rows {
 		if i == limit {
 			fmt.Fprintf(&b, "%s%s\n", tableIndent, t.Muted.Render(
-				fmt.Sprintf("… %d more: orama monitor alerts --env %s", len(rows)-limit, env)))
+				fmt.Sprintf("… %d more: orama status alerts --env %s", len(rows)-limit, env)))
 			break
 		}
 		fmt.Fprintf(&b, "%s%s %s %s %s\n", tableIndent,

@@ -2,7 +2,7 @@
 
 > **At a glance.**
 >
-> - **What:** three instruments over one health model. Every node collects a JSON health report about itself (17 collectors, run as root through the privileged helper). The cluster gateway on each node gathers its peers' reports over WireGuard, derives alerts, component states and a verdict, and serves them to operators and, projected down to service states, to the public. `orama monitor` reads that view from an operator's machine, live or one aspect at a time. `orama inspect` is a separate tool that SSHes into every node and runs deeper deterministic checks. Logs are zap lines in the systemd journal.
+> - **What:** three instruments over one health model. Every node collects a JSON health report about itself (17 collectors, run as root through the privileged helper). The cluster gateway on each node gathers its peers' reports over WireGuard, derives alerts, component states and a verdict, and serves them to operators and, projected down to service states, to the public. `orama status` reads that view from an operator's machine, live or one aspect at a time. `orama inspect` is a separate tool that SSHes into every node and runs deeper deterministic checks. Logs are zap lines in the systemd journal.
 > - **Key numbers:** node report every 10 s (60 s timeout; the helper cuts it at 50 s); a report older than 90 s counts as unreachable; peer fetch 4 s per peer, 16 in parallel, 15 s per assembly, snapshot cached 5 s; a node on an older release is `unknown` for up to 2 h; request metrics are a 60 s window of 1 s buckets with 24 latency buckets from 1 ms to 30 s; uptime is one sample a minute, kept 90 days; the live stream is 2 to 60 s per snapshot and ends after 100 s; the inspector runs at most 4 collectors at once per node.
 > - **Code:** `core/pkg/telemetry/` (`report`, `hub`, `cluster`, `globalhealth`, `traffic`), `core/pkg/inspector/`, `core/pkg/logging/`, `core/cmd/orama/internal/monitor/`, wired in `core/pkg/gateway/telemetry.go`.
 > - **Depends on:** [privilege and filesystem trust](05-privilege-and-filesystem-trust.md) for the root helper, [the WireGuard mesh](06-the-wireguard-mesh.md) for the peer path, [cluster state](07-cluster-state.md) for the registry, [membership and failure detection](08-membership-and-failure-detection.md) for the ring monitor, [the gateway](12-gateway-architecture.md) for the routes, [inter-node trust](15-inter-node-trust.md) for the coordination MAC.
@@ -274,7 +274,7 @@ A component in state `unknown` is not recorded: nothing was observed. When the U
 
 ### The monitor
 
-`orama monitor --env E [view]` builds a `Source` and either streams it into a terminal UI or prints one view. `--node` narrows the fetched snapshot to the node with that public or WireGuard address together with the alerts about it (a node not in the snapshot is an error listing the ones that are). `--json` switches any one-shot view to JSON.
+`orama status --env E [view]` builds a `Source` and either streams it into a terminal UI or prints one view. `--node` narrows the fetched snapshot to the node with that public or WireGuard address together with the alerts about it (a node not in the snapshot is an error listing the ones that are). `--json` switches any one-shot view to JSON.
 
 **Sources.** The API source is the default. `--ssh` selects the SSH source and nothing else does: when the API fails, the monitor stops with an error that says why and suggests `--ssh` (`core/cmd/orama/internal/monitor/source.go:NewSource`). `--config` names a `nodes.conf` and is refused without `--ssh`. The SSH source runs `sudo orama node report --json` on every node in parallel (30 s each), derives alerts locally with the same `DeriveAlerts`, and measures each node's clock offset from the report's timestamp and collect time. Request metrics are counted by gateways, so traffic is empty over SSH and report age is 0. With `--ssh` the live interval defaults to, and may not go below, 15 s, since every refresh SSHes into every node.
 
@@ -299,9 +299,9 @@ A missing credential or an ended session is an auth error. Failing to reach the 
 
 **Views.** Every view starts with the verdict line, for example `✓ All systems operational · 3/3 nodes · updated 2s ago`, with alert counts when not operational. The one-shot subcommands are `cluster` (verdict, components, a row per node, top five alerts), `node`, `service`, `mesh` (peer counts against N-1, every link's handshake age), `dns`, `namespaces`, `alerts` (distinct alerts, most severe first, identical ones counted), `traffic`, `chain` and `report`. The live view has nine tabs (Overview, Nodes, Services, Traffic, Chain, Mesh, DNS, Namespaces, Alerts) moved with tab or `1` to `9`; enter opens a node's full report, `c`, `w`, `i`, `a` filter alerts by severity, `r` refreshes, `q` quits. The traffic tab keeps a sparkline of the last 60 cluster request rates for the session.
 
-**Hints.** Under each critical and warning alert the views print a next step. For the subsystems `rqlite`, `olric`, `ipfs`, `dns`, `wireguard`, `system`, `network` and `tor` it is `orama inspect --env E --subsystem S`, with the runbook sections of `docs/COMMON_PROBLEMS.md` for rqlite, olric, wireguard, ipfs and namespace; for `collection`, the SSH monitor of that node; for `service`, `gateway` and `namespace`, `orama ssh <host> ... 'sudo orama node status'`; for `vault`, `orama monitor node`. A host goes into a command only if it parses as an IP address, because a hint is a command to paste into a shell and a self-reported hostname must not reach one. The `chain`, `global` and `security` subsystems have no hint (`core/cmd/orama/internal/monitor/view/hints.go:Hint`).
+**Hints.** Under each critical and warning alert the views print a next step. For the subsystems `rqlite`, `olric`, `ipfs`, `dns`, `wireguard`, `system`, `network` and `tor` it is `orama inspect --env E --subsystem S`, with the runbook sections of `docs/COMMON_PROBLEMS.md` for rqlite, olric, wireguard, ipfs and namespace; for `collection`, the SSH monitor of that node; for `service`, `gateway` and `namespace`, `orama ssh <host> ... 'sudo orama node status'`; for `vault`, `orama status node`. A host goes into a command only if it parses as an IP address, because a hint is a command to paste into a shell and a self-reported hostname must not reach one. The `chain`, `global` and `security` subsystems have no hint (`core/cmd/orama/internal/monitor/view/hints.go:Hint`).
 
-**The report document.** `orama monitor report` writes one JSON document for scripts, the lifecycle harness and language models: `meta` (environment, time, duration, node, healthy and failed counts), `summary` (`rqlite_leader`, `rqlite_quorum`, `wg_mesh_status`, `service_health`, alert counts, the verdict), `components`, `alerts`, and `nodes` with a `status` of `ok`, `degraded` (a critical alert names it) or `unreachable`, the report or error, and `report_age_sec`. Fields are only added, never renamed or removed, because `core/e2e/lifecycle` decodes it into the real `report.NodeReport` and its predicates read it; `report_contract_test.go` holds the contract (`core/cmd/orama/internal/monitor/display/report.go:fullReport`).
+**The report document.** `orama status report` writes one JSON document for scripts, the lifecycle harness and language models: `meta` (environment, time, duration, node, healthy and failed counts), `summary` (`rqlite_leader`, `rqlite_quorum`, `wg_mesh_status`, `service_health`, alert counts, the verdict), `components`, `alerts`, and `nodes` with a `status` of `ok`, `degraded` (a critical alert names it) or `unreachable`, the report or error, and `report_age_sec`. Fields are only added, never renamed or removed, because `core/e2e/lifecycle` decodes it into the real `report.NodeReport` and its predicates read it; `report_contract_test.go` holds the contract (`core/cmd/orama/internal/monitor/display/report.go:fullReport`).
 
 ### The inspector
 
@@ -341,7 +341,7 @@ The scripts read root-owned files (`node.yaml`, namespace env files) with `sudo 
 
 ### Monitor and inspector compared
 
-| | `orama monitor` | `orama inspect` |
+| | `orama status` | `orama inspect` |
 |---|---|---|
 | Data source | the gateway's operator telemetry (reports the nodes collected on their own timers); `--ssh`: one SSH call per node | 11 or 12 SSH sessions per node over one shared connection |
 | Cost of a refresh | one cached snapshot; nodes pay one 10 s collection regardless of viewers | grows with nodes and runs only when invoked |
@@ -514,17 +514,17 @@ go test ./cmd/privhelper/ -run NodeReport
 
 The tests worth reading: `core/pkg/telemetry/hub/aggregate_test.go` (stale, unknown, cache, concurrency), `core/pkg/telemetry/hub/fetch_test.go` (status mapping, clock offset, overlay-only), `core/pkg/telemetry/cluster/components_test.go` (database outage, DNS applicability), `core/pkg/telemetry/cluster/public_test.go` (the projection names no node), `core/pkg/telemetry/report/system_oom_test.go`, `core/pkg/telemetry/report/chain_verify_test.go`, `core/cmd/orama/internal/monitor/display/report_contract_test.go` (the report schema as a contract), `core/cmd/orama/internal/monitor/watch_test.go` (reconnect), and `core/pkg/inspector/collector_errors_test.go` (unreachable and truncated collections).
 
-**Fleet e2e.** `e2e/features/monitoring/` exercises every `orama monitor` view as a table and as JSON against a real fleet, the operator telemetry API over HTTP (401, 403, 200, the 5 s cache, the stream and its interval bounds), `--node`, the exit codes, `orama inspect` over SSH, and the public status JSON with its uptime history. `e2e/features/monitoring-chaos/` provokes alerts on purpose (clock skew past 5 s and 60 s, a failed unit, a stopped service, UFW disabled) and the ring detector. The owner runs the fleet suite.
+**Fleet e2e.** `e2e/features/monitoring/` exercises every `orama status` view as a table and as JSON against a real fleet, the operator telemetry API over HTTP (401, 403, 200, the 5 s cache, the stream and its interval bounds), `--node`, the exit codes, `orama inspect` over SSH, and the public status JSON with its uptime history. `e2e/features/monitoring-chaos/` provokes alerts on purpose (clock skew past 5 s and 60 s, a failed unit, a stopped service, UFW disabled) and the ring detector. The owner runs the fleet suite.
 
 **Live, read-only.**
 
 ```
-orama monitor cluster --env ENV            # verdict, components, a row per node, top alerts
-orama monitor alerts --env ENV --json      # every distinct alert with its hint
-orama monitor node --env ENV --node 10.0.0.1
-orama monitor traffic --env ENV
-orama monitor report --env ENV | jq '.summary.verdict, .nodes[].report_age_sec'
-orama monitor cluster --env ENV --ssh      # break-glass: reads the nodes directly
+orama status cluster --env ENV            # verdict, components, a row per node, top alerts
+orama status alerts --env ENV --json      # every distinct alert with its hint
+orama status node --env ENV --node 10.0.0.1
+orama status traffic --env ENV
+orama status report --env ENV | jq '.summary.verdict, .nodes[].report_age_sec'
+orama status cluster --env ENV --ssh      # break-glass: reads the nodes directly
 curl -s https://BASE_DOMAIN/v1/status | jq '.overall, .nodes, .components[0].history[-1]'
 orama inspect --env ENV --subsystem rqlite,wg --format json | jq '.summary'
 orama node logs node --since -30min | grep 'slow request'

@@ -20,10 +20,10 @@ adopted a release root (orama node trust add-root).
 It fetches the channel's metadata and verifies it against the adopted root:
 every role at its threshold, an unexpired timestamp, a snapshot no older than the
 newest this node has accepted, and the channel's own keys for the channel's own
-paths. What does not verify is refused, reported in 'orama monitor', and never
+paths. What does not verify is refused, reported in 'orama status', and never
 installed.
 
-With notify (the default) a newer release is reported in 'orama monitor' and
+With notify (the default) a newer release is reported in 'orama status' and
 nothing is installed. With auto the node installs it only when
 
   - the cluster is not degraded and a majority of the raft voters are up;

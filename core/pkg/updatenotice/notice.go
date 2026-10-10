@@ -1,5 +1,5 @@
 // Package updatenotice is what a node's auto-update agent last found, kept in
-// a file so the node report (and through it `orama monitor`) can show it. The
+// a file so the node report (and through it `orama status`) can show it. The
 // agent runs as root and writes the file; the report collector reads it.
 package updatenotice
 

@@ -239,7 +239,7 @@ Both go to **every SFU of the namespace**, over the overlay, each request signed
 
 ```bash
 orama namespace webrtc-status --namespace myapp
-orama monitor report                       # per-namespace sfu_up and turn_up
+orama status report                       # per-namespace sfu_up and turn_up
 orama inspect --subsystem webrtc           # SFU coverage (3 nodes) and TURN redundancy (2 nodes)
 sudo orama node logs orama-namespace-sfu@myapp -f
 sudo orama node logs turn -f

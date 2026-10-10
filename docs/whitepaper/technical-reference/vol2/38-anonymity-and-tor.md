@@ -126,7 +126,7 @@ Refusals before the upgrade carry `{error, code, hint}`: 400 `RELAY_DESTINATION_
 
 #### Health
 
-`/v1/health` reports the SOCKS port as `checks.anon_proxy` (`core/pkg/gateway/status_handlers.go:anonProxyCheck`): `ok`, or `unavailable` when it does not accept connections. It is deliberately not `error`: `/v1/health` decides DNS membership, and a node whose Tor client is down still serves everything except the anonymity routes. `orama monitor` and the inspector (`core/pkg/inspector/checks/tor.go`: unit active, SOCKS port bound, bootstrap percentage, legacy Anyone files gone) alert on it instead.
+`/v1/health` reports the SOCKS port as `checks.anon_proxy` (`core/pkg/gateway/status_handlers.go:anonProxyCheck`): `ok`, or `unavailable` when it does not accept connections. It is deliberately not `error`: `/v1/health` decides DNS membership, and a node whose Tor client is down still serves everything except the anonymity routes. `orama status` and the inspector (`core/pkg/inspector/checks/tor.go`: unit active, SOCKS port bound, bootstrap percentage, legacy Anyone files gone) alert on it instead.
 
 ### The network file
 
@@ -221,7 +221,7 @@ The archive is local to the authority host. Nothing publishes it and nothing pru
 
 ### Relay health
 
-`orama-global-tor-monitor.timer` (every five minutes, 2 minutes after boot) runs the oneshot `orama-global-tor-monitor.service`: `orama global tor monitor --home /var/lib/orama-global/tor-relay`, as the relay's account, no network. `WriteRelayMonitor` writes `monitor.json` (mode 0640) into the relay's DataDirectory. The body is `{"in_consensus": true|false}`, written only when the answer is known: the relay has an identity and holds a consensus that is still valid. Otherwise the file is `{}` and the node report shows the state as unknown. `report.ParseMonitor` reads it (`core/pkg/telemetry/report/global.go`): `orama monitor node` prints `relay active (in the relay set)` or `(not in the relay set)` on the Global line, and the global health rule `global.relay.consensus` warns when a relay says it is not listed (`core/pkg/telemetry/globalhealth/eval.go`).
+`orama-global-tor-monitor.timer` (every five minutes, 2 minutes after boot) runs the oneshot `orama-global-tor-monitor.service`: `orama global tor monitor --home /var/lib/orama-global/tor-relay`, as the relay's account, no network. `WriteRelayMonitor` writes `monitor.json` (mode 0640) into the relay's DataDirectory. The body is `{"in_consensus": true|false}`, written only when the answer is known: the relay has an identity and holds a consensus that is still valid. Otherwise the file is `{}` and the node report shows the state as unknown. `report.ParseMonitor` reads it (`core/pkg/telemetry/report/global.go`): `orama status node` prints `relay active (in the relay set)` or `(not in the relay set)` on the Global line, and the global health rule `global.relay.consensus` warns when a relay says it is not listed (`core/pkg/telemetry/globalhealth/eval.go`).
 
 ### The validator onion service and the tx gate
 

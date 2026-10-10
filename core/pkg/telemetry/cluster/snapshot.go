@@ -1,7 +1,7 @@
 // Package cluster turns per-node health reports into a view of the whole
 // cluster: which nodes answered, what each reported, and the alerts derived
 // from comparing them. The same types are built by the cluster gateway from
-// its peers' telemetry and by `orama monitor --ssh` from reports collected over
+// its peers' telemetry and by `orama status --ssh` from reports collected over
 // SSH, and they travel between the two as JSON.
 package cluster
 

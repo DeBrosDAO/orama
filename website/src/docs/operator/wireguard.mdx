@@ -54,19 +54,19 @@ Each node's WireGuard private key is generated during installation and stored on
 
 ## Monitoring Mesh Health
 
-### Using orama monitor
+### Using orama status
 
-The `orama monitor mesh` command shows WireGuard mesh connectivity across the cluster:
+The `orama status mesh` command shows WireGuard mesh connectivity across the cluster:
 
 ```bash
 # View mesh connectivity for all nodes
-orama monitor mesh --env devnet
+orama status mesh --env devnet
 
 # JSON output
-orama monitor mesh --env devnet --json
+orama status mesh --env devnet --json
 
 # Filter to a specific node
-orama monitor mesh --env devnet --node 203.0.113.10
+orama status mesh --env devnet --node 203.0.113.10
 ```
 
 The data comes from the cluster gateway's telemetry, not SSH: each node's report carries its WireGuard peers, and the view shows the peers against the N-1 a full mesh needs and each link's handshake age and traffic, so you can see which tunnels are healthy (recent handshakes) and which are stale. Add `--ssh` to collect from the nodes directly when no gateway answers.

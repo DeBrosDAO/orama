@@ -42,7 +42,7 @@ covers:
     - orama global stage-oramad
     - orama storage seal
     - orama storage open
-    - orama monitor report
+    - orama status report
   routes:
     - /v1/namespaces
     - /v1/operator/health

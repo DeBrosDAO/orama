@@ -97,7 +97,7 @@ func TestBootstrap_chainHeightAdvances(t *testing.T) {
 func readChain(t testing.TB, cli *oramacli.Runner, env string) chainView {
 	t.Helper()
 	var v chainView
-	if err := oramacli.DecodeJSON(cli.MustOK(t, "monitor", "chain", "--env", env, "--json"), &v); err != nil {
+	if err := oramacli.DecodeJSON(cli.MustOK(t, "status", "chain", "--env", env, "--json"), &v); err != nil {
 		t.Fatal(err)
 	}
 	return v
@@ -111,14 +111,14 @@ func TestBootstrap_monitorRefusals(t *testing.T) {
 	t.Parallel()
 	f := harness.Fleet(t)
 	cli := harness.CLI(t)
-	infra.ExpectRefused(t, infra.Run(t, cli, "monitor", "report", "--json"), "env")
-	infra.ExpectExit(t, infra.Run(t, cli.Isolated(t), "monitor", "report", "--env", f.State.Env, "--json"),
+	infra.ExpectRefused(t, infra.Run(t, cli.Isolated(t), "status", "report", "--json"), "active environment")
+	infra.ExpectExit(t, infra.Run(t, cli.Isolated(t), "status", "report", "--env", f.State.Env, "--json"),
 		infra.ExitAuth, "no usable credentials")
-	infra.ExpectExit(t, infra.Run(t, cli, "monitor", "report", "--env", f.State.Env, "--node", "192.0.2.1", "--json"),
+	infra.ExpectExit(t, infra.Run(t, cli, "status", "report", "--env", f.State.Env, "--node", "192.0.2.1", "--json"),
 		infra.ExitNotFound, "192.0.2.1")
-	infra.ExpectExit(t, infra.Run(t, cli, "monitor", "report", "--env", f.State.Env, "--config", "/nonexistent"),
+	infra.ExpectExit(t, infra.Run(t, cli, "status", "report", "--env", f.State.Env, "--config", "/nonexistent"),
 		infra.ExitUsage, "--ssh")
-	infra.ExpectRefused(t, infra.Run(t, cli, "monitor", "report", "--env", "e2e-no-such-environment", "--json"),
+	infra.ExpectRefused(t, infra.Run(t, cli, "status", "report", "--env", "e2e-no-such-environment", "--json"),
 		"not found")
 }
 
@@ -135,7 +135,7 @@ func TestBootstrap_monitorOneNode(t *testing.T) {
 	}
 	for _, key := range []string{n.PublicIP, entry.Report.WGIP} {
 		var r monitor.Report
-		res := harness.CLI(t).MustOK(t, "monitor", "report", "--env", f.State.Env, "--node", key, "--json")
+		res := harness.CLI(t).MustOK(t, "status", "report", "--env", f.State.Env, "--node", key, "--json")
 		if err := oramacli.DecodeJSON(res, &r); err != nil {
 			t.Fatal(err)
 		}

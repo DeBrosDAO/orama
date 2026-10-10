@@ -544,4 +544,4 @@ curl -s https://<base domain>/v1/status
 curl -si -H 'Origin: https://app.<base domain>' https://<base domain>/v1/auth/whoami
 ```
 
-`/health` shows `starting` with a reason while a node converges; `/v1/auth/whoami` without a credential shows the `AUTH_MISSING` body with its hint and the CORS headers. With an operator wallet, `orama monitor report` and `/v1/operator/health` show each node's checks and namespaces. In the index registry, `SELECT fqdn, value, is_active, updated_at FROM dns_records WHERE fqdn LIKE 'ns-%'` shows which nodes the namespace health loop advertises.
+`/health` shows `starting` with a reason while a node converges; `/v1/auth/whoami` without a credential shows the `AUTH_MISSING` body with its hint and the CORS headers. With an operator wallet, `orama status report` and `/v1/operator/health` show each node's checks and namespaces. In the index registry, `SELECT fqdn, value, is_active, updated_at FROM dns_records WHERE fqdn LIKE 'ns-%'` shows which nodes the namespace health loop advertises.

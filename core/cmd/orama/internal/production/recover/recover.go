@@ -743,7 +743,7 @@ func phase6Verify(nodes []inspector.Node, leader inspector.Node) {
 		fmt.Printf("   A follower syncing a large snapshot can take longer; re-check shortly.\n\n")
 	}
 	fmt.Printf("Next steps:\n")
-	fmt.Printf("  1. Run 'orama monitor report --env <env> --ssh' to verify full cluster health\n")
+	fmt.Printf("  1. Run 'orama status report --env <env> --ssh' to verify full cluster health\n")
 	fmt.Printf("     (--ssh reads the nodes directly: the gateways may not be serving telemetry yet)\n")
 	fmt.Printf("  2. If a follower still shows an unsettled state, check /opt/orama/.orama/logs/rqlite-node.log\n")
 }

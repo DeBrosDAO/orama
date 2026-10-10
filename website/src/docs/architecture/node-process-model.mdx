@@ -18,7 +18,7 @@ Reserved instance names `index` and `nameserver` are not tenant-provisionable. D
 
 **Unit dependencies express ordering, not lifecycle.** `Requires=` propagates stop and restart, so it is reserved for the two cases where one unit is useless without another (`ipfs-cluster@` and `ipfs-gc@` on `ipfs@`). Everything else is `Wants=` plus `After=`. In particular the gateway does not `Require` RQLite or Olric: restarting a namespace's RQLite (which split-brain recovery does) must not bounce the gateway with it. The gateway waits for RQLite itself (90 s, then exits and is restarted) and reconnects to Olric in the background, with its cache endpoints answering 503 meanwhile. Olric never reads the database, so it has no RQLite dependency at all.
 
-**Restart policy.** Every long-running unit uses `Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`: `on-failure` leaves a daemon down after a clean exit nobody asked for, and a start limit would turn a transient failure into one that needs a human. `orama monitor` reads the restart counter instead and raises a critical alert for a unit that has restarted repeatedly and never reached active.
+**Restart policy.** Every long-running unit uses `Restart=always`, `RestartSec=5s` and `StartLimitIntervalSec=0`: `on-failure` leaves a daemon down after a clean exit nobody asked for, and a start limit would turn a transient failure into one that needs a human. `orama status` reads the restart counter instead and raises a critical alert for a unit that has restarted repeatedly and never reached active.
 
 ## Boot: components, not a sequence
 

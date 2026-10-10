@@ -56,8 +56,9 @@ A release that fails TUF verification, including a rolled-back snapshot or
 an expired timestamp, is refused. So is a downgrade and a release a previous
 health-gate failure marked bad.
 
-A validator (--role validator) is never auto: the mode is refused, and chain
-upgrades are staged explicitly with 'orama global stage-oramad'.
+A validator (--role validator) is never auto: on auto the decision is skip, with
+the reason, and the command exits 0; chain upgrades are staged explicitly with
+'orama global stage-oramad'.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -94,10 +95,10 @@ adopted a release root (orama node trust add-root).
 It fetches the channel's metadata and verifies it against the adopted root:
 every role at its threshold, an unexpired timestamp, a snapshot no older than the
 newest this node has accepted, and the channel's own keys for the channel's own
-paths. What does not verify is refused, reported in 'orama monitor', and never
+paths. What does not verify is refused, reported in 'orama status', and never
 installed.
 
-With notify (the default) a newer release is reported in 'orama monitor' and
+With notify (the default) a newer release is reported in 'orama status' and
 nothing is installed. With auto the node installs it only when
 
 ```
@@ -288,7 +289,7 @@ joining node takes it from the cluster in the join response. With --remote,
 | `--operator-wallet` | — | Operator wallet address |
 | `--peers` | — | Comma-separated list of bootstrap peer multiaddrs |
 | `--remote` | `false` | Install the machine at --vps-ip over SSH, instead of this machine |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--skip-firewall` | `false` | Skip UFW firewall setup (for users who manage their own firewall) |
 | `--ssh-user` | — | SSH user for remote management |
 | `--token` | — | Invite from 'orama invite'; it carries the gateway to join and the certificate to pin |
@@ -568,7 +569,7 @@ orama node report [flags]
 ```
 
 Collect all system and service data from this node and output
-as a single JSON blob. Designed to be called by 'orama monitor' over SSH.
+as a single JSON blob. Designed to be called by 'orama status' over SSH.
 Requires root privileges for full data collection.
 
 | Flag | Default | Description |
@@ -924,7 +925,7 @@ Uses rolling restart with quorum safety to ensure zero downtime.
 | `--node` | — | Upgrade a single node IP only |
 | `--public-ip` | — | This node's public IP, recorded as node.public_ip (default: the recorded one, else the source address of the default route) |
 | `--restart` | `false` | Automatically restart services after upgrade |
-| `--skip-checks` | `false` | Skip minimum resource checks (RAM/CPU) |
+| `--skip-checks` | `false` | Skip minimum resource checks (disk, RAM, CPU) |
 | `--yes` | `false` | Execute the rolling upgrade plan (without it the plan is printed and nothing is restarted) |
 
 ## orama node wipe

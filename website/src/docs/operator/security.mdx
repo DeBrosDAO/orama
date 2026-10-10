@@ -2,11 +2,11 @@
 
 The reasons are on [Security model](/docs/architecture/security-model) and [Secrets and keys](/docs/architecture/secrets-and-keys). This page is what to check on a node you operate, with the command for each, and what the installer already does for you.
 
-Run these on the node (`orama ssh <ip>`), as root or with `sudo`. Most are also watched by `orama monitor`, which raises an alert when one drifts.
+Run these on the node (`orama ssh <ip>`), as root or with `sudo`. Most are also watched by `orama status`, which raises an alert when one drifts.
 
 ## What the installer sets up
 
-You do not configure these. Install and upgrade write them, and `orama monitor` warns if they drift.
+You do not configure these. Install and upgrade write them, and `orama status` warns if they drift.
 
 | Area | What is in place |
 |---|---|
@@ -33,7 +33,7 @@ Anything else on a public interface is a finding. Rules without the `orama` comm
 
 ```bash
 sudo wg show wg0                   # one peer per other node, recent handshakes
-orama monitor mesh --env <env>     # from your computer: peers against the N-1 a full mesh needs
+orama status mesh --env <env>     # from your computer: peers against the N-1 a full mesh needs
 ```
 
 ### The archive trust anchor
@@ -81,12 +81,12 @@ sudo ss -tlnp | grep 9050          # bound on 127.0.0.1 only
 ### Certificates and DNS
 
 ```bash
-orama monitor dns --env <env>      # certificate days left, resolution
+orama status dns --env <env>      # certificate days left, resolution
 ```
 
 ### Time
 
-Clocks must agree: the certificate store's lease, MACs (one minute either side), join tickets (30 seconds) and Raft all depend on it. Every node should run NTP; `orama monitor` warns above 5 seconds of skew and goes critical above 60.
+Clocks must agree: the certificate store's lease, MACs (one minute either side), join tickets (30 seconds) and Raft all depend on it. Every node should run NTP; `orama status` warns above 5 seconds of skew and goes critical above 60.
 
 ## Habits that keep a cluster safe
 

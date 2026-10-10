@@ -92,7 +92,7 @@ max-namespaces-per-wallet is an integer from 1 to %d. The default is %d.
 The cluster's automatic updates (docs/DEV_DEPLOY.md, "Auto-update"):
 
   auto-update      off, notify (the default) or auto. notify reports a newer
-                   release in 'orama monitor'; auto installs it, one node at a
+                   release in 'orama status'; auto installs it, one node at a
                    time, when the cluster is healthy and the hour is in the window
   update-channel   the release channel to follow: stable (the default) or nightly
   update-window    start-end hours UTC when auto may install, for example 1-5;

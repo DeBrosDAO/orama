@@ -64,9 +64,9 @@ func TestHint_pointsAtRealCommands(t *testing.T) {
 	}{
 		{cluster.Alert{Subsystem: "rqlite"}, []string{"orama inspect --env devnet --subsystem rqlite", "docs/COMMON_PROBLEMS.md §6"}},
 		{cluster.Alert{Subsystem: "wireguard", Node: "1.1.1.1"}, []string{"--subsystem wg", "§1"}},
-		{cluster.Alert{Subsystem: cluster.SubsystemCollection, Node: "3.3.3.3"}, []string{"orama monitor node --env devnet --node 3.3.3.3 --ssh"}},
+		{cluster.Alert{Subsystem: cluster.SubsystemCollection, Node: "3.3.3.3"}, []string{"orama status node --env devnet --node 3.3.3.3 --ssh"}},
 		{cluster.Alert{Subsystem: "service", Node: "2.2.2.2"}, []string{"orama ssh 2.2.2.2 --env devnet 'sudo orama node status'"}},
-		{cluster.Alert{Subsystem: "vault", Node: "2.2.2.2"}, []string{"orama monitor node --env devnet --node 2.2.2.2"}},
+		{cluster.Alert{Subsystem: "vault", Node: "2.2.2.2"}, []string{"orama status node --env devnet --node 2.2.2.2"}},
 		{cluster.Alert{Subsystem: "namespace"}, []string{"docs/COMMON_PROBLEMS.md §1–§4"}},
 	}
 	for _, tc := range cases {
@@ -91,7 +91,7 @@ func TestHint_nothingToSay(t *testing.T) {
 // A hint is pasted into a shell, so only an IP address is put into one.
 func TestHint_nonAddressHostIsLeftOut(t *testing.T) {
 	got := Hint(cluster.Alert{Subsystem: cluster.SubsystemCollection, Node: "x; rm -rf ~"}, "devnet")
-	if strings.Contains(got, "rm -rf") || got != "orama monitor --env devnet --ssh" {
+	if strings.Contains(got, "rm -rf") || got != "orama status --env devnet --ssh" {
 		t.Fatalf("got %q", got)
 	}
 	if got := Hint(cluster.Alert{Subsystem: "service", Node: "evil`id`"}, "devnet"); got != "" {

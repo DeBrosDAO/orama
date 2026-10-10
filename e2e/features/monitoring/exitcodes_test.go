@@ -27,14 +27,14 @@ func TestMonitor_usageErrorsExitTwo(t *testing.T) {
 		"root live interval 0":   monitorArgs(t, "", "--interval", "0s"),
 		"ssh interval under 15s": monitorArgs(t, "live", "--ssh", "--interval", "5s"),
 		"config without ssh":     monitorArgs(t, "cluster", "--config", "/nonexistent/nodes.conf"),
-		"unknown environment":    {"monitor", "cluster", "--env", "e2e-no-such-env"},
+		"unknown environment":    {"status", "cluster", "--env", "e2e-no-such-env"},
 	}
 	for what, args := range cases {
 		if res := infra.Run(t, cli, args...); res.Exit != infra.ExitUsage {
 			t.Errorf("%s: exit %d, want %d (usage)\n%s%s", what, res.Exit, infra.ExitUsage, res.Stdout, res.Stderr)
 		}
 	}
-	if res := infra.Run(t, cli, "monitor", "cluster"); res.Exit == infra.ExitOK {
+	if res := infra.Run(t, cli, "status", "cluster"); res.Exit == infra.ExitOK {
 		t.Errorf("monitor without --env succeeded (the flag is required)")
 	}
 }

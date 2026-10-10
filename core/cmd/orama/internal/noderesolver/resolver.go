@@ -158,7 +158,7 @@ func GatewayURLForEnv(env string) (string, error) {
 
 // LoadBearer returns the credential to send to a gateway: ORAMA_TOKEN when it
 // is set, else the stored session renewed if it has to be. Every operator API
-// call the CLI makes — node resolution here, `orama monitor`'s telemetry —
+// call the CLI makes — node resolution here, `orama status`'s telemetry —
 // authenticates this way.
 func LoadBearer(gatewayURL string) (string, error) {
 	return shared.AuthToken(gatewayURL)

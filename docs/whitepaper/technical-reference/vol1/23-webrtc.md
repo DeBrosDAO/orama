@@ -534,7 +534,7 @@ At 10x the load: join cost is one registry read (cached 10 s) and one health pro
 
 ```bash
 orama namespace webrtc-status --namespace NS
-orama monitor report --env ENV
+orama status report --env ENV
 orama inspect --env ENV
 ```
 

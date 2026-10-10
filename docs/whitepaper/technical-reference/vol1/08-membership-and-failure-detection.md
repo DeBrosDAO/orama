@@ -346,4 +346,4 @@ SELECT node_id, wg_ip, created_at, confirmed_at FROM wireguard_peers;
 SELECT node_id, peer_id, reason, evicted_at FROM raft_evicted_nodes;
 ```
 
-The ring for a given node is the 3 ids after its own in the sorted `dns_nodes` result. Verdicts and quorum messages appear in the gateway log (`orama node logs`, see `docs/MONITORING.md`) as "Node SUSPECT", "Node declared DEAD", "waiting for quorum" and "CONFIRMED DEAD". The reconciler logs "Removed the WireGuard peer of a departed node" and "WireGuard peers with no matching node record". `orama monitor` shows the cluster's node list and alerts without SSH.
+The ring for a given node is the 3 ids after its own in the sorted `dns_nodes` result. Verdicts and quorum messages appear in the gateway log (`orama node logs`, see `docs/MONITORING.md`) as "Node SUSPECT", "Node declared DEAD", "waiting for quorum" and "CONFIRMED DEAD". The reconciler logs "Removed the WireGuard peer of a departed node" and "WireGuard peers with no matching node record". `orama status` shows the cluster's node list and alerts without SSH.

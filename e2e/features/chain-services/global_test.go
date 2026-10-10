@@ -68,6 +68,6 @@ func TestGlobalServices_monitorShowsTheProvidersDealSlots(t *testing.T) {
 			}
 		}
 	}
-	res := infra.Run(t, harness.CLI(t), "monitor", "node", "--env", c.F.State.Env)
+	res := infra.Run(t, harness.CLI(t), "status", "node", "--env", c.F.State.Env)
 	infra.ExpectExit(t, res, infra.ExitOK, "Global:", "slots held")
 }

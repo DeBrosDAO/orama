@@ -19,6 +19,8 @@ func (m model) tabContent(width int) string {
 	switch m.tab {
 	case tabOverview:
 		return m.overview()
+	case tabOperator:
+		return section(t, "Your account on the chain", m.operatorContent())
 	case tabNodes:
 		if m.nodeDetail {
 			return m.nodeDetailContent(width)
@@ -102,4 +104,20 @@ func (m model) alerts() string {
 		return section(t, title, "  "+t.OK.Render("No alerts match."))
 	}
 	return section(t, title, display.AlertLines(t, rows, m.cfg.Env, len(rows)))
+}
+
+// noOperatorHint is the Operator tab when no operator address is known.
+const noOperatorHint = "No operator account: pass --operator <orama1...> to orama status."
+
+// operatorContent is the Operator tab: the account's earnings, spendable balance and bond.
+func (m model) operatorContent() string {
+	if m.cfg.Operator == nil {
+		return m.theme.Muted.Render(noOperatorHint) + "\n"
+	}
+	if m.operator == nil {
+		return m.theme.Muted.Render("Reading the account…") + "\n"
+	}
+	var b strings.Builder
+	display.WriteOperator(&b, m.operator)
+	return b.String()
 }

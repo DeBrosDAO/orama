@@ -47,7 +47,7 @@ func MembersOf(t testing.TB, f *fleet.Fleet, names ...string) map[string][]fleet
 	want := ExpectedMembers(len(f.State.Nodes))
 	var placed map[string][]fleet.Node
 	eventually.Require(t, membersPoll, membersBudget, fmt.Sprintf("%d nodes to report each of %d namespaces", want, len(names)), func() (bool, error) {
-		res, err := harness.CLI(t).Run(t.Context(), "monitor", "namespaces", "--env", f.State.Env, "--json")
+		res, err := harness.CLI(t).Run(t.Context(), "status", "namespaces", "--env", f.State.Env, "--json")
 		if err != nil {
 			return false, err
 		}

@@ -62,9 +62,9 @@ func hintCommand(a cluster.Alert, env string) string {
 	switch a.Subsystem {
 	case cluster.SubsystemCollection:
 		if host == "" {
-			return fmt.Sprintf("orama monitor --env %s --ssh", env)
+			return fmt.Sprintf("orama status --env %s --ssh", env)
 		}
-		return fmt.Sprintf("orama monitor node --env %s --node %s --ssh", env, host)
+		return fmt.Sprintf("orama status node --env %s --node %s --ssh", env, host)
 	case "service", "gateway", "namespace":
 		if host == "" {
 			return ""
@@ -72,9 +72,9 @@ func hintCommand(a cluster.Alert, env string) string {
 		return fmt.Sprintf("orama ssh %s --env %s 'sudo orama node status'", host, env)
 	case "vault":
 		if host == "" {
-			return fmt.Sprintf("orama monitor node --env %s", env)
+			return fmt.Sprintf("orama status node --env %s", env)
 		}
-		return fmt.Sprintf("orama monitor node --env %s --node %s", env, host)
+		return fmt.Sprintf("orama status node --env %s --node %s", env, host)
 	}
 	return ""
 }

@@ -237,7 +237,7 @@ curl -sf https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem >> le
 orama env add mycluster https://cluster.example.com --ca-file le-staging.pem
 ```
 
-**Check.** `orama status` lists three nodes, all healthy. `orama monitor cluster --env mycluster` gives the verdict with the numbers behind it. `orama monitor report --env mycluster` prints the full JSON report; use it as the baseline of what healthy looks like on your cluster. (`orama monitor` always needs `--env`; it does not fall back to the active environment.)
+**Check.** `orama status` lists three nodes, all healthy. `orama status cluster --env mycluster` gives the verdict with the numbers behind it. `orama status report --env mycluster` prints the full JSON report; use it as the baseline of what healthy looks like on your cluster. (`orama status` always needs `--env`; it does not fall back to the active environment.)
 
 ## 8. Create a namespace and deploy
 
