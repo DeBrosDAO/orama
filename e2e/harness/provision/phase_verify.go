@@ -26,7 +26,7 @@ const (
 
 var wgInetPattern = regexp.MustCompile(`\binet (10\.[0-9]+\.[0-9]+\.[0-9]+)/`)
 
-// healthReport is the part of `orama monitor report --json` provisioning
+// healthReport is the part of `orama status report --json` provisioning
 // reads (its contract: display/report.go, fields are only ever added).
 type healthReport struct {
 	Meta struct {
@@ -71,7 +71,7 @@ func (r *run) checkHealth(ctx context.Context) error {
 	if _, err := r.oramaCmd(ctx, "auth", "login"); err != nil {
 		return err
 	}
-	c := command{name: r.st.OramaBin, args: []string{"monitor", "report", "--env", r.st.Env, "--json"}, env: r.cliEnv(),
+	c := command{name: r.st.OramaBin, args: []string{"status", "report", "--env", r.st.Env, "--json"}, env: r.cliEnv(),
 		log: filepath.Join(r.cfg.ArtifactDir, "provision-poll-monitor-report.log"), redact: r.red.Redact}
 	out, err := waitReport(ctx, r.d.cmd, c, r.d.timing, func(h healthReport) string { return h.problem(len(r.st.Nodes)) })
 	if err != nil {

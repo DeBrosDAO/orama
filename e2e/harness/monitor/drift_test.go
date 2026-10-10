@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// samplePath is `orama monitor report --json` as the real code writes it:
+// samplePath is `orama status report --json` as the real code writes it:
 // display.FullReport (core/cmd/orama/internal/monitor/display) over a
 // snapshot of three healthy nodes with every section this package reads,
 // one unreachable node and a warning alert. Regenerate it after a change to

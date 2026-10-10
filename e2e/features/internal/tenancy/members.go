@@ -30,7 +30,7 @@ const (
 func ExpectedMembers(size int) int { return min(NamespaceNodeCount, size) }
 
 // Members are the nodes namespace name is placed on, read from the nodes
-// themselves (`orama monitor namespaces`: each node lists the namespaces it
+// themselves (`orama status namespaces`: each node lists the namespaces it
 // hosts), never assumed to be every node. It waits until the expected number
 // of members report the namespace. Every per-namespace check on a node (units,
 // files, ports, DNS records, faults) loops over Members; a check that
@@ -52,7 +52,7 @@ func MembersOf(t testing.TB, f *fleet.Fleet, names ...string) map[string][]fleet
 			return false, err
 		}
 		if res.Exit != 0 {
-			return false, fmt.Errorf("orama monitor namespaces exited %d: %s", res.Exit, res.Stderr)
+			return false, fmt.Errorf("orama status namespaces exited %d: %s", res.Exit, res.Stderr)
 		}
 		var rows []monitor.NamespaceRow
 		if err := oramacli.DecodeJSON(res, &rows); err != nil {

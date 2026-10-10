@@ -235,7 +235,7 @@ health:
 		echo "Usage: make health ENV=devnet|testnet"; \
 		exit 1; \
 	fi
-	./bin/orama monitor report --env $(ENV)
+	./bin/orama status report --env $(ENV)
 
 # Help
 help:

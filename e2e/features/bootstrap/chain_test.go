@@ -18,7 +18,7 @@ import (
 // land well inside a minute on a healthy chain.
 const blockBudget = 2 * time.Minute
 
-// chainView is `orama monitor chain --json`.
+// chainView is `orama status chain --json`.
 type chainView struct {
 	ChainID    string `json:"chain_id"`
 	Height     int64  `json:"height"`

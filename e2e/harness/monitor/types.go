@@ -1,4 +1,4 @@
-// Package monitor reads `orama monitor report --json`, the operator's view of
+// Package monitor reads `orama status report --json`, the operator's view of
 // the whole cluster, and decides whether the cluster has settled.
 //
 // The shapes are a copy of the fields tests need from the CLI's report
@@ -15,7 +15,7 @@ package monitor
 
 import "time"
 
-// Values `orama monitor report` writes.
+// Values `orama status report` writes.
 const (
 	// NoLeader is summary.rqlite_leader when no node is the leader.
 	NoLeader = "none"
@@ -39,7 +39,7 @@ const (
 // node whose collection took 25s.
 const MaxReportAgeSec = 90
 
-// Report is the whole `orama monitor report --json` document.
+// Report is the whole `orama status report --json` document.
 type Report struct {
 	Meta    Meta    `json:"meta"`
 	Summary Summary `json:"summary"`

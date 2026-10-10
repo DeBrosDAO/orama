@@ -14,7 +14,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Values `orama monitor` writes (core/pkg/telemetry/cluster).
+// Values `orama status` writes (core/pkg/telemetry/cluster).
 const (
 	severityCritical = "critical"
 	severityWarning  = "warning"

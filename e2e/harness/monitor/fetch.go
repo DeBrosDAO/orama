@@ -9,7 +9,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// Parse decodes `orama monitor report --json` output.
+// Parse decodes `orama status report --json` output.
 func Parse(raw []byte) (*Report, error) {
 	var r Report
 	if err := json.Unmarshal(raw, &r); err != nil {
@@ -18,16 +18,16 @@ func Parse(raw []byte) (*Report, error) {
 	return &r, nil
 }
 
-// Get runs `orama monitor report --env <env> --json` and decodes it. A
+// Get runs `orama status report --env <env> --json` and decodes it. A
 // non-zero exit is an error carrying the CLI's stderr: use it inside
 // eventually loops, where a failed read is an observation, not the end.
 func Get(ctx context.Context, cli *oramacli.Runner, env string) (*Report, error) {
-	res, err := cli.Run(ctx, "monitor", "report", "--env", env, "--json")
+	res, err := cli.Run(ctx, "status", "report", "--env", env, "--json")
 	if err != nil {
 		return nil, err
 	}
 	if res.Exit != 0 {
-		return nil, fmt.Errorf("orama monitor report --env %s exited %d: %s", env, res.Exit, res.Stderr)
+		return nil, fmt.Errorf("orama status report --env %s exited %d: %s", env, res.Exit, res.Stderr)
 	}
 	return Parse([]byte(res.Stdout))
 }

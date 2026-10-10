@@ -31,12 +31,12 @@ func TestMonitor_everyViewAsTableAndJSON(t *testing.T) {
 	for _, view := range oneShots {
 		res := cli.MustOK(t, monitorArgs(t, view)...)
 		if !startsWithVerdict(res.Stdout) {
-			t.Errorf("orama monitor %s: the first line is not the verdict:\n%s", view, res.Stdout)
+			t.Errorf("orama status %s: the first line is not the verdict:\n%s", view, res.Stdout)
 		}
 		var v any
 		monitorJSON(t, view, &v)
 		if v == nil {
-			t.Errorf("orama monitor %s --json printed null", view)
+			t.Errorf("orama status %s --json printed null", view)
 		}
 	}
 	infra.ExpectExit(t, infra.Run(t, cli, "status", "--help"), infra.ExitOK, "live", "report", "traffic")

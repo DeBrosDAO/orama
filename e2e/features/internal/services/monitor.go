@@ -11,7 +11,7 @@ import (
 	"github.com/DeBrosOfficial/network/e2e/harness/oramacli"
 )
 
-// rawReport is the part of `orama monitor report --json` these packages read
+// rawReport is the part of `orama status report --json` these packages read
 // that harness/monitor does not type: each node's subsystem reports
 // (core/pkg/telemetry/report/types.go), kept raw.
 type rawReport struct {

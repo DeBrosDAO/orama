@@ -28,7 +28,7 @@ e2e/
   cmd/e2e-fleet/         the runner: run, provision, test, teardown, sweep, sweep-namespaces, report, coverage, hook, target
   harness/               what tests import (below); provision/hetzner/cloudflare/agent/sshx provision the fleet
   harness/broker/        the runner's credential broker (DNS TXT, extras, eval clusters) on a unix socket
-  harness/monitor/       `orama monitor report --json` types and the cluster predicates
+  harness/monitor/       `orama status report --json` types and the cluster predicates
   features/<id>/         ONE feature per directory: feature.yaml + *_test.go (build tag e2e_fleet)
   features/internal/     helper packages shared by features (not features: no manifest, no TestMain)
   stages/stages.yaml     the eleven ordered stages
@@ -148,7 +148,7 @@ rejects other `Test*` names and flags a `func(*testing.T)` that is not named
 - **A namespace lives on three nodes, not on every node** (core
   `DefaultRQLiteNodeCount`). A per-namespace check on a node (units, files,
   ports, DNS records, faults) loops over `tenancy.Members(t, f, name)`, which
-  reads the placement from the nodes (`orama monitor namespaces`); a check that
+  reads the placement from the nodes (`orama status namespaces`); a check that
   something is gone (teardown residue) and every fleet-wide check loops over
   `f.State.Nodes`.
 - **Real paths only.** Requests go to the public name through DNS, TLS pinned to
@@ -439,13 +439,13 @@ aims at the namespace gateway. `ViaOperator` uses `orama namespace create`;
 
 ### monitor
 
-`orama monitor report --json` read as the operator reads the cluster
+`orama status report --json` read as the operator reads the cluster
 (`harness/monitor`; shapes copied from core, pinned by a drift test on a
 report the real code wrote).
 
 | Signature | Does |
 |-----------|------|
-| `Fetch(t, cli, env) *Report`, `Get(ctx, cli, env) (*Report, error)`, `Parse(raw)` | run `orama monitor report --env <env> --json` and decode (`Get` for `eventually` loops) |
+| `Fetch(t, cli, env) *Report`, `Get(ctx, cli, env) (*Report, error)`, `Parse(raw)` | run `orama status report --env <env> --json` and decode (`Get` for `eventually` loops) |
 | `Report{Meta, Summary, Alerts, Nodes}`, `Node{Host, Role, Status, Error, ReportAgeSec, Report}` | `Report` is the node report subset: rqlite, gateway, wireguard, services, dns, network, system, chain, version |
 | `(*Report).Converged(n) error` | n nodes, quorum, one leader, full mesh, no critical alert, no crash loop, fresh reports |
 | `(*Report).LeaderAgreement() error` | every responsive node names the same leader (split brain by name) |
@@ -798,7 +798,7 @@ through the same redaction; the test agent's log stays in the work dir
 copy, `collected/agent.log`. Before teardown the runner collects
 journals of every `orama-*`, `caddy*`, `coredns*`, `wg-quick@*` unit,
 `orama node report --json`, listeners, WireGuard (no keys), ufw, disk, clock
-and (when the run has a chain) chain status from every node, and `orama monitor report --json` and
+and (when the run has a chain) chain status from every node, and `orama status report --json` and
 `orama maint inspect` from the runner, into `<artifacts>/collected/`: from every
 member of the state and every extra or eval cluster server the broker created
 that is still up (found by the run's label).

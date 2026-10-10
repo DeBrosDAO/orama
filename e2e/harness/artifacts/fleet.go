@@ -192,7 +192,7 @@ func (c *FleetCollector) cliItems(ctx context.Context) []item {
 		rel  string
 		args []string
 	}{
-		{"cli/monitor-report.json", []string{"monitor", "report", "--json", "--env", env}},
+		{"cli/monitor-report.json", []string{"status", "report", "--json", "--env", env}},
 		{"cli/inspect.json", []string{"inspect", "--env", env, "--format", "json"}},
 	}
 	var out []item

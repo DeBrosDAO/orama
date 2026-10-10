@@ -20,7 +20,7 @@ import (
 // (core/pkg/telemetry/cluster/components.go StateOperational).
 const verdictOperational = "operational"
 
-// verdictView is the part of `orama monitor report --json` the harness type
+// verdictView is the part of `orama status report --json` the harness type
 // leaves out: the verdict and the per-component states.
 type verdictView struct {
 	Summary struct {
@@ -38,7 +38,7 @@ type verdictView struct {
 }
 
 // TestBootstrap_clusterConverged: the fresh cluster, read the way the
-// operator reads it (`orama monitor report`), has every core node, quorum,
+// operator reads it (`orama status report`), has every core node, quorum,
 // one leader every node agrees on, a full mesh and no critical alert
 // (website/src/docs/operator/monitoring.mdx).
 func TestBootstrap_clusterConverged(t *testing.T) {

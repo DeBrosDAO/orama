@@ -106,7 +106,7 @@ func (u *upgrader) upgradeNode(ctx context.Context, n fleet.Node) error {
 	if _, err := u.orama(ctx, "node-upgrade-"+n.Name, "node", "upgrade", "--env", u.st.Env, "--node", n.PublicIP, "--yes"); err != nil {
 		return fmt.Errorf("the upgrade of %s failed; the nodes after it are untouched: %w", n.Name, err)
 	}
-	nodeReport := u.command("monitor-"+n.Name, "monitor", "report", "--env", u.st.Env, "--node", n.PublicIP, "--json")
+	nodeReport := u.command("monitor-"+n.Name, "status", "report", "--env", u.st.Env, "--node", n.PublicIP, "--json")
 	if _, err := waitReport(ctx, u.cmd, nodeReport, u.tm, nodeProblem); err != nil {
 		return fmt.Errorf("%s did not come back healthy after its upgrade: %w", n.Name, err)
 	}
@@ -128,7 +128,7 @@ func nodeProblem(h healthReport) string {
 // waitCluster waits for the whole cluster to report healthy.
 func (u *upgrader) waitCluster(ctx context.Context) (healthReport, error) {
 	var h healthReport
-	c := u.command("monitor-cluster", "monitor", "report", "--env", u.st.Env, "--json")
+	c := u.command("monitor-cluster", "status", "report", "--env", u.st.Env, "--json")
 	_, err := waitReport(ctx, u.cmd, c, u.tm, func(r healthReport) string {
 		h = r
 		return r.problem(len(u.st.Nodes))

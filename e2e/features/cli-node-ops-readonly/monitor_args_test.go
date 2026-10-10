@@ -75,7 +75,7 @@ func TestMonitor_sshBreakGlassReadsEveryNode(t *testing.T) {
 	}
 }
 
-// unknownViewBudget bounds `orama monitor <typo>`: the bug it guards against
+// unknownViewBudget bounds `orama status <typo>`: the bug it guards against
 // is the live view opening instead of a refusal, and the live view never ends.
 const unknownViewBudget = time.Minute
 

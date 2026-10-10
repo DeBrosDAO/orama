@@ -16,7 +16,7 @@ import (
 // TestInstall_nodeReportShowsHardeningHeld: the node report reads the
 // hardened kernel settings back at runtime (docs/whitepaper/technical-reference/vol1/05-privilege-and-filesystem-trust.md "RAM-to-disk"),
 // so a drift after install (apport, a package postinst, sysctl -w, swap on)
-// raises the "RAM hardening drifted" warning in `orama monitor`. On a healthy
+// raises the "RAM hardening drifted" warning in `orama status`. On a healthy
 // node the report carries the values install set and no drift.
 func TestInstall_nodeReportShowsHardeningHeld(t *testing.T) {
 	t.Parallel()

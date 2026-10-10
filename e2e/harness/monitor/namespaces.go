@@ -6,7 +6,7 @@ import (
 	"sort"
 )
 
-// NamespaceRow is one row of `orama monitor namespaces --json`: a namespace
+// NamespaceRow is one row of `orama status namespaces --json`: a namespace
 // as one node hosting it reports it (core/cmd/orama/internal/monitor/display
 // NamespacesJSON). A node that does not host the namespace has no row.
 type NamespaceRow struct {
@@ -17,7 +17,7 @@ type NamespaceRow struct {
 	GatewayUp bool   `json:"gateway_up"`
 }
 
-// ParseNamespaceRows decodes `orama monitor namespaces --json`.
+// ParseNamespaceRows decodes `orama status namespaces --json`.
 func ParseNamespaceRows(raw []byte) ([]NamespaceRow, error) {
 	var rows []NamespaceRow
 	if err := json.Unmarshal(raw, &rows); err != nil {

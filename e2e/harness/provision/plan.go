@@ -145,7 +145,7 @@ func planJoins(cfg Config) []string {
 }
 
 func planHealth(cfg Config) []string {
-	return []string{"orama auth login", "poll orama monitor report --env " + envName(cfg.RunID) + " --json until all nodes are healthy"}
+	return []string{"orama auth login", "poll orama status report --env " + envName(cfg.RunID) + " --json until all nodes are healthy"}
 }
 
 func planWireGuard(Config) []string {

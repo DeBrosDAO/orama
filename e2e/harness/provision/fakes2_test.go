@@ -182,9 +182,9 @@ func (f *fakeCmd) answer(c command) (string, error) {
 		return "", nil
 	case strings.HasPrefix(args, "node dns delegation"):
 		return f.slots(argAfter(c.args, "--env")), nil
-	case strings.HasPrefix(args, "monitor report") && strings.Contains(args, "--node "):
+	case strings.HasPrefix(args, "status report") && strings.Contains(args, "--node "):
 		return `{"meta":{"node_count":1,"healthy_count":1},"summary":{"rqlite_leader":"none"},"alerts":[]}`, nil
-	case strings.HasPrefix(args, "monitor report"):
+	case strings.HasPrefix(args, "status report"):
 		return f.report(), nil
 	}
 	return "", nil

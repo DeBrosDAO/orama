@@ -51,7 +51,7 @@ const providerMonitorFile = "/var/lib/orama-global/provider/monitor.json"
 
 // TestGlobalServices_monitorShowsTheProvidersDealSlots: a node that runs the
 // provider writes held_slots and pending_slots into its monitor.json, and
-// `orama monitor node` prints them on the node's Global line
+// `orama status node` prints them on the node's Global line
 // (website/src/docs/operator/monitoring.mdx, the node report's global section).
 func TestGlobalServices_monitorShowsTheProvidersDealSlots(t *testing.T) {
 	t.Parallel()

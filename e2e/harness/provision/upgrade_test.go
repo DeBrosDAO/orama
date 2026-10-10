@@ -57,10 +57,10 @@ func TestUpgradeToHead_followersFirstLeaderLastWithGates(t *testing.T) {
 	}
 	leader := st.Nodes[0].PublicIP // the fake report names 203.0.113.3, node-1
 	var want []string
-	want = append(want, "maint push --env e2e-testrun1 --archive "+st.ArchivePath, "monitor report --env e2e-testrun1 --json")
+	want = append(want, "maint push --env e2e-testrun1 --archive "+st.ArchivePath, "status report --env e2e-testrun1 --json")
 	for _, ip := range []string{st.Nodes[1].PublicIP, st.Nodes[2].PublicIP, leader} {
 		want = append(want, "node upgrade --env e2e-testrun1 --node "+ip+" --yes",
-			"monitor report --env e2e-testrun1 --node "+ip+" --json", "monitor report --env e2e-testrun1 --json")
+			"status report --env e2e-testrun1 --node "+ip+" --json", "status report --env e2e-testrun1 --json")
 	}
 	got := e.cmd.lines()[from:]
 	if len(got) != len(want) {
