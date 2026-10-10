@@ -24,7 +24,8 @@ const minValueLength = 8
 // forgetting one.
 const MaxValues = 10000
 
-// MaxTokenValues caps the JWTs and Orama API keys one redactor holds. They are
+// MaxTokenValues caps the JWTs, Orama API keys and refresh tokens one redactor
+// holds; every sign-in mints a JWT and a refresh token. They are
 // kept apart from the other values and replaced in one pass of a
 // strings.Replacer, so they do not spend MaxValues: a run resumed across
 // deploys mints thousands of them. Their shape patterns alone are not enough:
@@ -105,7 +106,8 @@ func FromEnv(lookup func(string) (string, bool)) *Redactor {
 // Add registers more literal values, for example a token minted during a test,
 // and persists the new ones to the sink when one is set. It fails when the
 // values cannot be persisted or would exceed MaxValues (MaxTokenValues for
-// JWTs and Orama API keys); the values it could hold are registered either way.
+// JWTs, Orama API keys and refresh tokens); the values it could hold are
+// registered either way.
 func (r *Redactor) Add(values ...string) error {
 	r.mu.Lock()
 	literals, tokens := r.normalizeNew(values)

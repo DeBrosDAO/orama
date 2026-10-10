@@ -44,11 +44,17 @@ const headerValue = `[^\s"\\\[\]][^\r\n"\\\]]*`
 var (
 	jwtShape      = regexp.MustCompile(`eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}`)
 	oramaKeyShape = regexp.MustCompile(`orama_[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+`)
-	shapes        = []*regexp.Regexp{jwtShape, oramaKeyShape}
+	// refreshTokenShape is a gateway refresh token: 32 random bytes in unpadded
+	// base64url, after "dv1_" when its session is bound to a device. Every
+	// sign-in mints one. It classifies a registered value only and is not a
+	// pattern: 43 base64url characters in free text are as often a hash or an id.
+	refreshTokenShape = regexp.MustCompile(`(?:dv1_)?[A-Za-z0-9_-]{43}`)
+	shapes            = []*regexp.Regexp{jwtShape, oramaKeyShape, refreshTokenShape}
 )
 
-// wholeToken reports whether v is, whole, a JWT or an Orama API key: a value
-// the redactor keeps among its tokens rather than its other literals.
+// wholeToken reports whether v is, whole, a JWT, an Orama API key or a refresh
+// token: a value the redactor keeps among its tokens rather than its other
+// literals.
 func wholeToken(v string) bool {
 	for _, re := range shapes {
 		if loc := re.FindStringIndex(v); loc != nil && loc[0] == 0 && loc[1] == len(v) {

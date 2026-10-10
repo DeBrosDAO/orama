@@ -16,6 +16,37 @@ func fakeJWT(i int) string {
 }
 func fakeKey(i int) string { return fmt.Sprintf("orama_live_%08dpayload_chk%04d", i, i%10000) }
 
+// fakeRefresh is a distinct value of a refresh token's shape: 43 base64url
+// characters, after "dv1_" when the session is device bound.
+func fakeRefresh(i int, deviceBound bool) string {
+	v := fmt.Sprintf("rT-%010d_%029d", i, i)
+	if deviceBound {
+		return "dv1_" + v
+	}
+	return v
+}
+
+// Every sign-in mints a refresh token. The stagenet run of 2026-10-10 held
+// 14,353 of them as ordinary literals, reached MaxValues in stage 11, and then
+// every sign-in failed to register its credentials: refresh tokens are tokens.
+func TestAdd_refreshTokensTakeNoLiteralSlot(t *testing.T) {
+	r := NewRedactor()
+	var minted []string
+	for i := 0; i < MaxValues+10; i++ {
+		minted = append(minted, fakeRefresh(i, i%2 == 0))
+	}
+	if err := r.Add(minted...); err != nil {
+		t.Fatalf("Add of %d refresh tokens: %v", len(minted), err)
+	}
+	if err := r.Add("a-literal-credential-1234"); err != nil {
+		t.Fatalf("a literal value after them was refused: %v", err)
+	}
+	out := r.Redact("refresh " + fakeRefresh(9, false) + " bound " + fakeRefresh(8, true))
+	if strings.Contains(out, "rT-") {
+		t.Errorf("a registered refresh token survived redaction: %s", out)
+	}
+}
+
 // A run resumed across deploys minted past MaxValues, almost all of them
 // tokens and keys, and every line the runner printed was withheld: values the
 // shape patterns mask take no slot.
@@ -66,12 +97,16 @@ func TestForRun_registryOfMostlyTokensLoads(t *testing.T) {
 // merely contains one is an ordinary literal.
 func TestWholeToken_wholeValuesOnly(t *testing.T) {
 	for v, want := range map[string]bool{
-		fakeJWT(1):                 true,
-		fakeKey(1):                 true,
-		"Bearer " + fakeJWT(1):     false,
-		fakeKey(1) + "-suffix":     false,
-		"plain-secret-value-12345": false,
-		"":                         false,
+		fakeJWT(1):                  true,
+		fakeKey(1):                  true,
+		"Bearer " + fakeJWT(1):      false,
+		fakeKey(1) + "-suffix":      false,
+		fakeRefresh(1, false):       true,
+		fakeRefresh(1, true):        true,
+		fakeRefresh(1, false)[1:]:   false,
+		fakeRefresh(1, false) + "x": false,
+		"plain-secret-value-12345":  false,
+		"":                          false,
 	} {
 		if got := wholeToken(v); got != want {
 			t.Errorf("wholeToken(%q) = %v, want %v", v, got, want)
