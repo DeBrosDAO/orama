@@ -31,6 +31,7 @@ func BuildCreatePlan(o Options, m *netregistry.Manifest, env string) (*Plan, err
 	}
 	for i := range p.Nodes {
 		p.Nodes[i].Validator = false
+		p.Nodes[i].BindConsensus = p.Nodes[i].Full()
 	}
 	p.Notes = append(p.Notes, createNotes(o.Create, m, len(p.Nodes))...)
 	return p, nil

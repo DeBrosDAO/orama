@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/clusterops"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
 	"github.com/DeBrosOfficial/network/pkg/constants"
+	"github.com/DeBrosOfficial/network/pkg/globalbind"
 	"github.com/DeBrosOfficial/network/pkg/install"
 )
 
@@ -33,9 +35,12 @@ const (
 	markNodeID    = "__NODE_ID__"
 	markConsensus = "__CONSENSUS__"
 	markBinding   = "__BINDING__"
-	markStatus    = "__STATUS__"
-	markActive    = "__ACTIVE__"
-	markLog       = "__LOG__"
+	// markConsensusBinding precedes the consensus key's binding, printed only
+	// when the request asks for it.
+	markConsensusBinding = "__CONSENSUS_BINDING__"
+	markStatus           = "__STATUS__"
+	markActive           = "__ACTIVE__"
+	markLog              = "__LOG__"
 	// hotKeyWaitSeconds bounds the wait for the provider to create its hot key.
 	hotKeyWaitSeconds = 60
 	// chainLogLines is how much of the chain's log an error carries.
@@ -160,10 +165,12 @@ func splitMarked(out string, marks ...string) map[string]string {
 // IdentityScript, as root: makes the node's hot key if it has none (the provider
 // creates it on its first start, then stops for want of a node id), and prints
 // the chain node id, the consensus public key, and the hot key's binding signed
-// for the operator on this chain. No private key is printed.
+// for the operator on this chain. With in.BindConsensus it also prints the
+// consensus key's binding, signed here by the key CometBFT signs blocks with: that
+// key never leaves the machine. No private key is printed.
 func identityScript(in IdentityRequest) string {
 	oramad := constants.GlobalBinDir + "/" + constants.ChainDaemonName
-	return strings.NewReplacer(
+	script := strings.NewReplacer(
 		"{PROVIDER}", constants.GlobalProviderHome, "{CHAINUSER}", constants.ChainUser, "{ORAMAD}", oramad,
 		"{CHAINHOME}", constants.ChainHome, "{CLI}", constants.GlobalBinDir+"/orama", "{WAIT}", strconv.Itoa(hotKeyWaitSeconds),
 		"{NODEID}", markNodeID, "{CONSENSUS}", markConsensus, "{BINDING}", markBinding,
@@ -188,13 +195,22 @@ runuser -u {CHAINUSER} -- {ORAMAD} --home {CHAINHOME} comet show-validator
 echo {BINDING}
 {CLI} global bind --chain-id {CHAINID} --operator {OPERATOR} --service {SERVICE} --key-file "$HK" --key-type secp256k1
 `)
+	if !in.BindConsensus {
+		return script
+	}
+	return script + strings.NewReplacer(
+		"{CONSBINDING}", markConsensusBinding, "{CLI}", constants.GlobalBinDir+"/orama", "{VALKEY}", constants.ChainValidatorKeyPath,
+		"{CHAINID}", clusterops.ShellQuote(in.ChainID), "{OPERATOR}", clusterops.ShellQuote(in.Operator), "{SERVICE}", clusterreg.ConsensusService,
+	).Replace(`echo {CONSBINDING}
+{CLI} global bind --chain-id {CHAINID} --operator {OPERATOR} --service {SERVICE} --key-file {VALKEY}
+`)
 }
 
 // ParseIdentity reads identityScript's output into the facts a registration
 // needs. Every value is checked: the node id, the consensus key and the binding
 // are about to be signed over.
 func ParseIdentity(out string) (NodeIdentity, error) {
-	sec := splitMarked(out, markNodeID, markConsensus, markBinding)
+	sec := splitMarked(out, markNodeID, markConsensus, markBinding, markConsensusBinding)
 	var id NodeIdentity
 	id.ChainNodeID = strings.TrimSpace(sec[markNodeID])
 	if b, err := hex.DecodeString(id.ChainNodeID); err != nil || len(b) != 20 {
@@ -216,10 +232,43 @@ func ParseIdentity(out string) (NodeIdentity, error) {
 		return id, err
 	}
 	id.HotBinding, id.HotKey = binding, hotKey
+	if raw, ok := sec[markConsensusBinding]; ok {
+		if id.ConsensusBinding, err = parseConsensusBinding(raw, id.ConsensusPubKey); err != nil {
+			return id, err
+		}
+	}
 	return id, nil
 }
 
+// parseConsensusBinding reads the consensus key's binding and checks it is for
+// the key the chain node reported: a binding of another key would attribute the
+// wrong validator to the operator.
+func parseConsensusBinding(raw string, consensus []byte) (*clusterreg.NodeBinding, error) {
+	b, err := parseBindingDoc(raw, clusterreg.ConsensusService)
+	if err != nil {
+		return nil, fmt.Errorf("the consensus key's binding: %w", err)
+	}
+	if b.KeyType != globalbind.KeyTypeEd25519 || !bytes.Equal(b.Pubkey, consensus) {
+		return nil, fmt.Errorf("the consensus key's binding is for %s key %x, not the chain node's ed25519 key %x", b.KeyType, b.Pubkey, consensus)
+	}
+	return &b, nil
+}
+
 func parseBinding(raw string) (clusterreg.NodeBinding, string, error) {
+	b, err := parseBindingDoc(raw, clusterreg.HotKeyService)
+	if err != nil {
+		return clusterreg.NodeBinding{}, "", fmt.Errorf("the hot key's binding: %w", err)
+	}
+	address, err := clusterreg.AccountAddressOf(b.Pubkey)
+	if err != nil {
+		return clusterreg.NodeBinding{}, "", fmt.Errorf("the hot key's address: %w", err)
+	}
+	return b, address, nil
+}
+
+// parseBindingDoc reads the JSON `orama global bind` prints, for the service
+// wanted.
+func parseBindingDoc(raw, service string) (clusterreg.NodeBinding, error) {
 	var doc struct {
 		Service   string `json:"service"`
 		KeyType   string `json:"key_type"`
@@ -227,24 +276,20 @@ func parseBinding(raw string) (clusterreg.NodeBinding, string, error) {
 		Signature string `json:"signature"`
 	}
 	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
-		return clusterreg.NodeBinding{}, "", fmt.Errorf("the hot key's binding is not JSON: %w", err)
+		return clusterreg.NodeBinding{}, fmt.Errorf("the binding is not JSON: %w", err)
 	}
 	pub, err := hex.DecodeString(doc.Pubkey)
 	if err != nil {
-		return clusterreg.NodeBinding{}, "", fmt.Errorf("the binding's pubkey is not hex: %w", err)
+		return clusterreg.NodeBinding{}, fmt.Errorf("the binding's pubkey is not hex: %w", err)
 	}
 	sig, err := hex.DecodeString(doc.Signature)
 	if err != nil {
-		return clusterreg.NodeBinding{}, "", fmt.Errorf("the binding's signature is not hex: %w", err)
+		return clusterreg.NodeBinding{}, fmt.Errorf("the binding's signature is not hex: %w", err)
 	}
-	if doc.Service != clusterreg.HotKeyService {
-		return clusterreg.NodeBinding{}, "", fmt.Errorf("the binding is for service %q, not %q", doc.Service, clusterreg.HotKeyService)
+	if doc.Service != service {
+		return clusterreg.NodeBinding{}, fmt.Errorf("the binding is for service %q, not %q", doc.Service, service)
 	}
-	address, err := clusterreg.AccountAddressOf(pub)
-	if err != nil {
-		return clusterreg.NodeBinding{}, "", fmt.Errorf("the hot key's address: %w", err)
-	}
-	return clusterreg.NodeBinding{Service: doc.Service, KeyType: doc.KeyType, Pubkey: pub, Signature: sig}, address, nil
+	return clusterreg.NodeBinding{Service: doc.Service, KeyType: doc.KeyType, Pubkey: pub, Signature: sig}, nil
 }
 
 // startServicesScript writes the node id the provider reads and starts it.

@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -202,6 +203,12 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 				Amount string `json:"amount"`
 			} `json:"bonds"`
 			Capacity string `json:"declared_capacity_bytes"`
+			Bindings []struct {
+				Service   string `json:"service"`
+				KeyType   string `json:"key_type"`
+				Pubkey    string `json:"pubkey"`
+				Signature string `json:"signature"`
+			} `json:"bindings"`
 		} `json:"node"`
 	}
 	found, err := s.get(ctx, "/orama/nodes/v1/node/"+url.PathEscape(id), &doc)
@@ -222,6 +229,13 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 		}
 		n.Bonds[role] = amount
 	}
+	for _, b := range doc.Node.Bindings {
+		binding, err := restBinding(b.Service, b.KeyType, b.Pubkey, b.Signature)
+		if err != nil {
+			return nil, fmt.Errorf("node %q has a binding that is not a service key: %w", id, err)
+		}
+		n.Bindings = append(n.Bindings, binding)
+	}
 	if doc.Node.Capacity != "" {
 		c, ok := parseAmount(doc.Node.Capacity)
 		if !ok || !c.IsUint64() {
@@ -230,6 +244,25 @@ func (s *restSession) Node(ctx context.Context, id string) (*RegisteredNode, err
 		n.CapacityBytes = c.Uint64()
 	}
 	return n, nil
+}
+
+// restBinding reads a binding as the REST gateway names it: the key type as its
+// enum name, the key and the signature in base64.
+func restBinding(service, keyType, pubkey, signature string) (clusterreg.NodeBinding, error) {
+	types := map[string]string{"KEY_TYPE_SECP256K1": "secp256k1", "KEY_TYPE_ED25519": "ed25519"}
+	kind, ok := types[keyType]
+	if !ok {
+		return clusterreg.NodeBinding{}, fmt.Errorf("%q has the key type %q", service, keyType)
+	}
+	pub, err := base64.StdEncoding.DecodeString(pubkey)
+	if err != nil {
+		return clusterreg.NodeBinding{}, fmt.Errorf("%q has a pubkey that is not base64: %w", service, err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(signature)
+	if err != nil {
+		return clusterreg.NodeBinding{}, fmt.Errorf("%q has a signature that is not base64: %w", service, err)
+	}
+	return clusterreg.NodeBinding{Service: service, KeyType: kind, Pubkey: pub, Signature: sig}, nil
 }
 
 // ValidatorExists asks x/staking whether the operator has a validator.

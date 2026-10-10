@@ -55,6 +55,7 @@ orama setup --network stagenet --name alice --yes \
    - the budget is printed (the bonds, the self-bond, the fee allowance) and checked against a ceiling of 1,000,000 ORAMA, because the figures come from the chain node setup has just installed; the operator account is then checked for funds (see below);
    - register the operator, unless it is registered;
    - for each node: read its keys (the hot key is created on first use), register it with its roles, endpoint and autonomous system number, bond each role, declare its storage capacity, start the provider, and, on the first node, create the validator with the 1,000 ORAMA self-bond;
+   - on the validator's node, bind its consensus key to you (see [The consensus binding](#the-consensus-binding));
    - claim the node's name.
    Each step first asks the chain whether it is already done.
 8. **Your own domain** (`--domain`). Setup prints the NS and glue records to create at the parent zone as soon as the cluster exists, and at the end polls DNS until the parent zone returns them and the cluster serves a certificate for the domain.
@@ -107,7 +108,7 @@ The first steps are the join's: the preflight, enrolling and checking every mach
 5. **Written down before anything starts.** `networks/<name>/` is written to `--publish-dir`: `manifest.json`, `genesis.json` and `release-root.json`. A chain id that is already published with another genesis is refused here, before a chain starts: pass a new `--chain-id`. Then each chain is wired to the other seats' node ids (`orama global install --persistent-peers`, the same command again, without `--init-chain`).
 6. **The chains start one at a time.** Each is started and setup waits until its unit is active and its RPC answers before it starts the next. A chain of five seats needs more than two thirds of them before the first block, so the first blocks come with the fourth start. Setup then waits until every chain has reached block 3, or the unit stays down (the end of its log is quoted).
 7. **Restart the cluster nodes, one at a time**, as for a join, then on a network with a faucet **wait for epoch 2**: the seats earn from the first epoch that closes, and the faucet is paid from their earnings.
-8. **On the chain**, as for a join: register the operator (funded from the faucet on a test network), then each node: register, bond, declare capacity, start the provider. No validator is created: the seats are validators already, and nothing is bonded for them.
+8. **On the chain**, as for a join: register the operator (funded from the faucet on a test network), then each node: register (with its consensus binding), bond, declare capacity, start the provider. No validator is created: the seats are validators already, and nothing is bonded for them.
 9. **The record**, as for a join: the cluster is recorded under the environment named after the network (the faucet looks for it), and the operator account is stored on it.
 
 ### Running it again
@@ -131,6 +132,14 @@ orama setup --network stagenet --name alice --ip ...
 
 `orama network add` shows the digest of the release root and asks for confirmation. The manifest is not secret and does not change: a joiner checks the genesis it fetches against the digest the manifest pins.
 
+## The consensus binding
+
+x/power caps voting power per operator, and counts a validator toward the operator of the live x/nodes node that binds the validator's consensus key (the `consensus` service binding). A validator that no node binds shares one `unlinked` bucket with every other such validator, under one cap.
+
+Setup sends the binding for the validator's node on a join (the first full node, unless `--no-validator`) and for every seat of a network it creates. The consensus key signs the binding **on the node**, with `orama global bind --service consensus` reading `priv_validator_key.json` as root; the private key never leaves the machine, and only the public key and the signature come back. The statement is the chain's own, `orama-global-bind-v1|<chain-id>|<operator>|consensus|<hex public key>`, and setup verifies the signature against it before it sends anything.
+
+A node that is not yet registered carries the binding in its registration. A node that is registered without it (an earlier run, or an older setup) gets one update that replaces its binding set with the bindings it already has plus the new one. A node that already holds the binding is left alone, so running setup again sends nothing. If the validator's key later moves to another machine, run setup against the new machine: its binding replaces the old one.
+
 ## Funding
 
 The operator account needs ORAMA for the bonds (the storage bond is the network's bond per GiB times the capacity you declare, the relay and exit bonds are the network's minimums), the validator's 1,000 ORAMA self-bond, and fees. Setup reads the network's parameters and tells you the exact amount.
@@ -152,7 +161,6 @@ When a run stops at a step that waits (the chain, DNS), the error ends with the 
 ## Known gaps
 
 - **A created network's seat accounts are test-keyring keys.** The seat's account (the one that receives the seat's share and signs the faucet) is a key in `oramad`'s unencrypted test keyring on its machine. That is acceptable for a test network; a production network needs its seat keys held elsewhere, and this command does not make one (it takes at most 20 machines, and a production id needs 30 bootstrap validators).
-- **No setup flow sends the consensus binding.** x/power's operator-level cap counts a validator under the operator of the x/nodes node that binds its consensus key. Setup registers the nodes of a created network, as it does for a join, but sends no such binding, so the seats stay in x/power's unlinked bucket until a binding is sent.
 - **A created network has no archiver or indexer.** The full profile installs the chain, public storage and its provider.
 - **The seeds are not checked.** Setup prints the DNS records and does not wait for them; a joiner needs them, the seeds' gateways and their certificates.
 - **The relay needs `--tor-network`.** The network manifest does not yet pin the Tor network file, so setup does not fetch one; without the file no relay is installed and the plan says so.

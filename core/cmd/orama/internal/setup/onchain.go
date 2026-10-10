@@ -112,19 +112,25 @@ func (r *runner) registerOperator(ctx context.Context, sess ChainSession) error 
 func (r *runner) registerNode(ctx context.Context, sess ChainSession, n *nodeRun, bonds map[int]*big.Int) error {
 	ip, id := n.plan.IP, n.plan.Name
 	r.emit(ip, StepOnchain, StateRunning, "")
-	ident, err := n.m.Identity(ctx, IdentityRequest{ChainID: r.net.Manifest.ChainID, Operator: r.oper})
+	ident, err := n.m.Identity(ctx, IdentityRequest{ChainID: r.net.Manifest.ChainID, Operator: r.oper, BindConsensus: n.plan.BindConsensus})
 	if err != nil {
 		return fmt.Errorf("read the node's keys: %w", err)
+	}
+	consensus, err := r.consensusBindingOf(n, ident)
+	if err != nil {
+		return err
 	}
 	node, err := sess.Node(ctx, id)
 	if err != nil {
 		return fmt.Errorf("check whether node %q is registered: %w", id, err)
 	}
 	if node == nil {
-		if err := r.sendRegistration(ctx, sess, n, ident); err != nil {
+		if err := r.sendRegistration(ctx, sess, n, ident, consensus); err != nil {
 			return err
 		}
 		node = &RegisteredNode{Bonds: map[int]*big.Int{}}
+	} else if err := r.bindConsensus(ctx, sess, n, node, consensus); err != nil {
+		return err
 	}
 	if err := r.bondRoles(ctx, sess, n, node, bonds); err != nil {
 		return err
@@ -146,14 +152,18 @@ func (r *runner) registerNode(ctx context.Context, sess ChainSession, n *nodeRun
 	return nil
 }
 
-func (r *runner) sendRegistration(ctx context.Context, sess ChainSession, n *nodeRun, ident NodeIdentity) error {
+func (r *runner) sendRegistration(ctx context.Context, sess ChainSession, n *nodeRun, ident NodeIdentity, consensus *clusterreg.NodeBinding) error {
 	asn, err := r.asnOf(ctx, n.plan.IP)
 	if err != nil {
 		return err
 	}
+	bindings := []clusterreg.NodeBinding{ident.HotBinding}
+	if consensus != nil {
+		bindings = append(bindings, *consensus)
+	}
 	reg := clusterreg.NodeRegistration{
 		Operator: r.oper, NodeID: n.plan.Name, Roles: n.plan.Roles, HotKey: ident.HotKey,
-		Bindings:  []clusterreg.NodeBinding{ident.HotBinding},
+		Bindings:  bindings,
 		Endpoints: []string{"http://" + n.plan.IP + ":" + strconv.Itoa(constants.GlobalProviderPort)},
 		ASN:       asn,
 	}

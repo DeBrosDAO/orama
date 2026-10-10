@@ -170,3 +170,37 @@ func TestOperator_isTheSigningAccount(t *testing.T) {
 		t.Fatalf("Operator = %q, %v", got, err)
 	}
 }
+
+func TestUpdateNodeBindings_fillsTheOperatorAndSends(t *testing.T) {
+	chain, signer := newFakeChain(), newSigner()
+	u := clusterreg.NodeUpdate{NodeID: "node-a", Bindings: []clusterreg.NodeBinding{{
+		Service: clusterreg.ConsensusService, KeyType: "ed25519", Pubkey: bytes.Repeat([]byte{7}, 32), Signature: bytes.Repeat([]byte{5}, 64),
+	}}}
+	if _, err := newClient(t, chain, signer).UpdateNodeBindings(context.Background(), u); err != nil {
+		t.Fatal(err)
+	}
+	if got := typeURLOf(t, signer.signed[0]); got != clusterreg.UpdateNodeTypeURL {
+		t.Errorf("type = %s", got)
+	}
+	if !bytes.Contains(chain.sent[0], []byte(testOperator)) || !bytes.Contains(chain.sent[0], []byte(clusterreg.ConsensusService)) {
+		t.Error("the update does not name the operator and the consensus binding")
+	}
+}
+
+func TestUpdateNodeBindings_refusesAnotherOperatorAndNoBindings(t *testing.T) {
+	binding := clusterreg.NodeBinding{Service: clusterreg.ConsensusService, KeyType: "ed25519", Pubkey: bytes.Repeat([]byte{7}, 32), Signature: bytes.Repeat([]byte{5}, 64)}
+	for name, u := range map[string]clusterreg.NodeUpdate{
+		"another operator": {Operator: "orama1other", NodeID: "node-a", Bindings: []clusterreg.NodeBinding{binding}},
+		"no bindings":      {NodeID: "node-a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			chain := newFakeChain()
+			if _, err := newClient(t, chain, newSigner()).UpdateNodeBindings(context.Background(), u); err == nil {
+				t.Fatal("UpdateNodeBindings accepted it")
+			}
+			if len(chain.simulated) != 0 {
+				t.Error("an invalid update reached the chain")
+			}
+		})
+	}
+}

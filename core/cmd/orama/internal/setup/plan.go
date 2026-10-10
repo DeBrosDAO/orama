@@ -36,7 +36,12 @@ type NodePlan struct {
 	// Validator says this node's consensus key becomes the operator's validator.
 	// An operator has one validator, the first full node's.
 	Validator bool
-	StorageGB uint64
+	// BindConsensus says the node's consensus key is bound to the operator on the
+	// chain (the "consensus" binding), so x/power counts the validator it signs for
+	// toward the operator instead of the shared unlinked bucket: the validator's
+	// node, and every seat of a new network.
+	BindConsensus bool
+	StorageGB     uint64
 }
 
 // Full reports whether the node gets the global layer.
@@ -103,7 +108,7 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 			n.Profile, n.StorageGB, n.Exit = install.ProfileFull, o.StorageGB, o.Exit
 			n.Services, n.Roles = globalServices(o)
 			if !validatorTaken && !o.NoValidator {
-				n.Validator, validatorTaken = true, true
+				n.Validator, n.BindConsensus, validatorTaken = true, true, true
 			}
 		}
 		p.Nodes = append(p.Nodes, n)

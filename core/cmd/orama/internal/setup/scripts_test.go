@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -182,6 +183,64 @@ func TestParseIdentity_refusals(t *testing.T) {
 		if _, err := ParseIdentity(out); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+}
+
+// bindingOutput is the JSON `orama global bind` prints for a consensus binding.
+func bindingOutput(t *testing.T, mutate func(map[string]string), pub []byte) string {
+	t.Helper()
+	doc := map[string]string{"service": "consensus", "key_type": "ed25519", "pubkey": hex.EncodeToString(pub), "signature": hex.EncodeToString(make([]byte, 64))}
+	if mutate != nil {
+		mutate(doc)
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestParseIdentity_theConsensusBindingIsReadWhenTheNodePrintsIt(t *testing.T) {
+	consensus := bytes.Repeat([]byte{7}, 32)
+	base := identityOutput(t, strings.Repeat("ab", 20), consensus, nil)
+	id, err := ParseIdentity(base + "__CONSENSUS_BINDING__\n" + bindingOutput(t, nil, consensus) + "\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.ConsensusBinding == nil || id.ConsensusBinding.Service != "consensus" || id.ConsensusBinding.KeyType != "ed25519" || !bytes.Equal(id.ConsensusBinding.Pubkey, consensus) {
+		t.Errorf("%+v", id.ConsensusBinding)
+	}
+	if plain, err := ParseIdentity(base); err != nil || plain.ConsensusBinding != nil {
+		t.Errorf("a node that was not asked prints none: %+v, %v", plain.ConsensusBinding, err)
+	}
+}
+
+func TestParseIdentity_aConsensusBindingForAnotherKeyIsRefused(t *testing.T) {
+	consensus := bytes.Repeat([]byte{7}, 32)
+	base := identityOutput(t, strings.Repeat("ab", 20), consensus, nil) + "__CONSENSUS_BINDING__\n"
+	for name, doc := range map[string]string{
+		"another key":     bindingOutput(t, nil, bytes.Repeat([]byte{8}, 32)),
+		"another service": bindingOutput(t, func(d map[string]string) { d["service"] = "tor" }, consensus),
+		"a secp256k1 key": bindingOutput(t, func(d map[string]string) { d["key_type"] = "secp256k1" }, consensus),
+		"nothing":         "",
+	} {
+		if _, err := ParseIdentity(base + doc + "\n"); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+func TestIdentityScript_theConsensusKeySignsOnTheNode(t *testing.T) {
+	script := identityScript(IdentityRequest{ChainID: testChainID, Operator: testOperator, BindConsensus: true})
+	want := "global bind --chain-id 'orama-stagenet-6' --operator '" + testOperator + "' --service consensus --key-file /var/lib/orama-global/chain/config/priv_validator_key.json"
+	if !strings.Contains(script, want) {
+		t.Errorf("script lacks %q:\n%s", want, script)
+	}
+	if strings.Contains(script, "cat /var/lib/orama-global/chain/config/priv_validator_key.json") || strings.Contains(script, "--service consensus --key-file /var/lib/orama-global/chain/config/priv_validator_key.json >") {
+		t.Error("the consensus key must be read by bind alone, never printed or copied")
+	}
+	if plain := identityScript(IdentityRequest{ChainID: testChainID, Operator: testOperator}); strings.Contains(plain, "consensus --key-file") || strings.Contains(plain, "priv_validator_key") {
+		t.Errorf("a node that does not bind never touches the consensus key:\n%s", plain)
 	}
 }
 

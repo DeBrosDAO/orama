@@ -155,6 +155,9 @@ func TestBuildCreatePlan_everyMachineIsASeat(t *testing.T) {
 		if i == 0 {
 			wantRole = ClusterCreate
 		}
+		if !n.BindConsensus {
+			t.Errorf("node %d: every seat binds its consensus key to the operator", i)
+		}
 		if !n.Full() || n.Cluster != wantRole || n.Validator {
 			t.Errorf("node %d = %+v: every seat is full, only the first creates the cluster, none creates a validator", i, n)
 		}

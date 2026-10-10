@@ -223,7 +223,8 @@ func TestRun_alreadyInstalledMachinesAreSkipped(t *testing.T) {
 	h.w.operatorRegistered, h.w.validator = true, true
 	h.w.nodes["alice"] = &RegisteredNode{
 		Roles: []int{clusterreg.RoleStorage}, CapacityBytes: 10_000_000_000,
-		Bonds: map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(10 * noramaPerOrama)},
+		Bonds:    map[int]*big.Int{clusterreg.RoleStorage: big.NewInt(10 * noramaPerOrama)},
+		Bindings: append(hotOnly(), clusterreg.NodeBinding{Service: clusterreg.ConsensusService, KeyType: "ed25519", Pubkey: fakeConsensusPub(ip1)}),
 	}
 	res := mustRun(t, h, h.opts(ip1))
 	for _, forbidden := range []string{"stage ", "cluster ", "global ", "restart ", "fetch release", "trust point", "tx "} {

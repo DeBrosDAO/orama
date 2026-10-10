@@ -1,7 +1,9 @@
 package setup
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +100,31 @@ func TestRestSession_operatorAndValidatorExistence(t *testing.T) {
 	}
 	if ok, err := none.ValidatorExists(context.Background(), testOperator); err != nil || ok {
 		t.Errorf("validator absent: %v, %v", ok, err)
+	}
+}
+
+func TestRestSession_aNodeIsReadWithItsBindings(t *testing.T) {
+	pub := bytes.Repeat([]byte{7}, 32)
+	sig := bytes.Repeat([]byte{9}, 64)
+	doc := `{"node":{"bindings":[{"service":"consensus","key_type":"KEY_TYPE_ED25519","pubkey":"` + base64.StdEncoding.EncodeToString(pub) +
+		`","signature":"` + base64.StdEncoding.EncodeToString(sig) + `"}]}}`
+	s := chainServer(t, map[string]func(http.ResponseWriter){
+		"/orama/nodes/v1/node/alice": jsonBody(doc),
+		"/orama/nodes/v1/node/bad":   jsonBody(`{"node":{"bindings":[{"service":"consensus","key_type":"KEY_TYPE_UNSPECIFIED"}]}}`),
+		"/orama/nodes/v1/node/b64":   jsonBody(`{"node":{"bindings":[{"service":"tor","key_type":"KEY_TYPE_ED25519","pubkey":"***"}]}}`),
+	})
+	n, err := s.Node(context.Background(), "alice")
+	if err != nil || n == nil || len(n.Bindings) != 1 {
+		t.Fatalf("%+v, %v", n, err)
+	}
+	b := n.Bindings[0]
+	if b.Service != "consensus" || b.KeyType != "ed25519" || !bytes.Equal(b.Pubkey, pub) || !bytes.Equal(b.Signature, sig) {
+		t.Errorf("binding %+v", b)
+	}
+	for _, id := range []string{"bad", "b64"} {
+		if _, err := s.Node(context.Background(), id); err == nil {
+			t.Errorf("node %s: a binding that is not a service key is an error", id)
+		}
 	}
 }
 

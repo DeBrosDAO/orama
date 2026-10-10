@@ -158,6 +158,9 @@ type ChainState struct {
 type IdentityRequest struct {
 	ChainID  string
 	Operator string
+	// BindConsensus asks the node to sign, with its consensus key, the binding of
+	// that key to Operator. The key signs on the node and never leaves it.
+	BindConsensus bool
 }
 
 // NodeIdentity is what registering a node on the chain needs from the node.
@@ -169,6 +172,9 @@ type NodeIdentity struct {
 	// HotKey is the hot key's account address; HotBinding its signed binding.
 	HotKey     string
 	HotBinding clusterreg.NodeBinding
+	// ConsensusBinding is the consensus key's binding, signed on the node for the
+	// operator; nil unless the request asked for it.
+	ConsensusBinding *clusterreg.NodeBinding
 }
 
 // ChainSession is a node's chain, readable and writable from here.
@@ -187,6 +193,8 @@ type ChainOpener interface {
 type Transactor interface {
 	RegisterOperator(ctx context.Context) (*onchain.Receipt, error)
 	RegisterNode(ctx context.Context, n clusterreg.NodeRegistration) (*onchain.Receipt, error)
+	// UpdateNodeBindings replaces the binding set of a registered node.
+	UpdateNodeBindings(ctx context.Context, u clusterreg.NodeUpdate) (*onchain.Receipt, error)
 	Bond(ctx context.Context, b clusterreg.Bond) (*onchain.Receipt, error)
 	DeclareCapacity(ctx context.Context, c clusterreg.Capacity) (*onchain.Receipt, error)
 	CreateValidator(ctx context.Context, spec onchain.ValidatorSpec) (*onchain.Receipt, error)
@@ -217,6 +225,8 @@ type RegisteredNode struct {
 	Roles         []int
 	Bonds         map[int]*big.Int
 	CapacityBytes uint64
+	// Bindings are the node's service-key bindings, as the chain holds them.
+	Bindings []clusterreg.NodeBinding
 }
 
 // Funder funds a new operator account on a network that has a faucet.

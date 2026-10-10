@@ -396,6 +396,7 @@ volumes:
               - core/pkg/rwagent/
               - core/pkg/remotessh/
               - core/pkg/netregistry/
+              - core/pkg/netclass/
               - core/pkg/onchain/
               - networks/
           - file: vol1/36-sdks.md

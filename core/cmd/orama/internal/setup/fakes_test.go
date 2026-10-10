@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"math/big"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/DeBrosOfficial/network/cmd/orama/internal/production/dnsdelegation"
 	"github.com/DeBrosOfficial/network/pkg/clusterreg"
+	"github.com/DeBrosOfficial/network/pkg/globalbind"
 	"github.com/DeBrosOfficial/network/pkg/install"
 	"github.com/DeBrosOfficial/network/pkg/netregistry"
 	"github.com/DeBrosOfficial/network/pkg/onchain"
@@ -97,6 +99,8 @@ type fakeMachine struct {
 	installed     ClusterInstall
 	globalIn      GlobalInstall
 	identityErr   error
+	// tamperIdentity, when set, changes what the node reports about its keys.
+	tamperIdentity func(*NodeIdentity)
 }
 
 func goodHardware() install.Hardware {
@@ -141,12 +145,38 @@ func (m *fakeMachine) ChainState(context.Context) (ChainState, error) {
 	return m.state, m.stateErr
 }
 func (m *fakeMachine) Identity(_ context.Context, in IdentityRequest) (NodeIdentity, error) {
-	m.w.add("identity %s", m.ip)
-	return NodeIdentity{
+	m.w.add("identity %s consensus=%v", m.ip, in.BindConsensus)
+	id := NodeIdentity{
 		ChainNodeID: strings.Repeat("ab", 20), ConsensusPubKey: make([]byte, 32), HotKey: "orama1hot" + m.ip,
 		HotBinding: clusterreg.NodeBinding{Service: clusterreg.HotKeyService, KeyType: "secp256k1"},
-	}, m.identityErr
+	}
+	if in.BindConsensus {
+		signed, err := globalbind.SignEd25519(fakeConsensusSeed(m.ip), in.ChainID, in.Operator, clusterreg.ConsensusService)
+		if err != nil {
+			return NodeIdentity{}, err
+		}
+		id.ConsensusPubKey = signed.Pubkey
+		id.ConsensusBinding = &clusterreg.NodeBinding{Service: signed.Service, KeyType: signed.KeyType, Pubkey: signed.Pubkey, Signature: signed.Signature}
+	}
+	if m.tamperIdentity != nil {
+		m.tamperIdentity(&id)
+	}
+	return id, m.identityErr
 }
+
+// fakeConsensusSeed is the consensus key of the fake machine at ip: the node
+// signs with its own key, so the seed is the machine's address.
+func fakeConsensusSeed(ip string) []byte {
+	seed := make([]byte, ed25519.SeedSize)
+	copy(seed, ip)
+	return seed
+}
+
+// fakeConsensusPub is the public half of fakeConsensusSeed.
+func fakeConsensusPub(ip string) []byte {
+	return ed25519.NewKeyFromSeed(fakeConsensusSeed(ip)).Public().(ed25519.PublicKey)
+}
+
 func (m *fakeMachine) StartServices(_ context.Context, id string) error {
 	m.w.add("start %s %s", m.ip, id)
 	return nil
@@ -189,6 +219,8 @@ type fakeEnroller struct {
 	fail          map[string]error
 	created       map[string]*fakeMachine
 	state         ChainState
+	// tamperIdentity changes what every machine reports about its keys.
+	tamperIdentity func(*NodeIdentity)
 }
 
 func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, error) {
@@ -200,7 +232,7 @@ func (e *fakeEnroller) Enroll(_ context.Context, req MachineRequest) (Machine, e
 	if !ok {
 		facts = freshFacts()
 	}
-	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefusal: e.quorumRefusal}
+	m := &fakeMachine{w: e.w, ip: req.IP, facts: facts, state: e.state, quorumRefusal: e.quorumRefusal, tamperIdentity: e.tamperIdentity}
 	if e.created == nil {
 		e.created = map[string]*fakeMachine{}
 	}
@@ -320,9 +352,16 @@ func (s *fakeSession) RegisterOperator(context.Context) (*onchain.Receipt, error
 	return &onchain.Receipt{}, nil
 }
 func (s *fakeSession) RegisterNode(_ context.Context, n clusterreg.NodeRegistration) (*onchain.Receipt, error) {
-	s.w.add("tx register-node %s roles=%v asn=%d", n.NodeID, n.Roles, n.ASN)
+	s.w.add("tx register-node %s roles=%v asn=%d bindings=%s", n.NodeID, n.Roles, n.ASN, serviceList(n.Bindings))
 	s.w.mu.Lock()
-	s.w.nodes[n.NodeID] = &RegisteredNode{Roles: n.Roles, Bonds: map[int]*big.Int{}}
+	s.w.nodes[n.NodeID] = &RegisteredNode{Roles: n.Roles, Bonds: map[int]*big.Int{}, Bindings: n.Bindings}
+	s.w.mu.Unlock()
+	return &onchain.Receipt{}, nil
+}
+func (s *fakeSession) UpdateNodeBindings(_ context.Context, u clusterreg.NodeUpdate) (*onchain.Receipt, error) {
+	s.w.add("tx update-bindings %s %s", u.NodeID, serviceList(u.Bindings))
+	s.w.mu.Lock()
+	s.w.nodes[u.NodeID].Bindings = u.Bindings
 	s.w.mu.Unlock()
 	return &onchain.Receipt{}, nil
 }
@@ -351,6 +390,15 @@ func (s *fakeSession) CreateValidator(_ context.Context, spec onchain.ValidatorS
 	s.w.validator = true
 	s.w.mu.Unlock()
 	return &onchain.Receipt{}, nil
+}
+
+// serviceList names the services of bindings, in order, comma separated.
+func serviceList(bindings []clusterreg.NodeBinding) string {
+	services := make([]string, len(bindings))
+	for i, b := range bindings {
+		services[i] = b.Service
+	}
+	return strings.Join(services, ",")
 }
 
 type fakeFunder struct{ w *world }

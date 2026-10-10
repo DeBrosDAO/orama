@@ -54,6 +54,19 @@ func TestBuildPlan_oneValidatorOnTheFirstFullNode(t *testing.T) {
 	}
 }
 
+func TestBuildPlan_onlyTheValidatorsNodeBindsItsConsensusKey(t *testing.T) {
+	p := planFor(t, Options{IPs: []string{ip1, ip2}, Name: "alice"})
+	if !p.Nodes[0].BindConsensus || p.Nodes[1].BindConsensus {
+		t.Errorf("bind: %v %v, want the validator's node only", p.Nodes[0].BindConsensus, p.Nodes[1].BindConsensus)
+	}
+	if p = planFor(t, Options{IPs: []string{ip1}, Name: "alice", NoValidator: true}); p.Nodes[0].BindConsensus {
+		t.Error("--no-validator: no validator, so no consensus key to bind")
+	}
+	if p = planFor(t, Options{IPs: []string{ip1}, ClusterOnly: true}); p.Nodes[0].BindConsensus {
+		t.Error("a cluster-only node runs no chain")
+	}
+}
+
 func TestBuildPlan_fullProfileServicesAndRoles(t *testing.T) {
 	n := planFor(t, Options{IPs: []string{ip1}, Name: "alice"}).Nodes[0]
 	if got := strings.Join(n.ServiceNames(), ","); got != "chain,ipfs,provider" {
